@@ -3,9 +3,9 @@ import { rm } from "node:fs/promises";
 import process from "node:process";
 
 const scenario = process.argv[2];
-if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "native-space-selection", "candidate-query-reset", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "caret-probe", "scripts", "upright", "suggestions", "navigation", "geometry", "settings", "layout", "delete", "export"]).has(scenario)) {
+if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "native-space-selection", "candidate-query-reset", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "caret-probe", "scripts", "upright", "suggestions", "navigation", "geometry", "source-layout", "cursor-placement", "settings", "layout", "delete", "export"]).has(scenario)) {
   throw new Error(
-    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|native-space-selection|candidate-query-reset|raw-placeholder-visual|placeholder-selection|structural-placeholder|caret-probe|scripts|upright|suggestions|navigation|geometry|settings|layout|delete|export>",
+    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|native-space-selection|candidate-query-reset|raw-placeholder-visual|placeholder-selection|structural-placeholder|caret-probe|scripts|upright|suggestions|navigation|geometry|source-layout|cursor-placement|settings|layout|delete|export>",
   );
 }
 
@@ -255,6 +255,308 @@ async function main() {
       await sleep(100);
       await focusField();
     };
+
+    if (scenario === "source-layout") {
+      await evaluate(`(() => {
+        const storageKey = "visualtex-editor";
+        const persisted = JSON.parse(localStorage.getItem(storageKey) || "{}");
+        const lines = Array.from({ length: 24 }, (_, index) => ({
+          id: "source-layout-" + index,
+          latex:
+            "\\\\frac{a_{" +
+            index +
+            "}}{b_{" +
+            index +
+            "}}+\\\\sum_{n=1}^{100}x_n^{" +
+            (index + 1) +
+            "}",
+        }));
+        persisted.state = {
+          ...(persisted.state || {}),
+          lines,
+          activeLineId: lines[0].id,
+          sourceOpen: false,
+          latexCodeFormat: "raw",
+        };
+        localStorage.setItem(storageKey, JSON.stringify(persisted));
+        location.reload();
+        return true;
+      })()`);
+      await waitForEvaluation(`(() => ({
+        ready:
+          document.querySelectorAll("math-field").length === 24 &&
+          Boolean(document.querySelector(".source-toggle")) &&
+          !document.querySelector(".source-panel"),
+      }))()`, "collapsed source layout");
+
+      const collapsed = await evaluate(`(() => {
+        const label = document.querySelector(".source-toggle-label");
+        const toggle = document.querySelector(".source-toggle");
+        const row = document.querySelector(".source-toggle-row");
+        return {
+          labelVisible: Boolean(label && label.getBoundingClientRect().width > 0),
+          toggleVisible: Boolean(toggle && toggle.getBoundingClientRect().width > 0),
+          rowHeight: row?.getBoundingClientRect().height ?? 0,
+          pageScrollHeight: document.scrollingElement?.scrollHeight ?? 0,
+          pageClientHeight: document.scrollingElement?.clientHeight ?? 0,
+        };
+      })()`);
+      if (
+        !collapsed.labelVisible ||
+        !collapsed.toggleVisible ||
+        collapsed.rowHeight < 30 ||
+        collapsed.pageScrollHeight > collapsed.pageClientHeight + 1
+      ) {
+        throw new Error(`Collapsed source controls are invalid: ${JSON.stringify(collapsed)}`);
+      }
+
+      await evaluate(`document.querySelector(".source-toggle").click()`);
+      await waitForEvaluation(`(() => ({
+        ready:
+          Boolean(document.querySelector(".source-panel .cm-scroller")) &&
+          Boolean(document.querySelector(".source-collapse-button")) &&
+          !document.querySelector(".source-toggle-row"),
+      }))()`, "expanded source layout");
+      await sleep(180);
+
+      const expanded = await evaluate(`(() => {
+        const rect = (element) => {
+          const bounds = element?.getBoundingClientRect();
+          return bounds
+            ? { top: bounds.top, right: bounds.right, bottom: bounds.bottom, left: bounds.left, width: bounds.width, height: bounds.height }
+            : null;
+        };
+        const body = document.querySelector(".editor-pane-body");
+        const editorScroll = document.querySelector(".editor-pane-scroll");
+        const editorSurface = document.querySelector(".editor-surface");
+        const sourceSlot = document.querySelector(".source-pane-slot");
+        const sourcePanel = document.querySelector(".source-panel");
+        const sourceScroller = document.querySelector(".source-panel .cm-scroller");
+        editorScroll.scrollTop = 0;
+        sourceScroller.scrollTop = 0;
+        editorScroll.scrollTop = Math.min(120, editorScroll.scrollHeight - editorScroll.clientHeight);
+        const editorAfterOwnScroll = editorScroll.scrollTop;
+        const sourceAfterEditorScroll = sourceScroller.scrollTop;
+        sourceScroller.scrollTop = Math.min(120, sourceScroller.scrollHeight - sourceScroller.clientHeight);
+        return {
+          body: rect(body),
+          editorScroll: rect(editorScroll),
+          editorSurface: rect(editorSurface),
+          sourceSlot: rect(sourceSlot),
+          sourcePanel: rect(sourcePanel),
+          bodyOverflow: getComputedStyle(body).overflow,
+          editorOverflowY: getComputedStyle(editorScroll).overflowY,
+          sourceOverflowY: getComputedStyle(sourceScroller).overflowY,
+          editorScrollable: editorScroll.scrollHeight > editorScroll.clientHeight + 1,
+          sourceScrollable: sourceScroller.scrollHeight > sourceScroller.clientHeight + 1,
+          editorAfterOwnScroll,
+          editorAfterSourceScroll: editorScroll.scrollTop,
+          sourceAfterEditorScroll,
+          sourceAfterOwnScroll: sourceScroller.scrollTop,
+          pageScrollTop: document.scrollingElement?.scrollTop ?? 0,
+          pageScrollHeight: document.scrollingElement?.scrollHeight ?? 0,
+          pageClientHeight: document.scrollingElement?.clientHeight ?? 0,
+        };
+      })()`);
+      const boundaryGap =
+        expanded.sourcePanel.top - expanded.editorScroll.bottom;
+      const rightAlignmentError = Math.abs(
+        expanded.editorSurface.right - expanded.sourcePanel.right,
+      );
+      if (
+        !expanded.body ||
+        !expanded.sourceSlot ||
+        expanded.bodyOverflow !== "hidden" ||
+        !["auto", "scroll"].includes(expanded.editorOverflowY) ||
+        !["auto", "scroll"].includes(expanded.sourceOverflowY) ||
+        !expanded.editorScrollable ||
+        !expanded.sourceScrollable ||
+        expanded.editorAfterOwnScroll <= 0 ||
+        expanded.sourceAfterEditorScroll !== 0 ||
+        expanded.sourceAfterOwnScroll <= 0 ||
+        expanded.editorAfterSourceScroll !== expanded.editorAfterOwnScroll ||
+        boundaryGap < 6 ||
+        boundaryGap > 10 ||
+        rightAlignmentError > 1.5 ||
+        expanded.pageScrollTop !== 0 ||
+        expanded.pageScrollHeight > expanded.pageClientHeight + 1
+      ) {
+        throw new Error(`Source split scrolling is invalid: ${JSON.stringify({ ...expanded, boundaryGap, rightAlignmentError })}`);
+      }
+
+      await evaluate(`document.querySelector(".source-collapse-button").click()`);
+      await waitForEvaluation(`(() => ({
+        ready:
+          Boolean(document.querySelector(".source-toggle-row")) &&
+          !document.querySelector(".source-panel"),
+      }))()`, "collapsed source layout after close");
+      console.log(
+        JSON.stringify(
+          { collapsed, expanded, boundaryGap, rightAlignmentError },
+          null,
+          2,
+        ),
+      );
+      console.log("Targeted source layout regression passed");
+      return;
+    }
+
+    if (scenario === "cursor-placement") {
+      const readPlaceholderCaret = async (
+        name,
+        expectedPlaceholderCount,
+        requireTopmostPlaceholder = false,
+      ) =>
+        waitForEvaluation(`(() => {
+          const field =
+            document.querySelector(".formula-line.is-active math-field") ??
+            document.querySelector("math-field");
+          const root = field?.shadowRoot;
+          const placeholders = [...(root?.querySelectorAll(
+            ".visualtex-structural-placeholder",
+          ) ?? [])];
+          const selected = placeholders.find(
+            (placeholder) =>
+              placeholder.classList.contains("ML__selected") ||
+              placeholder.classList.contains("ML__placeholder-selected") ||
+              Boolean(placeholder.closest(".ML__selected")),
+          );
+          const caret = selected?.querySelector(
+            ":scope > .visualtex-structural-placeholder-caret",
+          );
+          const selectedBounds = selected?.getBoundingClientRect();
+          const caretBounds = caret?.getBoundingClientRect();
+          const placeholderBounds = placeholders
+            .map((placeholder) => placeholder.getBoundingClientRect())
+            .sort((first, second) => first.top - second.top);
+          const nativeCarets = [...(root?.querySelectorAll(
+            ".ML__caret, .ML__text-caret, .ML__latex-caret",
+          ) ?? [])].filter((node) => {
+            const style = getComputedStyle(node);
+            const bounds = node.getBoundingClientRect();
+            return (
+              style.display !== "none" &&
+              style.visibility !== "hidden" &&
+              Number.parseFloat(style.opacity || "1") > 0.1 &&
+              bounds.height > 0
+            );
+          });
+          const caretLeftDelta =
+            caretBounds && selectedBounds
+              ? caretBounds.left - selectedBounds.left
+              : 99;
+          const caretRightDelta =
+            caretBounds && selectedBounds
+              ? caretBounds.right - selectedBounds.left
+              : 99;
+          const topmostSelected =
+            !${requireTopmostPlaceholder} ||
+            Boolean(
+              selectedBounds &&
+                placeholderBounds[0] &&
+                Math.abs(selectedBounds.top - placeholderBounds[0].top) <= 1,
+            );
+          return {
+            ready:
+              Boolean(field && selected && caret) &&
+              placeholders.length === ${expectedPlaceholderCount} &&
+              caretLeftDelta < -0.5 &&
+              caretRightDelta <= 0.75 &&
+              nativeCarets.length === 0 &&
+              topmostSelected,
+            name: ${JSON.stringify(name)},
+            value: field?.value ?? "",
+            selection: field?.selection ?? null,
+            placeholderCount: placeholders.length,
+            selectedBounds: selectedBounds
+              ? {
+                  left: selectedBounds.left,
+                  top: selectedBounds.top,
+                  right: selectedBounds.right,
+                  bottom: selectedBounds.bottom,
+                }
+              : null,
+            caretBounds: caretBounds
+              ? {
+                  left: caretBounds.left,
+                  top: caretBounds.top,
+                  right: caretBounds.right,
+                  bottom: caretBounds.bottom,
+                }
+              : null,
+            caretLeftDelta,
+            caretRightDelta,
+            nativeCaretCount: nativeCarets.length,
+            topmostSelected,
+          };
+        })()`, `${name} placeholder caret placement`);
+
+      await clearField();
+      await typeText("\\frac");
+      await waitForEvaluation(`(() => {
+        const panel = document.getElementById("mathlive-suggestion-popover");
+        return {
+          ready:
+            panel?.classList.contains("is-visible") &&
+            panel.querySelector("li.ML__popover__current")?.dataset.command ===
+              "\\\\frac",
+          current:
+            panel?.querySelector("li.ML__popover__current")?.dataset.command ??
+            "",
+        };
+      })()`, "native fraction suggestion");
+      await key(" ", "Space", 32);
+      const fractionState = await readPlaceholderCaret(
+        "fraction numerator",
+        2,
+        true,
+      );
+
+      await evaluate(`document.querySelector(".add-formula-line").click()`);
+      await waitForEvaluation(`(() => {
+        const field = document.querySelector(
+          ".formula-line.is-active math-field",
+        );
+        return { ready: Boolean(field?.isConnected && field.value === "") };
+      })()`, "empty line for summation insertion");
+      await evaluate(`(() => {
+        if (!document.querySelector('[data-command-id="sum"]')) {
+          document.querySelector(".sidebar-toggle")?.click();
+        }
+        return true;
+      })()`);
+      await waitForEvaluation(`(() => ({
+        ready:
+          Boolean(document.querySelector('[data-command-id="sum"]')) &&
+          Boolean(document.querySelector('[data-command-id="int"]')),
+      }))()`, "formula toolbar commands");
+      await evaluate(
+        `document.querySelector('[data-command-id="sum"]').click()`,
+      );
+      const sumState = await readPlaceholderCaret("summation", 3);
+
+      await evaluate(`document.querySelector(".add-formula-line").click()`);
+      await waitForEvaluation(`(() => {
+        const field = document.querySelector(
+          ".formula-line.is-active math-field",
+        );
+        return { ready: Boolean(field?.isConnected && field.value === "") };
+      })()`, "empty line for integral insertion");
+      await evaluate(
+        `document.querySelector('[data-command-id="int"]').click()`,
+      );
+      const integralState = await readPlaceholderCaret("integral", 4);
+
+      console.log(
+        JSON.stringify(
+          { fractionState, sumState, integralState },
+          null,
+          2,
+        ),
+      );
+      console.log("Targeted structural cursor placement regression passed");
+      return;
+    }
 
     if (scenario === "geometry") {
       await waitForEvaluation(`(() => {
@@ -1122,7 +1424,7 @@ async function main() {
             Boolean(caret) &&
             graySelectionCleared &&
             Number.parseFloat(caretStyle?.borderLeftWidth ?? "0") >= 1 &&
-            caretStyle?.left === "0px" &&
+            Number.parseFloat(caretStyle?.left ?? "0") < 0 &&
             caretStyle?.animationName.includes("visualtex-placeholder-caret-blink"),
           value: field?.value ?? "",
           placeholderCount: placeholders.length,
@@ -1218,7 +1520,7 @@ async function main() {
             field?.position === savedPosition &&
             style?.borderTopWidth === "0px" &&
             Number.parseFloat(caretStyle?.borderLeftWidth ?? "0") >= 1 &&
-            caretStyle?.left === "0px" &&
+            Number.parseFloat(caretStyle?.left ?? "0") < 0 &&
             caretStyle?.animationName.includes("visualtex-placeholder-caret-blink") &&
             ["rgb(217, 237, 249)", "rgb(207, 232, 247)"].includes(
               style?.backgroundColor ?? "",

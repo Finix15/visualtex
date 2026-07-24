@@ -296,6 +296,11 @@ const structuredSuggestionCommands = new Set([
   "\\bigcup",
   "\\bigcap",
 ]);
+const nativePlaceholderSelectionCommands = new Set([
+  "\\frac",
+  "\\dfrac",
+  "\\tfrac",
+]);
 const wrapperCommandPreviews = new Map<string, string>([
   ["\\mathbb", "\\mathbb{ABC}"],
   ["\\mathbf", "\\mathbf{ABC}"],
@@ -682,6 +687,7 @@ function installVisualTexStructuralPlaceholderStyle(field: MathfieldElement) {
       .ML__container.${visualTexPlaceholderSelectionClass} .ML__selected .ML__placeholder,
       .ML__container.${visualTexPlaceholderSelectionClass} .${visualTexPlaceholderClass}.ML__selected,
       .ML__container.${visualTexPlaceholderSelectionClass} .ML__selected .${visualTexPlaceholderClass} {
+        overflow: visible !important;
         border: 0 !important;
         background: #cfe8f7 !important;
         color: transparent !important;
@@ -689,10 +695,17 @@ function installVisualTexStructuralPlaceholderStyle(field: MathfieldElement) {
         box-shadow: none !important;
       }
 
+      .ML__container.${visualTexPlaceholderSelectionClass} .ML__caret,
+      .ML__container.${visualTexPlaceholderSelectionClass} .ML__text-caret,
+      .ML__container.${visualTexPlaceholderSelectionClass} .ML__latex-caret {
+        opacity: 0 !important;
+        animation: none !important;
+      }
+
       .${visualTexPlaceholderCaretClass} {
         position: absolute !important;
         z-index: 2 !important;
-        left: 0 !important;
+        left: calc(-1 * max(1px, 0.045em)) !important;
         top: 0.04em !important;
         display: block !important;
         width: 0 !important;
@@ -1025,7 +1038,9 @@ function commitNativeSuggestion(
       mode: "math",
       format: "latex",
       insertionMode: "replaceSelection",
-      selectionMode: "after",
+      selectionMode: nativePlaceholderSelectionCommands.has(selectedCommand)
+        ? "placeholder"
+        : "after",
       focus: true,
       scrollIntoView: false,
     });

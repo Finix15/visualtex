@@ -2652,10 +2652,6 @@ button:disabled {
     right: 8px;
     max-width: calc(100% - 16px);
   }
-
-  .source-toggle-row > span {
-    display: none;
-  }
 }
 
 /* macOS scientific workspace ------------------------------------------------ */
@@ -3259,11 +3255,41 @@ button:disabled {
   white-space: nowrap;
 }
 
+.editor-pane-body {
+  --editor-pane-inset: 14px;
+  --source-pane-gap: 8px;
+  --source-pane-height: clamp(172px, 32vh, 300px);
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) 36px;
+  overflow: hidden;
+  background: var(--bg-elevated);
+}
+
+.editor-pane-body.has-source {
+  grid-template-rows: minmax(0, 1fr) var(--source-pane-height);
+}
+
 .editor-pane-scroll {
   min-width: 0;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
   overflow: auto;
-  padding: 16px;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+
+.editor-pane-scroll::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.editor-pane-scroll > .editor-surface {
+  width: 100%;
+  flex: 1 0 auto;
+  min-height: max(320px, calc(100% - var(--editor-pane-inset)));
 }
 
 .canvas-tool-group {
@@ -3342,33 +3368,61 @@ button:disabled {
 }
 
 .source-toggle-row {
+  min-width: 0;
   height: 36px;
+  display: flex;
+  align-items: center;
   justify-content: flex-start;
-  padding: 4px 0 0;
+  gap: 2px;
+  padding: 0 var(--editor-pane-inset);
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.source-toggle-label,
+.source-toggle {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  padding: 0;
+  border-radius: 6px;
+}
+
+.source-toggle-label {
+  color: var(--text-muted);
+  pointer-events: none;
 }
 
 .source-toggle {
-  width: 34px;
   min-height: 30px;
-  justify-content: center;
-  gap: 2px;
-  padding: 0;
+  gap: 0;
   font-size: 11px;
 }
 
-.source-toggle-row > span {
-  font-size: 11px;
+.source-pane-slot {
+  min-width: 0;
+  min-height: 0;
+  padding: var(--source-pane-gap) var(--editor-pane-inset)
+    var(--editor-pane-inset);
+  overflow: hidden;
+  background: var(--bg-elevated);
 }
 
 .source-panel {
-  min-height: 144px;
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 38px minmax(0, 1fr);
   border-radius: 8px;
   background: var(--surface);
   box-shadow: none;
 }
 
 .source-panel-header {
-  min-height: 38px;
+  height: 38px;
+  min-height: 0;
   background: var(--bg-elevated);
 }
 
@@ -3378,7 +3432,8 @@ button:disabled {
   font-size: 11px;
 }
 
-.source-copy-button {
+.source-copy-button,
+.source-collapse-button {
   width: 28px;
   padding: 0;
 }
@@ -3389,13 +3444,23 @@ button:disabled {
   font-size: 10px;
 }
 
-.codemirror-host,
-.cm-editor {
-  min-height: 104px;
+.source-panel .codemirror-host {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  overflow: hidden;
 }
 
-.source-panel .codemirror-host {
-  max-height: 260px;
+.source-panel .cm-editor {
+  height: 100%;
+  min-height: 0;
+}
+
+.source-panel .cm-scroller {
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .inline-ocr-progress strong,
@@ -3603,16 +3668,12 @@ button:disabled {
     width: 130px;
   }
 
-  .editor-pane-scroll {
-    padding: 12px;
+  .editor-pane-body {
+    --editor-pane-inset: 12px;
   }
 
   .canvas-ocr-model select {
     width: 116px;
-  }
-
-  .source-toggle-row > span {
-    display: none;
   }
 }
 
@@ -4913,7 +4974,7 @@ textarea:disabled {
 }
 
 .editor-pane-scroll {
-  padding: 14px;
+  padding: var(--editor-pane-inset) var(--editor-pane-inset) 0;
   background: var(--bg-elevated);
 }
 
@@ -5166,8 +5227,8 @@ textarea:disabled {
     gap: 5px;
   }
 
-  .editor-pane-scroll {
-    padding: 10px;
+  .editor-pane-body {
+    --editor-pane-inset: 10px;
   }
 
   .editor-surface {
@@ -5218,8 +5279,8 @@ textarea:disabled {
     width: min(252px, calc(100vw - 44px));
   }
 
-  .editor-pane-scroll {
-    padding: 7px;
+  .editor-pane-body {
+    --editor-pane-inset: 7px;
   }
 
   .editor-surface {
@@ -5279,6 +5340,10 @@ textarea:disabled {
 }
 
 @media (max-height: 620px) {
+  .editor-pane-body {
+    --source-pane-height: clamp(148px, 30vh, 220px);
+  }
+
   .settings-dialog,
   .ocr-dialog,
   .onboarding-dialog {
@@ -5310,8 +5375,9 @@ textarea:disabled {
     padding-inline: 10px;
   }
 
-  .editor-pane-scroll {
-    padding: 6px;
+  .editor-pane-body {
+    --editor-pane-inset: 6px;
+    grid-template-rows: minmax(0, 1fr) 32px;
   }
 
   .editor-surface {
