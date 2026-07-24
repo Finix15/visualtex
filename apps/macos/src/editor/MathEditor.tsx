@@ -688,6 +688,9 @@ function installVisualTexStructuralPlaceholderStyle(field: MathfieldElement) {
       .ML__container.${visualTexPlaceholderSelectionClass} .${visualTexPlaceholderClass}.ML__selected,
       .ML__container.${visualTexPlaceholderSelectionClass} .ML__selected .${visualTexPlaceholderClass} {
         overflow: visible !important;
+        /* Visible overflow changes an inline-block's baseline to its last text
+           baseline. Offset that font-metric difference so selection stays put. */
+        vertical-align: -0.2425em !important;
         border: 0 !important;
         background: #cfe8f7 !important;
         color: transparent !important;

@@ -1798,6 +1798,11 @@ async function main() {
     if (scenario === "structural-placeholder") {
       const placeholderCases = [
         {
+          name: "inline selected baseline",
+          source: String.raw`\placeholder{}d\placeholder{}`,
+          expectedCount: 2,
+        },
+        {
           name: "fraction",
           source: String.raw`\frac{\placeholder{}}{\placeholder{}}`,
           expectedCount: 2,
@@ -1858,6 +1863,7 @@ async function main() {
             const bounds = placeholder.getBoundingClientRect();
             const style = getComputedStyle(placeholder);
             return {
+              top: bounds.top,
               width: bounds.width,
               height: bounds.height,
               ratio: bounds.height > 0 ? bounds.width / bounds.height : 99,
@@ -1881,10 +1887,18 @@ async function main() {
             "rgb(217, 237, 249)",
             "rgb(207, 232, 247)",
           ]);
+          const selectedStyle = styles.find((item) => item.selected);
+          const unselectedStyle = styles.find((item) => !item.selected);
+          const baselineDelta =
+            selectedStyle && unselectedStyle
+              ? Math.abs(selectedStyle.top - unselectedStyle.top)
+              : 0;
           return {
             ready:
               Boolean(styleNode) &&
               placeholders.length === ${testCase.expectedCount} &&
+              (${JSON.stringify(testCase.name)} !== "inline selected baseline" ||
+                baselineDelta <= 1) &&
               styles.every(
                 (item) =>
                   item.width > 7 &&
@@ -1903,6 +1917,7 @@ async function main() {
             value: field?.value ?? "",
             styleInstalled: Boolean(styleNode),
             count: placeholders.length,
+            baselineDelta,
             styles,
           };
         })()`, `AxMath-style structural placeholders: ${testCase.name}`);
