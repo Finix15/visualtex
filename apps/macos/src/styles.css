@@ -1092,8 +1092,8 @@ kbd {
 }
 
 .suggestion-popup {
-  position: absolute;
-  z-index: 60;
+  position: fixed;
+  z-index: 300;
   width: min(420px, calc(100% - 24px));
   overflow: hidden;
   border: 1px solid var(--border);

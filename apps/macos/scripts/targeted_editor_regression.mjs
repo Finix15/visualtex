@@ -3127,6 +3127,50 @@ async function main() {
         };
       })()`, "other-command candidate list opens with multiple theta variants");
 
+      await evaluate(`document.querySelector(".source-toggle")?.click()`);
+      await waitForEvaluation(`(() => ({
+        ready:
+          Boolean(document.querySelector(".source-panel")) &&
+          Boolean(document.querySelector(".suggestion-popup")),
+      }))()`, "source pane opens below command candidates");
+      const layerState = await waitForEvaluation(`(() => {
+        const popup = document.querySelector(".suggestion-popup");
+        const editorScroll = document.querySelector(".editor-pane-scroll");
+        const sourcePanel = document.querySelector(".source-panel");
+        if (!popup || !editorScroll || !sourcePanel) return { ready: false };
+        const editorBounds = editorScroll.getBoundingClientRect();
+        popup.style.top = (editorBounds.bottom - 60) + "px";
+        const popupBounds = popup.getBoundingClientRect();
+        const sourceBounds = sourcePanel.getBoundingClientRect();
+        const testX = popupBounds.left + popupBounds.width / 2;
+        const testY = Math.min(
+          popupBounds.bottom - 2,
+          Math.max(sourceBounds.top + 2, editorBounds.bottom + 18),
+        );
+        const topmostNode = document.elementFromPoint(testX, testY);
+        const style = getComputedStyle(popup);
+        return {
+          ready:
+            popup.parentElement === document.body &&
+            style.position === "fixed" &&
+            Number.parseInt(style.zIndex || "0", 10) >= 300 &&
+            popupBounds.bottom > sourceBounds.top &&
+            Boolean(topmostNode && popup.contains(topmostNode)),
+          parentIsBody: popup.parentElement === document.body,
+          position: style.position,
+          zIndex: style.zIndex,
+          popupBottom: popupBounds.bottom,
+          sourceTop: sourceBounds.top,
+          topmostClass: topmostNode?.className ?? "",
+        };
+      })()`, "VisualTeX command candidate stays above the source pane");
+      await evaluate(`document.querySelector(".source-collapse-button")?.click()`);
+      await waitForEvaluation(`(() => ({
+        ready:
+          !document.querySelector(".source-panel") &&
+          Boolean(document.querySelector(".suggestion-popup")),
+      }))()`, "source pane closes without dismissing command candidates");
+
       await key("ArrowDown", "ArrowDown", 40);
       const firstNavigationState = await waitForEvaluation(`(() => {
         const selected = document.querySelector(
@@ -3179,6 +3223,7 @@ async function main() {
         stableNavigationState,
         secondNavigationState,
         navigationCommitState,
+        layerState,
       }, null, 2));
       console.log("Targeted other-command suggestion dismissal and navigation regression passed");
       return;

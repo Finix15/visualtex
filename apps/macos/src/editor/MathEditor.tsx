@@ -2612,27 +2612,24 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       const fieldWithCaret = field as MathfieldElement & {
         getCaretPoint?: () => { x: number; y: number; height?: number };
       };
-      const surface = surfaceRef.current;
-      if (!surface) return;
-      const surfaceRect = surface.getBoundingClientRect();
-      const popupWidth = Math.min(440, Math.max(280, surfaceRect.width - 24));
+      const popupWidth = Math.min(440, Math.max(280, window.innerWidth - 24));
       const clampLeft = (left: number) =>
-        Math.max(12, Math.min(surfaceRect.width - popupWidth - 12, left));
+        Math.max(12, Math.min(window.innerWidth - popupWidth - 12, left));
       const caret = fieldWithCaret.getCaretPoint?.();
 
       if (caret) {
         setPopupPosition({
-          left: clampLeft(caret.x - surfaceRect.left),
+          left: clampLeft(caret.x),
           top: Math.max(
             64,
-            caret.y - surfaceRect.top + (caret.height ?? 28) + 8,
+            caret.y + (caret.height ?? 28) + 8,
           ),
         });
       } else {
         const fieldRect = field.getBoundingClientRect();
         setPopupPosition({
-          left: clampLeft(fieldRect.left - surfaceRect.left + 48),
-          top: fieldRect.bottom - surfaceRect.top + 8,
+          left: clampLeft(fieldRect.left + 48),
+          top: fieldRect.bottom + 8,
         });
       }
     };
@@ -3655,6 +3652,30 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         selectSuggestionIndex(suggestions.length - 1);
       }
     }, [suggestions.length, selectedIndex]);
+
+    useEffect(() => {
+      if (!suggestions.length) return;
+      const lineId = activeLineIdRef.current;
+      const field = lineId ? fieldRefs.current.get(lineId) : null;
+      if (!field?.isConnected) return;
+
+      const reposition = () => {
+        if (field.isConnected) updatePopupPosition(field);
+      };
+      const editorScroll =
+        surfaceRef.current?.closest<HTMLElement>(".editor-pane-scroll") ?? null;
+      const resizeObserver = new ResizeObserver(reposition);
+      if (surfaceRef.current) resizeObserver.observe(surfaceRef.current);
+      window.addEventListener("resize", reposition);
+      editorScroll?.addEventListener("scroll", reposition, { passive: true });
+      reposition();
+
+      return () => {
+        resizeObserver.disconnect();
+        window.removeEventListener("resize", reposition);
+        editorScroll?.removeEventListener("scroll", reposition);
+      };
+    }, [activeLineId, suggestions.length]);
 
     useEffect(() => {
       queryRef.current = query;
