@@ -2507,9 +2507,9 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
 
       if (selection) {
         const clamped = clampSelection(selection, field.lastOffset);
+        // The selection setter also establishes the active endpoint. Assigning
+        // position afterwards would collapse a selected placeholder.
         field.selection = clamped;
-        const [start, end] = clamped.ranges[0] ?? [field.lastOffset, field.lastOffset];
-        field.position = clamped.direction === "backward" ? start : end;
       } else if (moveToEnd) {
         const end = field.lastOffset;
         field.selection = {
@@ -2561,7 +2561,21 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         pendingFocusRef.current = null;
         window.requestAnimationFrame(() => {
           if (!apply()) return;
-          window.setTimeout(apply, 80);
+          window.setTimeout(() => {
+            const currentField = fieldRefs.current.get(lineId);
+            // Do not let the delayed focus repair overwrite input that started
+            // immediately after a toolbar insertion.
+            if (
+              !currentField?.isConnected ||
+              currentField.mode !== "math" ||
+              rawLatexInput(currentField) ||
+              (expectedLatex !== null &&
+                normalizeChineseLatex(currentField.value) !== expectedLatex)
+            ) {
+              return;
+            }
+            apply();
+          }, 80);
         });
         return true;
       };

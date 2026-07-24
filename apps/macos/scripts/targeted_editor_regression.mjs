@@ -375,8 +375,8 @@ async function main() {
         expanded.sourceAfterEditorScroll !== 0 ||
         expanded.sourceAfterOwnScroll <= 0 ||
         expanded.editorAfterSourceScroll !== expanded.editorAfterOwnScroll ||
-        boundaryGap < 6 ||
-        boundaryGap > 10 ||
+        boundaryGap < 14 ||
+        boundaryGap > 18 ||
         rightAlignmentError > 1.5 ||
         expanded.pageScrollTop !== 0 ||
         expanded.pageScrollHeight > expanded.pageClientHeight + 1
@@ -456,10 +456,15 @@ async function main() {
                 placeholderBounds[0] &&
                 Math.abs(selectedBounds.top - placeholderBounds[0].top) <= 1,
             );
+          const selectionRange = field?.selection?.ranges?.[0] ?? null;
+          const placeholderSelected =
+            Boolean(selectionRange) &&
+            Math.abs(selectionRange[1] - selectionRange[0]) === 1;
           return {
             ready:
               Boolean(field && selected && caret) &&
               placeholders.length === ${expectedPlaceholderCount} &&
+              placeholderSelected &&
               caretLeftDelta < -0.5 &&
               caretRightDelta <= 0.75 &&
               nativeCarets.length === 0 &&
@@ -488,8 +493,39 @@ async function main() {
             caretRightDelta,
             nativeCaretCount: nativeCarets.length,
             topmostSelected,
+            placeholderSelected,
           };
         })()`, `${name} placeholder caret placement`);
+
+      const typeBackslashOverPlaceholder = async (
+        name,
+        expectedPlaceholderCount,
+      ) => {
+        await key("\\", "Backslash", 220);
+        return waitForEvaluation(`(() => {
+          const field = document.querySelector(
+            ".formula-line.is-active math-field",
+          );
+          const placeholders =
+            field?.shadowRoot?.querySelectorAll(
+              ".visualtex-structural-placeholder",
+            ) ?? [];
+          const rawLatex = [...(field?.shadowRoot?.querySelectorAll(
+            ".ML__raw-latex",
+          ) ?? [])]
+            .map((node) => node.textContent ?? "")
+            .join("");
+          return {
+            ready:
+              placeholders.length === ${expectedPlaceholderCount} &&
+              rawLatex.includes("\\\\"),
+            value: field?.value ?? "",
+            placeholderCount: placeholders.length,
+            rawLatex,
+            selection: field?.selection ?? null,
+          };
+        })()`, `${name} direct backslash replaces placeholder`);
+      };
 
       await clearField();
       await typeText("\\frac");
@@ -510,6 +546,10 @@ async function main() {
         "fraction numerator",
         2,
         true,
+      );
+      const fractionTypedState = await typeBackslashOverPlaceholder(
+        "fraction numerator",
+        1,
       );
 
       await evaluate(`document.querySelector(".add-formula-line").click()`);
@@ -534,6 +574,7 @@ async function main() {
         `document.querySelector('[data-command-id="sum"]').click()`,
       );
       const sumState = await readPlaceholderCaret("summation", 3);
+      const sumTypedState = await typeBackslashOverPlaceholder("summation", 2);
 
       await evaluate(`document.querySelector(".add-formula-line").click()`);
       await waitForEvaluation(`(() => {
@@ -546,10 +587,21 @@ async function main() {
         `document.querySelector('[data-command-id="int"]').click()`,
       );
       const integralState = await readPlaceholderCaret("integral", 4);
+      const integralTypedState = await typeBackslashOverPlaceholder(
+        "integral",
+        3,
+      );
 
       console.log(
         JSON.stringify(
-          { fractionState, sumState, integralState },
+          {
+            fractionState,
+            fractionTypedState,
+            sumState,
+            sumTypedState,
+            integralState,
+            integralTypedState,
+          },
           null,
           2,
         ),
