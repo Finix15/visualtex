@@ -3,9 +3,9 @@ import { rm } from "node:fs/promises";
 import process from "node:process";
 
 const scenario = process.argv[2];
-if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "native-space-selection", "candidate-query-reset", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "caret-probe", "scripts", "upright", "suggestions", "navigation", "geometry", "source-layout", "cursor-placement", "settings", "layout", "delete", "export"]).has(scenario)) {
+if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "native-space-selection", "candidate-query-reset", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "caret-probe", "scripts", "upright", "suggestions", "navigation", "geometry", "source-layout", "toolbar-compact", "cursor-placement", "settings", "layout", "delete", "export"]).has(scenario)) {
   throw new Error(
-    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|native-space-selection|candidate-query-reset|raw-placeholder-visual|placeholder-selection|structural-placeholder|caret-probe|scripts|upright|suggestions|navigation|geometry|source-layout|cursor-placement|settings|layout|delete|export>",
+    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|native-space-selection|candidate-query-reset|raw-placeholder-visual|placeholder-selection|structural-placeholder|caret-probe|scripts|upright|suggestions|navigation|geometry|source-layout|toolbar-compact|cursor-placement|settings|layout|delete|export>",
   );
 }
 
@@ -255,6 +255,495 @@ async function main() {
       await sleep(100);
       await focusField();
     };
+
+    if (scenario === "toolbar-compact") {
+      await evaluate(`(() => {
+        if (!document.querySelector(".formula-toolbar")) {
+          document.querySelector(".sidebar-toggle")?.click();
+        }
+        return true;
+      })()`);
+      await waitForEvaluation(`(() => ({
+        ready: Boolean(
+          document.querySelector(".formula-toolbar") &&
+            document.querySelector(".template-strip") &&
+            document.querySelectorAll(".toolbar-tab").length === 9,
+        ),
+      }))()`, "formula toolbar");
+
+      const tabLayoutState = await waitForEvaluation(`(() => {
+        const expectedOrder = [
+          "common",
+          "structure",
+          "calculus",
+          "matrix",
+          "relation",
+          "greek",
+          "arrow",
+          "physics",
+          "set",
+        ];
+        const container = document.querySelector(".toolbar-tabs");
+        const tabs = [...document.querySelectorAll(".toolbar-tab")];
+        const bounds = tabs.map((tab) => tab.getBoundingClientRect());
+        const rows = [];
+        for (const boundsItem of bounds) {
+          const row = rows.find(
+            (entry) => Math.abs(entry.top - boundsItem.top) <= 1,
+          );
+          if (row) row.count += 1;
+          else rows.push({ top: boundsItem.top, count: 1 });
+        }
+        const style = container ? getComputedStyle(container) : null;
+        const gridColumnCount =
+          style?.gridTemplateColumns.split(" ").filter(Boolean).length ?? 0;
+        const actualOrder = tabs.map((tab) => tab.dataset.category ?? "");
+        const labelsFit = tabs.every(
+          (tab) => tab.scrollWidth <= tab.clientWidth + 1,
+        );
+        const containerHeight =
+          container?.getBoundingClientRect().height ?? Number.POSITIVE_INFINITY;
+        return {
+          ready:
+            JSON.stringify(actualOrder) === JSON.stringify(expectedOrder) &&
+            gridColumnCount === 3 &&
+            rows.length === 3 &&
+            rows.every((row) => row.count === 3) &&
+            labelsFit &&
+            containerHeight <= 120,
+          actualOrder,
+          gridColumnCount,
+          rows,
+          labelsFit,
+          containerHeight,
+        };
+      })()`, "three-by-three toolbar tabs");
+
+      const categories = [
+        "common",
+        "structure",
+        "calculus",
+        "matrix",
+        "relation",
+        "greek",
+        "arrow",
+        "physics",
+        "set",
+      ];
+      const categoryStates = [];
+
+      for (const category of categories) {
+        await evaluate(`document.querySelector(
+          '.toolbar-tab[data-category="${category}"]',
+        ).click()`);
+        await sleep(100);
+        const state = await waitForEvaluation(`(() => {
+          const strip = document.querySelector(".template-strip");
+          const buttons = [...document.querySelectorAll(
+            ".template-strip > .template-button",
+          )];
+          const bounds = buttons.map((button) =>
+            button.getBoundingClientRect(),
+          );
+          const firstRowTop = bounds[0]?.top ?? -1;
+          const firstRow = bounds.filter(
+            (rect) => Math.abs(rect.top - firstRowTop) <= 1,
+          );
+          const directContentOnly = buttons.every(
+            (button) =>
+              button.children.length === 1 &&
+              button.firstElementChild?.classList.contains("math-preview"),
+          );
+          const previewStates = buttons.map((button) => {
+            const preview = button.querySelector(".math-preview");
+            const latex = preview?.querySelector(".ML__latex");
+            const style = preview ? getComputedStyle(preview) : null;
+            const previewBounds = preview?.getBoundingClientRect();
+            const latexBounds = latex?.getBoundingClientRect();
+            return {
+              visible: Boolean(
+                preview &&
+                  latex &&
+                  style?.display !== "none" &&
+                  style?.visibility !== "hidden" &&
+                  Number.parseFloat(style?.opacity || "1") > 0.1 &&
+                  previewBounds &&
+                  previewBounds.width > 4 &&
+                  previewBounds.height > 4 &&
+                  latexBounds &&
+                  latexBounds.width > 0 &&
+                  latexBounds.height > 0,
+              ),
+              display: style?.display ?? "missing",
+              width: previewBounds?.width ?? 0,
+              height: previewBounds?.height ?? 0,
+              latexWidth: latexBounds?.width ?? 0,
+              latexHeight: latexBounds?.height ?? 0,
+            };
+          });
+          const previewsVisible = previewStates.every((state) => state.visible);
+          const ariaLabelsPresent = buttons.every(
+            (button) => Boolean(button.getAttribute("aria-label")?.trim()),
+          );
+          const equalHeights = bounds.every(
+            (rect) => Math.abs(rect.height - 54) <= 1,
+          );
+          const equalWidths = bounds.every(
+            (rect) =>
+              bounds[0] && Math.abs(rect.width - bounds[0].width) <= 1,
+          );
+          const fourColumns =
+            firstRow.length === Math.min(4, buttons.length) &&
+            firstRow.every(
+              (rect, index) =>
+                index === 0 || rect.left > firstRow[index - 1].left,
+            );
+          const stripStyle = strip ? getComputedStyle(strip) : null;
+          const gridColumnCount = stripStyle?.gridTemplateColumns
+            .split(" ")
+            .filter(Boolean).length ?? 0;
+          return {
+            ready:
+              Boolean(strip) &&
+              buttons.length > 0 &&
+              directContentOnly &&
+              previewsVisible &&
+              ariaLabelsPresent &&
+              equalHeights &&
+              equalWidths &&
+              fourColumns &&
+              gridColumnCount === 4 &&
+              strip.scrollWidth <= strip.clientWidth + 1,
+            category: ${JSON.stringify(category)},
+            buttonCount: buttons.length,
+            firstRowCount: firstRow.length,
+            buttonWidth: bounds[0]?.width ?? 0,
+            buttonHeight: bounds[0]?.height ?? 0,
+            gridTemplateColumns: stripStyle?.gridTemplateColumns ?? "",
+            gridColumnCount,
+            directContentOnly,
+            previewsVisible,
+            firstPreviewState: previewStates[0] ?? null,
+            ariaLabelsPresent,
+            equalHeights,
+            equalWidths,
+            horizontalOverflow:
+              strip ? strip.scrollWidth - strip.clientWidth : -1,
+          };
+        })()`, `compact four-column toolbar category: ${category}`);
+        categoryStates.push(state);
+      }
+
+      await evaluate(`document.querySelector(
+        '.toolbar-tab[data-category="matrix"]',
+      ).click()`);
+      const matrixDelimiterState = await waitForEvaluation(`(() => {
+        const buttons = [...document.querySelectorAll(
+          ".matrix-delimiter-options button",
+        )];
+        const bounds = buttons.map((button) => button.getBoundingClientRect());
+        const previewStates = buttons.map((button) => {
+          const preview = button.querySelector(".math-preview");
+          const latex = preview?.querySelector(".ML__latex");
+          const style = preview ? getComputedStyle(preview) : null;
+          const previewBounds = preview?.getBoundingClientRect();
+          const latexBounds = latex?.getBoundingClientRect();
+          return {
+            visible: Boolean(
+              preview &&
+                latex &&
+                style?.display !== "none" &&
+                style?.visibility !== "hidden" &&
+                Number.parseFloat(style?.opacity || "1") > 0.1 &&
+                previewBounds &&
+                previewBounds.width > 4 &&
+                previewBounds.height > 4 &&
+                latexBounds &&
+                latexBounds.width > 0 &&
+                latexBounds.height > 0,
+            ),
+            display: style?.display ?? "missing",
+            width: previewBounds?.width ?? 0,
+            height: previewBounds?.height ?? 0,
+            latexWidth: latexBounds?.width ?? 0,
+            latexHeight: latexBounds?.height ?? 0,
+          };
+        });
+        return {
+          ready:
+            buttons.length === 3 &&
+            buttons.every(
+              (button) =>
+                button.children.length === 1 &&
+                button.firstElementChild?.classList.contains("math-preview") &&
+                Boolean(button.getAttribute("aria-label")?.trim()),
+            ) &&
+            previewStates.every((state) => state.visible) &&
+            bounds.every((rect) => rect.height <= 50),
+          count: buttons.length,
+          heights: bounds.map((rect) => rect.height),
+          contentCounts: buttons.map((button) => button.children.length),
+          previewStates,
+          ariaLabels: buttons.map(
+            (button) => button.getAttribute("aria-label") ?? "",
+          ),
+        };
+      })()`, "compact matrix delimiter symbols");
+
+      const adaptiveCategoryStates = [];
+      for (const category of ["common", "structure", "calculus", "matrix"]) {
+        await evaluate(`document.querySelector(
+          '.toolbar-tab[data-category="${category}"]',
+        ).click()`);
+        const state = await waitForEvaluation(`(() => {
+          const buttons = [...document.querySelectorAll(
+            ".template-strip > .template-button",
+          )];
+          const previews = buttons.map((button) => {
+            const host = button.querySelector(".math-preview");
+            const content = host?.querySelector(".math-preview-fit-content");
+            const hostBounds = host?.getBoundingClientRect();
+            const contentBounds = content?.getBoundingClientRect();
+            const widthRatio =
+              hostBounds && contentBounds && hostBounds.width > 0
+                ? contentBounds.width / hostBounds.width
+                : 0;
+            const heightRatio =
+              hostBounds && contentBounds && hostBounds.height > 0
+                ? contentBounds.height / hostBounds.height
+                : 0;
+            const inside = Boolean(
+              hostBounds &&
+                contentBounds &&
+                contentBounds.left >= hostBounds.left - 0.75 &&
+                contentBounds.right <= hostBounds.right + 0.75 &&
+                contentBounds.top >= hostBounds.top - 0.75 &&
+                contentBounds.bottom <= hostBounds.bottom + 0.75,
+            );
+            return {
+              commandId: button.dataset.commandId ?? "",
+              previewLatex: button.dataset.previewLatex ?? "",
+              autoFit: button.classList.contains("is-auto-fit"),
+              fitReady: host?.dataset.fitReady === "true",
+              scale: Number.parseFloat(host?.dataset.fitScale ?? "0"),
+              inside,
+              widthRatio,
+              heightRatio,
+              fillRatio: Math.max(widthRatio, heightRatio),
+              host: hostBounds
+                ? { width: hostBounds.width, height: hostBounds.height }
+                : null,
+              content: contentBounds
+                ? { width: contentBounds.width, height: contentBounds.height }
+                : null,
+            };
+          });
+          const invalid = previews.filter(
+            (preview) =>
+              !preview.autoFit ||
+              !preview.fitReady ||
+              !preview.inside ||
+              preview.fillRatio < 0.72 ||
+              !Number.isFinite(preview.scale) ||
+              preview.scale <= 0,
+          );
+          return {
+            ready: buttons.length > 0 && invalid.length === 0,
+            category: ${JSON.stringify(category)},
+            buttonCount: buttons.length,
+            minimumFillRatio: Math.min(
+              ...previews.map((preview) => preview.fillRatio),
+            ),
+            maximumScale: Math.max(
+              ...previews.map((preview) => preview.scale),
+            ),
+            invalid,
+            previews,
+          };
+        })()`, `per-command fitted previews: ${category}`);
+        adaptiveCategoryStates.push(state);
+      }
+
+      await evaluate(`document.querySelector(
+        '.toolbar-tab[data-category="physics"]',
+      ).click()`);
+      const physicsExceptionState = await waitForEvaluation(`(() => {
+        const inspect = (commandId) => {
+          const button = document.querySelector(
+            '.template-button[data-command-id="' + commandId + '"]',
+          );
+          const host = button?.querySelector(".math-preview");
+          const content = host?.querySelector(".math-preview-fit-content");
+          const hostBounds = host?.getBoundingClientRect();
+          const contentBounds = content?.getBoundingClientRect();
+          const widthRatio =
+            hostBounds && contentBounds && hostBounds.width > 0
+              ? contentBounds.width / hostBounds.width
+              : 0;
+          const heightRatio =
+            hostBounds && contentBounds && hostBounds.height > 0
+              ? contentBounds.height / hostBounds.height
+              : 0;
+          return {
+            commandId,
+            autoFit: button?.classList.contains("is-auto-fit") ?? false,
+            fitReady: host?.dataset.fitReady === "true",
+            scale: Number.parseFloat(host?.dataset.fitScale ?? "0"),
+            inside: Boolean(
+              hostBounds &&
+                contentBounds &&
+                contentBounds.left >= hostBounds.left - 0.75 &&
+                contentBounds.right <= hostBounds.right + 0.75 &&
+                contentBounds.top >= hostBounds.top - 0.75 &&
+                contentBounds.bottom <= hostBounds.bottom + 0.75,
+            ),
+            fillRatio: Math.max(widthRatio, heightRatio),
+            host: hostBounds
+              ? { width: hostBounds.width, height: hostBounds.height }
+              : null,
+            content: contentBounds
+              ? { width: contentBounds.width, height: contentBounds.height }
+              : null,
+          };
+        };
+        const commutator = inspect("commutator");
+        const anticommutator = inspect("anticommutator");
+        const ordinaryButtons = [...document.querySelectorAll(
+          ".template-strip > .template-button:not([data-command-id='commutator']):not([data-command-id='anticommutator'])",
+        )];
+        const ordinaryUnchanged = ordinaryButtons.every(
+          (button) =>
+            !button.classList.contains("is-auto-fit") &&
+            button.querySelector(".math-preview")?.dataset.fit === "none",
+        );
+        return {
+          ready:
+            [commutator, anticommutator].every(
+              (preview) =>
+                preview.autoFit &&
+                preview.fitReady &&
+                preview.inside &&
+                preview.fillRatio >= 0.72 &&
+                preview.scale > 0,
+            ) && ordinaryUnchanged,
+          commutator,
+          anticommutator,
+          ordinaryUnchanged,
+        };
+      })()`, "fitted physics bracket previews");
+
+      await evaluate(`document.querySelector(
+        '.toolbar-tab[data-category="calculus"]',
+      ).click()`);
+      const calculusPreviewState = await waitForEvaluation(`(() => {
+        const preview = (commandId) =>
+          document.querySelector(
+            '.template-button[data-command-id="' + commandId + '"]',
+          )?.dataset.previewLatex ?? "";
+        const values = {
+          intplain: preview("intplain"),
+          definiteIntegral: preview("int"),
+          summation: preview("sum"),
+          product: preview("prod"),
+          limit: preview("lim"),
+        };
+        return {
+          ready:
+            values.intplain === "\\\\int" &&
+            values.definiteIntegral === "\\\\int_a^b" &&
+            values.summation === "\\\\sum_{i=1}^{n}" &&
+            values.product === "\\\\prod_{i=1}^{n}" &&
+            values.limit === "\\\\lim_{x\\\\to0}" &&
+            !Object.values(values).some(
+              (value) =>
+                value.includes("f(") ||
+                value.includes("mathrm") ||
+                value.includes("a_i"),
+            ),
+          values,
+        };
+      })()`, "simplified calculus toolbar previews");
+
+      await evaluate(`document.querySelector(
+        '.toolbar-tab[data-category="common"]',
+      ).click()`);
+      const commonContentsState = await waitForEvaluation(`(() => {
+        const expectedIds = [
+          "frac",
+          "sqrt",
+          "power",
+          "subscript",
+          "hat",
+          "tilde",
+          "parentheses",
+          "absolute",
+          "intplain",
+          "int",
+          "iint",
+          "oint",
+          "sum",
+          "prod",
+          "lim",
+          "partial",
+          "derivative",
+          "nabla",
+          "infty",
+          "matrix2",
+          "cases",
+          "vector",
+          "alpha",
+          "beta",
+          "gamma",
+          "theta",
+          "lambda",
+          "mu",
+          "pi",
+          "sigma",
+          "omega",
+          "equal",
+          "neq",
+          "approx",
+          "leq",
+          "geq",
+          "propto",
+          "in",
+          "subset",
+          "rightarrow",
+        ];
+        const buttons = [...document.querySelectorAll(
+          ".template-strip > .template-button",
+        )];
+        const actualIds = buttons.map((button) => button.dataset.commandId ?? "");
+        const missingIds = expectedIds.filter((id) => !actualIds.includes(id));
+        return {
+          ready:
+            actualIds.length === expectedIds.length &&
+            JSON.stringify(actualIds) === JSON.stringify(expectedIds) &&
+            missingIds.length === 0,
+          count: actualIds.length,
+          actualIds,
+          missingIds,
+        };
+      })()`, "expanded common formula collection");
+
+      console.log(
+        JSON.stringify(
+          {
+            tabLayoutState,
+            categoryStates,
+            matrixDelimiterState,
+            adaptiveCategoryStates,
+            physicsExceptionState,
+            calculusPreviewState,
+            commonContentsState,
+          },
+          null,
+          2,
+        ),
+      );
+      console.log("Targeted compact formula toolbar regression passed");
+      return;
+    }
 
     if (scenario === "source-layout") {
       await evaluate(`(() => {

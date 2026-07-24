@@ -521,7 +521,7 @@ textarea:focus-visible,
   transform: scale(0.97);
 }
 
-.template-button > span:last-child {
+.template-button > .template-label {
   width: 100%;
   overflow: hidden;
   font-size: 9px;
@@ -564,9 +564,29 @@ textarea:focus-visible,
   font-size: 18px;
 }
 
+.math-preview-fit-content {
+  display: contents;
+}
+
+.math-preview[data-fit="contain"] .math-preview-fit-content {
+  width: max-content;
+  max-width: none;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  transform: scale(var(--math-preview-fit-scale, 1));
+  transform-origin: center;
+  will-change: transform;
+}
+
 .math-preview .ML__latex {
   max-width: 100%;
   pointer-events: none;
+}
+
+.math-preview[data-fit="contain"] .ML__latex {
+  max-width: none;
 }
 
 .workspace {
@@ -3098,25 +3118,27 @@ button:disabled {
 
 .toolbar-tabs {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: stretch;
-  gap: 4px;
-  padding: 8px;
+  gap: 3px;
+  padding: 6px 7px 7px;
   overflow: visible;
   border-bottom: 1px solid var(--border);
 }
 
 .toolbar-tab {
+  min-width: 0;
   height: 30px;
-  justify-content: flex-start;
-  gap: 5px;
-  padding: 0 8px;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 5px;
   border: 1px solid transparent;
   border-radius: 6px;
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 500;
-  text-align: left;
+  text-align: center;
+  white-space: nowrap;
 }
 
 .toolbar-tab::after {
@@ -3158,10 +3180,10 @@ button:disabled {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   align-content: start;
-  gap: 6px;
-  padding: 0 8px 8px;
+  gap: 3px;
+  padding: 4px 6px 8px;
   overflow-x: hidden;
   overflow-y: auto;
   background: transparent;
@@ -3169,16 +3191,18 @@ button:disabled {
 }
 
 .template-button,
-.template-button.is-wide,
-.template-button.is-compact {
+.template-button.is-symbol-large,
+.template-button.is-medium,
+.template-button.is-complex {
   min-width: 0;
   width: 100%;
-  height: 72px;
-  gap: 4px;
-  padding: 7px 5px 6px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--surface);
+  height: 54px;
+  min-height: 54px;
+  gap: 0;
+  padding: 4px 2px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
   box-shadow: none;
 }
 
@@ -3188,17 +3212,35 @@ button:disabled {
   box-shadow: none;
 }
 
-.template-button > span:last-child {
-  color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 500;
+.template-button > .template-label {
+  display: none;
 }
 
-.template-button .math-preview,
-.template-button.is-compact .math-preview {
-  min-height: 34px;
-  font-size: 17px;
+.template-button .math-preview {
+  height: 100%;
+  min-height: 0;
+  font-size: 18px;
   transform: none;
+  transform-origin: center;
+}
+
+.template-button.is-auto-fit .math-preview {
+  font-size: 24px;
+}
+
+.template-button.is-symbol-large .math-preview {
+  font-size: 24px;
+  transform: scale(1);
+}
+
+.template-button.is-medium .math-preview {
+  font-size: 18px;
+  transform: scale(1);
+}
+
+.template-button.is-complex .math-preview {
+  font-size: 13px;
+  transform: scale(0.82);
 }
 
 .formula-toolbar-footer {
@@ -4912,18 +4954,29 @@ textarea:disabled {
 }
 
 .toolbar-tabs {
-  gap: 2px;
-  padding: 8px 7px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 3px;
+  padding: 6px 7px 7px;
 }
 
 .toolbar-tab {
+  min-width: 0;
   height: 31px;
-  gap: 6px;
-  padding-inline: 9px;
+  justify-content: center;
+  gap: 4px;
+  padding-inline: 5px;
   border: 0;
   border-radius: 5px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 11px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.toolbar-tab svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
 }
 
 .toolbar-tab:hover {
@@ -4939,15 +4992,18 @@ textarea:disabled {
 }
 
 .template-strip {
-  gap: 2px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 3px;
   padding: 4px 6px 8px;
 }
 
 .template-button,
-.template-button.is-wide,
-.template-button.is-compact {
-  height: 68px;
-  padding: 7px 5px;
+.template-button.is-symbol-large,
+.template-button.is-medium,
+.template-button.is-complex {
+  height: 54px;
+  min-height: 54px;
+  padding: 4px 2px;
   border-color: transparent;
   border-radius: 5px;
   background: transparent;
@@ -4963,14 +5019,36 @@ textarea:disabled {
   outline-offset: -2px;
 }
 
-.template-button > span:last-child {
-  color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 500;
+.template-button > .template-label {
+  display: none;
 }
 
 .template-button .math-preview {
+  height: 100%;
+  min-height: 0;
   color: var(--text);
+  font-size: 18px;
+  transform: none;
+  transform-origin: center;
+}
+
+.template-button.is-auto-fit .math-preview {
+  font-size: 24px;
+}
+
+.template-button.is-symbol-large .math-preview {
+  font-size: 24px;
+  transform: scale(1);
+}
+
+.template-button.is-medium .math-preview {
+  font-size: 18px;
+  transform: scale(1);
+}
+
+.template-button.is-complex .math-preview {
+  font-size: 13px;
+  transform: scale(0.82);
 }
 
 .editor-pane-scroll {
@@ -6192,12 +6270,11 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 
 .matrix-delimiter-options button {
   min-width: 0;
-  min-height: 66px;
+  min-height: 48px;
   display: grid;
-  grid-template-rows: 38px auto;
-  align-items: center;
-  gap: 2px;
-  padding: 5px 3px;
+  place-items: center;
+  gap: 0;
+  padding: 4px 3px;
   border: 1px solid var(--border);
   border-radius: 7px;
   background: var(--surface);
@@ -6219,16 +6296,12 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 }
 
 .matrix-delimiter-options .math-preview {
-  min-height: 36px;
+  min-height: 38px;
   font-size: 14px;
 }
 
-.matrix-delimiter-options button > span:last-child {
-  overflow: hidden;
-  font-size: 10px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.matrix-delimiter-options button > .matrix-delimiter-label {
+  display: none;
 }
 
 .matrix-size-picker {

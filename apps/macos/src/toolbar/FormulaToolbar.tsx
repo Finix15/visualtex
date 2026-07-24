@@ -23,11 +23,11 @@ const categories = [
   "structure",
   "calculus",
   "matrix",
-  "greek",
   "relation",
-  "set",
+  "greek",
   "arrow",
   "physics",
+  "set",
 ];
 
 const matrixGridCells = Array.from({ length: 100 }, (_, index) => ({
@@ -60,16 +60,121 @@ const matrixDelimiterOptions: Array<{
   },
 ];
 
+const autoFitCategories = new Set([
+  "common",
+  "structure",
+  "calculus",
+  "matrix",
+]);
+const physicsAutoFitCommandIds = new Set([
+  "commutator",
+  "anticommutator",
+]);
+
+const calculusPreviewById: Record<string, string> = {
+  intplain: "\\int",
+  int: "\\int_a^b",
+  "iint-bounds": "\\iint_D^S",
+  "iiint-bounds": "\\iiint_V^W",
+  "oint-bounds": "\\oint_C^D",
+  lineintegral: "\\int_C",
+  iint: "\\iint_D",
+  surfaceintegral: "\\iint_S",
+  iiint: "\\iiint_V",
+  volumeintegral: "\\iiint_V",
+  oint: "\\oint_C",
+  "closed-surface-integral": "\\oiint_S",
+  "closed-volume-integral": "\\oiiint_V",
+  sum: "\\sum_{i=1}^{n}",
+  "sum-finite": "\\sum_{k=1}^{n}",
+  series: "\\sum_{n=0}^{\\infty}",
+  prod: "\\prod_{i=1}^{n}",
+  "prod-finite": "\\prod_{k=1}^{n}",
+  productseries: "\\prod_{n=1}^{\\infty}",
+  coproduct: "\\coprod_{i=1}^{n}",
+  lim: "\\lim_{x\\to0}",
+  "lim-infty": "\\lim_{x\\to\\infty}",
+  "lim-left": "\\lim_{x\\to a^-}",
+  "lim-right": "\\lim_{x\\to a^+}",
+  derivative: "\\frac{\\mathrm{d}}{\\mathrm{d}x}",
+  secondderivative: "\\frac{\\mathrm{d}^{2}}{\\mathrm{d}x^{2}}",
+  partial: "\\frac{\\partial}{\\partial x}",
+  partialsecond: "\\frac{\\partial^{2}}{\\partial x^{2}}",
+  mixedpartial: "\\frac{\\partial^{2}}{\\partial x\\partial y}",
+  evalbar: "\\left.\\vphantom{F}\\right|_a^b",
+  nabla: "\\nabla",
+  ln: "\\ln",
+  log: "\\log_a",
+  exp: "\\exp",
+  sin: "\\sin",
+  cos: "\\cos",
+  tan: "\\tan",
+};
+
+const toolbarPreviewById: Record<string, string> = {
+  ...calculusPreviewById,
+  cases: "\\begin{cases}a\\\\b\\end{cases}",
+  overbrace: "\\overbrace{a+b}",
+  underbrace: "\\underbrace{a+b}",
+  rowvector: "\\begin{bmatrix}a&b\\end{bmatrix}",
+  colvector: "\\begin{bmatrix}a\\\\b\\end{bmatrix}",
+  det: "\\det",
+  trace: "\\operatorname{tr}",
+  rank: "\\operatorname{rank}",
+  transpose: "A^{\\mathsf{T}}",
+  inverse: "A^{-1}",
+  dotproduct: "\\bullet",
+};
+
+const complexPreviewTokens = [
+  "\\sum",
+  "\\prod",
+  "\\coprod",
+  "\\int",
+  "\\iint",
+  "\\iiint",
+  "\\oint",
+  "\\oiint",
+  "\\oiiint",
+  "\\lim",
+];
+const mediumPreviewTokens = [
+  "\\frac",
+  "\\dfrac",
+  "\\tfrac",
+  "\\sqrt",
+  "\\binom",
+  "\\left",
+  "\\right",
+];
+
 const previewSizeClass = (command: LatexCommand) => {
-  const length = command.previewLatex.length;
-  const wide =
-    length > 22 ||
-    command.previewLatex.includes("\\begin") ||
+  const latex = command.previewLatex;
+  const isComplex =
+    latex.includes("\\begin") ||
+    latex.includes("cases") ||
+    complexPreviewTokens.some((token) => latex.includes(token)) ||
     command.id === "derivative" ||
     command.id === "partial";
-  const compact = length > 42 || command.previewLatex.includes("cases");
-  return (wide ? " is-wide" : "") + (compact ? " is-compact" : "");
+
+  if (isComplex) return " is-complex";
+
+  const visibleAtomCount = latex
+    .replace(/\\[A-Za-z]+/g, "x")
+    .replace(/[{}_^()[\]\\|\s]/g, "").length;
+  const isMedium =
+    mediumPreviewTokens.some((token) => latex.includes(token)) ||
+    visibleAtomCount > 3;
+
+  return isMedium ? " is-medium" : " is-symbol-large";
 };
+
+const toolbarPreviewLatex = (command: LatexCommand) =>
+  toolbarPreviewById[command.id] ?? command.previewLatex;
+
+const shouldAutoFitPreview = (category: string, commandId: string) =>
+  autoFitCategories.has(category) ||
+  (category === "physics" && physicsAutoFitCommandIds.has(commandId));
 
 function createMatrixCommand(
   rows: number,
@@ -217,9 +322,9 @@ export function FormulaToolbar({ onInsert, onClose }: Props) {
                   aria-pressed={matrixDelimiter === option.id}
                   onClick={() => setMatrixDelimiter(option.id)}
                   title={isEn ? option.labelEn : option.labelZh}
+                  aria-label={isEn ? option.labelEn : option.labelZh}
                 >
-                  <MathPreview latex={option.preview} />
-                  <span>{isEn ? option.labelEn : option.labelZh}</span>
+                  <MathPreview latex={option.preview} fit />
                 </button>
               ))}
             </div>
@@ -304,23 +409,31 @@ export function FormulaToolbar({ onInsert, onClose }: Props) {
           </section>
         )}
 
-        {visibleCommands.map((command) => (
-          <button
-            type="button"
-            className={"template-button" + previewSizeClass(command)}
-            data-command-id={command.id}
-            key={command.id}
-            onClick={() => onInsert(command)}
-            title={
-              (isEn ? command.labelEn : command.labelZh) +
-              " · " +
-              command.command
-            }
-          >
-            <MathPreview latex={command.previewLatex} />
-            <span>{isEn ? command.labelEn : command.labelZh}</span>
-          </button>
-        ))}
+        {visibleCommands.map((command) => {
+          const autoFit = shouldAutoFitPreview(activeCategory, command.id);
+          const previewLatex = toolbarPreviewLatex(command);
+          return (
+            <button
+              type="button"
+              className={
+                "template-button" +
+                (autoFit ? " is-auto-fit" : previewSizeClass(command))
+              }
+              data-command-id={command.id}
+              data-preview-latex={previewLatex}
+              key={command.id}
+              onClick={() => onInsert(command)}
+              aria-label={isEn ? command.labelEn : command.labelZh}
+              title={
+                (isEn ? command.labelEn : command.labelZh) +
+                " · " +
+                command.command
+              }
+            >
+              <MathPreview latex={previewLatex} fit={autoFit} />
+            </button>
+          );
+        })}
       </div>
     </aside>
   );
