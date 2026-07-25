@@ -18,22 +18,7 @@ function mount() {
   );
 }
 
-const isVstoDesktopRuntime =
-  new URLSearchParams(window.location.search).get("runtime") === "vsto-desktop";
-const officeRuntime = typeof Office === "undefined" ? null : Office;
-
-if (isVstoDesktopRuntime) {
-  mount();
-} else if (officeRuntime?.onReady) {
-  void officeRuntime.onReady().then(mount).catch((error) => {
-    const root = document.getElementById("root");
-    if (root) {
-      root.textContent =
-        error instanceof Error
-          ? error.message
-          : "Unable to initialize the VisualTeX Office Dialog.";
-    }
-  });
-} else {
-  mount();
-}
+// Windows Office integration is now exclusively driven by the native Ribbon
+// COM add-ins. The dialog is hosted by the VisualTeX companion service and no
+// longer waits for, imports or executes the Office.js runtime.
+mount();

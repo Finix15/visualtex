@@ -245,6 +245,7 @@
         <RegistryValue Name="Description" Type="string" Value="VisualTeX native Word formula integration" />
         <RegistryValue Name="LoadBehavior" Type="integer" Value="3" KeyPath="yes" />
         <RegistryValue Name="CommandLineSafe" Type="integer" Value="0" />
+        <RegistryValue Name="CodeBase" Type="string" Value="file:///[INSTALLFOLDER]VisualTeX.WordVsto.dll" />
       </RegistryKey>
     </Component>
 
@@ -254,14 +255,24 @@
         <RegistryValue Name="Description" Type="string" Value="VisualTeX native PowerPoint formula integration" />
         <RegistryValue Name="LoadBehavior" Type="integer" Value="3" KeyPath="yes" />
         <RegistryValue Name="CommandLineSafe" Type="integer" Value="0" />
+        <RegistryValue Name="CodeBase" Type="string" Value="file:///[INSTALLFOLDER]VisualTeX.PowerPointVsto.dll" />
       </RegistryKey>
     </Component>
 
     <Component Id="ModeRegistration" Directory="INSTALLFOLDER" Guid="*">
       <RegistryKey Root="HKCU" Key="Software\VisualTeX\OfficeIntegration">
-        <RegistryValue Name="Mode" Type="string" Value="native-vsto-ole" KeyPath="yes" />
-        <RegistryValue Name="OleManifestEnabled" Type="integer" Value="0" />
+        <RegistryValue Name="Mode" Type="string" Value="vsto" KeyPath="yes" />
         <RegistryValue Name="NativeOleEnabled" Type="integer" Value="1" />
+        <RegistryValue Name="FilesAndRegistryVerified" Type="integer" Value="0" />
+        <RegistryValue Name="OfficeRuntimeVerified" Type="integer" Value="0" />
+        <RegistryValue Name="WordConnected" Type="integer" Value="0" />
+        <RegistryValue Name="PowerPointConnected" Type="integer" Value="0" />
+        <RegistryValue Name="CompanionProcessRunning" Type="integer" Value="0" />
+        <RegistryValue Name="CompanionPortListening" Type="integer" Value="0" />
+        <RegistryValue Name="CompanionHttpsHealthy" Type="integer" Value="0" />
+        <RegistryValue Name="CompanionCertificateMatches" Type="integer" Value="0" />
+        <RegistryValue Name="CompanionProtocolMatches" Type="integer" Value="0" />
+        <RegistryValue Name="LastRuntimeError" Type="string" Value="Office runtime has not yet been verified." />
       </RegistryKey>
     </Component>
   </Package>

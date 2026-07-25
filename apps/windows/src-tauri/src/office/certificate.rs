@@ -1,7 +1,9 @@
 use crate::office::state::{OfficePaths, OFFICE_PORT, OFFICE_PROTOCOL_VERSION};
+use base64::Engine as _;
 use getrandom::fill as random_fill;
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
 use serde::{Deserialize, Serialize};
+use sha1::Sha1;
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -224,6 +226,23 @@ fn ensure_certificate(paths: &OfficePaths) -> Result<(), String> {
     atomic_write(&paths.private_key, private_key_pem.as_bytes(), 0o600)?;
     atomic_write(&paths.certificate, certificate_pem.as_bytes(), 0o644)?;
     atomic_write(&paths.certificate_metadata, &metadata_json, 0o644)
+}
+
+pub fn certificate_sha1_thumbprint(paths: &OfficePaths) -> Result<String, String> {
+    let pem = fs::read_to_string(&paths.certificate).map_err(|error| {
+        format!(
+            "Unable to read Office certificate {}: {error}",
+            paths.certificate.display()
+        )
+    })?;
+    let encoded = pem
+        .lines()
+        .filter(|line| !line.starts_with("-----"))
+        .collect::<String>();
+    let der = base64::engine::general_purpose::STANDARD
+        .decode(encoded.as_bytes())
+        .map_err(|error| format!("Unable to decode Office certificate PEM: {error}"))?;
+    Ok(hex::encode_upper(Sha1::digest(&der)))
 }
 
 pub fn ensure_office_install(paths: &OfficePaths) -> Result<String, String> {

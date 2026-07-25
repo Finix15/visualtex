@@ -10,7 +10,6 @@ pub mod windows;
 #[serde(rename_all = "lowercase")]
 pub enum OfficeIntegrationMode {
     Auto,
-    Ole,
     Vsto,
 }
 
@@ -27,9 +26,24 @@ pub struct OfficePlatformStatus {
     pub mode: OfficeIntegrationMode,
     pub active_backend: String,
     pub ole_bridge_healthy: bool,
+    pub ole_local_server_healthy: bool,
+    pub static_install_verified: bool,
+    pub word_files_present: bool,
+    pub word_registry_complete: bool,
+    pub word_load_enabled: bool,
+    pub powerpoint_files_present: bool,
+    pub powerpoint_registry_complete: bool,
+    pub powerpoint_load_enabled: bool,
     pub vsto_word_healthy: bool,
     pub vsto_powerpoint_healthy: bool,
-    pub office_catalog_registered: bool,
+    pub word_connected: bool,
+    pub powerpoint_connected: bool,
+    pub companion_process_running: bool,
+    pub companion_port_listening: bool,
+    pub companion_https_healthy: bool,
+    pub companion_certificate_matches: bool,
+    pub companion_protocol_matches: bool,
+    pub office_runtime_verified: bool,
     pub current_user_certificate_trusted: bool,
     pub background_start_enabled: bool,
     pub last_error: Option<String>,

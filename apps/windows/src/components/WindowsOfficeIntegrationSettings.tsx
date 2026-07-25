@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   Download,
   ExternalLink,
+  FolderOpen,
   Play,
   RefreshCw,
   ShieldAlert,
@@ -15,16 +16,31 @@ import {
 } from "lucide-react";
 import { useEditorStore } from "../stores/editorStore";
 
-export type WindowsOfficeMode = "auto" | "ole" | "vsto";
+export type WindowsOfficeMode = "auto" | "vsto";
 
 interface OfficePlatformStatus {
   platform: string;
   mode: WindowsOfficeMode;
   activeBackend: string;
   oleBridgeHealthy: boolean;
+  oleLocalServerHealthy: boolean;
+  staticInstallVerified: boolean;
+  wordFilesPresent: boolean;
+  wordRegistryComplete: boolean;
+  wordLoadEnabled: boolean;
+  powerpointFilesPresent: boolean;
+  powerpointRegistryComplete: boolean;
+  powerpointLoadEnabled: boolean;
   vstoWordHealthy: boolean;
   vstoPowerpointHealthy: boolean;
-  officeCatalogRegistered: boolean;
+  wordConnected: boolean;
+  powerpointConnected: boolean;
+  companionProcessRunning: boolean;
+  companionPortListening: boolean;
+  companionHttpsHealthy: boolean;
+  companionCertificateMatches: boolean;
+  companionProtocolMatches: boolean;
+  officeRuntimeVerified: boolean;
   currentUserCertificateTrusted: boolean;
   backgroundStartEnabled: boolean;
   lastError: string | null;
@@ -100,7 +116,11 @@ export function WindowsOfficeIntegrationSettings() {
       setMessage("");
       try {
         await invoke(command, args);
-        if (command !== "open_word" && command !== "open_powerpoint") {
+        if (
+          command !== "open_word" &&
+          command !== "open_powerpoint" &&
+          command !== "open_windows_office_logs"
+        ) {
           await refresh();
         }
       } catch (error) {
@@ -124,8 +144,8 @@ export function WindowsOfficeIntegrationSettings() {
           <strong>{isEn ? "Windows Office integration" : "Windows Office 集成"}</strong>
           <p>
             {isEn
-              ? "The Windows release uses the OLE Bridge for Word and PowerPoint. Legacy VisualTeX VSTO add-ins are disabled to prevent duplicate ribbons."
-              : "Windows 正式版使用 OLE Bridge 集成 Word 与 PowerPoint，并禁用旧版 VisualTeX VSTO 加载项以避免重复按钮。"}
+              ? "Windows Office integration uses native Word/PowerPoint Ribbon COM add-ins together with the VisualTeX Formula OLE LocalServer. Legacy Office.js Trusted Catalog manifests are not used."
+              : "Windows Office 集成统一使用 Word/PowerPoint 原生 Ribbon COM 加载项与 VisualTeX Formula OLE LocalServer，不再使用旧 Office.js Trusted Catalog 清单。"}
           </p>
         </div>
         <button
@@ -148,30 +168,62 @@ export function WindowsOfficeIntegrationSettings() {
             </StatusLine>
           </header>
           <dl>
-            <div><dt>{isEn ? "Selected mode" : "设置模式"}</dt><dd>{isEn ? "Native VSTO + OLE" : "原生 VSTO + OLE"}</dd></div>
-            <div><dt>{isEn ? "Duplicate ribbon guard" : "重复按钮保护"}</dt><dd>{isEn ? "Legacy Office.js add-in disabled" : "旧版 Office.js 加载项已禁用"}</dd></div>
+            <div><dt>{isEn ? "Selected mode" : "设置模式"}</dt><dd>{isEn ? "Native Ribbon + OLE LocalServer" : "原生 Ribbon + OLE LocalServer"}</dd></div>
+            <div><dt>{isEn ? "Files and registry" : "文件与注册"}</dt><dd>{status?.staticInstallVerified ? (isEn ? "Verified" : "已验证") : (isEn ? "Incomplete" : "不完整")}</dd></div>
+            <div><dt>{isEn ? "Companion runtime" : "伴侣服务运行时"}</dt><dd>{status?.officeRuntimeVerified ? (isEn ? "Verified" : "已验证") : (isEn ? "Not verified" : "尚未验证")}</dd></div>
           </dl>
         </article>
 
         <article className="office-status-card">
-          <header><strong>OLE Bridge</strong></header>
-          <StatusLine ok={Boolean(status?.oleBridgeHealthy)}>
-            {status?.oleBridgeHealthy
-              ? isEn ? "Named pipe and STA backend healthy" : "命名管道与 STA 后端健康"
-              : isEn ? "Unavailable or stopped" : "不可用或未启动"}
+          <header><strong>{isEn ? "Native Office components" : "原生 Office 组件"}</strong></header>
+          <StatusLine ok={Boolean(status?.wordFilesPresent)}>
+            {isEn ? "Word add-in files present" : "Word 加载项文件存在"}
           </StatusLine>
-          <StatusLine ok={Boolean(status?.officeCatalogRegistered)}>
-            {isEn ? "Office Catalog" : "Office Catalog"}
+          <StatusLine ok={Boolean(status?.wordRegistryComplete)}>
+            {isEn ? "Word COM registration complete" : "Word COM 注册完整"}
+          </StatusLine>
+          <StatusLine ok={Boolean(status?.wordLoadEnabled)}>
+            Word LoadBehavior=3
+          </StatusLine>
+          <StatusLine ok={Boolean(status?.powerpointFilesPresent)}>
+            {isEn ? "PowerPoint add-in files present" : "PowerPoint 加载项文件存在"}
+          </StatusLine>
+          <StatusLine ok={Boolean(status?.powerpointRegistryComplete)}>
+            {isEn ? "PowerPoint COM registration complete" : "PowerPoint COM 注册完整"}
+          </StatusLine>
+          <StatusLine ok={Boolean(status?.powerpointLoadEnabled)}>
+            PowerPoint LoadBehavior=3
+          </StatusLine>
+          <StatusLine ok={Boolean(status?.oleLocalServerHealthy)}>
+            {isEn ? "Formula OLE LocalServer healthy" : "公式 OLE LocalServer 健康"}
           </StatusLine>
         </article>
 
         <article className="office-status-card">
-          <header><strong>{isEn ? "Local security" : "本地安全"}</strong></header>
-          <StatusLine ok={Boolean(status?.currentUserCertificateTrusted)}>
-            {isEn ? "Current-user HTTPS certificate" : "当前用户 HTTPS 证书"}
+          <header><strong>{isEn ? "Runtime and security" : "运行时与安全"}</strong></header>
+          <StatusLine ok={Boolean(status?.companionProcessRunning)}>
+            {isEn ? "Companion process running" : "伴侣进程正在运行"}
           </StatusLine>
-          <StatusLine ok={Boolean(status?.backgroundStartEnabled)}>
-            {isEn ? "Background startup" : "后台启动"}
+          <StatusLine ok={Boolean(status?.companionPortListening)}>
+            {isEn ? "Companion TCP port listening" : "伴侣 TCP 端口正在监听"}
+          </StatusLine>
+          <StatusLine ok={Boolean(status?.companionHttpsHealthy)}>
+            {isEn ? "Companion HTTPS health passed" : "伴侣 HTTPS 健康检查通过"}
+          </StatusLine>
+          <StatusLine ok={Boolean(status?.companionCertificateMatches)}>
+            {isEn ? "Companion certificate matches" : "伴侣证书一致"}
+          </StatusLine>
+          <StatusLine ok={Boolean(status?.companionProtocolMatches)}>
+            {isEn ? "Companion protocol matches" : "伴侣协议版本一致"}
+          </StatusLine>
+          <StatusLine ok={Boolean(status?.wordConnected)}>
+            Word COMAddIn.Connect={String(Boolean(status?.wordConnected))}
+          </StatusLine>
+          <StatusLine ok={Boolean(status?.powerpointConnected)}>
+            PowerPoint COMAddIn.Connect={String(Boolean(status?.powerpointConnected))}
+          </StatusLine>
+          <StatusLine ok={Boolean(status?.currentUserCertificateTrusted)}>
+            {isEn ? "Current-user HTTPS certificate trusted" : "当前用户 HTTPS 证书受信任"}
           </StatusLine>
         </article>
 
@@ -193,7 +245,9 @@ export function WindowsOfficeIntegrationSettings() {
       {(message || status?.lastError || companion?.lastError) && (
         <div className="office-settings-warning" role="alert">
           <ShieldAlert size={15} />
-          <span>{message || status?.lastError || companion?.lastError}</span>
+          <pre className="office-settings-diagnostic">
+            {message || status?.lastError || companion?.lastError}
+          </pre>
         </div>
       )}
 
@@ -215,6 +269,24 @@ export function WindowsOfficeIntegrationSettings() {
         >
           <Wrench size={15} />
           {isEn ? "Repair native Office integration" : "修复原生 Office 集成"}
+        </button>
+        <button
+          type="button"
+          className="secondary-button"
+          disabled={busy !== null}
+          onClick={() => void run("runtime-test", "test_windows_office_runtime")}
+        >
+          <CheckCircle2 size={15} />
+          {isEn ? "Verify Office runtime" : "验证 Office 运行时"}
+        </button>
+        <button
+          type="button"
+          className="secondary-button"
+          disabled={busy !== null}
+          onClick={() => void run("open-logs", "open_windows_office_logs")}
+        >
+          <FolderOpen size={15} />
+          {isEn ? "Open diagnostic logs" : "打开诊断日志"}
         </button>
         <button
           type="button"

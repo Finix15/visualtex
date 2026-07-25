@@ -756,30 +756,25 @@ try {
     $restartHealth = Invoke-Bridge "health" ([ordered]@{})
     Assert-True ($restartHealth.ok -eq $true) "Bridge did not recover after a forced crash/restart."
 
-    Write-Host "[10/10] Optional OLE/VSTO mode mutual-exclusion test..."
+    Write-Host "[10/10] Optional unified native Office registration test..."
     if ($TestModeSwitch) {
-        & (Join-Path $PSScriptRoot "install_windows_ole.ps1")
-        $catalogKey = "HKCU:\Software\Microsoft\Office\16.0\WEF\TrustedCatalogs\{69C6A866-755B-4C5A-BACB-EEA28B03C724}"
-        Assert-True (Test-Path $catalogKey) "OLE Trusted Catalog was not registered."
+        if ([string]::IsNullOrWhiteSpace($VstoMsiPath)) {
+            throw "-TestModeSwitch now verifies the unified native Office installation and requires -VstoMsiPath."
+        }
+        & (Join-Path $PSScriptRoot "install_windows_vsto.ps1") -MsiPath $VstoMsiPath
+        foreach ($legacyCatalogKey in @(
+            "HKCU:\Software\Microsoft\Office\16.0\WEF\TrustedCatalogs\VisualTeX",
+            "HKCU:\Software\Microsoft\Office\16.0\WEF\TrustedCatalogs\{69C6A866-755B-4C5A-BACB-EEA28B03C724}"
+        )) {
+            Assert-True (-not (Test-Path $legacyCatalogKey)) "Legacy Office.js Trusted Catalog remained registered: $legacyCatalogKey"
+        }
         foreach ($key in @(
             "HKCU:\Software\Microsoft\Office\Word\Addins\VisualTeX.WordVsto",
             "HKCU:\Software\Microsoft\Office\PowerPoint\Addins\VisualTeX.PowerPointVsto"
         )) {
-            if (Test-Path $key) {
-                $loadBehavior = (Get-ItemProperty $key -Name LoadBehavior).LoadBehavior
-                Assert-True ($loadBehavior -ne 3) "VSTO remained enabled while OLE mode was active."
-            }
+            Assert-True ((Get-ItemProperty $key -Name LoadBehavior).LoadBehavior -eq 3) "Native Office add-in was not enabled: $key"
         }
-        if (-not [string]::IsNullOrWhiteSpace($VstoMsiPath)) {
-            & (Join-Path $PSScriptRoot "install_windows_vsto.ps1") -MsiPath $VstoMsiPath
-            Assert-True (-not (Test-Path $catalogKey)) "OLE Trusted Catalog remained registered while VSTO mode was active."
-            foreach ($key in @(
-                "HKCU:\Software\Microsoft\Office\Word\Addins\VisualTeX.WordVsto",
-                "HKCU:\Software\Microsoft\Office\PowerPoint\Addins\VisualTeX.PowerPointVsto"
-            )) {
-                Assert-True ((Get-ItemProperty $key -Name LoadBehavior).LoadBehavior -eq 3) "VSTO add-in was not enabled."
-            }
-        }
+        & (Join-Path $PSScriptRoot "test_windows_office_runtime.ps1")
     }
 
     Write-Host "VisualTeX Windows Office acceptance passed."

@@ -1,21 +1,14 @@
-import type { VisualTeXDialogMessage } from "../bridge/bridgeMessages";
+export interface NativeOfficeDialogNotification {
+  type: string;
+  sessionId: string;
+  [key: string]: unknown;
+}
 
-export function messageOfficeParent(message: VisualTeXDialogMessage) {
-  const isVstoDesktopRuntime =
-    new URLSearchParams(window.location.search).get("runtime") === "vsto-desktop";
-  if (
-    isVstoDesktopRuntime ||
-    typeof Office === "undefined" ||
-    !Office.context?.ui?.messageParent
-  ) {
-    return false;
-  }
-  const serialized = JSON.stringify(message);
-  const ui = Office.context.ui;
-  try {
-    ui.messageParent(serialized, { targetOrigin: window.location.origin });
-  } catch {
-    ui.messageParent(serialized);
-  }
-  return true;
+// Windows Office integration no longer hosts the editor inside an Office.js
+// dialog. Native Word/PowerPoint add-ins commit through the local session API,
+// so there is no Office.context.ui parent to notify.
+export function messageOfficeParent(
+  _message: NativeOfficeDialogNotification,
+) {
+  return false;
 }

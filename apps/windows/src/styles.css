@@ -6569,7 +6569,20 @@ html body #mathlive-suggestion-popover .ML__popover__keybinding {
 
 .office-settings-warning svg {
   flex: 0 0 auto;
+  align-self: flex-start;
+  margin-top: 2px;
   color: var(--warning);
+}
+
+.office-settings-diagnostic {
+  min-width: 0;
+  max-height: 260px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  color: inherit;
 }
 
 .office-status-grid {

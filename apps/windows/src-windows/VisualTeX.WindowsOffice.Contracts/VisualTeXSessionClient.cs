@@ -1,8 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
+using System.Net;
 using System.Net.Http;
+using System.Net.Security;
+using System.Net.Sockets;
+using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -11,41 +17,264 @@ using System.Threading.Tasks;
 
 namespace VisualTeX.WindowsOffice.Contracts;
 
+public sealed class CompanionHealthDiagnostic
+{
+    [JsonPropertyName("stage")]
+    public string Stage { get; set; } = "configuration";
+
+    [JsonPropertyName("failureType")]
+    public string FailureType { get; set; } = string.Empty;
+
+    [JsonPropertyName("message")]
+    public string Message { get; set; } = string.Empty;
+
+    [JsonPropertyName("exception")]
+    public string Exception { get; set; } = string.Empty;
+
+    [JsonPropertyName("innerExceptions")]
+    public List<string> InnerExceptions { get; set; } = new();
+
+    [JsonPropertyName("executablePath")]
+    public string ExecutablePath { get; set; } = string.Empty;
+
+    [JsonPropertyName("appDataRoot")]
+    public string AppDataRoot { get; set; } = string.Empty;
+
+    [JsonPropertyName("certificatePath")]
+    public string CertificatePath { get; set; } = string.Empty;
+
+    [JsonPropertyName("expectedCertificateThumbprint")]
+    public string ExpectedCertificateThumbprint { get; set; } = string.Empty;
+
+    [JsonPropertyName("serverCertificateThumbprint")]
+    public string ServerCertificateThumbprint { get; set; } = string.Empty;
+
+    [JsonPropertyName("companionPort")]
+    public int CompanionPort { get; set; }
+
+    [JsonPropertyName("expectedProtocolVersion")]
+    public int ExpectedProtocolVersion { get; set; }
+
+    [JsonPropertyName("actualProtocolVersion")]
+    public int? ActualProtocolVersion { get; set; }
+
+    [JsonPropertyName("startedProcessId")]
+    public int? StartedProcessId { get; set; }
+
+    [JsonPropertyName("startedProcessExitCode")]
+    public int? StartedProcessExitCode { get; set; }
+
+    [JsonPropertyName("portListening")]
+    public bool PortListening { get; set; }
+
+    [JsonPropertyName("portOwnerProcessId")]
+    public int? PortOwnerProcessId { get; set; }
+
+    [JsonPropertyName("portOwnerProcessName")]
+    public string PortOwnerProcessName { get; set; } = string.Empty;
+
+    [JsonPropertyName("portOwnerProcessPath")]
+    public string PortOwnerProcessPath { get; set; } = string.Empty;
+
+    [JsonPropertyName("tlsPolicyErrors")]
+    public string TlsPolicyErrors { get; set; } = string.Empty;
+
+    [JsonPropertyName("healthResponse")]
+    public string HealthResponse { get; set; } = string.Empty;
+
+    [JsonPropertyName("installJsonPath")]
+    public string InstallJsonPath { get; set; } = string.Empty;
+
+    [JsonPropertyName("startupLogPath")]
+    public string StartupLogPath { get; set; } = string.Empty;
+
+    [JsonPropertyName("companionLogPath")]
+    public string CompanionLogPath { get; set; } = string.Empty;
+
+    [JsonPropertyName("vstoClientLogPath")]
+    public string VstoClientLogPath { get; set; } = string.Empty;
+
+    [JsonPropertyName("attemptedExecutablePaths")]
+    public List<string> AttemptedExecutablePaths { get; set; } = new();
+
+    public string ToJson() => JsonSerializer.Serialize(this, JsonOptions.Default);
+}
+
+public sealed class VisualTeXCompanionException : Exception
+{
+    public VisualTeXCompanionException(CompanionHealthDiagnostic diagnostic, Exception? inner = null)
+        : base($"VisualTeX companion validation failed at stage '{diagnostic.Stage}': {diagnostic.Message}\n{diagnostic.ToJson()}", inner)
+    {
+        Diagnostic = diagnostic;
+    }
+
+    public CompanionHealthDiagnostic Diagnostic { get; }
+}
+
+internal sealed class CompanionConfiguration
+{
+    public string ExecutablePath { get; set; } = string.Empty;
+    public string AppDataRoot { get; set; } = string.Empty;
+    public string CertificatePath { get; set; } = string.Empty;
+    public string CertificateThumbprint { get; set; } = string.Empty;
+    public int CompanionPort { get; set; }
+    public int ProtocolVersion { get; set; }
+    public string InstallJsonPath => Path.Combine(AppDataRoot, "office", "install.json");
+}
+
 public sealed class VisualTeXSessionClient : IDisposable
 {
-    private static readonly Uri CompanionOrigin = new("https://127.0.0.1:43127");
+    private readonly CompanionConfiguration _configuration;
+    private readonly VisualTeXCompanionException? _configurationException;
     private readonly HttpClient _http;
     private string? _installToken;
+    private static readonly object ClientLogLock = new();
+    private string _lastServerCertificateThumbprint = string.Empty;
+    private string _lastTlsPolicyErrors = string.Empty;
+    private bool _hasValidatedServerCertificate;
     private bool _disposed;
 
     public VisualTeXSessionClient()
     {
-        _http = new HttpClient
+        try
         {
-            BaseAddress = CompanionOrigin,
-            Timeout = TimeSpan.FromSeconds(15),
+            _configuration = LoadConfiguration();
+        }
+        catch (VisualTeXCompanionException error)
+        {
+            _configurationException = error;
+            LastHealthDiagnostic = error.Diagnostic;
+            _configuration = new CompanionConfiguration
+            {
+                CompanionPort = error.Diagnostic.CompanionPort > 0
+                    ? error.Diagnostic.CompanionPort
+                    : 43127,
+                ProtocolVersion = error.Diagnostic.ExpectedProtocolVersion > 0
+                    ? error.Diagnostic.ExpectedProtocolVersion
+                    : 1,
+                ExecutablePath = error.Diagnostic.ExecutablePath,
+                AppDataRoot = error.Diagnostic.AppDataRoot,
+                CertificatePath = error.Diagnostic.CertificatePath,
+                CertificateThumbprint = error.Diagnostic.ExpectedCertificateThumbprint,
+            };
+        }
+        var handler = new HttpClientHandler
+        {
+            UseProxy = false,
+            Proxy = null,
+        };
+        try
+        {
+            handler.SslProtocols = SslProtocols.Tls12;
+        }
+        catch (PlatformNotSupportedException)
+        {
+            // .NET Framework 4.8 supports this property. Keep the system TLS
+            // default only on runtimes where the property is unavailable.
+        }
+        handler.ServerCertificateCustomValidationCallback = CaptureServerCertificate;
+        _http = new HttpClient(handler)
+        {
+            BaseAddress = new Uri($"https://127.0.0.1:{_configuration.CompanionPort}"),
+            Timeout = TimeSpan.FromSeconds(5),
         };
         _http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
+        AppendClientLog("client-created", null, null);
     }
+
+    public CompanionHealthDiagnostic? LastHealthDiagnostic { get; private set; }
 
     public async Task EnsureHealthyAsync(CancellationToken cancellationToken)
     {
-        if (!await TryReadHealthyAsync(cancellationToken).ConfigureAwait(false))
+        if (_configurationException != null)
         {
-            StartVisualTeXCompanion();
+            LastHealthDiagnostic = _configurationException.Diagnostic;
+            throw new VisualTeXCompanionException(
+                _configurationException.Diagnostic,
+                _configurationException);
+        }
+        var diagnostic = CreateDiagnostic("configuration");
+        LastHealthDiagnostic = diagnostic;
+        AppendClientLog("health-start", diagnostic, null);
+        try
+        {
+            ValidateConfiguration(diagnostic);
+            if (await TryValidateRunningCompanionAsync(diagnostic, cancellationToken)
+                    .ConfigureAwait(false))
+            {
+                EnsureAuthorizationHeader();
+                diagnostic.Stage = "complete";
+                diagnostic.FailureType = string.Empty;
+                diagnostic.Message = "VisualTeX companion is healthy.";
+                AppendClientLog("health-passed", diagnostic, null);
+                return;
+            }
+            if (diagnostic.PortListening)
+            {
+                if (!string.IsNullOrWhiteSpace(diagnostic.PortOwnerProcessPath)
+                    && !PathsEqual(diagnostic.PortOwnerProcessPath, _configuration.ExecutablePath))
+                {
+                    diagnostic.FailureType = "PortOccupiedByOtherProcess";
+                    diagnostic.Message =
+                        $"Port {_configuration.CompanionPort} is occupied by {diagnostic.PortOwnerProcessName} PID={diagnostic.PortOwnerProcessId?.ToString() ?? "unknown"} at '{diagnostic.PortOwnerProcessPath}', not by '{_configuration.ExecutablePath}'.";
+                }
+                else
+                {
+                    diagnostic.Message =
+                        $"Port {_configuration.CompanionPort} is already listening, but the existing service failed stage '{diagnostic.Stage}'. Owner={diagnostic.PortOwnerProcessName} PID={diagnostic.PortOwnerProcessId?.ToString() ?? "unknown"} path='{diagnostic.PortOwnerProcessPath}'. {diagnostic.Message}";
+                }
+                throw new VisualTeXCompanionException(diagnostic);
+            }
+
+            diagnostic.Stage = "process-start";
+            var started = StartVisualTeXCompanion(diagnostic);
             var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(20);
             while (DateTimeOffset.UtcNow < deadline)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                await Task.Delay(200, cancellationToken).ConfigureAwait(false);
-                if (await TryReadHealthyAsync(cancellationToken).ConfigureAwait(false))
-                    break;
+                if (started.HasExited)
+                {
+                    diagnostic.StartedProcessExitCode = started.ExitCode;
+                    diagnostic.FailureType = "ProcessExited";
+                    diagnostic.Message =
+                        $"VisualTeX background process exited before the companion became healthy (exit code {started.ExitCode}).";
+                    throw new VisualTeXCompanionException(diagnostic);
+                }
+
+                if (await TryValidateRunningCompanionAsync(diagnostic, cancellationToken)
+                        .ConfigureAwait(false))
+                {
+                    EnsureAuthorizationHeader();
+                    diagnostic.Stage = "complete";
+                    diagnostic.FailureType = string.Empty;
+                    diagnostic.Message = "VisualTeX companion started and passed all health checks.";
+                    AppendClientLog("health-passed-after-start", diagnostic, null);
+                    return;
+                }
+                await Task.Delay(250, cancellationToken).ConfigureAwait(false);
             }
-            if (!await TryReadHealthyAsync(cancellationToken).ConfigureAwait(false))
-                throw new TimeoutException(
-                    "VisualTeX local companion did not become healthy within 20 seconds.");
+
+            if (string.IsNullOrWhiteSpace(diagnostic.FailureType))
+                diagnostic.FailureType = "RuntimeValidationTimeout";
+            diagnostic.Message =
+                $"VisualTeX companion did not pass stage '{diagnostic.Stage}' within 20 seconds. {diagnostic.Message}".Trim();
+            throw new VisualTeXCompanionException(diagnostic);
         }
-        EnsureAuthorizationHeader();
+        catch (VisualTeXCompanionException error)
+        {
+            AppendClientLog("health-failed", error.Diagnostic, error);
+            throw;
+        }
+        catch (Exception error)
+        {
+            PopulateException(diagnostic, error);
+            if (string.IsNullOrWhiteSpace(diagnostic.FailureType))
+                diagnostic.FailureType = error.GetType().Name;
+            if (string.IsNullOrWhiteSpace(diagnostic.Message))
+                diagnostic.Message = error.Message;
+            AppendClientLog("health-failed-unhandled", diagnostic, error);
+            throw new VisualTeXCompanionException(diagnostic, error);
+        }
     }
 
     public async Task<OfficeSessionDocument> CreateSessionAsync(
@@ -195,11 +424,7 @@ public sealed class VisualTeXSessionClient : IDisposable
             || normalized.IndexOf("<image", StringComparison.OrdinalIgnoreCase) >= 0
             || normalized.IndexOf("<script", StringComparison.OrdinalIgnoreCase) >= 0)
             throw new InvalidDataException("VisualTeX Session SVG export contains forbidden content.");
-        var root = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "VisualTeX",
-            "office",
-            "temp");
+        var root = ControlledOfficeTempRoot();
         Directory.CreateDirectory(root);
         var path = Path.Combine(root, $"{sessionId:D}.svg");
         File.WriteAllText(path, normalized, new UTF8Encoding(false, true));
@@ -221,39 +446,500 @@ public sealed class VisualTeXSessionClient : IDisposable
             || bytes[2] != 78
             || bytes[3] != 71)
             throw new InvalidDataException("VisualTeX Session PNG export is invalid.");
-        var root = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "VisualTeX",
-            "office",
-            "temp");
+        var root = ControlledOfficeTempRoot();
         Directory.CreateDirectory(root);
         var path = Path.Combine(root, $"{sessionId:D}.png");
         File.WriteAllBytes(path, bytes);
         return path;
     }
 
-    private async Task<bool> TryReadHealthyAsync(CancellationToken cancellationToken)
+    private CompanionHealthDiagnostic CreateDiagnostic(string stage) => new()
+    {
+        Stage = stage,
+        ExecutablePath = _configuration.ExecutablePath,
+        AppDataRoot = _configuration.AppDataRoot,
+        CertificatePath = _configuration.CertificatePath,
+        ExpectedCertificateThumbprint = NormalizeThumbprint(_configuration.CertificateThumbprint),
+        CompanionPort = _configuration.CompanionPort,
+        ExpectedProtocolVersion = _configuration.ProtocolVersion,
+        InstallJsonPath = _configuration.InstallJsonPath,
+        StartupLogPath = Path.Combine(CompanionLogRoot(), "startup.log"),
+        CompanionLogPath = Path.Combine(CompanionLogRoot(), "companion.log"),
+        VstoClientLogPath = VstoClientLogPath(),
+        AttemptedExecutablePaths = new List<string> { _configuration.ExecutablePath },
+    };
+
+    private static string ControlledOfficeTempRoot() => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "VisualTeX",
+        "office",
+        "temp");
+
+    private static string CompanionLogRoot() => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "VisualTeX",
+        "office",
+        "logs");
+
+    private static string VstoClientLogPath() =>
+        Path.Combine(CompanionLogRoot(), "vsto-client.log");
+
+    private static CompanionConfiguration LoadConfiguration()
+    {
+        const string registryPath = @"HKCU\Software\VisualTeX\OfficeIntegration";
+        var diagnostic = new CompanionHealthDiagnostic
+        {
+            Stage = "configuration",
+            FailureType = "ConfigurationMissing",
+            StartupLogPath = Path.Combine(CompanionLogRoot(), "startup.log"),
+            CompanionLogPath = Path.Combine(CompanionLogRoot(), "companion.log"),
+            VstoClientLogPath = VstoClientLogPath(),
+        };
+        var values = QueryIntegrationRegistry(registryPath, diagnostic);
+        var configuration = new CompanionConfiguration
+        {
+            ExecutablePath = ReadRegistryString(values, "ExecutablePath").Trim().Trim('"'),
+            AppDataRoot = ReadRegistryString(values, "AppDataRoot").Trim().Trim('"'),
+            CertificatePath = ReadRegistryString(values, "CertificatePath").Trim().Trim('"'),
+            CertificateThumbprint = ReadRegistryString(values, "CertificateThumbprint"),
+            CompanionPort = ReadRegistryInteger(values, "CompanionPort"),
+            ProtocolVersion = ReadRegistryInteger(values, "ProtocolVersion"),
+        };
+        diagnostic.ExecutablePath = configuration.ExecutablePath;
+        diagnostic.AppDataRoot = configuration.AppDataRoot;
+        diagnostic.CertificatePath = configuration.CertificatePath;
+        diagnostic.ExpectedCertificateThumbprint = NormalizeThumbprint(configuration.CertificateThumbprint);
+        diagnostic.CompanionPort = configuration.CompanionPort;
+        diagnostic.ExpectedProtocolVersion = configuration.ProtocolVersion;
+        diagnostic.InstallJsonPath = configuration.InstallJsonPath;
+        if (!string.IsNullOrWhiteSpace(configuration.ExecutablePath))
+            diagnostic.AttemptedExecutablePaths.Add(configuration.ExecutablePath);
+
+        var missing = new List<string>();
+        if (string.IsNullOrWhiteSpace(configuration.ExecutablePath)) missing.Add("ExecutablePath");
+        if (string.IsNullOrWhiteSpace(configuration.AppDataRoot)) missing.Add("AppDataRoot");
+        if (string.IsNullOrWhiteSpace(configuration.CertificatePath)) missing.Add("CertificatePath");
+        if (string.IsNullOrWhiteSpace(configuration.CertificateThumbprint)) missing.Add("CertificateThumbprint");
+        if (configuration.CompanionPort <= 0 || configuration.CompanionPort > 65535) missing.Add("CompanionPort");
+        if (configuration.ProtocolVersion <= 0) missing.Add("ProtocolVersion");
+        if (missing.Count > 0)
+        {
+            diagnostic.Message =
+                $"The shared Office configuration is incomplete. Missing or invalid values: {string.Join(", ", missing)}.";
+            throw new VisualTeXCompanionException(diagnostic);
+        }
+        return configuration;
+    }
+
+    private static Dictionary<string, string> QueryIntegrationRegistry(
+        string registryPath,
+        CompanionHealthDiagnostic diagnostic)
     {
         try
         {
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
-                cancellationToken);
-            timeout.CancelAfter(TimeSpan.FromSeconds(2));
+            using var process = Process.Start(new ProcessStartInfo(
+                "reg.exe",
+                $"query \"{registryPath}\"")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            });
+            if (process == null)
+                throw new InvalidOperationException("Process.Start returned null for reg.exe.");
+            var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            if (process.ExitCode != 0)
+            {
+                diagnostic.Message =
+                    $"Unable to read {registryPath}. reg.exe exit code={process.ExitCode}; stdout={stdout}; stderr={stderr}";
+                diagnostic.Exception = stderr;
+                throw new VisualTeXCompanionException(diagnostic);
+            }
+
+            var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var rawLine in stdout.Split(
+                         new[] { '\r', '\n' },
+                         StringSplitOptions.RemoveEmptyEntries))
+            {
+                var line = rawLine.Trim();
+                var typeName = string.Empty;
+                var typeIndex = -1;
+                foreach (var candidate in new[] { "REG_SZ", "REG_EXPAND_SZ", "REG_DWORD" })
+                {
+                    var index = line.IndexOf(candidate, StringComparison.OrdinalIgnoreCase);
+                    if (index < 0 || typeIndex >= 0 && index >= typeIndex) continue;
+                    typeIndex = index;
+                    typeName = candidate;
+                }
+                if (typeIndex <= 0) continue;
+                var name = line.Substring(0, typeIndex).Trim();
+                var value = line.Substring(typeIndex + typeName.Length).Trim();
+                if (!string.IsNullOrWhiteSpace(name)) values[name] = value;
+            }
+            return values;
+        }
+        catch (VisualTeXCompanionException)
+        {
+            throw;
+        }
+        catch (Exception error)
+        {
+            diagnostic.Message = $"Unable to read {registryPath}: {error.Message}";
+            PopulateException(diagnostic, error);
+            throw new VisualTeXCompanionException(diagnostic, error);
+        }
+    }
+
+    private static string ReadRegistryString(
+        IReadOnlyDictionary<string, string> values,
+        string name) => values.TryGetValue(name, out var value) ? value : string.Empty;
+
+    private static int ReadRegistryInteger(
+        IReadOnlyDictionary<string, string> values,
+        string name)
+    {
+        if (!values.TryGetValue(name, out var value)) return 0;
+        value = value.Trim();
+        if (value.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+            && int.TryParse(
+                value.Substring(2),
+                NumberStyles.HexNumber,
+                CultureInfo.InvariantCulture,
+                out var hexadecimal))
+            return hexadecimal;
+        return int.TryParse(
+            value,
+            NumberStyles.Integer,
+            CultureInfo.InvariantCulture,
+            out var decimalValue)
+            ? decimalValue
+            : 0;
+    }
+
+    private void ValidateConfiguration(CompanionHealthDiagnostic diagnostic)
+    {
+        diagnostic.Stage = "configuration";
+        if (!File.Exists(_configuration.ExecutablePath))
+        {
+            diagnostic.FailureType = "ExecutableMissing";
+            diagnostic.Message =
+                $"The registered VisualTeX.exe does not exist: {_configuration.ExecutablePath}. Run repair with the exact -VisualTeXPath.";
+            throw new VisualTeXCompanionException(diagnostic);
+        }
+        if (!Directory.Exists(_configuration.AppDataRoot))
+        {
+            diagnostic.FailureType = "AppDataRootMissing";
+            diagnostic.Message = $"The registered AppDataRoot does not exist: {_configuration.AppDataRoot}";
+            throw new VisualTeXCompanionException(diagnostic);
+        }
+        if (!File.Exists(_configuration.CertificatePath))
+        {
+            diagnostic.FailureType = "CertificateFileMissing";
+            diagnostic.Message = $"The registered certificate file does not exist: {_configuration.CertificatePath}";
+            throw new VisualTeXCompanionException(diagnostic);
+        }
+
+        using (var certificate = new X509Certificate2(_configuration.CertificatePath))
+        {
+            var fileThumbprint = NormalizeThumbprint(certificate.Thumbprint);
+            if (!string.Equals(
+                    fileThumbprint,
+                    NormalizeThumbprint(_configuration.CertificateThumbprint),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                diagnostic.FailureType = "CertificateRegistryMismatch";
+                diagnostic.Message =
+                    $"CertificatePath contains thumbprint {fileThumbprint}, but the registry expects {NormalizeThumbprint(_configuration.CertificateThumbprint)}.";
+                throw new VisualTeXCompanionException(diagnostic);
+            }
+        }
+        if (!IsCertificateInCurrentUserRoot(_configuration.CertificateThumbprint))
+        {
+            diagnostic.FailureType = "CertificateNotTrusted";
+            diagnostic.Message =
+                $"Certificate {_configuration.CertificateThumbprint} is not present in the current-user Root certificate store.";
+            throw new VisualTeXCompanionException(diagnostic);
+        }
+
+        ValidateInstallJson(diagnostic);
+    }
+
+    private void ValidateInstallJson(CompanionHealthDiagnostic diagnostic)
+    {
+        diagnostic.Stage = "install-json";
+        if (!File.Exists(_configuration.InstallJsonPath))
+        {
+            diagnostic.FailureType = "InstallJsonMissing";
+            diagnostic.Message = $"VisualTeX install.json is missing: {_configuration.InstallJsonPath}";
+            throw new VisualTeXCompanionException(diagnostic);
+        }
+        try
+        {
+            using var document = JsonDocument.Parse(
+                File.ReadAllText(_configuration.InstallJsonPath, Encoding.UTF8));
+            var root = document.RootElement;
+            if (!root.TryGetProperty("installToken", out var token)
+                || token.ValueKind != JsonValueKind.String
+                || token.GetString()?.Length != 64)
+                throw new InvalidDataException("installToken is missing or is not a 64-character token.");
+            if (!root.TryGetProperty("port", out var port)
+                || !port.TryGetInt32(out var actualPort)
+                || actualPort != _configuration.CompanionPort)
+                throw new InvalidDataException(
+                    $"install.json port does not match registry CompanionPort={_configuration.CompanionPort}.");
+            if (!root.TryGetProperty("protocolVersion", out var protocol)
+                || !protocol.TryGetInt32(out var actualProtocol)
+                || actualProtocol != _configuration.ProtocolVersion)
+                throw new InvalidDataException(
+                    $"install.json protocolVersion does not match registry ProtocolVersion={_configuration.ProtocolVersion}.");
+        }
+        catch (VisualTeXCompanionException)
+        {
+            throw;
+        }
+        catch (Exception error)
+        {
+            diagnostic.FailureType = "InstallJsonInvalid";
+            diagnostic.Message = $"VisualTeX install.json is invalid: {error.Message}";
+            PopulateException(diagnostic, error);
+            throw new VisualTeXCompanionException(diagnostic, error);
+        }
+    }
+
+    private bool CaptureServerCertificate(
+        HttpRequestMessage _,
+        X509Certificate2? certificate,
+        X509Chain? __,
+        SslPolicyErrors sslPolicyErrors)
+    {
+        _lastServerCertificateThumbprint = NormalizeThumbprint(certificate?.Thumbprint);
+        _lastTlsPolicyErrors = sslPolicyErrors.ToString();
+        var expectedThumbprint = NormalizeThumbprint(_configuration.CertificateThumbprint);
+        var accepted = IsPinnedCertificateAccepted(
+            certificate,
+            expectedThumbprint,
+            DateTime.UtcNow,
+            out var certificateTimeValid,
+            out var pinnedCertificateMatches);
+
+        // This is a loopback-only service using a per-user certificate. The
+        // certificate file, current-user Root trust, and registry thumbprint
+        // are validated before the request. Office-hosted .NET Framework can
+        // report chain/name policy errors that differ from PowerShell on the
+        // same machine, so accept only the exact pinned, currently valid cert.
+        var diagnostic = CreateDiagnostic("tls-certificate-callback");
+        diagnostic.ServerCertificateThumbprint = _lastServerCertificateThumbprint;
+        diagnostic.TlsPolicyErrors = _lastTlsPolicyErrors;
+        diagnostic.FailureType = accepted ? string.Empty : "PinnedCertificateRejected";
+        diagnostic.Message =
+            $"TLS callback accepted={accepted}; policyErrors={sslPolicyErrors}; expected={expectedThumbprint}; actual={_lastServerCertificateThumbprint}; timeValid={certificateTimeValid}.";
+        _hasValidatedServerCertificate = accepted;
+        AppendClientLog("tls-certificate", diagnostic, null);
+        return accepted;
+    }
+
+    private async Task<bool> TryValidateRunningCompanionAsync(
+        CompanionHealthDiagnostic diagnostic,
+        CancellationToken cancellationToken)
+    {
+        diagnostic.Stage = "port-listen";
+        diagnostic.PortListening = await IsPortListeningAsync(
+                _configuration.CompanionPort,
+                cancellationToken)
+            .ConfigureAwait(false);
+        PopulatePortOwner(diagnostic);
+        if (!diagnostic.PortListening)
+        {
+            diagnostic.FailureType = "PortNotListening";
+            diagnostic.Message =
+                $"No process is listening on 127.0.0.1:{_configuration.CompanionPort}.";
+            return false;
+        }
+
+        diagnostic.Stage = "https-handshake";
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(3));
             using var response = await _http.GetAsync("/health", timeout.Token)
                 .ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode) return false;
-            var json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-            using var document = JsonDocument.Parse(json);
-            return document.RootElement.TryGetProperty("ok", out var ok)
-                && ok.ValueKind == JsonValueKind.True;
+            diagnostic.ServerCertificateThumbprint = _lastServerCertificateThumbprint;
+            diagnostic.TlsPolicyErrors = _lastTlsPolicyErrors;
+            diagnostic.HealthResponse = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                diagnostic.FailureType = "HealthHttpStatus";
+                diagnostic.Message =
+                    $"The companion /health endpoint returned HTTP {(int)response.StatusCode}.";
+                return false;
+            }
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException error) when (!cancellationToken.IsCancellationRequested)
+        {
+            diagnostic.FailureType = "HttpsTimeout";
+            diagnostic.Message = "The HTTPS /health request timed out after 3 seconds.";
+            diagnostic.ServerCertificateThumbprint = _lastServerCertificateThumbprint;
+            diagnostic.TlsPolicyErrors = _lastTlsPolicyErrors;
+            PopulateException(diagnostic, error);
+            return false;
+        }
+        catch (HttpRequestException error)
+        {
+            diagnostic.ServerCertificateThumbprint = _lastServerCertificateThumbprint;
+            diagnostic.TlsPolicyErrors = _lastTlsPolicyErrors;
+            diagnostic.FailureType = ContainsException<AuthenticationException>(error)
+                || !string.IsNullOrWhiteSpace(_lastTlsPolicyErrors)
+                    ? "TlsValidationFailed"
+                    : diagnostic.PortOwnerProcessId.HasValue
+                        ? "PortOccupiedOrHttpsUnavailable"
+                        : "HttpsRequestFailed";
+            diagnostic.Message =
+                $"HTTPS /health failed: {error.Message}. TLS={_lastTlsPolicyErrors}; port owner={diagnostic.PortOwnerProcessName} ({diagnostic.PortOwnerProcessId?.ToString() ?? "unknown"}) path='{diagnostic.PortOwnerProcessPath}'.";
+            PopulateException(diagnostic, error);
+            return false;
+        }
+
+        diagnostic.Stage = "certificate-match";
+        if (!_hasValidatedServerCertificate
+            || !string.Equals(
+                NormalizeThumbprint(diagnostic.ServerCertificateThumbprint),
+                NormalizeThumbprint(_configuration.CertificateThumbprint),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            diagnostic.FailureType = "ServerCertificateMismatch";
+            diagnostic.Message =
+                $"The HTTPS server certificate thumbprint {diagnostic.ServerCertificateThumbprint} does not match the registered certificate {_configuration.CertificateThumbprint}.";
+            return false;
+        }
+
+        diagnostic.Stage = "health-json";
+        try
+        {
+            using var document = JsonDocument.Parse(diagnostic.HealthResponse);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("ok", out var ok) || ok.ValueKind != JsonValueKind.True)
+            {
+                diagnostic.FailureType = "HealthNotOk";
+                diagnostic.Message = "The /health response did not contain ok=true.";
+                return false;
+            }
+            if (!root.TryGetProperty("protocolVersion", out var protocol)
+                || !protocol.TryGetInt32(out var actualProtocol))
+            {
+                diagnostic.FailureType = "HealthProtocolMissing";
+                diagnostic.Message = "The /health response did not contain a numeric protocolVersion.";
+                return false;
+            }
+            diagnostic.ActualProtocolVersion = actualProtocol;
+            diagnostic.Stage = "protocol-version";
+            if (actualProtocol != _configuration.ProtocolVersion)
+            {
+                diagnostic.FailureType = "ProtocolVersionMismatch";
+                diagnostic.Message =
+                    $"Companion protocolVersion={actualProtocol}; expected {_configuration.ProtocolVersion}.";
+                return false;
+            }
+            diagnostic.FailureType = string.Empty;
+            diagnostic.Message = "Port, HTTPS, certificate, health JSON and protocol version are valid.";
+            return true;
+        }
+        catch (JsonException error)
+        {
+            diagnostic.FailureType = "HealthJsonInvalid";
+            diagnostic.Message = $"The /health response is not valid JSON: {error.Message}";
+            PopulateException(diagnostic, error);
+            return false;
+        }
+    }
+
+    private static async Task<bool> IsPortListeningAsync(
+        int port,
+        CancellationToken cancellationToken)
+    {
+        using var client = new TcpClient();
+        try
+        {
+            var connect = client.ConnectAsync(IPAddress.Loopback, port);
+            var completed = await Task.WhenAny(
+                    connect,
+                    Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken))
+                .ConfigureAwait(false);
+            if (completed != connect) return false;
+            await connect.ConfigureAwait(false);
+            return client.Connected;
+        }
+        catch (SocketException)
         {
             return false;
         }
-        catch (HttpRequestException)
+    }
+
+    private static void PopulatePortOwner(CompanionHealthDiagnostic diagnostic)
+    {
+        try
         {
-            return false;
+            using var process = Process.Start(new ProcessStartInfo("netstat.exe", "-ano -p tcp")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            });
+            if (process == null) return;
+            var output = process.StandardOutput.ReadToEnd();
+            process.WaitForExit(2000);
+            foreach (var line in output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (line.IndexOf("LISTEN", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                var columns = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+                if (columns.Length < 4 || !columns[1].EndsWith(
+                        $":{diagnostic.CompanionPort}",
+                        StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (!int.TryParse(columns[columns.Length - 1], out var processId)) continue;
+                diagnostic.PortOwnerProcessId = processId;
+                try
+                {
+                    using var owner = Process.GetProcessById(processId);
+                    diagnostic.PortOwnerProcessName = owner.ProcessName;
+                    try
+                    {
+                        diagnostic.PortOwnerProcessPath = owner.MainModule?.FileName ?? string.Empty;
+                    }
+                    catch
+                    {
+                        diagnostic.PortOwnerProcessPath = string.Empty;
+                    }
+                }
+                catch
+                {
+                    diagnostic.PortOwnerProcessName = "<unavailable>";
+                    diagnostic.PortOwnerProcessPath = string.Empty;
+                }
+                return;
+            }
+        }
+        catch (Exception error)
+        {
+            diagnostic.InnerExceptions.Add($"Port owner lookup failed: {error}");
+        }
+    }
+
+    private static bool PathsEqual(string left, string right)
+    {
+        try
+        {
+            return string.Equals(
+                Path.GetFullPath(left),
+                Path.GetFullPath(right),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
         }
     }
 
@@ -268,43 +954,146 @@ public sealed class VisualTeXSessionClient : IDisposable
 
     public void OpenDesktop()
     {
-        var executable = FindVisualTeXExecutable();
-        Process.Start(new ProcessStartInfo(executable)
+        if (!File.Exists(_configuration.ExecutablePath))
+            throw new FileNotFoundException(
+                $"The registered VisualTeX.exe does not exist: {_configuration.ExecutablePath}",
+                _configuration.ExecutablePath);
+        Process.Start(new ProcessStartInfo(_configuration.ExecutablePath)
         {
             UseShellExecute = true,
         });
     }
 
-    private static void StartVisualTeXCompanion()
+    private Process StartVisualTeXCompanion(CompanionHealthDiagnostic diagnostic)
     {
-        var executable = FindVisualTeXExecutable();
-        Process.Start(new ProcessStartInfo(executable, "--office-background")
+        diagnostic.Stage = "process-start";
+        var process = Process.Start(new ProcessStartInfo(
+            _configuration.ExecutablePath,
+            "--office-background")
         {
-            UseShellExecute = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
             WindowStyle = ProcessWindowStyle.Hidden,
+            WorkingDirectory = Path.GetDirectoryName(_configuration.ExecutablePath) ?? string.Empty,
         });
+        if (process == null)
+        {
+            diagnostic.FailureType = "ProcessStartReturnedNull";
+            diagnostic.Message =
+                $"Process.Start returned null for {_configuration.ExecutablePath}.";
+            throw new VisualTeXCompanionException(diagnostic);
+        }
+        diagnostic.StartedProcessId = process.Id;
+        diagnostic.Message =
+            $"Started VisualTeX background process PID={process.Id} from {_configuration.ExecutablePath}.";
+        return process;
     }
 
-    private static string FindVisualTeXExecutable()
+    private static bool IsCertificateInCurrentUserRoot(string thumbprint)
     {
-        var candidates = new[]
+        var expected = NormalizeThumbprint(thumbprint);
+        using var store = new X509Store(StoreName.Root, StoreLocation.CurrentUser);
+        store.Open(OpenFlags.ReadOnly);
+        foreach (var certificate in store.Certificates)
         {
-            Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Programs",
-                "VisualTeX",
-                "VisualTeX.exe"),
-            Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "VisualTeX",
-                "VisualTeX.exe"),
-        };
-        foreach (var executable in candidates)
-        {
-            if (File.Exists(executable)) return executable;
+            if (string.Equals(
+                    NormalizeThumbprint(certificate.Thumbprint),
+                    expected,
+                    StringComparison.OrdinalIgnoreCase))
+                return true;
         }
-        throw new FileNotFoundException(
-            "The installed VisualTeX desktop executable could not be found.");
+        return false;
+    }
+
+    internal static bool IsPinnedCertificateAccepted(
+        X509Certificate2? certificate,
+        string? expectedThumbprint,
+        DateTime utcNow,
+        out bool certificateTimeValid,
+        out bool pinnedCertificateMatches)
+    {
+        var normalizedExpected = NormalizeThumbprint(expectedThumbprint);
+        var normalizedActual = NormalizeThumbprint(certificate?.Thumbprint);
+        certificateTimeValid = certificate is not null
+            && utcNow >= certificate.NotBefore.ToUniversalTime()
+            && utcNow <= certificate.NotAfter.ToUniversalTime();
+        pinnedCertificateMatches = certificate is not null
+            && !string.IsNullOrWhiteSpace(normalizedExpected)
+            && string.Equals(
+                normalizedActual,
+                normalizedExpected,
+                StringComparison.OrdinalIgnoreCase);
+        return pinnedCertificateMatches && certificateTimeValid;
+    }
+
+    private static string NormalizeThumbprint(string? value) =>
+        (value ?? string.Empty).Replace(" ", string.Empty).ToUpperInvariant();
+
+    private void AppendClientLog(
+        string eventName,
+        CompanionHealthDiagnostic? diagnostic,
+        Exception? error)
+    {
+        try
+        {
+            var logPath = VstoClientLogPath();
+            Directory.CreateDirectory(Path.GetDirectoryName(logPath) ?? CompanionLogRoot());
+            using var process = Process.GetCurrentProcess();
+            string processPath;
+            try
+            {
+                processPath = process.MainModule?.FileName ?? string.Empty;
+            }
+            catch
+            {
+                processPath = string.Empty;
+            }
+            var assembly = typeof(VisualTeXSessionClient).Assembly;
+            var builder = new StringBuilder();
+            builder.Append(DateTimeOffset.Now.ToString("o", CultureInfo.InvariantCulture));
+            builder.Append(" event=").Append(eventName);
+            builder.Append(" process=").Append(process.ProcessName);
+            builder.Append(" pid=").Append(process.Id.ToString(CultureInfo.InvariantCulture));
+            builder.Append(" processPath=\"").Append(processPath).Append('"');
+            builder.Append(" clr=\"").Append(Environment.Version).Append('"');
+            builder.Append(" os=\"").Append(Environment.OSVersion).Append('"');
+            builder.Append(" assembly=\"").Append(assembly.Location).Append('"');
+            builder.Append(" assemblyVersion=\"").Append(assembly.GetName().Version).Append('"');
+            builder.Append(" executable=\"").Append(_configuration.ExecutablePath).Append('"');
+            builder.Append(" port=").Append(_configuration.CompanionPort.ToString(CultureInfo.InvariantCulture));
+            if (diagnostic is not null)
+                builder.Append(" diagnostic=").Append(diagnostic.ToJson());
+            if (error is not null)
+                builder.Append(" exception=").Append(JsonSerializer.Serialize(error.ToString()));
+            builder.AppendLine();
+            lock (ClientLogLock)
+            {
+                File.AppendAllText(logPath, builder.ToString(), new UTF8Encoding(false));
+            }
+        }
+        catch
+        {
+            // Diagnostics must never block Office operations.
+        }
+    }
+
+    private static bool ContainsException<T>(Exception error) where T : Exception
+    {
+        for (Exception? current = error; current != null; current = current.InnerException)
+        {
+            if (current is T) return true;
+        }
+        return false;
+    }
+
+    private static void PopulateException(
+        CompanionHealthDiagnostic diagnostic,
+        Exception error)
+    {
+        diagnostic.Exception = error.ToString();
+        diagnostic.InnerExceptions.Clear();
+        for (var current = error.InnerException; current != null; current = current.InnerException)
+            diagnostic.InnerExceptions.Add(current.ToString());
     }
 
     private static async Task EnsureSuccessAsync(HttpResponseMessage response)
@@ -322,32 +1111,28 @@ public sealed class VisualTeXSessionClient : IDisposable
             ?? throw new InvalidDataException("VisualTeX Session response was empty.");
     }
 
-    private static string ReadInstallToken()
+    private string ReadInstallToken()
     {
-        var candidates = new[]
+        try
         {
-            Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "com.visualtex.studio",
-                "office",
-                "install.json"),
-            Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "com.visualtex.studio",
-                "office",
-                "install.json"),
-        };
-        foreach (var path in candidates)
-        {
-            if (!File.Exists(path)) continue;
-            using var document = JsonDocument.Parse(File.ReadAllText(path, Encoding.UTF8));
+            using var document = JsonDocument.Parse(
+                File.ReadAllText(_configuration.InstallJsonPath, Encoding.UTF8));
             if (document.RootElement.TryGetProperty("installToken", out var token)
                 && token.ValueKind == JsonValueKind.String
                 && token.GetString()?.Length == 64)
                 return token.GetString()!;
+            throw new InvalidDataException("installToken is missing or invalid.");
         }
-        throw new FileNotFoundException(
-            "VisualTeX install token was not found. Start VisualTeX before using the Office add-in.");
+        catch (Exception error)
+        {
+            var diagnostic = CreateDiagnostic("install-json");
+            diagnostic.FailureType = "InstallJsonInvalid";
+            diagnostic.Message =
+                $"Unable to read VisualTeX install token from {_configuration.InstallJsonPath}: {error.Message}";
+            PopulateException(diagnostic, error);
+            LastHealthDiagnostic = diagnostic;
+            throw new VisualTeXCompanionException(diagnostic, error);
+        }
     }
 
     public void Dispose()

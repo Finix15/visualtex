@@ -1,12 +1,18 @@
 use crate::office::background;
-use crate::office::certificate::{ensure_office_install, regenerate_certificate};
+use crate::office::certificate::{
+    certificate_sha1_thumbprint, ensure_office_install, regenerate_certificate,
+};
 use crate::office::formula_cache::FormulaMetadataCache;
 use crate::office::installer::{self, OfficeIntegrationStatus};
+#[cfg(not(target_os = "windows"))]
 use crate::office::manifest::ManifestHost;
 use crate::office::platform::{OfficeIntegrationMode, OfficePlatformStatus};
 use crate::office::server;
 use crate::office::sessions::SessionStore;
-use crate::office::state::{OfficeCompanionState, OfficeCompanionStatus, OfficePaths};
+use crate::office::state::{
+    append_office_log, OfficeCompanionState, OfficeCompanionStatus, OfficePaths, OFFICE_PORT,
+    OFFICE_PROTOCOL_VERSION,
+};
 use crate::OcrState;
 #[cfg(target_os = "macos")]
 use std::path::Path;
@@ -30,7 +36,7 @@ fn development_ui_root() -> PathBuf {
 fn development_ui_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
-        .join("dist-office-windows-ole")
+        .join("dist-office-windows-native")
 }
 
 #[cfg(all(
@@ -45,6 +51,11 @@ fn development_ui_root() -> PathBuf {
 
 fn resolve_ui_root(app: &AppHandle) -> Result<PathBuf, String> {
     if let Ok(resource) = app.path().resolve("office", BaseDirectory::Resource) {
+        #[cfg(target_os = "windows")]
+        if resource.join("dialog").join("index.html").is_file() {
+            return Ok(resource);
+        }
+        #[cfg(not(target_os = "windows"))]
         if resource.join("bridge").join("index.html").is_file()
             && resource.join("dialog").join("index.html").is_file()
         {
@@ -54,6 +65,11 @@ fn resolve_ui_root(app: &AppHandle) -> Result<PathBuf, String> {
     #[cfg(debug_assertions)]
     {
         let development = development_ui_root();
+        #[cfg(target_os = "windows")]
+        if development.join("dialog").join("index.html").is_file() {
+            return Ok(development);
+        }
+        #[cfg(not(target_os = "windows"))]
         if development.join("bridge").join("index.html").is_file()
             && development.join("dialog").join("index.html").is_file()
         {
@@ -89,7 +105,7 @@ pub fn initialize(app: &AppHandle, ocr: OcrState) -> Result<OfficeCompanionState
         format!("Unable to resolve VisualTeX application data directory: {error}")
     })?;
     let root = app_data.join("office");
-    let paths = OfficePaths {
+    let mut paths = OfficePaths {
         certificate: root.join("localhost-cert.pem"),
         private_key: root.join("localhost-key.pem"),
         certificate_metadata: root.join("certificate.json"),
@@ -97,10 +113,91 @@ pub fn initialize(app: &AppHandle, ocr: OcrState) -> Result<OfficeCompanionState
         sessions: root.join("sessions"),
         recovery: root.join("recovery"),
         formula_cache: root.join("formulas"),
-        ui_root: resolve_ui_root(app)?,
+        ui_root: PathBuf::new(),
         root,
     };
-    let install_token = ensure_office_install(&paths)?;
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("Unable to resolve the VisualTeX executable: {error}"))?;
+    append_office_log(
+        &paths,
+        "startup.log",
+        &format!(
+            "startup begin pid={} executable={} app_data_root={} office_root={}",
+            std::process::id(),
+            executable.display(),
+            app_data.display(),
+            paths.root.display()
+        ),
+    );
+
+    paths.ui_root = match resolve_ui_root(app) {
+        Ok(path) => {
+            append_office_log(
+                &paths,
+                "startup.log",
+                &format!("Office UI resource root resolved: {}", path.display()),
+            );
+            path
+        }
+        Err(error) => {
+            append_office_log(
+                &paths,
+                "startup.log",
+                &format!("Office UI resource resolution failed: {error}"),
+            );
+            return Err(error);
+        }
+    };
+
+    let install_token = ensure_office_install(&paths).map_err(|error| {
+        append_office_log(
+            &paths,
+            "startup.log",
+            &format!("Office data/certificate initialization failed: {error}"),
+        );
+        error
+    })?;
+    let certificate_thumbprint = certificate_sha1_thumbprint(&paths).map_err(|error| {
+        append_office_log(
+            &paths,
+            "startup.log",
+            &format!("Certificate thumbprint calculation failed: {error}"),
+        );
+        error
+    })?;
+
+    #[cfg(target_os = "windows")]
+    crate::office::windows_backend::write_shared_configuration(
+        &executable,
+        &app_data,
+        &paths,
+        &certificate_thumbprint,
+        OFFICE_PORT,
+        OFFICE_PROTOCOL_VERSION,
+    )
+    .map_err(|error| {
+        append_office_log(
+            &paths,
+            "startup.log",
+            &format!("OfficeIntegration registry write failed: {error}"),
+        );
+        error
+    })?;
+
+    append_office_log(
+        &paths,
+        "startup.log",
+        &format!(
+            "Office configuration ready certificate={} private_key={} thumbprint={} port={} protocol={} install_json={}",
+            paths.certificate.display(),
+            paths.private_key.display(),
+            certificate_thumbprint,
+            OFFICE_PORT,
+            OFFICE_PROTOCOL_VERSION,
+            paths.install.display()
+        ),
+    );
+
     // An installed (or temporarily paused) LaunchAgent means the user
     // explicitly installed Office integration. Reassert only VisualTeX's
     // GUID-prefixed manifests when the companion starts so a removed host
@@ -120,6 +217,7 @@ pub fn initialize(app: &AppHandle, ocr: OcrState) -> Result<OfficeCompanionState
     }
     let session_store = SessionStore::new(&paths).map_err(|error| error.to_string())?;
     let formula_cache = FormulaMetadataCache::new(&paths).map_err(|error| error.to_string())?;
+    append_office_log(&paths, "startup.log", "startup initialization completed");
     Ok(OfficeCompanionState::new(
         Some(app.clone()),
         ocr,
@@ -133,11 +231,22 @@ pub fn initialize(app: &AppHandle, ocr: OcrState) -> Result<OfficeCompanionState
 
 pub fn start(state: OfficeCompanionState) {
     if state.snapshot().running {
+        append_office_log(&state.paths, "companion.log", "start skipped: companion already marked running");
         return;
     }
+    append_office_log(
+        &state.paths,
+        "companion.log",
+        &format!("companion task requested by pid={}", std::process::id()),
+    );
     let service = state.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(error) = server::run(service.clone()).await {
+            append_office_log(
+                &service.paths,
+                "companion.log",
+                &format!("companion terminated with error: {error}"),
+            );
             service.update_status(|status| {
                 status.running = false;
                 status.last_error = Some(error);
@@ -332,7 +441,68 @@ fn powershell_compatible_path(path: &std::path::Path) -> PathBuf {
 }
 
 #[cfg(target_os = "windows")]
-fn run_windows_script(app: &AppHandle, script_name: &str, arguments: &[&str]) -> Result<(), String> {
+fn windows_office_root() -> PathBuf {
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("VisualTeX")
+        .join("office")
+}
+
+#[cfg(target_os = "windows")]
+fn windows_office_log_root() -> PathBuf {
+    windows_office_root().join("install-logs")
+}
+
+#[cfg(target_os = "windows")]
+fn latest_bootstrap_log_tail() -> String {
+    let root = windows_office_log_root();
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        return format!("No bootstrap log directory exists at {}", root.display());
+    };
+    let latest = entries
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("vsto-bootstrap-")
+                && entry.path().extension().is_some_and(|value| value == "log")
+        })
+        .filter_map(|entry| {
+            let modified = entry.metadata().ok()?.modified().ok()?;
+            Some((modified, entry.path()))
+        })
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, path)| path);
+    let Some(path) = latest else {
+        return format!("No vsto-bootstrap log exists at {}", root.display());
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return format!("Unable to read latest bootstrap log: {}", path.display());
+    };
+    let lines = text.lines().collect::<Vec<_>>();
+    let start = lines.len().saturating_sub(80);
+    format!(
+        "Latest bootstrap log: {}\n{}",
+        path.display(),
+        lines[start..].join("\n")
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn current_visualtex_executable() -> Result<String, String> {
+    std::env::current_exe()
+        .map(|path| powershell_compatible_path(&path).to_string_lossy().to_string())
+        .map_err(|error| format!("Unable to resolve the current VisualTeX.exe path: {error}"))
+}
+
+#[cfg(target_os = "windows")]
+fn run_windows_script(
+    app: &AppHandle,
+    script_name: &str,
+    arguments: &[String],
+) -> Result<String, String> {
     let script = app
         .path()
         .resolve(
@@ -347,7 +517,7 @@ fn run_windows_script(app: &AppHandle, script_name: &str, arguments: &[&str]) ->
         ));
     }
     let powershell_script = powershell_compatible_path(&script);
-    let status = hidden_windows_command("powershell.exe")
+    let output = hidden_windows_command("powershell.exe")
         .args([
             "-NoProfile",
             "-NonInteractive",
@@ -359,16 +529,21 @@ fn run_windows_script(app: &AppHandle, script_name: &str, arguments: &[&str]) ->
         ])
         .arg(&powershell_script)
         .args(arguments)
-        .status()
+        .output()
         .map_err(|error| format!("Unable to start Windows Office script: {error}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "Windows Office script {} failed with {status}",
-            script.display()
-        ))
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if output.status.success() {
+        return Ok(stdout);
     }
+    Err(format!(
+        "Windows Office script failed: {}\nStatus: {}\n\nstdout:\n{}\n\nstderr:\n{}\n\n{}",
+        script.display(),
+        output.status,
+        if stdout.is_empty() { "<empty>" } else { &stdout },
+        if stderr.is_empty() { "<empty>" } else { &stderr },
+        latest_bootstrap_log_tail()
+    ))
 }
 
 #[tauri::command]
@@ -378,15 +553,22 @@ pub fn install_windows_ole_integration(
 ) -> Result<OfficePlatformStatus, String> {
     #[cfg(target_os = "windows")]
     {
-        run_windows_script(&app, "install_windows_vsto.ps1", &[])?;
+        let executable = current_visualtex_executable()?;
+        let arguments = vec!["-VisualTeXPath".to_string(), executable];
+        run_windows_script(
+            &app,
+            "ensure_windows_office_certificate.ps1",
+            &arguments,
+        )?;
+        run_windows_script(&app, "install_windows_vsto.ps1", &arguments)?;
         return state
             .platform_backend
-            .set_mode(OfficeIntegrationMode::Ole);
+            .set_mode(OfficeIntegrationMode::Vsto);
     }
     #[cfg(not(target_os = "windows"))]
     {
         let _ = (app, state);
-        Err("Windows OLE integration can be installed only on Windows".to_string())
+        Err("Windows native Office integration can be installed only on Windows".to_string())
     }
 }
 
@@ -398,7 +580,6 @@ pub fn uninstall_windows_ole_integration(
     #[cfg(target_os = "windows")]
     {
         run_windows_script(&app, "uninstall_windows_vsto.ps1", &[])?;
-        run_windows_script(&app, "uninstall_windows_ole.ps1", &[])?;
         return state
             .platform_backend
             .set_mode(OfficeIntegrationMode::Auto);
@@ -406,7 +587,7 @@ pub fn uninstall_windows_ole_integration(
     #[cfg(not(target_os = "windows"))]
     {
         let _ = (app, state);
-        Err("Windows OLE integration can be removed only on Windows".to_string())
+        Err("Windows native Office integration can be removed only on Windows".to_string())
     }
 }
 
@@ -417,15 +598,61 @@ pub fn repair_windows_office_integration(
 ) -> Result<OfficePlatformStatus, String> {
     #[cfg(target_os = "windows")]
     {
-        run_windows_script(&app, "install_windows_vsto.ps1", &[])?;
+        let executable = current_visualtex_executable()?;
+        let arguments = vec!["-VisualTeXPath".to_string(), executable];
+        run_windows_script(
+            &app,
+            "ensure_windows_office_certificate.ps1",
+            &arguments,
+        )?;
+        run_windows_script(&app, "install_windows_vsto.ps1", &arguments)?;
         state
             .platform_backend
-            .set_mode(OfficeIntegrationMode::Ole)
+            .set_mode(OfficeIntegrationMode::Vsto)
     }
     #[cfg(not(target_os = "windows"))]
     {
         let _ = (app, state);
         Err("Windows Office repair is available only on Windows".to_string())
+    }
+}
+
+#[tauri::command]
+pub fn test_windows_office_runtime(
+    app: AppHandle,
+    state: tauri::State<'_, OfficeCompanionState>,
+) -> Result<OfficePlatformStatus, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let executable = current_visualtex_executable()?;
+        let arguments = vec!["-VisualTeXPath".to_string(), executable];
+        run_windows_script(&app, "test_windows_office_runtime.ps1", &arguments)?;
+        return Ok(state.platform_backend.status());
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (app, state);
+        Err("Windows Office runtime verification is available only on Windows".to_string())
+    }
+}
+
+#[tauri::command]
+pub fn open_windows_office_logs() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let root = windows_office_root();
+        std::fs::create_dir_all(&root).map_err(|error| {
+            format!("Unable to create Windows Office log directory {}: {error}", root.display())
+        })?;
+        return hidden_windows_command("explorer.exe")
+            .arg(&root)
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| format!("Unable to open Windows Office log directory: {error}"));
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Windows Office logs are available only on Windows".to_string())
     }
 }
 
