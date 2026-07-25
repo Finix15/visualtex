@@ -378,6 +378,32 @@ async function main() {
     })()`, "immediate generic differential upright write-back");
     console.log("STAGE live-differential-upright PASS");
 
+    await evaluate(`(() => {
+      const field = document.querySelector("math-field");
+      field.setValue("\\\\frac{\\\\partial f}{d\\\\alpha}", {
+        mode: "math",
+        format: "latex",
+        insertionMode: "replaceAll",
+        selectionMode: "after",
+        silenceNotifications: true,
+      });
+      field.position = field.lastOffset;
+      field.dispatchEvent(new InputEvent("input", {
+        bubbles: true,
+        composed: true,
+        inputType: "insertText",
+        data: "a",
+      }));
+    })()`);
+    await waitForEvaluation(`(() => {
+      const field = document.querySelector("math-field");
+      return {
+        ready: field?.value === "\\\\frac{\\\\partial f}{\\\\mathrm{d}\\\\alpha}",
+        value: field?.value ?? "",
+      };
+    })()`, "Greek differential upright inside an asymmetric fraction");
+    console.log("STAGE live-asymmetric-greek-differential PASS");
+
     await resetDocument();
     await waitForEvaluation(`(() => ({
       ready: Boolean(document.querySelector('button[data-category="matrix"]')),
@@ -441,7 +467,10 @@ async function main() {
     await evaluate(`document.querySelector(".canvas-input-behavior-trigger").click()`);
 
     await focusField();
-    await typeText("\\sum");
+    // The synced macOS editor intentionally delegates a physical raw-LaTeX
+    // command to MathLive's native popover. Inject this case in math mode to
+    // exercise VisualTeX's separate structured-command candidate panel.
+    await insertFieldText("\\sum");
     const structuredCandidate = await waitForEvaluation(`(() => ({
       ready: Boolean(document.querySelector(".suggestion-popup")),
       customVisible: Boolean(document.querySelector(".suggestion-popup")),
@@ -476,12 +505,13 @@ async function main() {
       const hostBounds = host?.getBoundingClientRect();
       const left = Number.parseFloat(host?.style.getPropertyValue("--pending-wrapper-left") ?? "NaN");
       const top = Number.parseFloat(host?.style.getPropertyValue("--pending-wrapper-top") ?? "NaN");
-      const expectedLeft = caretBounds && hostBounds ? caretBounds.left - hostBounds.left : Number.NaN;
+      const expectedCaretLeft = caretBounds && hostBounds ? caretBounds.left - hostBounds.left : Number.NaN;
       const expectedTop = caretBounds && hostBounds
         ? caretBounds.top - hostBounds.top + caretBounds.height / 2
         : Number.NaN;
       const pseudo = host ? getComputedStyle(host, "::after") : null;
       const width = Number.parseFloat(pseudo?.width ?? "NaN");
+      const expectedCenter = expectedCaretLeft + width / 2;
       const borderWidth = Number.parseFloat(pseudo?.borderTopWidth ?? "NaN");
       return {
         ready:
@@ -490,7 +520,7 @@ async function main() {
           host?.classList.contains("has-pending-wrapper-placeholder") &&
           width >= 18 &&
           borderWidth > 0 &&
-          Math.abs(left - expectedLeft) <= 1.5 &&
+          Math.abs(left - expectedCenter) <= 1.5 &&
           Math.abs(top - expectedTop) <= 1.5,
         value: field?.value ?? "",
         pending: field?.dataset.pendingWrapperCommand ?? "",
@@ -498,7 +528,8 @@ async function main() {
         top,
         width,
         borderWidth,
-        expectedLeft,
+        expectedCaretLeft,
+        expectedCenter,
         expectedTop,
       };
     })()`, "mathbb placeholder anchored to native caret");

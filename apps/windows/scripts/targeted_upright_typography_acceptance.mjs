@@ -38,6 +38,18 @@ const cases = [
     normalMathMlTokens: ["d"],
   },
   {
+    name: "Greek differential in an asymmetric fraction",
+    input: String.raw`\frac{\partial f}{d\alpha}`,
+    expectedFragments: [String.raw`\partial f`, String.raw`\mathrm{d}\alpha`],
+    normalMathMlTokens: ["d"],
+  },
+  {
+    name: "spaced Greek differential in a reciprocal fraction",
+    input: String.raw`\frac{1}{d \theta}`,
+    expectedFragments: [String.raw`\mathrm{d} \theta`],
+    normalMathMlTokens: ["d"],
+  },
+  {
     name: "styled vector differential operand",
     input: String.raw`\frac{d\mathbf{r}}{dt}`,
     expectedFragments: [String.raw`\mathrm{d}\mathbf{r}`, String.raw`\mathrm{d}t`],

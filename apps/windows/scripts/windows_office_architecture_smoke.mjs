@@ -295,7 +295,15 @@ const officeDialogMain = await source("src/office/dialog/main.tsx");
 const officeDialogMessages = await source("src/office/dialog/dialogMessages.ts");
 assert.ok(!sessionClient.includes("_installToken = ReadInstallToken()"));
 assert.ok(sessionClient.includes("StartVisualTeXCompanion"));
-assert.ok(sessionClient.includes("timeout.CancelAfter(TimeSpan.FromSeconds(2))"));
+assert.ok(sessionClient.includes("timeout.CancelAfter(TimeSpan.FromSeconds(3))"));
+assert.ok(sessionClient.includes("handler.SslProtocols = SslProtocols.Tls12"));
+assert.ok(sessionClient.includes("pinnedCertificateMatches && certificateTimeValid"));
+assert.ok(sessionClient.includes("_hasValidatedServerCertificate"));
+assert.ok(!sessionClient.includes("_lastServerCertificateThumbprint = string.Empty;\r\n        _lastTlsPolicyErrors = string.Empty;"));
+assert.ok(sessionClient.includes('Path.Combine(CompanionLogRoot(), "vsto-client.log")'));
+assert.ok(sessionClient.includes("assembly.Location"));
+assert.ok(sessionClient.includes("tls-certificate-callback"));
+assert.ok(!sessionClient.includes("return sslPolicyErrors == SslPolicyErrors.None"));
 assert.ok(sessionClient.includes("OpenEditorAsync"));
 assert.ok(sessionClient.includes("CloseEditorAsync"));
 assert.ok(sessionClient.includes("/api/v1/app/sessions/"));
@@ -313,15 +321,14 @@ assert.ok(officeServer.includes('"/app/sessions/{session_id}/close"'));
 assert.ok(officeServer.includes("close_desktop_session"));
 assert.ok(officeServer.includes("WebviewUrl::External(url)"));
 assert.ok(officeServer.includes("?runtime=vsto-desktop"));
-assert.ok(officeServer.includes("remove_office_js"));
-assert.ok(officeServer.includes('"<script src=\\\"/vendor/office-js/office.js\\\"></script>"'));
-assert.ok(officeDialogMain.includes('get("runtime") === "vsto-desktop"'));
-assert.ok(officeDialogMain.includes("if (isVstoDesktopRuntime)"));
-assert.ok(officeDialogMain.includes("else {\n  mount();\n}"));
-assert.ok(officeDialogMessages.includes('get("runtime") === "vsto-desktop"'));
+assert.ok(!officeServer.includes("remove_office_js"));
+assert.ok(!officeServer.includes('"<script src=\\\"/vendor/office-js/office.js\\\"></script>"'));
+assert.ok(officeServer.includes('#[cfg(not(target_os = "windows"))]'));
+assert.ok(officeDialogMain.includes("executes the Office.js runtime"));
+assert.ok(!officeDialogMain.includes("Office.onReady"));
+assert.ok(officeDialogMessages.includes("no Office.context.ui parent"));
 assert.ok(officeDialogMessages.includes("return false"));
-assert.ok(officeDialogMessages.includes("return true"));
-assert.ok(officeDialogMain.includes("if (isVstoDesktopRuntime)"));
+assert.ok(!officeDialogMessages.includes("messageParent"));
 const officeDialogApp = await source("src/office/dialog/OfficeDialogApp.tsx");
 assert.ok(officeDialogApp.includes("closeOfficeSessionWindow"));
 assert.ok(officeDialogApp.includes("IS_VSTO_DESKTOP_RUNTIME"));
@@ -555,6 +562,10 @@ assert.ok(!comContracts.includes("interface IOfficeRibbonExtensibility"));
 
 const installOle = await source("scripts/install_windows_ole.ps1");
 const installVsto = await source("scripts/install_windows_vsto.ps1");
+const installVstoRuntime = await source("scripts/install_windows_vsto_runtime.ps1");
+const prepareVstoRuntime = await source("scripts/prepare_windows_vsto_runtime.ps1");
+const runtimeVerification = await source("scripts/test_windows_office_runtime.ps1");
+const certificateInstaller = await source("scripts/ensure_windows_office_certificate.ps1");
 const uninstallVsto = await source("scripts/uninstall_windows_vsto.ps1");
 const buildWindowsOffice = await source("scripts/build_windows_office.ps1");
 const ribbonDispatchSmoke = await source(
@@ -566,8 +577,9 @@ const dependencyLoadingSmoke = await source(
 const nativeMsi = await source(
   "src-windows/VisualTeX.WindowsOffice.Installer/Package.wxs",
 );
-assert.ok(installOle.includes('LoadBehavior\" -PropertyType DWord -Value 0'));
-assert.ok(installVsto.includes("uninstall_windows_ole.ps1"));
+assert.ok(installOle.includes("forwarding to the native Ribbon + OLE LocalServer installer"));
+assert.ok(!installVsto.includes("uninstall_windows_ole.ps1"));
+assert.ok(!installVsto.includes("ensure_windows_office_certificate.ps1"));
 assert.ok(installVsto.includes('"/L*v"'));
 assert.ok(installVsto.includes("RelatedProducts"));
 assert.ok(installVsto.includes("Get-FileHash"));
@@ -577,14 +589,44 @@ assert.ok(installVsto.includes("Assert-NativeOleRegistration"));
 assert.ok(installVsto.includes("ServerExecutable"));
 assert.ok(installVsto.includes("3,1,32,1"));
 assert.ok(installVsto.includes("VisualTeX.FormulaOleServer.exe"));
-assert.ok(installVsto.includes('Value "native-vsto-ole"'));
-assert.ok(installVsto.includes('Name "NativeOleEnabled"'));
+assert.ok(installVsto.includes('-Name "Mode" -PropertyType String -Value "vsto"'));
+assert.ok(installVsto.includes('-Name "NativeOleEnabled"'));
 assert.ok(installVsto.includes("hashManifest.dependencies"));
 assert.ok(installVsto.includes("Assert-NoOfficeProcesses"));
-assert.ok(installVsto.includes('Get-Process WINWORD, POWERPNT'));
+assert.ok(installVsto.includes("Assert-VstoRuntimeInstalled"));
+assert.ok(installVsto.includes("Assert-NetFramework48Installed"));
+assert.ok(installVsto.includes("Assert-OfficeApplicationsInstalled"));
+assert.ok(installVsto.includes("Assert-MsiArchitecture"));
+assert.ok(installVsto.includes("Assert-OfficeAddinRegistration"));
+assert.ok(installVsto.includes("FilesAndRegistryVerified"));
+assert.ok(installVsto.includes("OfficeRuntimeVerified"));
+assert.ok(installVsto.includes("Diagnostic report"));
+assert.ok(!installVsto.includes("chain-verified"));
+assert.ok(installVsto.includes('"WINWORD", "POWERPNT"'));
 assert.ok(installVsto.includes('"MSIRESTARTMANAGERCONTROL=Disable"'));
 assert.ok(installVsto.includes('"REBOOT=ReallySuppress"'));
-assert.ok(installVsto.includes('"vsto-bootstrap-$bootstrapStamp.log"'));
+assert.ok(installVsto.includes('"vsto-bootstrap-$stamp.log"'));
+for (const required of [
+  "VSTORFeature_CLR40",
+  "Get-AuthenticodeSignature",
+  "Microsoft Corporation",
+  'ArgumentList @("/quiet", "/norestart")',
+  "-Verb RunAs",
+  "1641",
+  "3010",
+  "CheckOnly",
+]) {
+  assert.ok(installVstoRuntime.includes(required), `VSTO Runtime installer missing ${required}`);
+}
+for (const required of [
+  "download.microsoft.com",
+  "CFE1A40BBE4A50022DB2164ABDB0154984E2CECB761A23CDC81CB5754F6E0A18",
+  "10.0.60917.00",
+  "Get-AuthenticodeSignature",
+  "VISUALTEX_VSTO_RUNTIME_PATH",
+]) {
+  assert.ok(prepareVstoRuntime.includes(required), `VSTO Runtime preparation missing ${required}`);
+}
 assert.ok(uninstallVsto.includes("DF66EC66-3B3A-4675-A7BE-30456A04EB96"));
 assert.ok(uninstallVsto.includes('Name "NativeOleEnabled"'));
 assert.ok(buildWindowsOffice.includes("test_windows_formula_ole_server.ps1"));
@@ -601,6 +643,9 @@ assert.ok(ribbonDispatchSmoke.includes("VisualTeX.PowerPointVsto.Tab"));
 assert.ok(ribbonDispatchSmoke.includes("SysWOW64"));
 assert.ok(dependencyLoadingSmoke.includes("System.Text.Json, Version=8.0.0.0"));
 assert.ok(nativeMsi.includes("3,1,32,1"));
+assert.ok(nativeMsi.includes('Name="CodeBase"'));
+assert.ok(nativeMsi.includes('Name="Mode" Type="string" Value="vsto"'));
+assert.ok(!nativeMsi.includes("OleManifestEnabled"));
 assert.ok(dependencyLoadingSmoke.includes("System.Numerics.Vectors, Version=4.1.4.0"));
 assert.ok(dependencyLoadingSmoke.includes("SerializeJson"));
 assert.ok(dependencyLoadingSmoke.includes("SysWOW64"));
@@ -624,75 +669,101 @@ for (const msiRequirement of [
   "VisualTeX.Formula.1",
   "ProxyStubClsid32",
   "DF66EC66-3B3A-4675-A7BE-30456A04EB96",
-  "native-vsto-ole",
   "NativeOleEnabled",
+  "FilesAndRegistryVerified",
+  "OfficeRuntimeVerified",
   "SystemNumericsVectors",
   "SystemValueTuple",
 ]) {
   assert.ok(nativeMsi.includes(msiRequirement), `Native MSI is missing ${msiRequirement}`);
 }
 assert.ok(!nativeMsi.includes("CustomAction"));
-assert.ok(installOle.includes("Read-AndValidateManifest"));
-assert.ok(installOle.includes("Schannel HTTP 200"));
-assert.ok(installOle.includes("Clear-VisualTeXWefCache"));
-assert.ok(installOle.includes("Test-VisualTeXOnlyRibbonCache"));
-assert.ok(installOle.includes("Preserved shared Office Ribbon cache"));
-assert.ok(installOle.includes("$exitDeadline = [DateTimeOffset]::UtcNow.AddSeconds(8)"));
-assert.ok(installOle.includes("Get-Process $processName -ErrorAction SilentlyContinue"));
-assert.ok(installOle.includes("Stop-Process -Force -ErrorAction SilentlyContinue"));
+assert.ok(!installOle.includes("TrustedCatalog"));
+assert.ok(runtimeVerification.includes('COMAddIns.Item($ProgId)'));
+assert.ok(runtimeVerification.includes('"VisualTeX.WordVsto"'));
+assert.ok(runtimeVerification.includes('"VisualTeX.PowerPointVsto"'));
+assert.ok(runtimeVerification.includes("Get-DisabledItems"));
+assert.ok(runtimeVerification.includes("Get-RecentOfficeLoadEvents"));
+assert.ok(runtimeVerification.includes("FilesAndRegistryVerified"));
+assert.ok(runtimeVerification.includes('ArgumentList "-Embedding"'));
+assert.ok(runtimeVerification.includes("Native Office integration installed and verified successfully"));
+assert.ok(certificateInstaller.includes('Split-Path -Parent $PSScriptRoot'));
+assert.ok(certificateInstaller.includes("-LiteralPath"));
+assert.ok(certificateInstaller.includes("explicitly supplied VisualTeX executable"));
 
 const platformBundle = await source("scripts/build_platform_bundle.mjs");
 const windowsBundle = await source("src-tauri/tauri.windows.conf.json");
 const installerHooks = await source("src-tauri/windows/hooks.nsh");
 assert.ok(platformBundle.includes('"scripts/build_windows_office.ps1"'));
+assert.ok(platformBundle.includes('"scripts/prepare_windows_vsto_runtime.ps1"'));
 assert.ok(platformBundle.includes('"-SkipTests"'));
 assert.ok(!platformBundle.includes('"scripts/build_windows_ole_bridge.ps1"'));
 assert.ok(windowsBundle.includes('"../scripts/install_windows_vsto.ps1"'));
+assert.ok(windowsBundle.includes('"../scripts/install_windows_vsto_runtime.ps1"'));
 assert.ok(!windowsBundle.includes('"../scripts/install_windows_ole.ps1"'));
 for (const bundledOfficeResource of [
   "VisualTeX-WindowsOffice-VSTO-x64.msi",
   "VisualTeX-WindowsOffice-VSTO-x64.sha256.json",
   "VisualTeX-WindowsOffice-VSTO-x86.msi",
   "VisualTeX-WindowsOffice-VSTO-x86.sha256.json",
+  "vstor_redist.exe",
+  "vstor_redist.sha256.json",
 ]) {
   assert.ok(windowsBundle.includes(bundledOfficeResource));
 }
-assert.ok(installerHooks.includes("${NSD_Check} $VisualTeXOfficeOleRadio"));
+assert.ok(installerHooks.includes("${NSD_Check} $VisualTeXOfficeNativeRadio"));
 assert.ok(installerHooks.includes('${If} $VisualTeXOfficeChoice == ""'));
-assert.ok(installerHooks.includes('StrCpy $VisualTeXOfficeChoice "ole"'));
+assert.ok(installerHooks.includes('StrCpy $VisualTeXOfficeChoice "native"'));
 assert.ok(installerHooks.includes("install_windows_vsto.ps1"));
+assert.ok(installerHooks.includes("install_windows_vsto_runtime.ps1"));
+assert.ok(installerHooks.includes("vstor_redist.exe"));
+assert.ok(installerHooks.includes("vstor_redist.sha256.json"));
+assert.ok(installerHooks.includes("visualtex_vsto_runtime_install"));
+assert.ok(installerHooks.includes("visualtex_vsto_runtime_declined"));
+assert.ok(installerHooks.includes("-CheckOnly"));
+assert.ok(installerHooks.includes("UAC"));
+assert.ok(installerHooks.includes("ensure_windows_office_certificate.ps1"));
+assert.ok(installerHooks.includes("test_windows_office_runtime.ps1"));
 assert.ok(installerHooks.includes("VisualTeX-WindowsOffice-VSTO-x64.msi"));
 assert.ok(installerHooks.includes("VisualTeX-WindowsOffice-VSTO-x86.msi"));
 assert.ok(installerHooks.includes("VisualTeX-WindowsOffice-VSTO-x64.sha256.json"));
 assert.ok(installerHooks.includes("VisualTeX-WindowsOffice-VSTO-x86.sha256.json"));
 assert.ok(installerHooks.includes('-PackageDirectory "$INSTDIR\\windows-office"'));
+assert.ok(installerHooks.includes('-VisualTeXPath "$INSTDIR\\VisualTeX.exe"'));
 assert.ok(installerHooks.includes("uninstall_windows_vsto.ps1"));
+assert.ok(!installerHooks.includes("uninstall_windows_ole.ps1"));
 assert.ok(installerHooks.includes("Get-Process WINWORD,POWERPNT"));
 assert.ok(installerHooks.includes("Stop-Process -Force"));
 assert.ok(installerHooks.includes("IDYES visualtex_force_close_office"));
 assert.ok(installerHooks.includes("未保存的 Office 文档可能丢失"));
 assert.ok(installerHooks.includes("选择“否”将返回上一页"));
 assert.ok(installerHooks.indexOf("IDYES visualtex_force_close_office") < installerHooks.indexOf("Stop-Process -Force"));
-assert.ok(!installerHooks.includes("VisualTeXOfficeVstoRadio"));
-assert.ok(!installerHooks.includes('VisualTeXOfficeChoice == "vsto"'));
+assert.ok(!installerHooks.includes("VisualTeXOfficeOleRadio"));
+assert.ok(!installerHooks.includes('VisualTeXOfficeChoice == "ole"'));
 assert.ok(
   !installerHooks.includes('-File "$INSTDIR\\scripts\\install_windows_ole.ps1"'),
 );
+assert.ok(installerHooks.includes("companion"));
+assert.ok(installerHooks.includes("COMAddIn.Connect"));
+assert.ok(installerHooks.includes("visualtex_office_static_runtime_verified"));
+assert.ok(installerHooks.includes("IfSilent visualtex_office_done 0"));
+assert.ok(installerHooks.includes("native Office static installation and companion runtime verification passed"));
 assert.ok(!installerHooks.includes("Office Add-ins dialogs"));
 assert.ok(!installerHooks.includes("Automatically configuring Word and PowerPoint"));
 
-const windowsEntry = await source("src/office/windows-ole/main.ts");
-const windowsAdapter = await source("src/office/windows-ole/WindowsOleAdapter.ts");
-assert.ok(!windowsEntry.includes("../macos"));
-assert.ok(windowsEntry.includes("lastDoubleClickAt"));
-assert.ok(windowsEntry.includes("bridge.prepareInteractionTarget"));
-assert.ok(windowsEntry.includes("payload.metadata"));
-assert.ok(windowsAdapter.includes("pendingInteractionTarget"));
-assert.ok(windowsAdapter.includes("capturedTarget.metadata"));
-assert.ok(windowsEntry.includes('bridge.run("create", () => event?.completed?.())'));
-assert.ok(windowsEntry.includes('bridge.run("edit", () => event?.completed?.())'));
-assert.ok(!windowsEntry.includes('bridge.run("create").finally'));
-assert.ok(!windowsEntry.includes('bridge.run("edit").finally'));
+const nativeOfficeVite = await source("vite.office.windows-native.config.ts");
+const nativeDialogHtml = await source("office-dialog.html");
+const nativeDialogEntry = await source("src/office/dialog/main.tsx");
+const officeTsConfig = await source("tsconfig.office.json");
+assert.ok(nativeOfficeVite.includes('publicDir: false'));
+assert.ok(nativeOfficeVite.includes('dialog: resolve(root, "office-dialog.html")'));
+assert.ok(!nativeOfficeVite.includes("office-windows-ole-bridge.html"));
+assert.ok(nativeOfficeVite.includes("retired Office.js branch"));
+assert.ok(!nativeDialogHtml.includes("office.js"));
+assert.ok(nativeDialogEntry.includes("executes the Office.js runtime"));
+assert.ok(!nativeDialogEntry.includes("Office.onReady"));
+assert.ok(!officeTsConfig.includes('"office-js"'));
+assert.ok(!officeTsConfig.includes('src/office/windows-ole'));
 
 const windowsPipe = await source("src-tauri/src/office/windows_pipe.rs");
 const windowsBridgeProgram = await source("src-windows/VisualTeX.WindowsOleBridge/Program.cs");

@@ -4,19 +4,14 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const platform = process.argv[2];
-if (platform !== "windows-ole") {
-  throw new Error("Usage: node finalize_office_platform_build.mjs windows-ole");
+if (platform !== "windows-native") {
+  throw new Error("Usage: node finalize_office_platform_build.mjs windows-native");
 }
 
-const dist = join(root, "dist-office-windows-ole");
-for (const [sourceName, destination] of [
-  ["office-windows-ole-bridge.html", join("bridge", "index.html")],
-  ["office-dialog.html", join("dialog", "index.html")],
-]) {
-  const source = join(dist, sourceName);
-  const target = join(dist, destination);
-  await mkdir(dirname(target), { recursive: true });
-  await copyFile(source, target);
-  await rm(source);
-}
-console.log("Finalized Windows Office compatibility build layout.");
+const dist = join(root, "dist-office-windows-native");
+const source = join(dist, "office-dialog.html");
+const target = join(dist, "dialog", "index.html");
+await mkdir(dirname(target), { recursive: true });
+await copyFile(source, target);
+await rm(source);
+console.log("Finalized Windows native Office companion UI layout.");

@@ -79,11 +79,9 @@ const entries = [
   "LICENSE",
   "README.md",
   "docs/WINDOWS_NATIVE_OFFICE_OLE_ARCHITECTURE.md",
-  "dist-office-windows-ole",
+  "dist-office-windows-native",
   "index.html",
-  "office/windows",
   "office-dialog.html",
-  "office-windows-ole-bridge.html",
   "package-lock.json",
   "package.json",
   "scripts",
@@ -94,7 +92,7 @@ const entries = [
   "tsconfig.node.json",
   "tsconfig.office.json",
   "vite.config.ts",
-  "vite.office.windows-ole.config.ts",
+  "vite.office.windows-native.config.ts",
 ];
 for (const entry of entries) copyEntry(entry);
 
@@ -109,7 +107,7 @@ const readme = `# VisualTeX Windows Office 验收包
 基础提交：${baseCommit}
 分支：dev
 
-本包包含当前本地工作区的 Windows Office 集成源码、Windows Office.js 构建产物、安装脚本、单元测试和真实 Word/PowerPoint 验收脚本。当前修改尚未提交或推送。
+本包包含当前本地工作区的 Windows 原生 Office 集成源码、原生伴侣 UI、安装脚本、单元测试和真实 Word/PowerPoint 验收脚本。当前修改尚未提交或推送。
 
 ## Windows 环境要求
 
@@ -155,37 +153,31 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\\RUN-OLE-ACCEPTANCE.ps1 -KeepDocuments
 \`\`\`
 
-同时测试 OLE/VSTO 模式切换：
+同时验证统一的原生 Office 注册和运行时连接：
 
 \`\`\`powershell
-.\\RUN-OLE-ACCEPTANCE.ps1 -TestModeSwitch
+.\\RUN-OLE-ACCEPTANCE.ps1 -TestModeSwitch -VstoMsiPath .\\WINDOWS-BUILD-OUTPUT\\VisualTeX-WindowsOffice-VSTO-x64.msi
 \`\`\`
 
 ## 安装方式
 
-OLE 模式：
-
 \`\`\`powershell
-.\\scripts\\install_windows_ole.ps1 -EnableBackgroundStart
+.\\scripts\\ensure_windows_office_certificate.ps1 -VisualTeXPath .\\VisualTeX.exe
+.\\scripts\\install_windows_vsto.ps1 -MsiPath .\\WINDOWS-BUILD-OUTPUT\\VisualTeX-WindowsOffice-VSTO-x64.msi -VisualTeXPath .\\VisualTeX.exe
+.\\scripts\\test_windows_office_runtime.ps1
 \`\`\`
 
-原生加载项模式：
-
-\`\`\`powershell
-.\\scripts\\install_windows_vsto.ps1 -MsiPath .\\WINDOWS-BUILD-OUTPUT\\VisualTeX-WindowsOffice-VSTO.msi
-\`\`\`
-
-安装或切换模式前建议退出 Word 和 PowerPoint。OLE 与原生加载项不会同时启用：OLE 使用 Trusted Catalog，原生模式使用 Word/PowerPoint Addins 注册表项的 LoadBehavior。
+安装和运行时验证前必须退出 Word 与 PowerPoint。当前版本只使用 Word/PowerPoint 原生 Ribbon COM 加载项和 Formula OLE LocalServer，不再注册 Office.js Trusted Catalog。
 
 ## 日志和临时文件
 
-- 日志：\`%LOCALAPPDATA%\\VisualTeX\\office\\logs\`
-- OLE 清单目录：\`%LOCALAPPDATA%\\VisualTeX\\OfficeCatalog\`
+- 安装及诊断日志：\`%LOCALAPPDATA%\\VisualTeX\\office\\install-logs\`
+- 伴侣服务日志：\`%LOCALAPPDATA%\\VisualTeX\\office\\logs\`
 - 临时 PNG：\`%LOCALAPPDATA%\\VisualTeX\\office\\temp\`
 
 ## 说明
 
-本 ZIP 在 macOS 工作区中整理。Windows Office.js 已在打包前构建成功；C# EXE、MSI 和真实 Office COM 测试应在 Windows 本机生成和执行，以使用真实 MSBuild、Office COM 与 Windows SDK。
+本 ZIP 在 macOS 工作区中整理。共享伴侣 UI 已在打包前构建；C# EXE、MSI 和真实 Office COM 测试应在 Windows 本机生成和执行，以使用真实 MSBuild、Office COM 与 Windows SDK。
 `;
 writeFileSync(join(packageDirectory, "README-WINDOWS-ACCEPTANCE.md"), readme, "utf8");
 writeFileSync(join(packageDirectory, "BASE-COMMIT.txt"), `${baseCommit}\n`, "utf8");
@@ -219,8 +211,8 @@ Require-Command msbuild.exe "Install Visual Studio 2022 Build Tools with MSBuild
 
 npm ci
 if ($LASTEXITCODE -ne 0) { throw "npm ci failed." }
-npm run build:office:windows-ole
-if ($LASTEXITCODE -ne 0) { throw "Windows Office.js build failed." }
+npm run build:office:windows-native
+if ($LASTEXITCODE -ne 0) { throw "Windows native Office companion UI build failed." }
 
 if (-not $SkipTests) {
     npm run test:windows-office-architecture
@@ -233,9 +225,9 @@ $output = Join-Path $root "WINDOWS-BUILD-OUTPUT"
 Remove-Item $output -Recurse -Force -ErrorAction SilentlyContinue
 New-Item $output -ItemType Directory -Force | Out-Null
 Copy-Item .\\src-tauri\\binaries\\visualtex-windows-office-bridge-x86_64-pc-windows-msvc.exe $output -Force
-Copy-Item .\\src-tauri\\resources\\windows-office\\VisualTeX-WindowsOffice-VSTO.msi $output -Force
-Copy-Item .\\office\\windows\\ole\\manifests (Join-Path $output "office-manifests") -Recurse -Force
-Copy-Item .\\dist-office-windows-ole (Join-Path $output "office-web") -Recurse -Force
+Copy-Item .\\src-tauri\\resources\\windows-office\\VisualTeX-WindowsOffice-VSTO-*.msi $output -Force
+Copy-Item .\\src-tauri\\resources\\windows-office\\VisualTeX-WindowsOffice-VSTO-*.sha256.json $output -Force
+Copy-Item .\\dist-office-windows-native (Join-Path $output "office-companion-ui") -Recurse -Force
 Get-ChildItem $output -File -Recurse | Get-FileHash -Algorithm SHA256 |
     ForEach-Object { "$($_.Hash)  $($_.Path.Substring($output.Length + 1))" } |
     Set-Content (Join-Path $output "SHA256SUMS.txt") -Encoding UTF8

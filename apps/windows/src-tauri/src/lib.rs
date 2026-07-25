@@ -1788,6 +1788,8 @@ pub fn run() {
             office::lifecycle::install_windows_ole_integration,
             office::lifecycle::uninstall_windows_ole_integration,
             office::lifecycle::repair_windows_office_integration,
+            office::lifecycle::test_windows_office_runtime,
+            office::lifecycle::open_windows_office_logs,
             office::lifecycle::install_office_integration,
             office::lifecycle::repair_office_integration,
             office::lifecycle::uninstall_office_integration,

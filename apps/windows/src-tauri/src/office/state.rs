@@ -8,8 +8,11 @@ use crate::OcrState;
 use axum_server::Handle;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::sync::{Arc, Mutex, RwLock};
 use tauri::AppHandle;
 
@@ -18,6 +21,32 @@ pub const OFFICE_PORT: u16 = 43_127;
 pub const OFFICE_PROTOCOL_VERSION: u32 = 1;
 pub const OFFICE_UI_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MAX_OFFICE_REQUEST_BYTES: usize = 22 * 1024 * 1024;
+
+pub fn append_office_log(paths: &OfficePaths, file_name: &str, message: &str) {
+    #[cfg(target_os = "windows")]
+    let log_root = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("VisualTeX")
+        .join("office")
+        .join("logs");
+    #[cfg(not(target_os = "windows"))]
+    let log_root = paths.root.join("logs");
+    #[cfg(target_os = "windows")]
+    let _ = paths;
+    if fs::create_dir_all(&log_root).is_err() {
+        return;
+    }
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_secs())
+        .unwrap_or_default();
+    let path = log_root.join(file_name);
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "[{timestamp}] {message}");
+        let _ = file.flush();
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct OfficePaths {

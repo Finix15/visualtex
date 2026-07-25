@@ -135,7 +135,15 @@ internal static class Program
         {
             using var client = new VisualTeXSessionClient();
             client.EnsureHealthyAsync(CancellationToken.None).GetAwaiter().GetResult();
-            if (string.Equals(mode, "word-native-crossref-probe", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(mode, "health", StringComparison.OrdinalIgnoreCase))
+            {
+                // Run twice on the same client so the second request exercises
+                // HttpClient TLS connection pooling, where the certificate
+                // callback may not run again for an already-authenticated socket.
+                client.EnsureHealthyAsync(CancellationToken.None).GetAwaiter().GetResult();
+                Console.WriteLine("VisualTeX .NET Framework companion health acceptance passed twice on one pooled client.");
+            }
+            else if (string.Equals(mode, "word-native-crossref-probe", StringComparison.OrdinalIgnoreCase))
             {
                 ProbeNativeEquationCrossReference();
             }
@@ -146,6 +154,10 @@ internal static class Program
             else if (string.Equals(mode, "word-create", StringComparison.OrdinalIgnoreCase))
             {
                 RunWord(client, artifactRoot, initialOnly: true);
+            }
+            else if (string.Equals(mode, "powerpoint", StringComparison.OrdinalIgnoreCase))
+            {
+                RunPowerPoint(client, artifactRoot);
             }
             else if (string.Equals(mode, "word-omml-double-click-fixtures", StringComparison.OrdinalIgnoreCase))
             {

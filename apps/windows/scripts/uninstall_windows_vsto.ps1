@@ -62,9 +62,32 @@ if ($productCodes.Count -gt 0) {
     }
 }
 
+foreach ($legacyKey in @(
+    "HKCU:\Software\Microsoft\Office\16.0\WEF\TrustedCatalogs\VisualTeX",
+    "HKCU:\Software\Microsoft\Office\16.0\WEF\TrustedCatalogs\{69C6A866-755B-4C5A-BACB-EEA28B03C724}"
+)) {
+    Remove-Item -LiteralPath $legacyKey -Recurse -Force -ErrorAction SilentlyContinue
+}
+Remove-Item -LiteralPath (Join-Path $env:LOCALAPPDATA "VisualTeX\OfficeCatalog") -Recurse -Force -ErrorAction SilentlyContinue
+
 $modeKey = "HKCU:\Software\VisualTeX\OfficeIntegration"
 if (Test-Path $modeKey) {
     New-ItemProperty $modeKey -Name "Mode" -PropertyType String -Value "auto" -Force | Out-Null
     New-ItemProperty $modeKey -Name "NativeOleEnabled" -PropertyType DWord -Value 0 -Force | Out-Null
+    New-ItemProperty $modeKey -Name "FilesAndRegistryVerified" -PropertyType DWord -Value 0 -Force | Out-Null
+    New-ItemProperty $modeKey -Name "OfficeRuntimeVerified" -PropertyType DWord -Value 0 -Force | Out-Null
+    New-ItemProperty $modeKey -Name "WordConnected" -PropertyType DWord -Value 0 -Force | Out-Null
+    New-ItemProperty $modeKey -Name "PowerPointConnected" -PropertyType DWord -Value 0 -Force | Out-Null
+    foreach ($runtimeValueName in @(
+        "CompanionProcessRunning",
+        "CompanionPortListening",
+        "CompanionHttpsHealthy",
+        "CompanionCertificateMatches",
+        "CompanionProtocolMatches"
+    )) {
+        New-ItemProperty $modeKey -Name $runtimeValueName -PropertyType DWord -Value 0 -Force | Out-Null
+    }
+    New-ItemProperty $modeKey -Name "LastRuntimeError" -PropertyType String -Value "Office integration is not installed." -Force | Out-Null
+    Remove-ItemProperty -LiteralPath $modeKey -Name "OleManifestEnabled" -Force -ErrorAction SilentlyContinue
 }
-Write-Host "VisualTeX native VSTO + OLE Office integration removed for the current user."
+Write-Host "VisualTeX native Ribbon + OLE LocalServer Office integration removed for the current user."

@@ -6,7 +6,7 @@ use crate::office::windows_pipe::{locate_sidecar, WindowsPipeClient};
 use serde_json::Value;
 use std::fs;
 use std::os::windows::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 use tauri::AppHandle;
@@ -15,8 +15,13 @@ const WORD_VSTO_KEY: &str =
     r"HKCU\Software\Microsoft\Office\Word\Addins\VisualTeX.WordVsto";
 const POWERPOINT_VSTO_KEY: &str =
     r"HKCU\Software\Microsoft\Office\PowerPoint\Addins\VisualTeX.PowerPointVsto";
-const OLE_CATALOG_KEY: &str =
-    r"HKCU\Software\Microsoft\Office\16.0\WEF\TrustedCatalogs\VisualTeX";
+const OLE_LOCAL_SERVER_KEY: &str =
+    r"HKCU\Software\Classes\CLSID\{8FF7F5AA-0D60-48D5-ADBD-65A64B4C827B}\LocalServer32";
+const OFFICE_MODE_KEY: &str = r"HKCU\Software\VisualTeX\OfficeIntegration";
+const WORD_VSTO_CLSID_KEY: &str =
+    r"HKCU\Software\Classes\CLSID\{F1B68342-F9C6-4E7D-A9C6-A2F64C3558A1}\InprocServer32";
+const POWERPOINT_VSTO_CLSID_KEY: &str =
+    r"HKCU\Software\Classes\CLSID\{7E586D2D-57B0-4D14-AB24-EBA9021A5E6D}\InprocServer32";
 const WINDOWS_RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
 const WINDOWS_RUN_VALUE: &str = "VisualTeXOffice";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -54,43 +59,121 @@ impl WindowsOfficeBackend {
 
     pub fn status(&self) -> OfficePlatformStatus {
         let mode = self.mode.lock().map(|value| *value).unwrap_or_default();
-        let vsto_word = registry_dword_equals(
-            r"HKCU\Software\Microsoft\Office\Word\Addins\VisualTeX.WordVsto",
-            "LoadBehavior",
-            3,
+        let word_load_enabled = registry_dword_equals(WORD_VSTO_KEY, "LoadBehavior", 3);
+        let powerpoint_load_enabled =
+            registry_dword_equals(POWERPOINT_VSTO_KEY, "LoadBehavior", 3);
+        let word_files_present = registered_addin_file_exists(WORD_VSTO_KEY);
+        let powerpoint_files_present = registered_addin_file_exists(POWERPOINT_VSTO_KEY);
+        let word_registry_complete = addin_registry_complete(
+            WORD_VSTO_KEY,
+            WORD_VSTO_CLSID_KEY,
+            "VisualTeX.WordVsto.ThisAddIn",
         );
-        let vsto_powerpoint = registry_dword_equals(
-            r"HKCU\Software\Microsoft\Office\PowerPoint\Addins\VisualTeX.PowerPointVsto",
-            "LoadBehavior",
-            3,
+        let powerpoint_registry_complete = addin_registry_complete(
+            POWERPOINT_VSTO_KEY,
+            POWERPOINT_VSTO_CLSID_KEY,
+            "VisualTeX.PowerPointVsto.ThisAddIn",
         );
-        let ole_healthy = self.pipe.as_ref().is_some_and(WindowsPipeClient::is_healthy);
-        let active_backend = match mode {
-            OfficeIntegrationMode::Vsto if vsto_word && vsto_powerpoint => "vsto",
-            OfficeIntegrationMode::Vsto => "unavailable-vsto",
-            OfficeIntegrationMode::Ole => "ole",
-            OfficeIntegrationMode::Auto if vsto_word && vsto_powerpoint => "vsto",
-            OfficeIntegrationMode::Auto => "ole",
+        let vsto_word = word_files_present && word_registry_complete && word_load_enabled;
+        let vsto_powerpoint =
+            powerpoint_files_present && powerpoint_registry_complete && powerpoint_load_enabled;
+        let ole_local_server_healthy = native_ole_local_server_healthy();
+        let static_install_verified = registry_dword_equals(
+            OFFICE_MODE_KEY,
+            "FilesAndRegistryVerified",
+            1,
+        ) && vsto_word
+            && vsto_powerpoint
+            && ole_local_server_healthy;
+        let word_connected = registry_dword_equals(OFFICE_MODE_KEY, "WordConnected", 1);
+        let powerpoint_connected =
+            registry_dword_equals(OFFICE_MODE_KEY, "PowerPointConnected", 1);
+        let connection_verification_attempted = registry_dword_equals(
+            OFFICE_MODE_KEY,
+            "OfficeConnectionVerificationAttempted",
+            1,
+        );
+        let companion_process_running =
+            registry_dword_equals(OFFICE_MODE_KEY, "CompanionProcessRunning", 1);
+        let companion_port_listening =
+            registry_dword_equals(OFFICE_MODE_KEY, "CompanionPortListening", 1);
+        let companion_https_healthy =
+            registry_dword_equals(OFFICE_MODE_KEY, "CompanionHttpsHealthy", 1);
+        let companion_certificate_matches =
+            registry_dword_equals(OFFICE_MODE_KEY, "CompanionCertificateMatches", 1);
+        let companion_protocol_matches =
+            registry_dword_equals(OFFICE_MODE_KEY, "CompanionProtocolMatches", 1);
+        let office_runtime_verified = registry_dword_equals(
+            OFFICE_MODE_KEY,
+            "OfficeRuntimeVerified",
+            1,
+        ) && companion_process_running
+            && companion_port_listening
+            && companion_https_healthy
+            && companion_certificate_matches
+            && companion_protocol_matches;
+        let ole_bridge_healthy = self.pipe.as_ref().is_some_and(WindowsPipeClient::is_healthy);
+        let active_backend = if static_install_verified {
+            "vsto"
+        } else {
+            "unavailable-vsto"
         };
+
+        let last_error = if !word_files_present || !powerpoint_files_present {
+            Some("One or both native Office add-in assemblies are missing".to_string())
+        } else if !word_registry_complete || !powerpoint_registry_complete {
+            Some("One or both native Office add-in registry registrations are incomplete".to_string())
+        } else if !word_load_enabled || !powerpoint_load_enabled {
+            Some("One or both native Office add-ins are not allowed to load (LoadBehavior != 3)".to_string())
+        } else if !ole_local_server_healthy {
+            Some("The native Formula OLE LocalServer registration is missing or invalid".to_string())
+        } else if !office_runtime_verified {
+            registry_string_value(OFFICE_MODE_KEY, "LastRuntimeError")
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| {
+                    Some("Static installation passed, but companion runtime validation is incomplete".to_string())
+                })
+        } else if !(word_connected && powerpoint_connected) {
+            if connection_verification_attempted {
+                registry_string_value(OFFICE_MODE_KEY, "LastRuntimeError")
+                    .filter(|value| !value.trim().is_empty())
+                    .or_else(|| {
+                        Some("Word and PowerPoint connection verification did not complete successfully".to_string())
+                    })
+            } else {
+                None
+            }
+        } else {
+            self.pipe_error.clone()
+        };
+
         OfficePlatformStatus {
             platform: "windows".to_string(),
             mode,
             active_backend: active_backend.to_string(),
-            ole_bridge_healthy: ole_healthy,
+            ole_bridge_healthy,
+            ole_local_server_healthy,
+            static_install_verified,
+            word_files_present,
+            word_registry_complete,
+            word_load_enabled,
+            powerpoint_files_present,
+            powerpoint_registry_complete,
+            powerpoint_load_enabled,
             vsto_word_healthy: vsto_word,
             vsto_powerpoint_healthy: vsto_powerpoint,
-            office_catalog_registered: registry_key_exists(
-                r"HKCU\Software\Microsoft\Office\16.0\WEF\TrustedCatalogs\VisualTeX",
-            ),
+            word_connected,
+            powerpoint_connected,
+            connection_verification_attempted,
+            companion_process_running,
+            companion_port_listening,
+            companion_https_healthy,
+            companion_certificate_matches,
+            companion_protocol_matches,
+            office_runtime_verified,
             current_user_certificate_trusted: windows_certificate_trusted(&self.paths),
             background_start_enabled: registry_value_exists(WINDOWS_RUN_KEY, WINDOWS_RUN_VALUE),
-            last_error: self.pipe_error.clone().or_else(|| {
-                if mode == OfficeIntegrationMode::Vsto && !(vsto_word && vsto_powerpoint) {
-                    Some("VSTO mode is selected but one or both VSTO add-ins are unavailable".to_string())
-                } else {
-                    None
-                }
-            }),
+            last_error,
         }
     }
 
@@ -106,16 +189,12 @@ impl WindowsOfficeBackend {
     }
 
     pub fn request(&self, request: Value) -> Result<Value, String> {
-        let status = self.status();
-        if status.active_backend == "vsto" {
-            return Err("The OLE Office.js manifest is disabled while VSTO mode is active".to_string());
-        }
         self.pipe
             .as_ref()
             .ok_or_else(|| {
                 self.pipe_error
                     .clone()
-                    .unwrap_or_else(|| "Windows OLE bridge is unavailable".to_string())
+                    .unwrap_or_else(|| "Windows Office bridge is unavailable".to_string())
             })?
             .request_value(request)
     }
@@ -130,6 +209,38 @@ impl WindowsOfficeBackend {
     pub fn shutdown(&self) -> Result<(), String> {
         self.pipe.as_ref().map(WindowsPipeClient::shutdown).unwrap_or(Ok(()))
     }
+}
+
+pub fn write_shared_configuration(
+    executable: &Path,
+    app_data_root: &Path,
+    paths: &OfficePaths,
+    certificate_thumbprint: &str,
+    companion_port: u16,
+    protocol_version: u32,
+) -> Result<(), String> {
+    registry_set_string(
+        OFFICE_MODE_KEY,
+        "ExecutablePath",
+        &executable.to_string_lossy(),
+    )?;
+    registry_set_string(
+        OFFICE_MODE_KEY,
+        "AppDataRoot",
+        &app_data_root.to_string_lossy(),
+    )?;
+    registry_set_string(
+        OFFICE_MODE_KEY,
+        "CertificatePath",
+        &paths.certificate.to_string_lossy(),
+    )?;
+    registry_set_string(
+        OFFICE_MODE_KEY,
+        "CertificateThumbprint",
+        certificate_thumbprint,
+    )?;
+    registry_set_dword(OFFICE_MODE_KEY, "CompanionPort", u32::from(companion_port))?;
+    registry_set_dword(OFFICE_MODE_KEY, "ProtocolVersion", protocol_version)
 }
 
 pub fn set_background_start_enabled(enabled: bool) -> Result<(), String> {
@@ -172,45 +283,23 @@ fn write_mode(paths: &OfficePaths, mode: OfficeIntegrationMode) -> Result<(), St
 fn apply_mode_selection(mode: OfficeIntegrationMode) -> Result<(), String> {
     let vsto_installed = registry_key_exists(WORD_VSTO_KEY)
         && registry_key_exists(POWERPOINT_VSTO_KEY);
-    let ole_available = ole_catalog_manifests_available();
 
     match mode {
         OfficeIntegrationMode::Vsto => {
             if !vsto_installed {
                 return Err(
-                    "Cannot enable VSTO mode until both Word and PowerPoint native add-ins are installed"
+                    "Cannot enable native Office mode until both Word and PowerPoint add-ins are installed"
                         .to_string(),
                 );
             }
             set_vsto_load_behavior(true)?;
-            remove_ole_catalog()?;
-        }
-        OfficeIntegrationMode::Ole => {
-            if !ole_available {
-                return Err(
-                    "Cannot enable OLE mode because the Windows Office manifests are not installed in the VisualTeX Office catalog"
-                        .to_string(),
-                );
-            }
-            set_vsto_load_behavior(false)?;
-            register_ole_catalog()?;
         }
         OfficeIntegrationMode::Auto => {
             if vsto_installed {
                 set_vsto_load_behavior(true)?;
-                remove_ole_catalog()?;
-            } else if ole_available {
-                set_vsto_load_behavior(false)?;
-                register_ole_catalog()?;
-            } else {
-                return Err(
-                    "No usable Windows Office integration is installed. Install either the OLE manifests or both native add-ins first"
-                        .to_string(),
-                );
             }
         }
     }
-
     Ok(())
 }
 
@@ -224,65 +313,56 @@ fn set_vsto_load_behavior(enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn office_catalog_path() -> PathBuf {
-    std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("VisualTeX")
-        .join("OfficeCatalog")
+fn addin_registry_complete(addin_key: &str, clsid_key: &str, expected_class: &str) -> bool {
+    registry_string_value(addin_key, "FriendlyName").is_some_and(|value| !value.trim().is_empty())
+        && registry_string_value(addin_key, "Description")
+            .is_some_and(|value| !value.trim().is_empty())
+        && (registry_string_value(addin_key, "Manifest").is_some()
+            || registry_string_value(addin_key, "CodeBase").is_some())
+        && registry_default_string_value(clsid_key)
+            .is_some_and(|value| value.eq_ignore_ascii_case("mscoree.dll"))
+        && registry_string_value(clsid_key, "Class")
+            .is_some_and(|value| value == expected_class)
+        && registry_string_value(clsid_key, "Assembly").is_some()
+        && registry_string_value(clsid_key, "RuntimeVersion").is_some()
+        && registry_string_value(clsid_key, "CodeBase").is_some()
 }
 
-fn ole_catalog_manifests_available() -> bool {
-    let catalog = office_catalog_path();
-    catalog.join("VisualTeX.WindowsOle.Word.xml").is_file()
-        && catalog
-            .join("VisualTeX.WindowsOle.PowerPoint.xml")
-            .is_file()
+fn registered_addin_file_exists(addin_key: &str) -> bool {
+    let value = registry_string_value(addin_key, "Manifest")
+        .or_else(|| registry_string_value(addin_key, "CodeBase"));
+    let Some(value) = value else {
+        return false;
+    };
+    let normalized = value
+        .trim()
+        .trim_end_matches("|vstolocal")
+        .trim_end_matches('|');
+    let path = normalized
+        .strip_prefix("file:///")
+        .or_else(|| normalized.strip_prefix("file://"))
+        .unwrap_or(normalized)
+        .replace('/', "\\")
+        .replace("%20", " ");
+    PathBuf::from(path).is_file()
 }
 
-fn register_ole_catalog() -> Result<(), String> {
-    let catalog = office_catalog_path();
-    if !ole_catalog_manifests_available() {
-        return Err(format!(
-            "Windows Office manifests are missing from {}",
-            catalog.display()
-        ));
-    }
-
-    registry_set_string(OLE_CATALOG_KEY, "Id", "VisualTeX.WindowsOle")?;
-    registry_set_string(OLE_CATALOG_KEY, "Url", &path_to_file_uri(&catalog))?;
-    registry_set_dword(OLE_CATALOG_KEY, "Flags", 1)
-}
-
-fn remove_ole_catalog() -> Result<(), String> {
-    if !registry_key_exists(OLE_CATALOG_KEY) {
-        return Ok(());
-    }
-    let output = hidden_command("reg.exe")
-        .args(["delete", OLE_CATALOG_KEY, "/f"])
-        .output()
-        .map_err(|error| format!("Unable to remove the Windows Office trusted catalog: {error}"))?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "Unable to remove the Windows Office trusted catalog: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ))
-    }
+fn native_ole_local_server_healthy() -> bool {
+    let executable = registry_string_value(OLE_LOCAL_SERVER_KEY, "ServerExecutable")
+        .or_else(|| registry_default_string_value(OLE_LOCAL_SERVER_KEY));
+    let Some(executable) = executable else {
+        return false;
+    };
+    let executable = executable.trim().trim_matches('"');
+    !executable.is_empty() && PathBuf::from(executable).is_file()
 }
 
 fn write_mode_registry(mode: OfficeIntegrationMode) -> Result<(), String> {
     let value = match mode {
         OfficeIntegrationMode::Auto => "auto",
-        OfficeIntegrationMode::Ole => "ole",
         OfficeIntegrationMode::Vsto => "vsto",
     };
-    registry_set_string(
-        r"HKCU\Software\VisualTeX\OfficeIntegration",
-        "Mode",
-        value,
-    )
+    registry_set_string(OFFICE_MODE_KEY, "Mode", value)
 }
 
 fn registry_set_string(key: &str, name: &str, value: &str) -> Result<(), String> {
@@ -326,15 +406,6 @@ fn registry_add(key: &str, name: &str, value_type: &str, value: &str) -> Result<
     }
 }
 
-fn path_to_file_uri(path: &std::path::Path) -> String {
-    let normalized = path.to_string_lossy().replace('\\', "/");
-    let encoded = normalized
-        .replace('%', "%25")
-        .replace(' ', "%20")
-        .replace('#', "%23");
-    format!("file:///{encoded}")
-}
-
 fn windows_temp_root() -> PathBuf {
     std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
@@ -348,10 +419,7 @@ fn windows_certificate_trusted(paths: &OfficePaths) -> bool {
     if !paths.certificate.is_file() {
         return false;
     }
-    let Some(thumbprint) = registry_string_value(
-        r"HKCU\Software\VisualTeX\OfficeIntegration",
-        "CertificateThumbprint",
-    ) else {
+    let Some(thumbprint) = registry_string_value(OFFICE_MODE_KEY, "CertificateThumbprint") else {
         return false;
     };
     hidden_command("certutil.exe")
@@ -367,17 +435,23 @@ fn windows_certificate_trusted(paths: &OfficePaths) -> bool {
         .unwrap_or(false)
 }
 
+fn registry_default_string_value(key: &str) -> Option<String> {
+    let output = hidden_command("reg.exe").args(["query", key, "/ve"]).output().ok()?;
+    parse_registry_string_output(&output.stdout, None)
+}
+
 fn registry_string_value(key: &str, value: &str) -> Option<String> {
     let output = hidden_command("reg.exe")
         .args(["query", key, "/v", value])
         .output()
         .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
+    parse_registry_string_output(&output.stdout, Some(value))
+}
+
+fn parse_registry_string_output(bytes: &[u8], value: Option<&str>) -> Option<String> {
+    let text = String::from_utf8_lossy(bytes);
     for line in text.lines() {
-        if !line.contains(value) || !line.contains("REG_SZ") {
+        if value.is_some_and(|value| !line.contains(value)) || !line.contains("REG_SZ") {
             continue;
         }
         let (_, remainder) = line.split_once("REG_SZ")?;

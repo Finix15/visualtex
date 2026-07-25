@@ -6,7 +6,8 @@ use crate::office::sessions::{
     OfficeSessionStatus, SessionError, VisualTeXFormulaMetadata,
 };
 use crate::office::state::{
-    OfficeCompanionState, MAX_OFFICE_REQUEST_BYTES, OFFICE_PROTOCOL_VERSION, OFFICE_UI_VERSION,
+    append_office_log, OfficeCompanionState, MAX_OFFICE_REQUEST_BYTES, OFFICE_PROTOCOL_VERSION,
+    OFFICE_UI_VERSION,
 };
 use crate::office::word_native;
 use axum::body::Bytes;
@@ -108,73 +109,15 @@ fn inject_install_token(html: &str, token: &str) -> Result<String, StatusCode> {
     Ok(format!("{}{}{}", &html[..index], meta, &html[index..]))
 }
 
-fn extract_local_asset_urls(html: &str, attribute: &str) -> Vec<String> {
-    let marker = format!("{attribute}=\"");
-    let mut remaining = html;
-    let mut assets = Vec::new();
-    while let Some(start) = remaining.find(&marker) {
-        remaining = &remaining[start + marker.len()..];
-        let Some(end) = remaining.find('"') else {
-            break;
-        };
-        let value = &remaining[..end];
-        if value.starts_with("/assets/")
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || b"/_-.".contains(&byte))
-            && !assets.iter().any(|asset| asset == value)
-        {
-            assets.push(value.to_string());
-        }
-        remaining = &remaining[end + 1..];
-    }
-    assets
-}
-
-fn inject_dialog_preloads(bridge_html: &str, dialog_html: &str) -> Result<String, StatusCode> {
-    let marker = "</head>";
-    let index = bridge_html
-        .find(marker)
-        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
-    let mut preloads = String::new();
-    for script in extract_local_asset_urls(dialog_html, "src") {
-        if script.ends_with(".js") {
-            preloads.push_str(&format!(
-                "<link rel=\"modulepreload\" crossorigin href=\"{script}\" />\n"
-            ));
-        }
-    }
-    for stylesheet in extract_local_asset_urls(dialog_html, "href") {
-        if stylesheet.ends_with(".css") && !bridge_html.contains(&stylesheet) {
-            preloads.push_str(&format!(
-                "<link rel=\"preload\" as=\"style\" href=\"{stylesheet}\" />\n"
-            ));
-        }
-    }
-    Ok(format!(
-        "{}{}{}",
-        &bridge_html[..index],
-        preloads,
-        &bridge_html[index..]
-    ))
-}
-
 async fn read_office_html(
     ui_root: &Path,
     relative: &str,
     token: &str,
-    remove_office_js: bool,
 ) -> Result<Html<String>, StatusCode> {
     let path = ui_root.join(relative);
-    let mut html = tokio::fs::read_to_string(&path)
+    let html = tokio::fs::read_to_string(&path)
         .await
         .map_err(|_| StatusCode::NOT_FOUND)?;
-    if remove_office_js {
-        html = html.replace(
-            "<script src=\"/vendor/office-js/office.js\"></script>",
-            "",
-        );
-    }
     inject_install_token(&html, token).map(Html)
 }
 
@@ -186,18 +129,6 @@ async fn health(State(context): State<ServerContext>) -> Json<HealthResponse> {
         protocol_version: OFFICE_PROTOCOL_VERSION,
         ocr_available: context.companion.ocr_available,
     })
-}
-
-async fn bridge(State(context): State<ServerContext>) -> Result<Html<String>, StatusCode> {
-    let bridge_path = context.companion.paths.ui_root.join("bridge/index.html");
-    let dialog_path = context.companion.paths.ui_root.join("dialog/index.html");
-    let (bridge_html, dialog_html) = tokio::try_join!(
-        tokio::fs::read_to_string(bridge_path),
-        tokio::fs::read_to_string(dialog_path),
-    )
-    .map_err(|_| StatusCode::NOT_FOUND)?;
-    let html = inject_dialog_preloads(&bridge_html, &dialog_html)?;
-    inject_install_token(&html, &context.companion.install_token).map(Html)
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -218,11 +149,11 @@ async fn dialog(
     run_session_operation(move || store.get(&lookup_id))
         .await
         .map_err(|_| StatusCode::NOT_FOUND)?;
+    let _ = query.runtime;
     read_office_html(
         &context.companion.paths.ui_root,
         "dialog/index.html",
         &context.companion.install_token,
-        query.runtime.as_deref() == Some("vsto-desktop"),
     )
     .await
 }
@@ -1570,16 +1501,9 @@ pub(crate) fn build_router(companion: OfficeCompanionState) -> Router {
 
     Router::new()
         .route("/health", get(health))
-        .route("/bridge/index.html", get(bridge))
         .route("/dialog/{session_id}", get(dialog))
         .nest("/api/v1", api)
         .nest_service("/assets", ServeDir::new(ui_root.join("assets")))
-        .nest_service(
-            "/vendor/office-js",
-            ServeDir::new(ui_root.join("vendor").join("office-js")),
-        )
-        .nest_service("/licenses", ServeDir::new(ui_root.join("licenses")))
-        .nest_service("/icons", ServeDir::new(ui_root.join("icons")))
         .fallback(not_found)
         .layer(RequestBodyLimitLayer::new(MAX_OFFICE_REQUEST_BYTES))
         .layer(middleware::from_fn_with_state(
@@ -1599,29 +1523,108 @@ fn bind_listener(address: std::net::SocketAddr) -> Result<TcpListener, String> {
 
 pub async fn run(companion: OfficeCompanionState) -> Result<(), String> {
     let address = OfficeCompanionState::socket_addr();
-    let listener = bind_listener(address)?;
-    listener
-        .set_nonblocking(true)
-        .map_err(|error| format!("Unable to configure Office companion listener: {error}"))?;
-    let tls =
-        RustlsConfig::from_pem_file(&companion.paths.certificate, &companion.paths.private_key)
-            .await
-            .map_err(|error| format!("Unable to load Office TLS certificate: {error}"))?;
+    let executable = std::env::current_exe()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|error| format!("<unresolved: {error}>"));
+    append_office_log(
+        &companion.paths,
+        "companion.log",
+        &format!(
+            "server start pid={} executable={} data_root={} ui_root={} certificate={} private_key={} bind={}",
+            std::process::id(),
+            executable,
+            companion.paths.root.display(),
+            companion.paths.ui_root.display(),
+            companion.paths.certificate.display(),
+            companion.paths.private_key.display(),
+            address
+        ),
+    );
+
+    let dialog_path = companion.paths.ui_root.join("dialog").join("index.html");
+    if !dialog_path.is_file() {
+        let error = format!(
+            "Office UI resources are missing: {}",
+            dialog_path.display()
+        );
+        append_office_log(&companion.paths, "companion.log", &error);
+        return Err(error);
+    }
+    append_office_log(
+        &companion.paths,
+        "companion.log",
+        &format!("Office UI resource validated: {}", dialog_path.display()),
+    );
+
+    append_office_log(
+        &companion.paths,
+        "companion.log",
+        &format!("binding TCP listener at {address}"),
+    );
+    let listener = bind_listener(address).map_err(|error| {
+        append_office_log(&companion.paths, "companion.log", &format!("bind failed: {error}"));
+        error
+    })?;
+    append_office_log(
+        &companion.paths,
+        "companion.log",
+        &format!("TCP listener bound at {address}"),
+    );
+    listener.set_nonblocking(true).map_err(|error| {
+        let error = format!("Unable to configure Office companion listener: {error}");
+        append_office_log(&companion.paths, "companion.log", &error);
+        error
+    })?;
+
+    append_office_log(
+        &companion.paths,
+        "companion.log",
+        "initializing TLS certificate and private key",
+    );
+    let tls = RustlsConfig::from_pem_file(
+        &companion.paths.certificate,
+        &companion.paths.private_key,
+    )
+    .await
+    .map_err(|error| {
+        let error = format!("Unable to load Office TLS certificate: {error}");
+        append_office_log(&companion.paths, "companion.log", &error);
+        error
+    })?;
+    append_office_log(
+        &companion.paths,
+        "companion.log",
+        "TLS certificate and private key loaded successfully",
+    );
+
     let handle = axum_server::Handle::new();
     {
-        let mut stored = companion
-            .server_handle
-            .lock()
-            .map_err(|_| "Office companion server handle lock is unavailable".to_string())?;
+        let mut stored = companion.server_handle.lock().map_err(|_| {
+            let error = "Office companion server handle lock is unavailable".to_string();
+            append_office_log(&companion.paths, "companion.log", &error);
+            error
+        })?;
         *stored = Some(handle.clone());
     }
     companion.update_status(|status| {
         status.running = true;
         status.last_error = None;
     });
+    append_office_log(
+        &companion.paths,
+        "companion.log",
+        &format!(
+            "HTTPS companion listening at https://{}; protocol={}; ui_version={}",
+            address, OFFICE_PROTOCOL_VERSION, OFFICE_UI_VERSION
+        ),
+    );
 
     let result = axum_server::from_tcp_rustls(listener, tls)
-        .map_err(|error| format!("Unable to create Office TLS server: {error}"))?
+        .map_err(|error| {
+            let error = format!("Unable to create Office TLS server: {error}");
+            append_office_log(&companion.paths, "companion.log", &error);
+            error
+        })?
         .handle(handle)
         .serve(build_router(companion.clone()).into_make_service())
         .await
@@ -1635,6 +1638,18 @@ pub async fn run(companion: OfficeCompanionState) -> Result<(), String> {
     });
     if let Ok(mut stored) = companion.server_handle.lock() {
         *stored = None;
+    }
+    match &result {
+        Ok(()) => append_office_log(
+            &companion.paths,
+            "companion.log",
+            "companion stopped normally",
+        ),
+        Err(error) => append_office_log(
+            &companion.paths,
+            "companion.log",
+            &format!("companion stopped with error: {error}"),
+        ),
     }
     result
 }
@@ -1665,21 +1680,12 @@ mod tests {
     fn test_state(temp: &TempDir) -> OfficeCompanionState {
         let root = temp.path().join("office-data");
         let ui_root = temp.path().join("office-ui");
-        fs::create_dir_all(ui_root.join("bridge")).unwrap();
         fs::create_dir_all(ui_root.join("dialog")).unwrap();
         fs::create_dir_all(ui_root.join("assets")).unwrap();
-        fs::create_dir_all(ui_root.join("vendor").join("office-js")).unwrap();
-        fs::create_dir_all(ui_root.join("licenses")).unwrap();
-        fs::write(
-            ui_root.join("bridge").join("index.html"),
-            "<html><head></head><body>bridge</body></html>",
-        )
-        .unwrap();
         fs::write(
             ui_root.join("dialog").join("index.html"),
             concat!(
                 "<html><head>",
-                "<script src=\"/vendor/office-js/office.js\"></script>",
                 "<script type=\"module\" src=\"/assets/dialog-entry.js\"></script>",
                 "<link rel=\"stylesheet\" href=\"/assets/dialog.css\">",
                 "</head><body>dialog</body></html>"
@@ -1822,18 +1828,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(bridge.status(), StatusCode::OK);
-        let bridge_body = bridge.into_body().collect().await.unwrap().to_bytes();
-        let bridge_html = String::from_utf8(bridge_body.to_vec()).unwrap();
-        assert!(bridge_html.contains("visualtex-install-token"));
-        assert!(bridge_html.contains("visualtex-native-powerpoint-commit"));
-        assert!(bridge_html.contains(state.install_token.as_str()));
-        assert!(bridge_html.contains(
-            "<link rel=\"modulepreload\" crossorigin href=\"/assets/dialog-entry.js\" />"
-        ));
-        assert!(bridge_html.contains(
-            "<link rel=\"preload\" as=\"style\" href=\"/assets/dialog.css\" />"
-        ));
+        assert_eq!(bridge.status(), StatusCode::NOT_FOUND);
 
         let invalid_dialog = router
             .clone()
@@ -2042,7 +2037,8 @@ mod tests {
         assert_eq!(dialog.status(), StatusCode::OK);
         let dialog_body = dialog.into_body().collect().await.unwrap().to_bytes();
         let dialog_html = String::from_utf8(dialog_body.to_vec()).unwrap();
-        assert!(dialog_html.contains("/vendor/office-js/office.js"));
+        assert!(!dialog_html.contains("office.js"));
+        assert!(dialog_html.contains("visualtex-install-token"));
 
         let desktop_dialog = router
             .clone()
@@ -2064,7 +2060,7 @@ mod tests {
             .unwrap()
             .to_bytes();
         let desktop_html = String::from_utf8(desktop_body.to_vec()).unwrap();
-        assert!(!desktop_html.contains("/vendor/office-js/office.js"));
+        assert!(!desktop_html.contains("office.js"));
         assert!(desktop_html.contains("visualtex-install-token"));
 
         let patch = router

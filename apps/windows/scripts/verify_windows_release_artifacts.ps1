@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$ExpectedAppVersion = "1.2.2",
+    [string]$ExpectedAppVersion = "1.2.3",
     [string]$ExpectedOfficeMsiVersion = "1.0.35.0"
 )
 
@@ -11,9 +11,11 @@ $resourceX64 = Join-Path $root "src-tauri\resources\windows-office\VisualTeX-Win
 $resourceX86 = Join-Path $root "src-tauri\resources\windows-office\VisualTeX-WindowsOffice-VSTO-x86.msi"
 $manifestX64 = Join-Path $root "src-tauri\resources\windows-office\VisualTeX-WindowsOffice-VSTO-x64.sha256.json"
 $manifestX86 = Join-Path $root "src-tauri\resources\windows-office\VisualTeX-WindowsOffice-VSTO-x86.sha256.json"
+$vstoRuntime = Join-Path $root "src-tauri\resources\windows-office\vstor_redist.exe"
+$vstoRuntimeManifest = Join-Path $root "src-tauri\resources\windows-office\vstor_redist.sha256.json"
 $buildX64 = Join-Path $root "src-windows\VisualTeX.WindowsOffice.Installer\bin\x64\Release\VisualTeX-WindowsOffice-VSTO-x64.msi"
 $buildX86 = Join-Path $root "src-windows\VisualTeX.WindowsOffice.Installer\bin\x86\Release\VisualTeX-WindowsOffice-VSTO-x86.msi"
-$paths = @($installerPath, $resourceX64, $resourceX86, $manifestX64, $manifestX86, $buildX64, $buildX86)
+$paths = @($installerPath, $resourceX64, $resourceX86, $manifestX64, $manifestX86, $vstoRuntime, $vstoRuntimeManifest, $buildX64, $buildX86)
 
 foreach ($path in $paths) {
     if (-not (Test-Path -LiteralPath $path)) { throw "Release artifact is missing: $path" }
@@ -40,6 +42,26 @@ if ((Get-FileHash $resourceX64 -Algorithm SHA256).Hash -ne (Get-FileHash $buildX
 }
 if ((Get-FileHash $resourceX86 -Algorithm SHA256).Hash -ne (Get-FileHash $buildX86 -Algorithm SHA256).Hash) {
     throw "The x86 Office MSI bundled by Tauri is not the current x86 build."
+}
+
+$runtimeManifest = Get-Content -LiteralPath $vstoRuntimeManifest -Raw | ConvertFrom-Json
+$runtimeHash = (Get-FileHash -LiteralPath $vstoRuntime -Algorithm SHA256).Hash
+if ([string]$runtimeManifest.package.sha256 -ne $runtimeHash) {
+    throw "The bundled Microsoft VSTO Runtime hash manifest does not match $vstoRuntime."
+}
+if ($runtimeHash -ne "CFE1A40BBE4A50022DB2164ABDB0154984E2CECB761A23CDC81CB5754F6E0A18") {
+    throw "The bundled Microsoft VSTO Runtime is not the pinned 10.0.60917.00 package."
+}
+$runtimeSignature = Get-AuthenticodeSignature -FilePath $vstoRuntime
+if ($runtimeSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+    $null -eq $runtimeSignature.SignerCertificate -or
+    $runtimeSignature.SignerCertificate.Subject -notmatch "Microsoft Corporation") {
+    throw "The bundled Microsoft VSTO Runtime has an invalid or unexpected Authenticode signature."
+}
+$runtimeVersion = (Get-Item -LiteralPath $vstoRuntime).VersionInfo
+if ([string]$runtimeVersion.ProductVersion -ne "10.0.60917.00" -or
+    [string]$runtimeVersion.CompanyName -ne "Microsoft Corporation") {
+    throw "Unexpected bundled Microsoft VSTO Runtime metadata: Version=$($runtimeVersion.ProductVersion); Company=$($runtimeVersion.CompanyName)."
 }
 
 foreach ($entry in @(

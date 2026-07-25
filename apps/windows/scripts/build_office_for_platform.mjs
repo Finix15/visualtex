@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-const result = spawnSync(npm, ["run", "build:office:windows-ole"], {
+const result = spawnSync(npm, ["run", "build:office:windows-native"], {
   stdio: "inherit",
   shell: false,
 });
