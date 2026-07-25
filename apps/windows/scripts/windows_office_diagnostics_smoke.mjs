@@ -99,6 +99,9 @@ for (const required of [
   "exceptionChain",
   "installJsonPath",
   "CompanionOnly",
+  "ForceCloseOffice",
+  "Stop-Process -Id $process.Id -Force",
+  "OfficeConnectionVerificationAttempted",
   "CompanionPort",
   "ProtocolVersion",
   "Certificate mismatch",
@@ -150,6 +153,8 @@ for (const required of [
   "stdout:",
   "stderr:",
   "open_windows_office_logs",
+  "force_close_office",
+  '"-ForceCloseOffice"',
 ]) {
   assert.ok(lifecycle.includes(required), `lifecycle missing ${required}`);
 }
@@ -186,6 +191,7 @@ for (const required of [
   "powerpoint_load_enabled",
   "word_connected",
   "powerpoint_connected",
+  "connection_verification_attempted",
   "companion_process_running",
   "companion_port_listening",
   "companion_https_healthy",
@@ -203,6 +209,9 @@ assert.ok(!backend.includes("office_catalog_path"));
 
 assert.ok(hooks.includes('-VisualTeXPath "$INSTDIR\\VisualTeX.exe"'));
 assert.ok(hooks.includes("visualtex_office_static_runtime_verified"));
+assert.ok(hooks.includes("visualtex_office_verify_connections"));
+assert.ok(hooks.includes("visualtex_office_verification_deferred"));
+assert.ok(hooks.includes("需要临时启动这两个 Office 应用进行验证"));
 assert.ok(hooks.includes("COMAddIn.Connect"));
 assert.ok(settings.includes("wordFilesPresent"));
 assert.ok(settings.includes("wordRegistryComplete"));
@@ -211,6 +220,10 @@ assert.ok(settings.includes("companionPortListening"));
 assert.ok(settings.includes("companionHttpsHealthy"));
 assert.ok(settings.includes("companionCertificateMatches"));
 assert.ok(settings.includes("companionProtocolMatches"));
+assert.ok(settings.includes("connectionVerificationAttempted"));
+assert.ok(settings.includes("confirmRuntimeTest"));
+assert.ok(settings.includes("forceCloseOffice"));
+assert.ok(settings.includes("Office 集成已安装，等待连接验证"));
 assert.ok(settings.includes("open_windows_office_logs"));
 assert.ok(settings.includes("office-settings-diagnostic"));
 assert.ok(settings.includes("confirmUninstall"));

@@ -172,9 +172,28 @@ visualtex_vsto_runtime_ready:
     StrCmp $0 "0" visualtex_office_static_runtime_verified visualtex_office_failed
 
 visualtex_office_static_runtime_verified:
-    DetailPrint "VisualTeX native Office static installation and companion runtime verification passed. Word/PowerPoint COMAddIn.Connect remains a post-install verification step."
+    DetailPrint "VisualTeX native Office static installation and companion runtime verification passed."
     IfSilent visualtex_office_done 0
-    MessageBox MB_ICONINFORMATION "Windows 原生 Office 集成的证书、VSTO Runtime、MSI、文件哈希、注册表、OLE LocalServer，以及 VisualTeX 本地 companion 的进程、端口、HTTPS、证书和协议验证均已通过。$\r$\n$\r$\n安装器不会启动 Word 或 PowerPoint，因此尚未验证 COMAddIn.Connect。请在安装完成后从 VisualTeX 设置中执行“验证 Office 运行时”；只有 Word 与 PowerPoint 的 COMAddIn.Connect 均为 True 后，才会显示原生 Office 集成完整验证成功。"
+    MessageBox MB_ICONQUESTION|MB_YESNO "Office 插件和本地服务已经安装完成。要确认 Word 与 PowerPoint 的加载项是否真正连接成功，需要临时启动这两个 Office 应用进行验证。$\r$\n$\r$\n请先保存文档并关闭所有正在运行的 Word、PowerPoint 和其他 Office 窗口。是否现在开始验证？$\r$\n$\r$\n选择“否”不会影响 VisualTeX 主程序和插件安装，之后仍可在 VisualTeX 设置中点击“验证 Office 连接”。" IDYES visualtex_office_verify_connections IDNO visualtex_office_verification_deferred
+
+visualtex_office_verify_connections:
+    DetailPrint "Launching Word and PowerPoint to verify VisualTeX COMAddIn.Connect."
+    nsExec::ExecToLog `powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\test_windows_office_runtime.ps1" -VisualTeXPath "$INSTDIR\VisualTeX.exe"`
+    Pop $0
+    StrCmp $0 "0" visualtex_office_fully_verified visualtex_office_connection_verification_failed
+
+visualtex_office_fully_verified:
+    DetailPrint "Word and PowerPoint COMAddIn.Connect verification passed."
+    MessageBox MB_ICONINFORMATION "Word 和 PowerPoint 的 VisualTeX 加载项连接验证成功。打开 VisualTeX 设置时，Office 集成状态将直接显示为可正常使用。"
+    Goto visualtex_office_done
+
+visualtex_office_connection_verification_failed:
+    DetailPrint "Office connection verification did not complete. The installed integration remains available for in-app retry."
+    MessageBox MB_ICONEXCLAMATION "Office 插件已经安装，但本次连接验证没有完成。请确认 Word 和 PowerPoint 已全部关闭，然后进入 VisualTeX 设置点击“验证 Office 连接”；如仍无法关闭，可在提示窗口中选择强制关闭 Office 后验证。"
+    Goto visualtex_office_done
+
+visualtex_office_verification_deferred:
+    DetailPrint "The user deferred Word and PowerPoint connection verification."
     Goto visualtex_office_done
 
 visualtex_office_failed:

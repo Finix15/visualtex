@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   ChevronDown,
   CircleAlert,
+  CircleHelp,
   Download,
   ExternalLink,
   FolderOpen,
@@ -39,6 +40,7 @@ interface OfficePlatformStatus {
   vstoPowerpointHealthy: boolean;
   wordConnected: boolean;
   powerpointConnected: boolean;
+  connectionVerificationAttempted: boolean;
   companionProcessRunning: boolean;
   companionPortListening: boolean;
   companionHttpsHealthy: boolean;
@@ -85,6 +87,8 @@ export function WindowsOfficeIntegrationSettings() {
   const [companion, setCompanion] = useState<OfficeCompanionStatus | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState("");
+  const [confirmRuntimeTest, setConfirmRuntimeTest] = useState(false);
+  const [forceCloseOffice, setForceCloseOffice] = useState(false);
   const [confirmUninstall, setConfirmUninstall] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -155,7 +159,15 @@ export function WindowsOfficeIntegrationSettings() {
       status.oleLocalServerHealthy,
   );
   const runtimeHealthy = Boolean(status?.officeRuntimeVerified);
-  const integrationReady = installHealthy && runtimeHealthy && !status?.lastError;
+  const officeConnectionsVerified = Boolean(
+    status?.wordConnected && status?.powerpointConnected,
+  );
+  const integrationReady = Boolean(
+    installHealthy &&
+      runtimeHealthy &&
+      officeConnectionsVerified &&
+      !status?.lastError,
+  );
   const hasInstalledComponents = Boolean(
     status?.wordFilesPresent ||
       status?.powerpointFilesPresent ||
@@ -163,6 +175,14 @@ export function WindowsOfficeIntegrationSettings() {
       status?.powerpointRegistryComplete ||
       status?.oleLocalServerHealthy,
   );
+  const verificationPending = Boolean(
+    installHealthy &&
+      runtimeHealthy &&
+      !officeConnectionsVerified &&
+      !status?.connectionVerificationAttempted &&
+      !status?.lastError,
+  );
+  const installationNeedsRepair = hasInstalledComponents && !installHealthy;
   const statusCopy = useMemo(() => {
     if (!status) {
       return {
@@ -180,12 +200,32 @@ export function WindowsOfficeIntegrationSettings() {
           : "Word 和 PowerPoint 已可创建、插入和编辑 VisualTeX 公式。",
       };
     }
+    if (verificationPending) {
+      return {
+        title: isEn
+          ? "Office integration is installed"
+          : "Office 集成已安装，等待连接验证",
+        description: isEn
+          ? "Start Word and PowerPoint once to verify that both add-ins connect successfully."
+          : "启动一次 Word 和 PowerPoint 验证加载项连接后，即可完成全部检查。",
+      };
+    }
     if (hasInstalledComponents) {
       return {
-        title: isEn ? "Office integration needs repair" : "Office 集成需要修复",
-        description: isEn
-          ? "Some components are installed, but the complete runtime check did not pass."
-          : "部分组件已经安装，但完整运行检查尚未通过。",
+        title: installationNeedsRepair
+          ? isEn
+            ? "Office integration needs repair"
+            : "Office 集成需要修复"
+          : isEn
+            ? "Office connection verification needs attention"
+            : "Office 连接验证未通过",
+        description: installationNeedsRepair
+          ? isEn
+            ? "Some installation components are incomplete. Repair the integration and try again."
+            : "部分安装组件不完整，请修复 Office 集成后重试。"
+          : isEn
+            ? "Close Office and run the connection verification again."
+            : "请关闭所有 Office 应用后重新验证连接，必要时可选择强制关闭。",
       };
     }
     return {
@@ -194,9 +234,37 @@ export function WindowsOfficeIntegrationSettings() {
         ? "Install once to add VisualTeX tools to Word and PowerPoint."
         : "安装后即可在 Word 和 PowerPoint 中直接使用 VisualTeX。",
     };
-  }, [hasInstalledComponents, integrationReady, isEn, status]);
+  }, [
+    hasInstalledComponents,
+    installationNeedsRepair,
+    integrationReady,
+    isEn,
+    status,
+    verificationPending,
+  ]);
 
-  const diagnosticMessage = message || status?.lastError || companion?.lastError;
+  const diagnosticMessage =
+    message ||
+    (!verificationPending ? status?.lastError : null) ||
+    companion?.lastError;
+
+  const openRuntimeVerification = () => {
+    setMessage("");
+    setForceCloseOffice(false);
+    setConfirmRuntimeTest(true);
+  };
+
+  const verifyRuntime = async () => {
+    const succeeded = await run(
+      "runtime-test",
+      "test_windows_office_runtime",
+      { forceCloseOffice },
+    );
+    if (succeeded) {
+      setConfirmRuntimeTest(false);
+      setForceCloseOffice(false);
+    }
+  };
 
   const uninstall = async () => {
     const succeeded = await run(
@@ -236,13 +304,21 @@ export function WindowsOfficeIntegrationSettings() {
         className={`office-summary-card ${
           integrationReady
             ? "is-ready"
-            : hasInstalledComponents
-              ? "needs-attention"
-              : "is-not-installed"
+            : verificationPending
+              ? "is-pending"
+              : hasInstalledComponents
+                ? "needs-attention"
+                : "is-not-installed"
         }`}
       >
         <span className="office-summary-icon" aria-hidden="true">
-          {integrationReady ? <CheckCircle2 size={22} /> : <CircleAlert size={22} />}
+          {integrationReady ? (
+            <CheckCircle2 size={22} />
+          ) : verificationPending ? (
+            <CircleHelp size={22} />
+          ) : (
+            <CircleAlert size={22} />
+          )}
         </span>
         <div>
           <strong>{statusCopy.title}</strong>
@@ -279,10 +355,10 @@ export function WindowsOfficeIntegrationSettings() {
                 : "安装 Office 集成"}
           </button>
         )}
-        {(integrationReady || hasInstalledComponents) && (
+        {installationNeedsRepair && (
           <button
             type="button"
-            className={integrationReady ? "secondary-button" : "primary-button"}
+            className="primary-button office-action-main"
             disabled={busy !== null}
             onClick={() =>
               void run("repair", "repair_windows_office_integration")
@@ -296,6 +372,27 @@ export function WindowsOfficeIntegrationSettings() {
               : isEn
                 ? "Repair integration"
                 : "修复 Office 集成"}
+          </button>
+        )}
+        {hasInstalledComponents && installHealthy && !integrationReady && (
+          <button
+            type="button"
+            className="primary-button office-action-main"
+            disabled={busy !== null}
+            onClick={openRuntimeVerification}
+          >
+            <CheckCircle2 size={16} />
+            {busy === "runtime-test"
+              ? isEn
+                ? "Verifying…"
+                : "正在验证…"
+              : status?.connectionVerificationAttempted
+                ? isEn
+                  ? "Verify Office connection again"
+                  : "重新验证 Office 连接"
+                : isEn
+                  ? "Verify Office connection"
+                  : "验证 Office 连接"}
           </button>
         )}
         <button
@@ -419,13 +516,22 @@ export function WindowsOfficeIntegrationSettings() {
             <button
               type="button"
               className="secondary-button"
-              disabled={busy !== null}
-              onClick={() =>
-                void run("runtime-test", "test_windows_office_runtime")
-              }
+              disabled={busy !== null || !hasInstalledComponents}
+              onClick={openRuntimeVerification}
             >
               <CheckCircle2 size={15} />
-              {isEn ? "Verify runtime" : "验证运行环境"}
+              {isEn ? "Verify Office connection" : "验证 Office 连接"}
+            </button>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={busy !== null || !hasInstalledComponents}
+              onClick={() =>
+                void run("repair", "repair_windows_office_integration")
+              }
+            >
+              <Wrench size={15} />
+              {isEn ? "Repair integration" : "修复 Office 集成"}
             </button>
             <button
               type="button"
@@ -489,6 +595,119 @@ export function WindowsOfficeIntegrationSettings() {
           </div>
         </div>
       </details>
+
+      {confirmRuntimeTest && (
+        <div
+          className="office-confirm-backdrop"
+          role="presentation"
+          onMouseDown={() => {
+            if (busy !== null) return;
+            setConfirmRuntimeTest(false);
+            setForceCloseOffice(false);
+          }}
+        >
+          <section
+            className="office-confirm-dialog office-runtime-confirm-dialog"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="office-runtime-test-title"
+            aria-describedby="office-runtime-test-description"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <header>
+              <span
+                className="office-confirm-icon is-verification"
+                aria-hidden="true"
+              >
+                <CheckCircle2 size={19} />
+              </span>
+              <div>
+                <strong id="office-runtime-test-title">
+                  {isEn ? "Verify Office connection" : "验证 Office 连接"}
+                </strong>
+                <p id="office-runtime-test-description">
+                  {isEn
+                    ? "VisualTeX will start Word and PowerPoint briefly to verify that both add-ins connect. Save your documents and close every Office application before continuing."
+                    : "VisualTeX 将临时启动 Word 和 PowerPoint，检查两个加载项是否真正连接。继续前请保存文档，并关闭所有正在运行的 Office 应用。"}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="icon-button compact"
+                disabled={busy !== null}
+                onClick={() => {
+                  setConfirmRuntimeTest(false);
+                  setForceCloseOffice(false);
+                }}
+                aria-label={isEn ? "Cancel verification" : "取消验证"}
+              >
+                <X size={16} />
+              </button>
+            </header>
+
+            <label className="office-force-close-option">
+              <input
+                type="checkbox"
+                checked={forceCloseOffice}
+                disabled={busy !== null}
+                onChange={(event) => setForceCloseOffice(event.target.checked)}
+              />
+              <span>
+                <strong>
+                  {isEn
+                    ? "Force-close running Word and PowerPoint"
+                    : "强制关闭正在运行的 Word 和 PowerPoint"}
+                </strong>
+                <small>
+                  {isEn
+                    ? "Use only after saving. Unsaved Office changes may be lost."
+                    : "仅在保存文档后使用；未保存的 Office 内容可能丢失。"}
+                </small>
+              </span>
+            </label>
+
+            {message && (
+              <div className="office-confirm-inline-warning" role="alert">
+                <ShieldAlert size={15} />
+                <span>{message}</span>
+              </div>
+            )}
+
+            <footer>
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={busy !== null}
+                onClick={() => {
+                  setConfirmRuntimeTest(false);
+                  setForceCloseOffice(false);
+                }}
+              >
+                {isEn ? "Cancel" : "取消"}
+              </button>
+              <button
+                type="button"
+                className="primary-button"
+                disabled={busy !== null}
+                onClick={() => void verifyRuntime()}
+              >
+                <CheckCircle2 size={15} />
+                {busy === "runtime-test"
+                  ? isEn
+                    ? "Verifying…"
+                    : "正在验证…"
+                  : forceCloseOffice
+                    ? isEn
+                      ? "Force close and verify"
+                      : "强制关闭并验证"
+                    : isEn
+                      ? "I have closed Office; verify"
+                      : "我已关闭 Office，开始验证"}
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
 
       {confirmUninstall && (
         <div

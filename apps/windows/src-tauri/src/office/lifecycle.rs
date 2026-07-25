@@ -621,17 +621,21 @@ pub fn repair_windows_office_integration(
 pub fn test_windows_office_runtime(
     app: AppHandle,
     state: tauri::State<'_, OfficeCompanionState>,
+    force_close_office: bool,
 ) -> Result<OfficePlatformStatus, String> {
     #[cfg(target_os = "windows")]
     {
         let executable = current_visualtex_executable()?;
-        let arguments = vec!["-VisualTeXPath".to_string(), executable];
+        let mut arguments = vec!["-VisualTeXPath".to_string(), executable];
+        if force_close_office {
+            arguments.push("-ForceCloseOffice".to_string());
+        }
         run_windows_script(&app, "test_windows_office_runtime.ps1", &arguments)?;
         return Ok(state.platform_backend.status());
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (app, state);
+        let _ = (app, state, force_close_office);
         Err("Windows Office runtime verification is available only on Windows".to_string())
     }
 }

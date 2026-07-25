@@ -276,6 +276,48 @@ const styledVariableCommands = new Set([
   "mathscr",
   "mathfrak",
 ]);
+const greekVariableCommands = new Set([
+  "alpha",
+  "beta",
+  "gamma",
+  "delta",
+  "epsilon",
+  "varepsilon",
+  "zeta",
+  "eta",
+  "theta",
+  "vartheta",
+  "iota",
+  "kappa",
+  "lambda",
+  "mu",
+  "nu",
+  "xi",
+  "pi",
+  "varpi",
+  "rho",
+  "varrho",
+  "sigma",
+  "varsigma",
+  "tau",
+  "upsilon",
+  "phi",
+  "varphi",
+  "chi",
+  "psi",
+  "omega",
+  "Gamma",
+  "Delta",
+  "Theta",
+  "Lambda",
+  "Xi",
+  "Pi",
+  "Sigma",
+  "Upsilon",
+  "Phi",
+  "Psi",
+  "Omega",
+]);
 
 interface BracedSpan {
   open: number;
@@ -461,6 +503,41 @@ function uprightDifferentialPrefix(
   );
 }
 
+function leadingDifferentialVariableCommand(source: string): string | null {
+  let index = skipDifferentialSpacing(source, 0);
+  if (source.startsWith("\\mathrm{d}", index)) return null;
+  if (source.startsWith("\\differentialD", index)) return null;
+  if (source[index] !== "d") return null;
+
+  index += 1;
+  index = skipDifferentialSpacing(source, index);
+  if (source[index] === "^") {
+    index = readScriptEnd(source, index);
+  }
+  index = skipDifferentialSpacing(source, index);
+
+  if (source[index] === "{") {
+    const group = readBracedSpan(source, index);
+    if (!group) return null;
+    const groupIndex = skipDifferentialSpacing(group.content, 0);
+    if (group.content[groupIndex] !== "\\") return null;
+    const commandEnd = readCommandEnd(group.content, groupIndex);
+    return group.content.slice(groupIndex + 1, commandEnd);
+  }
+
+  if (source[index] !== "\\") return null;
+  const commandEnd = readCommandEnd(source, index);
+  return source.slice(index + 1, commandEnd);
+}
+
+function uprightLeadingGreekDifferential(source: string): string {
+  const variableCommand = leadingDifferentialVariableCommand(source);
+  if (!variableCommand || !greekVariableCommands.has(variableCommand)) {
+    return source;
+  }
+  return uprightDifferentialPrefix(source, false);
+}
+
 function uprightDifferentialSequence(source: string): string {
   const sequence = integralMeasureTail(source, 0, source.length);
   if (!sequence) return uprightDifferentialPrefix(source, false);
@@ -504,8 +581,12 @@ function normalizeDerivativeFractions(source: string): string {
       continue;
     }
 
-    let numerator = normalizeDerivativeFractions(numeratorGroup.content);
-    let denominator = normalizeDerivativeFractions(denominatorGroup.content);
+    let numerator = uprightLeadingGreekDifferential(
+      normalizeDerivativeFractions(numeratorGroup.content),
+    );
+    let denominator = uprightLeadingGreekDifferential(
+      normalizeDerivativeFractions(denominatorGroup.content),
+    );
     if (
       readDifferentialPrefix(numerator, true) &&
       readDifferentialPrefix(denominator, false)

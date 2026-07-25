@@ -6760,6 +6760,11 @@ html body #mathlive-suggestion-popover .ML__popover__keybinding {
   background: color-mix(in srgb, var(--success) 7%, var(--bg-elevated));
 }
 
+.office-summary-card.is-pending {
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-elevated));
+}
+
 .office-summary-card.needs-attention {
   border-color: color-mix(in srgb, var(--warning) 32%, var(--border));
   background: color-mix(in srgb, var(--warning) 7%, var(--bg-elevated));
@@ -6780,6 +6785,10 @@ html body #mathlive-suggestion-popover .ML__popover__keybinding {
 
 .office-summary-card.is-ready .office-summary-icon {
   color: var(--success);
+}
+
+.office-summary-card.is-pending .office-summary-icon {
+  color: var(--accent);
 }
 
 .office-summary-card.needs-attention .office-summary-icon {
@@ -6948,6 +6957,11 @@ html body #mathlive-suggestion-popover .ML__popover__keybinding {
   color: var(--danger);
 }
 
+.office-confirm-icon.is-verification {
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-elevated));
+  color: var(--accent);
+}
+
 .office-confirm-dialog strong {
   display: block;
   color: var(--text);
@@ -6960,6 +6974,55 @@ html body #mathlive-suggestion-popover .ML__popover__keybinding {
   color: var(--text-muted);
   font-size: 9px;
   line-height: 1.6;
+}
+
+.office-force-close-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 11px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-elevated);
+  cursor: pointer;
+}
+
+.office-force-close-option input {
+  margin: 2px 0 0;
+}
+
+.office-force-close-option > span {
+  display: grid;
+  gap: 3px;
+}
+
+.office-force-close-option strong {
+  font-size: 10px;
+}
+
+.office-force-close-option small {
+  color: var(--text-faint);
+  font-size: 8px;
+  line-height: 1.5;
+}
+
+.office-confirm-inline-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--warning) 32%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warning) 7%, var(--bg-elevated));
+  color: var(--text-muted);
+  font-size: 8px;
+  line-height: 1.5;
+}
+
+.office-confirm-inline-warning svg {
+  flex: 0 0 auto;
+  color: var(--warning);
 }
 
 .office-confirm-dialog > footer {

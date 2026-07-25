@@ -4,6 +4,7 @@ param(
     [string]$OfficePlatform = "auto",
     [string]$VisualTeXPath,
     [switch]$CompanionOnly,
+    [switch]$ForceCloseOffice,
     [string]$ReportPath
 )
 
@@ -795,9 +796,25 @@ $events = @()
 try {
     $running = @(Get-Process WINWORD, POWERPNT -ErrorAction SilentlyContinue)
     if ($running.Count -gt 0) {
-        throw "Word and PowerPoint must both be closed before runtime verification. Running: $($running.ProcessName -join ', ')"
+        if (-not $ForceCloseOffice) {
+            throw "Word and PowerPoint must both be closed before runtime verification. Save your documents and close Office, or retry with the force-close option. Running: $($running.ProcessName -join ', ')"
+        }
+        $runningNames = @($running.ProcessName | Sort-Object -Unique)
+        foreach ($process in $running) {
+            Stop-Process -Id $process.Id -Force -ErrorAction Stop
+        }
+        $deadline = [DateTime]::UtcNow.AddSeconds(10)
+        do {
+            Start-Sleep -Milliseconds 200
+            $stillRunning = @(Get-Process WINWORD, POWERPNT -ErrorAction SilentlyContinue)
+        } while ($stillRunning.Count -gt 0 -and [DateTime]::UtcNow -lt $deadline)
+        if ($stillRunning.Count -gt 0) {
+            throw "Unable to force-close all Office applications before runtime verification. Still running: $($stillRunning.ProcessName -join ', ')"
+        }
+        Add-Check "Word and PowerPoint closed" $true "Force-closed running Office applications: $($runningNames -join ', ')."
+    } else {
+        Add-Check "Word and PowerPoint closed" $true "No existing WINWORD.EXE or POWERPNT.EXE process was found."
     }
-    Add-Check "Word and PowerPoint closed" $true "No existing WINWORD.EXE or POWERPNT.EXE process was found."
 
     $script:resolvedOfficePlatform = Resolve-OfficePlatform $OfficePlatform
     Add-Check "Office platform" $true $script:resolvedOfficePlatform
@@ -898,6 +915,7 @@ try {
 
     if (-not (Test-Path -LiteralPath $modeKey)) { New-Item -Path $modeKey -Force | Out-Null }
     if (-not $CompanionOnly) {
+        New-ItemProperty -LiteralPath $modeKey -Name "OfficeConnectionVerificationAttempted" -PropertyType DWord -Value 1 -Force | Out-Null
         New-ItemProperty -LiteralPath $modeKey -Name "WordConnected" -PropertyType DWord -Value ([int][bool]$wordResult.connected) -Force | Out-Null
         New-ItemProperty -LiteralPath $modeKey -Name "PowerPointConnected" -PropertyType DWord -Value ([int][bool]$powerPointResult.connected) -Force | Out-Null
     }
@@ -954,6 +972,7 @@ try {
             "OfficeRuntimeVerified"
         )
         if (-not $CompanionOnly) {
+            New-ItemProperty -LiteralPath $modeKey -Name "OfficeConnectionVerificationAttempted" -PropertyType DWord -Value 1 -Force | Out-Null
             $failedRuntimeValues += @("WordConnected", "PowerPointConnected")
         }
         foreach ($valueName in $failedRuntimeValues) {

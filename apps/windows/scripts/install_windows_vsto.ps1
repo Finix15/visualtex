@@ -802,6 +802,7 @@ try {
     New-ItemProperty -LiteralPath $modeKey -Name "NativeOleEnabled" -PropertyType DWord -Value 1 -Force | Out-Null
     New-ItemProperty -LiteralPath $modeKey -Name "FilesAndRegistryVerified" -PropertyType DWord -Value 1 -Force | Out-Null
     New-ItemProperty -LiteralPath $modeKey -Name "OfficeRuntimeVerified" -PropertyType DWord -Value 0 -Force | Out-Null
+    New-ItemProperty -LiteralPath $modeKey -Name "OfficeConnectionVerificationAttempted" -PropertyType DWord -Value 0 -Force | Out-Null
     New-ItemProperty -LiteralPath $modeKey -Name "WordConnected" -PropertyType DWord -Value 0 -Force | Out-Null
     New-ItemProperty -LiteralPath $modeKey -Name "PowerPointConnected" -PropertyType DWord -Value 0 -Force | Out-Null
     foreach ($runtimeValueName in @(

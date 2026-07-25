@@ -88,6 +88,11 @@ impl WindowsOfficeBackend {
         let word_connected = registry_dword_equals(OFFICE_MODE_KEY, "WordConnected", 1);
         let powerpoint_connected =
             registry_dword_equals(OFFICE_MODE_KEY, "PowerPointConnected", 1);
+        let connection_verification_attempted = registry_dword_equals(
+            OFFICE_MODE_KEY,
+            "OfficeConnectionVerificationAttempted",
+            1,
+        );
         let companion_process_running =
             registry_dword_equals(OFFICE_MODE_KEY, "CompanionProcessRunning", 1);
         let companion_port_listening =
@@ -123,11 +128,21 @@ impl WindowsOfficeBackend {
         } else if !ole_local_server_healthy {
             Some("The native Formula OLE LocalServer registration is missing or invalid".to_string())
         } else if !office_runtime_verified {
-            registry_string_value(OFFICE_MODE_KEY, "LastRuntimeError").or_else(|| {
-                Some("Static installation passed, but companion runtime validation is incomplete".to_string())
-            })
+            registry_string_value(OFFICE_MODE_KEY, "LastRuntimeError")
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| {
+                    Some("Static installation passed, but companion runtime validation is incomplete".to_string())
+                })
         } else if !(word_connected && powerpoint_connected) {
-            Some("Companion runtime passed, but Word/PowerPoint COMAddIn.Connect has not both been verified".to_string())
+            if connection_verification_attempted {
+                registry_string_value(OFFICE_MODE_KEY, "LastRuntimeError")
+                    .filter(|value| !value.trim().is_empty())
+                    .or_else(|| {
+                        Some("Word and PowerPoint connection verification did not complete successfully".to_string())
+                    })
+            } else {
+                None
+            }
         } else {
             self.pipe_error.clone()
         };
@@ -149,6 +164,7 @@ impl WindowsOfficeBackend {
             vsto_powerpoint_healthy: vsto_powerpoint,
             word_connected,
             powerpoint_connected,
+            connection_verification_attempted,
             companion_process_running,
             companion_port_listening,
             companion_https_healthy,

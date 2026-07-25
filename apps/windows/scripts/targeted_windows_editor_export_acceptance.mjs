@@ -378,6 +378,32 @@ async function main() {
     })()`, "immediate generic differential upright write-back");
     console.log("STAGE live-differential-upright PASS");
 
+    await evaluate(`(() => {
+      const field = document.querySelector("math-field");
+      field.setValue("\\\\frac{\\\\partial f}{d\\\\alpha}", {
+        mode: "math",
+        format: "latex",
+        insertionMode: "replaceAll",
+        selectionMode: "after",
+        silenceNotifications: true,
+      });
+      field.position = field.lastOffset;
+      field.dispatchEvent(new InputEvent("input", {
+        bubbles: true,
+        composed: true,
+        inputType: "insertText",
+        data: "a",
+      }));
+    })()`);
+    await waitForEvaluation(`(() => {
+      const field = document.querySelector("math-field");
+      return {
+        ready: field?.value === "\\\\frac{\\\\partial f}{\\\\mathrm{d}\\\\alpha}",
+        value: field?.value ?? "",
+      };
+    })()`, "Greek differential upright inside an asymmetric fraction");
+    console.log("STAGE live-asymmetric-greek-differential PASS");
+
     await resetDocument();
     await waitForEvaluation(`(() => ({
       ready: Boolean(document.querySelector('button[data-category="matrix"]')),

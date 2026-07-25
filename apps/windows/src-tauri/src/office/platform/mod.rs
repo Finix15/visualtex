@@ -38,6 +38,7 @@ pub struct OfficePlatformStatus {
     pub vsto_powerpoint_healthy: bool,
     pub word_connected: bool,
     pub powerpoint_connected: bool,
+    pub connection_verification_attempted: bool,
     pub companion_process_running: bool,
     pub companion_port_listening: bool,
     pub companion_https_healthy: bool,
