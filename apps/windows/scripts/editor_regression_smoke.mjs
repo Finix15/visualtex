@@ -602,6 +602,14 @@ async function main() {
       };
     })()`, "ArrowUp switches to previous formula line");
 
+    if (arrowUpLineState.candidateVisible) {
+      await key("Escape", "Escape", 27);
+      await waitForEvaluation(
+        `(() => ({ ready: !document.querySelector(".suggestion-popup") }))()`,
+        "dismiss command candidate before formula-line navigation",
+      );
+    }
+
     await key("ArrowDown", "ArrowDown", 40);
     const arrowDownLineState = await waitForEvaluation(`(() => {
       const rows = [...document.querySelectorAll(".formula-line")];
@@ -622,6 +630,9 @@ async function main() {
           document
             .getElementById("mathlive-suggestion-popover")
             ?.classList.contains("is-visible") ?? false,
+        activeTag: document.activeElement?.tagName ?? "",
+        activeClass: document.activeElement?.className ?? "",
+        firstFocused: fields[0]?.matches(":focus-within") ?? false,
       };
     })()`, "ArrowDown switches to next formula line");
 

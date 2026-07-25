@@ -213,6 +213,10 @@ assert.ok(settings.includes("companionCertificateMatches"));
 assert.ok(settings.includes("companionProtocolMatches"));
 assert.ok(settings.includes("open_windows_office_logs"));
 assert.ok(settings.includes("office-settings-diagnostic"));
+assert.ok(settings.includes("confirmUninstall"));
+assert.ok(settings.includes("setConfirmUninstall(true)"));
+assert.ok(settings.includes('role="alertdialog"'));
+assert.ok(settings.includes("uninstall_windows_ole_integration"));
 
 assert.ok(!bundle.includes("TrustedCatalog"));
 assert.ok(!bundle.includes("OfficeCatalog"));
