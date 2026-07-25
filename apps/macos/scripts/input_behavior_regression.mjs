@@ -174,6 +174,19 @@ async function main() {
       await sleep(180);
     };
 
+    const pressArrow = async (key) => {
+      const keyCode = key === "ArrowUp" ? 38 : 40;
+      const common = {
+        key,
+        code: key,
+        windowsVirtualKeyCode: keyCode,
+        nativeVirtualKeyCode: keyCode,
+      };
+      await client.send("Input.dispatchKeyEvent", { type: "keyDown", ...common });
+      await client.send("Input.dispatchKeyEvent", { type: "keyUp", ...common });
+      await sleep(180);
+    };
+
     const configure = async (overrides = {}) => {
       await evaluate(`(() => {
         localStorage.setItem("visualtex.onboarding.v3.completed", "true");
@@ -252,7 +265,7 @@ async function main() {
           ".ML__placeholder-selected, .ML__caret, .ML__selected"
         ) || []);
         const marker = markers.find((candidate) =>
-          candidate.closest(".ML__msubsup, .ML__op-group")
+          candidate.closest(".ML__msubsup, .ML__op-group, .ML__mfrac")
         );
         const script = marker?.closest(".ML__msubsup, .ML__op-group");
         const markerBox = (marker?.parentElement || marker)?.getBoundingClientRect();
@@ -305,6 +318,15 @@ async function main() {
               };
             }),
           inScript: Boolean(marker && script),
+          inOperatorLimit: Boolean(marker?.closest(".ML__op-group")),
+          inFraction: Boolean(marker?.closest(".ML__mfrac")),
+          scriptRegion:
+            markerBox && scriptBox
+              ? markerBox.top + markerBox.height / 2 <
+                scriptBox.top + scriptBox.height / 2
+                ? "upper"
+                : "lower"
+              : null,
           inAccent: markers.some((candidate) => candidate.closest(".ML__accent-body")),
           markerClass: marker?.className || "",
           markerParentClass: marker?.parentElement?.className || "",
@@ -328,6 +350,185 @@ async function main() {
     assert.equal(subscript.value, "x_{b}");
     assert.equal(subscript.position, subscript.lastOffset);
     assert.equal(subscript.inScript, false);
+
+    const operatorLimitCases = [
+      ["integral lower limit", "\\int_{\\placeholder{}}^{1} f"],
+      ["integral upper limit", "\\int_{0}^{\\placeholder{}} f"],
+      ["sum lower limit", "\\sum_{\\placeholder{}}^{n} a"],
+      ["sum upper limit", "\\sum_{i=1}^{\\placeholder{}} a"],
+      ["product lower limit", "\\prod_{\\placeholder{}}^{n} a"],
+      ["product upper limit", "\\prod_{i=1}^{\\placeholder{}} a"],
+      ["limit condition", "\\lim_{x\\to\\placeholder{}} f"],
+    ];
+    for (const [label, latex] of operatorLimitCases) {
+      await preparePlaceholder(latex);
+      await typeCharacter("a", "KeyA", 65);
+      await typeCharacter("b", "KeyB", 66);
+      const operatorLimit = await readState();
+      assert.match(
+        operatorLimit.value,
+        /ab/,
+        `${label} lost consecutive input: ${JSON.stringify(operatorLimit)}`,
+      );
+      assert.equal(
+        operatorLimit.inOperatorLimit,
+        true,
+        `${label} incorrectly auto-exited: ${JSON.stringify(operatorLimit)}`,
+      );
+      assert.notEqual(
+        operatorLimit.position,
+        operatorLimit.lastOffset,
+        `${label} moved to the end of the formula`,
+      );
+    }
+
+    await preparePlaceholder("\\int_{\\placeholder{}}^{n} f");
+    await typeCharacter("i", "KeyI", 73);
+    await pressArrow("ArrowUp");
+    const operatorUpperNavigation = await readState();
+    assert.equal(
+      operatorUpperNavigation.inOperatorLimit,
+      true,
+      JSON.stringify(operatorUpperNavigation),
+    );
+    assert.equal(operatorUpperNavigation.scriptRegion, "upper");
+    await pressArrow("ArrowDown");
+    const operatorLowerNavigation = await readState();
+    assert.equal(
+      operatorLowerNavigation.inOperatorLimit,
+      true,
+      JSON.stringify(operatorLowerNavigation),
+    );
+    assert.equal(operatorLowerNavigation.scriptRegion, "lower");
+
+    await preparePlaceholder("\\frac{x^{\\placeholder{}}+y}{z}+q");
+    await typeCharacter("a", "KeyA", 65);
+    await typeCharacter("b", "KeyB", 66);
+    const fractionScript = await readState();
+    assert.match(fractionScript.value, /x\^\{a\}b/);
+    assert.equal(fractionScript.inFraction, true, JSON.stringify(fractionScript));
+    assert.equal(fractionScript.inScript, false, JSON.stringify(fractionScript));
+    assert.notEqual(fractionScript.position, fractionScript.lastOffset);
+
+    await preparePlaceholder("\\frac{n}{\\placeholder{}}+q");
+    await pressArrow("ArrowUp");
+    const fractionNumeratorNavigation = await readState();
+    assert.equal(
+      fractionNumeratorNavigation.inFraction,
+      true,
+      JSON.stringify(fractionNumeratorNavigation),
+    );
+    await pressArrow("ArrowDown");
+    const fractionDenominatorNavigation = await readState();
+    assert.equal(
+      fractionDenominatorNavigation.inFraction,
+      true,
+      JSON.stringify(fractionDenominatorNavigation),
+    );
+
+    const rawStructuralCommandCases = [
+      ["sqrt", /^\\sqrt\{ab\}$/],
+      ["frac", /^\\frac\{ab\}\{(?:\\placeholder\{\})?\}$/],
+      ["dfrac", /^\\dfrac\{ab\}\{(?:\\placeholder\{\})?\}$/],
+      ["tfrac", /^\\tfrac\{ab\}\{(?:\\placeholder\{\})?\}$/],
+      ["binom", /^\\binom\{ab\}\{(?:\\placeholder\{\})?\}$/],
+      ["overset", /^\\overset\{ab\}\{(?:\\placeholder\{\})?\}$/],
+      ["underset", /^\\underset\{ab\}\{(?:\\placeholder\{\})?\}$/],
+      [
+        "overunderset",
+        /^\\overset\{ab\}\{\\underset\{(?:\\placeholder\{\})?\}\{(?:\\placeholder\{\})?\}\}$/,
+      ],
+      ["stackrel", /^\\stackrel\{ab\}\{(?:\\placeholder\{\})?\}$/],
+      ["stackbin", /^\\stackbin\{ab\}\{(?:\\placeholder\{\})?\}$/],
+      ["overarc", /^\\overarc\{ab\}$/],
+      ["overbrace", /^\\overbrace\{ab\}$/],
+      ["overgroup", /^\\overgroup\{ab\}$/],
+      ["overparen", /^\\overparen\{ab\}$/],
+      ["overleftharpoon", /^\\overleftharpoon\{ab\}$/],
+      ["overrightharpoon", /^\\overrightharpoon\{ab\}$/],
+      ["overlinesegment", /^\\overlinesegment\{ab\}$/],
+      ["underarc", /^\\underarc\{ab\}$/],
+      ["underline", /^\\underline\{ab\}$/],
+      ["underbrace", /^\\underbrace\{ab\}$/],
+      ["undergroup", /^\\undergroup\{ab\}$/],
+      ["underparen", /^\\underparen\{ab\}$/],
+      ["underleftarrow", /^\\underleftarrow\{ab\}$/],
+      ["underrightarrow", /^\\underrightarrow\{ab\}$/],
+      ["underleftrightarrow", /^\\underleftrightarrow\{ab\}$/],
+      ["underlinesegment", /^\\underlinesegment\{ab\}$/],
+    ];
+    for (const [command, expectedValue] of rawStructuralCommandCases) {
+      await prepareEmptyField();
+      await typeRawCommand(command);
+      const pendingStructure = await readState();
+      assert.notEqual(
+        pendingStructure.position,
+        pendingStructure.lastOffset,
+        `Native \\${command} confirmation did not select its first argument: ${JSON.stringify(
+          pendingStructure,
+        )}`,
+      );
+      await typeCharacter("a", "KeyA", 65);
+      await typeCharacter("b", "KeyB", 66);
+      const typedStructure = await readState();
+      assert.match(
+        typedStructure.value,
+        expectedValue,
+        `Typed content escaped \\${command}'s structure: ${JSON.stringify(
+          typedStructure,
+        )}`,
+      );
+      assert.match(
+        typedStructure.value,
+        /ab/,
+        `\\${command} did not keep typed content inside any argument`,
+      );
+      assert.notEqual(
+        typedStructure.position,
+        typedStructure.lastOffset,
+        `\\${command} unexpectedly jumped out of its argument`,
+      );
+    }
+
+    const rawAccentAuditCommands = [
+      "acute",
+      "grave",
+      "dot",
+      "ddot",
+      "dddot",
+      "ddddot",
+      "tilde",
+      "bar",
+      "breve",
+      "check",
+      "hat",
+      "vec",
+      "widehat",
+      "widetilde",
+      "overline",
+      "overrightarrow",
+      "overleftarrow",
+      "overleftrightarrow",
+      "mathring",
+    ];
+    for (const command of rawAccentAuditCommands) {
+      await prepareEmptyField();
+      await typeRawCommand(command);
+      await typeCharacter("a", "KeyA", 65);
+      const typedAccentCommand = await readState();
+      assert.match(
+        typedAccentCommand.value,
+        /\{a\}/,
+        `\\${command} left its argument empty: ${JSON.stringify(
+          typedAccentCommand,
+        )}`,
+      );
+      assert.doesNotMatch(
+        typedAccentCommand.value,
+        /\{\}a/,
+        `\\${command} placed input outside an empty argument`,
+      );
+    }
 
     await preparePlaceholder("\\hat{\\placeholder{}}+z");
     await typeCharacter("c", "KeyC", 67);

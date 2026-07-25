@@ -5853,6 +5853,20 @@ html body #mathlive-suggestion-popover li.has-visualtex-command-preview .ML__pop
   max-width: 100%;
 }
 
+html body #mathlive-suggestion-popover .visualtex-native-preview-placeholder,
+html body #visualtex-native-input-suggestion-popover .visualtex-native-preview-placeholder {
+  width: 0.72em;
+  min-width: 0.72em;
+  height: 0.86em;
+  display: inline-block;
+  overflow: hidden;
+  border-radius: 0.08em;
+  background: #d9edf9;
+  color: transparent;
+  line-height: 0;
+  vertical-align: -0.08em;
+}
+
 html body #mathlive-suggestion-popover li.ML__popover__current {
   border-color: var(--accent-border) !important;
   border-radius: 7px !important;
