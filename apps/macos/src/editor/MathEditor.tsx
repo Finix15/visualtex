@@ -605,8 +605,20 @@ const visualTexAccentPlaceholderClass =
 const visualTexAccentPlaceholderLayoutClass =
   "visualtex-accent-placeholder-layout";
 const visualTexCombiningAccentClass = "visualtex-combining-accent";
-const visualTexCombiningAccentShiftProperty =
-  "--visualtex-combining-accent-shift";
+const visualTexCombiningAccentHostClass =
+  "visualtex-combining-accent-host";
+const visualTexCombiningAccentOverlayClass =
+  "visualtex-combining-accent-overlay";
+const visualTexCombiningAccentLeftProperty =
+  "--visualtex-combining-accent-left";
+const visualTexCombiningAccentTopProperty =
+  "--visualtex-combining-accent-top";
+const visualTexCombiningAccentHeightProperty =
+  "--visualtex-combining-accent-height";
+const visualTexCombiningAccentFontSizeProperty =
+  "--visualtex-combining-accent-font-size";
+const visualTexCombiningAccentColorProperty =
+  "--visualtex-combining-accent-color";
 const visualTexAccentPlaceholderShiftProperty =
   "--visualtex-accent-placeholder-shift";
 const visualTexPlaceholderCaretClass =
@@ -624,29 +636,102 @@ function accentLayoutForPlaceholder(node: HTMLElement) {
     : null;
 }
 
-function visualCenterForAccent(node: HTMLElement) {
-  const bounds = node.getBoundingClientRect();
-  if (!node.classList.contains("ML__accent-combining-char")) {
-    return bounds.left + bounds.width / 2;
+function setStylePropertyIfChanged(
+  node: HTMLElement,
+  property: string,
+  value: string,
+) {
+  if (node.style.getPropertyValue(property) === value) return;
+  node.style.setProperty(property, value);
+}
+
+function combiningAccentKind(node: HTMLElement) {
+  const text = node.textContent ?? "";
+  if (text.includes("\u20d7")) return "vector";
+  if (text.includes("\u20db")) return "triple-dot";
+  if (text.includes("\u20dc")) return "quadruple-dot";
+  return null;
+}
+
+function syncVisualTexCombiningAccent(node: HTMLElement) {
+  const kind = combiningAccentKind(node);
+  const layout = node.closest<HTMLElement>(".ML__vlist");
+  const host = node.closest<HTMLElement>(".ML__center");
+  const base = Array.from(layout?.children ?? []).find(
+    (candidate): candidate is HTMLElement =>
+      candidate instanceof HTMLElement &&
+      !candidate.classList.contains("ML__center"),
+  );
+  if (!kind || !layout || !host || !base) return;
+
+  if (!node.classList.contains(visualTexCombiningAccentClass)) {
+    node.classList.add(visualTexCombiningAccentClass);
+  }
+  if (!host.classList.contains(visualTexCombiningAccentHostClass)) {
+    host.classList.add(visualTexCombiningAccentHostClass);
   }
 
-  const context = document.createElement("canvas").getContext("2d");
-  const text = node.textContent ?? "";
-  if (!context || !text) return bounds.left;
-
-  const style = getComputedStyle(node);
-  context.font = [
-    style.fontStyle,
-    style.fontVariant,
-    style.fontWeight,
-    style.fontSize,
-    style.fontFamily,
-  ].join(" ");
-  const metrics = context.measureText(text);
-  return (
-    bounds.left +
-    (metrics.actualBoundingBoxRight - metrics.actualBoundingBoxLeft) / 2
+  let overlay = host.querySelector<HTMLElement>(
+    `:scope > .${visualTexCombiningAccentOverlayClass}`,
   );
+  if (!overlay) {
+    overlay = document.createElement("span");
+    overlay.className = visualTexCombiningAccentOverlayClass;
+    overlay.setAttribute("aria-hidden", "true");
+    host.append(overlay);
+  }
+  if (overlay.dataset.kind !== kind) {
+    overlay.dataset.kind = kind;
+    overlay.replaceChildren();
+    if (kind !== "vector") {
+      const dotCount = kind === "triple-dot" ? 3 : 4;
+      for (let index = 0; index < dotCount; index += 1) {
+        const dot = document.createElement("span");
+        dot.className = "visualtex-combining-accent-dot";
+        overlay.append(dot);
+      }
+    }
+  }
+
+  const nodeStyle = getComputedStyle(node);
+  const nodeBounds = node.getBoundingClientRect();
+  const hostBounds = host.getBoundingClientRect();
+  const baseBounds = base.getBoundingClientRect();
+  const overlayLeft =
+    baseBounds.left + baseBounds.width / 2 - hostBounds.left;
+  const overlayTop = nodeBounds.top - hostBounds.top;
+  setStylePropertyIfChanged(
+    overlay,
+    visualTexCombiningAccentLeftProperty,
+    `${overlayLeft}px`,
+  );
+  setStylePropertyIfChanged(
+    overlay,
+    visualTexCombiningAccentTopProperty,
+    `${overlayTop}px`,
+  );
+  setStylePropertyIfChanged(
+    overlay,
+    visualTexCombiningAccentHeightProperty,
+    `${nodeBounds.height}px`,
+  );
+  setStylePropertyIfChanged(
+    overlay,
+    visualTexCombiningAccentFontSizeProperty,
+    nodeStyle.fontSize,
+  );
+  const computedColor = [
+    getComputedStyle(base).color,
+    getComputedStyle(layout).color,
+    getComputedStyle(host).color,
+  ].find((color) => color !== "rgba(0, 0, 0, 0)");
+  if (computedColor) {
+    setStylePropertyIfChanged(
+      overlay,
+      visualTexCombiningAccentColorProperty,
+      computedColor,
+    );
+  }
 }
 
 function alignVisualTexAccentPlaceholder(
@@ -662,8 +747,11 @@ function alignVisualTexAccentPlaceholder(
   if (!accentCenter || !accentBody) return;
 
   accentCenter.style.removeProperty(visualTexAccentPlaceholderShiftProperty);
+  if (accentBody.classList.contains("ML__accent-combining-char")) return;
+
   const placeholderBounds = node.getBoundingClientRect();
-  const accentAnchor = visualCenterForAccent(accentBody);
+  const accentBounds = accentBody.getBoundingClientRect();
+  const accentAnchor = accentBounds.left + accentBounds.width / 2;
   const shift =
     placeholderBounds.left + placeholderBounds.width / 2 - accentAnchor;
   accentCenter.style.setProperty(
@@ -672,39 +760,24 @@ function alignVisualTexAccentPlaceholder(
   );
 }
 
-function alignVisualTexCombiningAccent(node: HTMLElement) {
-  const layout = node.closest<HTMLElement>(".ML__vlist");
-  const base = Array.from(layout?.children ?? []).find(
-    (candidate): candidate is HTMLElement =>
-      candidate instanceof HTMLElement &&
-      !candidate.classList.contains("ML__center"),
-  );
-  if (!base) return;
-
-  const baseBounds = base.getBoundingClientRect();
-  const correction =
-    baseBounds.left + baseBounds.width / 2 - visualCenterForAccent(node);
-  if (Math.abs(correction) <= 0.01) return;
-
-  const currentShift = Number.parseFloat(getComputedStyle(node).left) || 0;
-  node.style.setProperty(
-    visualTexCombiningAccentShiftProperty,
-    `${currentShift + correction}px`,
-  );
-}
-
 function markVisualTexStructuralPlaceholders(field: MathfieldElement) {
   const shadowRoot = field.shadowRoot;
-  if (!shadowRoot || visualTexPointerSelectingFields.has(field)) return;
+  if (!shadowRoot) return;
 
   shadowRoot
     .querySelectorAll<HTMLElement>(".ML__accent-combining-char")
-    .forEach((node) => {
-      if (!node.classList.contains(visualTexCombiningAccentClass)) {
-        node.classList.add(visualTexCombiningAccentClass);
-      }
-      alignVisualTexCombiningAccent(node);
+    .forEach(syncVisualTexCombiningAccent);
+  shadowRoot
+    .querySelectorAll<HTMLElement>(`.${visualTexCombiningAccentHostClass}`)
+    .forEach((host) => {
+      if (host.querySelector(".ML__accent-combining-char")) return;
+      host
+        .querySelector(`:scope > .${visualTexCombiningAccentOverlayClass}`)
+        ?.remove();
+      host.classList.remove(visualTexCombiningAccentHostClass);
     });
+
+  if (visualTexPointerSelectingFields.has(field)) return;
 
   const placeholderSymbol = field.placeholderSymbol || "▢";
   const selectionRanges = field.selection.ranges;
@@ -876,7 +949,84 @@ function installVisualTexStructuralPlaceholderStyle(field: MathfieldElement) {
       }
 
       .${visualTexCombiningAccentClass} {
-        left: var(${visualTexCombiningAccentShiftProperty}, 0px) !important;
+        left: 0 !important;
+        color: transparent !important;
+        overflow: visible !important;
+      }
+
+      .${visualTexCombiningAccentHostClass} {
+        overflow: visible !important;
+      }
+
+      .${visualTexCombiningAccentOverlayClass} {
+        position: absolute !important;
+        z-index: 2 !important;
+        left: var(${visualTexCombiningAccentLeftProperty}, 0px) !important;
+        top: var(${visualTexCombiningAccentTopProperty}, 0px) !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        gap: 0.07em !important;
+        width: max-content !important;
+        height: var(
+          ${visualTexCombiningAccentHeightProperty},
+          1em
+        ) !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: visible !important;
+        color: var(
+          ${visualTexCombiningAccentColorProperty},
+          var(--_caret-color)
+        ) !important;
+        font-family: KaTeX_Main !important;
+        font-size: var(
+          ${visualTexCombiningAccentFontSizeProperty},
+          1em
+        ) !important;
+        font-style: normal !important;
+        font-weight: 400 !important;
+        line-height: 1 !important;
+        text-indent: 0 !important;
+        transform: translateX(-50%) !important;
+        pointer-events: none !important;
+      }
+
+      .${visualTexCombiningAccentOverlayClass}[data-kind="vector"] {
+        width: 0.42em !important;
+      }
+
+      .${visualTexCombiningAccentOverlayClass}[data-kind="vector"]::before {
+        content: "" !important;
+        position: absolute !important;
+        top: 50% !important;
+        right: 0.03em !important;
+        left: 0 !important;
+        border-top: max(1px, 0.035em) solid currentColor !important;
+        transform: translateY(-50%) !important;
+      }
+
+      .${visualTexCombiningAccentOverlayClass}[data-kind="vector"]::after {
+        content: "" !important;
+        position: absolute !important;
+        top: 50% !important;
+        right: 0 !important;
+        width: 0.09em !important;
+        height: 0.09em !important;
+        border-top: max(1px, 0.035em) solid currentColor !important;
+        border-right: max(1px, 0.035em) solid currentColor !important;
+        transform: translateY(-50%) rotate(45deg) !important;
+        transform-origin: center !important;
+      }
+
+      .visualtex-combining-accent-dot {
+        display: block !important;
+        flex: 0 0 auto !important;
+        width: 0.09em !important;
+        height: 0.09em !important;
+        border: 0 !important;
+        border-radius: 50% !important;
+        background: currentColor !important;
       }
 
       .ML__contains-highlight,

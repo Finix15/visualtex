@@ -2659,37 +2659,15 @@ async function main() {
               ":scope > .ML__center .ML__accent-body",
             );
             const accentBounds = accentBody?.getBoundingClientRect();
-            const accentAnchor = accentBounds
-              ? (() => {
-                  if (
-                    !accentBody.classList.contains(
-                      "ML__accent-combining-char",
-                    )
-                  ) {
-                    return accentBounds.left + accentBounds.width / 2;
-                  }
-                  const context = document
-                    .createElement("canvas")
-                    .getContext("2d");
-                  const accentStyle = getComputedStyle(accentBody);
-                  context.font = [
-                    accentStyle.fontStyle,
-                    accentStyle.fontVariant,
-                    accentStyle.fontWeight,
-                    accentStyle.fontSize,
-                    accentStyle.fontFamily,
-                  ].join(" ");
-                  const metrics = context.measureText(
-                    accentBody.textContent ?? "",
-                  );
-                  return (
-                    accentBounds.left +
-                    (metrics.actualBoundingBoxRight -
-                      metrics.actualBoundingBoxLeft) /
-                      2
-                  );
-                })()
-              : null;
+            const overlay = node.closest(".ML__vlist")?.querySelector(
+              ".visualtex-combining-accent-overlay",
+            );
+            const overlayBounds = overlay?.getBoundingClientRect();
+            const accentAnchor = overlayBounds
+              ? overlayBounds.left + overlayBounds.width / 2
+              : accentBounds
+                ? accentBounds.left + accentBounds.width / 2
+                : null;
             return {
               atomId: node.dataset.atomId ?? "",
               classes: node.className,
@@ -2708,6 +2686,11 @@ async function main() {
               overflow: style.overflow,
               verticalAlign: style.verticalAlign,
               visualBackground: pseudo.backgroundColor,
+              overlayKind: overlay?.dataset.kind ?? "",
+              overlayDotCount:
+                overlay?.querySelectorAll(
+                  ".visualtex-combining-accent-dot",
+                ).length ?? 0,
               accentAnchor,
               alignmentDelta:
                 accentAnchor === null
@@ -2806,6 +2789,16 @@ async function main() {
           state.placeholder.borderRightWidth === "0px" &&
           state.placeholder.borderBottomWidth === "0px" &&
           state.placeholder.borderLeftWidth === "0px";
+        const expectedOverlay = {
+          vec: { kind: "vector", dotCount: 0 },
+          dddot: { kind: "triple-dot", dotCount: 3 },
+          ddddot: { kind: "quadruple-dot", dotCount: 4 },
+        }[testCase.name];
+        const stableOverlay = (state) =>
+          !expectedOverlay ||
+          (state.placeholder?.overlayKind === expectedOverlay.kind &&
+            state.placeholder?.overlayDotCount ===
+              expectedOverlay.dotCount);
         const geometryStable =
           Math.abs(held.placeholder.top - initial.placeholder.top) <= 1 &&
           Math.abs(released.placeholder.top - initial.placeholder.top) <= 1;
@@ -2817,6 +2810,9 @@ async function main() {
           !selectedRange(reenteredFromLeft) ||
           initial.placeholder.alignmentDelta > 1 ||
           held.placeholder.alignmentDelta > 1 ||
+          !stableOverlay(initial) ||
+          !stableOverlay(held) ||
+          !stableOverlay(released) ||
           !held.pointerSelecting ||
           !stablePlaceholder(held) ||
           !stablePlaceholder(released) ||
@@ -2850,9 +2846,24 @@ async function main() {
       }
 
       const combiningCharacterCases = [
-        { name: "vec-character", source: String.raw`a+\vec{w}+b` },
-        { name: "dddot-character", source: String.raw`a+\dddot{w}+b` },
-        { name: "ddddot-character", source: String.raw`a+\ddddot{w}+b` },
+        {
+          name: "vec-character",
+          source: String.raw`a+\vec{w}+b`,
+          overlayKind: "vector",
+          dotCount: 0,
+        },
+        {
+          name: "dddot-character",
+          source: String.raw`a+\dddot{w}+b`,
+          overlayKind: "triple-dot",
+          dotCount: 3,
+        },
+        {
+          name: "ddddot-character",
+          source: String.raw`a+\ddddot{w}+b`,
+          overlayKind: "quadruple-dot",
+          dotCount: 4,
+        },
       ];
       for (const testCase of combiningCharacterCases) {
         await evaluate(`(() => {
@@ -2877,34 +2888,31 @@ async function main() {
           );
           const accentBounds = accent?.getBoundingClientRect();
           const baseBounds = base?.getBoundingClientRect();
-          const context = document.createElement("canvas").getContext("2d");
-          const accentStyle = accent ? getComputedStyle(accent) : null;
-          if (context && accentStyle) {
-            context.font = [
-              accentStyle.fontStyle,
-              accentStyle.fontVariant,
-              accentStyle.fontWeight,
-              accentStyle.fontSize,
-              accentStyle.fontFamily,
-            ].join(" ");
-          }
-          const metrics =
-            context && accent
-              ? context.measureText(accent.textContent ?? "")
-              : null;
+          const overlay = layout?.querySelector(
+            ".visualtex-combining-accent-overlay",
+          );
+          const overlayBounds = overlay?.getBoundingClientRect();
           const accentVisualCenter =
-            accentBounds && metrics
-              ? accentBounds.left +
-                (metrics.actualBoundingBoxRight -
-                  metrics.actualBoundingBoxLeft) /
-                  2
+            overlayBounds
+              ? overlayBounds.left + overlayBounds.width / 2
               : -1;
           return {
-            ready: Boolean(accent && base && accentBounds && baseBounds),
+            ready: Boolean(
+              accent &&
+                base &&
+                accentBounds &&
+                baseBounds &&
+                overlayBounds,
+            ),
             classes: accent?.className ?? "",
             leftOffset: accent ? getComputedStyle(accent).left : "",
             accentOrigin: accentBounds?.left ?? -1,
             accentVisualCenter,
+            overlayKind: overlay?.dataset.kind ?? "",
+            overlayDotCount:
+              overlay?.querySelectorAll(
+                ".visualtex-combining-accent-dot",
+              ).length ?? 0,
             baseCenter: baseBounds
               ? baseBounds.left + baseBounds.width / 2
               : -1,
@@ -2923,6 +2931,8 @@ async function main() {
           !combiningCharacterState.classes.includes(
             "visualtex-combining-accent",
           ) ||
+          combiningCharacterState.overlayKind !== testCase.overlayKind ||
+          combiningCharacterState.overlayDotCount !== testCase.dotCount ||
           combiningCharacterState.alignmentDelta > 1
         ) {
           throw new Error(
