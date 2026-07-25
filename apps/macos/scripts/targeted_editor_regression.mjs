@@ -16,6 +16,8 @@ const baseUrl = `http://127.0.0.1:${previewPort}`;
 const chromeProfile = `/tmp/visualtex-targeted-${scenario}-${process.pid}`;
 const chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const canonicalLatex = (value) =>
+  value.replace(/\s+/g, "").replace(/\{([A-Za-z0-9])\}/g, "$1");
 
 async function waitFor(url, timeoutMs = 15000) {
   const started = Date.now();
@@ -2423,7 +2425,243 @@ async function main() {
         };
       })()`, "deleting the backslash restores the empty structural placeholder");
 
-      const wrapperPlaceholderCases = [
+  const persistentPlaceholderCases = [
+    {
+      name: "fraction",
+      source: String.raw`\frac{\placeholder{}}{\placeholder{}}`,
+      expectedCount: 2,
+    },
+    {
+      name: "fraction-denominator",
+      source: String.raw`\frac{x}{\placeholder{}}`,
+      expectedCount: 1,
+    },
+    {
+      name: "square-root",
+      source: String.raw`\sqrt{\placeholder{}}`,
+      expectedCount: 1,
+    },
+    {
+      name: "superscript",
+      source: String.raw`x^{\placeholder{}}`,
+      expectedCount: 1,
+    },
+    {
+      name: "subscript",
+      source: String.raw`x_{\placeholder{}}`,
+      expectedCount: 1,
+    },
+    {
+      name: "integral-limits",
+      source: String.raw`\int_{\placeholder{}}^{\placeholder{}}`,
+      expectedCount: 2,
+    },
+    {
+      name: "integral-lower-limit",
+      source: String.raw`\int_{\placeholder{}}^{n}`,
+      expectedCount: 1,
+    },
+    {
+      name: "integral-upper-limit",
+      source: String.raw`\int_{0}^{\placeholder{}}`,
+      expectedCount: 1,
+    },
+    {
+      name: "summation-limits",
+      source: String.raw`\sum_{\placeholder{}}^{\placeholder{}}`,
+      expectedCount: 2,
+    },
+    {
+      name: "summation-lower-limit",
+      source: String.raw`\sum_{\placeholder{}}^{n}`,
+      expectedCount: 1,
+    },
+    {
+      name: "summation-upper-limit",
+      source: String.raw`\sum_{i=0}^{\placeholder{}}`,
+      expectedCount: 1,
+    },
+    {
+      name: "dot-accent",
+      source: String.raw`\dot{\placeholder{}}`,
+      expectedCount: 1,
+    },
+    {
+      name: "hat-accent",
+      source: String.raw`\hat{\placeholder{}}`,
+      expectedCount: 1,
+    },
+    {
+      name: "vector-accent",
+      source: String.raw`\vec{\placeholder{}}`,
+      expectedCount: 1,
+    },
+    {
+      name: "triple-dot-accent",
+      source: String.raw`\dddot{\placeholder{}}`,
+      expectedCount: 1,
+    },
+    {
+      name: "quadruple-dot-accent",
+      source: String.raw`\ddddot{\placeholder{}}`,
+      expectedCount: 1,
+    },
+    {
+      name: "matrix-cell",
+      source: String.raw`\begin{matrix}\placeholder{}&\placeholder{}\end{matrix}`,
+      expectedCount: 2,
+    },
+    {
+      name: "matrix-second-cell",
+      source: String.raw`\begin{matrix}x&\placeholder{}\end{matrix}`,
+      expectedCount: 1,
+    },
+  ];
+  const persistentPlaceholderStates = [];
+  for (const testCase of persistentPlaceholderCases) {
+    await evaluate(`(() => {
+      const field = document.querySelector("math-field");
+      field.setValue(${JSON.stringify(testCase.source)}, {
+        mode: "math",
+        format: "latex",
+        insertionMode: "replaceAll",
+        selectionMode: "placeholder",
+        silenceNotifications: true,
+      });
+      field.focus();
+      field.shadowRoot?.querySelector('[part="keyboard-sink"]')?.focus({
+        preventScroll: true,
+      });
+      return true;
+    })()`);
+    await sleep(100);
+
+    const initial = await waitForEvaluation(`(() => {
+      const field = document.querySelector("math-field");
+      const placeholders = Array.from(
+        field?.shadowRoot?.querySelectorAll(
+          ".visualtex-structural-placeholder",
+        ) ?? [],
+      );
+      const selected = placeholders.find(
+        (node) =>
+          node.classList.contains("ML__placeholder-selected") ||
+          node.classList.contains("ML__selected") ||
+          Boolean(node.closest(".ML__selected")),
+      );
+      const bounds = selected?.getBoundingClientRect();
+      const selectedRange = field?.selection?.ranges?.[0];
+      const background = selected
+        ? getComputedStyle(selected).backgroundColor
+        : "";
+      const beforeBackground = selected
+        ? getComputedStyle(selected, "::before").backgroundColor
+        : "";
+      return {
+        ready:
+          placeholders.length === ${testCase.expectedCount} &&
+          Boolean(selected) &&
+          Boolean(bounds),
+        count: placeholders.length,
+        value: field?.value ?? "",
+        selection: field?.selection ?? null,
+        rangeLatex: selectedRange
+          ? field.getValue(selectedRange[0], selectedRange[1], "latex")
+          : "",
+        background,
+        beforeBackground,
+        top: bounds?.top ?? -1,
+        width: bounds?.width ?? -1,
+        height: bounds?.height ?? -1,
+      };
+    })()`, `initial persistent placeholder: ${testCase.name}`);
+
+    const cycles = [];
+    for (let cycle = 0; cycle < 2; cycle += 1) {
+      await key("x", "KeyX", 88);
+      const typed = await waitForEvaluation(`(() => {
+        const field = document.querySelector("math-field");
+        const count = field?.shadowRoot?.querySelectorAll(
+          ".visualtex-structural-placeholder",
+        ).length ?? -1;
+        return {
+          ready: count === ${testCase.expectedCount - 1},
+          count,
+          value: field?.value ?? "",
+          selection: field?.selection ?? null,
+        };
+      })()`, `placeholder consumed: ${testCase.name} cycle ${cycle + 1}`);
+
+      await key("Backspace", "Backspace", 8);
+      const restored = await waitForEvaluation(`(() => {
+        const field = document.querySelector("math-field");
+        const placeholders = Array.from(
+          field?.shadowRoot?.querySelectorAll(
+            ".visualtex-structural-placeholder",
+          ) ?? [],
+        );
+        const selected = placeholders.find(
+          (node) =>
+            node.classList.contains("ML__placeholder-selected") ||
+            node.classList.contains("ML__selected") ||
+            Boolean(node.closest(".ML__selected")),
+        );
+        const caret = selected?.querySelector(
+          ".visualtex-structural-placeholder-caret",
+        );
+        const bounds = selected?.getBoundingClientRect();
+        const background = selected ? getComputedStyle(selected).backgroundColor : "";
+        const beforeBackground = selected
+          ? getComputedStyle(selected, "::before").backgroundColor
+          : "";
+        const selection = field?.selection ?? null;
+        const selectionMatches =
+          JSON.stringify(selection) === ${JSON.stringify(JSON.stringify(initial.selection))};
+        return {
+          ready:
+            placeholders.length === ${testCase.expectedCount} &&
+            Boolean(selected) &&
+            Boolean(caret) &&
+            selectionMatches &&
+            background === ${JSON.stringify(initial.background)} &&
+            beforeBackground === ${JSON.stringify(initial.beforeBackground)} &&
+            [background, beforeBackground].some((color) =>
+              ["rgb(207, 232, 247)", "rgb(217, 237, 249)"].includes(color)
+            ) &&
+            (field?.value ?? "")
+              .replace(/\\s+/g, "")
+              .replace(/\\{([A-Za-z0-9])\\}/g, "$1") ===
+              ${JSON.stringify(canonicalLatex(initial.value))} &&
+            Math.abs((bounds?.top ?? -99) - ${initial.top}) <= 1 &&
+            Math.abs((bounds?.width ?? -99) - ${initial.width}) <= 1 &&
+            Math.abs((bounds?.height ?? -99) - ${initial.height}) <= 1,
+          count: placeholders.length,
+          selected: Boolean(selected),
+          caret: Boolean(caret),
+          background,
+          beforeBackground,
+          selection,
+          expectedSelection: ${JSON.stringify(initial.selection)},
+          expectedRangeLatex: ${JSON.stringify(initial.rangeLatex)},
+          expectedInitialValue: ${JSON.stringify(initial.value)},
+          typedValue: ${JSON.stringify(typed.value)},
+          value: field?.value ?? "",
+          selectionMatches,
+          top: bounds?.top ?? -1,
+          width: bounds?.width ?? -1,
+          height: bounds?.height ?? -1,
+        };
+      })()`, `placeholder restored: ${testCase.name} cycle ${cycle + 1}`);
+      cycles.push({ typed, restored });
+    }
+    persistentPlaceholderStates.push({
+      name: testCase.name,
+      initial,
+      cycles,
+    });
+  }
+
+  const wrapperPlaceholderCases = [
         {
           name: "fraction-numerator",
           source: String.raw`p+\frac{\placeholder{}}{d}+q`,
@@ -2590,9 +2828,10 @@ async function main() {
             emptyState,
             hiddenBlinkState,
             visibleBlinkState,
-            typedState,
-            restoredState,
-            wrapperPlaceholderStates,
+        typedState,
+        restoredState,
+        persistentPlaceholderStates,
+        wrapperPlaceholderStates,
             heights,
           },
           null,

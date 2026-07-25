@@ -717,12 +717,364 @@ const visualTexPlaceholderSelectionClass =
 const visualTexRawLatexClass = "has-visualtex-raw-latex-command";
 const visualTexPointerSelectingClass = "visualtex-pointer-selecting";
 const visualTexPointerSelectingFields = new WeakSet<MathfieldElement>();
+type VisualTexPlaceholderBranchState = {
+  isAccent: boolean;
+  restoreLatex: string | null;
+  selection: ReturnType<typeof captureSelection> | null;
+};
+
+const visualTexPlaceholderBranchAnchors = new WeakMap<
+  MathfieldElement,
+  Map<string, VisualTexPlaceholderBranchState>
+>();
+type VisualTexActiveAccentPlaceholder = {
+  state: VisualTexPlaceholderBranchState;
+  command: string;
+  lastValueContainingCommand: string;
+  restoreArmed: boolean;
+};
+const visualTexActiveAccentPlaceholders = new WeakMap<
+  MathfieldElement,
+  VisualTexActiveAccentPlaceholder
+>();
+const visualTexForcedPlaceholderRestores = new WeakMap<
+  MathfieldElement,
+  VisualTexPlaceholderBranchState
+>();
+const visualTexRestoringPlaceholderFields = new WeakSet<MathfieldElement>();
+const visualTexPlaceholderRestoreFrames = new WeakMap<
+  MathfieldElement,
+  number
+>();
+
+function visualTexPlaceholderBranchAnchor(node: HTMLElement) {
+  let branchChild = node;
+  for (let depth = 0; depth < 6; depth += 1) {
+    const row = branchChild.parentElement;
+    if (!row) return null;
+
+    const placeholderIndex = Array.from(row.children).indexOf(branchChild);
+    for (let index = placeholderIndex - 1; index >= 0; index -= 1) {
+      const sibling = row.children.item(index);
+      if (!(sibling instanceof HTMLElement)) continue;
+      const atomId = sibling.dataset.atomId;
+      if (atomId) return atomId;
+    }
+    if (row.classList.contains("ML__vlist")) break;
+    branchChild = row;
+  }
+  return null;
+}
+
+function rememberVisualTexPlaceholderBranch(
+  field: MathfieldElement,
+  node: HTMLElement,
+  isAccent: boolean,
+) {
+  if (isAccent) {
+    const placeholderRanges: [number, number][] = [];
+    for (let end = 1; end <= field.lastOffset; end += 1) {
+      if (field.getValue(end - 1, end, "latex").trim() === "\\placeholder{}") {
+        placeholderRanges.push([end - 1, end]);
+      }
+    }
+    placeholderRanges.sort(
+      (first, second) =>
+        Math.abs(first[1] - field.position) -
+        Math.abs(second[1] - field.position),
+    );
+    const placeholderRange = placeholderRanges[0];
+    const restoreLatex = Array.from(accentCommandTemplates.values()).find(
+      (template) => field.value.includes(template),
+    );
+    if (restoreLatex && placeholderRange) {
+      const state = {
+        isAccent: true,
+        restoreLatex,
+        selection: {
+          ranges: [placeholderRange],
+          direction: "none",
+        },
+      } satisfies VisualTexPlaceholderBranchState;
+      const command = restoreLatex.match(/^\\[A-Za-z]+/)?.[0];
+      if (command) {
+        visualTexForcedPlaceholderRestores.delete(field);
+        visualTexActiveAccentPlaceholders.set(field, {
+          state,
+          command,
+          lastValueContainingCommand: field.value,
+          restoreArmed: false,
+        });
+      }
+    }
+  }
+
+  const anchorId = visualTexPlaceholderBranchAnchor(node);
+  if (!anchorId) return;
+
+  let anchors = visualTexPlaceholderBranchAnchors.get(field);
+  if (!anchors) {
+    anchors = new Map<string, VisualTexPlaceholderBranchState>();
+    visualTexPlaceholderBranchAnchors.set(field, anchors);
+  }
+  const isSelected =
+    node.classList.contains("ML__placeholder-selected") ||
+    node.classList.contains("ML__selected") ||
+    Boolean(node.closest(".ML__selected"));
+  const selectedRange = field.selection.ranges[0];
+  const hasSelectedPlaceholderRange = Boolean(
+    isSelected &&
+      field.selection.ranges.length === 1 &&
+      selectedRange &&
+      selectedRange[1] - selectedRange[0] === 1 &&
+      field.getValue(selectedRange[0], selectedRange[1], "latex").trim() ===
+        "\\placeholder{}",
+  );
+  const rememberedState = anchors.get(anchorId);
+  const rememberedSelection = rememberedState?.selection ?? null;
+  let restoreLatex = rememberedState?.restoreLatex ?? null;
+  if (isAccent && hasSelectedPlaceholderRange && selectedRange) {
+    restoreLatex =
+      Array.from(accentCommandTemplates.values()).find((template) =>
+        field.value.includes(template),
+      ) ?? restoreLatex;
+    const offsets = Array.from({ length: field.lastOffset + 1 }, (_, offset) =>
+      offset,
+    ).sort(
+      (first, second) =>
+        Math.abs(first - selectedRange[1]) -
+        Math.abs(second - selectedRange[1]),
+    );
+    for (const offset of restoreLatex ? [] : offsets) {
+      const containerLatex = field.getElementInfo(offset)?.latex?.trim() ?? "";
+      if (
+        isAccentContainerLatex(containerLatex) &&
+        containerLatex.includes("\\placeholder{}")
+      ) {
+        restoreLatex = containerLatex;
+        break;
+      }
+    }
+  }
+  const nextState = {
+    isAccent,
+    restoreLatex,
+    selection:
+      rememberedSelection ??
+      (hasSelectedPlaceholderRange ? captureSelection(field) : null),
+  };
+  anchors.set(anchorId, nextState);
+  if (isAccent && nextState.restoreLatex && nextState.selection) {
+    const command = nextState.restoreLatex.match(/^\\[A-Za-z]+/)?.[0];
+    if (command) {
+      visualTexForcedPlaceholderRestores.delete(field);
+      visualTexActiveAccentPlaceholders.set(field, {
+        state: nextState,
+        command,
+        lastValueContainingCommand: field.value,
+        restoreArmed: false,
+      });
+    }
+  }
+}
+
+function restoreDeletedVisualTexPlaceholder(field: MathfieldElement) {
+  const shadowRoot = field.shadowRoot;
+  const anchors = visualTexPlaceholderBranchAnchors.get(field);
+  const forcedRestore = visualTexForcedPlaceholderRestores.get(field);
+  if (
+    !shadowRoot ||
+    (!anchors?.size && !forcedRestore) ||
+    field.mode === "latex" ||
+    !field.selectionIsCollapsed ||
+    visualTexPointerSelectingFields.has(field) ||
+    visualTexRestoringPlaceholderFields.has(field)
+  ) {
+    return false;
+  }
+
+  if (forcedRestore?.restoreLatex && forcedRestore.selection) {
+    visualTexForcedPlaceholderRestores.delete(field);
+    visualTexActiveAccentPlaceholders.delete(field);
+    visualTexRestoringPlaceholderFields.add(field);
+    try {
+      const inserted = field.insert(forcedRestore.restoreLatex, {
+        mode: "math",
+        format: "latex",
+        insertionMode: "replaceSelection",
+        selectionMode: "after",
+        focus: true,
+        scrollIntoView: false,
+      });
+      if (!inserted) return false;
+      field.selection = clampSelection(
+        forcedRestore.selection,
+        field.lastOffset,
+      );
+      markVisualTexStructuralPlaceholders(field);
+      return true;
+    } finally {
+      visualTexRestoringPlaceholderFields.delete(field);
+    }
+  }
+
+  if (!anchors) return false;
+
+  for (const [anchorId, branchState] of anchors) {
+    const anchor = shadowRoot.querySelector<HTMLElement>(
+      `[data-atom-id="${CSS.escape(anchorId)}"]`,
+    );
+    const row = anchor?.parentElement;
+    if (!anchor || !row) {
+      anchors.delete(anchorId);
+      continue;
+    }
+
+    const caret = Array.from(row.children).find(
+      (child): child is HTMLElement =>
+        child instanceof HTMLElement &&
+        (child.classList.contains("ML__caret") ||
+          child.classList.contains("ML__text-caret")),
+    );
+    if (!caret) continue;
+
+    const hasContent = Array.from(row.children).some((child) => {
+      if (!(child instanceof HTMLElement) || child === anchor || child === caret) {
+        return false;
+      }
+      return !child.classList.contains(visualTexPlaceholderCaretClass);
+    });
+    if (hasContent) continue;
+
+    const isAccentBranch =
+      branchState.isAccent ||
+      Boolean(
+        row
+          .closest<HTMLElement>(".ML__vlist")
+          ?.querySelector(".ML__accent-body"),
+      );
+    visualTexRestoringPlaceholderFields.add(field);
+    try {
+      const insertionPosition = field.position;
+      const inserted = field.insert(
+        branchState.restoreLatex ?? "\\placeholder{}",
+        {
+        mode: "math",
+        format: "latex",
+        insertionMode: "replaceSelection",
+        selectionMode: "after",
+        focus: true,
+        scrollIntoView: false,
+        },
+      );
+      if (!inserted) return false;
+      anchors.delete(anchorId);
+      const placeholderStart = Math.min(
+        field.lastOffset,
+        insertionPosition + (isAccentBranch ? 1 : 0),
+      );
+      const placeholderEnd = Math.min(field.lastOffset, placeholderStart + 1);
+      field.selection =
+        !isAccentBranch && branchState.selection
+          ? clampSelection(branchState.selection, field.lastOffset)
+          : {
+              ranges: [[placeholderStart, placeholderEnd]],
+              direction: "none",
+            };
+      markVisualTexStructuralPlaceholders(field);
+      return true;
+    } finally {
+      visualTexRestoringPlaceholderFields.delete(field);
+    }
+  }
+  return false;
+}
+
+function scheduleDeletedVisualTexPlaceholderRestore(field: MathfieldElement) {
+  if (visualTexPlaceholderRestoreFrames.has(field)) return;
+  const frame = window.requestAnimationFrame(() => {
+    visualTexPlaceholderRestoreFrames.delete(field);
+    if (!field.isConnected) return;
+    restoreDeletedVisualTexPlaceholder(field);
+  });
+  visualTexPlaceholderRestoreFrames.set(field, frame);
+}
+
+function captureSelectedAccentPlaceholderState(field: MathfieldElement) {
+  const selectedRange = field.selection.ranges[0];
+  if (
+    field.selection.ranges.length !== 1 ||
+    !selectedRange ||
+    selectedRange[1] - selectedRange[0] !== 1 ||
+    field.getValue(selectedRange[0], selectedRange[1], "latex").trim() !==
+      "\\placeholder{}"
+  ) {
+    return null;
+  }
+  const restoreLatex = Array.from(accentCommandTemplates.values()).find(
+    (template) => field.value.includes(template),
+  );
+  if (!restoreLatex) return null;
+  return {
+    isAccent: true,
+    restoreLatex,
+    selection: captureSelection(field),
+  } satisfies VisualTexPlaceholderBranchState;
+}
+
+function activateVisualTexAccentPlaceholder(
+  field: MathfieldElement,
+  state: VisualTexPlaceholderBranchState,
+) {
+  const command = state.restoreLatex?.match(/^\\[A-Za-z]+/)?.[0];
+  if (!command) return;
+  visualTexActiveAccentPlaceholders.set(field, {
+    state,
+    command,
+    lastValueContainingCommand: field.value,
+    restoreArmed: false,
+  });
+  visualTexForcedPlaceholderRestores.delete(field);
+}
+
+function observeVisualTexActiveAccentPlaceholder(field: MathfieldElement) {
+  const active = visualTexActiveAccentPlaceholders.get(field);
+  if (!active || visualTexForcedPlaceholderRestores.has(field)) return;
+  const commandPrefix = `${active.command}{`;
+  if (field.value.includes(commandPrefix)) {
+    active.lastValueContainingCommand = field.value;
+    return;
+  }
+  if (!active.restoreArmed) {
+    visualTexActiveAccentPlaceholders.delete(field);
+    return;
+  }
+  if (
+    active.lastValueContainingCommand.includes(commandPrefix)
+  ) {
+    visualTexForcedPlaceholderRestores.set(field, active.state);
+  }
+}
+
+function armVisualTexAccentPlaceholderRestore(field: MathfieldElement) {
+  const active = visualTexActiveAccentPlaceholders.get(field);
+  if (active) active.restoreArmed = field.selectionIsCollapsed;
+}
+
+function settleVisualTexAccentPlaceholderDelete(field: MathfieldElement) {
+  const active = visualTexActiveAccentPlaceholders.get(field);
+  if (active && field.value.includes(`${active.command}{`)) {
+    active.restoreArmed = false;
+  }
+}
 
 function accentLayoutForPlaceholder(node: HTMLElement) {
-  const layout = node.closest<HTMLElement>(".ML__vlist");
-  return layout?.querySelector(":scope > .ML__center .ML__accent-body")
-    ? layout
-    : null;
+  let layout = node.closest<HTMLElement>(".ML__vlist");
+  while (layout) {
+    if (layout.querySelector(".ML__accent-body")) return layout;
+    layout = layout.parentElement?.closest<HTMLElement>(".ML__vlist") ?? null;
+  }
+  return null;
 }
 
 function setStylePropertyIfChanged(
@@ -890,13 +1242,16 @@ function markVisualTexStructuralPlaceholders(field: MathfieldElement) {
         .map((child) => child.textContent ?? "")
         .join("")
         .trim();
-      const isPlaceholder =
-        node.classList.contains(visualTexPlaceholderClass) ||
-        node.classList.contains("ML__placeholder") ||
-        visibleText === placeholderSymbol;
-      const accentLayout = accentLayoutForPlaceholder(node);
-      const isAccentPlaceholder =
-        isPlaceholder && Boolean(accentLayout);
+    const isPlaceholder =
+      node.classList.contains(visualTexPlaceholderClass) ||
+      node.classList.contains("ML__placeholder") ||
+      visibleText === placeholderSymbol;
+    const accentLayout = accentLayoutForPlaceholder(node);
+    const isAccentPlaceholder =
+      isPlaceholder && Boolean(accentLayout);
+    if (isPlaceholder) {
+      rememberVisualTexPlaceholderBranch(field, node, isAccentPlaceholder);
+    }
       node.classList.toggle(visualTexPlaceholderClass, isPlaceholder);
       node.classList.toggle(
         visualTexAccentPlaceholderClass,
@@ -2586,8 +2941,12 @@ function FormulaField(props: FormulaFieldProps) {
       emitEdit(before, after, "composition", "keyboard");
       syncFrameSize();
     };
-    const handleBeforeInput = (event: InputEvent) => {
-      if (restoringRawCommandAnchor) return;
+  const handleBeforeInput = (event: InputEvent) => {
+    if (restoringRawCommandAnchor) return;
+    const selectedAccentState = captureSelectedAccentPlaceholderState(field);
+    if (selectedAccentState) {
+      activateVisualTexAccentPlaceholder(field, selectedAccentState);
+    }
       if (
         event.inputType === "deleteContentBackward" &&
         !pendingWrapperInput &&
@@ -2727,8 +3086,14 @@ function FormulaField(props: FormulaFieldProps) {
         event.stopPropagation();
       }
     };
-    const handleInput = (event: Event) => {
-      if (replacingPendingWrapperInput || restoringRawCommandAnchor) return;
+  const handleInput = (event: Event) => {
+    if (
+      replacingPendingWrapperInput ||
+      restoringRawCommandAnchor ||
+      visualTexRestoringPlaceholderFields.has(field)
+    ) {
+      return;
+    }
       if (imeGuard.isComposing()) {
         if (
           event instanceof InputEvent &&
@@ -2762,12 +3127,18 @@ function FormulaField(props: FormulaFieldProps) {
           autoExitSetting,
           autoExitScriptKey,
         );
-      }
-      clearPendingAutoExit();
-      normalizeCompletedDifferentialDisplay(field);
-      const after = captureFieldSnapshot(field);
-      const inputType =
-        event instanceof InputEvent ? event.inputType || "insertText" : "insertText";
+    }
+    clearPendingAutoExit();
+    normalizeCompletedDifferentialDisplay(field);
+    const inputType =
+      event instanceof InputEvent ? event.inputType || "insertText" : "insertText";
+    const postInputSnapshot = captureFieldSnapshot(field);
+    observeVisualTexActiveAccentPlaceholder(field);
+    if (inputType.startsWith("delete")) {
+      settleVisualTexAccentPlaceholderDelete(field);
+    }
+    scheduleDeletedVisualTexPlaceholderRestore(field);
+    const after = postInputSnapshot;
       emitEdit(
         before,
         after,
@@ -2792,9 +3163,14 @@ function FormulaField(props: FormulaFieldProps) {
         decorateNativeSuggestionPreviews();
       });
     };
-    const handleSelectionChange = () => {
-      markVisualTexStructuralPlaceholders(field);
-      schedulePointerPlaceholderSnapshotStyle();
+  const handleSelectionChange = () => {
+    markVisualTexStructuralPlaceholders(field);
+    const selectedAccentState = captureSelectedAccentPlaceholderState(field);
+    if (selectedAccentState) {
+      activateVisualTexAccentPlaceholder(field, selectedAccentState);
+    }
+    observeVisualTexActiveAccentPlaceholder(field);
+    schedulePointerPlaceholderSnapshotStyle();
       if (imeGuard.isComposing() || !lastSnapshotRef.current) return;
       lastSnapshotRef.current = {
         ...lastSnapshotRef.current,
@@ -3010,15 +3386,29 @@ function FormulaField(props: FormulaFieldProps) {
       emitEdit(before, after, "replace", "candidate");
       syncFrameSize();
       return true;
-    };
-    const handleRawWrapperKeyDown = (event: KeyboardEvent) => {
-      if (confirmPendingWrapperInput(event)) return;
+  };
+  const handleRawWrapperKeyDown = (event: KeyboardEvent) => {
+    const selectedAccentState = captureSelectedAccentPlaceholderState(field);
+    if (selectedAccentState) {
+      activateVisualTexAccentPlaceholder(field, selectedAccentState);
+    }
+    if (event.key === "Backspace" || event.key === "Delete") {
+      armVisualTexAccentPlaceholderRestore(field);
+    }
+    if (confirmPendingWrapperInput(event)) return;
       if (confirmRawPlaceholderCommand(event)) return;
       confirmRawWrapperCommand(event);
-    };
-    const handleWindowRawWrapperKeyDown = (event: KeyboardEvent) => {
-      if (!event.composedPath().includes(field)) return;
-      const isUnmodifiedPhysicalBackslash =
+  };
+  const handleWindowRawWrapperKeyDown = (event: KeyboardEvent) => {
+    if (!event.composedPath().includes(field)) return;
+    const selectedAccentState = captureSelectedAccentPlaceholderState(field);
+    if (selectedAccentState) {
+      activateVisualTexAccentPlaceholder(field, selectedAccentState);
+    }
+    if (event.key === "Backspace" || event.key === "Delete") {
+      armVisualTexAccentPlaceholderRestore(field);
+    }
+    const isUnmodifiedPhysicalBackslash =
         event.code === "Backslash" &&
         !event.metaKey &&
         !event.ctrlKey &&
@@ -3042,8 +3432,15 @@ function FormulaField(props: FormulaFieldProps) {
         decorateNativeSuggestionPreviews();
       });
     };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      const isUnmodifiedPhysicalBackslash =
+  const handleKeyDown = (event: KeyboardEvent) => {
+    const selectedAccentState = captureSelectedAccentPlaceholderState(field);
+    if (selectedAccentState) {
+      activateVisualTexAccentPlaceholder(field, selectedAccentState);
+    }
+    if (event.key === "Backspace" || event.key === "Delete") {
+      armVisualTexAccentPlaceholderRestore(field);
+    }
+    const isUnmodifiedPhysicalBackslash =
         event.code === "Backslash" &&
         !event.metaKey &&
         !event.ctrlKey &&
@@ -3305,9 +3702,11 @@ function FormulaField(props: FormulaFieldProps) {
         })
       : null;
     const inputMutationObserver = field.shadowRoot
-      ? new MutationObserver(() => {
-          markVisualTexStructuralPlaceholders(field);
-          schedulePointerPlaceholderSnapshotStyle();
+    ? new MutationObserver(() => {
+        observeVisualTexActiveAccentPlaceholder(field);
+        scheduleDeletedVisualTexPlaceholderRestore(field);
+        markVisualTexStructuralPlaceholders(field);
+        schedulePointerPlaceholderSnapshotStyle();
           scheduleInputActivity();
           schedulePendingWrapperPlaceholderPosition();
         })
