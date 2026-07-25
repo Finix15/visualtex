@@ -604,6 +604,9 @@ const visualTexAccentPlaceholderClass =
   "visualtex-accent-structural-placeholder";
 const visualTexAccentPlaceholderLayoutClass =
   "visualtex-accent-placeholder-layout";
+const visualTexCombiningAccentClass = "visualtex-combining-accent";
+const visualTexCombiningAccentShiftProperty =
+  "--visualtex-combining-accent-shift";
 const visualTexAccentPlaceholderShiftProperty =
   "--visualtex-accent-placeholder-shift";
 const visualTexPlaceholderCaretClass =
@@ -649,9 +652,41 @@ function alignVisualTexAccentPlaceholder(
   );
 }
 
+function alignVisualTexCombiningAccent(node: HTMLElement) {
+  const layout = node.closest<HTMLElement>(".ML__vlist");
+  const base = Array.from(layout?.children ?? []).find(
+    (candidate): candidate is HTMLElement =>
+      candidate instanceof HTMLElement &&
+      !candidate.classList.contains("ML__center"),
+  );
+  if (!base) return;
+
+  const accentBounds = node.getBoundingClientRect();
+  const baseBounds = base.getBoundingClientRect();
+  const correction =
+    baseBounds.left + baseBounds.width / 2 - accentBounds.left;
+  if (Math.abs(correction) <= 0.01) return;
+
+  const currentShift = Number.parseFloat(getComputedStyle(node).left) || 0;
+  node.style.setProperty(
+    visualTexCombiningAccentShiftProperty,
+    `${currentShift + correction}px`,
+  );
+}
+
 function markVisualTexStructuralPlaceholders(field: MathfieldElement) {
   const shadowRoot = field.shadowRoot;
   if (!shadowRoot || visualTexPointerSelectingFields.has(field)) return;
+
+  shadowRoot
+    .querySelectorAll<HTMLElement>(".ML__accent-combining-char")
+    .forEach((node) => {
+      if (!node.classList.contains(visualTexCombiningAccentClass)) {
+        node.classList.add(visualTexCombiningAccentClass);
+      }
+      alignVisualTexCombiningAccent(node);
+    });
+
   const placeholderSymbol = field.placeholderSymbol || "▢";
   const selectionRanges = field.selection.ranges;
   const [selectionStart, selectionEnd] = selectionRanges[0] ?? [-1, -1];
@@ -819,6 +854,10 @@ function installVisualTexStructuralPlaceholderStyle(field: MathfieldElement) {
       .${visualTexAccentPlaceholderLayoutClass}
         > .ML__center .ML__accent-combining-char {
         left: 0 !important;
+      }
+
+      .${visualTexCombiningAccentClass} {
+        left: var(${visualTexCombiningAccentShiftProperty}, 0px) !important;
       }
 
       .ML__contains-highlight,

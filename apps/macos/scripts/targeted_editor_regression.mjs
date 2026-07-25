@@ -2608,6 +2608,8 @@ async function main() {
         { name: "dot", source: String.raw`a+\dot{\placeholder{}}+b` },
         { name: "hat", source: String.raw`a+\hat{\placeholder{}}+b` },
         { name: "vec", source: String.raw`a+\vec{\placeholder{}}+b` },
+        { name: "dddot", source: String.raw`a+\dddot{\placeholder{}}+b` },
+        { name: "ddddot", source: String.raw`a+\ddddot{\placeholder{}}+b` },
       ];
       const states = [];
       const readAccentState = () =>
@@ -2796,7 +2798,76 @@ async function main() {
         });
       }
 
-      console.log(JSON.stringify(states, null, 2));
+      const combiningCharacterCases = [
+        { name: "vec-character", source: String.raw`a+\vec{w}+b` },
+        { name: "dddot-character", source: String.raw`a+\dddot{w}+b` },
+        { name: "ddddot-character", source: String.raw`a+\ddddot{w}+b` },
+      ];
+      for (const testCase of combiningCharacterCases) {
+        await evaluate(`(() => {
+          const field = document.querySelector("math-field");
+          field.setValue(${JSON.stringify(testCase.source)}, {
+            mode: "math",
+            format: "latex",
+            insertionMode: "replaceAll",
+            selectionMode: "after",
+            silenceNotifications: true,
+          });
+          field.focus();
+        })()`);
+        await sleep(150);
+
+        const combiningCharacterState = await evaluate(`(() => {
+          const root = document.querySelector("math-field")?.shadowRoot;
+          const accent = root?.querySelector(".ML__accent-combining-char");
+          const layout = accent?.closest(".ML__vlist");
+          const base = [...(layout?.children ?? [])].find(
+            (node) => !node.classList.contains("ML__center"),
+          );
+          const accentBounds = accent?.getBoundingClientRect();
+          const baseBounds = base?.getBoundingClientRect();
+          return {
+            ready: Boolean(accent && base && accentBounds && baseBounds),
+            classes: accent?.className ?? "",
+            leftOffset: accent ? getComputedStyle(accent).left : "",
+            accentOrigin: accentBounds?.left ?? -1,
+            baseCenter: baseBounds
+              ? baseBounds.left + baseBounds.width / 2
+              : -1,
+            alignmentDelta:
+              accentBounds && baseBounds
+                ? Math.abs(
+                    accentBounds.left -
+                      (baseBounds.left + baseBounds.width / 2),
+                  )
+                : 99,
+          };
+        })()`);
+        if (
+          !combiningCharacterState.ready ||
+          !combiningCharacterState.classes.includes(
+            "visualtex-combining-accent",
+          ) ||
+          combiningCharacterState.alignmentDelta > 1
+        ) {
+          throw new Error(
+            `Combining accent character alignment regression failed: ${JSON.stringify(
+              {
+                name: testCase.name,
+                state: combiningCharacterState,
+              },
+            )}`,
+          );
+        }
+
+        states.push({
+          name: testCase.name,
+          alignmentDelta: combiningCharacterState.alignmentDelta,
+          leftOffset: combiningCharacterState.leftOffset,
+        });
+      }
+
+    console.log(JSON.stringify(states, null, 2));
       console.log("Targeted accent placeholder regression passed");
       return;
     }
