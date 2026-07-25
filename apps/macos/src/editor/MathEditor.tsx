@@ -624,6 +624,31 @@ function accentLayoutForPlaceholder(node: HTMLElement) {
     : null;
 }
 
+function visualCenterForAccent(node: HTMLElement) {
+  const bounds = node.getBoundingClientRect();
+  if (!node.classList.contains("ML__accent-combining-char")) {
+    return bounds.left + bounds.width / 2;
+  }
+
+  const context = document.createElement("canvas").getContext("2d");
+  const text = node.textContent ?? "";
+  if (!context || !text) return bounds.left;
+
+  const style = getComputedStyle(node);
+  context.font = [
+    style.fontStyle,
+    style.fontVariant,
+    style.fontWeight,
+    style.fontSize,
+    style.fontFamily,
+  ].join(" ");
+  const metrics = context.measureText(text);
+  return (
+    bounds.left +
+    (metrics.actualBoundingBoxRight - metrics.actualBoundingBoxLeft) / 2
+  );
+}
+
 function alignVisualTexAccentPlaceholder(
   node: HTMLElement,
   layout: HTMLElement,
@@ -638,12 +663,7 @@ function alignVisualTexAccentPlaceholder(
 
   accentCenter.style.removeProperty(visualTexAccentPlaceholderShiftProperty);
   const placeholderBounds = node.getBoundingClientRect();
-  const accentBounds = accentBody.getBoundingClientRect();
-  const accentAnchor = accentBody.classList.contains(
-    "ML__accent-combining-char",
-  )
-    ? accentBounds.left
-    : accentBounds.left + accentBounds.width / 2;
+  const accentAnchor = visualCenterForAccent(accentBody);
   const shift =
     placeholderBounds.left + placeholderBounds.width / 2 - accentAnchor;
   accentCenter.style.setProperty(
@@ -661,10 +681,9 @@ function alignVisualTexCombiningAccent(node: HTMLElement) {
   );
   if (!base) return;
 
-  const accentBounds = node.getBoundingClientRect();
   const baseBounds = base.getBoundingClientRect();
   const correction =
-    baseBounds.left + baseBounds.width / 2 - accentBounds.left;
+    baseBounds.left + baseBounds.width / 2 - visualCenterForAccent(node);
   if (Math.abs(correction) <= 0.01) return;
 
   const currentShift = Number.parseFloat(getComputedStyle(node).left) || 0;

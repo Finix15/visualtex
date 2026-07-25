@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { rm } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import process from "node:process";
 
 const scenario = process.argv[2];
@@ -2612,6 +2612,32 @@ async function main() {
         { name: "ddddot", source: String.raw`a+\ddddot{\placeholder{}}+b` },
       ];
       const states = [];
+      const screenshotDir =
+        process.env.VISUALTEX_ACCENT_SCREENSHOT_DIR?.trim() || "";
+      const captureFormulaScreenshot = async (name) => {
+        if (!screenshotDir) return;
+        const clip = await evaluate(`(() => {
+          const field = document.querySelector("math-field");
+          const bounds = field.getBoundingClientRect();
+          return {
+            x: Math.max(0, bounds.left - 12),
+            y: Math.max(0, bounds.top - 12),
+            width: bounds.width + 24,
+            height: bounds.height + 24,
+            scale: 1,
+          };
+        })()`);
+        const screenshot = await client.send("Page.captureScreenshot", {
+          format: "png",
+          fromSurface: true,
+          captureBeyondViewport: false,
+          clip,
+        });
+        await writeFile(
+          `${screenshotDir}/${name}.png`,
+          Buffer.from(screenshot.data, "base64"),
+        );
+      };
       const readAccentState = () =>
         evaluate(`(() => {
           const field = document.querySelector("math-field");
@@ -2633,13 +2659,37 @@ async function main() {
               ":scope > .ML__center .ML__accent-body",
             );
             const accentBounds = accentBody?.getBoundingClientRect();
-            const accentAnchor = accentBody?.classList.contains(
-              "ML__accent-combining-char",
-            )
-              ? accentBounds?.left
-              : accentBounds
-                ? accentBounds.left + accentBounds.width / 2
-                : null;
+            const accentAnchor = accentBounds
+              ? (() => {
+                  if (
+                    !accentBody.classList.contains(
+                      "ML__accent-combining-char",
+                    )
+                  ) {
+                    return accentBounds.left + accentBounds.width / 2;
+                  }
+                  const context = document
+                    .createElement("canvas")
+                    .getContext("2d");
+                  const accentStyle = getComputedStyle(accentBody);
+                  context.font = [
+                    accentStyle.fontStyle,
+                    accentStyle.fontVariant,
+                    accentStyle.fontWeight,
+                    accentStyle.fontSize,
+                    accentStyle.fontFamily,
+                  ].join(" ");
+                  const metrics = context.measureText(
+                    accentBody.textContent ?? "",
+                  );
+                  return (
+                    accentBounds.left +
+                    (metrics.actualBoundingBoxRight -
+                      metrics.actualBoundingBoxLeft) /
+                      2
+                  );
+                })()
+              : null;
             return {
               atomId: node.dataset.atomId ?? "",
               classes: node.className,
@@ -2703,6 +2753,7 @@ async function main() {
         })()`);
         await sleep(150);
         const initial = await readAccentState();
+        await captureFormulaScreenshot(`${testCase.name}-placeholder`);
         await key("ArrowRight", "ArrowRight", 39);
         const afterRight = await readAccentState();
         await key("ArrowLeft", "ArrowLeft", 37);
@@ -2826,23 +2877,47 @@ async function main() {
           );
           const accentBounds = accent?.getBoundingClientRect();
           const baseBounds = base?.getBoundingClientRect();
+          const context = document.createElement("canvas").getContext("2d");
+          const accentStyle = accent ? getComputedStyle(accent) : null;
+          if (context && accentStyle) {
+            context.font = [
+              accentStyle.fontStyle,
+              accentStyle.fontVariant,
+              accentStyle.fontWeight,
+              accentStyle.fontSize,
+              accentStyle.fontFamily,
+            ].join(" ");
+          }
+          const metrics =
+            context && accent
+              ? context.measureText(accent.textContent ?? "")
+              : null;
+          const accentVisualCenter =
+            accentBounds && metrics
+              ? accentBounds.left +
+                (metrics.actualBoundingBoxRight -
+                  metrics.actualBoundingBoxLeft) /
+                  2
+              : -1;
           return {
             ready: Boolean(accent && base && accentBounds && baseBounds),
             classes: accent?.className ?? "",
             leftOffset: accent ? getComputedStyle(accent).left : "",
             accentOrigin: accentBounds?.left ?? -1,
+            accentVisualCenter,
             baseCenter: baseBounds
               ? baseBounds.left + baseBounds.width / 2
               : -1,
             alignmentDelta:
               accentBounds && baseBounds
-                ? Math.abs(
-                    accentBounds.left -
+              ? Math.abs(
+                    accentVisualCenter -
                       (baseBounds.left + baseBounds.width / 2),
                   )
                 : 99,
           };
         })()`);
+        await captureFormulaScreenshot(testCase.name);
         if (
           !combiningCharacterState.ready ||
           !combiningCharacterState.classes.includes(
