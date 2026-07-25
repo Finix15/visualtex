@@ -3,9 +3,9 @@ import { rm } from "node:fs/promises";
 import process from "node:process";
 
 const scenario = process.argv[2];
-if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "native-space-selection", "candidate-query-reset", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "caret-probe", "scripts", "upright", "suggestions", "navigation", "geometry", "source-layout", "toolbar-compact", "formula-tiles", "cursor-placement", "settings", "layout", "delete", "export"]).has(scenario)) {
+if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "native-space-selection", "candidate-query-reset", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "accent-placeholder", "caret-probe", "scripts", "upright", "suggestions", "navigation", "geometry", "source-layout", "toolbar-compact", "formula-tiles", "cursor-placement", "settings", "layout", "delete", "export"]).has(scenario)) {
   throw new Error(
-    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|native-space-selection|candidate-query-reset|raw-placeholder-visual|placeholder-selection|structural-placeholder|caret-probe|scripts|upright|suggestions|navigation|geometry|source-layout|toolbar-compact|formula-tiles|cursor-placement|settings|layout|delete|export>",
+    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|native-space-selection|candidate-query-reset|raw-placeholder-visual|placeholder-selection|structural-placeholder|accent-placeholder|caret-probe|scripts|upright|suggestions|navigation|geometry|source-layout|toolbar-compact|formula-tiles|cursor-placement|settings|layout|delete|export>",
   );
 }
 
@@ -204,6 +204,14 @@ async function main() {
     await evaluate(`(() => {
       localStorage.setItem("visualtex.onboarding.v3.completed", "true");
       localStorage.setItem("visualtex.office.macos.first-run.v1.completed", "true");
+      localStorage.setItem(
+        "visualtex.onboarding.macos.desktop.v1.2.0.completed",
+        "true",
+      );
+      localStorage.setItem(
+        "visualtex.office.macos.native-first-run.v1.2.0.completed",
+        "true",
+      );
       const storageKey = "visualtex-editor";
       const persisted = JSON.parse(localStorage.getItem(storageKey) || "{}");
       persisted.state = {
@@ -1780,6 +1788,91 @@ async function main() {
         };
       })()`, "alpha input leaves no gray fraction highlight around the next placeholder");
 
+      const selectedPlaceholderGeometry = await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        const placeholder = field?.shadowRoot?.querySelector(
+          ".visualtex-structural-placeholder.ML__selected, " +
+          ".ML__selected .visualtex-structural-placeholder, " +
+          ".visualtex-structural-placeholder.ML__placeholder-selected",
+        );
+        const bounds = placeholder?.getBoundingClientRect();
+          return bounds
+            ? {
+                x: bounds.left + bounds.width / 2,
+                y: bounds.top + bounds.height / 2,
+                top: bounds.top,
+              }
+          : null;
+      })()`);
+      if (!selectedPlaceholderGeometry) {
+        throw new Error("Could not locate selected placeholder geometry");
+      }
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: selectedPlaceholderGeometry.x,
+        y: selectedPlaceholderGeometry.y,
+        button: "left",
+        buttons: 1,
+        clickCount: 1,
+      });
+      await sleep(30);
+      const heldSelectedPlaceholderState = await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        const root = field?.shadowRoot;
+        const symbol = field?.placeholderSymbol || "▢";
+        const placeholder = [...(root?.querySelectorAll(
+          ".ML__cmr[data-atom-id], .ML__placeholder",
+        ) ?? [])].find((node) =>
+          node.classList.contains("visualtex-structural-placeholder") ||
+          node.classList.contains("ML__placeholder") ||
+          node.textContent?.trim() === symbol
+        );
+        const bounds = placeholder?.getBoundingClientRect();
+        const style = placeholder ? getComputedStyle(placeholder) : null;
+        return {
+          pointerSelecting:
+            field?.classList.contains("visualtex-pointer-selecting") ?? false,
+          top: bounds?.top ?? -1,
+            background: style?.backgroundColor ?? "",
+            borderTopWidth: style?.borderTopWidth ?? "",
+            color: style?.color ?? "",
+          };
+      })()`);
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: selectedPlaceholderGeometry.x,
+        y: selectedPlaceholderGeometry.y,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+      });
+      await sleep(100);
+      const releasedSelectedPlaceholderTop = await evaluate(`(() => {
+        const placeholder = document.querySelector("math-field")
+          ?.shadowRoot?.querySelector(".visualtex-structural-placeholder");
+        return placeholder?.getBoundingClientRect().top ?? -1;
+      })()`);
+      if (
+        !heldSelectedPlaceholderState.pointerSelecting ||
+        Math.abs(
+          heldSelectedPlaceholderState.top - selectedPlaceholderGeometry.top,
+        ) > 1 ||
+        Math.abs(
+          releasedSelectedPlaceholderTop - selectedPlaceholderGeometry.top,
+        ) > 1 ||
+        heldSelectedPlaceholderState.background !== "rgb(217, 237, 249)" ||
+        heldSelectedPlaceholderState.borderTopWidth !== "0px" ||
+        heldSelectedPlaceholderState.color !== "rgba(0, 0, 0, 0)"
+      ) {
+        throw new Error(
+          `Selected placeholder shifted during pointer click: ${JSON.stringify({
+            selectedPlaceholderGeometry,
+            heldSelectedPlaceholderState,
+            releasedSelectedPlaceholderTop,
+          })}`,
+        );
+      }
+
       await waitForEvaluation(`(() => {
         const field = document.querySelector("math-field");
         if (!field?.isConnected) return { ready: false };
@@ -1956,6 +2049,8 @@ async function main() {
         JSON.stringify(
           {
             alphaPlaceholderState,
+            heldSelectedPlaceholderState,
+            releasedSelectedPlaceholderTop,
             dragGeometry,
             heldPointerSelectionState,
             rangeSelectionState,
@@ -2505,6 +2600,204 @@ async function main() {
         ),
       );
       console.log("Targeted structural placeholder regression passed");
+      return;
+    }
+
+    if (scenario === "accent-placeholder") {
+      const cases = [
+        { name: "dot", source: String.raw`a+\dot{\placeholder{}}+b` },
+        { name: "hat", source: String.raw`a+\hat{\placeholder{}}+b` },
+        { name: "vec", source: String.raw`a+\vec{\placeholder{}}+b` },
+      ];
+      const states = [];
+      const readAccentState = () =>
+        evaluate(`(() => {
+          const field = document.querySelector("math-field");
+          const root = field?.shadowRoot;
+          const symbol = field?.placeholderSymbol || "▢";
+          const placeholder = [...(root?.querySelectorAll(
+            ".ML__cmr, .ML__placeholder",
+          ) ?? [])].filter((node) =>
+            node.classList.contains("visualtex-structural-placeholder") ||
+            node.classList.contains("ML__placeholder") ||
+            node.textContent?.trim() === symbol
+          )[0] ?? null;
+          const placeholderState = placeholder ? (() => {
+            const node = placeholder;
+            const bounds = node.getBoundingClientRect();
+            const style = getComputedStyle(node);
+            const pseudo = getComputedStyle(node, "::before");
+            const accentBody = node.closest(".ML__vlist")?.querySelector(
+              ":scope > .ML__center .ML__accent-body",
+            );
+            const accentBounds = accentBody?.getBoundingClientRect();
+            const accentAnchor = accentBody?.classList.contains(
+              "ML__accent-combining-char",
+            )
+              ? accentBounds?.left
+              : accentBounds
+                ? accentBounds.left + accentBounds.width / 2
+                : null;
+            return {
+              atomId: node.dataset.atomId ?? "",
+              classes: node.className,
+              parentClasses: node.parentElement?.className ?? "",
+              left: bounds.left,
+              top: bounds.top,
+              centerX: bounds.left + bounds.width / 2,
+              width: bounds.width,
+              height: bounds.height,
+              background: style.backgroundColor,
+              borderTopWidth: style.borderTopWidth,
+              borderRightWidth: style.borderRightWidth,
+              borderBottomWidth: style.borderBottomWidth,
+              borderLeftWidth: style.borderLeftWidth,
+              color: style.color,
+              overflow: style.overflow,
+              verticalAlign: style.verticalAlign,
+              visualBackground: pseudo.backgroundColor,
+              accentAnchor,
+              alignmentDelta:
+                accentAnchor === null
+                  ? 99
+                  : Math.abs(bounds.left + bounds.width / 2 - accentAnchor),
+              selected:
+                node.classList.contains("ML__selected") ||
+                node.classList.contains("ML__placeholder-selected") ||
+                Boolean(node.closest(".ML__selected")),
+            };
+          })() : null;
+          return {
+            value: field?.value ?? "",
+            position: field?.position ?? -1,
+            lastOffset: field?.lastOffset ?? -1,
+            selection: field?.selection ?? null,
+            pointerSelecting:
+              field?.classList.contains("visualtex-pointer-selecting") ?? false,
+            placeholder: placeholderState,
+          };
+        })()`);
+
+      for (const testCase of cases) {
+        await waitForEvaluation(
+          `(() => ({ ready: Boolean(document.querySelector("math-field")?.isConnected) }))()`,
+          `stable field for accent placeholder case: ${testCase.name}`,
+        );
+        await evaluate(`(() => {
+          const field = document.querySelector("math-field");
+          field.setValue(${JSON.stringify(testCase.source)}, {
+            mode: "math",
+            format: "latex",
+            insertionMode: "replaceAll",
+            selectionMode: "after",
+            silenceNotifications: true,
+          });
+          field.focus();
+          field.position = field.lastOffset;
+          field.executeCommand("moveToPreviousPlaceholder");
+          field.shadowRoot
+            ?.querySelector('[part="keyboard-sink"]')
+            ?.focus({ preventScroll: true });
+        })()`);
+        await sleep(150);
+        const initial = await readAccentState();
+        await key("ArrowRight", "ArrowRight", 39);
+        const afterRight = await readAccentState();
+        await key("ArrowLeft", "ArrowLeft", 37);
+        const reenteredFromRight = await readAccentState();
+        await key("ArrowLeft", "ArrowLeft", 37);
+        const afterExitLeft = await readAccentState();
+        await key("ArrowRight", "ArrowRight", 39);
+        const reenteredFromLeft = await readAccentState();
+
+        const point = {
+          x: reenteredFromLeft.placeholder.centerX,
+          y:
+            reenteredFromLeft.placeholder.top +
+            reenteredFromLeft.placeholder.height / 2,
+        };
+        await client.send("Input.dispatchMouseEvent", {
+          type: "mousePressed",
+          x: point.x,
+          y: point.y,
+          button: "left",
+          buttons: 1,
+          clickCount: 1,
+        });
+        await sleep(30);
+        const held = await readAccentState();
+        await client.send("Input.dispatchMouseEvent", {
+          type: "mouseReleased",
+          x: point.x,
+          y: point.y,
+          button: "left",
+          buttons: 0,
+          clickCount: 1,
+        });
+        await sleep(100);
+        const released = await readAccentState();
+
+        const selectedRange = (state) => {
+          const [start, end] = state.selection?.ranges?.[0] ?? [-1, -1];
+          return Math.abs(end - start) === 1 && state.placeholder?.selected;
+        };
+        const blueColors = new Set([
+          "rgb(217, 237, 249)",
+          "rgb(207, 232, 247)",
+        ]);
+        const stablePlaceholder = (state) =>
+          state.placeholder &&
+          blueColors.has(state.placeholder.visualBackground) &&
+          state.placeholder.color === "rgba(0, 0, 0, 0)" &&
+          state.placeholder.borderTopWidth === "0px" &&
+          state.placeholder.borderRightWidth === "0px" &&
+          state.placeholder.borderBottomWidth === "0px" &&
+          state.placeholder.borderLeftWidth === "0px";
+        const geometryStable =
+          Math.abs(held.placeholder.top - initial.placeholder.top) <= 1 &&
+          Math.abs(released.placeholder.top - initial.placeholder.top) <= 1;
+        if (
+          !selectedRange(initial) ||
+          afterRight.position !== 5 ||
+          !selectedRange(reenteredFromRight) ||
+          afterExitLeft.position !== 2 ||
+          !selectedRange(reenteredFromLeft) ||
+          initial.placeholder.alignmentDelta > 1 ||
+          held.placeholder.alignmentDelta > 1 ||
+          !held.pointerSelecting ||
+          !stablePlaceholder(held) ||
+          !stablePlaceholder(released) ||
+          !geometryStable
+        ) {
+          throw new Error(
+            `Accent placeholder regression failed: ${JSON.stringify({
+              name: testCase.name,
+              initial,
+              afterRight,
+              reenteredFromRight,
+              afterExitLeft,
+              reenteredFromLeft,
+              held,
+              released,
+              geometryStable,
+            })}`,
+          );
+        }
+        states.push({
+          name: testCase.name,
+          alignmentDelta: initial.placeholder.alignmentDelta,
+          heldAlignmentDelta: held.placeholder.alignmentDelta,
+          topDeltaWhileHeld: held.placeholder.top - initial.placeholder.top,
+          topDeltaAfterRelease:
+            released.placeholder.top - initial.placeholder.top,
+          rightReentrySelection: reenteredFromRight.selection,
+          leftReentrySelection: reenteredFromLeft.selection,
+          heldVisualBackground: held.placeholder.visualBackground,
+        });
+      }
+
+      console.log(JSON.stringify(states, null, 2));
+      console.log("Targeted accent placeholder regression passed");
       return;
     }
 

@@ -366,6 +366,44 @@ function exactAccentTemplate(rawQuery: string) {
   return accentCommandTemplates.get(rawQuery.trim()) ?? null;
 }
 
+function isAccentContainerLatex(latex: string) {
+  const normalized = latex.trim();
+  return Array.from(accentCommandTemplates.keys()).some((command) =>
+    normalized.startsWith(command + "{"),
+  );
+}
+
+function selectAdjacentAccentPlaceholder(
+  field: MathfieldElement,
+  direction: "left" | "right",
+) {
+  if (!field.selectionIsCollapsed || field.mode === "latex") return false;
+
+  const position = field.position;
+  for (let end = 1; end <= field.lastOffset; end += 1) {
+    if (
+      field.getValue(end - 1, end, "latex").trim() !== "\\placeholder{}"
+    ) {
+      continue;
+    }
+    const containerLatex =
+      field.getElementInfo(Math.min(field.lastOffset, end + 1))?.latex ?? "";
+    if (!isAccentContainerLatex(containerLatex)) continue;
+
+    const start = end - 1;
+    const adjacentBoundary =
+      direction === "left" ? end + 1 : start - 1;
+    if (position !== adjacentBoundary) continue;
+
+    field.selection = {
+      ranges: [[start, end]],
+      direction: "none",
+    };
+    return true;
+  }
+  return false;
+}
+
 function exactWrapperCommand(rawQuery: string) {
   const normalizedQuery = rawQuery.trim();
   if (!wrapperCommandPreviews.has(normalizedQuery)) return null;
@@ -562,6 +600,12 @@ function captureFieldSnapshot(field: MathfieldElement) {
 
 const visualTexPlaceholderStyleId = "visualtex-structural-placeholder-style";
 const visualTexPlaceholderClass = "visualtex-structural-placeholder";
+const visualTexAccentPlaceholderClass =
+  "visualtex-accent-structural-placeholder";
+const visualTexAccentPlaceholderLayoutClass =
+  "visualtex-accent-placeholder-layout";
+const visualTexAccentPlaceholderShiftProperty =
+  "--visualtex-accent-placeholder-shift";
 const visualTexPlaceholderCaretClass =
   "visualtex-structural-placeholder-caret";
 const visualTexPlaceholderSelectionClass =
@@ -569,6 +613,41 @@ const visualTexPlaceholderSelectionClass =
 const visualTexRawLatexClass = "has-visualtex-raw-latex-command";
 const visualTexPointerSelectingClass = "visualtex-pointer-selecting";
 const visualTexPointerSelectingFields = new WeakSet<MathfieldElement>();
+
+function accentLayoutForPlaceholder(node: HTMLElement) {
+  const layout = node.closest<HTMLElement>(".ML__vlist");
+  return layout?.querySelector(":scope > .ML__center .ML__accent-body")
+    ? layout
+    : null;
+}
+
+function alignVisualTexAccentPlaceholder(
+  node: HTMLElement,
+  layout: HTMLElement,
+) {
+  const accentCenter = layout.querySelector<HTMLElement>(
+    ":scope > .ML__center",
+  );
+  const accentBody = accentCenter?.querySelector<HTMLElement>(
+    ".ML__accent-body",
+  );
+  if (!accentCenter || !accentBody) return;
+
+  accentCenter.style.removeProperty(visualTexAccentPlaceholderShiftProperty);
+  const placeholderBounds = node.getBoundingClientRect();
+  const accentBounds = accentBody.getBoundingClientRect();
+  const accentAnchor = accentBody.classList.contains(
+    "ML__accent-combining-char",
+  )
+    ? accentBounds.left
+    : accentBounds.left + accentBounds.width / 2;
+  const shift =
+    placeholderBounds.left + placeholderBounds.width / 2 - accentAnchor;
+  accentCenter.style.setProperty(
+    visualTexAccentPlaceholderShiftProperty,
+    `${shift}px`,
+  );
+}
 
 function markVisualTexStructuralPlaceholders(field: MathfieldElement) {
   const shadowRoot = field.shadowRoot;
@@ -599,7 +678,21 @@ function markVisualTexStructuralPlaceholders(field: MathfieldElement) {
         node.classList.contains(visualTexPlaceholderClass) ||
         node.classList.contains("ML__placeholder") ||
         visibleText === placeholderSymbol;
+      const accentLayout = accentLayoutForPlaceholder(node);
+      const isAccentPlaceholder =
+        isPlaceholder && Boolean(accentLayout);
       node.classList.toggle(visualTexPlaceholderClass, isPlaceholder);
+      node.classList.toggle(
+        visualTexAccentPlaceholderClass,
+        isAccentPlaceholder,
+      );
+      accentLayout?.classList.toggle(
+        visualTexAccentPlaceholderLayoutClass,
+        isAccentPlaceholder,
+      );
+      if (isAccentPlaceholder && accentLayout) {
+        alignVisualTexAccentPlaceholder(node, accentLayout);
+      }
 
       const isSelected = Boolean(
         isFocusedPlaceholderSelection &&
@@ -695,6 +788,39 @@ function installVisualTexStructuralPlaceholderStyle(field: MathfieldElement) {
         height: 0.73em !important;
       }
 
+      .${visualTexAccentPlaceholderClass} {
+        width: auto !important;
+        min-width: 0 !important;
+        margin: 0 !important;
+        overflow: hidden !important;
+        background: transparent !important;
+        text-indent: 0 !important;
+      }
+
+      .${visualTexAccentPlaceholderClass}::before {
+        content: "" !important;
+        position: absolute !important;
+        inset: 0 auto 0 50% !important;
+        display: block !important;
+        width: 0.40em !important;
+        border-radius: 0.075em !important;
+        background: #d9edf9 !important;
+        transform: translateX(-50%) !important;
+        pointer-events: none !important;
+      }
+
+      .${visualTexAccentPlaceholderLayoutClass}
+        > .ML__center {
+        transform: translateX(
+          var(${visualTexAccentPlaceholderShiftProperty}, 0px)
+        ) !important;
+      }
+
+      .${visualTexAccentPlaceholderLayoutClass}
+        > .ML__center .ML__accent-combining-char {
+        left: 0 !important;
+      }
+
       .ML__contains-highlight,
       .ML__highlight {
         border-color: transparent !important;
@@ -727,6 +853,20 @@ function installVisualTexStructuralPlaceholderStyle(field: MathfieldElement) {
         box-shadow: none !important;
       }
 
+      .ML__container.${visualTexPlaceholderSelectionClass}
+        .${visualTexAccentPlaceholderClass},
+      .ML__container.${visualTexPlaceholderSelectionClass}
+        .ML__selected .${visualTexAccentPlaceholderClass} {
+        background: transparent !important;
+      }
+
+      .ML__container.${visualTexPlaceholderSelectionClass}
+        .${visualTexAccentPlaceholderClass}::before,
+      .ML__container.${visualTexPlaceholderSelectionClass}
+        .ML__selected .${visualTexAccentPlaceholderClass}::before {
+        background: #cfe8f7 !important;
+      }
+
       .ML__container.${visualTexPlaceholderSelectionClass} .ML__caret,
       .ML__container.${visualTexPlaceholderSelectionClass} .ML__text-caret,
       .ML__container.${visualTexPlaceholderSelectionClass} .ML__latex-caret {
@@ -752,6 +892,13 @@ function installVisualTexStructuralPlaceholderStyle(field: MathfieldElement) {
         text-indent: 0 !important;
         animation: visualtex-placeholder-caret-blink 1.05s step-end infinite !important;
         pointer-events: none !important;
+      }
+
+      .${visualTexAccentPlaceholderClass}
+        > .${visualTexPlaceholderCaretClass} {
+        left: calc(
+          50% - 0.20em - max(1px, 0.045em)
+        ) !important;
       }
 
       @keyframes visualtex-placeholder-caret-blink {
@@ -822,13 +969,65 @@ function installPointerPlaceholderSnapshotStyle(field: MathfieldElement) {
     ) {
       return [];
     }
+    const isAccentPlaceholder =
+      node.classList.contains(visualTexAccentPlaceholderClass) ||
+      Boolean(accentLayoutForPlaceholder(node));
     const atomId = node.dataset.atomId;
-    if (!atomId) return [];
+    const accentHostAtomId = isAccentPlaceholder
+      ? node.closest<HTMLElement>("[data-atom-id]")?.dataset.atomId
+      : null;
+    if (!atomId && !accentHostAtomId) return [];
     const style = getComputedStyle(node);
-    const escapedAtomId = CSS.escape(atomId);
+    const accentLayout = isAccentPlaceholder
+      ? accentLayoutForPlaceholder(node)
+      : null;
+    const accentCenter = accentLayout?.querySelector<HTMLElement>(
+      ":scope > .ML__center",
+    );
+    const accentShift =
+      accentCenter?.style.getPropertyValue(
+        visualTexAccentPlaceholderShiftProperty,
+      ) || "0px";
+    const accentHostSelector = accentHostAtomId
+      ? `[data-atom-id="${CSS.escape(accentHostAtomId)}"] ` +
+        `.ML__vlist:has(> .ML__center .ML__accent-body)`
+      : "";
+    const selector = atomId
+      ? `[data-atom-id="${CSS.escape(atomId)}"]`
+      : `${accentHostSelector} > span:not(.ML__center) .ML__cmr`;
+    const background = isAccentPlaceholder
+      ? "transparent"
+      : "#d9edf9";
+    const textIndent = isAccentPlaceholder ? "0" : "-999px";
+    const accentBoxRule = isAccentPlaceholder
+      ? `
+      :host(.${visualTexPointerSelectingClass}) ${selector}::before {
+        content: "" !important;
+        position: absolute !important;
+        inset: 0 auto 0 50% !important;
+        display: block !important;
+        width: 0.40em !important;
+        border-radius: 0.075em !important;
+        background: #d9edf9 !important;
+        transform: translateX(-50%) !important;
+        pointer-events: none !important;
+      }
+
+      :host(.${visualTexPointerSelectingClass})
+        ${accentHostSelector} > .ML__center {
+        transform: translateX(${accentShift}) !important;
+      }
+
+      :host(.${visualTexPointerSelectingClass})
+        ${accentHostSelector}
+        > .ML__center .ML__accent-combining-char {
+        left: 0 !important;
+      }
+      `
+      : "";
     return [
       `
-      :host(.${visualTexPointerSelectingClass}) [data-atom-id="${escapedAtomId}"] {
+      :host(.${visualTexPointerSelectingClass}) ${selector} {
         position: relative !important;
         display: inline-block !important;
         box-sizing: border-box !important;
@@ -837,16 +1036,19 @@ function installPointerPlaceholderSnapshotStyle(field: MathfieldElement) {
         height: ${style.height} !important;
         margin: ${style.margin} !important;
         padding: 0 !important;
-        overflow: hidden !important;
+        overflow: ${style.overflow} !important;
         border: 0 !important;
         border-radius: ${style.borderRadius} !important;
-        background: #d9edf9 !important;
+        background: ${background} !important;
         color: transparent !important;
         opacity: 1 !important;
-        text-indent: -999px !important;
+        text-indent: ${textIndent} !important;
+        /* Preserve the selected placeholder's measured baseline while
+          MathLive rebuilds its DOM during the pointer gesture. */
         vertical-align: ${style.verticalAlign} !important;
         box-shadow: none !important;
       }
+      ${accentBoxRule}
       `,
     ];
   });
@@ -2242,6 +2444,31 @@ function FormulaField(props: FormulaFieldProps) {
       if (compositionStartRef.current) {
         compositionStartRef.current = null;
         lastSnapshotRef.current = captureFieldSnapshot(field);
+      }
+
+      const accentNavigationDirection =
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        !event.shiftKey &&
+        event.key === "ArrowLeft"
+          ? "left"
+          : !event.metaKey &&
+              !event.ctrlKey &&
+              !event.altKey &&
+              !event.shiftKey &&
+              event.key === "ArrowRight"
+            ? "right"
+            : null;
+      if (
+        accentNavigationDirection &&
+        selectAdjacentAccentPlaceholder(field, accentNavigationDirection)
+      ) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        markVisualTexStructuralPlaceholders(field);
+        propsRef.current.onInputActivity(field);
+        return;
       }
 
       const capturesDirectMathInput =

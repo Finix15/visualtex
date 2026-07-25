@@ -178,6 +178,14 @@ async function main() {
       await evaluate(`(() => {
         localStorage.setItem("visualtex.onboarding.v3.completed", "true");
         localStorage.setItem("visualtex.office.macos.first-run.v1.completed", "true");
+        localStorage.setItem(
+          "visualtex.onboarding.macos.desktop.v1.2.0.completed",
+          "true",
+        );
+        localStorage.setItem(
+          "visualtex.office.macos.native-first-run.v1.2.0.completed",
+          "true",
+        );
         const key = "visualtex-editor";
         const persisted = JSON.parse(localStorage.getItem(key) || "{}");
         persisted.state = {
@@ -269,17 +277,28 @@ async function main() {
                 node.classList.contains("visualtex-structural-placeholder") ||
                 text === (field.placeholderSymbol || "▢")
               );
-            })
-            .map((node) => {
-              const style = getComputedStyle(node);
-              return {
+          })
+          .map((node) => {
+            const style = getComputedStyle(node);
+            const pseudoStyle = getComputedStyle(node, "::before");
+            const visualBackground =
+              pseudoStyle.backgroundColor !== "rgba(0, 0, 0, 0)"
+                ? pseudoStyle.backgroundColor
+                : style.backgroundColor;
+            const visualWidth =
+              pseudoStyle.backgroundColor !== "rgba(0, 0, 0, 0)"
+                ? pseudoStyle.width
+                : style.width;
+            return {
                 tag: node.tagName,
                 className: node.className,
                 text: (node.textContent || "").trim(),
                 parentClass: node.parentElement?.className || "",
                 grandParentClass: node.parentElement?.parentElement?.className || "",
-                color: style.color,
-                background: style.backgroundColor,
+              color: style.color,
+              background: style.backgroundColor,
+              visualBackground,
+              visualWidth,
                 border: style.border,
                 width: style.width,
                 height: style.height,
@@ -365,10 +384,10 @@ async function main() {
       node.className.includes("visualtex-structural-placeholder"),
     );
     assert.ok(dotPlaceholder, JSON.stringify(pendingDot));
-    assert.equal(dotPlaceholder.background, "rgb(207, 232, 247)");
+    assert.equal(dotPlaceholder.visualBackground, "rgb(207, 232, 247)");
     assert.equal(dotPlaceholder.color, "rgba(0, 0, 0, 0)");
     assert.ok(
-      Number.parseFloat(dotPlaceholder.width) <= 24,
+      Number.parseFloat(dotPlaceholder.visualWidth) <= 24,
       JSON.stringify(dotPlaceholder),
     );
     assert.match(pendingDot.value, /^\\dot\{(?:\\placeholder\{\})?\}$/);
@@ -398,10 +417,10 @@ async function main() {
       node.className.includes("visualtex-structural-placeholder"),
     );
     assert.ok(ddotPlaceholder, JSON.stringify(pendingDdot));
-    assert.equal(ddotPlaceholder.background, "rgb(207, 232, 247)");
+    assert.equal(ddotPlaceholder.visualBackground, "rgb(207, 232, 247)");
     assert.equal(ddotPlaceholder.color, "rgba(0, 0, 0, 0)");
     assert.ok(
-      Number.parseFloat(ddotPlaceholder.width) <= 24,
+      Number.parseFloat(ddotPlaceholder.visualWidth) <= 24,
       JSON.stringify(ddotPlaceholder),
     );
     assert.match(pendingDdot.value, /^t\\ddot\{(?:\\placeholder\{\})?\}$/);
