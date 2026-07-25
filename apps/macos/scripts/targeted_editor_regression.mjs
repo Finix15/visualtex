@@ -3,9 +3,9 @@ import { rm } from "node:fs/promises";
 import process from "node:process";
 
 const scenario = process.argv[2];
-if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "native-space-selection", "candidate-query-reset", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "caret-probe", "scripts", "upright", "suggestions", "navigation", "geometry", "source-layout", "toolbar-compact", "cursor-placement", "settings", "layout", "delete", "export"]).has(scenario)) {
+if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "native-space-selection", "candidate-query-reset", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "caret-probe", "scripts", "upright", "suggestions", "navigation", "geometry", "source-layout", "toolbar-compact", "formula-tiles", "cursor-placement", "settings", "layout", "delete", "export"]).has(scenario)) {
   throw new Error(
-    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|native-space-selection|candidate-query-reset|raw-placeholder-visual|placeholder-selection|structural-placeholder|caret-probe|scripts|upright|suggestions|navigation|geometry|source-layout|toolbar-compact|cursor-placement|settings|layout|delete|export>",
+    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|native-space-selection|candidate-query-reset|raw-placeholder-visual|placeholder-selection|structural-placeholder|caret-probe|scripts|upright|suggestions|navigation|geometry|source-layout|toolbar-compact|formula-tiles|cursor-placement|settings|layout|delete|export>",
   );
 }
 
@@ -469,6 +469,16 @@ async function main() {
             latexHeight: latexBounds?.height ?? 0,
           };
         });
+        const builder = document.querySelector(".matrix-builder");
+        const grid = document.querySelector(".matrix-size-grid");
+        const builderBounds = builder?.getBoundingClientRect();
+        const gridBounds = grid?.getBoundingClientRect();
+        const helperTextRemoved =
+          !document.querySelector(".matrix-size-picker-label") &&
+          !builder?.textContent?.includes("最大 10 × 10") &&
+          !builder?.textContent?.includes("Up to 10 × 10") &&
+          !builder?.textContent?.includes("单击选择行数和列数") &&
+          !builder?.textContent?.includes("Click to select rows and columns");
         return {
           ready:
             buttons.length === 3 &&
@@ -479,7 +489,10 @@ async function main() {
                 Boolean(button.getAttribute("aria-label")?.trim()),
             ) &&
             previewStates.every((state) => state.visible) &&
-            bounds.every((rect) => rect.height <= 50),
+            bounds.every((rect) => rect.height <= 44) &&
+            helperTextRemoved &&
+            Boolean(builderBounds && builderBounds.height <= 355) &&
+            Boolean(gridBounds && gridBounds.width <= 214),
           count: buttons.length,
           heights: bounds.map((rect) => rect.height),
           contentCounts: buttons.map((button) => button.children.length),
@@ -487,6 +500,9 @@ async function main() {
           ariaLabels: buttons.map(
             (button) => button.getAttribute("aria-label") ?? "",
           ),
+          helperTextRemoved,
+          builderHeight: builderBounds?.height ?? 0,
+          gridWidth: gridBounds?.width ?? 0,
         };
       })()`, "compact matrix delimiter symbols");
 
@@ -742,6 +758,221 @@ async function main() {
         ),
       );
       console.log("Targeted compact formula toolbar regression passed");
+      return;
+    }
+
+    if (scenario === "formula-tiles") {
+      await evaluate(`(() => {
+        localStorage.removeItem("visualtex-custom-formula-tiles");
+        if (!document.querySelector(".formula-toolbar")) {
+          document.querySelector(".sidebar-toggle")?.click();
+        }
+        return true;
+      })()`);
+      await waitForEvaluation(`(() => ({
+        ready:
+          Boolean(document.querySelector('[data-toolbar-view="tools"]')) &&
+          Boolean(document.querySelector('[data-toolbar-view="tiles"]')) &&
+          !document.querySelector(".formula-toolbar-actions") &&
+          !document.querySelector(".add-formula-line"),
+      }))()`, "formula tool and tile view tabs without legacy buttons");
+
+      await evaluate(`document.querySelector('[data-toolbar-view="tiles"]').click()`);
+      const commonTilesState = await waitForEvaluation(`(() => {
+        const panel = document.querySelector(".formula-tiles-panel");
+        const buttons = [...document.querySelectorAll(
+          '.formula-tile-list > .formula-tile-button',
+        )];
+        const previews = buttons.map((button) => {
+          const host = button.querySelector(".formula-tile-preview");
+          const content = host?.querySelector(".math-preview-fit-content");
+          const hostBounds = host?.getBoundingClientRect();
+          const contentBounds = content?.getBoundingClientRect();
+          return {
+            id: button.dataset.formulaTileId ?? "",
+            fitReady: host?.dataset.fitReady === "true",
+            scale: Number.parseFloat(host?.dataset.fitScale ?? "0"),
+            buttonHeight: button.getBoundingClientRect().height,
+            hostHeight: hostBounds?.height ?? 0,
+            inside: Boolean(
+              hostBounds &&
+                contentBounds &&
+                contentBounds.left >= hostBounds.left - 1 &&
+                contentBounds.right <= hostBounds.right + 1 &&
+                contentBounds.top >= hostBounds.top - 1 &&
+                contentBounds.bottom <= hostBounds.bottom + 1,
+            ),
+          };
+        });
+        const heights = previews.map((preview) => Math.round(preview.hostHeight));
+        return {
+          ready:
+            Boolean(panel) &&
+            buttons.length === 10 &&
+            previews.every(
+              (preview) =>
+                preview.fitReady &&
+                preview.scale > 0 &&
+                preview.inside &&
+                preview.hostHeight >= 52 &&
+                preview.buttonHeight >= preview.hostHeight,
+            ) &&
+            panel.scrollWidth <= panel.clientWidth + 1,
+          count: buttons.length,
+          heights,
+          distinctHeightCount: new Set(heights).size,
+          horizontalOverflow: panel
+            ? panel.scrollWidth - panel.clientWidth
+            : -1,
+          previews,
+        };
+      })()`, "ten fitted common formula tiles");
+
+      await clearField();
+      await evaluate(`document.querySelector(
+        '[data-formula-tile-id="quadratic-formula"]',
+      ).click()`);
+      const insertedTileState = await waitForEvaluation(`(() => {
+        const field = document.querySelector(
+          ".formula-line.is-active math-field",
+        );
+        return {
+          ready:
+            Boolean(field) &&
+            field.value.includes("\\\\frac{-b\\\\pm\\\\sqrt{b^2-4ac}}{2a}"),
+          value: field?.value ?? "",
+        };
+      })()`, "common formula tile insertion");
+
+      await evaluate(`(() => {
+        const field = document.querySelector(
+          ".formula-line.is-active math-field",
+        );
+        if (!field) return false;
+        field.setValue("E=mc^2", { silenceNotifications: false });
+        field.dispatchEvent(new InputEvent("input", {
+          bubbles: true,
+          composed: true,
+          inputType: "insertText",
+          data: null,
+        }));
+        field.focus();
+        return true;
+      })()`);
+      await waitForEvaluation(`(() => {
+        const field = document.querySelector(
+          ".formula-line.is-active math-field",
+        );
+        return { ready: field?.value === "E=mc^2", value: field?.value ?? "" };
+      })()`, "selected line replaced for custom tile");
+      await evaluate(`document.querySelector(
+        '[data-tile-category="custom"]',
+      ).click()`);
+      await waitForEvaluation(`(() => ({
+        ready: Boolean(
+          document.querySelector(".save-current-formula-tile:not(:disabled)"),
+        ),
+      }))()`, "enabled custom tile save button");
+      await evaluate(`document.querySelector(
+        ".save-current-formula-tile",
+      ).click()`);
+      const customTileState = await waitForEvaluation(`(() => {
+        const button = document.querySelector(
+          '[data-formula-tile-id="custom-0"]',
+        );
+        const stored = JSON.parse(
+          localStorage.getItem("visualtex-custom-formula-tiles") || "[]",
+        );
+        const host = button?.querySelector(".formula-tile-preview");
+        return {
+          ready:
+            Boolean(button) &&
+            Array.isArray(stored) &&
+            stored.length === 1 &&
+            stored[0] === "E=mc^2" &&
+            host?.dataset.fitReady === "true",
+          stored,
+          latex: button?.dataset.formulaTileLatex ?? "",
+          fitReady: host?.dataset.fitReady ?? "missing",
+        };
+      })()`, "persisted selected-line custom formula tile");
+
+      await evaluate(`(() => {
+        const button = document.querySelector(
+          '[data-formula-tile-id="custom-0"]',
+        );
+        const field = document.querySelector(
+          ".formula-line.is-active math-field",
+        );
+        if (!button || !field) return false;
+        window.__visualtexFieldValueBeforeTileContextMenu = field.value;
+        const bounds = button.getBoundingClientRect();
+        button.dispatchEvent(new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          button: 2,
+          buttons: 2,
+          clientX: bounds.left + 24,
+          clientY: bounds.top + 20,
+        }));
+        return true;
+      })()`);
+      const customTileContextState = await waitForEvaluation(`(() => {
+        const menu = document.querySelector(".formula-tile-context-menu");
+        const deleteButton = menu?.querySelector('[role="menuitem"]');
+        const field = document.querySelector(
+          ".formula-line.is-active math-field",
+        );
+        const stored = JSON.parse(
+          localStorage.getItem("visualtex-custom-formula-tiles") || "[]",
+        );
+        return {
+          ready:
+            Boolean(menu && deleteButton) &&
+            field?.value ===
+              window.__visualtexFieldValueBeforeTileContextMenu &&
+            stored.length === 1,
+          fieldValueBefore:
+            window.__visualtexFieldValueBeforeTileContextMenu ?? "",
+          fieldValue: field?.value ?? "",
+          stored,
+          menuText: deleteButton?.textContent?.trim() ?? "",
+        };
+      })()`, "custom tile right-click menu without insertion conflict");
+
+      await evaluate(`document.querySelector(
+        ".formula-tile-context-menu [role=menuitem]",
+      ).click()`);
+      const deletedCustomTileState = await waitForEvaluation(`(() => {
+        const stored = JSON.parse(
+          localStorage.getItem("visualtex-custom-formula-tiles") || "[]",
+        );
+        return {
+          ready:
+            !document.querySelector('[data-formula-tile-id^="custom-"]') &&
+            !document.querySelector(".formula-tile-context-menu") &&
+            Boolean(document.querySelector(".formula-tile-empty")) &&
+            Array.isArray(stored) &&
+            stored.length === 0,
+          stored,
+          emptyVisible: Boolean(document.querySelector(".formula-tile-empty")),
+        };
+      })()`, "right-click custom tile deletion persistence");
+
+      console.log(
+        JSON.stringify(
+          {
+            commonTilesState,
+            insertedTileState,
+            customTileState,
+            customTileContextState,
+            deletedCustomTileState,
+          },
+          null,
+          2,
+        ),
+      );
+      console.log("Targeted formula tiles regression passed");
       return;
     }
 
@@ -1041,7 +1272,7 @@ async function main() {
         1,
       );
 
-      await evaluate(`document.querySelector(".add-formula-line").click()`);
+      await key("Enter", "Enter", 13);
       await waitForEvaluation(`(() => {
         const field = document.querySelector(
           ".formula-line.is-active math-field",
@@ -1065,7 +1296,7 @@ async function main() {
       const sumState = await readPlaceholderCaret("summation", 3);
       const sumTypedState = await typeBackslashOverPlaceholder("summation", 2);
 
-      await evaluate(`document.querySelector(".add-formula-line").click()`);
+      await key("Enter", "Enter", 13);
       await waitForEvaluation(`(() => {
         const field = document.querySelector(
           ".formula-line.is-active math-field",

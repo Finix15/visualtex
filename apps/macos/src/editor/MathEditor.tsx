@@ -14,7 +14,6 @@ import {
   type Style,
 } from "mathlive";
 import { flushSync } from "react-dom";
-import { Plus } from "lucide-react";
 import type {
   CommandSource,
   CommandUsage,
@@ -3753,16 +3752,6 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
             </div>
             );
           })}
-
-          <button
-            type="button"
-            className="add-formula-line"
-            onClick={() => addLineAfter(linesRef.current.length - 1)}
-            aria-label={isEn ? "Add formula line" : "添加公式行"}
-            title={isEn ? "Add formula line · Enter" : "添加公式行 · Enter"}
-          >
-            <Plus size={15} />
-          </button>
         </div>
         <CommandSuggestionPopup
           suggestions={suggestions}

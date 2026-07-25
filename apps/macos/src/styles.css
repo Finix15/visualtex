@@ -1820,28 +1820,6 @@ kbd {
   cursor: text;
 }
 
-.add-formula-line {
-  height: 34px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  border: 0;
-  border-top: 1px dashed color-mix(in srgb, var(--border-strong) 72%, transparent);
-  border-radius: 0;
-  background: transparent;
-  color: var(--text-faint);
-  font-size: 10px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 140ms ease, color 140ms ease;
-}
-
-.add-formula-line:hover {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-
 .editor-hint code {
   color: var(--accent);
   font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
@@ -3394,19 +3372,6 @@ button:disabled {
   border-radius: 5px;
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 10px;
-}
-
-.add-formula-line {
-  width: 30px;
-  height: 30px;
-  margin: 8px auto 0;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  font-size: 0;
-}
-
-.add-formula-line:hover {
-  border-color: var(--accent-border);
 }
 
 .source-toggle-row {
@@ -5097,18 +5062,6 @@ textarea:disabled {
   background: var(--surface);
 }
 
-.add-formula-line {
-  border-radius: 5px;
-  background: transparent;
-}
-
-.add-formula-line:hover,
-.add-formula-line:focus-visible {
-  border-color: var(--accent-border);
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-
 .source-toggle {
   border-radius: 5px;
   color: var(--text-muted);
@@ -6216,8 +6169,8 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 .matrix-builder {
   grid-column: 1 / -1;
   display: grid;
-  gap: 10px;
-  padding: 11px;
+  gap: 7px;
+  padding: 8px;
   border: 1px solid var(--accent-border);
   border-radius: 8px;
   background: color-mix(in srgb, var(--accent-soft) 48%, var(--surface));
@@ -6230,26 +6183,15 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
   gap: 8px;
 }
 
-.matrix-builder-heading > div {
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-}
-
 .matrix-builder-heading strong {
   color: var(--text);
   font-size: 12px;
   font-weight: 650;
 }
 
-.matrix-builder-heading > div > span {
-  color: var(--text-faint);
-  font-size: 10px;
-}
-
 .matrix-size-badge {
-  min-width: 48px;
-  height: 24px;
+  min-width: 44px;
+  height: 22px;
   display: grid;
   place-items: center;
   padding: 0 7px;
@@ -6265,16 +6207,16 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 .matrix-delimiter-options {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 5px;
+  gap: 4px;
 }
 
 .matrix-delimiter-options button {
   min-width: 0;
-  min-height: 48px;
+  min-height: 42px;
   display: grid;
   place-items: center;
   gap: 0;
-  padding: 4px 3px;
+  padding: 2px 3px;
   border: 1px solid var(--border);
   border-radius: 7px;
   background: var(--surface);
@@ -6296,7 +6238,7 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 }
 
 .matrix-delimiter-options .math-preview {
-  min-height: 38px;
+  min-height: 34px;
   font-size: 14px;
 }
 
@@ -6306,23 +6248,15 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 
 .matrix-size-picker {
   display: grid;
-  gap: 6px;
-}
-
-.matrix-size-picker-label {
-  color: var(--text-muted);
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 1.35;
 }
 
 .matrix-size-grid {
-  width: min(100%, 226px);
+  width: min(100%, 212px);
   display: grid;
   grid-template-columns: repeat(10, minmax(0, 1fr));
-  gap: 3px;
+  gap: 2px;
   margin-inline: auto;
-  padding: 6px;
+  padding: 5px;
   border: 1px solid var(--border);
   border-radius: 7px;
   background: var(--surface);
@@ -6356,7 +6290,7 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 }
 
 .matrix-insert-button {
-  min-height: 34px;
+  min-height: 31px;
   border: 1px solid transparent;
   border-radius: 6px;
   background: var(--accent);
@@ -7372,4 +7306,229 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
   .office-settings-actions > button {
     flex: 1 1 180px;
   }
+}
+
+/* Formula tools / reusable formula tiles */
+.formula-toolbar-header {
+  justify-content: flex-start;
+  padding: 0 8px;
+}
+
+.formula-toolbar-view-tabs {
+  width: 100%;
+  min-width: 0;
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.formula-toolbar-view-tabs button {
+  min-width: 0;
+  height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.formula-toolbar-view-tabs button:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.formula-toolbar-view-tabs button.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.formula-tiles-panel {
+  min-width: 0;
+  min-height: 0;
+  grid-row: 2 / 4;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  overflow: hidden;
+  background: var(--bg-elevated);
+}
+
+.formula-tile-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.formula-tile-tabs button {
+  min-width: 0;
+  height: 32px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.formula-tile-tabs button:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.formula-tile-tabs button.is-active {
+  background: var(--surface);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+}
+
+.custom-formula-tile-controls {
+  display: grid;
+  gap: 5px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.save-current-formula-tile {
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: 7px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.save-current-formula-tile:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-soft) 70%, var(--accent) 10%);
+}
+
+.save-current-formula-tile:disabled {
+  border-color: var(--border);
+  background: var(--surface-sunken);
+  color: var(--text-faint);
+  cursor: not-allowed;
+}
+
+.custom-formula-tile-controls span {
+  color: var(--text-faint);
+  font-size: 9px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.formula-tile-list {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.formula-tile-button {
+  width: 100%;
+  min-width: 0;
+  flex: 0 0 auto;
+  display: block;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.formula-tile-button:nth-child(4n + 1) {
+  background: color-mix(in srgb, var(--surface) 94%, var(--accent) 6%);
+}
+
+.formula-tile-button:nth-child(4n + 2) {
+  background: color-mix(in srgb, var(--surface) 95%, var(--success) 5%);
+}
+
+.formula-tile-button:nth-child(4n + 3) {
+  background: color-mix(in srgb, var(--surface) 95%, var(--warning) 5%);
+}
+
+.formula-tile-button:hover,
+.formula-tile-button:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  outline: none;
+}
+
+.formula-tile-context-menu {
+  position: fixed;
+  z-index: 1800;
+  min-width: 144px;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+
+.formula-tile-context-menu button {
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--danger, #b42318);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.formula-tile-context-menu button:hover,
+.formula-tile-context-menu button:focus-visible {
+  background: color-mix(in srgb, var(--danger, #b42318) 9%, transparent);
+  outline: none;
+}
+
+.formula-tile-preview.math-preview[data-fluid-height="true"] {
+  width: 100%;
+  height: var(--math-preview-fluid-height, 56px);
+  min-height: var(--math-preview-fluid-height, 56px);
+  font-size: 19px;
+  overflow: hidden;
+}
+
+.formula-tile-empty {
+  display: grid;
+  gap: 5px;
+  padding: 24px 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.formula-tile-empty strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.formula-tile-empty span {
+  color: var(--text-faint);
+  font-size: 10px;
+  line-height: 1.5;
 }

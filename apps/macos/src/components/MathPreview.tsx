@@ -5,6 +5,7 @@ interface MathPreviewProps {
   latex: string;
   className?: string;
   fit?: boolean;
+  fluidHeight?: boolean;
 }
 
 const fitInsetRatio = 0.9;
@@ -15,6 +16,7 @@ export function MathPreview({
   latex,
   className = "",
   fit = false,
+  fluidHeight = false,
 }: MathPreviewProps) {
   const hostRef = useRef<HTMLSpanElement>(null);
   const contentRef = useRef<HTMLSpanElement>(null);
@@ -33,23 +35,37 @@ export function MathPreview({
       animationFrame = 0;
       if (!fit) {
         content.style.setProperty("--math-preview-fit-scale", "1");
+        host.style.removeProperty("--math-preview-fluid-height");
         host.dataset.fitReady = "false";
         host.dataset.fitScale = "1";
         return;
       }
 
       const availableWidth = Math.max(1, host.clientWidth * fitInsetRatio);
-      const availableHeight = Math.max(1, host.clientHeight * fitInsetRatio);
       const naturalWidth = Math.max(1, content.offsetWidth);
       const naturalHeight = Math.max(1, content.offsetHeight);
-      const containedScale = Math.min(
-        availableWidth / naturalWidth,
-        availableHeight / naturalHeight,
-      );
-      const scale = Math.max(
-        minimumFitScale,
-        Math.min(maximumFitScale, containedScale),
-      );
+      let scale = 1;
+
+      if (fluidHeight) {
+        scale = Math.max(
+          minimumFitScale,
+          Math.min(1.35, availableWidth / naturalWidth),
+        );
+        const renderedHeight = naturalHeight * scale;
+        const rowHeight = Math.min(168, Math.max(52, Math.ceil(renderedHeight + 20)));
+        host.style.setProperty("--math-preview-fluid-height", `${rowHeight}px`);
+      } else {
+        host.style.removeProperty("--math-preview-fluid-height");
+        const availableHeight = Math.max(1, host.clientHeight * fitInsetRatio);
+        const containedScale = Math.min(
+          availableWidth / naturalWidth,
+          availableHeight / naturalHeight,
+        );
+        scale = Math.max(
+          minimumFitScale,
+          Math.min(maximumFitScale, containedScale),
+        );
+      }
 
       content.style.setProperty(
         "--math-preview-fit-scale",
@@ -72,7 +88,7 @@ export function MathPreview({
       if (animationFrame) cancelAnimationFrame(animationFrame);
       resizeObserver.disconnect();
     };
-  }, [fit, markup]);
+  }, [fit, fluidHeight, markup]);
 
   return (
     <span
@@ -80,6 +96,7 @@ export function MathPreview({
       className={"math-preview " + className}
       aria-hidden="true"
       data-fit={fit ? "contain" : "none"}
+      data-fluid-height={fluidHeight ? "true" : "false"}
     >
       <span
         ref={contentRef}

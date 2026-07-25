@@ -136,7 +136,6 @@ export function EditorWorkspace({
         {sidebarOpen && (
           <FormulaToolbar
             onInsert={(command) => editorRef.current?.insertCommand(command)}
-            onClose={() => onSidebarOpenChange(false)}
           />
         )}
 
