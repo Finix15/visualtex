@@ -23,7 +23,7 @@ const defaultFitInsetRatio = 0.9;
 const minimumFluidFitScale = 0.1;
 const defaultMaximumFitScale = 8;
 const visiblePlaceholderLatex =
-  "\\htmlClass{visualtex-tile-placeholder}{\\rule{0.72em}{0.18em}}";
+  "\\htmlClass{visualtex-tile-placeholder}{\\rule{0.48em}{0.82em}}";
 
 export function latexWithVisiblePlaceholders(latex: string) {
   if (!latex.includes("\\placeholder")) return latex;

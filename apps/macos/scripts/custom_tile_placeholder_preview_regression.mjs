@@ -214,7 +214,10 @@ async function main() {
         latex: button.dataset.formulaTileLatex ?? "",
         showPlaceholders: preview?.dataset.showPlaceholders ?? "",
         placeholderCount: placeholders.length,
-        placeholderWidths: placeholders.map((node) => node.getBoundingClientRect().width),
+        placeholderRects: placeholders.map((node) => {
+          const rect = node.getBoundingClientRect();
+          return { width: rect.width, height: rect.height };
+        }),
         hasPreviewRule: Boolean(preview?.querySelector('.visualtex-tile-placeholder .ML__rule')),
       };
     })`);
@@ -231,7 +234,9 @@ async function main() {
       );
       assert.equal(previewState.hasPreviewRule, true, JSON.stringify(previewState));
       assert.ok(
-        previewState.placeholderWidths.every((width) => width > 2),
+        previewState.placeholderRects.every(
+          ({ width, height }) => width > 2 && height > width * 1.35,
+        ),
         JSON.stringify(previewState),
       );
     }

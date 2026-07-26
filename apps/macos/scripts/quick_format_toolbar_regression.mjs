@@ -201,11 +201,20 @@ async function main() {
         activeLineId: document.querySelector(".formula-line.is-active")?.dataset.lineId ?? "",
         pressed: buttons.find((button) => button.getAttribute("aria-pressed") === "true")?.dataset.formulaAlignment ?? "",
         lines: lines.map((line) => {
+          const host = line.querySelector(".mathfield-host");
           const field = line.querySelector("math-field");
+          const hostRect = host?.getBoundingClientRect();
+          const fieldRect = field?.getBoundingClientRect();
           return {
             id: line.dataset.lineId ?? "",
             latex: field?.value ?? "",
-            textAlign: field ? getComputedStyle(field).textAlign : "",
+            hostWidth: hostRect?.width ?? 0,
+            fieldWidth: fieldRect?.width ?? 0,
+            hostJustify: host ? getComputedStyle(host).justifyContent : "",
+            hostFieldLeftGap:
+              hostRect && fieldRect ? fieldRect.left - hostRect.left : -1,
+            hostFieldRightGap:
+              hostRect && fieldRect ? hostRect.right - fieldRect.right : -1,
             hasLineAlignment: line.hasAttribute("data-alignment"),
           };
         }),
@@ -219,7 +228,16 @@ async function main() {
     assert.equal(state.rootAlignment, "left", JSON.stringify(state));
     assert.equal(state.pressed, "left", JSON.stringify(state));
     assert.deepEqual(state.lines.map((line) => line.latex), originalLatex);
-    assert.ok(state.lines.every((line) => line.textAlign === "left"), JSON.stringify(state));
+    assert.ok(state.lines.every((line) => line.hostJustify === "flex-start"), JSON.stringify(state));
+    assert.ok(state.lines.every((line) => line.fieldWidth < line.hostWidth - 20), JSON.stringify(state));
+    assert.ok(
+      state.lines.every(
+        (line) =>
+          line.hostFieldLeftGap >= -0.5 &&
+          line.hostFieldRightGap - line.hostFieldLeftGap > 20,
+      ),
+      JSON.stringify(state),
+    );
     assert.ok(state.lines.every((line) => !line.hasLineAlignment), JSON.stringify(state));
 
     const clickAlignment = async (alignment) => {
@@ -228,11 +246,58 @@ async function main() {
       return readState();
     };
 
+    const clickBlankArea = async (lineId, side) =>
+      evaluate(`(() => {
+        const host = document.querySelector('[data-line-id="${lineId}"] .mathfield-host');
+        const field = host?.querySelector('math-field');
+        if (!host || !field) return { position: -1, lastOffset: -1 };
+        const rect = host.getBoundingClientRect();
+        const clientX = ${JSON.stringify(side)} === 'left'
+          ? rect.left + 4
+          : rect.right - 4;
+        const clientY = (rect.top + rect.bottom) / 2;
+        host.dispatchEvent(new PointerEvent('pointerdown', {
+          bubbles: true,
+          composed: true,
+          cancelable: true,
+          button: 0,
+          buttons: 1,
+          pointerId: 41,
+          isPrimary: true,
+          clientX,
+          clientY,
+        }));
+        window.dispatchEvent(new PointerEvent('pointerup', {
+          bubbles: true,
+          composed: true,
+          button: 0,
+          pointerId: 41,
+          isPrimary: true,
+          clientX,
+          clientY,
+        }));
+        return { position: field.position, lastOffset: field.lastOffset };
+      })()`);
+
     state = await clickAlignment("center");
     assert.equal(state.rootAlignment, "center", JSON.stringify(state));
     assert.equal(state.pressed, "center", JSON.stringify(state));
-    assert.ok(state.lines.every((line) => line.textAlign === "center"), JSON.stringify(state));
+    assert.ok(state.lines.every((line) => line.hostJustify === "center"), JSON.stringify(state));
+    assert.ok(
+      state.lines.every(
+        (line) => Math.abs(line.hostFieldLeftGap - line.hostFieldRightGap) <= 1,
+      ),
+      JSON.stringify(state),
+    );
     assert.deepEqual(state.lines.map((line) => line.latex), originalLatex);
+    const centeredLeftBlank = await clickBlankArea("alignment-line-1", "left");
+    assert.equal(centeredLeftBlank.position, 0, JSON.stringify(centeredLeftBlank));
+    const centeredRightBlank = await clickBlankArea("alignment-line-1", "right");
+    assert.equal(
+      centeredRightBlank.position,
+      centeredRightBlank.lastOffset,
+      JSON.stringify(centeredRightBlank),
+    );
     assert.equal(state.persistedAlignment, "center", JSON.stringify(state));
     assert.ok(
       state.persistedLines.every((line) => !("alignment" in line)),
@@ -253,8 +318,24 @@ async function main() {
     state = await clickAlignment("right");
     assert.equal(state.rootAlignment, "right", JSON.stringify(state));
     assert.equal(state.pressed, "right", JSON.stringify(state));
-    assert.ok(state.lines.every((line) => line.textAlign === "right"), JSON.stringify(state));
+    assert.ok(state.lines.every((line) => line.hostJustify === "flex-end"), JSON.stringify(state));
+    assert.ok(
+      state.lines.every(
+        (line) =>
+          line.hostFieldRightGap >= -0.5 &&
+          line.hostFieldLeftGap - line.hostFieldRightGap > 20,
+      ),
+      JSON.stringify(state),
+    );
     assert.deepEqual(state.lines.map((line) => line.latex), originalLatex);
+    const rightAlignedLeftBlank = await clickBlankArea("alignment-line-1", "left");
+    assert.equal(rightAlignedLeftBlank.position, 0, JSON.stringify(rightAlignedLeftBlank));
+    const rightAlignedRightBlank = await clickBlankArea("alignment-line-1", "right");
+    assert.equal(
+      rightAlignedRightBlank.position,
+      rightAlignedRightBlank.lastOffset,
+      JSON.stringify(rightAlignedRightBlank),
+    );
     assert.equal(state.persistedAlignment, "right", JSON.stringify(state));
 
     await client.send("Page.reload", { ignoreCache: true });
@@ -263,7 +344,15 @@ async function main() {
     assert.equal(state.rootAlignment, "right", JSON.stringify(state));
     assert.equal(state.pressed, "right", JSON.stringify(state));
     assert.deepEqual(state.lines.map((line) => line.latex), originalLatex);
-    assert.ok(state.lines.every((line) => line.textAlign === "right"), JSON.stringify(state));
+    assert.ok(state.lines.every((line) => line.hostJustify === "flex-end"), JSON.stringify(state));
+    assert.ok(
+      state.lines.every(
+        (line) =>
+          line.hostFieldRightGap >= -0.5 &&
+          line.hostFieldLeftGap - line.hostFieldRightGap > 20,
+      ),
+      JSON.stringify(state),
+    );
 
     const pressEnter = async () => {
       await client.send("Input.dispatchKeyEvent", {
@@ -293,7 +382,15 @@ async function main() {
     state = await readState();
     assert.equal(state.lines.length, 3, JSON.stringify(state));
     assert.equal(state.rootAlignment, "right", JSON.stringify(state));
-    assert.ok(state.lines.every((line) => line.textAlign === "right"), JSON.stringify(state));
+    assert.ok(state.lines.every((line) => line.hostJustify === "flex-end"), JSON.stringify(state));
+    assert.ok(
+      state.lines.every(
+        (line) =>
+          line.hostFieldRightGap >= -0.5 &&
+          line.hostFieldLeftGap - line.hostFieldRightGap > 20,
+      ),
+      JSON.stringify(state),
+    );
     assert.ok(state.persistedLines.every((line) => !("alignment" in line)), JSON.stringify(state));
 
     await evaluate(`(() => {
@@ -306,7 +403,15 @@ async function main() {
     state = await readState();
     assert.equal(state.lines.length, 4, JSON.stringify(state));
     assert.equal(state.rootAlignment, "right", JSON.stringify(state));
-    assert.ok(state.lines.every((line) => line.textAlign === "right"), JSON.stringify(state));
+    assert.ok(state.lines.every((line) => line.hostJustify === "flex-end"), JSON.stringify(state));
+    assert.ok(
+      state.lines.every(
+        (line) =>
+          line.hostFieldRightGap >= -0.5 &&
+          line.hostFieldLeftGap - line.hostFieldRightGap > 20,
+      ),
+      JSON.stringify(state),
+    );
     assert.ok(state.persistedLines.every((line) => !("alignment" in line)), JSON.stringify(state));
 
     console.log("Document-level visual formula alignment regression passed");

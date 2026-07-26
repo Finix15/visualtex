@@ -4206,25 +4206,28 @@ function FormulaField(props: FormulaFieldProps) {
       }
 
       const hasVisibleFormula = Boolean(field.value.trim()) && contentBounds;
+      const clickedInLeftBlankArea = hasVisibleFormula
+        ? event.clientX < contentBounds.left - 6
+        : false;
       const clickedInRightBlankArea = hasVisibleFormula
         ? event.clientX > contentBounds.right + 6
         : true;
 
-      // Preserve MathLive's native hit testing for every click on or between
-      // rendered formula atoms. Only the unused row area to the right maps to
-      // the mathematical end of the line.
-      if (!clickedInRightBlankArea) return;
+      // Preserve MathLive's native hit testing on rendered formula atoms.
+      // Blank row space maps to the nearest mathematical edge so centered and
+      // right-aligned formulas remain easy to focus and edit.
+      if (!clickedInLeftBlankArea && !clickedInRightBlankArea) return;
 
       event.preventDefault();
       event.stopPropagation();
 
-      const end = field.lastOffset;
+      const target = clickedInLeftBlankArea ? 0 : field.lastOffset;
       field.focus();
       field.selection = {
-        ranges: [[end, end]],
+        ranges: [[target, target]],
         direction: "none",
       };
-      field.position = end;
+      field.position = target;
       field.shadowRoot
         ?.querySelector<HTMLElement>('[part="keyboard-sink"]')
         ?.focus({ preventScroll: true });
