@@ -2592,6 +2592,25 @@ async function main() {
         };
       })()`, `placeholder consumed: ${testCase.name} cycle ${cycle + 1}`);
 
+      await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        window.__visualTexPlaceholderRestoreFrames = [];
+        field?.addEventListener("input", () => {
+          const sample = () => {
+            window.__visualTexPlaceholderRestoreFrames.push(
+              field.shadowRoot?.querySelectorAll(
+                ".visualtex-structural-placeholder",
+              ).length ?? -1,
+            );
+          };
+          sample();
+          requestAnimationFrame(() => {
+            sample();
+            requestAnimationFrame(sample);
+          });
+        }, { once: true });
+        return true;
+      })()`);
       await key("Backspace", "Backspace", 8);
       const restored = await waitForEvaluation(`(() => {
         const field = document.querySelector("math-field");
@@ -2652,12 +2671,65 @@ async function main() {
           height: bounds?.height ?? -1,
         };
       })()`, `placeholder restored: ${testCase.name} cycle ${cycle + 1}`);
-      cycles.push({ typed, restored });
+      await sleep(40);
+      const restoreFrameCounts = await evaluate(
+        `window.__visualTexPlaceholderRestoreFrames ?? []`,
+      );
+      if (
+        restoreFrameCounts.length < 3 ||
+        restoreFrameCounts.slice(1).some(
+          (count) => count < testCase.expectedCount,
+        )
+      ) {
+        throw new Error(
+          `Placeholder flashed while restoring: ${testCase.name}: ${JSON.stringify(
+            restoreFrameCounts,
+          )}`,
+        );
+      }
+      cycles.push({ typed, restored, restoreFrameCounts });
+    }
+
+    await key("Backspace", "Backspace", 8);
+    const removedRestoredPlaceholder = await waitForEvaluation(`(() => {
+      const field = document.querySelector("math-field");
+      const count = field?.shadowRoot?.querySelectorAll(
+        ".visualtex-structural-placeholder",
+      ).length ?? -1;
+      return {
+        ready: count < ${testCase.expectedCount},
+        count,
+        value: field?.value ?? "",
+        selection: field?.selection ?? null,
+      };
+    })()`, `restored placeholder can be deleted: ${testCase.name}`);
+    await sleep(240);
+    const stableAfterRemoval = await evaluate(`(() => {
+      const field = document.querySelector("math-field");
+      return {
+        count: field?.shadowRoot?.querySelectorAll(
+          ".visualtex-structural-placeholder",
+        ).length ?? -1,
+        value: field?.value ?? "",
+      };
+    })()`);
+    if (
+      stableAfterRemoval.count !== removedRestoredPlaceholder.count ||
+      stableAfterRemoval.value !== removedRestoredPlaceholder.value
+    ) {
+      throw new Error(
+        `Deleted placeholder reappeared: ${testCase.name}: ${JSON.stringify({
+          removedRestoredPlaceholder,
+          stableAfterRemoval,
+        })}`,
+      );
     }
     persistentPlaceholderStates.push({
       name: testCase.name,
       initial,
       cycles,
+      removedRestoredPlaceholder,
+      stableAfterRemoval,
     });
   }
 

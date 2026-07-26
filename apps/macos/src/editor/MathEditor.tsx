@@ -721,6 +721,7 @@ type VisualTexPlaceholderBranchState = {
   isAccent: boolean;
   restoreLatex: string | null;
   selection: ReturnType<typeof captureSelection> | null;
+  restoreArmed: boolean;
 };
 
 const visualTexPlaceholderBranchAnchors = new WeakMap<
@@ -791,6 +792,7 @@ function rememberVisualTexPlaceholderBranch(
       const state = {
         isAccent: true,
         restoreLatex,
+        restoreArmed: false,
         selection: {
           ranges: [placeholderRange],
           direction: "none",
@@ -859,6 +861,7 @@ function rememberVisualTexPlaceholderBranch(
   const nextState = {
     isAccent,
     restoreLatex,
+    restoreArmed: rememberedState?.restoreArmed ?? false,
     selection:
       rememberedSelection ??
       (hasSelectedPlaceholderRange ? captureSelection(field) : null),
@@ -921,6 +924,7 @@ function restoreDeletedVisualTexPlaceholder(field: MathfieldElement) {
   if (!anchors) return false;
 
   for (const [anchorId, branchState] of anchors) {
+    if (!branchState.restoreArmed) continue;
     const anchor = shadowRoot.querySelector<HTMLElement>(
       `[data-atom-id="${CSS.escape(anchorId)}"]`,
     );
@@ -991,6 +995,15 @@ function restoreDeletedVisualTexPlaceholder(field: MathfieldElement) {
 }
 
 function scheduleDeletedVisualTexPlaceholderRestore(field: MathfieldElement) {
+  const hasArmedBranch = Array.from(
+    visualTexPlaceholderBranchAnchors.get(field)?.values() ?? [],
+  ).some((state) => state.restoreArmed);
+  if (
+    !hasArmedBranch &&
+    !visualTexForcedPlaceholderRestores.has(field)
+  ) {
+    return;
+  }
   if (visualTexPlaceholderRestoreFrames.has(field)) return;
   const frame = window.requestAnimationFrame(() => {
     visualTexPlaceholderRestoreFrames.delete(field);
@@ -1018,6 +1031,7 @@ function captureSelectedAccentPlaceholderState(field: MathfieldElement) {
   return {
     isAccent: true,
     restoreLatex,
+    restoreArmed: false,
     selection: captureSelection(field),
   } satisfies VisualTexPlaceholderBranchState;
 }
@@ -1056,9 +1070,43 @@ function observeVisualTexActiveAccentPlaceholder(field: MathfieldElement) {
   }
 }
 
-function armVisualTexAccentPlaceholderRestore(field: MathfieldElement) {
+function visualTexHasSingleDeletionAtom(field: MathfieldElement) {
+  if (!field.selectionIsCollapsed || field.selection.ranges.length !== 1) {
+    return false;
+  }
+  const selectedRange = field.selection.ranges[0];
+  if (
+    selectedRange &&
+    selectedRange[1] - selectedRange[0] === 1 &&
+    field.getValue(selectedRange[0], selectedRange[1], "latex").trim() ===
+      "\\placeholder{}"
+  ) {
+    return false;
+  }
+  for (let distance = 1; distance <= 2; distance += 1) {
+    const end = field.position - distance + 1;
+    const start = end - 1;
+    if (start < 0 || end > field.lastOffset) continue;
+    const latex = field.getValue(start, end, "latex").trim();
+    if (latex && latex !== "\\placeholder{}") return true;
+  }
+  return false;
+}
+
+function armVisualTexPlaceholderRestore(field: MathfieldElement) {
+  const shouldArm = visualTexHasSingleDeletionAtom(field);
+  const anchors = visualTexPlaceholderBranchAnchors.get(field);
+  if (anchors) {
+    for (const state of anchors.values()) state.restoreArmed = shouldArm;
+  }
   const active = visualTexActiveAccentPlaceholders.get(field);
-  if (active) active.restoreArmed = field.selectionIsCollapsed;
+  if (active) {
+    const commandPrefix = `${active.command}{`;
+    active.restoreArmed =
+      shouldArm &&
+      active.lastValueContainingCommand.includes(commandPrefix) &&
+      !active.lastValueContainingCommand.includes("\\placeholder{}");
+  }
 }
 
 function settleVisualTexAccentPlaceholderDelete(field: MathfieldElement) {
@@ -1066,6 +1114,12 @@ function settleVisualTexAccentPlaceholderDelete(field: MathfieldElement) {
   if (active && field.value.includes(`${active.command}{`)) {
     active.restoreArmed = false;
   }
+}
+
+function settleVisualTexPlaceholderDelete(field: MathfieldElement) {
+  const anchors = visualTexPlaceholderBranchAnchors.get(field);
+  if (!anchors) return;
+  for (const state of anchors.values()) state.restoreArmed = false;
 }
 
 function accentLayoutForPlaceholder(node: HTMLElement) {
@@ -3132,12 +3186,16 @@ function FormulaField(props: FormulaFieldProps) {
     normalizeCompletedDifferentialDisplay(field);
     const inputType =
       event instanceof InputEvent ? event.inputType || "insertText" : "insertText";
-    const postInputSnapshot = captureFieldSnapshot(field);
+    let postInputSnapshot = captureFieldSnapshot(field);
     observeVisualTexActiveAccentPlaceholder(field);
     if (inputType.startsWith("delete")) {
+      const restoredPlaceholder = restoreDeletedVisualTexPlaceholder(field);
       settleVisualTexAccentPlaceholderDelete(field);
+      settleVisualTexPlaceholderDelete(field);
+      if (restoredPlaceholder) {
+        postInputSnapshot = captureFieldSnapshot(field);
+      }
     }
-    scheduleDeletedVisualTexPlaceholderRestore(field);
     const after = postInputSnapshot;
       emitEdit(
         before,
@@ -3393,7 +3451,7 @@ function FormulaField(props: FormulaFieldProps) {
       activateVisualTexAccentPlaceholder(field, selectedAccentState);
     }
     if (event.key === "Backspace" || event.key === "Delete") {
-      armVisualTexAccentPlaceholderRestore(field);
+      armVisualTexPlaceholderRestore(field);
     }
     if (confirmPendingWrapperInput(event)) return;
       if (confirmRawPlaceholderCommand(event)) return;
@@ -3406,7 +3464,7 @@ function FormulaField(props: FormulaFieldProps) {
       activateVisualTexAccentPlaceholder(field, selectedAccentState);
     }
     if (event.key === "Backspace" || event.key === "Delete") {
-      armVisualTexAccentPlaceholderRestore(field);
+      armVisualTexPlaceholderRestore(field);
     }
     const isUnmodifiedPhysicalBackslash =
         event.code === "Backslash" &&
@@ -3438,7 +3496,7 @@ function FormulaField(props: FormulaFieldProps) {
       activateVisualTexAccentPlaceholder(field, selectedAccentState);
     }
     if (event.key === "Backspace" || event.key === "Delete") {
-      armVisualTexAccentPlaceholderRestore(field);
+      armVisualTexPlaceholderRestore(field);
     }
     const isUnmodifiedPhysicalBackslash =
         event.code === "Backslash" &&
