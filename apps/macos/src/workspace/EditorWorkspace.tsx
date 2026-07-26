@@ -227,7 +227,7 @@ export function EditorWorkspace({
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => applyFormulaAlignment(alignment)}
                   >
-                    <Icon size={16} strokeWidth={2.2} />
+                    <Icon size={16} strokeWidth={2} />
                   </button>
                 ))}
               </div>
@@ -284,7 +284,7 @@ export function EditorWorkspace({
                       : undefined
                   }
                 >
-                  <Minus size={15} />
+                  <Minus size={14} />
                 </button>
                 <span aria-live="polite" aria-atomic="true">
                   {Math.round(zoom * 100)}%
@@ -303,7 +303,7 @@ export function EditorWorkspace({
                       : undefined
                   }
                 >
-                  <Plus size={15} />
+                  <Plus size={14} />
                 </button>
               </div>
             </div>
@@ -360,7 +360,7 @@ export function EditorWorkspace({
                         setClassicDockOpen(true);
                       }}
                     >
-                      <Braces size={15} />
+                      <Braces size={16} />
                       {isEn ? "Formula tools" : "公式工具"}
                     </button>
                     <button
@@ -374,7 +374,7 @@ export function EditorWorkspace({
                         setClassicDockOpen(true);
                       }}
                     >
-                      <Code2 size={15} />
+                      <Code2 size={16} />
                       {isEn ? "LaTeX source" : "LaTeX 源码"}
                     </button>
                   </div>
@@ -404,9 +404,9 @@ export function EditorWorkspace({
                     onClick={() => setClassicDockOpen((open) => !open)}
                   >
                     {classicDockOpen ? (
-                      <PanelBottomClose size={15} />
+                      <PanelBottomClose size={14} />
                     ) : (
-                      <PanelBottomOpen size={15} />
+                      <PanelBottomOpen size={14} />
                     )}
                   </button>
                 </nav>

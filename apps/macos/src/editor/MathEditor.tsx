@@ -6562,7 +6562,11 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         data-formula-alignment={formulaAlignment}
       >
         {overlay}
-        <div className="mathfield-stack">
+        <div
+          className={
+            "mathfield-stack" + (lines.length === 1 ? " is-single-line" : "")
+          }
+        >
           {lines.map((line, index) => {
             const lineId = line.id;
             return (
@@ -6571,8 +6575,8 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
               data-line-id={lineId}
               key={lineId}
             >
-              <span className="formula-line-number">
-                {String(index + 1).padStart(2, "0")}
+              <span className="formula-line-number" aria-hidden="true">
+                {index + 1}
               </span>
               <FormulaField
                 lineId={lineId}
