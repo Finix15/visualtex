@@ -41,32 +41,27 @@
 :root[data-theme="beige"] {
   color-scheme: light;
 
-  /* User-facing warm paper palette. */
-  --bg-global: #efe5d6;
-  --bg-paper: #fcf7ee;
-  --bg-raised: #f8efe2;
-  --bg-sunken: #e7d6bf;
-  --bg-hover: #eadbc7;
-  --bg-selected: #d9c3a0;
-  --text-primary: #3b342c;
-  --text-secondary: #665b4d;
-  --text-muted-beige: #887765;
-  --text-placeholder: #846f56;
-  --text-placeholder-focus: #756047;
-  --text-disabled: #aa9b88;
-  --border-subtle: #ded0bc;
-  --border-default: #cdba9e;
-  --border-strong-beige: #a98e6d;
-  --accent-primary: #875936;
-  --accent-hover-beige: #6e472e;
-  --accent-active: #583823;
-  --accent-soft-beige: #e8d2bd;
-  --accent-border-beige: #ae7a52;
-  --accent-foreground: #fff9f1;
-  --interaction-primary: #4f716a;
-  --interaction-hover: #3e5b56;
-  --interaction-active: #304945;
-  --interaction-soft: #dde7e3;
+  /* Warm paper palette. */
+  --bg-global: #e4d5bf;
+  --bg-paper: #fff9ef;
+  --bg-raised: #f3e7d6;
+  --bg-sunken: #d0b794;
+  --bg-hover: #d9c2a1;
+  --bg-selected: #be9d6c;
+  --text-primary: #352c24;
+  --text-secondary: #665847;
+  --text-muted-beige: #887661;
+  --text-placeholder: #7c684f;
+  --text-placeholder-selected: #483321;
+  --text-disabled: #a18e76;
+  --border-subtle: #c8b293;
+  --border-default: #b79e7d;
+  --border-strong-beige: #947452;
+  --accent-primary: #785536;
+  --accent-hover-beige: #5e3f27;
+  --accent-active: #49301e;
+  --accent-soft-beige: #dfc6a7;
+  --accent-foreground: #fff9ef;
 
   /* Map the palette onto the application's semantic tokens. */
   --bg: var(--bg-global);
@@ -83,21 +78,21 @@
   --accent: var(--accent-primary);
   --accent-hover: var(--accent-hover-beige);
   --accent-soft: var(--accent-soft-beige);
-  --accent-border: var(--accent-border-beige);
-  --info: var(--interaction-primary);
-  --success: #5f7357;
+  --accent-border: var(--border-strong-beige);
+  --info: var(--accent-primary);
+  --success: #6f7148;
   --warning: #8d622d;
   --danger: #98554c;
-  --focus-ring: rgba(79, 113, 106, 0.28);
+  --focus-ring: rgba(120, 85, 54, 0.28);
   --primary-foreground: var(--accent-foreground);
   --formula-surface: var(--bg-paper);
-  --formula-placeholder: var(--interaction-soft);
-  --formula-placeholder-selected: #bfd1cc;
-  --formula-caret: #426c66;
-  --formula-selection: rgba(79, 113, 106, 0.20);
-  --shadow-sm: 0 1px 2px rgba(59, 52, 44, 0.08);
-  --shadow-md: 0 7px 20px rgba(59, 52, 44, 0.14), 0 1px 3px rgba(59, 52, 44, 0.08);
-  --shadow-lg: 0 16px 40px rgba(59, 52, 44, 0.18), 0 2px 8px rgba(59, 52, 44, 0.09);
+  --formula-placeholder: var(--accent-soft-beige);
+  --formula-placeholder-selected: var(--bg-selected);
+  --formula-caret: #5b3c24;
+  --formula-selection: rgba(120, 85, 54, 0.20);
+  --shadow-sm: 0 1px 2px rgba(53, 44, 36, 0.08);
+  --shadow-md: 0 7px 20px rgba(53, 44, 36, 0.14), 0 1px 3px rgba(53, 44, 36, 0.08);
+  --shadow-lg: 0 16px 40px rgba(53, 44, 36, 0.18), 0 2px 8px rgba(53, 44, 36, 0.09);
 }
 
 :root[data-theme="dark"] {
@@ -168,7 +163,7 @@ button {
 
 :root[data-theme="beige"] input:focus::placeholder,
 :root[data-theme="beige"] textarea:focus::placeholder {
-  color: var(--text-placeholder-focus);
+  color: var(--text-placeholder-selected);
 }
 
 :root[data-theme="beige"] input:disabled,
@@ -7701,40 +7696,23 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
   outline: none;
 }
 
-:root[data-theme="beige"] .formula-tile-button:nth-child(6n + 1) {
-  border-color: #a98e68;
-  background: #d5be9b;
+:root[data-theme="beige"] .formula-tiles-panel,
+:root[data-theme="beige"] .formula-tile-list {
+  background: var(--bg-raised);
 }
 
-:root[data-theme="beige"] .formula-tile-button:nth-child(6n + 2) {
-  border-color: #9b8068;
-  background: #c7b39d;
-}
-
-:root[data-theme="beige"] .formula-tile-button:nth-child(6n + 3) {
-  border-color: #ad8958;
-  background: #d8b98b;
-}
-
-:root[data-theme="beige"] .formula-tile-button:nth-child(6n + 4) {
-  border-color: #8f9971;
-  background: #c2c9a9;
-}
-
-:root[data-theme="beige"] .formula-tile-button:nth-child(6n + 5) {
-  border-color: #789b92;
-  background: #b9cbc5;
-}
-
-:root[data-theme="beige"] .formula-tile-button:nth-child(6n) {
-  border-color: #9e776e;
-  background: #c8b0a8;
+:root[data-theme="beige"] .formula-tile-button,
+:root[data-theme="beige"] .formula-tile-button:nth-child(4n + 1),
+:root[data-theme="beige"] .formula-tile-button:nth-child(4n + 2),
+:root[data-theme="beige"] .formula-tile-button:nth-child(4n + 3) {
+  border-color: var(--border-default);
+  background: var(--bg-paper);
 }
 
 :root[data-theme="beige"] .formula-tile-button:hover,
 :root[data-theme="beige"] .formula-tile-button:focus-visible {
-  border-color: var(--interaction-primary);
-  filter: brightness(0.98);
+  border-color: var(--border-strong-beige);
+  background: color-mix(in srgb, var(--bg-paper) 82%, var(--accent-soft-beige) 18%);
 }
 
 .formula-tile-context-menu {
@@ -8600,15 +8578,15 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 }
 
 [data-theme-choice="beige"] .theme-choice-swatch i:nth-child(1) {
-  background: #efe5d6;
+  background: #e4d5bf;
 }
 
 [data-theme-choice="beige"] .theme-choice-swatch i:nth-child(2) {
-  background: #fcf7ee;
+  background: #fff9ef;
 }
 
 [data-theme-choice="beige"] .theme-choice-swatch i:nth-child(3) {
-  background: #875936;
+  background: #785536;
 }
 
 [data-theme-choice="dark"] .theme-choice-swatch i:nth-child(1) {
@@ -8966,14 +8944,14 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 }
 
 :root[data-theme="beige"] .formula-line.is-active {
-  background: color-mix(in srgb, var(--interaction-soft) 72%, transparent);
-  box-shadow: inset 2px 0 0 var(--interaction-primary);
+  background: color-mix(in srgb, var(--accent-soft-beige) 72%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent-primary);
 }
 
 :root[data-theme="beige"] .formula-alignment-button.is-active,
 :root[data-theme="beige"] .formula-toolbar-actions .icon-button.is-active {
-  background: var(--interaction-soft);
-  color: var(--interaction-primary);
+  background: var(--accent-soft-beige);
+  color: var(--accent-primary);
 }
 
 :root[data-theme="beige"] .formula-toolbar-view-tabs button.is-active,
@@ -8981,8 +8959,15 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 :root[data-theme="beige"] .toolbar-tab.is-active,
 :root[data-theme="beige"] .classic-bottom-tab-group button.is-active,
 :root[data-theme="beige"] .formula-toolbar.is-horizontal .toolbar-tab.is-active {
-  color: var(--interaction-primary);
-  box-shadow: inset 0 -2px 0 var(--interaction-primary);
+  color: var(--accent-primary);
+  box-shadow: inset 0 -2px 0 var(--accent-primary);
+}
+
+:root[data-theme="beige"] .formula-tile-button.is-custom.has-custom-color,
+:root[data-theme="beige"] .formula-tile-button.is-custom.has-custom-color:hover,
+:root[data-theme="beige"] .formula-tile-button.is-custom.has-custom-color:focus-visible {
+  border-color: var(--border-default);
+  background: var(--bg-paper);
 }
 
 @media (max-width: 980px) {

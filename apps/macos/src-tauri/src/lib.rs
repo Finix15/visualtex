@@ -29,6 +29,37 @@ const ALLOWED_MODELS: &[&str] = &[
 const MAX_OCR_EVENTS: usize = 256;
 const OCR_RUNTIME_PROBE_CACHE_SCHEMA: u32 = 1;
 const OCR_RUNTIME_PROBE_CACHE_FILE: &str = "runtime-probe-cache.json";
+const ACTIVE_THEME_FILE: &str = "active-theme.txt";
+const THEME_CHANGED_EVENT: &str = "visualtex-theme-changed";
+
+fn normalize_app_theme(theme: &str) -> &'static str {
+    match theme.trim() {
+        "beige" => "beige",
+        "dark" => "dark",
+        _ => "light",
+    }
+}
+
+pub(crate) fn persisted_app_theme(app: &AppHandle) -> String {
+    let Ok(app_data_dir) = app.path().app_data_dir() else {
+        return "light".to_string();
+    };
+    fs::read_to_string(app_data_dir.join(ACTIVE_THEME_FILE))
+        .map(|theme| normalize_app_theme(&theme).to_string())
+        .unwrap_or_else(|_| "light".to_string())
+}
+
+#[tauri::command]
+fn set_app_theme(app: AppHandle, theme: String) -> Result<String, String> {
+    let normalized = normalize_app_theme(&theme).to_string();
+    let app_data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    fs::create_dir_all(&app_data_dir).map_err(|error| error.to_string())?;
+    fs::write(app_data_dir.join(ACTIVE_THEME_FILE), &normalized)
+        .map_err(|error| error.to_string())?;
+    app.emit(THEME_CHANGED_EVENT, normalized.clone())
+        .map_err(|error| error.to_string())?;
+    Ok(normalized)
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1497,6 +1528,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             write_export_file,
+            set_app_theme,
             get_ocr_runtime_status,
             install_ocr_runtime,
             recognize_formula_image,

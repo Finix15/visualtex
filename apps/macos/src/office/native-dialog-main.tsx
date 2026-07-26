@@ -5,8 +5,10 @@ import "../styles.css";
 import { configureOcrTransport } from "../ocr/ocrService";
 import { desktopOcrTransport } from "../ocr/ocrTransport";
 import { OfficeDialogApp } from "./dialog/OfficeDialogApp";
+import { applyDocumentTheme, readSynchronizedTheme } from "../themeSync";
 
 configureOcrTransport(desktopOcrTransport);
+applyDocumentTheme(readSynchronizedTheme());
 
 class OfficeFormulaErrorBoundary extends Component<
   { children: ReactNode },

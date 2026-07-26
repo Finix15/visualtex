@@ -6,6 +6,7 @@ import { configureOcrTransport } from "../ocr/ocrService";
 import { desktopOcrTransport } from "../ocr/ocrTransport";
 import { OfficeDialogApp } from "../office/dialog/OfficeDialogApp";
 import { DesktopApp } from "./DesktopApp";
+import { applyDocumentTheme, readSynchronizedTheme } from "../themeSync";
 
 configureOcrTransport(desktopOcrTransport);
 
@@ -16,6 +17,7 @@ const view = new URLSearchParams(window.location.search).get("view");
 const officeFormulaView = view === "office-formula";
 if (officeFormulaView) {
   document.body.classList.add("office-dialog-page");
+  applyDocumentTheme(readSynchronizedTheme());
 }
 
 createRoot(root).render(

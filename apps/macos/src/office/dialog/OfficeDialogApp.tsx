@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { AlertCircle, Check, LoaderCircle, ScanLine, X } from "lucide-react";
 import { OcrDialog } from "../../components/OcrDialog";
 import { EditorWorkspace } from "../../workspace/EditorWorkspace";
@@ -24,6 +25,12 @@ import {
   isLatexCodeFormat,
 } from "../../clipboard/LatexCopyService";
 import type { LatexCodeFormat } from "../../types/formula";
+import {
+  applyDocumentTheme,
+  normalizeSynchronizedTheme,
+  readSynchronizedTheme,
+  subscribeSynchronizedTheme,
+} from "../../themeSync";
 import type {
   MathEditorHandle,
   MathEditorInsertionTarget,
@@ -173,11 +180,46 @@ export function OfficeDialogApp() {
   const lines = useEditorStore((state) => state.lines);
   const activeLineId = useEditorStore((state) => state.activeLineId);
   const language = useEditorStore((state) => state.language);
+  const theme = useEditorStore((state) => state.theme);
+  const setTheme = useEditorStore((state) => state.setTheme);
   const latexCodeFormat = useEditorStore((state) => state.latexCodeFormat);
   const addHistory = useEditorStore((state) => state.addHistory);
   const historyState = useHistorySnapshot();
   const isEn = language === "en";
   const latex = joinFormulaLines(lines);
+
+  useEffect(() => {
+    const applyTheme = (nextThemeValue: unknown) => {
+      const nextTheme = normalizeSynchronizedTheme(nextThemeValue);
+      applyDocumentTheme(nextTheme);
+      if (useEditorStore.getState().theme !== nextTheme) {
+        setTheme(nextTheme);
+      }
+    };
+
+    applyTheme(readSynchronizedTheme());
+    const unsubscribeBrowser = subscribeSynchronizedTheme(applyTheme);
+    let disposed = false;
+    let unsubscribeTauri: (() => void) | undefined;
+    if (isMacosOfflineTauriTransport()) {
+      void listen<string>("visualtex-theme-changed", (event) => {
+        applyTheme(event.payload);
+      }).then((unsubscribe) => {
+        if (disposed) unsubscribe();
+        else unsubscribeTauri = unsubscribe;
+      });
+    }
+
+    return () => {
+      disposed = true;
+      unsubscribeBrowser();
+      unsubscribeTauri?.();
+    };
+  }, [setTheme]);
+
+  useEffect(() => {
+    applyDocumentTheme(theme);
+  }, [theme]);
   const selectedOcrModel =
     OCR_MODELS.find((item) => item.id === ocrModel) ?? OCR_MODELS[1];
   const inlineOcrModel =

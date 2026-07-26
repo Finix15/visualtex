@@ -581,8 +581,9 @@ fn open_editor_window(app: &AppHandle, session_id: &str) -> Result<(), String> {
         window.set_focus().map_err(|error| error.to_string())?;
         return Ok(());
     }
+    let theme = crate::persisted_app_theme(app);
     let path = format!(
-        "index.html?view=office-formula&sessionId={session_id}&transport=tauri"
+        "index.html?view=office-formula&sessionId={session_id}&transport=tauri&theme={theme}"
     );
     let window = WebviewWindowBuilder::new(app, label, WebviewUrl::App(path.into()))
         .title("VisualTeX Office Formula")

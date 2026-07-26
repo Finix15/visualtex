@@ -77,6 +77,7 @@ import {
 } from "./clipboard/LatexCopyService";
 import { normalizeChineseLatex } from "./editor/normalizeChineseLatex";
 import type { FormulaDocument, LatexCodeFormat } from "./types/formula";
+import { publishSynchronizedTheme } from "./themeSync";
 import { buildMarkdownDocument } from "./export/markdownExport";
 import { latexToSvg, svgToPng } from "./export/runtime";
 import type { WorkspaceExportFormat } from "./workspace/workspaceTypes";
@@ -358,7 +359,10 @@ function App() {
   }, []);
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
+    publishSynchronizedTheme(theme);
+    if (isNativeTauri()) {
+      void invoke<string>("set_app_theme", { theme }).catch(() => undefined);
+    }
   }, [theme]);
 
   useEffect(() => {

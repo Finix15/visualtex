@@ -329,11 +329,11 @@ async function main() {
         caret: "#1f638e",
       },
       beige: {
-        bg: "#efe5d6",
-        surface: "#fcf7ee",
-        accent: "#875936",
-        placeholder: "#dde7e3",
-        caret: "#426c66",
+        bg: "#e4d5bf",
+        surface: "#fff9ef",
+        accent: "#785536",
+        placeholder: "#dfc6a7",
+        caret: "#5b3c24",
       },
       dark: {
         bg: "#16181b",
@@ -431,21 +431,17 @@ async function main() {
           placeholder: expected.placeholder,
           caret: expected.caret,
           editorSurface:
-            themeId === 'beige' ? 'rgb(252, 247, 238)' :
+            themeId === 'beige' ? 'rgb(255, 249, 239)' :
             themeId === 'dark' ? 'rgb(32, 35, 40)' : 'rgb(255, 255, 255)',
           settingsSurface:
-            themeId === 'beige' ? 'rgb(252, 247, 238)' :
+            themeId === 'beige' ? 'rgb(255, 249, 239)' :
             themeId === 'dark' ? 'rgb(32, 35, 40)' : 'rgb(255, 255, 255)',
           active: true,
           tileColors: themeId === 'beige'
-            ? [
-                ['rgb(213, 190, 155)', 'rgb(169, 142, 104)'],
-                ['rgb(199, 179, 157)', 'rgb(155, 128, 104)'],
-                ['rgb(216, 185, 139)', 'rgb(173, 137, 88)'],
-                ['rgb(194, 201, 169)', 'rgb(143, 153, 113)'],
-                ['rgb(185, 203, 197)', 'rgb(120, 155, 146)'],
-                ['rgb(200, 176, 168)', 'rgb(158, 119, 110)'],
-              ]
+            ? Array.from({ length: 6 }, () => [
+                'rgb(255, 249, 239)',
+                'rgb(183, 158, 125)',
+              ])
             : [],
           blueInteractiveColors: [],
         },
