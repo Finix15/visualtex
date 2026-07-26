@@ -137,6 +137,15 @@ async function main() {
       }
       throw new Error(`Timed out waiting for selector: ${selector}`);
     };
+    const setViewport = async (width, height = 820) => {
+      await client.send("Emulation.setDeviceMetricsOverride", {
+        width,
+        height,
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
+      await sleep(180);
+    };
 
     await evaluate(`(() => {
       localStorage.clear();
@@ -356,6 +365,10 @@ async function main() {
       const sizePicker = builder?.querySelector('.matrix-size-picker');
       const sizePickerRect = sizePicker?.getBoundingClientRect();
       const insert = builder?.querySelector('.matrix-insert-button');
+      const nextTemplate = document.querySelector(
+        '.classic-bottom-toolbar .template-strip > .template-button',
+      );
+      const nextTemplateRect = nextTemplate?.getBoundingClientRect();
       const delimiterButtons = Array.from(builder?.querySelectorAll('.matrix-delimiter-options button') ?? []);
       const inside = (rect) => Boolean(
         builderRect && rect &&
@@ -385,6 +398,9 @@ async function main() {
         insertInside: inside(insert?.getBoundingClientRect()),
         insertWidth: insert?.getBoundingClientRect().width ?? -1,
         insertHeight: insert?.getBoundingClientRect().height ?? -1,
+        nextTemplateGap: builderRect && nextTemplateRect
+          ? nextTemplateRect.left - builderRect.right
+          : -1,
         delimiterCount: delimiterButtons.length,
         delimiterHeights: delimiterButtons.map((button) =>
           button.getBoundingClientRect().height,
@@ -422,6 +438,8 @@ async function main() {
     assert.ok(matrixState.insertWidth >= 180, JSON.stringify(matrixState));
     assert.ok(matrixState.insertWidth <= 220, JSON.stringify(matrixState));
     assert.ok(matrixState.insertHeight <= 38, JSON.stringify(matrixState));
+    assert.ok(matrixState.nextTemplateGap >= 0, JSON.stringify(matrixState));
+    assert.ok(matrixState.nextTemplateGap <= 8, JSON.stringify(matrixState));
     assert.equal(matrixState.delimiterCount, 3, JSON.stringify(matrixState));
     assert.ok(
       matrixState.delimiterHeights.every((height) => height >= 58),
@@ -436,6 +454,102 @@ async function main() {
 
     await evaluate(`document.querySelector('.classic-bottom-toolbar [data-category="common"]')?.click()`);
     await sleep(80);
+
+    const readResponsiveLayout = () => evaluate(`(() => {
+      const workspace = document.querySelector('.workspace.is-classic-layout');
+      const editor = document.querySelector('.formula-workspace.editor-pane');
+      const editorHeader = document.querySelector('.editor-pane-header');
+      const dock = document.querySelector('.classic-bottom-dock');
+      const bottomToolbar = document.querySelector('.classic-bottom-toolbar');
+      const tiles = document.querySelector('.classic-tile-toolbar');
+      const workspaceRect = workspace?.getBoundingClientRect();
+      const editorRect = editor?.getBoundingClientRect();
+      const headerRect = editorHeader?.getBoundingClientRect();
+      const dockRect = dock?.getBoundingClientRect();
+      const bottomRect = bottomToolbar?.getBoundingClientRect();
+      const tileRect = tiles?.getBoundingClientRect();
+      const tileStyle = tiles ? getComputedStyle(tiles) : null;
+      const bottomStyle = bottomToolbar ? getComputedStyle(bottomToolbar) : null;
+      const contained = (outer, inner) => Boolean(
+        outer && inner &&
+        inner.left >= outer.left - 1 &&
+        inner.right <= outer.right + 1 &&
+        inner.top >= outer.top - 1 &&
+        inner.bottom <= outer.bottom + 1
+      );
+      return {
+        viewportWidth: window.innerWidth,
+        workspaceWidth: workspaceRect?.width ?? -1,
+        workspaceClientWidth: workspace?.clientWidth ?? -1,
+        workspaceScrollWidth: workspace?.scrollWidth ?? -1,
+        editorWidth: editorRect?.width ?? -1,
+        editorVisible: Boolean(
+          editorRect && headerRect &&
+          editorRect.width > 180 && editorRect.height > 180 &&
+          headerRect.height > 20
+        ),
+        dockInsideEditor: contained(editorRect, dockRect),
+        bottomInsideEditor: contained(editorRect, bottomRect),
+        bottomPosition: bottomStyle?.position ?? '',
+        tilePosition: tileStyle?.position ?? '',
+        tileWidth: tileRect?.width ?? -1,
+        tileRightAligned: Boolean(
+          workspaceRect && tileRect &&
+          Math.abs(tileRect.right - workspaceRect.right) <= 1
+        ),
+        tileOverlaysEditor: Boolean(
+          editorRect && tileRect && tileRect.left < editorRect.right - 1
+        ),
+      };
+    })()`);
+
+    for (const width of [1020, 820]) {
+      await setViewport(width);
+      const hasTiles = await evaluate(
+        `Boolean(document.querySelector('.classic-tile-toolbar'))`,
+      );
+      if (!hasTiles) {
+        await evaluate(`document.querySelector('.sidebar-toggle')?.click()`);
+        await waitForSelector('.classic-tile-toolbar');
+        await sleep(100);
+      }
+      const responsive = await readResponsiveLayout();
+      assert.equal(responsive.viewportWidth, width, JSON.stringify(responsive));
+      assert.equal(responsive.editorVisible, true, JSON.stringify(responsive));
+      assert.equal(responsive.dockInsideEditor, true, JSON.stringify(responsive));
+      assert.equal(responsive.bottomInsideEditor, true, JSON.stringify(responsive));
+      assert.notEqual(responsive.bottomPosition, "absolute", JSON.stringify(responsive));
+      assert.notEqual(responsive.bottomPosition, "fixed", JSON.stringify(responsive));
+      assert.notEqual(responsive.tilePosition, "absolute", JSON.stringify(responsive));
+      assert.notEqual(responsive.tilePosition, "fixed", JSON.stringify(responsive));
+      assert.equal(responsive.tileRightAligned, true, JSON.stringify(responsive));
+      assert.equal(responsive.tileOverlaysEditor, false, JSON.stringify(responsive));
+      assert.ok(responsive.editorWidth >= 420, JSON.stringify(responsive));
+      assert.ok(
+        responsive.workspaceScrollWidth <= responsive.workspaceClientWidth + 1,
+        JSON.stringify(responsive),
+      );
+    }
+
+    await setViewport(680);
+    const narrowResponsive = await readResponsiveLayout();
+    assert.equal(narrowResponsive.viewportWidth, 680, JSON.stringify(narrowResponsive));
+    assert.equal(narrowResponsive.editorVisible, true, JSON.stringify(narrowResponsive));
+    assert.equal(narrowResponsive.dockInsideEditor, true, JSON.stringify(narrowResponsive));
+    assert.equal(narrowResponsive.bottomInsideEditor, true, JSON.stringify(narrowResponsive));
+    assert.notEqual(narrowResponsive.bottomPosition, "absolute", JSON.stringify(narrowResponsive));
+    assert.notEqual(narrowResponsive.bottomPosition, "fixed", JSON.stringify(narrowResponsive));
+    assert.equal(narrowResponsive.tilePosition, "absolute", JSON.stringify(narrowResponsive));
+    assert.equal(narrowResponsive.tileRightAligned, true, JSON.stringify(narrowResponsive));
+    assert.equal(narrowResponsive.tileOverlaysEditor, true, JSON.stringify(narrowResponsive));
+    assert.ok(narrowResponsive.editorWidth >= 600, JSON.stringify(narrowResponsive));
+    assert.ok(narrowResponsive.tileWidth <= 280, JSON.stringify(narrowResponsive));
+    assert.ok(
+      narrowResponsive.workspaceScrollWidth <= narrowResponsive.workspaceClientWidth + 1,
+      JSON.stringify(narrowResponsive),
+    );
+
+    await setViewport(1440, 1000);
 
     await evaluate(`document.querySelector('[data-classic-bottom-view="source"]')?.click()`);
     await sleep(120);

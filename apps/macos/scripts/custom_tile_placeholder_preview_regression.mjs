@@ -241,6 +241,7 @@ async function main() {
             height: rect.height,
             borderWidth: parseFloat(style.borderTopWidth),
             borderStyle: style.borderTopStyle,
+            borderRadius: parseFloat(style.borderTopLeftRadius),
             backgroundColor: style.backgroundColor,
             ruleVisibility: rule ? getComputedStyle(rule).visibility : '',
           };
@@ -271,13 +272,16 @@ async function main() {
             height,
             borderWidth,
             borderStyle,
+            borderRadius,
             backgroundColor,
             ruleVisibility,
           }) =>
             width > 2 &&
-            height > width * 1.35 &&
+            height > width * 1.55 &&
             borderWidth > 0 &&
+            borderWidth <= 1.2 &&
             borderStyle === "solid" &&
+            borderRadius === 0 &&
             backgroundColor === "rgba(0, 0, 0, 0)" &&
             ruleVisibility === "hidden",
         ),

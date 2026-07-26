@@ -3661,7 +3661,7 @@ button:disabled {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .formula-toolbar {
+  .workspace.is-standard-layout.has-sidebar > .formula-toolbar {
     position: absolute;
     inset: 0 auto 0 0;
     width: 240px;
@@ -7635,13 +7635,13 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 .formula-tile-preview .visualtex-tile-placeholder {
   display: inline-block;
   box-sizing: border-box;
-  vertical-align: -0.12em;
-  border: 0.065em solid color-mix(in srgb, var(--text) 86%, transparent);
-  border-radius: 0.1em;
+  vertical-align: -0.08em;
+  border: 0.05em solid color-mix(in srgb, var(--text) 84%, transparent);
+  border-radius: 0;
   background: transparent;
   color: transparent;
   line-height: 0;
-  opacity: 0.9;
+  opacity: 0.88;
 }
 
 .formula-tile-preview .visualtex-tile-placeholder .ML__rule {
@@ -8628,16 +8628,16 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 }
 
 .formula-toolbar.is-horizontal .matrix-builder {
-  width: 360px;
+  width: 100%;
   min-width: 0;
   height: auto;
-  grid-column: span 7;
+  grid-column: span 6;
   grid-row: 1 / span 3;
-  grid-template-columns: minmax(0, 218px) 126px;
+  grid-template-columns: minmax(0, 212px) 126px;
   grid-template-rows: minmax(0, 1fr);
   align-items: stretch;
-  justify-content: start;
-  gap: 8px;
+  justify-content: stretch;
+  gap: 6px;
   padding: 6px;
   overflow: hidden;
 }
@@ -8718,10 +8718,40 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 
 @media (max-width: 980px) {
   .workspace.is-classic-layout.has-sidebar {
-    grid-template-columns: minmax(0, 1fr) 260px;
+    grid-template-columns: minmax(0, 1fr) clamp(220px, 28vw, 260px);
   }
 
-  .classic-bottom-tabs button {
+  .classic-bottom-tab-group button {
     min-width: 96px;
+  }
+}
+
+@media (max-width: 760px) {
+  .workspace.is-classic-layout.has-sidebar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workspace.is-classic-layout > .classic-tile-toolbar {
+    position: absolute;
+    inset: 0 0 0 auto;
+    z-index: 35;
+    width: min(280px, 82vw);
+    min-width: 0;
+    box-shadow: -10px 0 28px rgba(20, 24, 34, 0.16);
+  }
+
+  .classic-bottom-tabs {
+    grid-template-columns: minmax(28px, 1fr) auto minmax(28px, 1fr);
+    padding-inline: 4px;
+  }
+
+  .classic-bottom-tab-group button {
+    min-width: 86px;
+    padding-inline: 8px;
+    font-size: 11px;
+  }
+
+  .classic-editor-pane-body {
+    grid-template-rows: minmax(0, 1fr) clamp(210px, 32vh, 238px);
   }
 }
