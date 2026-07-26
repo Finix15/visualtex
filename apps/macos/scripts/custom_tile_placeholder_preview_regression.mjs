@@ -276,8 +276,8 @@ async function main() {
             backgroundColor,
             ruleVisibility,
           }) =>
-            width > 2 &&
-            height > width * 1.55 &&
+            width >= 5.2 &&
+            height > width * 1.3 &&
             borderWidth > 0 &&
             borderWidth <= 1.2 &&
             borderStyle === "solid" &&

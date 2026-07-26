@@ -215,8 +215,13 @@ async function main() {
         .map((button) => button.getBoundingClientRect());
       const bottomTabs = document.querySelector('.classic-bottom-tabs');
       const bottomTabGroup = document.querySelector('.classic-bottom-tab-group');
+      const bottomCopy = document.querySelector('[data-classic-bottom-copy]');
+      const bottomCollapse = document.querySelector('[data-classic-bottom-collapse]');
+      const sourceHeader = document.querySelector('.classic-source-pane-slot .source-panel-header');
       const bottomTabsRect = bottomTabs?.getBoundingClientRect();
       const bottomTabGroupRect = bottomTabGroup?.getBoundingClientRect();
+      const bottomCopyRect = bottomCopy?.getBoundingClientRect();
+      const bottomCollapseRect = bottomCollapse?.getBoundingClientRect();
       const templateRows = Array.from(
         new Set(templateRects.map((rect) => Math.round(rect.top))),
       );
@@ -250,9 +255,18 @@ async function main() {
               (bottomTabsRect.left + bottomTabsRect.right) / 2,
           ) <= 1
         ),
-        hasDockCollapse: Boolean(document.querySelector('[data-classic-bottom-collapse]')),
+        hasDockCollapse: Boolean(bottomCollapse),
+        hasClassicTopCopy: Boolean(bottomCopy),
+        copyBeforeCollapse: Boolean(
+          bottomCopyRect && bottomCollapseRect &&
+          bottomCopyRect.right <= bottomCollapseRect.left + 1
+        ),
         dockCollapsed: dock?.classList.contains('is-collapsed') ?? false,
         hasSourcePanel: Boolean(sourcePanel),
+        hasSourceInternalHeader: Boolean(sourceHeader),
+        hasSourceInternalCopy: Boolean(
+          document.querySelector('.classic-source-pane-slot .source-copy-button'),
+        ),
         hasSourceInternalCollapse: Boolean(
           document.querySelector('.classic-source-pane-slot .source-collapse-button'),
         ),
@@ -665,6 +679,45 @@ async function main() {
       JSON.stringify(narrowResponsive),
     );
 
+    const readClassicToolsSpacing = () => evaluate(`(() => {
+      const strip = document.querySelector('.classic-bottom-toolbar .template-strip');
+      const buttons = Array.from(
+        document.querySelectorAll('.classic-bottom-toolbar .template-button'),
+      );
+      const stripRect = strip?.getBoundingClientRect();
+      const rects = buttons.map((button) => button.getBoundingClientRect());
+      const lastBottom = rects.length ? Math.max(...rects.map((rect) => rect.bottom)) : -1;
+      const firstTop = rects.length ? Math.min(...rects.map((rect) => rect.top)) : -1;
+      return {
+        height: window.innerHeight,
+        topGap: stripRect && firstTop >= 0 ? firstTop - stripRect.top : -1,
+        bottomGap: stripRect && lastBottom >= 0 ? stripRect.bottom - lastBottom : -1,
+        rowHeights: Array.from(
+          new Map(rects.map((rect) => [Math.round(rect.top), rect.height])).values(),
+        ),
+      };
+    })()`);
+    const classicToolSpacings = [];
+    for (const height of [720, 1000]) {
+      await setViewport(1440, height);
+      classicToolSpacings.push(await readClassicToolsSpacing());
+    }
+    assert.ok(
+      classicToolSpacings.every(
+        (spacing) =>
+          spacing.topGap >= 4 && spacing.topGap <= 7 &&
+          spacing.bottomGap >= 5 && spacing.bottomGap <= 9 &&
+          spacing.rowHeights.length === 3,
+      ),
+      JSON.stringify(classicToolSpacings),
+    );
+    assert.ok(
+      Math.abs(
+        classicToolSpacings[0].bottomGap - classicToolSpacings[1].bottomGap,
+      ) <= 1.5,
+      JSON.stringify(classicToolSpacings),
+    );
+
     await setViewport(1440, 1000);
 
     await evaluate(`document.querySelector('[data-classic-bottom-view="source"]')?.click()`);
@@ -672,7 +725,11 @@ async function main() {
     state = await readLayout();
     assert.equal(state.hasBottomToolbar, false, JSON.stringify(state));
     assert.equal(state.hasSourcePanel, true, JSON.stringify(state));
+    assert.equal(state.hasSourceInternalHeader, false, JSON.stringify(state));
+    assert.equal(state.hasSourceInternalCopy, false, JSON.stringify(state));
     assert.equal(state.hasSourceInternalCollapse, false, JSON.stringify(state));
+    assert.equal(state.hasClassicTopCopy, true, JSON.stringify(state));
+    assert.equal(state.copyBeforeCollapse, true, JSON.stringify(state));
     assert.equal(state.bottomTabsCentered, true, JSON.stringify(state));
 
     await evaluate(`document.querySelector('[data-classic-bottom-collapse]')?.click()`);
@@ -694,6 +751,7 @@ async function main() {
     state = await readLayout();
     assert.equal(state.hasBottomToolbar, true, JSON.stringify(state));
     assert.equal(state.hasSourcePanel, false, JSON.stringify(state));
+    assert.equal(state.hasClassicTopCopy, false, JSON.stringify(state));
     assert.equal(state.templateRows.length, 3, JSON.stringify(state));
 
     await evaluate(`document.querySelector('.classic-tile-toolbar [data-tile-category="custom"]')?.click()`);
@@ -771,6 +829,63 @@ async function main() {
     assert.equal(state.hasStandardToolbar, true, JSON.stringify(state));
     assert.equal(state.hasClassicTiles, false, JSON.stringify(state));
     assert.equal(state.hasDock, false, JSON.stringify(state));
+
+    await setViewport(1920, 1080);
+    await evaluate(`document.querySelector(
+      '.workspace.is-standard-layout > .formula-toolbar [data-toolbar-view="tiles"]',
+    )?.click()`);
+    await sleep(100);
+    await evaluate(`document.querySelector(
+      '.workspace.is-standard-layout > .formula-toolbar [data-tile-category="custom"]',
+    )?.click()`);
+    await waitForSelector(
+      '.workspace.is-standard-layout > .formula-toolbar .formula-tile-button.is-custom',
+    );
+    await sleep(350);
+    const standardTileStability = await evaluate(`new Promise((resolve) => {
+      const samples = [];
+      let remaining = 48;
+      const sample = () => {
+        const toolbar = document.querySelector(
+          '.workspace.is-standard-layout > .formula-toolbar',
+        );
+        const panel = toolbar?.querySelector('.formula-tiles-panel');
+        const list = toolbar?.querySelector('.formula-tile-list');
+        const buttons = Array.from(
+          toolbar?.querySelectorAll('.formula-tile-button.is-custom') ?? [],
+        ).slice(0, 8);
+        samples.push({
+          toolbarWidth: toolbar?.getBoundingClientRect().width ?? -1,
+          panelWidth: panel?.getBoundingClientRect().width ?? -1,
+          listWidth: list?.getBoundingClientRect().width ?? -1,
+          listHeight: list?.getBoundingClientRect().height ?? -1,
+          scrollHeight: list?.scrollHeight ?? -1,
+          buttons: buttons.map((button) => {
+            const rect = button.getBoundingClientRect();
+            return [rect.left, rect.top, rect.width, rect.height];
+          }),
+        });
+        remaining -= 1;
+        if (remaining > 0) requestAnimationFrame(sample);
+        else resolve(samples);
+      };
+      requestAnimationFrame(sample);
+    })`);
+    const standardStabilitySignature = (sample) => JSON.stringify({
+      toolbarWidth: Math.round(sample.toolbarWidth * 2) / 2,
+      panelWidth: Math.round(sample.panelWidth * 2) / 2,
+      listWidth: Math.round(sample.listWidth * 2) / 2,
+      listHeight: Math.round(sample.listHeight * 2) / 2,
+      scrollHeight: sample.scrollHeight,
+      buttons: sample.buttons.map((rect) =>
+        rect.map((value) => Math.round(value * 2) / 2),
+      ),
+    });
+    assert.equal(
+      new Set(standardTileStability.map(standardStabilitySignature)).size,
+      1,
+      JSON.stringify(standardTileStability),
+    );
 
     console.log("Editor layout switch regression passed");
   } finally {
