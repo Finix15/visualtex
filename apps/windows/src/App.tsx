@@ -14,18 +14,18 @@ import {
   LoaderCircle,
   Menu,
   Minus,
-  Moon,
   PanelBottomClose,
   PanelBottomOpen,
   PanelLeftClose,
   PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
   Plus,
   Redo2,
   RefreshCw,
   Save,
   ScanLine,
   Settings2,
-  Sun,
   Undo2,
   X,
 } from "lucide-react";
@@ -37,6 +37,7 @@ import {
 import { FormulaToolbar } from "./toolbar/FormulaToolbar";
 import { LatexSourceEditor } from "./source-editor/LatexSourceEditor";
 import { SettingsDialog } from "./components/SettingsDialog";
+import { FormulaHotkeyManagerDialog } from "./components/FormulaHotkeyManagerDialog";
 import { HistoryPanel } from "./components/HistoryPanel";
 import { OcrDialog } from "./components/OcrDialog";
 import { ExportDialog } from "./components/ExportDialog";
@@ -123,6 +124,7 @@ function App() {
   const copyMenuButtonRef = useRef<HTMLButtonElement>(null);
   const copyMenuRef = useRef<HTMLDivElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [formulaHotkeyManagerOpen, setFormulaHotkeyManagerOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [ocrOpen, setOcrOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
@@ -161,12 +163,13 @@ function App() {
   const setTitle = useEditorStore((state) => state.setTitle);
   const lines = useEditorStore((state) => state.lines);
   const activeLineId = useEditorStore((state) => state.activeLineId);
+  const formulaAlignment = useEditorStore((state) => state.formulaAlignment);
   const theme = useEditorStore((state) => state.theme);
-  const setTheme = useEditorStore((state) => state.setTheme);
   const language = useEditorStore((state) => state.language);
   const setLanguage = useEditorStore((state) => state.setLanguage);
   const zoom = useEditorStore((state) => state.zoom);
   const setZoom = useEditorStore((state) => state.setZoom);
+  const editorLayout = useEditorStore((state) => state.editorLayout);
   const sourceOpen = useEditorStore((state) => state.sourceOpen);
   const setSourceOpen = useEditorStore((state) => state.setSourceOpen);
   const latexCodeFormat = useEditorStore((state) => state.latexCodeFormat);
@@ -751,6 +754,7 @@ function App() {
 
       if (
         settingsOpen ||
+        formulaHotkeyManagerOpen ||
         ocrOpen ||
         historyOpen ||
         exportOpen ||
@@ -811,6 +815,7 @@ function App() {
     isEn,
     zoom,
     settingsOpen,
+    formulaHotkeyManagerOpen,
     ocrOpen,
     historyOpen,
     exportOpen,
@@ -848,11 +853,33 @@ function App() {
           <button
             type="button"
             className={"icon-button sidebar-toggle " + (sidebarOpen ? "is-active" : "")}
-            aria-label={sidebarOpen ? (isEn ? "Hide formula tools" : "隐藏公式工具") : (isEn ? "Show formula tools" : "显示公式工具")}
+            aria-label={
+              editorLayout === "classic"
+                ? sidebarOpen
+                  ? isEn
+                    ? "Hide formula tiles"
+                    : "隐藏公式磁贴"
+                  : isEn
+                    ? "Show formula tiles"
+                    : "显示公式磁贴"
+                : sidebarOpen
+                  ? isEn
+                    ? "Hide formula tools"
+                    : "隐藏公式工具"
+                  : isEn
+                    ? "Show formula tools"
+                    : "显示公式工具"
+            }
             aria-pressed={sidebarOpen}
             onClick={() => setSidebarOpen((open) => !open)}
           >
-            {sidebarOpen ? <PanelLeftClose size={17} /> : <PanelLeftOpen size={17} />}
+            {editorLayout === "classic" ? (
+              sidebarOpen ? <PanelRightClose size={17} /> : <PanelRightOpen size={17} />
+            ) : sidebarOpen ? (
+              <PanelLeftClose size={17} />
+            ) : (
+              <PanelLeftOpen size={17} />
+            )}
           </button>
           <div className="brand-mark" aria-hidden="true">
             <VisualTeXLogo className="visualtex-brand-logo" />
@@ -1038,23 +1065,6 @@ function App() {
           </button>
           <button type="button" className="icon-button workspace-action" onClick={() => setOcrOpen(true)} aria-label={isEn ? "Recognize formula image" : "图片公式识别"} title={isEn ? "Recognize formula image" : "图片公式识别"}>
             <ScanLine size={17} />
-          </button>
-          <button
-            type="button"
-            className="icon-button theme-toggle"
-            onClick={() => setTheme(theme === "light" ? "dark" : "light")}
-            aria-label={theme === "light" ? (isEn ? "Switch to dark mode" : "切换深色模式") : (isEn ? "Switch to light mode" : "切换浅色模式")}
-            title={
-              isEn
-                ? theme === "light"
-                  ? "Switch to dark mode"
-                  : "Switch to light mode"
-                : theme === "light"
-                  ? "切换深色模式"
-                  : "切换浅色模式"
-            }
-          >
-            {theme === "light" ? <Moon size={17} /> : <Sun size={17} />}
           </button>
           <button type="button" className="icon-button settings-toggle" onClick={() => setSettingsOpen(true)} aria-label={isEn ? "Settings" : "设置"} title={isEn ? "Settings · ⌘," : "设置 · ⌘,"}>
             <Settings2 size={17} />
@@ -1253,6 +1263,14 @@ function App() {
           setSettingsOpen(false);
           void runUpdateCheck(true);
         }}
+        onOpenFormulaHotkeys={() => {
+          setSettingsOpen(false);
+          setFormulaHotkeyManagerOpen(true);
+        }}
+      />
+      <FormulaHotkeyManagerDialog
+        open={formulaHotkeyManagerOpen}
+        onClose={() => setFormulaHotkeyManagerOpen(false)}
       />
       <HistoryPanel
         open={historyOpen}
@@ -1273,6 +1291,7 @@ function App() {
               title,
               lines: nextLines,
               activeLineId: nextActiveLineId,
+              formulaAlignment,
               selectionByLineId:
                 editorRef.current?.getSelectionMap() ?? {},
             },

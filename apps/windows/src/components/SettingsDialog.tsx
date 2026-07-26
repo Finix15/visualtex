@@ -1,12 +1,11 @@
 import { useEffect, useRef } from "react";
 import {
   BrainCircuit,
+  Keyboard,
   Languages,
-  Moon,
   RefreshCw,
   RotateCcw,
   SlidersHorizontal,
-  Sun,
   X,
 } from "lucide-react";
 import { useEditorStore } from "../stores/editorStore";
@@ -16,9 +15,15 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onCheckForUpdates: () => void;
+  onOpenFormulaHotkeys: () => void;
 }
 
-export function SettingsDialog({ open, onClose, onCheckForUpdates }: Props) {
+export function SettingsDialog({
+  open,
+  onClose,
+  onCheckForUpdates,
+  onOpenFormulaHotkeys,
+}: Props) {
   const dialogRef = useRef<HTMLElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const theme = useEditorStore((state) => state.theme);
@@ -27,6 +32,8 @@ export function SettingsDialog({ open, onClose, onCheckForUpdates }: Props) {
   const setLanguage = useEditorStore((state) => state.setLanguage);
   const zoom = useEditorStore((state) => state.zoom);
   const setZoom = useEditorStore((state) => state.setZoom);
+  const editorLayout = useEditorStore((state) => state.editorLayout);
+  const setEditorLayout = useEditorStore((state) => state.setEditorLayout);
   const autoPairDelimiters = useEditorStore(
     (state) => state.autoPairDelimiters,
   );
@@ -168,6 +175,28 @@ export function SettingsDialog({ open, onClose, onCheckForUpdates }: Props) {
 
           <div className="settings-section">
             <div className="settings-section-title">
+              <Keyboard size={18} />
+              <div>
+                <h3>{isEn ? "Formula hotkeys" : "公式快捷键"}</h3>
+                <p>
+                  {isEn
+                    ? "Review the hotkeys assigned from formula tools and tiles."
+                    : "查看和管理通过公式工具与磁贴设置的快捷键。"}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="secondary-button settings-hotkey-button"
+              onClick={onOpenFormulaHotkeys}
+            >
+              <Keyboard size={15} />
+              {isEn ? "Manage formula hotkeys" : "管理公式快捷键"}
+            </button>
+          </div>
+
+          <div className="settings-section">
+            <div className="settings-section-title">
               <SlidersHorizontal size={18} />
               <div>
                 <h3>{isEn ? "Appearance & editor" : "外观与编辑"}</h3>
@@ -178,23 +207,78 @@ export function SettingsDialog({ open, onClose, onCheckForUpdates }: Props) {
                 </p>
               </div>
             </div>
-            <div className="theme-segment">
-              <button
-                type="button"
-                className={theme === "light" ? "is-active" : ""}
-                aria-pressed={theme === "light"}
-                onClick={() => setTheme("light")}
+            <div className="editor-layout-setting">
+              <span>
+                <strong>{isEn ? "Editor layout" : "编辑器布局"}</strong>
+                <small>
+                  {isEn
+                    ? "Keep the current sidebar layout or use a classic bottom-tools layout."
+                    : "保留当前侧栏布局，或切换为底部工具栏与右侧磁贴的经典布局。"}
+                </small>
+              </span>
+              <div
+                className="theme-segment editor-layout-segment"
+                role="group"
+                aria-label={isEn ? "Editor layout" : "编辑器布局"}
               >
-                <Sun size={16} /> {isEn ? "Light" : "浅色"}
-              </button>
-              <button
-                type="button"
-                className={theme === "dark" ? "is-active" : ""}
-                aria-pressed={theme === "dark"}
-                onClick={() => setTheme("dark")}
+                <button
+                  type="button"
+                  className={editorLayout === "standard" ? "is-active" : ""}
+                  aria-pressed={editorLayout === "standard"}
+                  data-editor-layout-choice="standard"
+                  onClick={() => setEditorLayout("standard")}
+                >
+                  {isEn ? "Standard" : "标准布局"}
+                </button>
+                <button
+                  type="button"
+                  className={editorLayout === "classic" ? "is-active" : ""}
+                  aria-pressed={editorLayout === "classic"}
+                  data-editor-layout-choice="classic"
+                  onClick={() => setEditorLayout("classic")}
+                >
+                  {isEn ? "Classic" : "经典布局"}
+                </button>
+              </div>
+            </div>
+            <div className="theme-choice-setting">
+              <span>
+                <strong>{isEn ? "Colour theme" : "界面配色"}</strong>
+                <small>
+                  {isEn
+                    ? "Choose a complete semantic colour system for the app and formula canvas."
+                    : "选择整套界面、公式画布、Placeholder 与光标配色。"}
+                </small>
+              </span>
+              <div
+                className="theme-segment theme-choice-segment"
+                role="group"
+                aria-label={isEn ? "Colour theme" : "界面配色"}
               >
-                <Moon size={16} /> {isEn ? "Dark" : "深色"}
-              </button>
+                {(
+                  [
+                    ["light", isEn ? "Light" : "浅色"],
+                    ["beige", isEn ? "Warm beige" : "暖米色"],
+                    ["dark", isEn ? "Dark" : "深色"],
+                  ] as const
+                ).map(([themeId, label]) => (
+                  <button
+                    key={themeId}
+                    type="button"
+                    className={theme === themeId ? "is-active" : ""}
+                    aria-pressed={theme === themeId}
+                    data-theme-choice={themeId}
+                    onClick={() => setTheme(themeId)}
+                  >
+                    <span className="theme-choice-swatch" aria-hidden="true">
+                      <i />
+                      <i />
+                      <i />
+                    </span>
+                    <span>{label}</span>
+                  </button>
+                ))}
+              </div>
             </div>
             <label className="switch-row">
               <span>

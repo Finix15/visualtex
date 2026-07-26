@@ -203,6 +203,7 @@ export function OfficeDialogApp() {
         nextLines.some((line) => line.id === session.activeLineId)
           ? session.activeLineId
           : nextLines[0]?.id ?? null,
+      formulaAlignment: useEditorStore.getState().formulaAlignment,
       selectionByLineId: {},
     });
     const loadedCodeFormat = normalizeOfficeCodeFormat(session.codeFormat);

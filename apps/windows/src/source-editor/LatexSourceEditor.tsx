@@ -11,13 +11,14 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { useEditorStore } from "../stores/editorStore";
-import type { LatexCodeFormat } from "../types/formula";
+import type { LatexCodeFormat, Theme } from "../types/formula";
 
 interface Props {
   latex: string;
-  theme: "light" | "dark";
+  theme: Theme;
   format: LatexCodeFormat;
   onCollapse: () => void;
+  showCollapseAction?: boolean;
   onApply: (latex: string, sourceFormat: LatexCodeFormat) => void;
   onCopy: () => void;
 }
@@ -27,6 +28,7 @@ export function LatexSourceEditor({
   theme,
   format,
   onCollapse,
+  showCollapseAction = true,
   onApply,
   onCopy,
 }: Props) {
@@ -194,15 +196,17 @@ export function LatexSourceEditor({
           >
             <Copy size={14} />
           </button>
-          <button
-            type="button"
-            className="text-button source-collapse-button"
-            onClick={onCollapse}
-            aria-label={isEn ? "Hide LaTeX source" : "收起 LaTeX 源码"}
-            title={isEn ? "Hide LaTeX source" : "收起 LaTeX 源码"}
-          >
-            <PanelBottomClose size={14} />
-          </button>
+          {showCollapseAction && (
+            <button
+              type="button"
+              className="text-button source-collapse-button"
+              onClick={onCollapse}
+              aria-label={isEn ? "Hide LaTeX source" : "收起 LaTeX 源码"}
+              title={isEn ? "Hide LaTeX source" : "收起 LaTeX 源码"}
+            >
+              <PanelBottomClose size={14} />
+            </button>
+          )}
         </div>
       </div>
       <div ref={hostRef} className="codemirror-host" />
