@@ -7625,6 +7625,16 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
   overflow: hidden;
 }
 
+.formula-tile-preview .visualtex-tile-placeholder {
+  display: inline-block;
+  color: var(--text);
+  opacity: 0.82;
+}
+
+.formula-tile-preview .visualtex-tile-placeholder .ML__rule {
+  border-radius: 0.08em;
+}
+
 .formula-tile-empty {
   display: grid;
   gap: 5px;

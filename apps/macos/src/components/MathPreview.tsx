@@ -4,6 +4,7 @@ import { convertLatexToMarkup } from "mathlive";
 interface MathPreviewProps {
   latex: string;
   className?: string;
+  showPlaceholders?: boolean;
   fit?: boolean;
   fluidHeight?: boolean;
   intrinsicWidth?: boolean;
@@ -21,10 +22,64 @@ interface MathPreviewProps {
 const defaultFitInsetRatio = 0.9;
 const minimumFluidFitScale = 0.1;
 const defaultMaximumFitScale = 8;
+const visiblePlaceholderLatex =
+  "\\htmlClass{visualtex-tile-placeholder}{\\rule{0.72em}{0.18em}}";
+
+export function latexWithVisiblePlaceholders(latex: string) {
+  if (!latex.includes("\\placeholder")) return latex;
+
+  let cursor = 0;
+  let rendered = "";
+  while (cursor < latex.length) {
+    const commandStart = latex.indexOf("\\placeholder", cursor);
+    if (commandStart < 0) {
+      rendered += latex.slice(cursor);
+      break;
+    }
+
+    rendered += latex.slice(cursor, commandStart);
+    let commandEnd = commandStart + "\\placeholder".length;
+    while (/\s/.test(latex[commandEnd] ?? "")) commandEnd += 1;
+
+    if (latex[commandEnd] === "[") {
+      let bracketDepth = 1;
+      commandEnd += 1;
+      while (commandEnd < latex.length && bracketDepth > 0) {
+        if (latex[commandEnd] === "[") bracketDepth += 1;
+        if (latex[commandEnd] === "]") bracketDepth -= 1;
+        commandEnd += 1;
+      }
+      while (/\s/.test(latex[commandEnd] ?? "")) commandEnd += 1;
+    }
+
+    if (latex[commandEnd] !== "{") {
+      rendered += "\\placeholder";
+      cursor = commandStart + "\\placeholder".length;
+      continue;
+    }
+
+    let braceDepth = 1;
+    commandEnd += 1;
+    while (commandEnd < latex.length && braceDepth > 0) {
+      if (latex[commandEnd] === "{") braceDepth += 1;
+      if (latex[commandEnd] === "}") braceDepth -= 1;
+      commandEnd += 1;
+    }
+    if (braceDepth > 0) {
+      rendered += latex.slice(commandStart);
+      break;
+    }
+
+    rendered += visiblePlaceholderLatex;
+    cursor = commandEnd;
+  }
+  return rendered;
+}
 
 export function MathPreview({
   latex,
   className = "",
+  showPlaceholders = false,
   fit = false,
   fluidHeight = false,
   intrinsicWidth = false,
@@ -42,9 +97,13 @@ export function MathPreview({
   const contentRef = useRef<HTMLSpanElement>(null);
   const onMeasureRef = useRef(onMeasure);
   onMeasureRef.current = onMeasure;
+  const previewLatex = useMemo(
+    () => (showPlaceholders ? latexWithVisiblePlaceholders(latex) : latex),
+    [latex, showPlaceholders],
+  );
   const markup = useMemo(
-    () => convertLatexToMarkup(latex, { defaultMode: "math" }),
-    [latex],
+    () => convertLatexToMarkup(previewLatex, { defaultMode: "math" }),
+    [previewLatex],
   );
 
   useLayoutEffect(() => {
@@ -155,6 +214,7 @@ export function MathPreview({
       className={"math-preview " + className}
       aria-hidden="true"
       data-fit={fit ? "contain" : "none"}
+      data-show-placeholders={showPlaceholders ? "true" : "false"}
       data-fluid-height={fluidHeight ? "true" : "false"}
       data-intrinsic-width={intrinsicWidth ? "true" : "false"}
     >

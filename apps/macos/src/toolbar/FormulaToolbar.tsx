@@ -1575,6 +1575,7 @@ export function FormulaToolbar({ onInsert }: Props) {
                                   <MathPreview
                                     latex={tile.latex}
                                     className="formula-tile-preview"
+                                    showPlaceholders
                                     fit
                                     fluidHeight
                                     minimumFluidScale={0.9}
