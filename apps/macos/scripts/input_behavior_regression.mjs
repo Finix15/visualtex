@@ -920,6 +920,215 @@ async function main() {
       })()`);
       await reload();
     };
+
+    const clickStructuralGap = async (latex, prefix) => {
+      await loadFormulaLines([latex], 0);
+      const geometry = await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        const compact = (value) => value.replace(/\\s+/g, "").replace(/\\{([A-Za-z0-9])\\}/g, "$1");
+        let targetOffset = -1;
+        for (let offset = 0; offset <= field.lastOffset; offset += 1) {
+          if (compact(field.getValue(0, offset, "latex")) === compact(${JSON.stringify(prefix)})) {
+            targetOffset = offset;
+            break;
+          }
+        }
+        const entries = Array.from({ length: field.lastOffset + 1 }, (_, offset) => ({
+          offset,
+          info: field.getElementInfo(offset),
+        }));
+        const previous = entries.slice(0, targetOffset).reverse().find(({ info }) => info?.bounds)?.info.bounds;
+        const next = entries.slice(targetOffset + 1).find(({ info }) => info?.depth === 0 && info.bounds)?.info.bounds;
+        const fieldRect = field.getBoundingClientRect();
+        return {
+          targetOffset,
+          point: {
+            x: previous && next ? (previous.right + next.left) / 2 : -1,
+            y: (fieldRect.top + fieldRect.bottom) / 2,
+          },
+        };
+      })()`);
+      assert.ok(geometry.targetOffset >= 0, JSON.stringify({ latex, prefix, geometry }));
+      assert.ok(geometry.point.x >= 0, JSON.stringify({ latex, prefix, geometry }));
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: geometry.point.x,
+        y: geometry.point.y,
+        button: "left",
+        buttons: 1,
+        clickCount: 1,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: geometry.point.x,
+        y: geometry.point.y,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+      });
+      await sleep(120);
+      const state = await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        const caret = field.shadowRoot?.querySelector(".ML__caret, .ML__text-caret")?.getBoundingClientRect();
+        return {
+          position: field.position,
+          caretTop: caret?.top ?? -1,
+          caretBottom: caret?.bottom ?? -1,
+        };
+      })()`);
+      assert.equal(
+        state.position,
+        geometry.targetOffset,
+        JSON.stringify({ latex, prefix, geometry, state }),
+      );
+      assert.ok(state.caretBottom > state.caretTop);
+    };
+
+    await clickStructuralGap(
+      "x_{i}^{2}\\int_{0}^{1}f(x)\\,\\mathrm{d}x",
+      "x_{i}^{2}",
+    );
+    await clickStructuralGap(
+      "A_{m}^{n}\\frac{p+q}{r-s}",
+      "A_{m}^{n}",
+    );
+    await clickStructuralGap(
+      "\\frac{a_i}{b^2}x_j^3\\sum_{k=0}^{N}c_k",
+      "\\frac{a_i}{b^2}x_j^3",
+    );
+    await clickStructuralGap(
+      "\\sqrt{\\frac{u}{v}}y_k^4\\prod_{r=1}^{M}d_r",
+      "\\sqrt{\\frac{u}{v}}y_k^4",
+    );
+
+    const dragAcrossLines = async ({ reverse, fromFarRight = false }) => {
+      await loadFormulaLines(["abcDEF", "m+\\frac{n}{d}", "UVWxyz"], reverse ? 2 : 0);
+      const geometry = await evaluate(`(() => {
+        const fields = Array.from(document.querySelectorAll("math-field"));
+        const compact = (value) => value.replace(/\\s+/g, "");
+        const pointForPrefix = (field, prefix) => {
+          let offset = -1;
+          for (let candidate = 0; candidate <= field.lastOffset; candidate += 1) {
+            if (compact(field.getValue(0, candidate, "latex")) === compact(prefix)) {
+              offset = candidate;
+              break;
+            }
+          }
+          const bounds = field.getElementInfo(offset)?.bounds;
+          const content = field.shadowRoot?.querySelector('[part="content"]')?.getBoundingClientRect();
+          return {
+            offset,
+            x: bounds ? bounds.right - 1 : content.left + 1,
+            y: content ? (content.top + content.bottom) / 2 : field.getBoundingClientRect().y,
+          };
+        };
+        const first = pointForPrefix(fields[0], "abc");
+        const third = pointForPrefix(fields[2], "UVW");
+        const thirdFieldRect = fields[2].getBoundingClientRect();
+        const thirdContentRect = fields[2].shadowRoot.querySelector('[part="content"]').getBoundingClientRect();
+        if (${fromFarRight}) {
+          third.offset = fields[2].lastOffset;
+          third.x = Math.min(thirdFieldRect.right - 12, thirdContentRect.right + 100);
+        }
+        return { first, third, middleY: fields[1].getBoundingClientRect().y + fields[1].getBoundingClientRect().height / 2 };
+      })()`);
+      const start = reverse ? geometry.third : geometry.first;
+      const end = reverse ? geometry.first : geometry.third;
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: start.x,
+        y: start.y,
+        button: "left",
+        buttons: 1,
+        clickCount: 1,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: (start.x + end.x) / 2,
+        y: geometry.middleY,
+        button: "left",
+        buttons: 1,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: end.x,
+        y: end.y,
+        button: "left",
+        buttons: 1,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: end.x,
+        y: end.y,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+      });
+      await sleep(180);
+      const selected = await evaluate(`Array.from(document.querySelectorAll("math-field")).map((field) => ({
+        selection: field.selection,
+        selected: field.classList.contains("has-visualtex-multi-line-selection"),
+      }))`);
+      assert.equal(selected.length, 3);
+      assert.ok(selected.every((state) => state.selected), JSON.stringify(selected));
+      assert.ok(
+        selected.every((state) => state.selection.ranges[0][0] !== state.selection.ranges[0][1]),
+        JSON.stringify(selected),
+      );
+      const common = {
+        key: "Backspace",
+        code: "Backspace",
+        windowsVirtualKeyCode: 8,
+        nativeVirtualKeyCode: 8,
+      };
+      await client.send("Input.dispatchKeyEvent", { type: "keyDown", ...common });
+      await client.send("Input.dispatchKeyEvent", { type: "keyUp", ...common });
+      await sleep(220);
+      return evaluate(`Array.from(document.querySelectorAll("math-field")).map((field) => field.value)`);
+    };
+
+    assert.deepEqual(await dragAcrossLines({ reverse: false }), ["abcxyz"]);
+    const undoMultiLineDelete = await evaluate(`new Promise((resolve) => {
+      const field = document.querySelector("math-field");
+      field.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "z",
+        code: "KeyZ",
+        metaKey: true,
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+      }));
+      setTimeout(() => resolve(
+        Array.from(document.querySelectorAll("math-field")).map((item) => item.value)
+      ), 180);
+    })`);
+    assert.deepEqual(undoMultiLineDelete, [
+      "abcDEF",
+      "m+\\frac{n}{d}",
+      "UVWxyz",
+    ]);
+    const redoMultiLineDelete = await evaluate(`new Promise((resolve) => {
+      const field = document.querySelector("math-field");
+      field.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "z",
+        code: "KeyZ",
+        metaKey: true,
+        shiftKey: true,
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+      }));
+      setTimeout(() => resolve(
+        Array.from(document.querySelectorAll("math-field")).map((item) => item.value)
+      ), 180);
+    })`);
+    assert.deepEqual(redoMultiLineDelete, ["abcxyz"]);
+    assert.deepEqual(await dragAcrossLines({ reverse: true }), ["abcxyz"]);
+    assert.deepEqual(
+      await dragAcrossLines({ reverse: true, fromFarRight: true }),
+      ["abc"],
+    );
+
     const mergeAtSecondLineStart = async () =>
       evaluate(`new Promise((resolve) => {
         const fields = Array.from(document.querySelectorAll("math-field"));

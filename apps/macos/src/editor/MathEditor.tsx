@@ -120,6 +120,25 @@ interface FormulaFieldProps {
   onPasteImage?: (file: File, target: MathEditorInsertionTarget) => void;
 }
 
+interface MultiLineSelectionPoint {
+  lineId: string;
+  lineIndex: number;
+  offset: number;
+}
+
+interface MultiLineSelectionState {
+  anchor: MultiLineSelectionPoint;
+  focus: MultiLineSelectionPoint;
+}
+
+interface PointerSelectionSession {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  anchor: MultiLineSelectionPoint;
+  active: boolean;
+}
+
 const trailingCommand = /\\([\p{L}]*)$/u;
 
 function hasRawLatexInput(field: MathfieldElement) {
@@ -133,6 +152,52 @@ function rawLatexInput(field: MathfieldElement) {
     .filter((node) => !node.classList.contains("ML__suggestion"))
     .map((node) => node.textContent ?? "")
     .join("");
+}
+
+function structuralBoundaryOffsetFromPoint(
+  field: MathfieldElement,
+  clientX: number,
+) {
+  const elementInfo = Array.from(
+    { length: field.lastOffset + 1 },
+    (_, offset) => ({ offset, info: field.getElementInfo(offset) }),
+  );
+  const nextTopLevelBounds = new Array<DOMRect | undefined>(
+    elementInfo.length,
+  );
+  let upcomingTopLevelBounds: DOMRect | undefined;
+  for (let index = elementInfo.length - 1; index >= 0; index -= 1) {
+    nextTopLevelBounds[index] = upcomingTopLevelBounds;
+    const info = elementInfo[index]?.info;
+    if (info?.depth === 0 && info.bounds) {
+      upcomingTopLevelBounds = info.bounds;
+    }
+  }
+
+  let previousBounds: DOMRect | undefined;
+  for (const candidate of elementInfo) {
+    // MathLive's point hit testing uses two-dimensional distance. In the
+    // horizontal gap after a scripted expression this can select a superscript
+    // or subscript instead of the real top-level boundary represented by this
+    // bounds-less model offset. Restrict the correction to the actual gap so
+    // clicks on either neighboring structure keep their native behavior.
+    if (candidate.info?.depth === 0 && !candidate.info.bounds) {
+      const next = nextTopLevelBounds[candidate.offset];
+      if (
+        previousBounds &&
+        next &&
+        previousBounds.right <= next.left &&
+        clientX >= previousBounds.right &&
+        clientX <= next.left
+      ) {
+        return candidate.offset;
+      }
+    }
+
+    if (candidate.info?.bounds) previousBounds = candidate.info.bounds;
+  }
+
+  return null;
 }
 
 function rawCommandQuery(field: MathfieldElement) {
@@ -3698,6 +3763,32 @@ function FormulaField(props: FormulaFieldProps) {
         event.clientY <= hostBounds.bottom;
       if (!clickedInsideHost) return;
 
+      const structuralBoundaryOffset = structuralBoundaryOffsetFromPoint(
+        field,
+        event.clientX,
+      );
+      if (
+        structuralBoundaryOffset !== null &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.shiftKey
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        field.focus();
+        field.selection = {
+          ranges: [[structuralBoundaryOffset, structuralBoundaryOffset]],
+          direction: "none",
+        };
+        field.position = structuralBoundaryOffset;
+        field.shadowRoot
+          ?.querySelector<HTMLElement>('[part="keyboard-sink"]')
+          ?.focus({ preventScroll: true });
+        propsRef.current.onFocus(propsRef.current.index, field);
+        return;
+      }
+
       const hasVisibleFormula = Boolean(field.value.trim()) && contentBounds;
       const clickedInRightBlankArea = hasVisibleFormula
         ? event.clientX > contentBounds.right + 6
@@ -3904,6 +3995,11 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
     const activeLineIdRef = useRef<string | null>(activeLineId);
     const focusRequestRef = useRef(0);
     const suppressedHistoryLineIdRef = useRef<string | null>(null);
+    const multiLineSelectionRef = useRef<MultiLineSelectionState | null>(null);
+    const pointerSelectionSessionRef = useRef<PointerSelectionSession | null>(
+      null,
+    );
+    const multiLineSelectedIdsRef = useRef(new Set<string>());
     const pendingFocusRef = useRef<{
       lineId: string;
       latex: string | null;
@@ -4172,10 +4268,150 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       useEditorStore.getState().setActiveLineId(lineId);
     };
 
+    const clearMultiLineSelection = () => {
+      for (const lineId of multiLineSelectedIdsRef.current) {
+        const field = fieldRefs.current.get(lineId);
+        if (!field?.isConnected) continue;
+        field.classList.remove("has-visualtex-multi-line-selection");
+        field
+          .closest<HTMLElement>(".formula-line")
+          ?.classList.remove("is-multi-line-selected");
+        if (!field.selectionIsCollapsed) {
+          const position = Math.max(0, Math.min(field.position, field.lastOffset));
+          field.selection = {
+            ranges: [[position, position]],
+            direction: "none",
+          };
+        }
+      }
+      multiLineSelectedIdsRef.current.clear();
+      multiLineSelectionRef.current = null;
+    };
+
+    const resolveMultiLineSelectionPoint = (
+      clientX: number,
+      clientY: number,
+      preferredLineId?: string,
+    ): MultiLineSelectionPoint | null => {
+      const mountedLines = linesRef.current.flatMap((line, lineIndex) => {
+        const field = fieldRefs.current.get(line.id);
+        const row = field?.closest<HTMLElement>(".formula-line");
+        return field?.isConnected && row
+          ? [{ lineId: line.id, lineIndex, field, rowRect: row.getBoundingClientRect() }]
+          : [];
+      });
+      if (!mountedLines.length) return null;
+
+      const preferred = preferredLineId
+        ? mountedLines.find((line) => line.lineId === preferredLineId)
+        : null;
+      const target =
+        preferred ??
+        mountedLines.find(
+          ({ rowRect }) => clientY >= rowRect.top && clientY <= rowRect.bottom,
+        ) ??
+        mountedLines.reduce((nearest, line) => {
+          const distance =
+            clientY < line.rowRect.top
+              ? line.rowRect.top - clientY
+              : clientY > line.rowRect.bottom
+                ? clientY - line.rowRect.bottom
+                : 0;
+          const nearestDistance =
+            clientY < nearest.rowRect.top
+              ? nearest.rowRect.top - clientY
+              : clientY > nearest.rowRect.bottom
+                ? clientY - nearest.rowRect.bottom
+                : 0;
+          return distance < nearestDistance ? line : nearest;
+        });
+      const content = target.field.shadowRoot?.querySelector<HTMLElement>(
+        '[part="content"]',
+      );
+      const contentRect = content?.getBoundingClientRect();
+      const sampleY = contentRect
+        ? Math.max(contentRect.top + 1, Math.min(clientY, contentRect.bottom - 1))
+        : clientY;
+      const structuralOffset = structuralBoundaryOffsetFromPoint(
+        target.field,
+        clientX,
+      );
+      const offset = Math.max(
+        0,
+        Math.min(
+          structuralOffset ??
+            target.field.getOffsetFromPoint(clientX, sampleY, { bias: 0 }),
+          target.field.lastOffset,
+        ),
+      );
+      return {
+        lineId: target.lineId,
+        lineIndex: target.lineIndex,
+        offset,
+      };
+    };
+
+    const applyMultiLineSelection = (
+      anchor: MultiLineSelectionPoint,
+      focus: MultiLineSelectionPoint,
+    ) => {
+      const isForward =
+        anchor.lineIndex < focus.lineIndex ||
+        (anchor.lineIndex === focus.lineIndex && anchor.offset <= focus.offset);
+      const start = isForward ? anchor : focus;
+      const end = isForward ? focus : anchor;
+      const nextSelectedIds = new Set<string>();
+
+      for (const lineId of multiLineSelectedIdsRef.current) {
+        if (
+          linesRef.current.findIndex((line) => line.id === lineId) >=
+            start.lineIndex &&
+          linesRef.current.findIndex((line) => line.id === lineId) <=
+            end.lineIndex
+        ) {
+          continue;
+        }
+        const field = fieldRefs.current.get(lineId);
+        if (!field?.isConnected) continue;
+        field.classList.remove("has-visualtex-multi-line-selection");
+        field
+          .closest<HTMLElement>(".formula-line")
+          ?.classList.remove("is-multi-line-selected");
+        const position = Math.max(0, Math.min(field.position, field.lastOffset));
+        field.selection = {
+          ranges: [[position, position]],
+          direction: "none",
+        };
+      }
+
+      for (let lineIndex = start.lineIndex; lineIndex <= end.lineIndex; lineIndex += 1) {
+        const line = linesRef.current[lineIndex];
+        const field = line ? fieldRefs.current.get(line.id) : null;
+        if (!line || !field?.isConnected) continue;
+        const rangeStart =
+          lineIndex === start.lineIndex ? start.offset : 0;
+        const rangeEnd =
+          lineIndex === end.lineIndex ? end.offset : field.lastOffset;
+        field.selection = {
+          ranges: [[Math.min(rangeStart, rangeEnd), Math.max(rangeStart, rangeEnd)]],
+          direction: isForward ? "forward" : "backward",
+        };
+        field.classList.add("has-visualtex-multi-line-selection");
+        field
+          .closest<HTMLElement>(".formula-line")
+          ?.classList.add("is-multi-line-selected");
+        nextSelectedIds.add(line.id);
+      }
+
+      multiLineSelectedIdsRef.current = nextSelectedIds;
+      multiLineSelectionRef.current = { anchor, focus };
+    };
+
     const handleFieldEdit = (
       edit: FormulaFieldEdit,
       field: MathfieldElement,
     ) => {
+      if (multiLineSelectionRef.current) clearMultiLineSelection();
       const state = useEditorStore.getState();
       const currentLine = state.lines.find((line) => line.id === edit.lineId);
       if (!currentLine) return;
@@ -4690,6 +4926,123 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       return true;
     };
 
+    const deleteMultiLineSelection = () => {
+      const selection = multiLineSelectionRef.current;
+      if (!selection) return false;
+      const anchorIndex = linesRef.current.findIndex(
+        (line) => line.id === selection.anchor.lineId,
+      );
+      const focusIndex = linesRef.current.findIndex(
+        (line) => line.id === selection.focus.lineId,
+      );
+      if (anchorIndex < 0 || focusIndex < 0 || anchorIndex === focusIndex) {
+        return false;
+      }
+
+      const anchor = { ...selection.anchor, lineIndex: anchorIndex };
+      const focus = { ...selection.focus, lineIndex: focusIndex };
+      const isForward = anchor.lineIndex < focus.lineIndex;
+      const start = isForward ? anchor : focus;
+      const end = isForward ? focus : anchor;
+      const startLine = linesRef.current[start.lineIndex];
+      const endLine = linesRef.current[end.lineIndex];
+      const startField = startLine ? fieldRefs.current.get(startLine.id) : null;
+      const endField = endLine ? fieldRefs.current.get(endLine.id) : null;
+      if (!startLine || !endLine || !startField || !endField) return false;
+
+      historyManager.commitPendingTransaction();
+      const startOffset = Math.max(0, Math.min(start.offset, startField.lastOffset));
+      const endOffset = Math.max(0, Math.min(end.offset, endField.lastOffset));
+      const leftLatex = normalizeChineseLatex(
+        startField.getValue(0, startOffset, "latex"),
+      );
+      const rightLatex = normalizeChineseLatex(
+        endField.getValue(endOffset, endField.lastOffset, "latex"),
+      );
+      const commandSeparator =
+        /\\[A-Za-z]+$/.test(leftLatex) && /^[A-Za-z]/.test(rightLatex)
+          ? " "
+          : "";
+      const verifier = new MathfieldElement();
+      verifier.setValue(`${leftLatex}${commandSeparator}${rightLatex}`, {
+        mode: "math",
+        format: "latex",
+        insertionMode: "replaceAll",
+        selectionMode: "after",
+        silenceNotifications: true,
+      });
+      const mergedLatex = normalizeChineseLatex(verifier.value);
+      const prefixVerifier = new MathfieldElement();
+      prefixVerifier.setValue(leftLatex, {
+        mode: "math",
+        format: "latex",
+        insertionMode: "replaceAll",
+        selectionMode: "after",
+        silenceNotifications: true,
+      });
+      const joinOffset = prefixVerifier.lastOffset;
+      const joinSelection: MathSelectionSnapshot = {
+        ranges: [[joinOffset, joinOffset]],
+        direction: "none",
+      };
+
+      const selectionByLineId = Object.fromEntries(
+        linesRef.current.flatMap((line) => {
+          const currentField = fieldRefs.current.get(line.id);
+          return currentField?.isConnected
+            ? [[line.id, captureSelection(currentField)] as const]
+            : [];
+        }),
+      );
+      const before = getEditorDocumentSnapshot(selectionByLineId);
+      before.lines = before.lines.map((line) => {
+        const currentField = fieldRefs.current.get(line.id);
+        return currentField?.isConnected
+          ? { ...line, latex: normalizeChineseLatex(currentField.value) }
+          : line;
+      });
+      const removedIds = new Set(
+        before.lines
+          .slice(start.lineIndex + 1, end.lineIndex + 1)
+          .map((line) => line.id),
+      );
+      const nextSelectionByLineId = { ...before.selectionByLineId };
+      for (const lineId of removedIds) delete nextSelectionByLineId[lineId];
+      nextSelectionByLineId[startLine.id] = joinSelection;
+      const after: ReplaceDocumentEntry["after"] = {
+        title: before.title,
+        lines: before.lines
+          .filter((line) => !removedIds.has(line.id))
+          .map((line) =>
+            line.id === startLine.id
+              ? { ...line, latex: mergedLatex }
+              : { ...line },
+          ),
+        activeLineId: startLine.id,
+        selectionByLineId: nextSelectionByLineId,
+      };
+
+      clearMultiLineSelection();
+      endField.blur();
+      flushSync(() => useEditorStore.getState().replaceDocumentState(after));
+      linesRef.current = useEditorStore.getState().lines;
+      setActiveLine(startLine.id);
+      historyManager.push({
+        type: "replace-document",
+        before,
+        after,
+        source: "delete-multi-line",
+        timestamp: Date.now(),
+      });
+      setQuery("");
+      selectSuggestionIndex(0);
+      focusLine(startLine.id, {
+        latex: mergedLatex,
+        selection: joinSelection,
+      });
+      return true;
+    };
+
     const removeEmptyLine = (index: number) => {
       const state = useEditorStore.getState();
       if (state.lines.length <= 1) return;
@@ -4747,6 +5100,19 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       field: MathfieldElement,
     ) => {
       setActiveLine(lineId);
+
+      if (
+        (event.key === "Backspace" || event.key === "Delete") &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.shiftKey &&
+        deleteMultiLineSelection()
+      ) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+      }
 
       const formulaHotkey = hasRawLatexInput(field)
         ? null
@@ -5437,6 +5803,108 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
     useEffect(() => {
       queryRef.current = query;
     }, [query]);
+
+    useEffect(() => {
+      const surface = surfaceRef.current;
+      if (!surface) return;
+
+      const handleSurfacePointerDown = (event: PointerEvent) => {
+        if (event.button !== 0 || !event.isPrimary || event.shiftKey) return;
+        const path = event.composedPath();
+        const entry = Array.from(fieldRefs.current.entries()).find(
+          ([, field]) =>
+            path.includes(field) ||
+            Boolean(field.parentElement && path.includes(field.parentElement)),
+        );
+        if (!entry) return;
+
+        clearMultiLineSelection();
+        const anchor = resolveMultiLineSelectionPoint(
+          event.clientX,
+          event.clientY,
+          entry[0],
+        );
+        if (!anchor) return;
+        pointerSelectionSessionRef.current = {
+          pointerId: event.pointerId,
+          startX: event.clientX,
+          startY: event.clientY,
+          anchor,
+          active: false,
+        };
+      };
+
+      const handleWindowPointerMove = (event: PointerEvent) => {
+        const session = pointerSelectionSessionRef.current;
+        if (!session || event.pointerId !== session.pointerId) return;
+        const distance = Math.hypot(
+          event.clientX - session.startX,
+          event.clientY - session.startY,
+        );
+        if (!session.active && distance < 5) return;
+
+        const focus = resolveMultiLineSelectionPoint(
+          event.clientX,
+          event.clientY,
+        );
+        if (!focus) return;
+        session.active = true;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        applyMultiLineSelection(session.anchor, focus);
+      };
+
+      const handleWindowPointerEnd = (event: PointerEvent) => {
+        const session = pointerSelectionSessionRef.current;
+        if (!session || event.pointerId !== session.pointerId) return;
+        pointerSelectionSessionRef.current = null;
+        if (!session.active) return;
+
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        for (const field of fieldRefs.current.values()) {
+          visualTexPointerSelectingFields.delete(field);
+          field.classList.remove(visualTexPointerSelectingClass);
+          removePointerPlaceholderSnapshotStyle(field);
+          markVisualTexStructuralPlaceholders(field);
+        }
+        const selection = multiLineSelectionRef.current;
+        if (!selection) return;
+        const focusField = fieldRefs.current.get(selection.focus.lineId);
+        if (focusField?.isConnected) {
+          focusField.focus();
+          focusField.shadowRoot
+            ?.querySelector<HTMLElement>('[part="keyboard-sink"]')
+            ?.focus({ preventScroll: true });
+          applyMultiLineSelection(selection.anchor, selection.focus);
+          setActiveLine(selection.focus.lineId);
+        }
+      };
+
+      const handleWindowPointerCancel = (event: PointerEvent) => {
+        const session = pointerSelectionSessionRef.current;
+        if (!session || event.pointerId !== session.pointerId) return;
+        pointerSelectionSessionRef.current = null;
+        for (const field of fieldRefs.current.values()) {
+          visualTexPointerSelectingFields.delete(field);
+          field.classList.remove(visualTexPointerSelectingClass);
+          removePointerPlaceholderSnapshotStyle(field);
+          markVisualTexStructuralPlaceholders(field);
+        }
+        clearMultiLineSelection();
+      };
+
+      surface.addEventListener("pointerdown", handleSurfacePointerDown, true);
+      window.addEventListener("pointermove", handleWindowPointerMove, true);
+      window.addEventListener("pointerup", handleWindowPointerEnd, true);
+      window.addEventListener("pointercancel", handleWindowPointerCancel, true);
+      return () => {
+        surface.removeEventListener("pointerdown", handleSurfacePointerDown, true);
+        window.removeEventListener("pointermove", handleWindowPointerMove, true);
+        window.removeEventListener("pointerup", handleWindowPointerEnd, true);
+        window.removeEventListener("pointercancel", handleWindowPointerCancel, true);
+      };
+    });
 
     useEffect(() => {
       const lineId =
