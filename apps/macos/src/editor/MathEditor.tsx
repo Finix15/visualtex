@@ -20,6 +20,7 @@ import type {
   LatexCommand,
 } from "../types/command";
 import type {
+  FormulaAlignment,
   FormulaLine,
   InputBehaviorSettingKey,
   InputBehaviorSettings,
@@ -87,6 +88,7 @@ export interface MathEditorHandle {
 interface Props {
   lines: FormulaLine[];
   activeLineId: string | null;
+  formulaAlignment: FormulaAlignment;
   zoom: number;
   onPasteImage?: (file: File, target: MathEditorInsertionTarget) => void;
   onHistoryBusyChange?: (busy: boolean) => void;
@@ -4419,6 +4421,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
     {
       lines,
       activeLineId,
+      formulaAlignment,
       zoom,
       onPasteImage,
       onHistoryBusyChange,
@@ -5274,6 +5277,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         title: state.title,
         lines: nextLines,
         activeLineId: line.id,
+        formulaAlignment: state.formulaAlignment,
         selectionByLineId: {},
       };
 
@@ -5414,6 +5418,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         title: before.title,
         lines: nextLines,
         activeLineId: nextLine.id,
+        formulaAlignment: before.formulaAlignment,
         selectionByLineId: {
           ...before.selectionByLineId,
           [lineId]: {
@@ -5515,6 +5520,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
               : { ...line },
           ),
         activeLineId: previousLine.id,
+        formulaAlignment: before.formulaAlignment,
         selectionByLineId: nextSelectionByLineId,
       };
 
@@ -5630,6 +5636,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
               : { ...line },
           ),
         activeLineId: startLine.id,
+        formulaAlignment: before.formulaAlignment,
         selectionByLineId: nextSelectionByLineId,
       };
 
@@ -5682,6 +5689,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         title: state.title,
         lines: remainingLines.map((line) => ({ ...line })),
         activeLineId: targetLine.id,
+        formulaAlignment: state.formulaAlignment,
         selectionByLineId: {
           [targetLine.id]: afterSelection,
         },
@@ -6342,10 +6350,11 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         ranges: [[Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER]],
         direction: "none",
       };
-      const after = {
+      const after: ReplaceDocumentEntry["after"] = {
         title: before.title,
         lines: nextLines.map((line) => ({ ...line })),
         activeLineId: lastLine.id,
+        formulaAlignment: before.formulaAlignment,
         selectionByLineId: {
           ...before.selectionByLineId,
           [lastLine.id]: afterSelection,
@@ -6547,6 +6556,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         className="editor-surface multi-line-editor"
         data-command-query={query}
         data-active-line-id={activeLineIdRef.current ?? ""}
+        data-formula-alignment={formulaAlignment}
       >
         {overlay}
         <div className="mathfield-stack">

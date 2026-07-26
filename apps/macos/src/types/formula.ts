@@ -16,6 +16,8 @@ export type LatexCodeFormat =
   | "equation-split"
   | "equation-star-split";
 
+export type FormulaAlignment = "left" | "center" | "right";
+
 export interface FormulaLine {
   id: string;
   latex: string;
@@ -25,7 +27,7 @@ export interface FormulaBlock {
   id: string;
   latex: string;
   displayMode: "inline" | "block";
-  alignment: "left" | "center" | "right";
+  alignment: FormulaAlignment;
   fontSize: number;
   createdAt: number;
   updatedAt: number;
@@ -39,6 +41,7 @@ export interface FormulaDocument {
   settings: {
     theme: "light" | "dark";
     zoom: number;
+    formulaAlignment?: FormulaAlignment;
     latexCodeFormat?: LatexCodeFormat;
   };
 }

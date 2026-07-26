@@ -3250,6 +3250,25 @@ button:disabled {
   gap: 8px;
 }
 
+.formula-alignment-controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  margin-left: 4px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+
+.formula-alignment-button {
+  color: var(--text-muted);
+}
+
+.formula-alignment-button.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 .pane-icon {
   width: 28px;
   height: 28px;
@@ -5774,6 +5793,33 @@ textarea:disabled {
 .formula-line .visual-mathfield::part(container) {
   display: flex;
   align-items: center;
+}
+
+.multi-line-editor[data-formula-alignment="left"] .visual-mathfield,
+.multi-line-editor[data-formula-alignment="left"] .visual-mathfield::part(content) {
+  text-align: left;
+}
+
+.multi-line-editor[data-formula-alignment="center"] .visual-mathfield,
+.multi-line-editor[data-formula-alignment="center"] .visual-mathfield::part(content) {
+  text-align: center;
+}
+
+.multi-line-editor[data-formula-alignment="right"] .visual-mathfield,
+.multi-line-editor[data-formula-alignment="right"] .visual-mathfield::part(content) {
+  text-align: right;
+}
+
+.multi-line-editor[data-formula-alignment="left"] .visual-mathfield::part(container) {
+  justify-content: flex-start;
+}
+
+.multi-line-editor[data-formula-alignment="center"] .visual-mathfield::part(container) {
+  justify-content: center;
+}
+
+.multi-line-editor[data-formula-alignment="right"] .visual-mathfield::part(container) {
+  justify-content: flex-end;
 }
 
 .formula-line .visual-mathfield.is-simple-formula {

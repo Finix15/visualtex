@@ -1,4 +1,4 @@
-import type { FormulaLine } from "../types/formula";
+import type { FormulaAlignment, FormulaLine } from "../types/formula";
 
 export type EditKind =
   | "insert"
@@ -88,6 +88,7 @@ export interface DocumentSnapshot {
   title: string;
   lines: FormulaLine[];
   activeLineId: string | null;
+  formulaAlignment: FormulaAlignment;
   selectionByLineId: Record<string, MathSelectionSnapshot>;
 }
 

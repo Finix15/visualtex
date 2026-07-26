@@ -1,5 +1,8 @@
 import { useState } from "react";
 import {
+  AlignCenter,
+  AlignLeft,
+  AlignRight,
   Braces,
   Code2,
   Minus,
@@ -24,6 +27,7 @@ import {
 } from "../clipboard/LatexCopyService";
 import { normalizeChineseLatex } from "../editor/normalizeChineseLatex";
 import { reconcileFormulaLines } from "../history/documentHistory";
+import type { FormulaAlignment } from "../types/formula";
 import type { EditorWorkspaceProps } from "./workspaceTypes";
 
 export function EditorWorkspace({
@@ -59,12 +63,20 @@ export function EditorWorkspace({
   const theme = useEditorStore((state) => state.theme);
   const zoom = useEditorStore((state) => state.zoom);
   const setZoom = useEditorStore((state) => state.setZoom);
+  const formulaAlignment = useEditorStore((state) => state.formulaAlignment);
+  const setFormulaAlignment = useEditorStore(
+    (state) => state.setFormulaAlignment,
+  );
   const sourceOpen = useEditorStore((state) => state.sourceOpen);
   const setSourceOpen = useEditorStore((state) => state.setSourceOpen);
   const latexCodeFormat = useEditorStore((state) => state.latexCodeFormat);
   const isEn = language === "en";
   const latex = joinFormulaLines(lines);
   const sourceLatex = formatLatex(latex, latexCodeFormat);
+  const applyFormulaAlignment = (alignment: FormulaAlignment) => {
+    setFormulaAlignment(alignment);
+    editorRef.current?.focus();
+  };
 
   const runPrimaryAction = async () => {
     if (!onPrimaryAction || primaryBusy) return;
@@ -147,6 +159,36 @@ export function EditorWorkspace({
               </span>
               <div className="pane-title-copy">
                 <h1>{isEn ? "Visual editor" : "可视化编辑"}</h1>
+              </div>
+              <div
+                className="formula-alignment-controls"
+                role="toolbar"
+                aria-label={isEn ? "Formula alignment" : "公式对齐方式"}
+              >
+                {(
+                  [
+                    ["left", AlignLeft, isEn ? "Align left" : "左对齐"],
+                    ["center", AlignCenter, isEn ? "Centre" : "居中"],
+                    ["right", AlignRight, isEn ? "Align right" : "右对齐"],
+                  ] as const
+                ).map(([alignment, Icon, label]) => (
+                  <button
+                    key={alignment}
+                    type="button"
+                    className={
+                      "icon-button compact formula-alignment-button" +
+                      (formulaAlignment === alignment ? " is-active" : "")
+                    }
+                    aria-label={label}
+                    title={label}
+                    aria-pressed={formulaAlignment === alignment}
+                    data-formula-alignment={alignment}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => applyFormulaAlignment(alignment)}
+                  >
+                    <Icon size={16} strokeWidth={2.2} />
+                  </button>
+                ))}
               </div>
             </div>
             <div className="canvas-tool-group">
@@ -232,6 +274,7 @@ export function EditorWorkspace({
                 ref={editorRef}
                 lines={lines}
                 activeLineId={activeLineId}
+                formulaAlignment={formulaAlignment}
                 zoom={zoom}
                 onPasteImage={showOcrActions ? onPasteImage : undefined}
                 onHistoryBusyChange={onHistoryBusyChange}
@@ -261,6 +304,7 @@ export function EditorWorkspace({
                         title,
                         lines: nextLines,
                         activeLineId: nextActiveLineId,
+                        formulaAlignment,
                         selectionByLineId:
                           editorRef.current?.getSelectionMap() ?? {},
                       },

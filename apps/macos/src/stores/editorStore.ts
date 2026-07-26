@@ -3,6 +3,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import type { CommandSource, CommandUsage } from "../types/command";
 import type {
   FormulaDocument,
+  FormulaAlignment,
   FormulaHistoryItem,
   FormulaLine,
   InputBehaviorSettingKey,
@@ -66,6 +67,10 @@ function normalizeInputBehaviorSettings(
   };
 }
 
+function normalizeFormulaAlignment(value: unknown): FormulaAlignment {
+  return value === "center" || value === "right" ? value : "left";
+}
+
 function normalizeEditorZoom(value: unknown) {
   const zoom = typeof value === "number" && Number.isFinite(value) ? value : 1;
   return Math.min(
@@ -115,7 +120,7 @@ export function normalizeFormulaLines(
           ),
         } satisfies FormulaLine;
       })
-      .filter((line): line is FormulaLine => line !== null);
+      .filter((line): line is NonNullable<typeof line> => line !== null);
     if (normalized.length) return normalized;
   }
 
@@ -153,6 +158,7 @@ interface EditorState {
   title: string;
   lines: FormulaLine[];
   activeLineId: string | null;
+  formulaAlignment: FormulaAlignment;
   theme: Theme;
   language: Language;
   zoom: number;
@@ -168,6 +174,7 @@ interface EditorState {
   setTitle: (title: string) => void;
   setActiveLineId: (lineId: string | null) => void;
   replaceFormulaLine: (lineId: string, latex: string) => void;
+  setFormulaAlignment: (alignment: FormulaAlignment) => void;
   insertFormulaLine: (line: FormulaLine, index: number) => void;
   removeFormulaLine: (lineId: string) => void;
   replaceDocumentState: (snapshot: DocumentSnapshot) => void;
@@ -201,6 +208,7 @@ export const useEditorStore = create<EditorState>()(
       title: "未命名公式",
       lines: initialLines,
       activeLineId: initialLines[0].id,
+      formulaAlignment: "left",
       theme: "light",
       language: "cn",
       zoom: 1,
@@ -226,6 +234,8 @@ export const useEditorStore = create<EditorState>()(
               : line,
           ),
         })),
+      setFormulaAlignment: (formulaAlignment) =>
+        set({ formulaAlignment: normalizeFormulaAlignment(formulaAlignment) }),
       insertFormulaLine: (line, index) =>
         set((state) => {
           const nextLines = state.lines.filter((item) => item.id !== line.id);
@@ -255,6 +265,9 @@ export const useEditorStore = create<EditorState>()(
             title: snapshot.title,
             lines,
             activeLineId: validActiveLineId(lines, snapshot.activeLineId),
+            formulaAlignment: normalizeFormulaAlignment(
+              snapshot.formulaAlignment,
+            ),
           };
         }),
       setTheme: (theme) => set({ theme }),
@@ -337,6 +350,10 @@ export const useEditorStore = create<EditorState>()(
             title: document.title,
             lines,
             activeLineId: lines[0]?.id ?? null,
+            formulaAlignment: normalizeFormulaAlignment(
+              document.settings.formulaAlignment ??
+                document.formulas[0]?.alignment,
+            ),
             theme: document.settings.theme,
             zoom: normalizeEditorZoom(document.settings.zoom),
             latexCodeFormat: isLatexCodeFormat(document.settings.latexCodeFormat)
@@ -354,7 +371,7 @@ export const useEditorStore = create<EditorState>()(
             id: line.id,
             latex: line.latex,
             displayMode: "block",
-            alignment: "center",
+            alignment: state.formulaAlignment,
             fontSize: Math.round(36 * state.zoom),
             createdAt: now,
             updatedAt: now,
@@ -363,6 +380,7 @@ export const useEditorStore = create<EditorState>()(
           settings: {
             theme: state.theme,
             zoom: state.zoom,
+            formulaAlignment: state.formulaAlignment,
             latexCodeFormat: state.latexCodeFormat,
           },
         };
@@ -375,6 +393,7 @@ export const useEditorStore = create<EditorState>()(
         title: state.title,
         lines: state.lines,
         activeLineId: state.activeLineId,
+        formulaAlignment: state.formulaAlignment,
         theme: state.theme,
         language: state.language,
         zoom: state.zoom,
@@ -394,11 +413,17 @@ export const useEditorStore = create<EditorState>()(
         };
         const { latex: legacyLatex, ...currentPersisted } = persisted;
         const lines = normalizeFormulaLines(persisted.lines, legacyLatex);
+        const legacyLineAlignment = Array.isArray(persisted.lines)
+          ? (persisted.lines[0] as { alignment?: unknown } | undefined)?.alignment
+          : undefined;
         return {
           ...currentState,
           ...currentPersisted,
           lines,
           activeLineId: validActiveLineId(lines, persisted.activeLineId),
+          formulaAlignment: normalizeFormulaAlignment(
+            persisted.formulaAlignment ?? legacyLineAlignment,
+          ),
           zoom: normalizeEditorZoom(persisted.zoom),
           latexCodeFormat: isLatexCodeFormat(persisted.latexCodeFormat)
             ? persisted.latexCodeFormat

@@ -197,6 +197,7 @@ function App() {
   const setTitle = useEditorStore((state) => state.setTitle);
   const lines = useEditorStore((state) => state.lines);
   const activeLineId = useEditorStore((state) => state.activeLineId);
+  const formulaAlignment = useEditorStore((state) => state.formulaAlignment);
   const theme = useEditorStore((state) => state.theme);
   const setTheme = useEditorStore((state) => state.setTheme);
   const language = useEditorStore((state) => state.language);
@@ -1474,6 +1475,7 @@ function App() {
               title,
               lines: nextLines,
               activeLineId: nextActiveLineId,
+              formulaAlignment,
               selectionByLineId:
                 editorRef.current?.getSelectionMap() ?? {},
             },
