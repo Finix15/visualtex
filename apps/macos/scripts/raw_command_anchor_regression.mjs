@@ -452,6 +452,40 @@ async function main() {
       }
     }
 
+    await evaluate(`(() => {
+      const field = document.querySelector("math-field");
+      field.setValue("", {
+        mode: "math",
+        format: "latex",
+        insertionMode: "replaceAll",
+        selectionMode: "after",
+        silenceNotifications: true,
+      });
+      field.position = field.lastOffset;
+      field.focus();
+      field.shadowRoot?.querySelector('[part="keyboard-sink"]')?.focus({ preventScroll: true });
+    })()`);
+    await typeCharacter("\\", "Backslash", 220);
+    for (const character of "bet") {
+      const upper = character.toUpperCase();
+      await typeCharacter(character, `Key${upper}`, upper.charCodeAt(0));
+    }
+    const prefixState = await readState();
+    assert.equal(prefixState.raw, "\\bet", JSON.stringify(prefixState));
+    assert.equal(
+      prefixState.selectedCandidate,
+      "\\beta",
+      `Default native beta candidate was not selected: ${JSON.stringify(prefixState)}`,
+    );
+    await typeCharacter(" ", "Space", 32, 170);
+    const completedPrefixState = await readState();
+    assert.equal(
+      completedPrefixState.value.replaceAll(" ", ""),
+      "\\beta",
+      `Space inserted the raw prefix instead of beta: ${JSON.stringify(completedPrefixState)}`,
+    );
+    assert.equal(completedPrefixState.raw, "");
+
     console.log("Raw command anchor and auto-exit regression passed");
   } finally {
     client?.close();

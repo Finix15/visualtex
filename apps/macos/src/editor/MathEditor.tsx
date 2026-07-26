@@ -948,6 +948,31 @@ const visualTexPlaceholderSelectionClass =
   "has-visualtex-structural-placeholder-selection";
 const visualTexRawLatexClass = "has-visualtex-raw-latex-command";
 const visualTexPointerSelectingClass = "visualtex-pointer-selecting";
+const visualTexCaretRepaintClass = "visualtex-caret-repaint";
+const visualTexCaretRepaintFrames = new WeakMap<MathfieldElement, number>();
+
+function repaintMathLiveCaret(field: MathfieldElement) {
+  const previousFrame = visualTexCaretRepaintFrames.get(field);
+  if (previousFrame) window.cancelAnimationFrame(previousFrame);
+
+  field.classList.remove(visualTexCaretRepaintClass);
+  // Separate the previous WebKit compositing state from the class mutation.
+  // This matters when the focused keyboard sink that dispatched Backspace has
+  // just been removed from the document.
+  field.shadowRoot
+    ?.querySelector<HTMLElement>(
+      ".ML__caret, .ML__text-caret, .ML__latex-caret",
+    )
+    ?.getBoundingClientRect();
+  field.classList.add(visualTexCaretRepaintClass);
+
+  const frame = window.requestAnimationFrame(() => {
+    visualTexCaretRepaintFrames.delete(field);
+    if (!field.isConnected) return;
+    field.classList.remove(visualTexCaretRepaintClass);
+  });
+  visualTexCaretRepaintFrames.set(field, frame);
+}
 const visualTexPointerSelectingFields = new WeakSet<MathfieldElement>();
 type VisualTexPlaceholderBranchState = {
   isAccent: boolean;
@@ -1810,6 +1835,18 @@ function installVisualTexStructuralPlaceholderStyle(field: MathfieldElement) {
       .ML__container.${visualTexPlaceholderSelectionClass} .ML__latex-caret {
         opacity: 0 !important;
         animation: none !important;
+      }
+
+      :host(.${visualTexCaretRepaintClass})
+        .ML__focused .ML__caret::after,
+      :host(.${visualTexCaretRepaintClass})
+        .ML__focused .ML__text-caret::after,
+      :host(.${visualTexCaretRepaintClass})
+        .ML__focused .ML__latex-caret::after {
+        visibility: visible !important;
+        opacity: 1 !important;
+        animation: none !important;
+        transform: translateZ(0);
       }
 
       .${visualTexPlaceholderCaretClass} {
@@ -2821,6 +2858,7 @@ function FormulaField(props: FormulaFieldProps) {
   const syncFrameSizeRef = useRef<(() => void) | null>(null);
   const lastSnapshotRef = useRef<ReturnType<typeof captureFieldSnapshot> | null>(null);
   const compositionStartRef = useRef<ReturnType<typeof captureFieldSnapshot> | null>(null);
+  const sizingZoomRef = useRef(props.zoom);
   const propsRef = useRef(props);
   propsRef.current = props;
 
@@ -2889,8 +2927,6 @@ function FormulaField(props: FormulaFieldProps) {
       });
     };
     let resizeFrame = 0;
-    let resizeTimer = 0;
-    let resizePass = 0;
     const measureFrameSize = () => {
       const metrics = formulaRowHeightMetrics(
         field.value,
@@ -2930,18 +2966,9 @@ function FormulaField(props: FormulaFieldProps) {
         "--formula-row-height",
         nextHeight + "px",
       );
-
-      resizePass += 1;
-      if (resizePass < 4) {
-        resizeTimer = window.setTimeout(() => {
-          resizeFrame = window.requestAnimationFrame(measureFrameSize);
-        }, resizePass * 50);
-      }
     };
     const syncFrameSize = () => {
       window.cancelAnimationFrame(resizeFrame);
-      window.clearTimeout(resizeTimer);
-      resizePass = 0;
       resizeFrame = window.requestAnimationFrame(measureFrameSize);
     };
     syncFrameSizeRef.current = syncFrameSize;
@@ -3812,6 +3839,17 @@ function FormulaField(props: FormulaFieldProps) {
 
       const rawQuery = rawCommandQuery(field);
       if (!rawQuery) return false;
+      const selectedNativeCommand =
+        field.dataset.pendingNativeSuggestion ||
+        getVisibleNativeSuggestionItems().find((item) =>
+          item.classList.contains("ML__popover__current"),
+        )?.dataset.command ||
+        "";
+      // A raw query such as `\\bet` is only a prefix. Commit the complete
+      // command selected by MathLive (for example `\\beta`), not the prefix
+      // itself. If the native list has no selected item, let MathLive handle
+      // the key instead of turning an incomplete query into an error atom.
+      if (!selectedNativeCommand) return false;
 
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -3820,7 +3858,7 @@ function FormulaField(props: FormulaFieldProps) {
       const committed = commitNativeSuggestion(
         field,
         propsRef.current.inputBehavior,
-        rawQuery,
+        selectedNativeCommand,
       );
       if (!committed) return false;
 
@@ -4221,7 +4259,6 @@ function FormulaField(props: FormulaFieldProps) {
       window.cancelAnimationFrame(resizeFrame);
       window.cancelAnimationFrame(pointerPlaceholderFrame);
       window.cancelAnimationFrame(wrapperPlaceholderFrame);
-      window.clearTimeout(resizeTimer);
       window.clearTimeout(backslashGuardTimer);
       resizeObserver?.disconnect();
       inputMutationObserver?.disconnect();
@@ -4255,6 +4292,12 @@ function FormulaField(props: FormulaFieldProps) {
       clearPendingAutoExit();
       clearPendingWrapperInput();
       rawCommandAnchors.delete(field);
+      const caretRepaintFrame = visualTexCaretRepaintFrames.get(field);
+      if (caretRepaintFrame) {
+        window.cancelAnimationFrame(caretRepaintFrame);
+        visualTexCaretRepaintFrames.delete(field);
+      }
+      field.classList.remove(visualTexCaretRepaintClass);
       host.replaceChildren();
     };
   }, []);
@@ -4263,6 +4306,8 @@ function FormulaField(props: FormulaFieldProps) {
     const field = fieldRef.current;
     const host = hostRef.current;
     if (!field || !host) return;
+    const zoomChanged = sizingZoomRef.current !== props.zoom;
+    sizingZoomRef.current = props.zoom;
 
     // 本地输入仅因中文规范化而与 store 等值时，不重建 MathLive 模型；
     // 只更新事务基准，保留当前光标、选区和删除键内部状态。
@@ -4271,17 +4316,18 @@ function FormulaField(props: FormulaFieldProps) {
         latex: props.latex,
         selection: captureSelection(field),
       };
-      return;
+      if (!zoomChanged) return;
+    } else {
+      field.setValue(props.latex, {
+        mode: "math",
+        format: "latex",
+        insertionMode: "replaceAll",
+        selectionMode: "after",
+        silenceNotifications: true,
+      });
+      field.resetUndo();
     }
 
-    field.setValue(props.latex, {
-      mode: "math",
-      format: "latex",
-      insertionMode: "replaceAll",
-      selectionMode: "after",
-      silenceNotifications: true,
-    });
-    field.resetUndo();
     const metrics = formulaRowHeightMetrics(props.latex, props.zoom);
     const predictedHeight = predictedFormulaRowHeight(
       props.latex,
@@ -4299,13 +4345,6 @@ function FormulaField(props: FormulaFieldProps) {
     lastSnapshotRef.current = captureFieldSnapshot(field);
     syncFrameSizeRef.current?.();
   }, [props.latex, props.zoom]);
-
-  useEffect(() => {
-    if (fieldRef.current) {
-      fieldRef.current.style.fontSize = formulaFontSize(props.zoom) + "px";
-      syncFrameSizeRef.current?.();
-    }
-  }, [props.zoom]);
 
   useEffect(() => {
     if (fieldRef.current) {
@@ -4649,6 +4688,59 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
           deferredRepair: pending.deferredRepair,
         });
       }
+    };
+
+    const prepareFocusBeforeStructuralRemoval = (
+      lineId: string,
+      selection: MathSelectionSnapshot,
+    ) => {
+      const field = fieldRefs.current.get(lineId);
+      if (!field?.isConnected) return false;
+
+      // Transfer the native focus while both keyboard sinks are still in the
+      // document. WKWebView drops a post-removal focus request made after the
+      // keydown target has already been detached.
+      focusRequestRef.current += 1;
+      const index = linesRef.current.findIndex((line) => line.id === lineId);
+      if (index >= 0) {
+        activeIndexRef.current = index;
+        activeLineIdRef.current = lineId;
+        setActiveIndex((current) => (current === index ? current : index));
+      }
+      const currentState = useEditorStore.getState();
+      if (currentState.activeLineId !== lineId) {
+        currentState.setActiveLineId(lineId);
+      }
+      const clamped = clampSelection(selection, field.lastOffset);
+      field.selection = clamped;
+      const range = clamped.ranges[0];
+      if (range && range[0] === range[1]) field.position = range[1];
+      (field as HTMLElement).focus({ preventScroll: true });
+      field.shadowRoot
+        ?.querySelector<HTMLElement>('[part="keyboard-sink"]')
+        ?.focus({ preventScroll: true });
+      return true;
+    };
+
+    const finalizeFocusAfterStructuralRemoval = (
+      lineId: string,
+      selection: MathSelectionSnapshot,
+    ) => {
+      queueMicrotask(() => {
+        if (
+          activeLineIdRef.current !== lineId ||
+          !fieldRefs.current.get(lineId)?.isConnected
+        ) {
+          return;
+        }
+        const field = fieldRefs.current.get(lineId);
+        if (!field?.isConnected) return;
+        const clamped = clampSelection(selection, field.lastOffset);
+        field.selection = clamped;
+        const range = clamped.ranges[0];
+        if (range && range[0] === range[1]) field.position = range[1];
+        repaintMathLiveCaret(field);
+      });
     };
 
     const updatePopupPosition = (field: MathfieldElement) => {
@@ -5383,6 +5475,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       };
 
       const scrollSnapshot = captureEditorScrollSnapshot(previousLine.id);
+      prepareFocusBeforeStructuralRemoval(previousLine.id, joinSelection);
       flushSync(() => useEditorStore.getState().replaceDocumentState(after));
       linesRef.current = useEditorStore.getState().lines;
       setActiveLine(previousLine.id);
@@ -5395,11 +5488,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       });
       setQuery("");
       selectSuggestionIndex(0);
-      focusLine(previousLine.id, {
-        latex: mergedLatex,
-        selection: joinSelection,
-        deferredRepair: false,
-      });
+      finalizeFocusAfterStructuralRemoval(previousLine.id, joinSelection);
       stabilizeEditorScroll(scrollSnapshot, previousLine.id, false);
       return true;
     };
@@ -5501,6 +5590,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       };
 
       const scrollSnapshot = captureEditorScrollSnapshot(startLine.id);
+      prepareFocusBeforeStructuralRemoval(startLine.id, joinSelection);
       clearMultiLineSelection();
       flushSync(() => useEditorStore.getState().replaceDocumentState(after));
       linesRef.current = useEditorStore.getState().lines;
@@ -5514,11 +5604,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       });
       setQuery("");
       selectSuggestionIndex(0);
-      focusLine(startLine.id, {
-        latex: mergedLatex,
-        selection: joinSelection,
-        deferredRepair: false,
-      });
+      finalizeFocusAfterStructuralRemoval(startLine.id, joinSelection);
       stabilizeEditorScroll(scrollSnapshot, startLine.id, false);
       return true;
     };
@@ -5556,6 +5642,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
           [targetLine.id]: afterSelection,
         },
       };
+      prepareFocusBeforeStructuralRemoval(targetLine.id, afterSelection);
       flushSync(() => state.replaceDocumentState(nextDocument));
       linesRef.current = useEditorStore.getState().lines;
       setActiveLine(targetLine.id);
@@ -5572,11 +5659,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       };
       historyManager.push(entry);
       setQuery("");
-      focusLine(targetLine.id, {
-        latex: targetLine.latex,
-        selection: afterSelection,
-        deferredRepair: false,
-      });
+      finalizeFocusAfterStructuralRemoval(targetLine.id, afterSelection);
       stabilizeEditorScroll(scrollSnapshot, targetLine.id, false);
     };
 

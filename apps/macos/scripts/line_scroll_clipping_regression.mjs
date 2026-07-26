@@ -209,6 +209,13 @@ try {
       const samples = [];
       const originalRows = Array.from(document.querySelectorAll(".formula-line"));
       const originalFields = Array.from(document.querySelectorAll("math-field"));
+      const nodeIds = new WeakMap();
+      let nextNodeId = 1;
+      const nodeId = (node) => {
+        if (!node) return null;
+        if (!nodeIds.has(node)) nodeIds.set(node, nextNodeId++);
+        return nodeIds.get(node);
+      };
       let createdRow = null;
       let createdField = null;
       const read = (label) => {
@@ -237,13 +244,18 @@ try {
         ).map((node) => {
           const rect = node.getBoundingClientRect();
           const style = getComputedStyle(node);
+          const pseudo = getComputedStyle(node, "::after");
           return {
+            nodeId: nodeId(node),
             className: node.className,
             width: rect.width,
             height: rect.height,
             display: style.display,
             visibility: style.visibility,
             opacity: style.opacity,
+            pseudoVisibility: pseudo.visibility,
+            pseudoOpacity: pseudo.opacity,
+            pseudoAnimation: pseudo.animationName,
           };
         });
         samples.push({
@@ -263,7 +275,9 @@ try {
           createdFieldStable: !createdField || (createdField.isConnected && fields.includes(createdField)),
           deepTag: deep?.tagName || "",
           deepPart: deep?.getAttribute?.("part") || "",
+          deepNodeId: nodeId(deep),
           activeFieldId: activeField?.closest(".formula-line")?.dataset.lineId ?? null,
+          activeFieldNodeId: nodeId(activeField),
           activeFieldPosition: activeField?.position ?? null,
           activeFieldSelection: activeField?.selection ?? null,
           activeFieldFocused: activeField === document.activeElement || activeField?.matches(":focus-within") || false,
@@ -356,11 +370,23 @@ try {
             caret.height > 0 &&
             caret.display !== "none" &&
             caret.visibility !== "hidden" &&
-            caret.opacity !== "0",
+            caret.opacity !== "0" &&
+            caret.pseudoVisibility !== "hidden" &&
+            caret.pseudoOpacity !== "0",
         ),
         `${label}: visible caret missing at ${sample.label}: ${JSON.stringify(samples)}`,
       );
     }
+    const finalActiveLineId = samples.at(-1)?.activeFieldId;
+    const activeFieldNodeIds = samples
+      .slice(1)
+      .filter((sample) => sample.activeFieldId === finalActiveLineId)
+      .map((sample) => sample.activeFieldNodeId);
+    assert.equal(
+      new Set(activeFieldNodeIds).size,
+      1,
+      `${label}: target Mathfield was replaced: ${JSON.stringify(samples)}`,
+    );
   };
 
   const assertStableViewport = (samples, label) => {
