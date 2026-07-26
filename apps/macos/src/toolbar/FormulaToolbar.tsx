@@ -1158,37 +1158,58 @@ export function FormulaToolbar({
       >
         {activeCategory === "matrix" && (
           <section className="matrix-builder" aria-label={isEn ? "Custom matrix" : "自定义矩阵"}>
-            <div className="matrix-builder-heading">
-              <strong>{isEn ? "Custom matrix" : "自定义矩阵"}</strong>
-              <span className="matrix-size-badge" aria-live="polite">
-                {previewRows} × {previewColumns}
-              </span>
-            </div>
-
-            <div className="matrix-delimiter-picker">
-              <span className="matrix-control-label">
-                {isEn ? "Delimiter" : "边界样式"}
-              </span>
-              <div className="matrix-delimiter-options" role="group" aria-label={isEn ? "Matrix delimiter" : "矩阵边界"}>
-                {matrixDelimiterOptions.map((option) => (
-                  <button
-                    key={option.id}
-                    type="button"
-                    className={matrixDelimiter === option.id ? "is-active" : ""}
-                    aria-pressed={matrixDelimiter === option.id}
-                    onClick={() => setMatrixDelimiter(option.id)}
-                    title={isEn ? option.labelEn : option.labelZh}
-                    aria-label={isEn ? option.labelEn : option.labelZh}
-                  >
-                    <MathPreview
-                      latex={option.preview}
-                      fit
-                      maximumFitScale={1.15}
-                      fitInsetRatio={0.72}
-                    />
-                  </button>
-                ))}
+            <div className="matrix-options-column">
+              <div className="matrix-builder-heading">
+                <strong>{isEn ? "Custom matrix" : "自定义矩阵"}</strong>
+                <span className="matrix-size-badge" aria-live="polite">
+                  {previewRows} × {previewColumns}
+                </span>
               </div>
+
+              <div className="matrix-delimiter-picker">
+                <span className="matrix-control-label">
+                  {isEn ? "Delimiter" : "边界样式"}
+                </span>
+                <div className="matrix-delimiter-options" role="group" aria-label={isEn ? "Matrix delimiter" : "矩阵边界"}>
+                  {matrixDelimiterOptions.map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      className={matrixDelimiter === option.id ? "is-active" : ""}
+                      aria-pressed={matrixDelimiter === option.id}
+                      onClick={() => setMatrixDelimiter(option.id)}
+                      title={isEn ? option.labelEn : option.labelZh}
+                      aria-label={isEn ? option.labelEn : option.labelZh}
+                    >
+                      <MathPreview
+                        latex={option.preview}
+                        fit
+                        maximumFitScale={1.15}
+                        fitInsetRatio={0.72}
+                      />
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="matrix-insert-button"
+                data-command-id="custom-matrix"
+                onClick={insertCustomMatrix}
+                onContextMenu={(event) =>
+                  openFormulaContextMenu(event, matrixHotkeyTarget())
+                }
+                title={
+                  isEn
+                    ? "Insert the selected matrix · Right-click to set a hotkey"
+                    : "插入当前矩阵 · 右键设置快捷键"
+                }
+              >
+                {isEn
+                  ? `Insert ${matrixRows} × ${matrixColumns}`
+                  : `插入 ${matrixRows} × ${matrixColumns}`}
+              </button>
             </div>
 
             <div className="matrix-size-picker">
@@ -1256,29 +1277,6 @@ export function FormulaToolbar({
               </div>
             </div>
 
-            <div className="matrix-insert-area">
-              <span className="matrix-control-label">
-                {isEn ? "Action" : "确认插入"}
-              </span>
-              <button
-                type="button"
-                className="matrix-insert-button"
-                data-command-id="custom-matrix"
-                onClick={insertCustomMatrix}
-                onContextMenu={(event) =>
-                  openFormulaContextMenu(event, matrixHotkeyTarget())
-                }
-                title={
-                  isEn
-                    ? "Insert the selected matrix · Right-click to set a hotkey"
-                    : "插入当前矩阵 · 右键设置快捷键"
-                }
-              >
-                {isEn
-                  ? `Insert ${matrixRows} × ${matrixColumns}`
-                  : `插入 ${matrixRows} × ${matrixColumns}`}
-              </button>
-            </div>
           </section>
         )}
 

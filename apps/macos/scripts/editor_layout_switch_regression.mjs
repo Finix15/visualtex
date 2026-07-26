@@ -346,11 +346,15 @@ async function main() {
     const matrixState = await evaluate(`(() => {
       const builder = document.querySelector('.classic-bottom-toolbar .matrix-builder');
       const builderRect = builder?.getBoundingClientRect();
+      const optionsColumn = builder?.querySelector('.matrix-options-column');
+      const optionsColumnRect = optionsColumn?.getBoundingClientRect();
       const heading = builder?.querySelector('.matrix-builder-heading');
       const headingRect = heading?.getBoundingClientRect();
       const headingStrong = heading?.querySelector('strong');
       const badge = builder?.querySelector('.matrix-size-badge');
       const grid = builder?.querySelector('.matrix-size-grid');
+      const sizePicker = builder?.querySelector('.matrix-size-picker');
+      const sizePickerRect = sizePicker?.getBoundingClientRect();
       const insert = builder?.querySelector('.matrix-insert-button');
       const delimiterButtons = Array.from(builder?.querySelectorAll('.matrix-delimiter-options button') ?? []);
       const inside = (rect) => Boolean(
@@ -366,6 +370,12 @@ async function main() {
           width: builderRect.width,
           height: builderRect.height,
         } : null,
+        optionsColumnInside: inside(optionsColumnRect),
+        sizePickerInside: inside(sizePickerRect),
+        hasTwoColumnOrder: Boolean(
+          optionsColumnRect && sizePickerRect &&
+          optionsColumnRect.right <= sizePickerRect.left
+        ),
         headingInside: inside(headingRect),
         headingWhiteSpace: headingStrong ? getComputedStyle(headingStrong).whiteSpace : '',
         headingLineHeight: headingStrong ? parseFloat(getComputedStyle(headingStrong).lineHeight) : -1,
@@ -376,6 +386,9 @@ async function main() {
         insertWidth: insert?.getBoundingClientRect().width ?? -1,
         insertHeight: insert?.getBoundingClientRect().height ?? -1,
         delimiterCount: delimiterButtons.length,
+        delimiterHeights: delimiterButtons.map((button) =>
+          button.getBoundingClientRect().height,
+        ),
         delimiterInside: delimiterButtons.every((button) => inside(button.getBoundingClientRect())),
         delimiterPreviewInside: delimiterButtons.every((button) => {
           const buttonRect = button.getBoundingClientRect();
@@ -394,17 +407,26 @@ async function main() {
       };
     })()`);
     assert.equal(matrixState.exists, true, JSON.stringify(matrixState));
-    assert.ok(matrixState.builderRect.width >= 430, JSON.stringify(matrixState));
+    assert.ok(matrixState.builderRect.width >= 340, JSON.stringify(matrixState));
+    assert.ok(matrixState.builderRect.width <= 390, JSON.stringify(matrixState));
     assert.ok(matrixState.builderRect.height >= 130, JSON.stringify(matrixState));
+    assert.equal(matrixState.optionsColumnInside, true, JSON.stringify(matrixState));
+    assert.equal(matrixState.sizePickerInside, true, JSON.stringify(matrixState));
+    assert.equal(matrixState.hasTwoColumnOrder, true, JSON.stringify(matrixState));
     assert.equal(matrixState.headingInside, true, JSON.stringify(matrixState));
     assert.equal(matrixState.headingWhiteSpace, "nowrap", JSON.stringify(matrixState));
     assert.ok(matrixState.headingHeight <= matrixState.headingLineHeight + 1, JSON.stringify(matrixState));
     assert.equal(matrixState.badgeInside, true, JSON.stringify(matrixState));
     assert.equal(matrixState.gridInside, true, JSON.stringify(matrixState));
     assert.equal(matrixState.insertInside, true, JSON.stringify(matrixState));
-    assert.ok(matrixState.insertWidth <= 140, JSON.stringify(matrixState));
+    assert.ok(matrixState.insertWidth >= 180, JSON.stringify(matrixState));
+    assert.ok(matrixState.insertWidth <= 220, JSON.stringify(matrixState));
     assert.ok(matrixState.insertHeight <= 38, JSON.stringify(matrixState));
     assert.equal(matrixState.delimiterCount, 3, JSON.stringify(matrixState));
+    assert.ok(
+      matrixState.delimiterHeights.every((height) => height >= 58),
+      JSON.stringify(matrixState),
+    );
     assert.equal(matrixState.delimiterInside, true, JSON.stringify(matrixState));
     assert.equal(matrixState.delimiterPreviewInside, true, JSON.stringify(matrixState));
     assert.ok(
