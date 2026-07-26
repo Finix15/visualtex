@@ -1773,14 +1773,13 @@ kbd {
 }
 
 .formula-line {
-  min-height: var(--formula-row-height, 100px);
+  min-height: var(--formula-row-height, 69px);
   display: grid;
   grid-template-columns: 50px minmax(0, 1fr);
   align-items: stretch;
   border: 0;
   border-radius: 0;
   background: transparent;
-  transition: background 140ms ease;
 }
 
 .formula-line + .formula-line {
@@ -1827,7 +1826,7 @@ kbd {
 .formula-line .visual-mathfield {
   width: 100%;
   display: block;
-  min-height: var(--formula-row-height, 100px);
+  min-height: var(--formula-row-height, 69px);
   justify-content: flex-start;
   padding: 15px 22px !important;
   border-radius: 0;
@@ -3295,6 +3294,7 @@ button:disabled {
   display: flex;
   flex-direction: column;
   overflow: auto;
+  overflow-anchor: none;
   overscroll-behavior: contain;
   scrollbar-width: none;
 }
@@ -5019,8 +5019,7 @@ textarea:disabled {
 
 .formula-line {
   position: relative;
-  min-height: var(--formula-row-height, 100px);
-  transition: background 120ms ease, box-shadow 120ms ease;
+  min-height: var(--formula-row-height, 69px);
 }
 
 .formula-line:hover {

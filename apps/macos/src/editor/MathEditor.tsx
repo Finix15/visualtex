@@ -224,11 +224,21 @@ interface WrapperCaretAnchor {
   height: number;
 }
 
+interface EditorScrollSnapshot {
+  scroller: HTMLElement;
+  anchorLineId: string | null;
+  anchorOffset: number;
+  scrollTop: number;
+}
+
 interface RawCommandAnchor {
   latex: string;
   selection: MathSelectionSnapshot;
   position: number;
   visualCaret: WrapperCaretAnchor | null;
+  selectedPlaceholder: boolean;
+  autoExitSetting: InputBehaviorSettingKey | null;
+  autoExitScriptKey: string | null;
 }
 
 const rawCommandAnchors = new WeakMap<MathfieldElement, RawCommandAnchor>();
@@ -317,12 +327,47 @@ function captureWrapperCaretAnchor(
 }
 
 function rememberRawCommandAnchor(field: MathfieldElement) {
+  if (rawCommandAnchors.has(field)) return;
+  const selection = captureSelection(field);
+  const activeRange = selection.ranges.at(-1);
+  const selectedLatex = activeRange
+    ? field
+        .getValue(
+          Math.min(activeRange[0], activeRange[1]),
+          Math.max(activeRange[0], activeRange[1]),
+          "latex",
+        )
+        .trim()
+    : "";
+  const autoExitSetting = getCaretAutoExitSetting(field);
+  const scriptContext = getScriptCaretContext(field);
   rawCommandAnchors.set(field, {
     latex: normalizeChineseLatex(field.value),
-    selection: captureSelection(field),
+    selection,
     position: field.position,
     visualCaret: captureWrapperCaretAnchor(field),
+    selectedPlaceholder: selectedLatex === "\\placeholder{}",
+    autoExitSetting,
+    autoExitScriptKey:
+      autoExitSetting === "autoExitSuperscript" ||
+      autoExitSetting === "autoExitSubscript"
+        ? scriptContext?.autoExitKey ?? null
+        : null,
   });
+}
+
+function canonicalRawCommandAnchorSkeleton(latex: string) {
+  const verifier = new MathfieldElement();
+  verifier.setValue(latex.replace(/\\placeholder\{\}/g, ""), {
+    mode: "math",
+    format: "latex",
+    insertionMode: "replaceAll",
+    selectionMode: "after",
+    silenceNotifications: true,
+  });
+  return normalizeChineseLatex(verifier.value)
+    .replace(/\s+/g, "")
+    .replace(/\{([A-Za-z0-9])\}/g, "$1");
 }
 
 function restoreRawCommandAnchor(
@@ -331,7 +376,74 @@ function restoreRawCommandAnchor(
 ) {
   const rejectedRawGroup = field.executeCommand(["complete", "reject"]);
   if (!rejectedRawGroup) field.mode = "math";
-  if (normalizeChineseLatex(field.value) !== anchor.latex) {
+
+  const currentLatex = normalizeChineseLatex(field.value);
+  const anchorContainsPlaceholder = anchor.latex.includes("\\placeholder{}");
+  const retainedPlaceholderContainer =
+    anchorContainsPlaceholder &&
+    canonicalRawCommandAnchorSkeleton(currentLatex) ===
+      canonicalRawCommandAnchorSkeleton(anchor.latex);
+
+  // MathLive keeps the original empty container when it rejects nested raw
+  // input. Keep that model, but explicitly restore the original slot: the
+  // selection produced by reject can drift outside an accent/script/fraction
+  // and makes the accepted command appear in a surprising location.
+  if (retainedPlaceholderContainer) {
+    field.mode = "math";
+    const preferredRange = anchor.selection.ranges.at(-1);
+    const preferredStart = preferredRange
+      ? Math.min(preferredRange[0], preferredRange[1])
+      : anchor.position;
+
+    if (anchor.selectedPlaceholder) {
+      const placeholderRanges: Array<[number, number]> = [];
+      for (let offset = 1; offset <= field.lastOffset; offset += 1) {
+        if (
+          field.getValue(offset - 1, offset, "latex").trim() ===
+          "\\placeholder{}"
+        ) {
+          placeholderRanges.push([offset - 1, offset]);
+        }
+      }
+      const closestPlaceholder = placeholderRanges.sort(
+        (first, second) =>
+          Math.abs(first[0] - preferredStart) -
+          Math.abs(second[0] - preferredStart),
+      )[0];
+      if (closestPlaceholder) {
+        const selection: MathSelectionSnapshot = {
+          ranges: [closestPlaceholder],
+          direction: "none",
+        };
+        field.selection = selection;
+        return selection;
+      }
+
+      const position = Math.max(
+        0,
+        Math.min(field.lastOffset, preferredStart),
+      );
+      const selection: MathSelectionSnapshot = {
+        ranges: [[position, position]],
+        direction: "none",
+      };
+      field.selection = selection;
+      field.position = position;
+      return selection;
+    }
+
+    const selection = clampSelection(anchor.selection, field.lastOffset);
+    field.selection = selection;
+    if (selection.ranges.every(([start, end]) => start === end)) {
+      field.position = Math.max(
+        0,
+        Math.min(field.lastOffset, anchor.position),
+      );
+    }
+    return selection;
+  }
+
+  if (currentLatex !== anchor.latex) {
     field.setValue(anchor.latex, {
       mode: "math",
       format: "latex",
@@ -735,6 +847,61 @@ const MIN_FORMULA_FONT_SIZE = BASE_FORMULA_FONT_SIZE * 0.2;
 
 const formulaFontSize = (zoom: number) =>
   Math.max(MIN_FORMULA_FONT_SIZE, BASE_FORMULA_FONT_SIZE * zoom);
+
+function formulaRowHeightMetrics(latex: string, zoom: number) {
+  const fontSize = formulaFontSize(zoom);
+  const hasTallStructure = tallFormulaPattern.test(latex);
+  const baseHeight = hasTallStructure
+    ? Math.max(36, fontSize * 1.34 + 16)
+    : Math.max(30, fontSize * 1.12 + 8);
+  const verticalPadding = hasTallStructure
+    ? Math.max(10, fontSize * 0.44)
+    : Math.max(8, fontSize * 0.26);
+  return {
+    fontSize,
+    hasTallStructure,
+    baseHeight,
+    verticalPadding,
+  };
+}
+
+function predictedFormulaRowHeight(
+  latex: string,
+  zoom: number,
+  measurementHost?: HTMLElement | null,
+) {
+  const metrics = formulaRowHeightMetrics(latex, zoom);
+  let renderedHeight = latex.trim() ? 0 : metrics.fontSize * 1.2;
+
+  if (measurementHost && latex.trim()) {
+    const probe = document.createElement("span");
+    probe.setAttribute("aria-hidden", "true");
+    probe.style.position = "absolute";
+    probe.style.left = "-100000px";
+    probe.style.top = "0";
+    probe.style.display = "inline-block";
+    probe.style.width = "max-content";
+    probe.style.maxWidth = "none";
+    probe.style.whiteSpace = "nowrap";
+    probe.style.visibility = "hidden";
+    probe.style.pointerEvents = "none";
+    probe.style.fontSize = metrics.fontSize + "px";
+    probe.style.lineHeight = "normal";
+    probe.innerHTML = convertLatexToMarkup(latex, {
+      defaultMode: "math",
+    });
+    measurementHost.append(probe);
+    renderedHeight = probe.getBoundingClientRect().height;
+    probe.remove();
+  }
+
+  return Math.ceil(
+    Math.max(
+      metrics.baseHeight,
+      renderedHeight + metrics.verticalPadding,
+    ),
+  );
+}
 
 function captureSelection(field: MathfieldElement): MathSelectionSnapshot {
   return {
@@ -2013,6 +2180,7 @@ function moveNativeSuggestionSelection(
 
 function commitNativeSuggestion(
   field: MathfieldElement,
+  settings: InputBehaviorSettings,
   rememberedCommand = "",
 ): boolean {
   const selectedCommand =
@@ -2028,6 +2196,10 @@ function commitNativeSuggestion(
     const queryRange = rawInput
       ? findTrailingCommandRange(field, rawInput)
       : null;
+    if (!anchor && !queryRange && field.mode !== "latex") {
+      dismissNativeSuggestionPopover(field);
+      return false;
+    }
     if (anchor) {
       restoreRawCommandAnchor(field, anchor);
     } else {
@@ -2055,6 +2227,12 @@ function commitNativeSuggestion(
     });
     if (inserted) {
       selectFirstLatexPlaceholder(field, selectedCommand);
+      applyCompletedRawCommandAutoExit(
+        field,
+        settings,
+        anchor,
+        insertionTemplate,
+      );
       rawCommandAnchors.delete(field);
       dismissNativeSuggestionPopover(field);
     }
@@ -2064,7 +2242,14 @@ function commitNativeSuggestion(
   if (!getVisibleNativeSuggestionItems().length && field.mode !== "latex") {
     return false;
   }
-  return field.executeCommand(["complete", "accept-all"]);
+  const anchor = rawCommandAnchors.get(field);
+  const rawQuery = rawCommandQuery(field);
+  const accepted = field.executeCommand(["complete", "accept-all"]);
+  if (accepted) {
+    applyCompletedRawCommandAutoExit(field, settings, anchor, rawQuery);
+    rawCommandAnchors.delete(field);
+  }
+  return accepted;
 }
 
 function dismissNativeSuggestionPopover(field: MathfieldElement) {
@@ -2345,6 +2530,26 @@ function moveCaretThroughEnabledAutoExitContainers(
     moved = true;
   }
   return moved;
+}
+
+function applyCompletedRawCommandAutoExit(
+  field: MathfieldElement,
+  settings: InputBehaviorSettings,
+  anchor: RawCommandAnchor | null | undefined,
+  insertedLatex: string,
+) {
+  if (
+    !anchor?.autoExitSetting ||
+    insertedLatex.includes("\\placeholder{}")
+  ) {
+    return false;
+  }
+  return moveCaretThroughEnabledAutoExitContainers(
+    field,
+    settings,
+    anchor.autoExitSetting,
+    anchor.autoExitScriptKey,
+  );
 }
 
 const customVerticalStructurePattern =
@@ -2645,7 +2850,27 @@ function FormulaField(props: FormulaFieldProps) {
         : "第 " + (propsRef.current.index + 1) + " 行公式",
     );
     field.removeAttribute("placeholder");
-    field.style.fontSize = formulaFontSize(propsRef.current.zoom) + "px";
+    const initialMetrics = formulaRowHeightMetrics(
+      propsRef.current.latex,
+      propsRef.current.zoom,
+    );
+    const initialRowHeight = predictedFormulaRowHeight(
+      propsRef.current.latex,
+      propsRef.current.zoom,
+      host,
+    );
+    let initialHeightFloor = initialRowHeight;
+    field.style.fontSize = initialMetrics.fontSize + "px";
+    field.classList.toggle(
+      "is-simple-formula",
+      !initialMetrics.hasTallStructure,
+    );
+    field.style.height = initialRowHeight + "px";
+    field.style.minHeight = initialRowHeight + "px";
+    host.closest<HTMLElement>(".formula-line")?.style.setProperty(
+      "--formula-row-height",
+      initialRowHeight + "px",
+    );
     installVisualTexStructuralPlaceholderStyle(field);
 
     let pointerPlaceholderFrame = 0;
@@ -2667,7 +2892,12 @@ function FormulaField(props: FormulaFieldProps) {
     let resizeTimer = 0;
     let resizePass = 0;
     const measureFrameSize = () => {
-      const fontSize = formulaFontSize(propsRef.current.zoom);
+      const metrics = formulaRowHeightMetrics(
+        field.value,
+        propsRef.current.zoom,
+      );
+      const { fontSize, hasTallStructure, baseHeight, verticalPadding } =
+        metrics;
       const content = field.shadowRoot?.querySelector<HTMLElement>(
         '[part="content"]',
       );
@@ -2685,16 +2915,13 @@ function FormulaField(props: FormulaFieldProps) {
         ? Math.max(...formulaRects.map((rect) => rect.bottom)) -
           Math.min(...formulaRects.map((rect) => rect.top))
         : fontSize;
-      const hasTallStructure = tallFormulaPattern.test(field.value);
-      const baseHeight = hasTallStructure
-        ? Math.max(36, fontSize * 1.34 + 16)
-        : Math.max(30, fontSize * 1.12 + 8);
-      const verticalPadding = hasTallStructure
-        ? Math.max(10, fontSize * 0.44)
-        : Math.max(8, fontSize * 0.26);
-      const nextHeight = Math.ceil(
+      const measuredHeight = Math.ceil(
         Math.max(baseHeight, formulaHeight + verticalPadding),
       );
+      if (measuredHeight >= initialHeightFloor - 1) {
+        initialHeightFloor = 0;
+      }
+      const nextHeight = Math.max(measuredHeight, initialHeightFloor);
 
       field.classList.toggle("is-simple-formula", !hasTallStructure);
       field.style.height = nextHeight + "px";
@@ -2724,8 +2951,10 @@ function FormulaField(props: FormulaFieldProps) {
       kind: PhysicalBackslashInputKind;
       beforeValue: string;
       expiresAt: number;
+      acceptedInput: boolean;
     } | null = null;
-    let suppressBackslashReplayUntil = 0;
+    let suppressBackslashKeyReplayUntil = 0;
+    let suppressUnarmedBackslashInputUntil = 0;
     let backslashGuardTimer = 0;
     let pendingAutoExitSetting: InputBehaviorSettingKey | null = null;
     let pendingAutoExitScriptKey: string | null = null;
@@ -2934,6 +3163,7 @@ function FormulaField(props: FormulaFieldProps) {
         kind,
         beforeValue: field.value,
         expiresAt: timeStamp + 240,
+        acceptedInput: false,
       };
       window.clearTimeout(backslashGuardTimer);
       const expectedGuard = physicalBackslashGuard;
@@ -2950,6 +3180,29 @@ function FormulaField(props: FormulaFieldProps) {
         physicalBackslashGuard = null;
         return;
       }
+
+      const activeRawInput = rawLatexInput(field);
+      if (
+        guard.kind === "latin-backslash" &&
+        activeRawInput.length > 1 &&
+        /^\\+$/.test(activeRawInput)
+      ) {
+        // Some WebKit/IME transitions apply the same physical Backslash more
+        // than once directly to MathLive's raw-LaTeX DOM. The public field
+        // value is still unchanged in raw mode, so normalize that DOM through
+        // MathLive commands rather than rebuilding the formula snapshot.
+        restoringRawCommandAnchor = true;
+        try {
+          for (let index = 1; index < activeRawInput.length; index += 1) {
+            field.executeCommand("deleteBackward");
+          }
+        } finally {
+          restoringRawCommandAnchor = false;
+        }
+        physicalBackslashGuard = null;
+        return;
+      }
+
       const rawValue = field.value;
       const normalizedValue = normalizePhysicalBackslashInput(
         guard.beforeValue,
@@ -3004,6 +3257,9 @@ function FormulaField(props: FormulaFieldProps) {
     const handleCompositionStart = () => {
       compositionDeleteObserved = false;
       suppressPostCompositionDeleteUntil = 0;
+      physicalBackslashGuard = null;
+      suppressUnarmedBackslashInputUntil = 0;
+      window.clearTimeout(backslashGuardTimer);
       capturePendingAutoExit();
       propsRef.current.onCommitPending();
       imeGuard.compositionStart();
@@ -3017,6 +3273,8 @@ function FormulaField(props: FormulaFieldProps) {
       suppressPostCompositionDeleteUntil = cancelledByCompositionDelete
         ? event.timeStamp + 160
         : 0;
+      suppressUnarmedBackslashInputUntil =
+        event.data === "" ? event.timeStamp + 260 : 0;
       compositionDeleteObserved = false;
       normalizeGuardedBackslashInput(event.timeStamp);
       const before =
@@ -3199,13 +3457,31 @@ function FormulaField(props: FormulaFieldProps) {
           clearPendingAutoExit();
         }
       }
-      if (
-        event.data === "\\" &&
-        event.timeStamp <= suppressBackslashReplayUntil
-      ) {
-        clearPendingAutoExit();
-        event.preventDefault();
-        event.stopPropagation();
+      if (event.data === "\\") {
+        const guard = physicalBackslashGuard;
+        const guardedLatinInput = Boolean(
+          guard &&
+            guard.kind === "latin-backslash" &&
+            event.timeStamp <= guard.expiresAt,
+        );
+        if (guardedLatinInput && guard) {
+          if (guard.acceptedInput) {
+            clearPendingAutoExit();
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            return;
+          }
+          guard.acceptedInput = true;
+          suppressUnarmedBackslashInputUntil = 0;
+        } else if (
+          event.timeStamp <= suppressBackslashKeyReplayUntil ||
+          event.timeStamp <= suppressUnarmedBackslashInputUntil
+        ) {
+          clearPendingAutoExit();
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          return;
+        }
       }
     };
   const handleInput = (event: Event) => {
@@ -3463,6 +3739,9 @@ function FormulaField(props: FormulaFieldProps) {
         selection: before.selection,
         position: field.position,
         visualCaret: captureWrapperCaretAnchor(field),
+        selectedPlaceholder: false,
+        autoExitSetting: null,
+        autoExitScriptKey: null,
       };
       const anchorSelection = restoreRawCommandAnchor(field, anchor);
       const anchorRange = anchorSelection.ranges.at(-1) ?? [anchor.position, anchor.position];
@@ -3514,6 +3793,49 @@ function FormulaField(props: FormulaFieldProps) {
       syncFrameSize();
       return true;
   };
+    const confirmRawNativeCommand = (event: KeyboardEvent) => {
+      if (
+        pendingWrapperInput ||
+        event.isComposing ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        !(
+          event.key === "Enter" ||
+          event.key === "Tab" ||
+          event.key === " " ||
+          event.code === "Space"
+        )
+      ) {
+        return false;
+      }
+
+      const rawQuery = rawCommandQuery(field);
+      if (!rawQuery) return false;
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      clearPendingAutoExit();
+      const before = captureFieldSnapshot(field);
+      const committed = commitNativeSuggestion(
+        field,
+        propsRef.current.inputBehavior,
+        rawQuery,
+      );
+      if (!committed) return false;
+
+      delete field.dataset.pendingNativeSuggestion;
+      markVisualTexStructuralPlaceholders(field);
+      field.focus();
+      field.shadowRoot
+        ?.querySelector<HTMLElement>('[part="keyboard-sink"]')
+        ?.focus({ preventScroll: true });
+      const after = captureFieldSnapshot(field);
+      emitEdit(before, after, "replace", "candidate");
+      propsRef.current.onInputActivity(field);
+      syncFrameSize();
+      return true;
+    };
   const handleRawWrapperKeyDown = (event: KeyboardEvent) => {
     const selectedAccentState = captureSelectedAccentPlaceholderState(field);
     if (selectedAccentState) {
@@ -3524,7 +3846,8 @@ function FormulaField(props: FormulaFieldProps) {
     }
     if (confirmPendingWrapperInput(event)) return;
       if (confirmRawPlaceholderCommand(event)) return;
-      confirmRawWrapperCommand(event);
+      if (confirmRawWrapperCommand(event)) return;
+      confirmRawNativeCommand(event);
   };
   const handleWindowRawWrapperKeyDown = (event: KeyboardEvent) => {
     if (!event.composedPath().includes(field)) return;
@@ -3550,7 +3873,8 @@ function FormulaField(props: FormulaFieldProps) {
       }
       if (confirmPendingWrapperInput(event)) return;
       if (confirmRawPlaceholderCommand(event)) return;
-      confirmRawWrapperCommand(event);
+      if (confirmRawWrapperCommand(event)) return;
+      confirmRawNativeCommand(event);
     };
     const scheduleInputActivity = () => {
       window.requestAnimationFrame(() => {
@@ -3575,17 +3899,24 @@ function FormulaField(props: FormulaFieldProps) {
       if (event.key === "Escape") rawCommandAnchors.delete(field);
       if (isUnmodifiedPhysicalBackslash && event.key === "、") {
         armPhysicalBackslashGuard("ideographic-comma", event.timeStamp);
-        suppressBackslashReplayUntil = event.timeStamp + 180;
+        suppressBackslashKeyReplayUntil = event.timeStamp + 180;
+        suppressUnarmedBackslashInputUntil = event.timeStamp + 180;
         event.preventDefault();
         event.stopPropagation();
         return;
       }
       if (isUnmodifiedPhysicalBackslash && event.key === "\\") {
-        if (event.timeStamp <= suppressBackslashReplayUntil) {
+        const existingGuard = physicalBackslashGuard;
+        if (
+          event.repeat ||
+          event.timeStamp <= suppressBackslashKeyReplayUntil ||
+          Boolean(existingGuard && event.timeStamp <= existingGuard.expiresAt)
+        ) {
           event.preventDefault();
-          event.stopPropagation();
+          event.stopImmediatePropagation();
           return;
         }
+        suppressUnarmedBackslashInputUntil = 0;
         armPhysicalBackslashGuard("latin-backslash", event.timeStamp);
       }
 
@@ -3703,6 +4034,7 @@ function FormulaField(props: FormulaFieldProps) {
       if (confirmPendingWrapperInput(event)) return;
       if (confirmRawPlaceholderCommand(event)) return;
       if (confirmRawWrapperCommand(event)) return;
+      if (confirmRawNativeCommand(event)) return;
 
       propsRef.current.onKeyDown(propsRef.current.index, event, field);
     };
@@ -3875,7 +4207,15 @@ function FormulaField(props: FormulaFieldProps) {
         subtree: true,
       });
     }
-    syncFrameSize();
+    // The field is now connected, but React's layout effect still runs before
+    // the browser's first paint. Resolve the actual MathLive geometry here so
+    // a newly inserted line never paints with the CSS fallback or predicted
+    // height and then visibly shrinks on the next animation frame.
+    measureFrameSize();
+    queueMicrotask(() => {
+      if (!field.isConnected) return;
+      measureFrameSize();
+    });
 
     return () => {
       window.cancelAnimationFrame(resizeFrame);
@@ -3919,9 +4259,10 @@ function FormulaField(props: FormulaFieldProps) {
     };
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const field = fieldRef.current;
-    if (!field) return;
+    const host = hostRef.current;
+    if (!field || !host) return;
 
     // 本地输入仅因中文规范化而与 store 等值时，不重建 MathLive 模型；
     // 只更新事务基准，保留当前光标、选区和删除键内部状态。
@@ -3941,9 +4282,23 @@ function FormulaField(props: FormulaFieldProps) {
       silenceNotifications: true,
     });
     field.resetUndo();
+    const metrics = formulaRowHeightMetrics(props.latex, props.zoom);
+    const predictedHeight = predictedFormulaRowHeight(
+      props.latex,
+      props.zoom,
+      host,
+    );
+    field.classList.toggle("is-simple-formula", !metrics.hasTallStructure);
+    field.style.fontSize = metrics.fontSize + "px";
+    field.style.height = predictedHeight + "px";
+    field.style.minHeight = predictedHeight + "px";
+    host.closest<HTMLElement>(".formula-line")?.style.setProperty(
+      "--formula-row-height",
+      predictedHeight + "px",
+    );
     lastSnapshotRef.current = captureFieldSnapshot(field);
     syncFrameSizeRef.current?.();
-  }, [props.latex]);
+  }, [props.latex, props.zoom]);
 
   useEffect(() => {
     if (fieldRef.current) {
@@ -4005,6 +4360,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       latex: string | null;
       selection: MathSelectionSnapshot | null;
       moveToEnd: boolean;
+      deferredRepair: boolean;
     } | null>(null);
     const [activeIndex, setActiveIndex] = useState(() =>
       Math.max(0, lines.findIndex((line) => line.id === activeLineId)),
@@ -4036,6 +4392,94 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
     const resolvedActiveLineId =
       lines.find((line) => line.id === activeLineId)?.id ?? lines[0]?.id ?? null;
     activeLineIdRef.current = resolvedActiveLineId;
+
+    const captureEditorScrollSnapshot = (
+      preferredLineId?: string | null,
+    ): EditorScrollSnapshot | null => {
+      const scroller =
+        surfaceRef.current?.closest<HTMLElement>(".editor-pane-scroll") ?? null;
+      if (!scroller) return null;
+      const scrollerRect = scroller.getBoundingClientRect();
+      const rows = Array.from(
+        surfaceRef.current?.querySelectorAll<HTMLElement>(".formula-line") ?? [],
+      );
+      const preferredRow = preferredLineId
+        ? rows.find((row) => row.dataset.lineId === preferredLineId) ?? null
+        : null;
+      const visibleRow = rows.find((row) => {
+        const rect = row.getBoundingClientRect();
+        return rect.bottom > scrollerRect.top && rect.top < scrollerRect.bottom;
+      });
+      const anchorRow = preferredRow ?? visibleRow ?? null;
+      return {
+        scroller,
+        anchorLineId: anchorRow?.dataset.lineId ?? null,
+        anchorOffset: anchorRow
+          ? anchorRow.getBoundingClientRect().top - scrollerRect.top
+          : 0,
+        scrollTop: scroller.scrollTop,
+      };
+    };
+
+    const applyEditorScrollSnapshot = (
+      snapshot: EditorScrollSnapshot | null,
+      targetLineId?: string | null,
+      ensureTargetVisible = false,
+    ) => {
+      if (!snapshot?.scroller.isConnected) return;
+      const { scroller } = snapshot;
+      const scrollerRect = scroller.getBoundingClientRect();
+      const anchorRow = snapshot.anchorLineId
+        ? surfaceRef.current?.querySelector<HTMLElement>(
+            `[data-line-id="${snapshot.anchorLineId}"]`,
+          ) ?? null
+        : null;
+      if (anchorRow?.isConnected) {
+        const currentOffset =
+          anchorRow.getBoundingClientRect().top - scrollerRect.top;
+        const offsetDelta = currentOffset - snapshot.anchorOffset;
+        if (Math.abs(offsetDelta) > 0.5) {
+          scroller.scrollTop += offsetDelta;
+        }
+      } else if (Math.abs(scroller.scrollTop - snapshot.scrollTop) > 0.5) {
+        scroller.scrollTop = snapshot.scrollTop;
+      }
+
+      if (!ensureTargetVisible || !targetLineId) return;
+      const targetRow = surfaceRef.current?.querySelector<HTMLElement>(
+        `[data-line-id="${targetLineId}"]`,
+      );
+      if (!targetRow?.isConnected) return;
+      const viewport = scroller.getBoundingClientRect();
+      const target = targetRow.getBoundingClientRect();
+      const inset = 8;
+      const top = viewport.top + inset;
+      const bottom = viewport.bottom - inset;
+      const availableHeight = Math.max(0, bottom - top);
+      if (target.height > availableHeight) {
+        scroller.scrollTop += target.top - top;
+      } else if (target.top < top) {
+        scroller.scrollTop -= top - target.top;
+      } else if (target.bottom > bottom) {
+        scroller.scrollTop += target.bottom - bottom;
+      }
+    };
+
+    const stabilizeEditorScroll = (
+      snapshot: EditorScrollSnapshot | null,
+      targetLineId?: string | null,
+      ensureTargetVisible = false,
+    ) => {
+      const apply = () =>
+        applyEditorScrollSnapshot(
+          snapshot,
+          targetLineId,
+          ensureTargetVisible,
+        );
+      apply();
+      queueMicrotask(apply);
+      window.requestAnimationFrame(apply);
+    };
 
     const suggestions = useMemo(
       () =>
@@ -4086,16 +4530,16 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         });
       }
       field.resetUndo();
-      field.focus();
-      field.shadowRoot
-        ?.querySelector<HTMLElement>('[part="keyboard-sink"]')
-        ?.focus({ preventScroll: true });
 
+      // Establish the final model position before focusing MathLive's hidden
+      // keyboard sink. WebKit can fail to repaint the caret when a focused
+      // sink receives a programmatic selection change, leaving the correct
+      // selection in the model but no visible caret until the next input.
       if (selection) {
         const clamped = clampSelection(selection, field.lastOffset);
-        // The selection setter also establishes the active endpoint. Assigning
-        // position afterwards would collapse a selected placeholder.
         field.selection = clamped;
+        const range = clamped.ranges[0];
+        if (range && range[0] === range[1]) field.position = range[1];
       } else if (moveToEnd) {
         const end = field.lastOffset;
         field.selection = {
@@ -4104,6 +4548,11 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         };
         field.position = end;
       }
+
+      (field as HTMLElement).focus({ preventScroll: true });
+      field.shadowRoot
+        ?.querySelector<HTMLElement>('[part="keyboard-sink"]')
+        ?.focus({ preventScroll: true });
       return true;
     };
 
@@ -4113,6 +4562,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         latex?: string | null;
         selection?: MathSelectionSnapshot | null;
         moveToEnd?: boolean;
+        deferredRepair?: boolean;
       } = {},
       remainingAttempts = 10,
       requestId = ++focusRequestRef.current,
@@ -4123,15 +4573,20 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       const expectedLatex = options.latex ?? null;
       const selection = options.selection ?? null;
       const moveToEnd = options.moveToEnd ?? false;
+      const deferredRepair = options.deferredRepair ?? true;
       activeIndexRef.current = index;
       activeLineIdRef.current = lineId;
-      setActiveIndex(index);
-      useEditorStore.getState().setActiveLineId(lineId);
+      setActiveIndex((current) => (current === index ? current : index));
+      const currentState = useEditorStore.getState();
+      if (currentState.activeLineId !== lineId) {
+        currentState.setActiveLineId(lineId);
+      }
       pendingFocusRef.current = {
         lineId,
         latex: expectedLatex,
         selection,
         moveToEnd,
+        deferredRepair,
       };
 
       const apply = () =>
@@ -4145,6 +4600,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       const finish = () => {
         if (!apply()) return false;
         pendingFocusRef.current = null;
+        if (!deferredRepair) return true;
         window.requestAnimationFrame(() => {
           if (!apply()) return;
           window.setTimeout(() => {
@@ -4190,6 +4646,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
           latex: pending.latex,
           selection: pending.selection,
           moveToEnd: pending.moveToEnd,
+          deferredRepair: pending.deferredRepair,
         });
       }
     };
@@ -4264,8 +4721,9 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       }
       activeIndexRef.current = index;
       activeLineIdRef.current = lineId;
-      setActiveIndex(index);
-      useEditorStore.getState().setActiveLineId(lineId);
+      setActiveIndex((current) => (current === index ? current : index));
+      const state = useEditorStore.getState();
+      if (state.activeLineId !== lineId) state.setActiveLineId(lineId);
     };
 
     const clearMultiLineSelection = () => {
@@ -4543,7 +5001,9 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       const insertionTemplate = activeQuery
         ? command.insertTemplate
         : templateForSelection(command, selectedLatex);
-      const autoExitSetting = getCaretAutoExitSetting(field);
+      const autoExitSetting =
+        rawAnchor?.autoExitSetting ?? getCaretAutoExitSetting(field);
+      const autoExitScriptKey = rawAnchor?.autoExitScriptKey ?? null;
       const historySource: FormulaEditSource =
         source === "candidate"
           ? "candidate"
@@ -4607,6 +5067,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
                 field,
                 inputBehavior,
                 autoExitSetting,
+                autoExitScriptKey,
               );
             }
             return inserted;
@@ -4661,16 +5122,26 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         ? captureSelection(beforeField)
         : null;
       const nextIndex = Math.max(0, Math.min(index + 1, state.lines.length));
+      const anchorLineId =
+        state.lines[Math.max(0, Math.min(index, state.lines.length - 1))]?.id ??
+        beforeActiveLineId;
+      const scrollSnapshot = captureEditorScrollSnapshot(anchorLineId);
       const line = createFormulaLine("");
       const afterSelection: MathSelectionSnapshot = {
         ranges: [[0, 0]],
         direction: "none",
       };
 
-      flushSync(() => {
-        state.insertFormulaLine(line, nextIndex);
-        useEditorStore.getState().setActiveLineId(line.id);
-      });
+      const nextLines = state.lines.map((currentLine) => ({ ...currentLine }));
+      nextLines.splice(nextIndex, 0, line);
+      const nextDocument: ReplaceDocumentEntry["after"] = {
+        title: state.title,
+        lines: nextLines,
+        activeLineId: line.id,
+        selectionByLineId: {},
+      };
+
+      flushSync(() => state.replaceDocumentState(nextDocument));
       linesRef.current = useEditorStore.getState().lines;
       setActiveLine(line.id);
 
@@ -4689,7 +5160,9 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       focusLine(line.id, {
         latex: line.latex,
         selection: afterSelection,
+        deferredRepair: false,
       });
+      stabilizeEditorScroll(scrollSnapshot, line.id, false);
     };
 
     const splitLineAtCaret = (
@@ -4791,6 +5264,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         line.id === lineId ? { ...line, latex: originalLatex } : line,
       );
 
+      const scrollSnapshot = captureEditorScrollSnapshot(lineId);
       const nextLine = createFormulaLine(rightLatex);
       const nextLines = before.lines.map((line) =>
         line.id === lineId ? { ...line, latex: leftLatex } : { ...line },
@@ -4831,7 +5305,9 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       focusLine(nextLine.id, {
         latex: rightLatex,
         selection: startSelection,
+        deferredRepair: false,
       });
+      stabilizeEditorScroll(scrollSnapshot, nextLine.id, false);
     };
 
     const mergeLineWithPrevious = (
@@ -4906,7 +5382,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         selectionByLineId: nextSelectionByLineId,
       };
 
-      field.blur();
+      const scrollSnapshot = captureEditorScrollSnapshot(previousLine.id);
       flushSync(() => useEditorStore.getState().replaceDocumentState(after));
       linesRef.current = useEditorStore.getState().lines;
       setActiveLine(previousLine.id);
@@ -4922,7 +5398,9 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       focusLine(previousLine.id, {
         latex: mergedLatex,
         selection: joinSelection,
+        deferredRepair: false,
       });
+      stabilizeEditorScroll(scrollSnapshot, previousLine.id, false);
       return true;
     };
 
@@ -5022,8 +5500,8 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         selectionByLineId: nextSelectionByLineId,
       };
 
+      const scrollSnapshot = captureEditorScrollSnapshot(startLine.id);
       clearMultiLineSelection();
-      endField.blur();
       flushSync(() => useEditorStore.getState().replaceDocumentState(after));
       linesRef.current = useEditorStore.getState().lines;
       setActiveLine(startLine.id);
@@ -5039,7 +5517,9 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       focusLine(startLine.id, {
         latex: mergedLatex,
         selection: joinSelection,
+        deferredRepair: false,
       });
+      stabilizeEditorScroll(scrollSnapshot, startLine.id, false);
       return true;
     };
 
@@ -5067,11 +5547,16 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         direction: "none",
       };
 
-      removedField?.blur();
-      flushSync(() => {
-        state.removeFormulaLine(removedLine.id);
-        useEditorStore.getState().setActiveLineId(targetLine.id);
-      });
+      const scrollSnapshot = captureEditorScrollSnapshot(targetLine.id);
+      const nextDocument: ReplaceDocumentEntry["after"] = {
+        title: state.title,
+        lines: remainingLines.map((line) => ({ ...line })),
+        activeLineId: targetLine.id,
+        selectionByLineId: {
+          [targetLine.id]: afterSelection,
+        },
+      };
+      flushSync(() => state.replaceDocumentState(nextDocument));
       linesRef.current = useEditorStore.getState().lines;
       setActiveLine(targetLine.id);
 
@@ -5090,7 +5575,9 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       focusLine(targetLine.id, {
         latex: targetLine.latex,
         selection: afterSelection,
+        deferredRepair: false,
       });
+      stabilizeEditorScroll(scrollSnapshot, targetLine.id, false);
     };
 
     const handleKeyDown = (
@@ -5151,7 +5638,9 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         event.key !== "ArrowDown" &&
         event.key !== "ArrowUp" &&
         event.key !== "Enter" &&
-        event.key !== "Tab"
+        event.key !== "Tab" &&
+        event.key !== " " &&
+        event.code !== "Space"
       ) {
         delete field.dataset.pendingNativeSuggestion;
       }
@@ -5197,7 +5686,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
 
       if (confirmsWrapperCommand) {
         event.preventDefault();
-        event.stopPropagation();
+        event.stopImmediatePropagation();
         insertCommand(wrapperCommand, "candidate", wrapperQuery);
         return;
       }
@@ -5221,7 +5710,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         }
         if (event.key === "Enter" || event.key === "Tab") {
           event.preventDefault();
-          event.stopPropagation();
+          event.stopImmediatePropagation();
           const suggestionIndex = Math.min(
             selectedIndexRef.current,
             liveSuggestions.length - 1,
@@ -5286,7 +5775,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
           event.code === "Space"
         ) {
           event.preventDefault();
-          event.stopPropagation();
+          event.stopImmediatePropagation();
           // The remembered native command is inserted synchronously. Waiting
           // for MathLive's popover mutation here used to add up to one second
           // before the editor state and history caught up with the field.
@@ -5294,7 +5783,12 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
             lineId,
             field,
             "candidate",
-            () => commitNativeSuggestion(field, pendingNativeSuggestion),
+            () =>
+              commitNativeSuggestion(
+                field,
+                currentState.inputBehavior,
+                pendingNativeSuggestion,
+              ),
           );
           if (committed) {
             delete field.dataset.pendingNativeSuggestion;
@@ -5317,7 +5811,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
 
       if (event.key === "Enter") {
         event.preventDefault();
-        event.stopPropagation();
+        event.stopImmediatePropagation();
         splitLineAtCaret(index, lineId, field);
         return;
       }
@@ -5351,7 +5845,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
           !event.shiftKey
         ) {
           event.preventDefault();
-          event.stopPropagation();
+          event.stopImmediatePropagation();
           removeEmptyLine(index);
           return;
         }
@@ -5374,13 +5868,13 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
           field.position === 0
         ) {
           event.preventDefault();
-          event.stopPropagation();
+          event.stopImmediatePropagation();
           mergeLineWithPrevious(index, lineId, field);
           return;
         }
 
         event.preventDefault();
-        event.stopPropagation();
+        event.stopImmediatePropagation();
 
         if (!currentLine) return;
         const before = captureFieldSnapshot(field);
@@ -5568,6 +6062,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
           latex,
           selection,
           moveToEnd: !selection,
+          deferredRepair: true,
         };
 
         let attempts = 12;
