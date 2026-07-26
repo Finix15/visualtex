@@ -9268,8 +9268,12 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
   white-space: nowrap;
 }
 
+:root[data-theme="beige"] .formula-line:hover,
 :root[data-theme="beige"] .formula-line.is-active {
   background: color-mix(in srgb, var(--formula-surface) 88%, var(--accent-soft-beige) 12%);
+}
+
+:root[data-theme="beige"] .formula-line.is-active {
   box-shadow: inset 2px 0 0 var(--accent-primary);
 }
 
