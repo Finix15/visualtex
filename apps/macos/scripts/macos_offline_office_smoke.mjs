@@ -799,6 +799,26 @@ expectIncludes(
 );
 expectIncludes(
   read("scripts/tauri_dev.mjs"),
+  "unregisterMacosDevUrlHandler",
+  "Tauri development shutdown must release visualtex:// back to the production application",
+);
+expectIncludes(
+  read("scripts/register_macos_dev_url_handler.mjs"),
+  '$("com.visualtex.studio")',
+  "Development URL cleanup must restore the production VisualTeX bundle identifier",
+);
+expectIncludes(
+  appRuntime,
+  "claim_production_visualtex_url_handler",
+  "The production application must reclaim visualtex:// from stale development handlers on launch",
+);
+expectIncludes(
+  appRuntime,
+  'LSSetDefaultHandlerForURLScheme($("visualtex"), $("com.visualtex.studio"))',
+  "The production application must explicitly register its fixed visualtex URL scheme handler",
+);
+expectIncludes(
+  read("scripts/tauri_dev.mjs"),
   'join(repositoryRoot, "node_modules", ".bin", "vite")',
   "Tauri development startup must remove stale Vite servers that occupy the fixed development port",
 );

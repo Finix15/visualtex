@@ -1360,6 +1360,52 @@ async fn remove_optional_ocr_model(
     state.remove_optional_model(app, model).await
 }
 
+#[cfg(target_os = "macos")]
+fn claim_production_visualtex_url_handler() -> Result<(), String> {
+    if cfg!(debug_assertions) {
+        return Ok(());
+    }
+
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("Unable to locate the VisualTeX executable: {error}"))?;
+    let app_bundle = executable
+        .parent()
+        .and_then(|path| path.parent())
+        .and_then(|path| path.parent())
+        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("app"))
+        .ok_or_else(|| {
+            format!(
+                "Unable to resolve the VisualTeX app bundle from {}",
+                executable.display()
+            )
+        })?;
+
+    let launch_services = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
+    let register_status = Command::new(launch_services)
+        .arg("-f")
+        .arg(app_bundle)
+        .status()
+        .map_err(|error| format!("Unable to register VisualTeX with LaunchServices: {error}"))?;
+    if !register_status.success() {
+        return Err(format!(
+            "LaunchServices registration failed with status {register_status}"
+        ));
+    }
+
+    let script = r#"ObjC.import("CoreServices"); $.LSSetDefaultHandlerForURLScheme($("visualtex"), $("com.visualtex.studio"));"#;
+    let handler_status = Command::new("/usr/bin/osascript")
+        .args(["-l", "JavaScript", "-e", script])
+        .status()
+        .map_err(|error| format!("Unable to restore the VisualTeX URL handler: {error}"))?;
+    if !handler_status.success() {
+        return Err(format!(
+            "VisualTeX URL handler restoration failed with status {handler_status}"
+        ));
+    }
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let background_mode = office::background::is_background_mode();
@@ -1413,6 +1459,14 @@ pub fn run() {
                         eprintln!("VisualTeX native Office installation failed: {error}");
                         std::process::exit(1);
                     }
+                }
+            }
+
+            #[cfg(not(debug_assertions))]
+            {
+                #[cfg(target_os = "macos")]
+                if let Err(error) = claim_production_visualtex_url_handler() {
+                    eprintln!("Unable to claim the production visualtex:// handler: {error}");
                 }
             }
 

@@ -202,6 +202,10 @@ async function main() {
       const bottomToolbar = document.querySelector('.classic-bottom-toolbar');
       const sourcePanel = document.querySelector('.classic-source-pane-slot .source-panel');
       const editorRect = editor?.getBoundingClientRect();
+      const editorSurface = editor?.querySelector('.editor-surface');
+      const firstFormulaLine = editorSurface?.querySelector('.formula-line');
+      const editorSurfaceRect = editorSurface?.getBoundingClientRect();
+      const firstFormulaLineRect = firstFormulaLine?.getBoundingClientRect();
       const tileRect = classicTiles?.getBoundingClientRect();
       const dockRect = dock?.getBoundingClientRect();
       const editorScrollRect = document.querySelector('.editor-pane-scroll')?.getBoundingClientRect();
@@ -273,6 +277,12 @@ async function main() {
         alignmentControlsInHeader: Boolean(
           document.querySelector('.editor-pane-header .formula-alignment-controls'),
         ),
+        firstFormulaTopGap: editorSurfaceRect && firstFormulaLineRect
+          ? firstFormulaLineRect.top - editorSurfaceRect.top
+          : -1,
+        editorSurfacePaddingTop: editorSurface
+          ? parseFloat(getComputedStyle(editorSurface).paddingTop)
+          : -1,
       };
     })()`);
 
@@ -285,6 +295,8 @@ async function main() {
     assert.equal(state.hasClassicTiles, false, JSON.stringify(state));
     assert.equal(state.hasDock, false, JSON.stringify(state));
     assert.equal(state.alignmentControlsInHeader, true, JSON.stringify(state));
+    assert.ok(state.editorSurfacePaddingTop >= 11 && state.editorSurfacePaddingTop <= 13, JSON.stringify(state));
+    assert.ok(state.firstFormulaTopGap >= 11 && state.firstFormulaTopGap <= 15, JSON.stringify(state));
 
     const settingsClick = await evaluate(`(() => {
       const button = document.querySelector('.settings-toggle');
@@ -317,11 +329,11 @@ async function main() {
         caret: "#1f638e",
       },
       beige: {
-        bg: "#f3ebdd",
-        surface: "#fbf4e8",
-        accent: "#8a7354",
-        placeholder: "#ccb994",
-        caret: "#70573c",
+        bg: "#efe5d6",
+        surface: "#fcf7ee",
+        accent: "#875936",
+        placeholder: "#dde7e3",
+        caret: "#426c66",
       },
       dark: {
         bg: "#16181b",
@@ -349,6 +361,10 @@ async function main() {
     for (const [themeId, expected] of Object.entries(themeExpectations)) {
       await evaluate(`document.querySelector('[data-theme-choice="${themeId}"]')?.click()`);
       await sleep(90);
+      if (themeId === "beige") {
+        await evaluate(`document.querySelector('.workspace.is-standard-layout [data-toolbar-view="tiles"]')?.click()`);
+        await sleep(80);
+      }
       const themeState = await evaluate(`(() => {
         const rootStyle = getComputedStyle(document.documentElement);
         const persisted = JSON.parse(localStorage.getItem('visualtex-editor') || '{}').state ?? {};
@@ -363,6 +379,12 @@ async function main() {
           editorSurface: getComputedStyle(document.querySelector('.editor-surface')).backgroundColor,
           settingsSurface: getComputedStyle(document.querySelector('.settings-dialog')).backgroundColor,
           active: document.querySelector('[data-theme-choice="${themeId}"]')?.classList.contains('is-active') ?? false,
+          tileColors: ${themeId === "beige" ? `Array.from(
+            document.querySelectorAll('.workspace.is-standard-layout .formula-tile-button')
+          ).slice(0, 6).map((button) => {
+            const style = getComputedStyle(button);
+            return [style.backgroundColor, style.borderTopColor];
+          })` : `[]`},
           blueInteractiveColors: ${themeId === "beige" ? `(() => {
             const rgb = (value) => {
               const match = value.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);
@@ -374,7 +396,7 @@ async function main() {
               const [r, g, b] = channels;
               const max = Math.max(r, g, b);
               const min = Math.min(r, g, b);
-              return max - min >= 28 && b > r + 18 && (b >= g || g > r + 24);
+              return max - min >= 28 && b > r + 18 && b > g + 10;
             };
             return Array.from(document.querySelectorAll(
               'button, [role="button"], input, select, .is-active, .is-selected, .formula-line.is-active'
@@ -409,16 +431,30 @@ async function main() {
           placeholder: expected.placeholder,
           caret: expected.caret,
           editorSurface:
-            themeId === 'beige' ? 'rgb(251, 244, 232)' :
+            themeId === 'beige' ? 'rgb(252, 247, 238)' :
             themeId === 'dark' ? 'rgb(32, 35, 40)' : 'rgb(255, 255, 255)',
           settingsSurface:
-            themeId === 'beige' ? 'rgb(251, 244, 232)' :
+            themeId === 'beige' ? 'rgb(252, 247, 238)' :
             themeId === 'dark' ? 'rgb(32, 35, 40)' : 'rgb(255, 255, 255)',
           active: true,
+          tileColors: themeId === 'beige'
+            ? [
+                ['rgb(213, 190, 155)', 'rgb(169, 142, 104)'],
+                ['rgb(199, 179, 157)', 'rgb(155, 128, 104)'],
+                ['rgb(216, 185, 139)', 'rgb(173, 137, 88)'],
+                ['rgb(194, 201, 169)', 'rgb(143, 153, 113)'],
+                ['rgb(185, 203, 197)', 'rgb(120, 155, 146)'],
+                ['rgb(200, 176, 168)', 'rgb(158, 119, 110)'],
+              ]
+            : [],
           blueInteractiveColors: [],
         },
         JSON.stringify(themeState),
       );
+      if (themeId === "beige") {
+        await evaluate(`document.querySelector('.workspace.is-standard-layout [data-toolbar-view="tools"]')?.click()`);
+        await sleep(60);
+      }
     }
     await evaluate(`document.querySelector('[data-theme-choice="light"]')?.click()`);
     await sleep(90);
@@ -445,6 +481,8 @@ async function main() {
     assert.equal(state.hasDockCollapse, true, JSON.stringify(state));
     assert.equal(state.dockCollapsed, false, JSON.stringify(state));
     assert.equal(state.alignmentControlsInHeader, true, JSON.stringify(state));
+    assert.ok(state.editorSurfacePaddingTop >= 11 && state.editorSurfacePaddingTop <= 13, JSON.stringify(state));
+    assert.ok(state.firstFormulaTopGap >= 11 && state.firstFormulaTopGap <= 15, JSON.stringify(state));
 
     for (const category of [
       "structure",

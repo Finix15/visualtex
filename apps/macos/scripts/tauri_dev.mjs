@@ -2,7 +2,10 @@ import { execFileSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { registerMacosDevUrlHandler } from "./register_macos_dev_url_handler.mjs";
+import {
+  registerMacosDevUrlHandler,
+  unregisterMacosDevUrlHandler,
+} from "./register_macos_dev_url_handler.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const debugExecutable = join(repositoryRoot, "src-tauri", "target", "debug", "visualtex");
@@ -90,9 +93,7 @@ function cleanup() {
   if (backgroundGuardTimer) clearInterval(backgroundGuardTimer);
   if (registrationTimer) clearInterval(registrationTimer);
   stopStaleDevelopmentProcesses();
-  // Keep the development URL handler registered. When Vite is not running,
-  // the handler shows a precise diagnostic instead of leaving Word with
-  // kLSApplicationNotFoundErr and a generic formula-creation failure.
+  unregisterMacosDevUrlHandler();
 }
 
 function forwardSignal(signal) {

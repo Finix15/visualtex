@@ -135,13 +135,46 @@ export function registerMacosDevUrlHandler() {
   return devApp;
 }
 
-export function unregisterMacosDevUrlHandler() {
-  if (process.platform !== "darwin" || !existsSync(devApp)) return;
-  try {
-    execFileSync(launchServices, ["-u", devApp], { stdio: "pipe" });
-  } catch {
-    // LaunchServices cleanup is best-effort during development shutdown.
+export function restoreProductionMacosUrlHandler() {
+  if (process.platform !== "darwin") return;
+  for (const productionApp of [
+    "/Applications/VisualTeX.app",
+    join(process.env.HOME ?? "", "Applications", "VisualTeX.app"),
+  ]) {
+    if (!productionApp || !existsSync(productionApp)) continue;
+    try {
+      execFileSync(launchServices, ["-f", productionApp], { stdio: "pipe" });
+      break;
+    } catch {
+      // Continue to the next supported installation location.
+    }
   }
+  try {
+    execFileSync(
+      "/usr/bin/osascript",
+      [
+        "-l",
+        "JavaScript",
+        "-e",
+        'ObjC.import("CoreServices"); $.LSSetDefaultHandlerForURLScheme($("visualtex"), $("com.visualtex.studio"));',
+      ],
+      { stdio: "pipe" },
+    );
+  } catch {
+    // The production application will claim the scheme again on its next launch.
+  }
+}
+
+export function unregisterMacosDevUrlHandler() {
+  if (process.platform !== "darwin") return;
+  if (existsSync(devApp)) {
+    try {
+      execFileSync(launchServices, ["-u", devApp], { stdio: "pipe" });
+    } catch {
+      // LaunchServices cleanup is best-effort during development shutdown.
+    }
+  }
+  restoreProductionMacosUrlHandler();
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
