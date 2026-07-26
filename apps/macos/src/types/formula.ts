@@ -17,6 +17,7 @@ export type LatexCodeFormat =
   | "equation-star-split";
 
 export type FormulaAlignment = "left" | "center" | "right";
+export type Theme = "light" | "beige" | "dark";
 
 export interface FormulaLine {
   id: string;
@@ -39,7 +40,7 @@ export interface FormulaDocument {
   formulas: FormulaBlock[];
   macros: Record<string, string>;
   settings: {
-    theme: "light" | "dark";
+    theme: Theme;
     zoom: number;
     formulaAlignment?: FormulaAlignment;
     latexCodeFormat?: LatexCodeFormat;

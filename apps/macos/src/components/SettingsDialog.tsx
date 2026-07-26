@@ -3,11 +3,9 @@ import {
   BrainCircuit,
   Keyboard,
   Languages,
-  Moon,
   RefreshCw,
   RotateCcw,
   SlidersHorizontal,
-  Sun,
   X,
 } from "lucide-react";
 import { useEditorStore } from "../stores/editorStore";
@@ -243,23 +241,44 @@ export function SettingsDialog({
                 </button>
               </div>
             </div>
-            <div className="theme-segment">
-              <button
-                type="button"
-                className={theme === "light" ? "is-active" : ""}
-                aria-pressed={theme === "light"}
-                onClick={() => setTheme("light")}
+            <div className="theme-choice-setting">
+              <span>
+                <strong>{isEn ? "Colour theme" : "界面配色"}</strong>
+                <small>
+                  {isEn
+                    ? "Choose a complete semantic colour system for the app and formula canvas."
+                    : "选择整套界面、公式画布、Placeholder 与光标配色。"}
+                </small>
+              </span>
+              <div
+                className="theme-segment theme-choice-segment"
+                role="group"
+                aria-label={isEn ? "Colour theme" : "界面配色"}
               >
-                <Sun size={16} /> {isEn ? "Light" : "浅色"}
-              </button>
-              <button
-                type="button"
-                className={theme === "dark" ? "is-active" : ""}
-                aria-pressed={theme === "dark"}
-                onClick={() => setTheme("dark")}
-              >
-                <Moon size={16} /> {isEn ? "Dark" : "深色"}
-              </button>
+                {(
+                  [
+                    ["light", isEn ? "Light" : "浅色"],
+                    ["beige", isEn ? "Warm beige" : "暖米色"],
+                    ["dark", isEn ? "Dark" : "深色"],
+                  ] as const
+                ).map(([themeId, label]) => (
+                  <button
+                    key={themeId}
+                    type="button"
+                    className={theme === themeId ? "is-active" : ""}
+                    aria-pressed={theme === themeId}
+                    data-theme-choice={themeId}
+                    onClick={() => setTheme(themeId)}
+                  >
+                    <span className="theme-choice-swatch" aria-hidden="true">
+                      <i />
+                      <i />
+                      <i />
+                    </span>
+                    <span>{label}</span>
+                  </button>
+                ))}
+              </div>
             </div>
             <label className="switch-row">
               <span>

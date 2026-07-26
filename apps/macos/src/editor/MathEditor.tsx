@@ -233,17 +233,130 @@ interface EditorScrollSnapshot {
   scrollTop: number;
 }
 
+type VerticalPlaceholderKind =
+  | "fraction"
+  | "operator-limit"
+  | "script"
+  | "stack";
+
+type VerticalPlaceholderAnchor = {
+  kind: VerticalPlaceholderKind;
+  region: "upper" | "lower";
+  centerX: number;
+  centerY: number;
+  relativeX: number;
+  relativeY: number;
+};
+
 interface RawCommandAnchor {
   latex: string;
   selection: MathSelectionSnapshot;
   position: number;
   visualCaret: WrapperCaretAnchor | null;
   selectedPlaceholder: boolean;
+  selectedPlaceholderIndex: number | null;
+  selectedPlaceholderTextIndex: number | null;
+  verticalPlaceholder: VerticalPlaceholderAnchor | null;
   autoExitSetting: InputBehaviorSettingKey | null;
   autoExitScriptKey: string | null;
 }
 
 const rawCommandAnchors = new WeakMap<MathfieldElement, RawCommandAnchor>();
+
+function latexPlaceholderRanges(field: MathfieldElement) {
+  const ranges: Array<[number, number]> = [];
+  for (let offset = 1; offset <= field.lastOffset; offset += 1) {
+    if (
+      field.getValue(offset - 1, offset, "latex").trim() ===
+      "\\placeholder{}"
+    ) {
+      ranges.push([offset - 1, offset]);
+    }
+  }
+  return ranges;
+}
+
+const placeholderMarkerCharacters =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+function markedPlaceholderLatex(latex: string) {
+  let index = 0;
+  const markers: string[] = [];
+  const markedLatex = latex.replace(/\\placeholder\{\}/g, () => {
+    const marker = placeholderMarkerCharacters[index] ?? "Q";
+    markers.push(marker);
+    index += 1;
+    return marker;
+  });
+  return { markedLatex, markers };
+}
+
+function textualPlaceholderIndexForRange(
+  latex: string,
+  range: [number, number],
+) {
+  const { markedLatex, markers } = markedPlaceholderLatex(latex);
+  if (!markers.length) return null;
+  const verifier = new MathfieldElement();
+  verifier.setValue(markedLatex, {
+    mode: "math",
+    format: "latex",
+    insertionMode: "replaceAll",
+    selectionMode: "after",
+    silenceNotifications: true,
+  });
+  const marker = verifier
+    .getValue(
+      Math.min(range[0], range[1]),
+      Math.max(range[0], range[1]),
+      "latex",
+    )
+    .trim();
+  const index = markers.indexOf(marker);
+  return index >= 0 ? index : null;
+}
+
+function replaceTextualPlaceholder(
+  latex: string,
+  targetIndex: number,
+  replacement: string,
+) {
+  let index = 0;
+  let replaced = false;
+  const value = latex.replace(/\\placeholder\{\}/g, (placeholder) => {
+    if (index !== targetIndex) {
+      index += 1;
+      return placeholder;
+    }
+    index += 1;
+    replaced = true;
+    return replacement;
+  });
+  return replaced ? value : null;
+}
+
+function modelRangeForTextualPlaceholder(
+  field: MathfieldElement,
+  latex: string,
+  targetIndex: number,
+) {
+  const { markedLatex, markers } = markedPlaceholderLatex(latex);
+  const targetMarker = markers[targetIndex];
+  if (!targetMarker) return null;
+  const verifier = new MathfieldElement();
+  verifier.setValue(markedLatex, {
+    mode: "math",
+    format: "latex",
+    insertionMode: "replaceAll",
+    selectionMode: "after",
+    silenceNotifications: true,
+  });
+  return (
+    latexPlaceholderRanges(field).find(([start, end]) =>
+      verifier.getValue(start, end, "latex").trim() === targetMarker,
+    ) ?? null
+  );
+}
 
 function captureWrapperCaretAnchor(
   field: MathfieldElement,
@@ -328,8 +441,204 @@ function captureWrapperCaretAnchor(
   return modelAnchor;
 }
 
+function visiblePlaceholderNodes(
+  field: MathfieldElement,
+  scope: ParentNode = field.shadowRoot ?? field,
+) {
+  return Array.from(
+    new Set(
+      Array.from(
+        scope.querySelectorAll<HTMLElement>(
+          `.ML__placeholder, .${visualTexPlaceholderClass}`,
+        ),
+      ),
+    ),
+  ).filter((placeholder) => {
+    const bounds = placeholder.getBoundingClientRect();
+    const style = getComputedStyle(placeholder);
+    return (
+      bounds.width > 0 &&
+      bounds.height > 0 &&
+      style.display !== "none" &&
+      style.visibility !== "hidden"
+    );
+  });
+}
+
+function closestPlaceholderNodeToMarker(
+  field: MathfieldElement,
+  marker: HTMLElement,
+) {
+  if (
+    marker.classList.contains("ML__placeholder") ||
+    marker.classList.contains(visualTexPlaceholderClass)
+  ) {
+    return marker;
+  }
+  const markerBounds = (marker.parentElement ?? marker).getBoundingClientRect();
+  const markerX = markerBounds.left + markerBounds.width / 2;
+  const markerY = markerBounds.top + markerBounds.height / 2;
+  return visiblePlaceholderNodes(field)
+    .map((placeholder) => {
+      const bounds = placeholder.getBoundingClientRect();
+      const centerX = bounds.left + bounds.width / 2;
+      const centerY = bounds.top + bounds.height / 2;
+      return {
+        placeholder,
+        distance: Math.hypot(centerX - markerX, centerY - markerY),
+      };
+    })
+    .sort((first, second) => first.distance - second.distance)[0]
+    ?.placeholder ?? null;
+}
+
+function describeVerticalPlaceholderNode(
+  field: MathfieldElement,
+  placeholder: HTMLElement,
+): VerticalPlaceholderAnchor | null {
+  if (placeholder.closest(".ML__sqrt, .ML__accent-body")) return null;
+
+  const placeholderCount = (container: HTMLElement) =>
+    visiblePlaceholderNodes(field, container).length;
+  const fraction = placeholder.closest<HTMLElement>(".ML__mfrac");
+  const operator = placeholder.closest<HTMLElement>(".ML__op-group");
+  const script = placeholder.closest<HTMLElement>(".ML__msubsup");
+  let stack: HTMLElement | null = null;
+  for (
+    let current = placeholder.parentElement;
+    current;
+    current = current.parentElement
+  ) {
+    if (
+      (current.classList.contains("ML__vlist") ||
+        current.classList.contains("ML__vlist-r") ||
+        current.classList.contains("ML__vlist-t")) &&
+      placeholderCount(current) >= 2
+    ) {
+      stack = current;
+      break;
+    }
+  }
+
+  const directContainer = fraction ?? operator ?? script;
+  let container =
+    directContainer && placeholderCount(directContainer) >= 2
+      ? directContainer
+      : stack;
+  if (!container) {
+    const base = placeholder.closest<HTMLElement>(".ML__base");
+    const centers = base
+      ? visiblePlaceholderNodes(field, base).map((node) => {
+          const bounds = node.getBoundingClientRect();
+          return bounds.top + bounds.height / 2;
+        })
+      : [];
+    const verticalSpread = centers.length
+      ? Math.max(...centers) - Math.min(...centers)
+      : 0;
+    if (base && centers.length >= 2 && verticalSpread >= 6) {
+      container = base;
+    }
+  }
+  if (!container) return null;
+
+  const placeholderBounds = placeholder.getBoundingClientRect();
+  const containerBounds = container.getBoundingClientRect();
+  if (
+    placeholderBounds.height <= 0 ||
+    containerBounds.width <= 0 ||
+    containerBounds.height <= 0
+  ) {
+    return null;
+  }
+
+  const centerX = placeholderBounds.left + placeholderBounds.width / 2;
+  const centerY = placeholderBounds.top + placeholderBounds.height / 2;
+  const relativeX = (centerX - containerBounds.left) / containerBounds.width;
+  const relativeY = (centerY - containerBounds.top) / containerBounds.height;
+  const kind: VerticalPlaceholderKind = fraction
+    ? "fraction"
+    : operator
+      ? "operator-limit"
+      : script
+        ? "script"
+        : "stack";
+  return {
+    kind,
+    region: relativeY < 0.5 ? "upper" : "lower",
+    centerX,
+    centerY,
+    relativeX,
+    relativeY,
+  };
+}
+
+function describeSelectedVerticalPlaceholder(
+  field: MathfieldElement,
+): VerticalPlaceholderAnchor | null {
+  const marker = activeMathCaretMarker(field);
+  if (!marker) return null;
+  const placeholder = closestPlaceholderNodeToMarker(field, marker);
+  return placeholder
+    ? describeVerticalPlaceholderNode(field, placeholder)
+    : null;
+}
+
+function placeholderRangeForVisualNode(
+  field: MathfieldElement,
+  placeholder: HTMLElement,
+  ranges: Array<[number, number]>,
+) {
+  const bounds = placeholder.getBoundingClientRect();
+  const pointOffset = field.getOffsetFromPoint(
+    bounds.left + bounds.width / 2,
+    bounds.top + bounds.height / 2,
+    { bias: 0 },
+  );
+  return ranges
+    .map((range) => ({
+      range,
+      distance: Math.min(
+        Math.abs(range[0] - pointOffset),
+        Math.abs(range[1] - pointOffset),
+      ),
+    }))
+    .sort((first, second) => first.distance - second.distance)[0]
+    ?.range ?? null;
+}
+
+function findMatchingVerticalPlaceholderRange(
+  field: MathfieldElement,
+  target: VerticalPlaceholderAnchor,
+) {
+  const ranges = latexPlaceholderRanges(field);
+  const candidates = visiblePlaceholderNodes(field).flatMap((placeholder) => {
+    const description = describeVerticalPlaceholderNode(field, placeholder);
+    if (
+      !description ||
+      description.kind !== target.kind ||
+      description.region !== target.region
+    ) {
+      return [];
+    }
+    const range = placeholderRangeForVisualNode(field, placeholder, ranges);
+    if (!range) return [];
+    return [{
+      range,
+      score:
+        Math.abs(description.relativeY - target.relativeY) * 1200 +
+        Math.abs(description.relativeX - target.relativeX) * 300 +
+        Math.abs(description.centerY - target.centerY) * 4 +
+        Math.abs(description.centerX - target.centerX),
+    }];
+  });
+  return candidates.sort((first, second) => first.score - second.score)[0]
+    ?.range ?? null;
+}
+
 function rememberRawCommandAnchor(field: MathfieldElement) {
   if (rawCommandAnchors.has(field)) return;
+  clearVisualTexPlaceholderRestoreState(field);
   const selection = captureSelection(field);
   const activeRange = selection.ranges.at(-1);
   const selectedLatex = activeRange
@@ -341,6 +650,29 @@ function rememberRawCommandAnchor(field: MathfieldElement) {
         )
         .trim()
     : "";
+  const selectedPlaceholder = selectedLatex === "\\placeholder{}";
+  const normalizedActiveRange = activeRange
+    ? [
+        Math.min(activeRange[0], activeRange[1]),
+        Math.max(activeRange[0], activeRange[1]),
+      ] as [number, number]
+    : null;
+  const selectedPlaceholderIndex =
+    selectedPlaceholder && normalizedActiveRange
+      ? latexPlaceholderRanges(field).findIndex(
+          ([start, end]) =>
+            start === normalizedActiveRange[0] &&
+            end === normalizedActiveRange[1],
+        )
+      : -1;
+  const selectedPlaceholderTextIndex =
+    selectedPlaceholder && normalizedActiveRange
+      ? (textualPlaceholderIndexForRange(
+          normalizeChineseLatex(field.value),
+          normalizedActiveRange,
+        ) ??
+        (selectedPlaceholderIndex >= 0 ? selectedPlaceholderIndex : null))
+      : null;
   const autoExitSetting = getCaretAutoExitSetting(field);
   const scriptContext = getScriptCaretContext(field);
   rawCommandAnchors.set(field, {
@@ -348,7 +680,11 @@ function rememberRawCommandAnchor(field: MathfieldElement) {
     selection,
     position: field.position,
     visualCaret: captureWrapperCaretAnchor(field),
-    selectedPlaceholder: selectedLatex === "\\placeholder{}",
+    selectedPlaceholder,
+    selectedPlaceholderIndex:
+      selectedPlaceholderIndex >= 0 ? selectedPlaceholderIndex : null,
+    selectedPlaceholderTextIndex,
+    verticalPlaceholder: null,
     autoExitSetting,
     autoExitScriptKey:
       autoExitSetting === "autoExitSuperscript" ||
@@ -372,6 +708,76 @@ function canonicalRawCommandAnchorSkeleton(latex: string) {
     .replace(/\{([A-Za-z0-9])\}/g, "$1");
 }
 
+function restoreCancelledRawCommandAnchor(
+  field: MathfieldElement,
+  anchor: RawCommandAnchor,
+) {
+  field.executeCommand(["complete", "reject"]);
+  field.mode = "math";
+  field.setValue(anchor.latex, {
+    mode: "math",
+    format: "latex",
+    insertionMode: "replaceAll",
+    selectionMode: "after",
+    silenceNotifications: true,
+  });
+  const selection = clampSelection(anchor.selection, field.lastOffset);
+  field.selection = selection;
+  if (selection.ranges.every(([start, end]) => start === end)) {
+    field.position = Math.max(0, Math.min(field.lastOffset, anchor.position));
+  }
+  return selection;
+}
+
+function restoreSelectedPlaceholderAnchor(
+  field: MathfieldElement,
+  anchor: RawCommandAnchor,
+) {
+  const placeholderIndex = anchor.selectedPlaceholderIndex;
+  if (placeholderIndex === null) return null;
+
+  clearVisualTexPlaceholderRestoreState(field);
+  field.executeCommand(["complete", "reject"]);
+  field.mode = "math";
+  // `replaceAll` and an ordinary full-range selection can leave the empty
+  // container that held the rejected raw group in MathLive's atom tree. Exit
+  // every nested parent first, then remove every atom from the root model.
+  for (let depth = 0; depth < 12; depth += 1) {
+    if (!field.executeCommand("moveAfterParent")) break;
+  }
+  field.executeCommand("deleteAll");
+  field.setValue(anchor.latex, {
+    mode: "math",
+    format: "latex",
+    insertionMode: "replaceAll",
+    selectionMode: "after",
+    silenceNotifications: true,
+  });
+  const targetRange = latexPlaceholderRanges(field)[placeholderIndex] ?? null;
+  if (!targetRange) return null;
+
+  const selection: MathSelectionSnapshot = {
+    ranges: [targetRange],
+    direction: "none",
+  };
+  field.selection = selection;
+  return selection;
+}
+
+function restoreRawCommandInsertionAnchor(
+  field: MathfieldElement,
+  anchor: RawCommandAnchor,
+) {
+  if (anchor.selectedPlaceholder) {
+    const restored = restoreSelectedPlaceholderAnchor(field, anchor);
+    if (restored) return restored;
+    const selection = clampSelection(anchor.selection, field.lastOffset);
+    field.selection = selection;
+    return selection;
+  }
+  return restoreRawCommandAnchor(field, anchor);
+}
+
 function restoreRawCommandAnchor(
   field: MathfieldElement,
   anchor: RawCommandAnchor,
@@ -387,7 +793,7 @@ function restoreRawCommandAnchor(
       canonicalRawCommandAnchorSkeleton(anchor.latex);
 
   // MathLive keeps the original empty container when it rejects nested raw
-  // input. Keep that model, but explicitly restore the original slot: the
+  // input. Keep that model, but explicitly restore the original caret: the
   // selection produced by reject can drift outside an accent/script/fraction
   // and makes the accepted command appear in a surprising location.
   if (retainedPlaceholderContainer) {
@@ -397,17 +803,11 @@ function restoreRawCommandAnchor(
       ? Math.min(preferredRange[0], preferredRange[1])
       : anchor.position;
 
+    // Preserve the original, proven single-slot behaviour for accents, roots
+    // and other ordinary placeholders. Multi-branch vertical structures are
+    // intercepted separately before this function is called.
     if (anchor.selectedPlaceholder) {
-      const placeholderRanges: Array<[number, number]> = [];
-      for (let offset = 1; offset <= field.lastOffset; offset += 1) {
-        if (
-          field.getValue(offset - 1, offset, "latex").trim() ===
-          "\\placeholder{}"
-        ) {
-          placeholderRanges.push([offset - 1, offset]);
-        }
-      }
-      const closestPlaceholder = placeholderRanges.sort(
+      const closestPlaceholder = latexPlaceholderRanges(field).sort(
         (first, second) =>
           Math.abs(first[0] - preferredStart) -
           Math.abs(second[0] - preferredStart),
@@ -673,6 +1073,27 @@ function exactWrapperCommand(rawQuery: string) {
   if (!wrapperCommandPreviews.has(normalizedQuery)) return null;
   return (
     commandRegistry.find((command) => command.command === normalizedQuery) ?? null
+  );
+}
+
+function findAcceptedWrapperRange(
+  field: MathfieldElement,
+  command: string,
+  preferredPosition: number,
+) {
+  const candidates: Array<[number, number]> = [];
+  for (let end = 1; end <= field.lastOffset; end += 1) {
+    const latex = field.getValue(end - 1, end, "latex").trim();
+    if (latex.startsWith(`${command}{`)) {
+      candidates.push([end - 1, end]);
+    }
+  }
+  return (
+    candidates.sort(
+      (first, second) =>
+        Math.abs(first[0] - preferredPosition) -
+        Math.abs(second[0] - preferredPosition),
+    )[0] ?? null
   );
 }
 
@@ -1006,6 +1427,23 @@ const visualTexPlaceholderRestoreFrames = new WeakMap<
   MathfieldElement,
   number
 >();
+const visualTexDeleteRestoreDeadlines = new WeakMap<
+  MathfieldElement,
+  number
+>();
+
+function clearVisualTexPlaceholderRestoreState(field: MathfieldElement) {
+  const pendingFrame = visualTexPlaceholderRestoreFrames.get(field);
+  if (pendingFrame) window.cancelAnimationFrame(pendingFrame);
+  visualTexPlaceholderRestoreFrames.delete(field);
+  visualTexDeleteRestoreDeadlines.delete(field);
+  visualTexForcedPlaceholderRestores.delete(field);
+  visualTexActiveAccentPlaceholders.delete(field);
+  const anchors = visualTexPlaceholderBranchAnchors.get(field);
+  if (anchors) {
+    for (const state of anchors.values()) state.restoreArmed = false;
+  }
+}
 
 function visualTexPlaceholderBranchAnchor(node: HTMLElement) {
   let branchChild = node;
@@ -1141,6 +1579,11 @@ function rememberVisualTexPlaceholderBranch(
 }
 
 function restoreDeletedVisualTexPlaceholder(field: MathfieldElement) {
+  const deleteDeadline = visualTexDeleteRestoreDeadlines.get(field) ?? 0;
+  if (performance.now() > deleteDeadline) {
+    visualTexDeleteRestoreDeadlines.delete(field);
+    return false;
+  }
   const shadowRoot = field.shadowRoot;
   const anchors = visualTexPlaceholderBranchAnchors.get(field);
   const forcedRestore = visualTexForcedPlaceholderRestores.get(field);
@@ -1174,6 +1617,7 @@ function restoreDeletedVisualTexPlaceholder(field: MathfieldElement) {
         field.lastOffset,
       );
       markVisualTexStructuralPlaceholders(field);
+      visualTexDeleteRestoreDeadlines.delete(field);
       return true;
     } finally {
       visualTexRestoringPlaceholderFields.delete(field);
@@ -1245,6 +1689,7 @@ function restoreDeletedVisualTexPlaceholder(field: MathfieldElement) {
               direction: "none",
             };
       markVisualTexStructuralPlaceholders(field);
+      visualTexDeleteRestoreDeadlines.delete(field);
       return true;
     } finally {
       visualTexRestoringPlaceholderFields.delete(field);
@@ -1354,6 +1799,11 @@ function visualTexHasSingleDeletionAtom(field: MathfieldElement) {
 
 function armVisualTexPlaceholderRestore(field: MathfieldElement) {
   const shouldArm = visualTexHasSingleDeletionAtom(field);
+  if (shouldArm) {
+    visualTexDeleteRestoreDeadlines.set(field, performance.now() + 500);
+  } else {
+    visualTexDeleteRestoreDeadlines.delete(field);
+  }
   const anchors = visualTexPlaceholderBranchAnchors.get(field);
   if (anchors) {
     for (const state of anchors.values()) state.restoreArmed = shouldArm;
@@ -1632,7 +2082,7 @@ function installVisualTexStructuralPlaceholderStyle(field: MathfieldElement) {
         overflow: hidden !important;
         border: 0 !important;
         border-radius: 0.075em !important;
-        background: #d9edf9 !important;
+        background: var(--formula-placeholder) !important;
         color: transparent !important;
         opacity: 1 !important;
         text-indent: -999px !important;
@@ -1688,7 +2138,7 @@ function installVisualTexStructuralPlaceholderStyle(field: MathfieldElement) {
         display: block !important;
         width: 0.40em !important;
         border-radius: 0.075em !important;
-        background: #d9edf9 !important;
+        background: var(--formula-placeholder) !important;
         transform: translateX(-50%) !important;
         pointer-events: none !important;
       }
@@ -1812,7 +2262,7 @@ function installVisualTexStructuralPlaceholderStyle(field: MathfieldElement) {
            baseline. Offset that font-metric difference so selection stays put. */
         vertical-align: -0.2425em !important;
         border: 0 !important;
-        background: #cfe8f7 !important;
+        background: var(--formula-placeholder-selected) !important;
         color: transparent !important;
         opacity: 1 !important;
         box-shadow: none !important;
@@ -1829,7 +2279,7 @@ function installVisualTexStructuralPlaceholderStyle(field: MathfieldElement) {
         .${visualTexAccentPlaceholderClass}::before,
       .ML__container.${visualTexPlaceholderSelectionClass}
         .ML__selected .${visualTexAccentPlaceholderClass}::before {
-        background: #cfe8f7 !important;
+        background: var(--formula-placeholder-selected) !important;
       }
 
       .ML__container.${visualTexPlaceholderSelectionClass} .ML__caret,
@@ -1974,7 +2424,7 @@ function installPointerPlaceholderSnapshotStyle(field: MathfieldElement) {
       : `${accentHostSelector} > span:not(.ML__center) .ML__cmr`;
     const background = isAccentPlaceholder
       ? "transparent"
-      : "#d9edf9";
+      : "var(--formula-placeholder)";
     const textIndent = isAccentPlaceholder ? "0" : "-999px";
     const accentBoxRule = isAccentPlaceholder
       ? `
@@ -1985,7 +2435,7 @@ function installPointerPlaceholderSnapshotStyle(field: MathfieldElement) {
         display: block !important;
         width: 0.40em !important;
         border-radius: 0.075em !important;
-        background: #d9edf9 !important;
+        background: var(--formula-placeholder) !important;
         transform: translateX(-50%) !important;
         pointer-events: none !important;
       }
@@ -2217,6 +2667,77 @@ function moveNativeSuggestionSelection(
   return command;
 }
 
+function insertRawCommandIntoVerticalPlaceholder(
+  field: MathfieldElement,
+  anchor: RawCommandAnchor,
+  insertionTemplate: string,
+  selectedCommand: string,
+) {
+  const semanticAnchor = anchor.verticalPlaceholder;
+  if (!semanticAnchor) return false;
+
+  field.executeCommand(["complete", "reject"]);
+  field.mode = "math";
+  field.setValue(anchor.latex, {
+    mode: "math",
+    format: "latex",
+    insertionMode: "replaceAll",
+    selectionMode: "after",
+    silenceNotifications: true,
+  });
+
+  const restoredSelection = clampSelection(
+    anchor.selection,
+    field.lastOffset,
+  );
+  const restoredRange = restoredSelection.ranges.at(-1) ?? null;
+  let targetRange: [number, number] | null = null;
+  if (
+    restoredRange &&
+    field
+      .getValue(
+        Math.min(restoredRange[0], restoredRange[1]),
+        Math.max(restoredRange[0], restoredRange[1]),
+        "latex",
+      )
+      .trim() === "\\placeholder{}"
+  ) {
+    field.selection = restoredSelection;
+    const restoredSemantic = describeSelectedVerticalPlaceholder(field);
+    if (
+      !restoredSemantic ||
+      (restoredSemantic.kind === semanticAnchor.kind &&
+        restoredSemantic.region === semanticAnchor.region)
+    ) {
+      targetRange = [
+        Math.min(restoredRange[0], restoredRange[1]),
+        Math.max(restoredRange[0], restoredRange[1]),
+      ];
+    }
+  }
+  targetRange ??= findMatchingVerticalPlaceholderRange(
+    field,
+    semanticAnchor,
+  );
+  if (!targetRange) return false;
+
+  field.selection = { ranges: [targetRange], direction: "none" };
+  const inserted = field.insert(insertionTemplate, {
+    mode: "math",
+    format: "latex",
+    insertionMode: "replaceSelection",
+    selectionMode:
+      insertionTemplate.includes("\\placeholder{}") ||
+      nativePlaceholderSelectionCommands.has(selectedCommand)
+        ? "placeholder"
+        : "after",
+    focus: true,
+    scrollIntoView: false,
+  });
+  if (inserted) selectFirstLatexPlaceholder(field, selectedCommand);
+  return inserted;
+}
+
 function commitNativeSuggestion(
   field: MathfieldElement,
   settings: InputBehaviorSettings,
@@ -2239,8 +2760,29 @@ function commitNativeSuggestion(
       dismissNativeSuggestionPopover(field);
       return false;
     }
+    const insertionTemplate =
+      exactRawPlaceholderTemplate(selectedCommand) ?? selectedCommand;
+    if (
+      anchor?.selectedPlaceholder &&
+      rawInput === selectedCommand &&
+      !insertionTemplate.includes("\\placeholder{}")
+    ) {
+      clearVisualTexPlaceholderRestoreState(field);
+      const accepted = field.executeCommand(["complete", "accept-all"]);
+      if (accepted) {
+        applyCompletedRawCommandAutoExit(
+          field,
+          settings,
+          anchor,
+          selectedCommand,
+        );
+        rawCommandAnchors.delete(field);
+        dismissNativeSuggestionPopover(field);
+      }
+      return accepted;
+    }
     if (anchor) {
-      restoreRawCommandAnchor(field, anchor);
+      restoreRawCommandInsertionAnchor(field, anchor);
     } else {
       field.mode = "math";
       if (queryRange) {
@@ -2250,8 +2792,6 @@ function commitNativeSuggestion(
         };
       }
     }
-    const insertionTemplate =
-      exactRawPlaceholderTemplate(selectedCommand) ?? selectedCommand;
     const inserted = field.insert(insertionTemplate, {
       mode: "math",
       format: "latex",
@@ -2536,6 +3076,9 @@ function moveCaretThroughEnabledAutoExitContainers(
     preferredScriptKey: string | null = null,
   ) => {
     if (!settings[setting]) return false;
+    if (setting === "autoExitAccent" && !caretIsInsideAccent(field)) {
+      return false;
+    }
 
     let scriptKey: string | null = null;
     if (
@@ -3383,7 +3926,7 @@ function FormulaField(props: FormulaFieldProps) {
           const before = captureFieldSnapshot(field);
           restoringRawCommandAnchor = true;
           try {
-            restoreRawCommandAnchor(field, anchor);
+            restoreCancelledRawCommandAnchor(field, anchor);
           } finally {
             restoringRawCommandAnchor = false;
           }
@@ -3728,8 +4271,84 @@ function FormulaField(props: FormulaFieldProps) {
       event.preventDefault();
       event.stopImmediatePropagation();
       clearPendingAutoExit();
+      if (anchor?.selectedPlaceholder) {
+        const before = {
+          latex: anchor.latex,
+          selection: anchor.selection,
+        };
+        clearVisualTexPlaceholderRestoreState(field);
+        let accepted = field.executeCommand([
+          "complete",
+          "accept-suggestion",
+        ]);
+        if (rawLatexInput(field)) {
+          accepted =
+            field.executeCommand(["complete", "accept-all"]) || accepted;
+        }
+        if (!accepted || rawLatexInput(field)) return false;
+        const placeholderTextIndex = anchor.selectedPlaceholderTextIndex;
+        if (placeholderTextIndex === null) return false;
+        const restoredLatex = replaceTextualPlaceholder(
+          anchor.latex,
+          placeholderTextIndex,
+          placeholderTemplate,
+        );
+        if (!restoredLatex) return false;
+        field.setValue(restoredLatex, {
+          mode: "math",
+          format: "latex",
+          insertionMode: "replaceAll",
+          selectionMode: "after",
+          silenceNotifications: true,
+        });
+        const placeholderRanges = latexPlaceholderRanges(field);
+        const insertedPlaceholderCount =
+          placeholderTemplate.match(/\\placeholder\{\}/g)?.length ?? 0;
+        const basePlaceholderIndex = anchor.selectedPlaceholderIndex;
+        const selectedModelIndex =
+          basePlaceholderIndex === null
+            ? null
+            : basePlaceholderIndex +
+              (reverseModelPlaceholderOrderCommands.has(placeholderCommand)
+                ? Math.max(0, insertedPlaceholderCount - 1)
+                : 0);
+        const selectedRange =
+          selectedModelIndex === null
+            ? null
+            : placeholderRanges[selectedModelIndex] ?? null;
+        window.requestAnimationFrame(() => {
+          if (!field.isConnected) return;
+          if (selectedRange) {
+            field.selection = {
+              ranges: [selectedRange],
+              direction: "none",
+            };
+          } else {
+            selectFirstLatexPlaceholder(field, placeholderCommand);
+          }
+          markVisualTexStructuralPlaceholders(field);
+          field.focus();
+          field.shadowRoot
+            ?.querySelector<HTMLElement>('[part="keyboard-sink"]')
+            ?.focus({ preventScroll: true });
+          syncFrameSize();
+        });
+        rawCommandAnchors.delete(field);
+        delete field.dataset.pendingNativeSuggestion;
+        dismissNativeSuggestionPopover(field);
+        markVisualTexStructuralPlaceholders(field);
+        field.focus();
+        field.shadowRoot
+          ?.querySelector<HTMLElement>('[part="keyboard-sink"]')
+          ?.focus({ preventScroll: true });
+        const after = captureFieldSnapshot(field);
+        emitEdit(before, after, "replace", "candidate");
+        propsRef.current.onInputActivity(field);
+        syncFrameSize();
+        return true;
+      }
       if (anchor) {
-        restoreRawCommandAnchor(field, anchor);
+        restoreRawCommandInsertionAnchor(field, anchor);
       } else {
         field.mode = "math";
         if (queryRange) {
@@ -3811,12 +4430,41 @@ function FormulaField(props: FormulaFieldProps) {
         position: field.position,
         visualCaret: captureWrapperCaretAnchor(field),
         selectedPlaceholder: false,
+        selectedPlaceholderIndex: null,
+        selectedPlaceholderTextIndex: null,
+        verticalPlaceholder: null,
         autoExitSetting: null,
         autoExitScriptKey: null,
       };
-      const anchorSelection = restoreRawCommandAnchor(field, anchor);
+      let anchorSelection: MathSelectionSnapshot;
+      let replaceAcceptedWrapper = false;
+      if (anchor.selectedPlaceholder) {
+        clearVisualTexPlaceholderRestoreState(field);
+        field.executeCommand(["complete", "reject"]);
+        field.mode = "math";
+        const insertionStart = field.position;
+        const insertedWrapper = field.insert(`${wrapperCommand.command}{}`, {
+          mode: "math",
+          format: "latex",
+          insertionMode: "replaceSelection",
+          selectionMode: "after",
+          focus: true,
+          scrollIntoView: false,
+        });
+        if (!insertedWrapper) return false;
+        anchorSelection = {
+          ranges: [[insertionStart, field.position]],
+          direction: "none",
+        };
+        replaceAcceptedWrapper = true;
+      } else {
+        anchorSelection = restoreRawCommandAnchor(field, anchor);
+      }
       const anchorRange = anchorSelection.ranges.at(-1) ?? [anchor.position, anchor.position];
       const rangeStart = Math.min(anchorRange[0], anchorRange[1]);
+      const rangeEnd = replaceAcceptedWrapper
+        ? Math.max(anchorRange[0], anchorRange[1])
+        : rangeStart;
       rawCommandAnchors.delete(field);
       delete field.dataset.pendingNativeSuggestion;
       const styleAtAnchor =
@@ -3833,12 +4481,16 @@ function FormulaField(props: FormulaFieldProps) {
       pendingWrapperInput = {
         command: wrapperCommand.command,
         content: "",
-        range: [rangeStart, rangeStart],
+        range: [rangeStart, rangeEnd],
         anchorStyle,
         visualCaret: anchor.visualCaret,
         autoExitSetting: "autoExitWrapperCommand",
-        parentAutoExitSetting: anchor.autoExitSetting,
-        parentAutoExitScriptKey: anchor.autoExitScriptKey,
+        parentAutoExitSetting: anchor.selectedPlaceholder
+          ? anchor.autoExitSetting
+          : null,
+        parentAutoExitScriptKey: anchor.selectedPlaceholder
+          ? anchor.autoExitScriptKey
+          : null,
       };
       field.dataset.pendingWrapperCommand = wrapperCommand.command;
       field.focus();
@@ -4017,7 +4669,7 @@ function FormulaField(props: FormulaFieldProps) {
           const before = captureFieldSnapshot(field);
           restoringRawCommandAnchor = true;
           try {
-            restoreRawCommandAnchor(field, anchor);
+            restoreCancelledRawCommandAnchor(field, anchor);
           } finally {
             restoringRawCommandAnchor = false;
           }
@@ -5177,7 +5829,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       }
 
       const tryInsert = () => {
-        if (rawAnchor) restoreRawCommandAnchor(field, rawAnchor);
+        if (rawAnchor) restoreRawCommandInsertionAnchor(field, rawAnchor);
         else field.selection = originalSelection;
         const inserted = applyDiscreteFormulaMutation(
           targetLineId,

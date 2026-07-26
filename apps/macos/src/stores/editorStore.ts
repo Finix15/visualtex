@@ -9,6 +9,7 @@ import type {
   InputBehaviorSettingKey,
   InputBehaviorSettings,
   LatexCodeFormat,
+  Theme,
 } from "../types/formula";
 import type { DocumentSnapshot } from "../history/historyTypes";
 import {
@@ -18,7 +19,6 @@ import {
 import { normalizeChineseLatex } from "../editor/normalizeChineseLatex";
 import { normalizeMultilineLatex } from "../editor/normalizeChineseLatex";
 
-type Theme = "light" | "dark";
 export type Language = "cn" | "en";
 export type EditorLayout = "standard" | "classic";
 export const MIN_EDITOR_ZOOM = 0.2;
@@ -74,6 +74,10 @@ function normalizeFormulaAlignment(value: unknown): FormulaAlignment {
 
 function normalizeEditorLayout(value: unknown): EditorLayout {
   return value === "classic" ? "classic" : "standard";
+}
+
+function normalizeTheme(value: unknown): Theme {
+  return value === "dark" || value === "beige" ? value : "light";
 }
 
 function normalizeEditorZoom(value: unknown) {
@@ -280,7 +284,7 @@ export const useEditorStore = create<EditorState>()(
             ),
           };
         }),
-      setTheme: (theme) => set({ theme }),
+      setTheme: (theme) => set({ theme: normalizeTheme(theme) }),
       setLanguage: (language) => set({ language }),
       setZoom: (zoom) => set({ zoom: normalizeEditorZoom(zoom) }),
       setSourceOpen: (sourceOpen) => set({ sourceOpen }),
@@ -364,7 +368,7 @@ export const useEditorStore = create<EditorState>()(
               document.settings.formulaAlignment ??
                 document.formulas[0]?.alignment,
             ),
-            theme: document.settings.theme,
+            theme: normalizeTheme(document.settings.theme),
             zoom: normalizeEditorZoom(document.settings.zoom),
             latexCodeFormat: isLatexCodeFormat(document.settings.latexCodeFormat)
               ? document.settings.latexCodeFormat
@@ -436,6 +440,7 @@ export const useEditorStore = create<EditorState>()(
             persisted.formulaAlignment ?? legacyLineAlignment,
           ),
           editorLayout: normalizeEditorLayout(persisted.editorLayout),
+          theme: normalizeTheme(persisted.theme),
           zoom: normalizeEditorZoom(persisted.zoom),
           latexCodeFormat: isLatexCodeFormat(persisted.latexCodeFormat)
             ? persisted.latexCodeFormat

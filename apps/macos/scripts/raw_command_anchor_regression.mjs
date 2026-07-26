@@ -256,6 +256,76 @@ async function main() {
       );
     };
 
+    const prepareVerticalPlaceholder = async (latex, region = "upper") => {
+      const prepared = await evaluate(`(async () => {
+        const field = document.querySelector("math-field");
+        field.focus();
+        field.shadowRoot?.querySelector('[part="keyboard-sink"]')?.focus({ preventScroll: true });
+        field.setValue(${JSON.stringify(latex)}, {
+          mode: "math",
+          format: "latex",
+          insertionMode: "replaceAll",
+          selectionMode: "after",
+          silenceNotifications: true,
+        });
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const placeholderCount = (field.value.match(/\\\\placeholder\\{\\}/g) || []).length;
+        field.position = field.lastOffset;
+        const candidates = [];
+        for (let index = 0; index < placeholderCount; index += 1) {
+          field.executeCommand('moveToPreviousPlaceholder');
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+          const selection = JSON.parse(JSON.stringify(field.selection));
+          const selected = field.selectionIsCollapsed ? '' : field.getValue(field.selection);
+          const marker = Array.from(field.shadowRoot?.querySelectorAll(
+            '.visualtex-structural-placeholder-caret, .ML__placeholder-selected, .ML__selected, .ML__caret'
+          ) ?? []).find((node) => node.getBoundingClientRect().height > 0);
+          const markerRect = (marker?.parentElement ?? marker)?.getBoundingClientRect();
+          const placeholderNodes = Array.from(
+            field.shadowRoot?.querySelectorAll('.visualtex-structural-placeholder, .ML__placeholder') ?? []
+          ).map((node) => {
+            const rect = node.getBoundingClientRect();
+            return {
+              node,
+              centerX: rect.left + rect.width / 2,
+              centerY: rect.top + rect.height / 2,
+              width: rect.width,
+              height: rect.height,
+            };
+          }).filter((item) => item.width > 0 && item.height > 0);
+          const markerX = markerRect ? markerRect.left + markerRect.width / 2 : 0;
+          const markerY = markerRect ? markerRect.top + markerRect.height / 2 : 0;
+          const closest = placeholderNodes.sort((first, second) =>
+            Math.hypot(first.centerX - markerX, first.centerY - markerY) -
+            Math.hypot(second.centerX - markerX, second.centerY - markerY)
+          )[0] ?? null;
+          candidates.push({
+            selection,
+            selected,
+            centerY: closest?.centerY ?? Number.POSITIVE_INFINITY,
+          });
+        }
+        candidates.sort((first, second) => first.centerY - second.centerY);
+        const target = ${JSON.stringify(region)} === 'upper'
+          ? candidates[0]
+          : candidates[candidates.length - 1];
+        if (target) field.selection = target.selection;
+        return {
+          value: field.value,
+          selection: field.selection,
+          selected: field.selectionIsCollapsed ? '' : field.getValue(field.selection),
+          placeholders: candidates,
+          region: ${JSON.stringify(region)},
+        };
+      })()`);
+      assert.match(
+        prepared.selected,
+        /\\placeholder\{\}/,
+        `Vertical placeholder was not selected: ${latex} ${JSON.stringify(prepared)}`,
+      );
+      return prepared;
+    };
+
     const readState = () =>
       evaluate(`(() => {
         const field = document.querySelector("math-field");
@@ -345,11 +415,36 @@ async function main() {
         context: { accentDepth: 0 },
       },
       {
+        label: "hat alpha keeps exactly one accent",
+        latex: "\\hat{\\placeholder{}}+z",
+        command: "alpha",
+        expected: /^\\hat\{\\alpha\}\+z$/,
+        context: { accentDepth: 0 },
+        outerCommand: "hat",
+      },
+      {
         label: "accent alpha auto-exit",
         latex: "\\vec{\\placeholder{}}+z",
         command: "alpha",
         expected: /^\\vec\{\\alpha\}\+z$/,
         context: { accentDepth: 0 },
+        outerCommand: "vec",
+      },
+      {
+        label: "dot alpha keeps exact source",
+        latex: "\\dot{\\placeholder{}}",
+        command: "alpha",
+        expected: /^\\dot\{\\alpha\}$/,
+        context: { accentDepth: 0 },
+        outerCommand: "dot",
+      },
+      {
+        label: "dot theta keeps exactly one accent",
+        latex: "\\dot{\\placeholder{}}+z",
+        command: "theta",
+        expected: /^\\dot\{\\theta\}\+z$/,
+        context: { accentDepth: 0 },
+        outerCommand: "dot",
       },
       {
         label: "accent integral auto-exit",
@@ -412,6 +507,18 @@ async function main() {
         1,
         `${testCase.label} duplicated command: ${JSON.stringify(state)}`,
       );
+      if (testCase.outerCommand) {
+        assert.equal(
+          countCommand(state.value, testCase.outerCommand),
+          1,
+          `${testCase.label} created an extra empty accent: ${JSON.stringify(state)}`,
+        );
+        assert.doesNotMatch(
+          state.value,
+          new RegExp(`\\\\${testCase.outerCommand}\\{\\}`),
+          `${testCase.label} left an empty accent: ${JSON.stringify(state)}`,
+        );
+      }
       for (const key of [
         "accentDepth",
         "scriptDepth",
@@ -432,6 +539,79 @@ async function main() {
           `${testCase.label} wrong caret context ${key}: ${JSON.stringify(state)}`,
         );
       }
+    }
+
+    await evaluate(`(() => {
+      const field = document.querySelector("math-field");
+      field.focus();
+      field.shadowRoot?.querySelector('[part="keyboard-sink"]')?.focus({ preventScroll: true });
+      field.setValue("", {
+        mode: "math",
+        format: "latex",
+        insertionMode: "replaceAll",
+        selectionMode: "after",
+        silenceNotifications: true,
+      });
+      field.position = 0;
+    })()`);
+    const insertedDotTemplate = await typeRawCommand("dot");
+    assert.match(
+      insertedDotTemplate.value,
+      /^\\dot\{\\placeholder\{\}\}$/,
+      `typing \\dot did not create one selected placeholder: ${JSON.stringify(insertedDotTemplate)}`,
+    );
+    assert.match(
+      insertedDotTemplate.selectedLatex,
+      /\\placeholder\{\}/,
+      `typing \\dot did not select its placeholder: ${JSON.stringify(insertedDotTemplate)}`,
+    );
+    const dotAlphaFromTypedTemplate = await typeRawCommand("alpha");
+    assert.equal(
+      dotAlphaFromTypedTemplate.value,
+      "\\dot{\\alpha}",
+      `typing \\alpha inside a typed \\dot duplicated the accent: ${JSON.stringify(dotAlphaFromTypedTemplate)}`,
+    );
+    assert.equal(
+      countCommand(dotAlphaFromTypedTemplate.value, "dot"),
+      1,
+      `typing \\alpha inside a typed \\dot created another dot: ${JSON.stringify(dotAlphaFromTypedTemplate)}`,
+    );
+
+    const verticalPlaceholderCases = [
+      {
+        label: "fraction numerator keeps raw command",
+        latex: "\\frac{\\placeholder{}}{\\placeholder{}}+z",
+        expected: /^\\frac\{\\pi\}\{\\placeholder\{\}\}\+z$/,
+      },
+      {
+        label: "integral upper limit keeps raw command",
+        latex: "\\int_{\\placeholder{}}^{\\placeholder{}}f",
+        expected: /^\\int_\{\\placeholder\{\}\}\^\{\\pi\}f$/,
+      },
+      {
+        label: "sum upper limit keeps raw command",
+        latex: "\\sum_{\\placeholder{}}^{\\placeholder{}}x",
+        expected: /^\\sum_\{\\placeholder\{\}\}\^\{\\pi\}x$/,
+      },
+      {
+        label: "overset upper slot keeps raw command",
+        latex: "\\overset{\\placeholder{}}{\\placeholder{}}+z",
+        expected: /^\\overset\{\\pi\}\{\\placeholder\{\}\}\+z$/,
+      },
+    ];
+
+    for (const testCase of verticalPlaceholderCases) {
+      const prepared = await prepareVerticalPlaceholder(testCase.latex, "upper");
+      assert.ok(
+        prepared.placeholders.length >= 2,
+        `${testCase.label} did not expose two placeholders: ${JSON.stringify(prepared)}`,
+      );
+      const state = await typeRawCommand("pi");
+      assert.match(
+        state.value,
+        testCase.expected,
+        `${testCase.label}: ${JSON.stringify({ prepared, state })}`,
+      );
     }
 
     const wrapperCases = [
@@ -471,6 +651,15 @@ async function main() {
         afterFollowup: /^\\frac\{\\hat\{\\mathfrak\{g\}\}q\}\{b\}\+z$/,
         context: { accentDepth: 0, fractionDepth: 1 },
       },
+      {
+        label: "mathbb inside radical stays in radical",
+        latex: "\\sqrt{\\placeholder{}}+z",
+        command: "mathbb",
+        input: "R",
+        expected: /^\\sqrt\{\\mathbb\{R\}\}\+z$/,
+        afterFollowup: /^\\sqrt\{\\mathbb\{R\}q\}\+z$/,
+        context: {},
+      },
     ];
 
     for (const testCase of wrapperCases) {
@@ -508,6 +697,63 @@ async function main() {
         followup.value,
         testCase.afterFollowup,
         `${testCase.label} did not leave the accent before follow-up input: ${JSON.stringify(followup)}`,
+      );
+    }
+
+    const verticalWrapperCases = [
+      {
+        label: "mathbb stays in fraction numerator",
+        latex: "\\frac{\\placeholder{}}{\\placeholder{}}+z",
+        command: "mathbb",
+        input: "R",
+        expected: /^\\frac\{\\mathbb\{R\}\}\{\\placeholder\{\}\}\+z$/,
+        afterFollowup: /^\\frac\{\\mathbb\{R\}q\}\{\\placeholder\{\}\}\+z$/,
+      },
+      {
+        label: "mathbf stays in sum upper limit",
+        latex: "\\sum_{\\placeholder{}}^{\\placeholder{}}f",
+        command: "mathbf",
+        input: "x",
+        expected: /^\\sum_\{\\placeholder\{\}\}\^\{\\mathbf\{x\}\}f$/,
+        afterFollowup: /^\\sum_\{\\placeholder\{\}\}\^\{\\mathbf\{x\}q\}f$/,
+      },
+      {
+        label: "mathcal stays in overset upper slot",
+        latex: "\\overset{\\placeholder{}}{\\placeholder{}}+z",
+        command: "mathcal",
+        input: "A",
+        expected: /^\\overset\{\\mathcal\{A\}\}\{\\placeholder\{\}\}\+z$/,
+        afterFollowup: /^\\overset\{\\mathcal\{A\}q\}\{\\placeholder\{\}\}\+z$/,
+      },
+    ];
+
+    for (const testCase of verticalWrapperCases) {
+      await prepareVerticalPlaceholder(testCase.latex, "upper");
+      await typeRawCommand(testCase.command);
+      const pending = await readState();
+      assert.equal(
+        pending.pendingWrapperCommand,
+        `\\${testCase.command}`,
+        `${testCase.label} did not enter wrapper input: ${JSON.stringify(pending)}`,
+      );
+      await typeCharacter(
+        testCase.input,
+        `Key${testCase.input.toUpperCase()}`,
+        testCase.input.toUpperCase().charCodeAt(0),
+        170,
+      );
+      const state = await readState();
+      assert.match(
+        state.value,
+        testCase.expected,
+        `${testCase.label}: ${JSON.stringify(state)}`,
+      );
+      await typeCharacter("q", "KeyQ", 81, 170);
+      const followup = await readState();
+      assert.match(
+        followup.value,
+        testCase.afterFollowup,
+        `${testCase.label} moved to another branch: ${JSON.stringify(followup)}`,
       );
     }
 
@@ -708,7 +954,12 @@ async function main() {
     chrome?.kill("SIGTERM");
     preview.kill("SIGTERM");
     await sleep(250);
-    await rm(chromeProfile, { recursive: true, force: true });
+    await rm(chromeProfile, {
+      recursive: true,
+      force: true,
+      maxRetries: 6,
+      retryDelay: 120,
+    });
   }
 }
 

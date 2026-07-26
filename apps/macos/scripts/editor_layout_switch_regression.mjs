@@ -293,6 +293,122 @@ async function main() {
       throw new Error(`Settings did not open: ${JSON.stringify({ settingsClick, settingsState })}`);
     }
     await waitForSelector('[data-editor-layout-choice="classic"]');
+
+    const themeExpectations = {
+      light: {
+        bg: "#f2f4f6",
+        surface: "#ffffff",
+        accent: "#1f638e",
+        placeholder: "#d9edf9",
+        caret: "#1f638e",
+      },
+      beige: {
+        bg: "#f3ebdd",
+        surface: "#fbf4e8",
+        accent: "#8a7354",
+        placeholder: "#ccb994",
+        caret: "#70573c",
+      },
+      dark: {
+        bg: "#16181b",
+        surface: "#202328",
+        accent: "#72b7dd",
+        placeholder: "#5f8fa8",
+        caret: "#72b7dd",
+      },
+    };
+    const themeChoiceState = await evaluate(`(() => ({
+      ids: Array.from(document.querySelectorAll('[data-theme-choice]'))
+        .map((button) => button.dataset.themeChoice ?? ''),
+      hasHeaderThemeToggle: Boolean(document.querySelector('.app-header .theme-toggle')),
+    }))()`);
+    assert.deepEqual(
+      themeChoiceState.ids,
+      Object.keys(themeExpectations),
+      JSON.stringify(themeChoiceState),
+    );
+    assert.equal(
+      themeChoiceState.hasHeaderThemeToggle,
+      false,
+      JSON.stringify(themeChoiceState),
+    );
+    for (const [themeId, expected] of Object.entries(themeExpectations)) {
+      await evaluate(`document.querySelector('[data-theme-choice="${themeId}"]')?.click()`);
+      await sleep(90);
+      const themeState = await evaluate(`(() => {
+        const rootStyle = getComputedStyle(document.documentElement);
+        const persisted = JSON.parse(localStorage.getItem('visualtex-editor') || '{}').state ?? {};
+        return {
+          rootTheme: document.documentElement.dataset.theme ?? '',
+          persistedTheme: persisted.theme ?? '',
+          bg: rootStyle.getPropertyValue('--bg').trim().toLowerCase(),
+          surface: rootStyle.getPropertyValue('--surface').trim().toLowerCase(),
+          accent: rootStyle.getPropertyValue('--accent').trim().toLowerCase(),
+          placeholder: rootStyle.getPropertyValue('--formula-placeholder').trim().toLowerCase(),
+          caret: rootStyle.getPropertyValue('--formula-caret').trim().toLowerCase(),
+          editorSurface: getComputedStyle(document.querySelector('.editor-surface')).backgroundColor,
+          settingsSurface: getComputedStyle(document.querySelector('.settings-dialog')).backgroundColor,
+          active: document.querySelector('[data-theme-choice="${themeId}"]')?.classList.contains('is-active') ?? false,
+          blueInteractiveColors: ${themeId === "beige" ? `(() => {
+            const rgb = (value) => {
+              const match = value.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);
+              return match ? match.slice(1, 4).map(Number) : null;
+            };
+            const isBlue = (value) => {
+              const channels = rgb(value);
+              if (!channels) return false;
+              const [r, g, b] = channels;
+              const max = Math.max(r, g, b);
+              const min = Math.min(r, g, b);
+              return max - min >= 28 && b > r + 18 && (b >= g || g > r + 24);
+            };
+            return Array.from(document.querySelectorAll(
+              'button, [role="button"], input, select, .is-active, .is-selected, .formula-line.is-active'
+            )).flatMap((element) => {
+              const style = getComputedStyle(element);
+              const values = [
+                style.color,
+                style.backgroundColor,
+                style.borderTopColor,
+                style.borderRightColor,
+                style.borderBottomColor,
+                style.borderLeftColor,
+                style.outlineColor,
+              ];
+              return values.filter(isBlue).map((value) => ({
+                tag: element.tagName,
+                className: element.className,
+                value,
+              }));
+            });
+          })()` : `[]`},
+        };
+      })()`);
+      assert.deepEqual(
+        themeState,
+        {
+          rootTheme: themeId,
+          persistedTheme: themeId,
+          bg: expected.bg,
+          surface: expected.surface,
+          accent: expected.accent,
+          placeholder: expected.placeholder,
+          caret: expected.caret,
+          editorSurface:
+            themeId === 'beige' ? 'rgb(251, 244, 232)' :
+            themeId === 'dark' ? 'rgb(32, 35, 40)' : 'rgb(255, 255, 255)',
+          settingsSurface:
+            themeId === 'beige' ? 'rgb(251, 244, 232)' :
+            themeId === 'dark' ? 'rgb(32, 35, 40)' : 'rgb(255, 255, 255)',
+          active: true,
+          blueInteractiveColors: [],
+        },
+        JSON.stringify(themeState),
+      );
+    }
+    await evaluate(`document.querySelector('[data-theme-choice="light"]')?.click()`);
+    await sleep(90);
+
     await evaluate(`document.querySelector('[data-editor-layout-choice="classic"]')?.click()`);
     await sleep(180);
 

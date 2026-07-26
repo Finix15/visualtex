@@ -11,11 +11,11 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { useEditorStore } from "../stores/editorStore";
-import type { LatexCodeFormat } from "../types/formula";
+import type { LatexCodeFormat, Theme } from "../types/formula";
 
 interface Props {
   latex: string;
-  theme: "light" | "dark";
+  theme: Theme;
   format: LatexCodeFormat;
   onCollapse: () => void;
   showCollapseAction?: boolean;

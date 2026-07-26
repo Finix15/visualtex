@@ -16,7 +16,6 @@ import {
   LoaderCircle,
   Menu,
   Minus,
-  Moon,
   PanelBottomClose,
   PanelBottomOpen,
   PanelLeftClose,
@@ -29,7 +28,6 @@ import {
   Save,
   ScanLine,
   Settings2,
-  Sun,
   Undo2,
   X,
 } from "lucide-react";
@@ -201,7 +199,6 @@ function App() {
   const activeLineId = useEditorStore((state) => state.activeLineId);
   const formulaAlignment = useEditorStore((state) => state.formulaAlignment);
   const theme = useEditorStore((state) => state.theme);
-  const setTheme = useEditorStore((state) => state.setTheme);
   const language = useEditorStore((state) => state.language);
   const setLanguage = useEditorStore((state) => state.setLanguage);
   const zoom = useEditorStore((state) => state.zoom);
@@ -1260,23 +1257,6 @@ function App() {
           </button>
           <button type="button" className="icon-button workspace-action" onClick={() => setOcrOpen(true)} aria-label={isEn ? "Recognize formula image" : "图片公式识别"} title={isEn ? "Recognize formula image" : "图片公式识别"}>
             <ScanLine size={17} />
-          </button>
-          <button
-            type="button"
-            className="icon-button theme-toggle"
-            onClick={() => setTheme(theme === "light" ? "dark" : "light")}
-            aria-label={theme === "light" ? (isEn ? "Switch to dark mode" : "切换深色模式") : (isEn ? "Switch to light mode" : "切换浅色模式")}
-            title={
-              isEn
-                ? theme === "light"
-                  ? "Switch to dark mode"
-                  : "Switch to light mode"
-                : theme === "light"
-                  ? "切换深色模式"
-                  : "切换浅色模式"
-            }
-          >
-            {theme === "light" ? <Moon size={17} /> : <Sun size={17} />}
           </button>
           <button type="button" className="icon-button settings-toggle" onClick={() => setSettingsOpen(true)} aria-label={isEn ? "Settings" : "设置"} title={isEn ? "Settings · ⌘," : "设置 · ⌘,"}>
             <Settings2 size={17} />
