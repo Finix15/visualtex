@@ -2606,16 +2606,19 @@ function FormulaField(props: FormulaFieldProps) {
       const content = field.shadowRoot?.querySelector<HTMLElement>(
         '[part="content"]',
       );
-      const atomRects = content
+      const formulaRects = content
         ? Array.from(
-            content.querySelectorAll<HTMLElement>("[data-atom-id]"),
+            content.querySelectorAll<HTMLElement>(
+              "[data-atom-id], .ML__base, .ML__mfrac, .ML__sqrt, " +
+                ".ML__op-group, .ML__vlist",
+            ),
           )
-            .map((atom) => atom.getBoundingClientRect())
+            .map((node) => node.getBoundingClientRect())
             .filter((rect) => rect.height > 0 && rect.width >= 0)
         : [];
-      const formulaHeight = atomRects.length
-        ? Math.max(...atomRects.map((rect) => rect.bottom)) -
-          Math.min(...atomRects.map((rect) => rect.top))
+      const formulaHeight = formulaRects.length
+        ? Math.max(...formulaRects.map((rect) => rect.bottom)) -
+          Math.min(...formulaRects.map((rect) => rect.top))
         : fontSize;
       const hasTallStructure = tallFormulaPattern.test(field.value);
       const baseHeight = hasTallStructure
@@ -3229,6 +3232,7 @@ function FormulaField(props: FormulaFieldProps) {
     }
     observeVisualTexActiveAccentPlaceholder(field);
     schedulePointerPlaceholderSnapshotStyle();
+    syncFrameSize();
       if (imeGuard.isComposing() || !lastSnapshotRef.current) return;
       lastSnapshotRef.current = {
         ...lastSnapshotRef.current,
@@ -3764,6 +3768,7 @@ function FormulaField(props: FormulaFieldProps) {
         observeVisualTexActiveAccentPlaceholder(field);
         scheduleDeletedVisualTexPlaceholderRestore(field);
         markVisualTexStructuralPlaceholders(field);
+        syncFrameSize();
         schedulePointerPlaceholderSnapshotStyle();
           scheduleInputActivity();
           schedulePendingWrapperPlaceholderPosition();
@@ -4456,39 +4461,74 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       lineId: string,
       field: MathfieldElement,
     ) => {
-      // Preserve the existing Enter behavior while a formula selection or raw
-      // LaTeX command is active. A collapsed caret in ordinary math input can
-      // safely use Word-like paragraph splitting.
-      if (!field.selectionIsCollapsed || hasRawLatexInput(field)) {
+      // Raw LaTeX input still belongs to MathLive's command transaction. In
+      // ordinary math input, Enter follows Word: a selection is removed first,
+      // then the remaining content is split at the selection boundary.
+      if (hasRawLatexInput(field)) {
         addLineAfter(index);
         return;
       }
 
-      const splitOffset = Math.max(
+      const selectedRange = field.selection.ranges[0];
+      if (field.selection.ranges.length !== 1 || !selectedRange) {
+        addLineAfter(index);
+        return;
+      }
+      const splitStart = Math.max(
         0,
-        Math.min(field.position, field.lastOffset),
+        Math.min(
+          field.selectionIsCollapsed
+            ? field.position
+            : Math.min(selectedRange[0], selectedRange[1]),
+          field.lastOffset,
+        ),
       );
-      if (splitOffset >= field.lastOffset) {
+      const splitEnd = Math.max(
+        splitStart,
+        Math.min(
+          field.selectionIsCollapsed
+            ? field.position
+            : Math.max(selectedRange[0], selectedRange[1]),
+          field.lastOffset,
+        ),
+      );
+      if (field.selectionIsCollapsed && splitEnd >= field.lastOffset) {
         addLineAfter(index);
         return;
       }
 
       const originalLatex = normalizeChineseLatex(field.value);
       const leftLatex = normalizeChineseLatex(
-        field.getValue(0, splitOffset, "latex"),
+        field.getValue(0, splitStart, "latex"),
       );
       const rightLatex = normalizeChineseLatex(
-        field.getValue(splitOffset, field.lastOffset, "latex"),
+        field.getValue(splitEnd, field.lastOffset, "latex"),
       );
-      const comparable = (value: string) => value.replace(/\s+/g, "");
-
+      const comparable = (value: string) =>
+        value
+          .replace(/\s+/g, "")
+          .replace(/\{([A-Za-z0-9])\}/g, "$1");
+      const verifier = new MathfieldElement();
+      const canonicalize = (latex: string) => {
+        verifier.setValue(latex, {
+          mode: "math",
+          format: "latex",
+          insertionMode: "replaceAll",
+          selectionMode: "after",
+          silenceNotifications: true,
+        });
+        return comparable(verifier.value);
+      };
       // MathLive offsets can point inside a structured atom such as a fraction
-      // or matrix. Only split when both serialized ranges reassemble to the
-      // original formula; otherwise keep the previous blank-line behavior so
-      // Enter can never damage a structured expression.
+      // or matrix. Reparse the two serialized ranges before comparing them:
+      // MathLive legitimately normalizes braces and command whitespace at a
+      // safe boundary, which made direct string concatenation reject complex
+      // trailing structures even though their model was lossless.
       if (
-        !rightLatex.trim() ||
-        comparable(leftLatex + rightLatex) !== comparable(originalLatex)
+        field.selectionIsCollapsed &&
+        (!rightLatex.trim() ||
+          canonicalize(`${leftLatex} ${rightLatex}`) !==
+            canonicalize(originalLatex))
       ) {
         addLineAfter(index);
         return;
@@ -4556,6 +4596,98 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         latex: rightLatex,
         selection: startSelection,
       });
+    };
+
+    const mergeLineWithPrevious = (
+      index: number,
+      lineId: string,
+      field: MathfieldElement,
+    ) => {
+      if (index <= 0) return false;
+      const state = useEditorStore.getState();
+      const currentIndex = state.lines.findIndex((line) => line.id === lineId);
+      if (currentIndex <= 0) return false;
+      const currentLine = state.lines[currentIndex];
+      const previousLine = state.lines[currentIndex - 1];
+      if (!currentLine || !previousLine) return false;
+
+      historyManager.commitPendingTransaction();
+      const previousField = fieldRefs.current.get(previousLine.id);
+      const previousLatex = normalizeChineseLatex(
+        previousField?.value ?? previousLine.latex,
+      );
+      const currentLatex = normalizeChineseLatex(field.value);
+      const joinOffset = previousField?.lastOffset ?? 0;
+      const verifier = new MathfieldElement();
+      const commandSeparator =
+        /\\[A-Za-z]+$/.test(previousLatex) && /^[A-Za-z]/.test(currentLatex)
+          ? " "
+          : "";
+      verifier.setValue(`${previousLatex}${commandSeparator}${currentLatex}`, {
+        mode: "math",
+        format: "latex",
+        insertionMode: "replaceAll",
+        selectionMode: "after",
+        silenceNotifications: true,
+      });
+      const mergedLatex = normalizeChineseLatex(verifier.value);
+
+      const selectionByLineId = Object.fromEntries(
+        linesRef.current.flatMap((line) => {
+          const currentField = fieldRefs.current.get(line.id);
+          return currentField?.isConnected
+            ? [[line.id, captureSelection(currentField)] as const]
+            : [];
+        }),
+      );
+      const before = getEditorDocumentSnapshot(selectionByLineId);
+      before.lines = before.lines.map((line) => {
+        if (line.id === previousLine.id) {
+          return { ...line, latex: previousLatex };
+        }
+        if (line.id === currentLine.id) {
+          return { ...line, latex: currentLatex };
+        }
+        return line;
+      });
+      const joinSelection: MathSelectionSnapshot = {
+        ranges: [[joinOffset, joinOffset]],
+        direction: "none",
+      };
+      const nextSelectionByLineId = { ...before.selectionByLineId };
+      delete nextSelectionByLineId[currentLine.id];
+      nextSelectionByLineId[previousLine.id] = joinSelection;
+      const after: ReplaceDocumentEntry["after"] = {
+        title: before.title,
+        lines: before.lines
+          .filter((line) => line.id !== currentLine.id)
+          .map((line) =>
+            line.id === previousLine.id
+              ? { ...line, latex: mergedLatex }
+              : { ...line },
+          ),
+        activeLineId: previousLine.id,
+        selectionByLineId: nextSelectionByLineId,
+      };
+
+      field.blur();
+      flushSync(() => useEditorStore.getState().replaceDocumentState(after));
+      linesRef.current = useEditorStore.getState().lines;
+      setActiveLine(previousLine.id);
+      historyManager.push({
+        type: "replace-document",
+        before,
+        after,
+        source: "merge-line",
+        timestamp: Date.now(),
+      });
+      setQuery("");
+      selectSuggestionIndex(0);
+      focusLine(previousLine.id, {
+        latex: mergedLatex,
+        selection: joinSelection,
+      });
+      return true;
     };
 
     const removeEmptyLine = (index: number) => {
@@ -4867,6 +4999,17 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         // Preserve MathLive's native word/line deletion shortcuts such as
         // Option+Backspace and Command+Backspace on macOS.
         if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
+          return;
+        }
+
+        if (
+          event.key === "Backspace" &&
+          field.selectionIsCollapsed &&
+          field.position === 0
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          mergeLineWithPrevious(index, lineId, field);
           return;
         }
 

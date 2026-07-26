@@ -97,6 +97,7 @@ export type ReplaceDocumentSource =
   | "new-document"
   | "open-document"
   | "split-line"
+  | "merge-line"
   | "ocr";
 
 export interface ReplaceDocumentEntry {

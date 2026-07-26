@@ -830,11 +830,166 @@ async function main() {
 
     await loadSingleFormulaLine("abcdef");
     const selectedEnter = await pressEnterAtPrefix("a", "abc");
-    assert.deepEqual(selectedEnter.values, ["abcdef", ""]);
+    assert.deepEqual(selectedEnter.values, ["a", "def"]);
 
     await loadSingleFormulaLine("x\\frac{a}{b}");
     const structuredBoundarySplit = await pressEnterAtPrefix("x");
     assert.deepEqual(structuredBoundarySplit.values, ["x", "\\frac{a}{b}"]);
+
+    const complexTrailingLatex =
+      "p+\\int_{0}^{1}\\frac{\\sqrt{x}}{\\sum_{i=0}^{n}a_i}+q";
+    await loadSingleFormulaLine(complexTrailingLatex);
+    const complexBoundarySplit = await pressEnterAtPrefix("p+");
+    assert.equal(complexBoundarySplit.values.length, 2);
+    assert.equal(
+      complexBoundarySplit.values[0],
+      "p+",
+      JSON.stringify(complexBoundarySplit),
+    );
+    assert.match(complexBoundarySplit.values[1], /\\int/);
+    assert.match(complexBoundarySplit.values[1], /\\frac/);
+    assert.match(complexBoundarySplit.values[1], /\\sum/);
+
+    const integralLine = "\\int_{0}^{1}a\\,\\mathrm{d}c";
+    await loadSingleFormulaLine(integralLine);
+    const integralStartSplit = await pressEnterAtPrefix("");
+    assert.equal(integralStartSplit.values.length, 2);
+    assert.equal(integralStartSplit.values[0], "");
+    assert.match(integralStartSplit.values[1], /\\int/);
+    const integralGeometry = await evaluate(`new Promise((resolve) => {
+      const field = document.querySelectorAll("math-field")[1];
+      const sample = () => {
+        const fieldRect = field.getBoundingClientRect();
+        const structuralRects = Array.from(
+          field.shadowRoot?.querySelectorAll(
+            ".ML__op-group, .ML__vlist, .ML__base",
+          ) ?? [],
+        )
+          .map((node) => node.getBoundingClientRect())
+          .filter((rect) => rect.width > 0 && rect.height > 0);
+        return {
+          fieldHeight: fieldRect.height,
+          topInset: structuralRects.length
+            ? Math.min(...structuralRects.map((rect) => rect.top)) - fieldRect.top
+            : -1,
+          bottomInset: structuralRects.length
+            ? fieldRect.bottom - Math.max(...structuralRects.map((rect) => rect.bottom))
+            : -1,
+        };
+      };
+      field.focus();
+      field.position = 0;
+      setTimeout(() => {
+        const beforeIntegral = sample();
+        field.position = Math.min(2, field.lastOffset);
+        setTimeout(() => resolve({
+          beforeIntegral,
+          insideIntegral: sample(),
+        }), 220);
+      }, 220);
+    })`);
+    assert.ok(
+      integralGeometry.beforeIntegral.topInset >= 2 &&
+        integralGeometry.beforeIntegral.bottomInset >= 2,
+      `Integral was clipped before entering its structure: ${JSON.stringify(integralGeometry)}`,
+    );
+    assert.ok(
+      Math.abs(
+        integralGeometry.beforeIntegral.fieldHeight -
+          integralGeometry.insideIntegral.fieldHeight,
+      ) <= 1,
+      `Integral row height changed with caret position: ${JSON.stringify(integralGeometry)}`,
+    );
+
+    const loadFormulaLines = async (values, activeIndex = values.length - 1) => {
+      await evaluate(`(() => {
+        const key = "visualtex-editor";
+        const persisted = JSON.parse(localStorage.getItem(key) || "{}");
+        const values = ${JSON.stringify(values)};
+        const lines = values.map((latex, index) => ({
+          id: "merge-line-" + index,
+          latex,
+        }));
+        persisted.state = {
+          ...(persisted.state || {}),
+          lines,
+          activeLineId: lines[${activeIndex}]?.id ?? lines[0]?.id ?? null,
+          sourceOpen: false,
+        };
+        localStorage.setItem(key, JSON.stringify(persisted));
+      })()`);
+      await reload();
+    };
+    const mergeAtSecondLineStart = async () =>
+      evaluate(`new Promise((resolve) => {
+        const fields = Array.from(document.querySelectorAll("math-field"));
+        const firstEnd = fields[0].lastOffset;
+        const field = fields[1];
+        field.focus();
+        field.shadowRoot?.querySelector('[part="keyboard-sink"]')?.focus({ preventScroll: true });
+        field.position = 0;
+        field.dispatchEvent(new KeyboardEvent("keydown", {
+          key: "Backspace",
+          code: "Backspace",
+          bubbles: true,
+          composed: true,
+          cancelable: true,
+        }));
+        setTimeout(() => {
+          const mergedFields = Array.from(document.querySelectorAll("math-field"));
+          resolve({
+            values: mergedFields.map((item) => item.value),
+            position: mergedFields[0]?.position ?? -1,
+            expectedPosition: firstEnd,
+          });
+        }, 180);
+      })`);
+
+    await loadFormulaLines(["abc", "def"]);
+    const simpleMerge = await mergeAtSecondLineStart();
+    assert.deepEqual(simpleMerge.values, ["abcdef"]);
+    assert.equal(simpleMerge.position, simpleMerge.expectedPosition);
+    const undoMerge = await evaluate(`new Promise((resolve) => {
+      const field = document.querySelector("math-field");
+      field.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "z",
+        code: "KeyZ",
+        metaKey: true,
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+      }));
+      setTimeout(() => resolve(
+        Array.from(document.querySelectorAll("math-field")).map((item) => item.value)
+      ), 180);
+    })`);
+    assert.deepEqual(undoMerge, ["abc", "def"]);
+    const redoMerge = await evaluate(`new Promise((resolve) => {
+      const field = document.querySelectorAll("math-field")[1];
+      field.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "z",
+        code: "KeyZ",
+        metaKey: true,
+        shiftKey: true,
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+      }));
+      setTimeout(() => resolve(
+        Array.from(document.querySelectorAll("math-field")).map((item) => item.value)
+      ), 180);
+    })`);
+    assert.deepEqual(redoMerge, ["abcdef"]);
+
+    await loadFormulaLines([
+      "a+\\frac{x}{y}",
+      "\\int_{0}^{1}z\\,\\mathrm{d}z+b",
+    ]);
+    const complexMerge = await mergeAtSecondLineStart();
+    assert.equal(complexMerge.values.length, 1);
+    assert.match(complexMerge.values[0], /\\frac/);
+    assert.match(complexMerge.values[0], /\\int/);
+    assert.equal(complexMerge.position, complexMerge.expectedPosition);
 
     console.log("Input behavior regression passed");
   } finally {
