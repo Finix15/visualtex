@@ -138,6 +138,22 @@ async function main() {
       })`);
     };
 
+    const configure = async (overrides) => {
+      await evaluate(`(() => {
+        const key = "visualtex-editor";
+        const persisted = JSON.parse(localStorage.getItem(key) || "{}");
+        persisted.state = {
+          ...(persisted.state || {}),
+          inputBehavior: {
+            ...(persisted.state?.inputBehavior || {}),
+            ...${JSON.stringify(overrides)},
+          },
+        };
+        localStorage.setItem(key, JSON.stringify(persisted));
+      })()`);
+      await reload();
+    };
+
     await evaluate(`(() => {
       localStorage.setItem("visualtex.onboarding.v3.completed", "true");
       localStorage.setItem("visualtex.office.macos.first-run.v1.completed", "true");
@@ -172,6 +188,21 @@ async function main() {
         ...common,
         text: key,
         unmodifiedText: key,
+      });
+      await client.send("Input.dispatchKeyEvent", { type: "keyUp", ...common });
+      await sleep(pause);
+    };
+
+    const pressKey = async (key, code, keyCode, pause = 140) => {
+      const common = {
+        key,
+        code,
+        windowsVirtualKeyCode: keyCode,
+        nativeVirtualKeyCode: keyCode,
+      };
+      await client.send("Input.dispatchKeyEvent", {
+        type: "rawKeyDown",
+        ...common,
       });
       await client.send("Input.dispatchKeyEvent", { type: "keyUp", ...common });
       await sleep(pause);
@@ -295,6 +326,10 @@ async function main() {
           sqrtDepth: countAncestors("ML__sqrt"),
           markerClass: marker?.className || "",
           prefix: field.getValue(0, field.position, "latex"),
+          pendingWrapperCommand:
+            field.closest(".mathfield-host")?.dataset.pendingWrapperCommand || "",
+          pendingWrapperLength:
+            field.closest(".mathfield-host")?.dataset.pendingWrapperLength || "",
         };
       })()`);
 
@@ -398,6 +433,187 @@ async function main() {
         );
       }
     }
+
+    const wrapperCases = [
+      {
+        label: "mathbb inside accent auto-exit",
+        latex: "\\hat{\\placeholder{}}+z",
+        command: "mathbb",
+        input: "R",
+        expected: /^\\hat\{\\mathbb\{R\}\}\+z$/,
+        afterFollowup: /^\\hat\{\\mathbb\{R\}\}q\+z$/,
+        context: { accentDepth: 0 },
+      },
+      {
+        label: "mathbf inside accent auto-exit",
+        latex: "\\vec{\\placeholder{}}+z",
+        command: "mathbf",
+        input: "x",
+        expected: /^\\vec\{\\mathbf\{x\}\}\+z$/,
+        afterFollowup: /^\\vec\{\\mathbf\{x\}\}q\+z$/,
+        context: { accentDepth: 0 },
+      },
+      {
+        label: "mathcal inside accent auto-exit",
+        latex: "\\bar{\\placeholder{}}+z",
+        command: "mathcal",
+        input: "A",
+        expected: /^\\bar\{\\mathcal\{A\}\}\+z$/,
+        afterFollowup: /^\\bar\{\\mathcal\{A\}\}q\+z$/,
+        context: { accentDepth: 0 },
+      },
+      {
+        label: "mathfrak inside nested accent and fraction",
+        latex: "\\frac{\\hat{\\placeholder{}}}{b}+z",
+        command: "mathfrak",
+        input: "g",
+        expected: /^\\frac\{\\hat\{\\mathfrak\{g\}\}\}\{b\}\+z$/,
+        afterFollowup: /^\\frac\{\\hat\{\\mathfrak\{g\}\}q\}\{b\}\+z$/,
+        context: { accentDepth: 0, fractionDepth: 1 },
+      },
+    ];
+
+    for (const testCase of wrapperCases) {
+      await preparePlaceholder(testCase.latex);
+      await typeRawCommand(testCase.command);
+      const pending = await readState();
+      assert.equal(
+        pending.pendingWrapperCommand,
+        `\\${testCase.command}`,
+        `${testCase.label} did not enter wrapper input: ${JSON.stringify(pending)}`,
+      );
+      await typeCharacter(
+        testCase.input,
+        `Key${testCase.input.toUpperCase()}`,
+        testCase.input.toUpperCase().charCodeAt(0),
+        170,
+      );
+      const state = await readState();
+      assert.match(state.value, testCase.expected, `${testCase.label}: ${JSON.stringify(state)}`);
+      assert.equal(
+        state.pendingWrapperCommand,
+        "",
+        `${testCase.label} wrapper input did not complete: ${JSON.stringify(state)}`,
+      );
+      for (const [key, expected] of Object.entries(testCase.context)) {
+        assert.equal(
+          state[key],
+          expected,
+          `${testCase.label} wrong caret context ${key}: ${JSON.stringify(state)}`,
+        );
+      }
+      await typeCharacter("q", "KeyQ", 81, 170);
+      const followup = await readState();
+      assert.match(
+        followup.value,
+        testCase.afterFollowup,
+        `${testCase.label} did not leave the accent before follow-up input: ${JSON.stringify(followup)}`,
+      );
+    }
+
+    await configure({
+      autoExitAccent: false,
+      autoExitWrapperCommand: true,
+      autoExitSuperscript: true,
+      autoExitSubscript: true,
+    });
+    await preparePlaceholder("\\hat{\\placeholder{}}+z");
+    await typeRawCommand("mathbb");
+    await typeCharacter("R", "KeyR", 82, 170);
+    await typeCharacter("q", "KeyQ", 81, 170);
+    const disabledAccentWrapper = await readState();
+    assert.equal(
+      disabledAccentWrapper.value,
+      "\\hat{\\mathbb{R}q}+z",
+      `disabled accent auto-exit changed wrapper behavior: ${JSON.stringify(disabledAccentWrapper)}`,
+    );
+
+    await configure({
+      autoExitAccent: true,
+      autoExitWrapperCommand: false,
+    });
+    await preparePlaceholder("\\vec{\\placeholder{}}+z");
+    await typeRawCommand("mathbf");
+    await typeCharacter("x", "KeyX", 88, 120);
+    await typeCharacter("y", "KeyY", 89, 120);
+    const pendingContinuousWrapper = await readState();
+    assert.equal(pendingContinuousWrapper.value, "\\vec{\\mathbf{xy}}+z");
+    assert.equal(pendingContinuousWrapper.pendingWrapperCommand, "\\mathbf");
+    await pressKey("Enter", "Enter", 13, 170);
+    const confirmedContinuousWrapper = await readState();
+    assert.equal(confirmedContinuousWrapper.pendingWrapperCommand, "");
+    await typeCharacter("q", "KeyQ", 81, 170);
+    const confirmedAccentExit = await readState();
+    assert.equal(
+      confirmedAccentExit.value,
+      "\\vec{\\mathbf{xy}}q+z",
+      `Enter-confirmed wrapper did not exit accent: ${JSON.stringify(confirmedAccentExit)}`,
+    );
+
+    await configure({
+      autoExitAccent: false,
+      autoExitWrapperCommand: false,
+    });
+    await preparePlaceholder("\\bar{\\placeholder{}}+z");
+    await typeRawCommand("mathfrak");
+    await typeCharacter("g", "KeyG", 71, 120);
+    await typeCharacter("h", "KeyH", 72, 120);
+    await pressKey("Enter", "Enter", 13, 170);
+    await typeCharacter("q", "KeyQ", 81, 170);
+    const bothDisabledWrapper = await readState();
+    assert.equal(
+      bothDisabledWrapper.value,
+      "\\bar{\\mathfrak{gh}q}+z",
+      `disabled wrapper/accent settings were ignored: ${JSON.stringify(bothDisabledWrapper)}`,
+    );
+
+    await configure({
+      autoExitAccent: true,
+      autoExitWrapperCommand: true,
+      autoExitSuperscript: true,
+      autoExitSubscript: true,
+    });
+    await preparePlaceholder("x^{\\placeholder{}}+z");
+    await typeRawCommand("mathbb");
+    await typeCharacter("R", "KeyR", 82, 170);
+    await typeCharacter("q", "KeyQ", 81, 170);
+    const wrapperSuperscriptExit = await readState();
+    assert.match(
+      wrapperSuperscriptExit.value,
+      /^x\^\{?\\mathbb\{R\}\}?q\+z$/,
+      `wrapper did not preserve superscript auto-exit: ${JSON.stringify(wrapperSuperscriptExit)}`,
+    );
+
+    await preparePlaceholder("\\int_{0}^{\\placeholder{}}f");
+    await typeRawCommand("mathbf");
+    await typeCharacter("x", "KeyX", 88, 170);
+    await typeCharacter("q", "KeyQ", 81, 170);
+    const wrapperOperatorLimit = await readState();
+    assert.match(
+      wrapperOperatorLimit.value,
+      /^\\int_(?:0|\{0\})\^\{\\mathbf\{x\}q\}f$/,
+      `wrapper incorrectly exited an operator limit: ${JSON.stringify(wrapperOperatorLimit)}`,
+    );
+
+    await preparePlaceholder("\\hat{\\placeholder{}}+z");
+    await typeRawCommand("mathbb");
+    await evaluate(`(() => {
+      const field = document.querySelector("math-field");
+      field.dispatchEvent(new InputEvent("beforeinput", {
+        inputType: "insertText",
+        data: "Rq",
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+      }));
+    })()`);
+    await sleep(170);
+    const batchedWrapperInput = await readState();
+    assert.equal(
+      batchedWrapperInput.value,
+      "\\hat{\\mathbb{R}}q+z",
+      `batched wrapper input left trailing text in accent: ${JSON.stringify(batchedWrapperInput)}`,
+    );
 
     const structuralCases = [
       {

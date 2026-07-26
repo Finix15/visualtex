@@ -3005,6 +3005,8 @@ function FormulaField(props: FormulaFieldProps) {
       anchorStyle: Readonly<Style>;
       visualCaret: WrapperCaretAnchor | null;
       autoExitSetting: "autoExitWrapperCommand";
+      parentAutoExitSetting: InputBehaviorSettingKey | null;
+      parentAutoExitScriptKey: string | null;
     } | null = null;
     let replacingPendingWrapperInput = false;
     let restoringRawCommandAnchor = false;
@@ -3138,6 +3140,18 @@ function FormulaField(props: FormulaFieldProps) {
       pendingWrapperInput = null;
       delete field.dataset.pendingWrapperCommand;
       syncPendingWrapperPlaceholder();
+    };
+    const applyPendingWrapperParentAutoExit = (
+      pending: NonNullable<typeof pendingWrapperInput>,
+    ) => {
+      const setting = pending.parentAutoExitSetting;
+      if (!setting || !propsRef.current.inputBehavior[setting]) return false;
+      return moveCaretThroughEnabledAutoExitContainers(
+        field,
+        propsRef.current.inputBehavior,
+        setting,
+        pending.parentAutoExitScriptKey,
+      );
     };
     const replacePendingWrapperInput = (
       command: string,
@@ -3390,28 +3404,33 @@ function FormulaField(props: FormulaFieldProps) {
           event.stopImmediatePropagation();
           const before = captureFieldSnapshot(field);
           const inputCharacters = Array.from(event.data);
+          const pending = pendingWrapperInput;
           const autoExit =
-            propsRef.current.inputBehavior[
-              pendingWrapperInput.autoExitSetting
-            ] && inputCharacters.length > 0;
+            propsRef.current.inputBehavior[pending.autoExitSetting] &&
+            inputCharacters.length > 0;
           const wrappedInput = autoExit
             ? inputCharacters.slice(0, 1).join("")
             : event.data;
           const trailingInput = autoExit
             ? inputCharacters.slice(1).join("")
             : "";
+          const exitsParent = Boolean(
+            autoExit &&
+              pending.parentAutoExitSetting &&
+              propsRef.current.inputBehavior[pending.parentAutoExitSetting],
+          );
           const nextCommand =
-            pendingWrapperInput.command === "\\mathcal" &&
-            pendingWrapperInput.content.length === 0 &&
+            pending.command === "\\mathcal" &&
+            pending.content.length === 0 &&
             /^[a-z]$/.test(wrappedInput)
               ? "\\mathscr"
-              : pendingWrapperInput.command;
-          const nextContent = pendingWrapperInput.content + wrappedInput;
+              : pending.command;
+          const nextContent = pending.content + wrappedInput;
           if (
             !replacePendingWrapperInput(
               nextCommand,
               nextContent,
-              trailingInput,
+              exitsParent ? "" : trailingInput,
             )
           ) {
             return;
@@ -3419,7 +3438,27 @@ function FormulaField(props: FormulaFieldProps) {
           field.dataset.pendingWrapperCommand = nextCommand;
           syncPendingWrapperPlaceholder();
           field.focus();
-          if (autoExit) clearPendingWrapperInput();
+          if (autoExit) {
+            clearPendingWrapperInput();
+            if (exitsParent) {
+              applyPendingWrapperParentAutoExit(pending);
+              if (trailingInput) {
+                replacingPendingWrapperInput = true;
+                try {
+                  field.insert(trailingInput, {
+                    mode: "math",
+                    format: "latex",
+                    insertionMode: "insertAfter",
+                    selectionMode: "after",
+                    focus: true,
+                    scrollIntoView: false,
+                  });
+                } finally {
+                  replacingPendingWrapperInput = false;
+                }
+              }
+            }
+          }
           field.shadowRoot
             ?.querySelector<HTMLElement>('[part="keyboard-sink"]')
             ?.focus({ preventScroll: true });
@@ -3630,7 +3669,9 @@ function FormulaField(props: FormulaFieldProps) {
 
       event.preventDefault();
       event.stopImmediatePropagation();
+      const pending = pendingWrapperInput;
       const confirmedPosition = field.position;
+      const exitsParent = pending.content.length > 0;
       clearPendingWrapperInput();
       field.mode = "math";
       field.selection = {
@@ -3638,6 +3679,7 @@ function FormulaField(props: FormulaFieldProps) {
         direction: "none",
       };
       field.position = confirmedPosition;
+      if (exitsParent) applyPendingWrapperParentAutoExit(pending);
       field.focus();
       field.shadowRoot
         ?.querySelector<HTMLElement>('[part="keyboard-sink"]')
@@ -3793,6 +3835,8 @@ function FormulaField(props: FormulaFieldProps) {
         anchorStyle,
         visualCaret: anchor.visualCaret,
         autoExitSetting: "autoExitWrapperCommand",
+        parentAutoExitSetting: anchor.autoExitSetting,
+        parentAutoExitScriptKey: anchor.autoExitScriptKey,
       };
       field.dataset.pendingWrapperCommand = wrapperCommand.command;
       field.focus();
