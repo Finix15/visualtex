@@ -205,20 +205,46 @@ async function main() {
         : setTimeout(poll, 25);
       poll();
     })`);
+    await sleep(350);
 
     const previews = await evaluate(`Array.from(document.querySelectorAll('.formula-tile-button.is-custom')).map((button) => {
       const preview = button.querySelector('.formula-tile-preview');
+      const content = preview?.querySelector('.math-preview-fit-content');
+      const previewRect = preview?.getBoundingClientRect();
+      const contentRect = content?.getBoundingClientRect();
       const placeholders = Array.from(preview?.querySelectorAll('.visualtex-tile-placeholder') ?? []);
       return {
         id: button.dataset.formulaTileId ?? "",
         latex: button.dataset.formulaTileLatex ?? "",
         showPlaceholders: preview?.dataset.showPlaceholders ?? "",
+        fitScale: Number(preview?.dataset.fitScale ?? "0"),
+        previewOverflow: preview ? getComputedStyle(preview).overflow : "",
+        contentFits:
+          Boolean(previewRect && contentRect) &&
+          contentRect.left >= previewRect.left - 1 &&
+          contentRect.right <= previewRect.right + 1 &&
+          contentRect.top >= previewRect.top - 1 &&
+          contentRect.bottom <= previewRect.bottom + 1,
+        previewRect: previewRect
+          ? { width: previewRect.width, height: previewRect.height }
+          : null,
+        contentRect: contentRect
+          ? { width: contentRect.width, height: contentRect.height }
+          : null,
         placeholderCount: placeholders.length,
         placeholderRects: placeholders.map((node) => {
           const rect = node.getBoundingClientRect();
-          return { width: rect.width, height: rect.height };
+          const style = getComputedStyle(node);
+          const rule = node.querySelector('.ML__rule');
+          return {
+            width: rect.width,
+            height: rect.height,
+            borderWidth: parseFloat(style.borderTopWidth),
+            borderStyle: style.borderTopStyle,
+            backgroundColor: style.backgroundColor,
+            ruleVisibility: rule ? getComputedStyle(rule).visibility : '',
+          };
         }),
-        hasPreviewRule: Boolean(preview?.querySelector('.visualtex-tile-placeholder .ML__rule')),
       };
     })`);
 
@@ -227,15 +253,33 @@ async function main() {
       assert.ok(previewState, `Missing preview for ${tile.id}`);
       assert.equal(previewState.latex, tile.latex, JSON.stringify(previewState));
       assert.equal(previewState.showPlaceholders, "true", JSON.stringify(previewState));
+      assert.ok(
+        previewState.fitScale >= 0.799 && previewState.fitScale <= 1.201,
+        JSON.stringify(previewState),
+      );
+      assert.equal(previewState.previewOverflow, "hidden", JSON.stringify(previewState));
+      assert.equal(previewState.contentFits, true, JSON.stringify(previewState));
       assert.equal(
         previewState.placeholderCount,
         tile.expectedPlaceholders,
         JSON.stringify(previewState),
       );
-      assert.equal(previewState.hasPreviewRule, true, JSON.stringify(previewState));
       assert.ok(
         previewState.placeholderRects.every(
-          ({ width, height }) => width > 2 && height > width * 1.35,
+          ({
+            width,
+            height,
+            borderWidth,
+            borderStyle,
+            backgroundColor,
+            ruleVisibility,
+          }) =>
+            width > 2 &&
+            height > width * 1.35 &&
+            borderWidth > 0 &&
+            borderStyle === "solid" &&
+            backgroundColor === "rgba(0, 0, 0, 0)" &&
+            ruleVisibility === "hidden",
         ),
         JSON.stringify(previewState),
       );
@@ -274,7 +318,15 @@ async function main() {
     chrome?.kill("SIGTERM");
     preview.kill("SIGTERM");
     await sleep(250);
-    await rm(chromeProfile, { recursive: true, force: true });
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      try {
+        await rm(chromeProfile, { recursive: true, force: true });
+        break;
+      } catch (error) {
+        if (attempt === 3) throw error;
+        await sleep(180);
+      }
+    }
   }
 }
 

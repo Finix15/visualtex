@@ -34,6 +34,8 @@ export function SettingsDialog({
   const setLanguage = useEditorStore((state) => state.setLanguage);
   const zoom = useEditorStore((state) => state.zoom);
   const setZoom = useEditorStore((state) => state.setZoom);
+  const editorLayout = useEditorStore((state) => state.editorLayout);
+  const setEditorLayout = useEditorStore((state) => state.setEditorLayout);
   const autoPairDelimiters = useEditorStore(
     (state) => state.autoPairDelimiters,
   );
@@ -205,6 +207,40 @@ export function SettingsDialog({
                     ? "Appearance settings are saved automatically."
                     : "外观设置会自动保存在当前设备。"}
                 </p>
+              </div>
+            </div>
+            <div className="editor-layout-setting">
+              <span>
+                <strong>{isEn ? "Editor layout" : "编辑器布局"}</strong>
+                <small>
+                  {isEn
+                    ? "Keep the current sidebar layout or use a classic bottom-tools layout."
+                    : "保留当前侧栏布局，或切换为底部工具栏与右侧磁贴的经典布局。"}
+                </small>
+              </span>
+              <div
+                className="theme-segment editor-layout-segment"
+                role="group"
+                aria-label={isEn ? "Editor layout" : "编辑器布局"}
+              >
+                <button
+                  type="button"
+                  className={editorLayout === "standard" ? "is-active" : ""}
+                  aria-pressed={editorLayout === "standard"}
+                  data-editor-layout-choice="standard"
+                  onClick={() => setEditorLayout("standard")}
+                >
+                  {isEn ? "Standard" : "标准布局"}
+                </button>
+                <button
+                  type="button"
+                  className={editorLayout === "classic" ? "is-active" : ""}
+                  aria-pressed={editorLayout === "classic"}
+                  data-editor-layout-choice="classic"
+                  onClick={() => setEditorLayout("classic")}
+                >
+                  {isEn ? "Classic" : "经典布局"}
+                </button>
               </div>
             </div>
             <div className="theme-segment">

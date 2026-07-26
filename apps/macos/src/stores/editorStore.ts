@@ -20,6 +20,7 @@ import { normalizeMultilineLatex } from "../editor/normalizeChineseLatex";
 
 type Theme = "light" | "dark";
 export type Language = "cn" | "en";
+export type EditorLayout = "standard" | "classic";
 export const MIN_EDITOR_ZOOM = 0.2;
 export const MAX_EDITOR_ZOOM = 1.6;
 
@@ -69,6 +70,10 @@ function normalizeInputBehaviorSettings(
 
 function normalizeFormulaAlignment(value: unknown): FormulaAlignment {
   return value === "center" || value === "right" ? value : "left";
+}
+
+function normalizeEditorLayout(value: unknown): EditorLayout {
+  return value === "classic" ? "classic" : "standard";
 }
 
 function normalizeEditorZoom(value: unknown) {
@@ -159,6 +164,7 @@ interface EditorState {
   lines: FormulaLine[];
   activeLineId: string | null;
   formulaAlignment: FormulaAlignment;
+  editorLayout: EditorLayout;
   theme: Theme;
   language: Language;
   zoom: number;
@@ -175,6 +181,7 @@ interface EditorState {
   setActiveLineId: (lineId: string | null) => void;
   replaceFormulaLine: (lineId: string, latex: string) => void;
   setFormulaAlignment: (alignment: FormulaAlignment) => void;
+  setEditorLayout: (layout: EditorLayout) => void;
   insertFormulaLine: (line: FormulaLine, index: number) => void;
   removeFormulaLine: (lineId: string) => void;
   replaceDocumentState: (snapshot: DocumentSnapshot) => void;
@@ -209,6 +216,7 @@ export const useEditorStore = create<EditorState>()(
       lines: initialLines,
       activeLineId: initialLines[0].id,
       formulaAlignment: "left",
+      editorLayout: "standard",
       theme: "light",
       language: "cn",
       zoom: 1,
@@ -236,6 +244,8 @@ export const useEditorStore = create<EditorState>()(
         })),
       setFormulaAlignment: (formulaAlignment) =>
         set({ formulaAlignment: normalizeFormulaAlignment(formulaAlignment) }),
+      setEditorLayout: (editorLayout) =>
+        set({ editorLayout: normalizeEditorLayout(editorLayout) }),
       insertFormulaLine: (line, index) =>
         set((state) => {
           const nextLines = state.lines.filter((item) => item.id !== line.id);
@@ -394,6 +404,7 @@ export const useEditorStore = create<EditorState>()(
         lines: state.lines,
         activeLineId: state.activeLineId,
         formulaAlignment: state.formulaAlignment,
+        editorLayout: state.editorLayout,
         theme: state.theme,
         language: state.language,
         zoom: state.zoom,
@@ -424,6 +435,7 @@ export const useEditorStore = create<EditorState>()(
           formulaAlignment: normalizeFormulaAlignment(
             persisted.formulaAlignment ?? legacyLineAlignment,
           ),
+          editorLayout: normalizeEditorLayout(persisted.editorLayout),
           zoom: normalizeEditorZoom(persisted.zoom),
           latexCodeFormat: isLatexCodeFormat(persisted.latexCodeFormat)
             ? persisted.latexCodeFormat

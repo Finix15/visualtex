@@ -21,6 +21,8 @@ import {
   PanelBottomOpen,
   PanelLeftClose,
   PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
   Plus,
   Redo2,
   RefreshCw,
@@ -204,6 +206,7 @@ function App() {
   const setLanguage = useEditorStore((state) => state.setLanguage);
   const zoom = useEditorStore((state) => state.zoom);
   const setZoom = useEditorStore((state) => state.setZoom);
+  const editorLayout = useEditorStore((state) => state.editorLayout);
   const sourceOpen = useEditorStore((state) => state.sourceOpen);
   const setSourceOpen = useEditorStore((state) => state.setSourceOpen);
   const latexCodeFormat = useEditorStore((state) => state.latexCodeFormat);
@@ -1049,11 +1052,33 @@ function App() {
           <button
             type="button"
             className={"icon-button sidebar-toggle " + (sidebarOpen ? "is-active" : "")}
-            aria-label={sidebarOpen ? (isEn ? "Hide formula tools" : "隐藏公式工具") : (isEn ? "Show formula tools" : "显示公式工具")}
+            aria-label={
+              editorLayout === "classic"
+                ? sidebarOpen
+                  ? isEn
+                    ? "Hide formula tiles"
+                    : "隐藏公式磁贴"
+                  : isEn
+                    ? "Show formula tiles"
+                    : "显示公式磁贴"
+                : sidebarOpen
+                  ? isEn
+                    ? "Hide formula tools"
+                    : "隐藏公式工具"
+                  : isEn
+                    ? "Show formula tools"
+                    : "显示公式工具"
+            }
             aria-pressed={sidebarOpen}
             onClick={() => setSidebarOpen((open) => !open)}
           >
-            {sidebarOpen ? <PanelLeftClose size={17} /> : <PanelLeftOpen size={17} />}
+            {editorLayout === "classic" ? (
+              sidebarOpen ? <PanelRightClose size={17} /> : <PanelRightOpen size={17} />
+            ) : sidebarOpen ? (
+              <PanelLeftClose size={17} />
+            ) : (
+              <PanelLeftOpen size={17} />
+            )}
           </button>
           <div className="brand-mark" aria-hidden="true">
             <VisualTeXLogo className="visualtex-brand-logo" />

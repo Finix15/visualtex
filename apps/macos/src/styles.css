@@ -592,7 +592,6 @@ textarea:focus-visible,
   justify-content: center;
   transform: scale(var(--math-preview-fit-scale, 1));
   transform-origin: center;
-  will-change: transform;
 }
 
 .math-preview .ML__latex {
@@ -7613,13 +7612,18 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 
 .formula-tile-preview .visualtex-tile-placeholder {
   display: inline-block;
+  box-sizing: border-box;
   vertical-align: -0.12em;
-  color: var(--text);
-  opacity: 0.78;
+  border: 0.065em solid color-mix(in srgb, var(--text) 86%, transparent);
+  border-radius: 0.1em;
+  background: transparent;
+  color: transparent;
+  line-height: 0;
+  opacity: 0.9;
 }
 
 .formula-tile-preview .visualtex-tile-placeholder .ML__rule {
-  border-radius: 0.1em;
+  visibility: hidden;
 }
 
 .formula-tile-empty {
@@ -8359,5 +8363,327 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 
   .formula-hotkey-recorder-footer > div {
     justify-content: flex-end;
+  }
+}
+
+/* Optional classic editor layout: bottom formula tools/source and right tiles. */
+.editor-layout-setting {
+  display: grid;
+  gap: 8px;
+}
+
+.editor-layout-setting > span {
+  display: grid;
+  gap: 3px;
+}
+
+.editor-layout-setting > span strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.editor-layout-setting > span small {
+  color: var(--text-faint);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.editor-layout-segment {
+  width: 100%;
+}
+
+.workspace.is-classic-layout.has-sidebar {
+  grid-template-columns: minmax(0, 1fr) 300px;
+}
+
+.workspace.is-classic-layout .formula-workspace.editor-pane {
+  border-right: 0;
+}
+
+.classic-editor-pane-body {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) clamp(222px, 29vh, 278px);
+  overflow: hidden;
+  background: var(--bg-elevated);
+}
+
+.classic-editor-pane-body.is-dock-collapsed {
+  grid-template-rows: minmax(0, 1fr) 36px;
+}
+
+.classic-bottom-dock {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 36px minmax(0, 1fr);
+  overflow: hidden;
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.classic-bottom-dock.is-collapsed {
+  grid-template-rows: 36px;
+}
+
+.classic-bottom-tabs {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(34px, 1fr) auto minmax(34px, 1fr);
+  align-items: stretch;
+  gap: 3px;
+  padding: 3px 8px 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.classic-bottom-tab-spacer {
+  min-width: 0;
+}
+
+.classic-bottom-tab-group {
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  gap: 3px;
+}
+
+.classic-bottom-tab-group button {
+  min-width: 112px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.classic-bottom-tab-group button:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.classic-bottom-tab-group button.is-active {
+  background: var(--bg-elevated);
+  color: var(--accent);
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.classic-bottom-collapse {
+  align-self: center;
+  justify-self: end;
+  margin-bottom: 3px;
+  color: var(--text-muted);
+}
+
+.classic-bottom-collapse:hover {
+  color: var(--accent);
+}
+
+.classic-bottom-content {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.classic-source-pane-slot {
+  width: 100%;
+  height: 100%;
+  padding: 7px 10px 10px;
+}
+
+.classic-source-pane-slot .source-panel {
+  border-radius: 6px;
+}
+
+.formula-toolbar.is-view-fixed {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.classic-tile-toolbar {
+  min-width: 0;
+  border-right: 0;
+  border-left: 1px solid var(--border);
+}
+
+.classic-tile-toolbar .formula-tiles-panel {
+  grid-row: 1;
+  width: 100%;
+  height: 100%;
+  contain: inline-size;
+}
+
+.classic-tile-toolbar .formula-tile-list {
+  grid-row: 3;
+  scrollbar-gutter: stable;
+}
+
+.formula-toolbar.is-horizontal {
+  width: 100%;
+  height: 100%;
+  grid-template-rows: 36px minmax(0, 1fr);
+  border: 0;
+  background: var(--bg-elevated);
+}
+
+.formula-toolbar.is-horizontal .toolbar-tabs {
+  min-width: 0;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid var(--border);
+  scrollbar-width: none;
+}
+
+.formula-toolbar.is-horizontal .toolbar-tabs::-webkit-scrollbar,
+.formula-toolbar.is-horizontal .template-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.formula-toolbar.is-horizontal .toolbar-tab {
+  min-width: 78px;
+  height: 28px;
+  flex: 0 0 auto;
+  padding-inline: 10px;
+}
+
+.formula-toolbar.is-horizontal .template-strip {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: none;
+  grid-auto-flow: column;
+  grid-auto-columns: 54px;
+  grid-template-rows: repeat(3, minmax(44px, 1fr));
+  align-items: stretch;
+  align-content: stretch;
+  gap: 4px;
+  padding: 5px 8px 7px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.formula-toolbar.is-horizontal .template-button {
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  min-height: 44px;
+  padding: 2px;
+  border-color: var(--border);
+  background: var(--surface);
+}
+
+.formula-toolbar.is-horizontal .template-button.is-wide-preview {
+  grid-column: span 2;
+  width: 100%;
+  min-width: 0;
+}
+
+.formula-toolbar.is-horizontal .template-button .math-preview {
+  font-size: 18px;
+}
+
+.formula-toolbar.is-horizontal .matrix-builder {
+  width: auto;
+  min-width: 0;
+  height: auto;
+  grid-column: span 9;
+  grid-row: 1 / span 3;
+  grid-template-columns: 122px 146px 132px;
+  grid-template-rows: 28px minmax(0, 1fr);
+  justify-content: start;
+  gap: 6px;
+  padding: 6px;
+  overflow: hidden;
+}
+
+.formula-toolbar.is-horizontal .matrix-builder-heading {
+  grid-column: 1;
+  grid-row: 1;
+  gap: 5px;
+}
+
+.formula-toolbar.is-horizontal .matrix-builder-heading strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.formula-toolbar.is-horizontal .matrix-size-badge {
+  min-width: 42px;
+  height: 22px;
+  flex: 0 0 auto;
+  padding-inline: 5px;
+  font-size: 9px;
+}
+
+.formula-toolbar.is-horizontal .matrix-delimiter-options {
+  grid-column: 1;
+  grid-row: 2;
+  gap: 3px;
+}
+
+.formula-toolbar.is-horizontal .matrix-delimiter-options button {
+  min-height: 0;
+  height: 100%;
+  padding: 2px;
+}
+
+.formula-toolbar.is-horizontal .matrix-delimiter-options .math-preview {
+  min-height: 0;
+  font-size: 13px;
+}
+
+.formula-toolbar.is-horizontal .matrix-size-picker {
+  grid-column: 2;
+  grid-row: 1 / 3;
+  align-self: center;
+  justify-self: center;
+}
+
+.formula-toolbar.is-horizontal .matrix-size-grid {
+  width: 136px;
+  padding: 4px;
+  gap: 2px;
+}
+
+.formula-toolbar.is-horizontal .matrix-insert-button {
+  grid-column: 3;
+  grid-row: 1 / 3;
+  width: auto;
+  min-width: 116px;
+  height: 34px;
+  min-height: 34px;
+  align-self: center;
+  justify-self: center;
+  padding: 0 14px;
+  border-radius: 7px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+@media (max-width: 980px) {
+  .workspace.is-classic-layout.has-sidebar {
+    grid-template-columns: minmax(0, 1fr) 260px;
+  }
+
+  .classic-bottom-tabs button {
+    min-width: 96px;
   }
 }

@@ -38,13 +38,18 @@ import {
 import { useEditorStore } from "../stores/editorStore";
 import { useFormulaHotkeyStore } from "../stores/formulaHotkeyStore";
 
-interface Props {
-  onInsert: (command: LatexCommand) => void;
-}
-
 type MatrixDelimiter = "bmatrix" | "pmatrix" | "vmatrix";
 type ToolbarView = "tools" | "tiles";
+type ToolbarLayout = "sidebar" | "horizontal";
 type TileCategory = "custom" | "common";
+
+interface Props {
+  onInsert: (command: LatexCommand) => void;
+  view?: ToolbarView;
+  layout?: ToolbarLayout;
+  className?: string;
+  stabilizeTileLayout?: boolean;
+}
 
 interface FormulaTileDefinition {
   id: string;
@@ -654,8 +659,16 @@ function createMatrixCommand(
   };
 }
 
-export function FormulaToolbar({ onInsert }: Props) {
-  const [activeView, setActiveView] = useState<ToolbarView>("tools");
+export function FormulaToolbar({
+  onInsert,
+  view: fixedView,
+  layout = "sidebar",
+  className = "",
+  stabilizeTileLayout = false,
+}: Props) {
+  const [internalActiveView, setInternalActiveView] =
+    useState<ToolbarView>("tools");
+  const activeView = fixedView ?? internalActiveView;
   const [activeTileCategory, setActiveTileCategory] =
     useState<TileCategory>("common");
   const [customTileLibrary, setCustomTileLibrary] =
@@ -735,34 +748,72 @@ export function FormulaToolbar({ onInsert }: Props) {
     const root = toolbarRef.current;
     if (!root) return;
 
+    let frame = 0;
+    const quantizeWidth = (width: number) =>
+      Math.max(120, Math.floor(width / 2) * 2);
+    const commitWidths = (entries: Array<[string, number]>) => {
+      if (!entries.length) return;
+      setCustomTileGridWidths((current) => {
+        let changed = false;
+        const next = { ...current };
+        for (const [sectionId, width] of entries) {
+          if (Math.abs((current[sectionId] ?? 0) - width) < 2) continue;
+          next[sectionId] = width;
+          changed = true;
+        }
+        return changed ? next : current;
+      });
+    };
+    const schedule = (callback: () => void) => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(callback);
+    };
+
+    if (stabilizeTileLayout) {
+      const recordStableRootWidth = () =>
+        schedule(() => {
+          const availableWidth = quantizeWidth(root.clientWidth - 16);
+          commitWidths(
+            customTileLibrary.sections.map((section) => [
+              section.id,
+              availableWidth,
+            ]),
+          );
+        });
+      const observer = new ResizeObserver(recordStableRootWidth);
+      observer.observe(root);
+      recordStableRootWidth();
+      return () => {
+        window.cancelAnimationFrame(frame);
+        observer.disconnect();
+      };
+    }
+
     const grids = Array.from(
       root.querySelectorAll<HTMLElement>(".custom-formula-tile-grid"),
     );
-    const recordGridWidth = (grid: HTMLElement) => {
-      const sectionId = grid.dataset.customTileGridSection;
-      if (!sectionId) return;
-      const width = grid.getBoundingClientRect().width;
-      if (width <= 0) return;
-      setCustomTileGridWidths((current) =>
-        Math.abs((current[sectionId] ?? 0) - width) < 0.5
-          ? current
-          : { ...current, [sectionId]: width },
-      );
+    const recordGridWidths = () =>
+      schedule(() => {
+        commitWidths(
+          grids.flatMap((grid) => {
+            const sectionId = grid.dataset.customTileGridSection;
+            const width = quantizeWidth(grid.getBoundingClientRect().width);
+            return sectionId && width > 0 ? [[sectionId, width]] : [];
+          }),
+        );
+      });
+    const observer = new ResizeObserver(recordGridWidths);
+    grids.forEach((grid) => observer.observe(grid));
+    recordGridWidths();
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
     };
-    const observer = new ResizeObserver((entries) => {
-      entries.forEach((entry) =>
-        recordGridWidth(entry.target as HTMLElement),
-      );
-    });
-    grids.forEach((grid) => {
-      observer.observe(grid);
-      recordGridWidth(grid);
-    });
-    return () => observer.disconnect();
   }, [
     activeTileCategory,
     activeView,
-    customTileLibrary.sections.length,
+    customTileLibrary.sections,
+    stabilizeTileLayout,
   ]);
 
   useEffect(() => {
@@ -804,16 +855,21 @@ export function FormulaToolbar({ onInsert }: Props) {
       : activeCategory === "calculus"
         ? calculusCommandIds
         : null;
-    if (preferredIds) {
-      return preferredIds
-        .map((id) => commandRegistry.find((command) => command.id === id))
-        .filter((command): command is LatexCommand => Boolean(command));
-    }
-    return commandRegistry.filter(
-      (command) =>
-        command.category === activeCategory &&
-        !hiddenToolbarCommandIds.has(command.id),
-    );
+    const candidates = preferredIds
+      ? preferredIds
+          .map((id) => commandRegistry.find((command) => command.id === id))
+          .filter((command): command is LatexCommand => Boolean(command))
+      : commandRegistry.filter(
+          (command) =>
+            command.category === activeCategory &&
+            !hiddenToolbarCommandIds.has(command.id),
+        );
+    const seenCommandIds = new Set<string>();
+    return candidates.filter((command) => {
+      if (seenCommandIds.has(command.id)) return false;
+      seenCommandIds.add(command.id);
+      return true;
+    });
   }, [activeCategory]);
 
   const customTileDefinitions = useMemo<FormulaTileDefinition[]>(
@@ -834,10 +890,11 @@ export function FormulaToolbar({ onInsert }: Props) {
       : customTileDefinitions;
 
   const recordCustomTileNaturalWidth = (tileId: string, width: number) => {
+    const stableWidth = Math.max(1, Math.round(width));
     setCustomTileNaturalWidths((current) =>
-      Math.abs((current[tileId] ?? 0) - width) < 0.5
+      Math.abs((current[tileId] ?? 0) - stableWidth) < 2
         ? current
-        : { ...current, [tileId]: width },
+        : { ...current, [tileId]: stableWidth },
     );
   };
   const customTileRowsForSection = (
@@ -1029,10 +1086,17 @@ export function FormulaToolbar({ onInsert }: Props) {
   return (
     <aside
       ref={toolbarRef}
-      className="formula-toolbar"
+      className={
+        "formula-toolbar" +
+        (fixedView ? " is-view-fixed" : "") +
+        (layout === "horizontal" ? " is-horizontal" : "") +
+        (className ? ` ${className}` : "")
+      }
+      data-toolbar-layout={layout}
+      data-toolbar-fixed-view={fixedView ?? ""}
       aria-label={isEn ? "Formula toolbar" : "公式工具栏"}
     >
-      <header className="formula-toolbar-header">
+      {!fixedView && <header className="formula-toolbar-header">
         <div
           className="formula-toolbar-view-tabs"
           role="tablist"
@@ -1046,7 +1110,7 @@ export function FormulaToolbar({ onInsert }: Props) {
             data-toolbar-view="tools"
             onClick={() => {
               setContextMenu(null);
-              setActiveView("tools");
+              setInternalActiveView("tools");
             }}
           >
             {isEn ? "Formula tools" : "公式工具"}
@@ -1059,13 +1123,13 @@ export function FormulaToolbar({ onInsert }: Props) {
             data-toolbar-view="tiles"
             onClick={() => {
               setContextMenu(null);
-              setActiveView("tiles");
+              setInternalActiveView("tiles");
             }}
           >
             {isEn ? "Tiles" : "磁贴"}
           </button>
         </div>
-      </header>
+      </header>}
 
       {activeView === "tools" ? (
         <>
@@ -1088,7 +1152,12 @@ export function FormulaToolbar({ onInsert }: Props) {
         ))}
       </nav>
 
-      <div className="template-strip" aria-label={isEn ? "Formula templates" : "公式模板"}>
+      <div
+        key={`${layout}-${activeCategory}`}
+        className="template-strip"
+        data-active-category={activeCategory}
+        aria-label={isEn ? "Formula templates" : "公式模板"}
+      >
         {activeCategory === "matrix" && (
           <section className="matrix-builder" aria-label={isEn ? "Custom matrix" : "自定义矩阵"}>
             <div className="matrix-builder-heading">
@@ -1109,7 +1178,12 @@ export function FormulaToolbar({ onInsert }: Props) {
                   title={isEn ? option.labelEn : option.labelZh}
                   aria-label={isEn ? option.labelEn : option.labelZh}
                 >
-                  <MathPreview latex={option.preview} fit />
+                  <MathPreview
+                    latex={option.preview}
+                    fit
+                    maximumFitScale={1.15}
+                    fitInsetRatio={0.72}
+                  />
                 </button>
               ))}
             </div>
@@ -1578,8 +1652,9 @@ export function FormulaToolbar({ onInsert }: Props) {
                                     showPlaceholders
                                     fit
                                     fluidHeight
-                                    minimumFluidScale={0.9}
-                                    maximumFluidScale={1.1}
+                                    minimumFluidScale={0.8}
+                                    maximumFluidScale={1.2}
+                                    fitInsetRatio={0.84}
                                     minimumFluidHeight={44}
                                     fluidVerticalPadding={8}
                                     onMeasure={({ width }) =>

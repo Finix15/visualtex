@@ -23,7 +23,7 @@ const defaultFitInsetRatio = 0.9;
 const minimumFluidFitScale = 0.1;
 const defaultMaximumFitScale = 8;
 const visiblePlaceholderLatex =
-  "\\htmlClass{visualtex-tile-placeholder}{\\rule{0.48em}{0.82em}}";
+  "\\htmlClass{visualtex-tile-placeholder}{\\phantom{\\rule{0.46em}{0.8em}}}";
 
 export function latexWithVisiblePlaceholders(latex: string) {
   if (!latex.includes("\\placeholder")) return latex;
@@ -142,9 +142,15 @@ export function MathPreview({
       let scale = 1;
 
       if (fluidHeight) {
+        const availableHeight = Math.max(
+          1,
+          maximumFluidHeight - fluidVerticalPadding,
+        );
+        const widthScale = availableWidth / naturalWidth;
+        const heightScale = availableHeight / naturalHeight;
         scale = Math.max(
           minimumFluidScale,
-          Math.min(maximumFluidScale, availableWidth / naturalWidth),
+          Math.min(maximumFluidScale, widthScale, heightScale),
         );
         const renderedHeight = naturalHeight * scale;
         const rowHeight = Math.min(

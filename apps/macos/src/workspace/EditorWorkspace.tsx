@@ -6,6 +6,7 @@ import {
   Braces,
   Code2,
   Minus,
+  PanelBottomClose,
   PanelBottomOpen,
   Plus,
   ScanLine,
@@ -56,6 +57,7 @@ export function EditorWorkspace({
   ocrOverlay,
 }: EditorWorkspaceProps) {
   const [primaryBusy, setPrimaryBusy] = useState(false);
+  const [classicDockOpen, setClassicDockOpen] = useState(true);
   const title = useEditorStore((state) => state.title);
   const lines = useEditorStore((state) => state.lines);
   const activeLineId = useEditorStore((state) => state.activeLineId);
@@ -67,6 +69,7 @@ export function EditorWorkspace({
   const setFormulaAlignment = useEditorStore(
     (state) => state.setFormulaAlignment,
   );
+  const editorLayout = useEditorStore((state) => state.editorLayout);
   const sourceOpen = useEditorStore((state) => state.sourceOpen);
   const setSourceOpen = useEditorStore((state) => state.setSourceOpen);
   const latexCodeFormat = useEditorStore((state) => state.latexCodeFormat);
@@ -77,6 +80,38 @@ export function EditorWorkspace({
     setFormulaAlignment(alignment);
     editorRef.current?.focus();
   };
+  const applySource = (source: string, sourceFormat: typeof latexCodeFormat) => {
+    const values = parseLatexSource(source, sourceFormat).map(
+      normalizeChineseLatex,
+    );
+    const nextLines = reconcileFormulaLines(values, lines);
+    const nextActiveLineId = nextLines.some(
+      (line) => line.id === activeLineId,
+    )
+      ? activeLineId
+      : nextLines[0]?.id ?? null;
+    onReplaceDocument(
+      {
+        title,
+        lines: nextLines,
+        activeLineId: nextActiveLineId,
+        formulaAlignment,
+        selectionByLineId: editorRef.current?.getSelectionMap() ?? {},
+      },
+      "source-apply",
+    );
+  };
+  const renderSourceEditor = (showCollapseAction = true) => (
+    <LatexSourceEditor
+      latex={sourceLatex}
+      theme={theme}
+      format={latexCodeFormat}
+      onCollapse={() => setSourceOpen(false)}
+      showCollapseAction={showCollapseAction}
+      onApply={applySource}
+      onCopy={() => void onCopy()}
+    />
+  );
 
   const runPrimaryAction = async () => {
     if (!onPrimaryAction || primaryBusy) return;
@@ -144,8 +179,14 @@ export function EditorWorkspace({
         </div>
       )}
 
-      <main className={`workspace${sidebarOpen ? " has-sidebar" : ""}`}>
-        {sidebarOpen && (
+      <main
+        className={
+          `workspace ${editorLayout === "classic" ? "is-classic-layout" : "is-standard-layout"}` +
+          (sidebarOpen ? " has-sidebar" : "")
+        }
+        data-editor-layout={editorLayout}
+      >
+        {editorLayout === "standard" && sidebarOpen && (
           <FormulaToolbar
             onInsert={(command) => editorRef.current?.insertCommand(command)}
           />
@@ -268,70 +309,172 @@ export function EditorWorkspace({
             </div>
           </header>
 
-          <div className={`editor-pane-body${sourceOpen ? " has-source" : ""}`}>
-            <div className="editor-pane-scroll">
-              <MathEditor
-                ref={editorRef}
-                lines={lines}
-                activeLineId={activeLineId}
-                formulaAlignment={formulaAlignment}
-                zoom={zoom}
-                onPasteImage={showOcrActions ? onPasteImage : undefined}
-                onHistoryBusyChange={onHistoryBusyChange}
-                overlay={ocrOverlay}
-              />
-            </div>
-
-            {sourceOpen ? (
-              <div className="source-pane-slot">
-                <LatexSourceEditor
-                  latex={sourceLatex}
-                  theme={theme}
-                  format={latexCodeFormat}
-                  onCollapse={() => setSourceOpen(false)}
-                  onApply={(source, sourceFormat) => {
-                    const values = parseLatexSource(source, sourceFormat).map(
-                      normalizeChineseLatex,
-                    );
-                    const nextLines = reconcileFormulaLines(values, lines);
-                    const nextActiveLineId = nextLines.some(
-                      (line) => line.id === activeLineId,
-                    )
-                      ? activeLineId
-                      : nextLines[0]?.id ?? null;
-                    onReplaceDocument(
-                      {
-                        title,
-                        lines: nextLines,
-                        activeLineId: nextActiveLineId,
-                        formulaAlignment,
-                        selectionByLineId:
-                          editorRef.current?.getSelectionMap() ?? {},
-                      },
-                      "source-apply",
-                    );
-                  }}
-                  onCopy={() => void onCopy()}
+          {editorLayout === "classic" ? (
+            <div
+              className={
+                "classic-editor-pane-body" +
+                (classicDockOpen ? "" : " is-dock-collapsed")
+              }
+            >
+              <div className="editor-pane-scroll">
+                <MathEditor
+                  ref={editorRef}
+                  lines={lines}
+                  activeLineId={activeLineId}
+                  formulaAlignment={formulaAlignment}
+                  zoom={zoom}
+                  onPasteImage={showOcrActions ? onPasteImage : undefined}
+                  onHistoryBusyChange={onHistoryBusyChange}
+                  overlay={ocrOverlay}
                 />
               </div>
-            ) : (
-              <div className="source-toggle-row">
-                <span className="source-toggle-label" aria-hidden="true">
-                  <Code2 size={15} />
-                </span>
-                <button
-                  type="button"
-                  className="source-toggle"
-                  onClick={() => setSourceOpen(true)}
-                  aria-label={isEn ? "Show LaTeX source" : "展开 LaTeX 源码"}
-                  title={isEn ? "Show LaTeX source" : "展开 LaTeX 源码"}
+
+              <section
+                className={
+                  "classic-bottom-dock" +
+                  (classicDockOpen ? "" : " is-collapsed") +
+                  (sourceOpen ? " is-source-panel" : " is-tools-panel")
+                }
+                aria-label={
+                  isEn ? "Formula tools and LaTeX source" : "公式工具与 LaTeX 源码"
+                }
+              >
+                <nav
+                  className="classic-bottom-tabs"
+                  aria-label={isEn ? "Bottom editor panel" : "底部编辑面板"}
                 >
-                  <PanelBottomOpen size={15} />
-                </button>
+                  <span className="classic-bottom-tab-spacer" aria-hidden="true" />
+                  <div
+                    className="classic-bottom-tab-group"
+                    role="tablist"
+                    aria-label={isEn ? "Bottom editor panel" : "底部编辑面板"}
+                  >
+                    <button
+                      type="button"
+                      role="tab"
+                      className={!sourceOpen ? "is-active" : ""}
+                      aria-selected={!sourceOpen}
+                      data-classic-bottom-view="tools"
+                      onClick={() => {
+                        setSourceOpen(false);
+                        setClassicDockOpen(true);
+                      }}
+                    >
+                      <Braces size={15} />
+                      {isEn ? "Formula tools" : "公式工具"}
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      className={sourceOpen ? "is-active" : ""}
+                      aria-selected={sourceOpen}
+                      data-classic-bottom-view="source"
+                      onClick={() => {
+                        setSourceOpen(true);
+                        setClassicDockOpen(true);
+                      }}
+                    >
+                      <Code2 size={15} />
+                      {isEn ? "LaTeX source" : "LaTeX 源码"}
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    className="icon-button compact classic-bottom-collapse"
+                    data-classic-bottom-collapse
+                    aria-expanded={classicDockOpen}
+                    aria-label={
+                      classicDockOpen
+                        ? isEn
+                          ? "Collapse formula tools and source"
+                          : "收起公式工具与源码"
+                        : isEn
+                          ? "Expand formula tools and source"
+                          : "展开公式工具与源码"
+                    }
+                    title={
+                      classicDockOpen
+                        ? isEn
+                          ? "Collapse bottom panel"
+                          : "收起底部面板"
+                        : isEn
+                          ? "Expand bottom panel"
+                          : "展开底部面板"
+                    }
+                    onClick={() => setClassicDockOpen((open) => !open)}
+                  >
+                    {classicDockOpen ? (
+                      <PanelBottomClose size={15} />
+                    ) : (
+                      <PanelBottomOpen size={15} />
+                    )}
+                  </button>
+                </nav>
+                {classicDockOpen && (
+                  <div className="classic-bottom-content">
+                    {sourceOpen ? (
+                      <div className="source-pane-slot classic-source-pane-slot">
+                        {renderSourceEditor(false)}
+                      </div>
+                    ) : (
+                      <FormulaToolbar
+                        view="tools"
+                        layout="horizontal"
+                        className="classic-bottom-toolbar"
+                        onInsert={(command) =>
+                          editorRef.current?.insertCommand(command)
+                        }
+                      />
+                    )}
+                  </div>
+                )}
+              </section>
+            </div>
+          ) : (
+            <div className={`editor-pane-body${sourceOpen ? " has-source" : ""}`}>
+              <div className="editor-pane-scroll">
+                <MathEditor
+                  ref={editorRef}
+                  lines={lines}
+                  activeLineId={activeLineId}
+                  formulaAlignment={formulaAlignment}
+                  zoom={zoom}
+                  onPasteImage={showOcrActions ? onPasteImage : undefined}
+                  onHistoryBusyChange={onHistoryBusyChange}
+                  overlay={ocrOverlay}
+                />
               </div>
-            )}
-          </div>
+
+              {sourceOpen ? (
+                <div className="source-pane-slot">{renderSourceEditor()}</div>
+              ) : (
+                <div className="source-toggle-row">
+                  <span className="source-toggle-label" aria-hidden="true">
+                    <Code2 size={15} />
+                  </span>
+                  <button
+                    type="button"
+                    className="source-toggle"
+                    onClick={() => setSourceOpen(true)}
+                    aria-label={isEn ? "Show LaTeX source" : "展开 LaTeX 源码"}
+                    title={isEn ? "Show LaTeX source" : "展开 LaTeX 源码"}
+                  >
+                    <PanelBottomOpen size={15} />
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </section>
+
+        {editorLayout === "classic" && sidebarOpen && (
+          <FormulaToolbar
+            view="tiles"
+            className="classic-tile-toolbar"
+            stabilizeTileLayout
+            onInsert={(command) => editorRef.current?.insertCommand(command)}
+          />
+        )}
       </main>
 
       <footer className="status-bar">

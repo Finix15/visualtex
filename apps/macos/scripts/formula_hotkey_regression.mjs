@@ -497,7 +497,7 @@ async function main() {
     assert.equal(customTileLayout.betaWeight, 1, JSON.stringify(customTileLayout));
     assert.ok(customTileLayout.betaWidth <= 32, JSON.stringify(customTileLayout));
     assert.ok(
-      customTileLayout.scales.every((scale) => scale >= 0.899 && scale <= 1.101),
+      customTileLayout.scales.every((scale) => scale >= 0.799 && scale <= 1.201),
       JSON.stringify(customTileLayout),
     );
     assert.equal(customTileLayout.sectionBorderWidth, "0px");
