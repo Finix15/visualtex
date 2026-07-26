@@ -36,6 +36,8 @@ fn normalize_app_theme(theme: &str) -> &'static str {
     match theme.trim() {
         "beige" => "beige",
         "dark" => "dark",
+        "purple" => "purple",
+        "green" => "green",
         _ => "light",
     }
 }

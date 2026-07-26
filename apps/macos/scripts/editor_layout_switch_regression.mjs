@@ -342,6 +342,20 @@ async function main() {
         placeholder: "#5f8fa8",
         caret: "#72b7dd",
       },
+      purple: {
+        bg: "#120e16",
+        surface: "#362842",
+        accent: "#bfa4ef",
+        placeholder: "#806791",
+        caret: "#d7c2ff",
+      },
+      green: {
+        bg: "#0d120f",
+        surface: "#25352d",
+        accent: "#78c595",
+        placeholder: "#587466",
+        caret: "#8bd4ac",
+      },
     };
     const themeChoiceState = await evaluate(`(() => ({
       ids: Array.from(document.querySelectorAll('[data-theme-choice]'))
@@ -432,10 +446,14 @@ async function main() {
           caret: expected.caret,
           editorSurface:
             themeId === 'beige' ? 'rgb(255, 249, 239)' :
-            themeId === 'dark' ? 'rgb(32, 35, 40)' : 'rgb(255, 255, 255)',
+            themeId === 'dark' ? 'rgb(32, 35, 40)' :
+            themeId === 'purple' ? 'rgb(67, 50, 82)' :
+            themeId === 'green' ? 'rgb(42, 59, 50)' : 'rgb(255, 255, 255)',
           settingsSurface:
             themeId === 'beige' ? 'rgb(255, 249, 239)' :
-            themeId === 'dark' ? 'rgb(32, 35, 40)' : 'rgb(255, 255, 255)',
+            themeId === 'dark' ? 'rgb(32, 35, 40)' :
+            themeId === 'purple' ? 'rgb(54, 40, 66)' :
+            themeId === 'green' ? 'rgb(37, 53, 45)' : 'rgb(255, 255, 255)',
           active: true,
           tileColors: themeId === 'beige'
             ? Array.from({ length: 6 }, () => [

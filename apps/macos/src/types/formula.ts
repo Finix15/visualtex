@@ -17,7 +17,7 @@ export type LatexCodeFormat =
   | "equation-star-split";
 
 export type FormulaAlignment = "left" | "center" | "right";
-export type Theme = "light" | "beige" | "dark";
+export type Theme = "light" | "beige" | "dark" | "purple" | "green";
 
 export interface FormulaLine {
   id: string;

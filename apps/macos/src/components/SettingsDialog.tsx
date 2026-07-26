@@ -260,6 +260,8 @@ export function SettingsDialog({
                     ["light", isEn ? "Light" : "浅色"],
                     ["beige", isEn ? "Warm beige" : "暖米色"],
                     ["dark", isEn ? "Dark" : "深色"],
+                    ["purple", isEn ? "Deep purple" : "深紫色"],
+                    ["green", isEn ? "Deep green" : "深绿色"],
                   ] as const
                 ).map(([themeId, label]) => (
                   <button

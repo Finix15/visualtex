@@ -77,7 +77,12 @@ function normalizeEditorLayout(value: unknown): EditorLayout {
 }
 
 function normalizeTheme(value: unknown): Theme {
-  return value === "dark" || value === "beige" ? value : "light";
+  return value === "dark" ||
+    value === "beige" ||
+    value === "purple" ||
+    value === "green"
+    ? value
+    : "light";
 }
 
 function normalizeEditorZoom(value: unknown) {

@@ -5,7 +5,12 @@ const EDITOR_STORAGE_KEY = "visualtex-editor";
 const THEME_CHANNEL_NAME = "visualtex-theme";
 
 export function normalizeSynchronizedTheme(value: unknown): Theme {
-  return value === "dark" || value === "beige" ? value : "light";
+  return value === "dark" ||
+    value === "beige" ||
+    value === "purple" ||
+    value === "green"
+    ? value
+    : "light";
 }
 
 function readPersistedEditorTheme(): Theme | null {

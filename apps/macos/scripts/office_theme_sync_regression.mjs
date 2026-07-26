@@ -7,7 +7,7 @@ const offset = process.pid % 700;
 const previewPort = 8800 + offset;
 const debugPort = 15800 + offset;
 const baseUrl = `http://127.0.0.1:${previewPort}`;
-const officeUrl = `${baseUrl}/office-native-dialog.html?session=00000000-0000-4000-8000-000000000000&theme=beige`;
+const officeUrl = `${baseUrl}/office-native-dialog.html?session=00000000-0000-4000-8000-000000000000&theme=purple`;
 const chromeProfile = `/tmp/visualtex-office-theme-${process.pid}`;
 const chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -148,15 +148,15 @@ async function main() {
       paper: getComputedStyle(document.documentElement).getPropertyValue('--surface').trim().toLowerCase(),
     })`);
     assert.deepEqual(inherited, {
-      theme: "beige",
-      background: "#e4d5bf",
-      paper: "#fff9ef",
+      theme: "purple",
+      background: "#120e16",
+      paper: "#362842",
     });
 
     await mainClient.evaluate(`(() => {
-      localStorage.setItem('visualtex.active-theme', 'dark');
+      localStorage.setItem('visualtex.active-theme', 'green');
       const channel = new BroadcastChannel('visualtex-theme');
-      channel.postMessage('dark');
+      channel.postMessage('green');
       channel.close();
     })()`);
     await sleep(180);
@@ -165,8 +165,8 @@ async function main() {
       background: getComputedStyle(document.documentElement).getPropertyValue('--bg').trim().toLowerCase(),
     })`);
     assert.deepEqual(synchronized, {
-      theme: "dark",
-      background: "#16181b",
+      theme: "green",
+      background: "#0d120f",
     });
 
     process.stdout.write("Office theme inheritance and live synchronization regression passed\n");
