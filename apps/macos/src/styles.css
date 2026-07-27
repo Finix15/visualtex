@@ -1033,7 +1033,7 @@ textarea:focus-visible,
 
 .input-behavior-menu {
   position: relative;
-  z-index: 6;
+  z-index: 90;
 }
 
 .canvas-input-behavior-trigger {
@@ -1048,7 +1048,7 @@ textarea:focus-visible,
   color: var(--text-muted);
   box-shadow: var(--shadow-sm);
   cursor: pointer;
-  font-size: 9px;
+  font-size: 13px;
   font-weight: 700;
   white-space: nowrap;
 }
@@ -1076,11 +1076,12 @@ textarea:focus-visible,
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
-  width: min(350px, calc(100vw - 28px));
-  max-height: min(420px, calc(100vh - 84px));
-  padding: 12px;
+  width: min(420px, calc(100vw - 28px));
+  max-height: min(560px, calc(100vh - 84px));
+  padding: 18px;
   border: 1px solid var(--border-strong);
   border-radius: 11px;
+  z-index: 100;
   background: var(--surface);
   box-shadow: var(--shadow-md);
   overflow-y: auto;
@@ -1095,13 +1096,13 @@ textarea:focus-visible,
 
 .input-behavior-heading strong {
   color: var(--text);
-  font-size: 11px;
+  font-size: 16px;
   font-weight: 700;
 }
 
 .input-behavior-heading span {
   color: var(--text-faint);
-  font-size: 8px;
+  font-size: 12px;
   line-height: 1.45;
 }
 
@@ -1118,12 +1119,12 @@ textarea:focus-visible,
 }
 
 .input-behavior-option {
-  min-height: 50px;
+  min-height: 70px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 8px 10px;
+  padding: 11px 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg-elevated);
@@ -1143,14 +1144,14 @@ textarea:focus-visible,
 
 .input-behavior-option strong {
   color: var(--text);
-  font-size: 9px;
+  font-size: 14px;
   font-weight: 700;
 }
 
 .input-behavior-option small {
   color: var(--text-faint);
-  font-size: 8px;
-  line-height: 1.35;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .input-behavior-option input {
@@ -3187,7 +3188,7 @@ button:disabled {
   background: var(--accent-soft);
   color: var(--accent);
   font: inherit;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 700;
   white-space: nowrap;
   cursor: pointer;
@@ -3215,8 +3216,8 @@ button:disabled {
   top: calc(100% + 8px);
   right: 0;
   z-index: 90;
-  width: min(350px, calc(100vw - 28px));
-  padding: 12px;
+  width: min(420px, calc(100vw - 28px));
+  padding: 18px;
   border: 1px solid var(--border-strong);
   border-radius: 11px;
   background: var(--surface);
@@ -3232,13 +3233,13 @@ button:disabled {
 
 .export-menu-heading strong {
   color: var(--text);
-  font-size: 11px;
+  font-size: 16px;
   font-weight: 750;
 }
 
 .export-menu-heading span {
   color: var(--text-faint);
-  font-size: 8px;
+  font-size: 12px;
 }
 
 .export-format-options {
@@ -3249,7 +3250,7 @@ button:disabled {
 
 .export-format-options > button {
   min-width: 0;
-  min-height: 70px;
+  min-height: 84px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -3285,13 +3286,13 @@ button:disabled {
 
 .export-format-options strong {
   color: inherit;
-  font-size: 10px;
+  font-size: 14px;
   font-weight: 750;
 }
 
 .export-format-options small {
   color: var(--text-faint);
-  font-size: 8px;
+  font-size: 12px;
 }
 
 .export-path-section {
@@ -3313,33 +3314,33 @@ button:disabled {
 
 .export-path-copy span {
   color: var(--text-faint);
-  font-size: 8px;
+  font-size: 12px;
 }
 
 .export-path-copy strong {
-  max-width: 220px;
+  max-width: 240px;
   overflow: hidden;
   color: var(--text-muted);
   font-family: "JetBrains Mono", monospace;
-  font-size: 8px;
+  font-size: 12px;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .export-path-button {
-  height: 30px;
+  height: 34px;
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 0 9px;
+  padding: 0 11px;
   border: 1px solid var(--border);
   border-radius: 7px;
   background: var(--surface);
   color: var(--text-muted);
   font: inherit;
-  font-size: 9px;
+  font-size: 13px;
   font-weight: 700;
   cursor: pointer;
 }
@@ -3619,6 +3620,12 @@ button:disabled {
   grid-template-rows: var(--panel-header-height) minmax(0, 1fr);
   border-right: 1px solid var(--border);
   background: var(--surface);
+}
+
+.formula-workspace.editor-pane > .workspace-heading {
+  position: relative;
+  z-index: 80;
+  overflow: visible;
 }
 
 .workspace-heading {
