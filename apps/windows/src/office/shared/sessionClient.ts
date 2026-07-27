@@ -41,6 +41,10 @@ export interface PreparedPowerPointCommit {
   selection: NativePowerPointCommitSelection;
 }
 
+export interface OfficeThemeStatus {
+  theme: string;
+}
+
 export interface OfficeFormulaSession {
   id: string;
   mode: OfficeSessionMode;
@@ -145,6 +149,10 @@ export function getOfficeSession(sessionId: string) {
   return requestJson<OfficeFormulaSession>(
     `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
   );
+}
+
+export function getOfficeTheme() {
+  return requestJson<OfficeThemeStatus>("/api/v1/theme");
 }
 
 export function updateOfficeSession(

@@ -1,4 +1,5 @@
 import { ChangeEvent, useCallback, useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   AlertCircle,
   Braces,
@@ -75,6 +76,7 @@ import {
 } from "./clipboard/LatexCopyService";
 import { normalizeChineseLatex } from "./editor/normalizeChineseLatex";
 import type { FormulaDocument, LatexCodeFormat } from "./types/formula";
+import { publishSynchronizedTheme } from "./themeSync";
 import {
   DEFAULT_OCR_MODEL,
   OCR_MODELS,
@@ -290,7 +292,10 @@ function App() {
   }, []);
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
+    publishSynchronizedTheme(theme);
+    if (isTauriEnvironment()) {
+      void invoke<string>("set_app_theme", { theme }).catch(() => undefined);
+    }
   }, [theme]);
 
   useEffect(() => {

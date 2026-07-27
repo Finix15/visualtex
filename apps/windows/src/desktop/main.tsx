@@ -6,8 +6,10 @@ import "../styles-macos-main.css";
 import { configureOcrTransport } from "../ocr/ocrService";
 import { desktopOcrTransport } from "../ocr/ocrTransport";
 import { DesktopApp } from "./DesktopApp";
+import { applyDocumentTheme, readSynchronizedTheme } from "../themeSync";
 
 configureOcrTransport(desktopOcrTransport);
+applyDocumentTheme(readSynchronizedTheme());
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

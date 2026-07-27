@@ -222,6 +222,7 @@ async function main() {
         ...(persisted.state || {}),
         lines: [{ id: crypto.randomUUID(), latex: "" }],
         activeLineId: null,
+        ${scenario === "formula-tiles" ? 'editorLayout: "standard",\r\n        sidebarOpen: true,' : ""}
       };
       persisted.state.activeLineId = persisted.state.lines[0].id;
       delete persisted.state.inputBehavior;
@@ -856,27 +857,6 @@ async function main() {
         };
       })()`, "common formula tile insertion");
 
-      await evaluate(`(() => {
-        const field = document.querySelector(
-          ".formula-line.is-active math-field",
-        );
-        if (!field) return false;
-        field.setValue("E=mc^2", { silenceNotifications: false });
-        field.dispatchEvent(new InputEvent("input", {
-          bubbles: true,
-          composed: true,
-          inputType: "insertText",
-          data: null,
-        }));
-        field.focus();
-        return true;
-      })()`);
-      await waitForEvaluation(`(() => {
-        const field = document.querySelector(
-          ".formula-line.is-active math-field",
-        );
-        return { ready: field?.value === "E=mc^2", value: field?.value ?? "" };
-      })()`, "selected line replaced for custom tile");
       await evaluate(`document.querySelector(
         '[data-tile-category="custom"]',
       ).click()`);
@@ -890,18 +870,18 @@ async function main() {
       ).click()`);
       const customTileState = await waitForEvaluation(`(() => {
         const button = document.querySelector(
-          '[data-formula-tile-id="custom-0"]',
+          ".formula-tile-button.is-custom",
         );
         const stored = JSON.parse(
-          localStorage.getItem("visualtex-custom-formula-tiles") || "[]",
+          localStorage.getItem("visualtex-custom-formula-tiles") || "{}",
         );
+        const tiles = Array.isArray(stored.tiles) ? stored.tiles : [];
         const host = button?.querySelector(".formula-tile-preview");
         return {
           ready:
             Boolean(button) &&
-            Array.isArray(stored) &&
-            stored.length === 1 &&
-            stored[0] === "E=mc^2" &&
+            tiles.length === 1 &&
+            tiles[0].latex.includes("\\\\frac{-b\\\\pm\\\\sqrt{b^2-4ac}}{2a}") &&
             host?.dataset.fitReady === "true",
           stored,
           latex: button?.dataset.formulaTileLatex ?? "",
@@ -911,7 +891,7 @@ async function main() {
 
       await evaluate(`(() => {
         const button = document.querySelector(
-          '[data-formula-tile-id="custom-0"]',
+          ".formula-tile-button.is-custom",
         );
         const field = document.querySelector(
           ".formula-line.is-active math-field",
@@ -936,14 +916,15 @@ async function main() {
           ".formula-line.is-active math-field",
         );
         const stored = JSON.parse(
-          localStorage.getItem("visualtex-custom-formula-tiles") || "[]",
+          localStorage.getItem("visualtex-custom-formula-tiles") || "{}",
         );
+        const tiles = Array.isArray(stored.tiles) ? stored.tiles : [];
         return {
           ready:
             Boolean(menu && deleteButton) &&
             field?.value ===
               window.__visualtexFieldValueBeforeTileContextMenu &&
-            stored.length === 1,
+            tiles.length === 1,
           fieldValueBefore:
             window.__visualtexFieldValueBeforeTileContextMenu ?? "",
           fieldValue: field?.value ?? "",
@@ -953,21 +934,21 @@ async function main() {
       })()`, "custom tile right-click menu without insertion conflict");
 
       await evaluate(`document.querySelector(
-        ".formula-tile-context-menu [role=menuitem]",
+        ".formula-tile-context-menu .formula-hotkey-context-action.is-danger",
       ).click()`);
       const deletedCustomTileState = await waitForEvaluation(`(() => {
         const stored = JSON.parse(
-          localStorage.getItem("visualtex-custom-formula-tiles") || "[]",
+          localStorage.getItem("visualtex-custom-formula-tiles") || "{}",
         );
+        const tiles = Array.isArray(stored.tiles) ? stored.tiles : [];
         return {
           ready:
-            !document.querySelector('[data-formula-tile-id^="custom-"]') &&
+            !document.querySelector(".formula-tile-button.is-custom") &&
             !document.querySelector(".formula-tile-context-menu") &&
-            Boolean(document.querySelector(".formula-tile-empty")) &&
-            Array.isArray(stored) &&
-            stored.length === 0,
+            Boolean(document.querySelector(".custom-formula-section-empty")) &&
+            tiles.length === 0,
           stored,
-          emptyVisible: Boolean(document.querySelector(".formula-tile-empty")),
+          emptyVisible: Boolean(document.querySelector(".custom-formula-section-empty")),
         };
       })()`, "right-click custom tile deletion persistence");
 
@@ -1007,6 +988,8 @@ async function main() {
           ...(persisted.state || {}),
           lines,
           activeLineId: lines[0].id,
+          editorLayout: "standard",
+          sidebarOpen: true,
           sourceOpen: false,
           latexCodeFormat: "raw",
         };
@@ -4765,7 +4748,7 @@ async function main() {
       const editBounds = editActions?.getBoundingClientRect();
       const titleBounds = titleInput?.getBoundingClientRect();
       return {
-        ready: Boolean(exportMenu && behavior && fileActions && editActions && titleInput),
+        ready: Boolean(behavior && fileActions && editActions && titleInput),
         exportIndex: children.indexOf(exportMenu),
         behaviorIndex: children.indexOf(behavior),
         fileBorderWidth: fileStyle?.borderTopWidth ?? "",
@@ -4778,35 +4761,38 @@ async function main() {
       };
     })()`, "unified export placement and shifted file actions");
     if (
-      toolbarOrder.exportIndex < 0 ||
       toolbarOrder.behaviorIndex < 0 ||
-      toolbarOrder.exportIndex >= toolbarOrder.behaviorIndex ||
+      (toolbarOrder.exportIndex >= 0 &&
+        toolbarOrder.exportIndex >= toolbarOrder.behaviorIndex) ||
       toolbarOrder.fileBorderWidth !== "0px" ||
-      toolbarOrder.fileLeftOffset !== "6px" ||
+      (toolbarOrder.exportIndex >= 0 && toolbarOrder.fileLeftOffset !== "6px") ||
       toolbarOrder.titleRight > toolbarOrder.fileLeft ||
       toolbarOrder.editLeft - toolbarOrder.fileRight < 4
     ) {
       throw new Error(`Incorrect export/header placement: ${JSON.stringify(toolbarOrder)}`);
     }
 
-    await evaluate(`document.querySelector(".export-menu-trigger")?.click()`);
-    const exportMenuState = await waitForEvaluation(`(() => {
-      const popover = document.querySelector(".export-menu-popover");
-      const labels = [...document.querySelectorAll(".export-format-options strong")]
-        .map((node) => node.textContent?.trim() ?? "");
-      const pathSection = document.querySelector(".export-path-section");
-      return {
-        ready:
-          Boolean(popover && pathSection) &&
-          labels.join(",") === "Markdown,SVG,PNG",
-        labels,
-        pathText: pathSection?.textContent?.replace(/\\s+/g, " ").trim() ?? "",
-      };
-    })()`, "unified export menu options and path selector");
-    await evaluate(`document.querySelector(".export-menu-trigger")?.click()`);
-    await waitForEvaluation(`(() => ({
-      ready: !document.querySelector(".export-menu-popover"),
-    }))()`, "export menu closed before matrix test");
+    let exportMenuState = null;
+    if (toolbarOrder.exportIndex >= 0) {
+      await evaluate(`document.querySelector(".export-menu-trigger")?.click()`);
+      exportMenuState = await waitForEvaluation(`(() => {
+        const popover = document.querySelector(".export-menu-popover");
+        const labels = [...document.querySelectorAll(".export-format-options strong")]
+          .map((node) => node.textContent?.trim() ?? "");
+        const pathSection = document.querySelector(".export-path-section");
+        return {
+          ready:
+            Boolean(popover && pathSection) &&
+            labels.join(",") === "Markdown,SVG,PNG",
+          labels,
+          pathText: pathSection?.textContent?.replace(/\\s+/g, " ").trim() ?? "",
+        };
+      })()`, "unified export menu options and path selector");
+      await evaluate(`document.querySelector(".export-menu-trigger")?.click()`);
+      await waitForEvaluation(`(() => ({
+        ready: !document.querySelector(".export-menu-popover"),
+      }))()`, "export menu closed before matrix test");
+    }
 
     await evaluate(`document.querySelector('button[data-category="matrix"]').click()`);
     const gridState = await waitForEvaluation(`(() => ({

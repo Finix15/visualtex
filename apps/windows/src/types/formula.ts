@@ -17,7 +17,7 @@ export type LatexCodeFormat =
   | "equation-star-split";
 
 export type FormulaAlignment = "left" | "center" | "right";
-export type Theme = "light" | "beige" | "dark";
+export type Theme = "light" | "beige" | "dark" | "purple" | "green";
 
 export interface FormulaLine {
   id: string;
@@ -54,6 +54,7 @@ export interface FormulaHistoryItem {
 }
 
 export interface InputBehaviorSettings {
+  autoEscapeShortcuts: boolean;
   autoExitSuperscript: boolean;
   autoExitSubscript: boolean;
   autoExitAccent: boolean;
@@ -63,6 +64,7 @@ export interface InputBehaviorSettings {
 }
 
 export type InputBehaviorSettingKey =
+  | "autoEscapeShortcuts"
   | "autoExitSuperscript"
   | "autoExitSubscript"
   | "autoExitAccent"

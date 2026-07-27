@@ -6,8 +6,10 @@ import "../../styles-macos-main.css";
 import { configureOcrTransport } from "../../ocr/ocrService";
 import { officeOcrTransport } from "../api/ocrHttpTransport";
 import { OfficeDialogApp } from "./OfficeDialogApp";
+import { applyDocumentTheme, readSynchronizedTheme } from "../../themeSync";
 
 configureOcrTransport(officeOcrTransport);
+applyDocumentTheme(readSynchronizedTheme());
 
 function mount() {
   const root = document.getElementById("root");

@@ -5,6 +5,7 @@ import {
   AlignRight,
   Braces,
   Code2,
+  Copy,
   FileDown,
   Minus,
   PanelBottomClose,
@@ -101,13 +102,23 @@ export function EditorWorkspace({
     );
   };
 
-  const renderSourceEditor = (showCollapseAction = true) => (
+  const renderSourceEditor = ({
+    showCollapseAction = true,
+    showCopyAction = true,
+    compact = false,
+  }: {
+    showCollapseAction?: boolean;
+    showCopyAction?: boolean;
+    compact?: boolean;
+  } = {}) => (
     <LatexSourceEditor
       latex={sourceLatex}
       theme={theme}
       format={latexCodeFormat}
       onCollapse={() => setSourceOpen(false)}
       showCollapseAction={showCollapseAction}
+      showCopyAction={showCopyAction}
+      compact={compact}
       onApply={applySource}
       onCopy={() => void onCopy()}
     />
@@ -188,6 +199,7 @@ export function EditorWorkspace({
       >
         {editorLayout === "standard" && sidebarOpen && (
           <FormulaToolbar
+            stabilizeTileLayout
             onInsert={(command) => editorRef.current?.insertCommand(command)}
           />
         )}
@@ -381,43 +393,61 @@ export function EditorWorkspace({
                       {isEn ? "LaTeX source" : "LaTeX 源码"}
                     </button>
                   </div>
-                  <button
-                    type="button"
-                    className="icon-button compact classic-bottom-collapse"
-                    data-classic-bottom-collapse
-                    aria-expanded={classicDockOpen}
-                    aria-label={
-                      classicDockOpen
-                        ? isEn
-                          ? "Collapse formula tools and source"
-                          : "收起公式工具与源码"
-                        : isEn
-                          ? "Expand formula tools and source"
-                          : "展开公式工具与源码"
-                    }
-                    title={
-                      classicDockOpen
-                        ? isEn
-                          ? "Collapse bottom panel"
-                          : "收起底部面板"
-                        : isEn
-                          ? "Expand bottom panel"
-                          : "展开底部面板"
-                    }
-                    onClick={() => setClassicDockOpen((open) => !open)}
-                  >
-                    {classicDockOpen ? (
-                      <PanelBottomClose size={14} />
-                    ) : (
-                      <PanelBottomOpen size={14} />
+                  <div className="classic-bottom-actions">
+                    {sourceOpen && classicDockOpen && (
+                      <button
+                        type="button"
+                        className="icon-button compact classic-bottom-copy"
+                        data-classic-bottom-copy
+                        onClick={() => void onCopy()}
+                        aria-label={isEn ? "Copy LaTeX source" : "复制 LaTeX 源码"}
+                        title={isEn ? "Copy LaTeX source" : "复制 LaTeX 源码"}
+                      >
+                        <Copy size={14} />
+                      </button>
                     )}
-                  </button>
+                    <button
+                      type="button"
+                      className="icon-button compact classic-bottom-collapse"
+                      data-classic-bottom-collapse
+                      aria-expanded={classicDockOpen}
+                      aria-label={
+                        classicDockOpen
+                          ? isEn
+                            ? "Collapse formula tools and source"
+                            : "收起公式工具与源码"
+                          : isEn
+                            ? "Expand formula tools and source"
+                            : "展开公式工具与源码"
+                      }
+                      title={
+                        classicDockOpen
+                          ? isEn
+                            ? "Collapse bottom panel"
+                            : "收起底部面板"
+                          : isEn
+                            ? "Expand bottom panel"
+                            : "展开底部面板"
+                      }
+                      onClick={() => setClassicDockOpen((open) => !open)}
+                    >
+                      {classicDockOpen ? (
+                        <PanelBottomClose size={14} />
+                      ) : (
+                        <PanelBottomOpen size={14} />
+                      )}
+                    </button>
+                  </div>
                 </nav>
                 {classicDockOpen && (
                   <div className="classic-bottom-content">
                     {sourceOpen ? (
                       <div className="source-pane-slot classic-source-pane-slot">
-                        {renderSourceEditor(false)}
+                        {renderSourceEditor({
+                          showCollapseAction: false,
+                          showCopyAction: false,
+                          compact: true,
+                        })}
                       </div>
                     ) : (
                       <FormulaToolbar

@@ -22,6 +22,16 @@ pub const OFFICE_PROTOCOL_VERSION: u32 = 1;
 pub const OFFICE_UI_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MAX_OFFICE_REQUEST_BYTES: usize = 22 * 1024 * 1024;
 
+pub fn normalize_app_theme(theme: &str) -> &'static str {
+    match theme.trim() {
+        "beige" => "beige",
+        "dark" => "dark",
+        "purple" => "purple",
+        "green" => "green",
+        _ => "light",
+    }
+}
+
 pub fn append_office_log(paths: &OfficePaths, file_name: &str, message: &str) {
     #[cfg(target_os = "windows")]
     let log_root = std::env::var_os("LOCALAPPDATA")
@@ -94,6 +104,7 @@ pub struct OfficeCompanionState {
     pub paths: Arc<OfficePaths>,
     pub install_token: Arc<String>,
     pub status: Arc<RwLock<OfficeCompanionStatus>>,
+    pub app_theme: Arc<RwLock<String>>,
     pub server_handle: Arc<Mutex<Option<Handle<SocketAddr>>>>,
     pub session_store: SessionStore,
     pub formula_cache: FormulaMetadataCache,
@@ -125,6 +136,7 @@ impl OfficeCompanionState {
             paths: Arc::new(paths),
             install_token: Arc::new(install_token),
             status: Arc::new(RwLock::new(status)),
+            app_theme: Arc::new(RwLock::new("light".to_string())),
             server_handle: Arc::new(Mutex::new(None)),
             session_store,
             formula_cache,
@@ -150,5 +162,20 @@ impl OfficeCompanionState {
         if let Ok(mut status) = self.status.write() {
             mutate(&mut status);
         }
+    }
+
+    pub fn current_theme(&self) -> String {
+        self.app_theme
+            .read()
+            .map(|theme| theme.clone())
+            .unwrap_or_else(|_| "light".to_string())
+    }
+
+    pub fn set_current_theme(&self, theme: &str) -> String {
+        let normalized = normalize_app_theme(theme).to_string();
+        if let Ok(mut current) = self.app_theme.write() {
+            *current = normalized.clone();
+        }
+        normalized
     }
 }

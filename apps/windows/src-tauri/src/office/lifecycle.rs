@@ -256,6 +256,14 @@ pub fn start(state: OfficeCompanionState) {
 }
 
 #[tauri::command]
+pub fn set_app_theme(
+    theme: String,
+    state: tauri::State<'_, OfficeCompanionState>,
+) -> String {
+    state.set_current_theme(&theme)
+}
+
+#[tauri::command]
 pub fn get_office_companion_status(
     state: tauri::State<'_, OfficeCompanionState>,
 ) -> OfficeCompanionStatus {

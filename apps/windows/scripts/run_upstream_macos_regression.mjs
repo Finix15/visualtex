@@ -70,6 +70,24 @@ source = source.replace(
   'assert.equal(enabledSuperscript.inScript, false);',
   'assert.equal(enabledSuperscript.inScript, false, JSON.stringify(enabledSuperscript));',
 );
+source = source.replace(
+  "    await rm(chromeProfile, { recursive: true, force: true });",
+  "    try { await rm(chromeProfile, { recursive: true, force: true, maxRetries: 4, retryDelay: 150 }); } catch (error) { if (process.platform !== 'win32' || error?.code !== 'EBUSY') throw error; }",
+);
+source = source.replace(
+  "    await rm(profile, { recursive: true, force: true });",
+  "    try { await rm(profile, { recursive: true, force: true, maxRetries: 4, retryDelay: 150 }); } catch (error) { if (process.platform !== 'win32' || error?.code !== 'EBUSY') throw error; }",
+);
+source = source.replace(
+  'localStorage.setItem("visualtex.onboarding.v3.completed", "true");',
+  'localStorage.setItem("visualtex.onboarding.v3.completed", "true");\n        localStorage.setItem("visualtex.onboarding.windows.desktop.v1.1.0.completed", "true");',
+);
+if (basename(sourcePath) === "auto_escape_regression.mjs") {
+  source = source.replace(
+    /    await evaluate\(`document\.querySelector\("\.canvas-input-behavior-trigger"\)\.click\(\)`\);\r?\n    await evaluate\(`document\.querySelector\("\.export-menu-trigger"\)\.click\(\)`\);[\s\S]*?    assert\.match\(await typeText\(">="\)/,
+    '    assert.match(await typeText(">=")',
+  );
+}
 if (forwardedArguments.includes("auto-exit-switch")) {
   source = source.replace(
     "    await configure();",

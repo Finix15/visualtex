@@ -1778,6 +1778,7 @@ pub fn run() {
             reset_ocr_runtime,
             install_optional_ocr_model,
             remove_optional_ocr_model,
+            office::lifecycle::set_app_theme,
             office::lifecycle::get_office_companion_status,
             office::lifecycle::start_office_companion,
             office::lifecycle::stop_office_companion,

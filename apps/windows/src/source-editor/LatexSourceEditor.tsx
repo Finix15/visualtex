@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { EditorState } from "@codemirror/state";
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
+import { tags } from "@lezer/highlight";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { latex as latexLanguageSupport } from "codemirror-lang-latex";
 import {
@@ -13,12 +15,41 @@ import {
 import { useEditorStore } from "../stores/editorStore";
 import type { LatexCodeFormat, Theme } from "../types/formula";
 
+const visualTeXLatexHighlightStyle = HighlightStyle.define([
+  {
+    tag: [
+      tags.keyword,
+      tags.definitionKeyword,
+      tags.macroName,
+      tags.labelName,
+      tags.heading,
+    ],
+    color: "var(--syntax-command)",
+  },
+  {
+    tag: [tags.className, tags.typeName, tags.namespace],
+    color: "var(--syntax-function)",
+  },
+  {
+    tag: [tags.operator, tags.processingInstruction],
+    color: "var(--syntax-operator)",
+  },
+  { tag: tags.number, color: "var(--syntax-number)" },
+  { tag: tags.bracket, color: "var(--syntax-bracket)" },
+  { tag: [tags.string, tags.quote, tags.meta], color: "var(--syntax-string)" },
+  { tag: tags.comment, color: "var(--syntax-comment)", fontStyle: "italic" },
+  { tag: [tags.variableName, tags.content], color: "var(--syntax-variable)" },
+  { tag: tags.invalid, color: "var(--syntax-error)", textDecoration: "underline" },
+]);
+
 interface Props {
   latex: string;
   theme: Theme;
   format: LatexCodeFormat;
   onCollapse: () => void;
   showCollapseAction?: boolean;
+  showCopyAction?: boolean;
+  compact?: boolean;
   onApply: (latex: string, sourceFormat: LatexCodeFormat) => void;
   onCopy: () => void;
 }
@@ -29,6 +60,8 @@ export function LatexSourceEditor({
   format,
   onCollapse,
   showCollapseAction = true,
+  showCopyAction = true,
+  compact = false,
   onApply,
   onCopy,
 }: Props) {
@@ -73,6 +106,7 @@ export function LatexSourceEditor({
         lineNumbers(),
         history(),
         latexLanguageSupport({ enableLinting: false, enableTooltips: false }),
+        syntaxHighlighting(visualTeXLatexHighlightStyle),
         keymap.of([...defaultKeymap, ...historyKeymap]),
         editorTheme,
         EditorView.lineWrapping,
@@ -164,51 +198,65 @@ export function LatexSourceEditor({
     updateDirty(false);
   };
 
+  const showHeader = !compact || dirty;
+
   return (
-    <section className="source-panel">
-      <div className="source-panel-header">
-        <div className="source-title">
-          <Code2 size={16} />
-          <span>{isEn ? "LaTeX source" : "LaTeX 源码"}</span>
-          {dirty && (
-            <span className="unsaved-chip">
-              {isEn ? "Unsynced changes" : "有未同步更改"}
-            </span>
+    <section
+      className={
+        "source-panel" +
+        (compact ? " is-compact" : "") +
+        (compact && dirty ? " has-dirty-actions" : "")
+      }
+    >
+      {showHeader && (
+        <div className="source-panel-header">
+          {!compact && (
+            <div className="source-title">
+              <Code2 size={16} />
+              <span>{isEn ? "LaTeX source" : "LaTeX 源码"}</span>
+              {dirty && (
+                <span className="unsaved-chip">
+                  {isEn ? "Unsynced changes" : "有未同步更改"}
+                </span>
+              )}
+            </div>
           )}
-        </div>
-        <div className="source-actions">
-          {dirty && (
-            <>
-              <button type="button" className="text-button" onClick={() => replaceDraft(latex)}>
-                <RotateCcw size={14} /> {isEn ? "Reset" : "还原"}
+          <div className="source-actions">
+            {dirty && (
+              <>
+                <button type="button" className="text-button" onClick={() => replaceDraft(latex)}>
+                  <RotateCcw size={14} /> {isEn ? "Reset" : "还原"}
+                </button>
+                <button type="button" className="primary-small-button" onClick={applyDraft}>
+                  <Check size={14} /> {isEn ? "Apply" : "同步到公式"}
+                </button>
+              </>
+            )}
+            {showCopyAction && (
+              <button
+                type="button"
+                className="text-button source-copy-button"
+                onClick={onCopy}
+                aria-label={isEn ? "Copy LaTeX source" : "复制 LaTeX 源码"}
+                title={isEn ? "Copy LaTeX source" : "复制 LaTeX 源码"}
+              >
+                <Copy size={14} />
               </button>
-              <button type="button" className="primary-small-button" onClick={applyDraft}>
-                <Check size={14} /> {isEn ? "Apply" : "同步到公式"}
+            )}
+            {showCollapseAction && (
+              <button
+                type="button"
+                className="text-button source-collapse-button"
+                onClick={onCollapse}
+                aria-label={isEn ? "Hide LaTeX source" : "收起 LaTeX 源码"}
+                title={isEn ? "Hide LaTeX source" : "收起 LaTeX 源码"}
+              >
+                <PanelBottomClose size={14} />
               </button>
-            </>
-          )}
-          <button
-            type="button"
-            className="text-button source-copy-button"
-            onClick={onCopy}
-            aria-label={isEn ? "Copy LaTeX source" : "复制 LaTeX 源码"}
-            title={isEn ? "Copy LaTeX source" : "复制 LaTeX 源码"}
-          >
-            <Copy size={14} />
-          </button>
-          {showCollapseAction && (
-            <button
-              type="button"
-              className="text-button source-collapse-button"
-              onClick={onCollapse}
-              aria-label={isEn ? "Hide LaTeX source" : "收起 LaTeX 源码"}
-              title={isEn ? "Hide LaTeX source" : "收起 LaTeX 源码"}
-            >
-              <PanelBottomClose size={14} />
-            </button>
-          )}
+            )}
+          </div>
         </div>
-      </div>
+      )}
       <div ref={hostRef} className="codemirror-host" />
     </section>
   );

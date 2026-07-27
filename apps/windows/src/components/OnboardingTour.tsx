@@ -38,6 +38,8 @@ type StepId =
   | "welcome"
   | "library"
   | "keyboard"
+  | "hotkeys-tiles"
+  | "layouts-themes"
   | "matrix-fonts"
   | "input-behavior"
   | "code-format"
@@ -78,6 +80,20 @@ export function tutorialSteps(language: Language, platform: DesktopPlatform): Tu
       description: isEn
         ? "A few keys cover line creation, navigation, and deletion."
         : "几个按键就能完成换行、跳转和删除。",
+    },
+    {
+      id: "hotkeys-tiles",
+      title: isEn ? "Turn formulas into fast shortcuts" : "把常用公式变成快捷入口",
+      description: isEn
+        ? "Right-click any formula tool or tile to bind a hotkey. Save the current formula as a custom tile, then organize it by section, colour, and shortcut."
+        : "右键公式工具或磁贴即可绑定快捷键；还可以把当前公式保存为自定义磁贴，再按分区、颜色和快捷键管理。",
+    },
+    {
+      id: "layouts-themes",
+      title: isEn ? "Choose your layout and colour theme" : "选择适合你的布局与主题",
+      description: isEn
+        ? "Open Settings → Appearance & editing to switch between Standard and Classic layouts and five complete colour themes. Office formula editors follow the same theme."
+        : "在“设置 → 外观与编辑”中切换标准布局、经典布局和五套完整主题；Office 公式编辑窗口也会同步主应用主题。",
     },
     {
       id: "matrix-fonts",
@@ -292,6 +308,105 @@ export function OnboardingTour({ open, language, platform, onFinish }: Props) {
                   <span><Keyboard size={14} /><kbd>Enter</kbd><small>{isEn ? "New line" : "新建一行"}</small></span>
                   <span><kbd>Tab</kbd><small>{isEn ? "Next field" : "下个位置"}</small></span>
                   <span><kbd>⌫</kbd><small>{isEn ? "Delete empty line" : "删除空行"}</small></span>
+                </div>
+              </div>
+            )}
+
+            {current.id === "hotkeys-tiles" && (
+              <div className="onboarding-hotkeys-tiles-demo">
+                <section className="onboarding-hotkey-guide">
+                  <header>
+                    <Keyboard size={17} />
+                    <strong>{isEn ? "Formula hotkeys" : "公式快捷键"}</strong>
+                  </header>
+                  <div className="onboarding-hotkey-flow">
+                    <span>
+                      <b>1</b>
+                      <small>{isEn ? "Right-click a tool or tile" : "右键公式工具或磁贴"}</small>
+                    </span>
+                    <i><ArrowRight size={14} /></i>
+                    <span>
+                      <b>2</b>
+                      <small>{isEn ? "Press and assign a shortcut" : "按下组合键并完成绑定"}</small>
+                    </span>
+                    <i><ArrowRight size={14} /></i>
+                    <span>
+                      <kbd>Alt+1</kbd>
+                      <small>{isEn ? "Insert at the active cursor" : "在当前公式光标处插入"}</small>
+                    </span>
+                  </div>
+                  <div className="onboarding-hotkey-manager-note">
+                    <Settings2 size={14} />
+                    <span>{isEn ? "Settings → Manage formula hotkeys" : "设置 → 管理公式快捷键，可统一修改或删除"}</span>
+                  </div>
+                </section>
+
+                <section className="onboarding-custom-tile-guide">
+                  <header>
+                    <PanelLeft size={17} />
+                    <strong>{isEn ? "Custom formula tiles" : "自定义公式磁贴"}</strong>
+                  </header>
+                  <div className="onboarding-custom-tile-preview">
+                    <MathPreview latex="\\int_0^1 x^2\\,\\mathrm{d}x" />
+                  </div>
+                  <button type="button" tabIndex={-1}>
+                    {isEn ? "Save current formula" : "保存当前公式"}
+                  </button>
+                  <small>
+                    {isEn
+                      ? "Create sections, then right-click a tile to change its shortcut, colour, or section."
+                      : "先建立分区；保存后右键磁贴，可调整快捷键、颜色和所属分区。"}
+                  </small>
+                </section>
+              </div>
+            )}
+
+            {current.id === "layouts-themes" && (
+              <div className="onboarding-layout-theme-demo">
+                <div className="onboarding-layout-choice-list">
+                  <article>
+                    <div className="onboarding-layout-mini is-standard" aria-hidden="true">
+                      <i />
+                      <span />
+                      <b />
+                    </div>
+                    <strong>{isEn ? "Standard layout" : "标准布局"}</strong>
+                    <small>{isEn ? "Editor with side tools and tiles" : "公式区配合侧边工具和磁贴"}</small>
+                  </article>
+                  <article className="is-selected">
+                    <div className="onboarding-layout-mini is-classic" aria-hidden="true">
+                      <i />
+                      <span />
+                      <b />
+                    </div>
+                    <strong>{isEn ? "Classic layout" : "经典布局"}</strong>
+                    <small>{isEn ? "Bottom tools with a right tile rail" : "底部公式工具＋右侧磁贴栏"}</small>
+                  </article>
+                </div>
+
+                <div className="onboarding-theme-guide">
+                  <header>
+                    <Settings2 size={17} />
+                    <strong>{isEn ? "Five complete themes" : "五套完整界面主题"}</strong>
+                  </header>
+                  <div className="onboarding-theme-swatches">
+                    {[
+                      ["light", isEn ? "Light" : "浅色"],
+                      ["beige", isEn ? "Warm beige" : "暖米色"],
+                      ["dark", isEn ? "Dark" : "深色"],
+                      ["purple", isEn ? "Deep purple" : "深紫色"],
+                      ["green", isEn ? "Deep green" : "深绿色"],
+                    ].map(([themeId, label]) => (
+                      <span className={`is-${themeId}`} key={themeId}>
+                        <i><b /><b /><b /></i>
+                        <small>{label}</small>
+                      </span>
+                    ))}
+                  </div>
+                  <div className="onboarding-theme-sync-note">
+                    <Check size={14} />
+                    <span>{isEn ? "Office formula editors inherit the same theme" : "Word 和 PowerPoint 公式编辑窗口会自动继承主题"}</span>
+                  </div>
                 </div>
               </div>
             )}

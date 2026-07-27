@@ -52,6 +52,11 @@ struct HealthResponse {
 }
 
 #[derive(Serialize)]
+struct ThemeResponse {
+    theme: String,
+}
+
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PreparedPowerPointCommit {
     session: OfficeFormulaSession,
@@ -95,7 +100,11 @@ fn scale_powerpoint_formula_size(width_px: f64, height_px: f64) -> Result<(f64, 
     Ok((natural_width * scale, natural_height * scale))
 }
 
-fn inject_install_token(html: &str, token: &str) -> Result<String, StatusCode> {
+fn inject_install_token(
+    html: &str,
+    token: &str,
+    theme: &str,
+) -> Result<String, StatusCode> {
     let marker = "</head>";
     let index = html.find(marker).ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
     let native_powerpoint_commit = if cfg!(target_os = "macos") {
@@ -104,7 +113,7 @@ fn inject_install_token(html: &str, token: &str) -> Result<String, StatusCode> {
         "false"
     };
     let meta = format!(
-        "<meta name=\"visualtex-install-token\" content=\"{token}\" />\n<meta name=\"visualtex-native-powerpoint-commit\" content=\"{native_powerpoint_commit}\" />\n"
+        "<meta name=\"visualtex-install-token\" content=\"{token}\" />\n<meta name=\"visualtex-native-powerpoint-commit\" content=\"{native_powerpoint_commit}\" />\n<meta name=\"visualtex-theme\" content=\"{theme}\" />\n"
     );
     Ok(format!("{}{}{}", &html[..index], meta, &html[index..]))
 }
@@ -113,12 +122,13 @@ async fn read_office_html(
     ui_root: &Path,
     relative: &str,
     token: &str,
+    theme: &str,
 ) -> Result<Html<String>, StatusCode> {
     let path = ui_root.join(relative);
     let html = tokio::fs::read_to_string(&path)
         .await
         .map_err(|_| StatusCode::NOT_FOUND)?;
-    inject_install_token(&html, token).map(Html)
+    inject_install_token(&html, token, theme).map(Html)
 }
 
 async fn health(State(context): State<ServerContext>) -> Json<HealthResponse> {
@@ -150,12 +160,20 @@ async fn dialog(
         .await
         .map_err(|_| StatusCode::NOT_FOUND)?;
     let _ = query.runtime;
+    let theme = context.companion.current_theme();
     read_office_html(
         &context.companion.paths.ui_root,
         "dialog/index.html",
         &context.companion.install_token,
+        &theme,
     )
     .await
+}
+
+async fn api_theme(State(context): State<ServerContext>) -> Json<ThemeResponse> {
+    Json(ThemeResponse {
+        theme: context.companion.current_theme(),
+    })
 }
 
 async fn api_status(
@@ -1426,6 +1444,7 @@ pub(crate) fn build_router(companion: OfficeCompanionState) -> Router {
     let ui_root = companion.paths.ui_root.clone();
     let api = Router::new()
         .route("/status", get(api_status))
+        .route("/theme", get(api_theme))
         .route("/platform/status", get(get_office_platform_status))
         .route("/app/reveal", post(reveal_desktop_app))
         .route(

@@ -32,12 +32,19 @@ import { latexToMathMl, latexToSvg } from "../../export/latexToSvg";
 import {
   closeOfficeSessionWindow,
   getOfficeSession,
+  getOfficeTheme,
   saveOfficeSessionKeepalive,
   type OfficeExportResult,
   type OfficeHost,
 } from "../api/sessionClient";
 import { useOfficeSession } from "./useOfficeSession";
 import { messageOfficeParent } from "./dialogMessages";
+import {
+  applyDocumentTheme,
+  normalizeSynchronizedTheme,
+  readSynchronizedTheme,
+  subscribeSynchronizedTheme,
+} from "../../themeSync";
 import {
   DEFAULT_OCR_MODEL,
   OCR_MODELS,
@@ -166,11 +173,56 @@ export function OfficeDialogApp() {
   const lines = useEditorStore((state) => state.lines);
   const activeLineId = useEditorStore((state) => state.activeLineId);
   const language = useEditorStore((state) => state.language);
+  const theme = useEditorStore((state) => state.theme);
+  const setTheme = useEditorStore((state) => state.setTheme);
   const latexCodeFormat = useEditorStore((state) => state.latexCodeFormat);
   const addHistory = useEditorStore((state) => state.addHistory);
   const historyState = useHistorySnapshot();
   const isEn = language === "en";
   const latex = joinFormulaLines(lines);
+
+  useEffect(() => {
+    let disposed = false;
+    const applyTheme = (nextThemeValue: unknown) => {
+      const nextTheme = normalizeSynchronizedTheme(nextThemeValue);
+      applyDocumentTheme(nextTheme);
+      if (useEditorStore.getState().theme !== nextTheme) {
+        setTheme(nextTheme);
+      }
+    };
+    const syncFromCompanion = async () => {
+      try {
+        const status = await getOfficeTheme();
+        if (!disposed) applyTheme(status.theme);
+      } catch {
+        // Keep the last applied theme while the companion is restarting.
+      }
+    };
+
+    applyTheme(readSynchronizedTheme());
+    const unsubscribeBrowser = subscribeSynchronizedTheme(applyTheme);
+    void syncFromCompanion();
+    const interval = window.setInterval(() => void syncFromCompanion(), 500);
+    const handleFocus = () => void syncFromCompanion();
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") void syncFromCompanion();
+    };
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      disposed = true;
+      unsubscribeBrowser();
+      window.clearInterval(interval);
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [setTheme]);
+
+  useEffect(() => {
+    applyDocumentTheme(theme);
+  }, [theme]);
+
   const selectedOcrModel =
     OCR_MODELS.find((item) => item.id === ocrModel) ??
     OCR_MODELS.find((item) => item.id === DEFAULT_OCR_MODEL)!;
