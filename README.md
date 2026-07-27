@@ -13,23 +13,34 @@
 
 # 中文
 
+<div align="center">
+  <p><strong>VisualTeX QQ 交流群：<code>1045801770</code></strong></p>
+  <p>欢迎交流使用问题、功能建议、Office 插件与项目开发。</p>
+  <img src="apps/macos/public/qq-group-card.svg" width="360" alt="VisualTeX QQ 交流群 1045801770" />
+</div>
+
 VisualTeX 是一款面向数学、物理、工程与科研写作的桌面公式编辑器。它提供结构化可视化输入、LaTeX 源码编辑、本地图片公式识别，以及 Word 和 PowerPoint 原生公式工作流。
 
 ## 实际界面
 
-以下均为 VisualTeX 的真实运行截图，不是设计稿或模拟图。
+以下均为 VisualTeX 的真实运行截图，不是设计稿或模拟图。第一行展示蓝白主题主界面与布局、功能设置，第二行展示三套主题配色。
 
-### 浅色模式
-
-<p align="center">
-  <img src="docs/images/visualtex-light-mode.png" width="920" alt="VisualTeX 浅色模式" />
-</p>
-
-### 深色模式
+### 蓝白主界面与功能布局
 
 <p align="center">
-  <img src="docs/images/visualtex-dark-mode.png" width="920" alt="VisualTeX 深色模式" />
+  <img src="docs/images/visualtex-readme-1.webp" width="45%" alt="VisualTeX 蓝白主题经典布局主界面" />
+  <img src="docs/images/visualtex-readme-2.webp" width="45%" alt="VisualTeX 布局切换与功能设置界面" />
 </p>
+<p align="center"><sub>蓝白主题经典布局 · 布局切换、操作逻辑与导出功能</sub></p>
+
+### 多主题界面
+
+<p align="center">
+  <img src="docs/images/visualtex-readme-3.webp" width="30%" alt="VisualTeX 暖米色主题" />
+  <img src="docs/images/visualtex-readme-4.webp" width="30%" alt="VisualTeX 深紫色主题" />
+  <img src="docs/images/visualtex-readme-5.webp" width="30%" alt="VisualTeX 深绿色主题" />
+</p>
+<p align="center"><sub>暖米色主题 · 深紫色主题 · 深绿色主题</sub></p>
 
 ## 主要功能
 
@@ -37,10 +48,12 @@ VisualTeX 是一款面向数学、物理、工程与科研写作的桌面公式�
 
 - 结构化输入分式、根式、积分、求和、极限、上下标、希腊字母、集合与关系符号；
 - 支持多公式行、1×1 至 10×10 矩阵、定界符和基于选区的结构插入；
-- “操作逻辑”可以分别控制上下标、重音和字体命令的自动跳出，以及不同类型的命令候选框；
-- `mathbb`、`mathbf`、`mathcal` 等字体命令支持单字符自动跳出，也支持连续输入后按 Enter 确认；
+- 支持标准布局与经典布局；经典布局将公式工具和 LaTeX 源码停靠在底部，并可随时折叠；
+- “操作逻辑”可开关常用数学输入自动转义：`alpha` 输入希腊字母，`>=` 输入大于等于号，`pp`、`ss`、`mm`、`dd`、`eq` 分别输入加号、减号、乘号、除号和等号；关闭后所有无反斜杠快捷转义均停用，同时 `xx` 始终保留为普通变量；
+- 可分别控制上下标、重音和字体命令的自动跳出，以及不同类型的命令候选框；
+- `mathbb`、`mathbf`、`mathcal` 等字体命令通过反斜杠或工具栏输入，支持单字符自动跳出，也支持连续输入后按 Enter 确认；
 - 文档级撤销与重做会恢复公式内容、活动行、光标和选区；
-- 支持公式缩放、浅色/深色主题、中文/英文界面、本地历史和 JSON 文档。
+- 支持公式缩放、蓝白浅色、暖米色、深色、深紫色和深绿色主题，以及中文/英文界面、本地历史和 JSON 文档。
 
 ### LaTeX 源码
 
@@ -142,19 +155,24 @@ VisualTeX is a desktop formula editor for mathematics, physics, engineering, and
 
 ## Real application renders
 
-The following images are real VisualTeX runtime captures, not mockups.
+The following images are real VisualTeX runtime captures, not mockups. The first row shows the blue-and-white main workspace and layout or feature settings; the second row shows three additional colour themes.
 
-### Light mode
-
-<p align="center">
-  <img src="docs/images/visualtex-light-mode.png" width="920" alt="VisualTeX light mode" />
-</p>
-
-### Dark mode
+### Main workspace and controls
 
 <p align="center">
-  <img src="docs/images/visualtex-dark-mode.png" width="920" alt="VisualTeX dark mode" />
+  <img src="docs/images/visualtex-readme-1.webp" width="45%" alt="VisualTeX blue-and-white classic workspace" />
+  <img src="docs/images/visualtex-readme-2.webp" width="45%" alt="VisualTeX layout and feature settings" />
 </p>
+<p align="center"><sub>Blue-and-white classic workspace · Layout, input-behaviour, and export controls</sub></p>
+
+### Colour themes
+
+<p align="center">
+  <img src="docs/images/visualtex-readme-3.webp" width="30%" alt="VisualTeX warm beige theme" />
+  <img src="docs/images/visualtex-readme-4.webp" width="30%" alt="VisualTeX deep purple theme" />
+  <img src="docs/images/visualtex-readme-5.webp" width="30%" alt="VisualTeX deep green theme" />
+</p>
+<p align="center"><sub>Warm beige · Deep purple · Deep green</sub></p>
 
 ## Core features
 
@@ -162,10 +180,12 @@ The following images are real VisualTeX runtime captures, not mockups.
 
 - Structured fractions, roots, integrals, sums, limits, scripts, Greek letters, sets, and relations;
 - Multiple formula rows, 1×1 to 10×10 matrices, delimiters, and selection-aware structure insertion;
-- Input behavior controls for automatic exits from scripts, accents, and font commands, plus separate command-suggestion panels;
-- Font wrappers such as `mathbb`, `mathbf`, and `mathcal` can exit after one character or accept multiple characters and confirm with Enter;
+- Standard and classic workspace layouts; the classic layout docks formula tools and LaTeX source at the bottom and can be collapsed;
+- Optional plain-text conversion: `alpha` inserts a Greek letter, `>=` inserts greater-than-or-equal, and `pp`, `ss`, `mm`, `dd`, and `eq` insert plus, minus, multiplication, division, and equals; disabling it turns off every no-backslash shortcut, while `xx` always remains ordinary variable input;
+- Independent controls for automatic exits from scripts, accents, and font commands, plus separate command-suggestion panels;
+- Font wrappers such as `mathbb`, `mathbf`, and `mathcal` are entered with a backslash or toolbar button and can exit after one character or accept multiple characters and confirm with Enter;
 - Document-level undo and redo with active-row, caret, and selection restoration;
-- Formula zoom, light and dark themes, Chinese and English UI, local history, and JSON documents.
+- Formula zoom, blue-and-white light, warm beige, dark, deep purple, and deep green themes, Chinese and English UI, local history, and JSON documents.
 
 ### LaTeX source
 
@@ -252,15 +272,3 @@ npm run tauri:build
 ```
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the repository design.
-
----
-
-## VisualTeX 交流与反馈
-
-对 VisualTeX 的使用、开发或改进感兴趣，欢迎加入 QQ 交流群。
-
-**QQ群号：`1045801770`**
-
-<p align="center">
-  <img src="apps/macos/public/qq-group-card.svg" width="360" alt="VisualTeX QQ 交流群 1045801770" />
-</p>
