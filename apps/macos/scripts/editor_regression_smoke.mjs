@@ -1214,6 +1214,45 @@ async function main() {
       await evaluate(`document.querySelector(".onboarding-actions .primary-button").click()`);
       await sleep(100);
     }
+    const onboardingHotkeysTilesStep = await evaluate(`(() => ({
+      progressCount: document.querySelectorAll(".onboarding-progress > span").length,
+      visible: Boolean(document.querySelector(".onboarding-hotkeys-tiles-demo")),
+      title: document.querySelector("#onboarding-title")?.textContent ?? "",
+      hotkeyCopy: document.querySelector(".onboarding-hotkey-guide")?.textContent ?? "",
+      tileCopy: document.querySelector(".onboarding-custom-tile-guide")?.textContent ?? "",
+    }))()`);
+    if (
+      onboardingHotkeysTilesStep.progressCount < 9 ||
+      !onboardingHotkeysTilesStep.visible ||
+      !onboardingHotkeysTilesStep.title.includes("快捷") ||
+      !onboardingHotkeysTilesStep.hotkeyCopy.includes("右键") ||
+      !onboardingHotkeysTilesStep.tileCopy.includes("分区")
+    ) {
+      throw new Error(`The onboarding hotkeys and tiles step is incomplete: ${JSON.stringify(onboardingHotkeysTilesStep)}`);
+    }
+
+    await evaluate(`document.querySelector(".onboarding-actions .primary-button").click()`);
+    await sleep(100);
+    const onboardingLayoutsThemesStep = await evaluate(`(() => ({
+      visible: Boolean(document.querySelector(".onboarding-layout-theme-demo")),
+      title: document.querySelector("#onboarding-title")?.textContent ?? "",
+      layouts: document.querySelector(".onboarding-layout-choice-list")?.textContent ?? "",
+      themeCount: document.querySelectorAll(".onboarding-theme-swatches > span").length,
+      officeCopy: document.querySelector(".onboarding-theme-sync-note")?.textContent ?? "",
+    }))()`);
+    if (
+      !onboardingLayoutsThemesStep.visible ||
+      !onboardingLayoutsThemesStep.title.includes("布局") ||
+      !onboardingLayoutsThemesStep.layouts.includes("标准布局") ||
+      !onboardingLayoutsThemesStep.layouts.includes("经典布局") ||
+      onboardingLayoutsThemesStep.themeCount !== 5 ||
+      !onboardingLayoutsThemesStep.officeCopy.includes("Office")
+    ) {
+      throw new Error(`The onboarding layouts and themes step is incomplete: ${JSON.stringify(onboardingLayoutsThemesStep)}`);
+    }
+
+    await evaluate(`document.querySelector(".onboarding-actions .primary-button").click()`);
+    await sleep(100);
     const onboardingFormatStep = await evaluate(`(() => ({
       progressCount: document.querySelectorAll(".onboarding-progress > span").length,
       visible: Boolean(document.querySelector(".onboarding-code-format-demo")),
@@ -1221,7 +1260,7 @@ async function main() {
       source: document.querySelector(".onboarding-code-format-demo pre")?.textContent ?? "",
     }))()`);
     if (
-      onboardingFormatStep.progressCount < 7 ||
+      onboardingFormatStep.progressCount < 9 ||
       !onboardingFormatStep.visible ||
       !onboardingFormatStep.title.includes("LaTeX") ||
       !onboardingFormatStep.source.includes("\\begin{align*}")
@@ -1253,6 +1292,8 @@ async function main() {
       chineseIdeographicCommaValue,
       arrowUpLineState,
       arrowDownLineState,
+      onboardingHotkeysTilesStep,
+      onboardingLayoutsThemesStep,
       onboardingFormatStep,
     }, null, 2));
     console.log("Editor regression smoke test passed");

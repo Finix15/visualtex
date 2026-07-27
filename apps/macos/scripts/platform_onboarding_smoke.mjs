@@ -22,12 +22,18 @@ assert.equal(shouldOpenOnboardingInitially(true, false), false);
 
 const macSteps = tutorialSteps("cn", "macos");
 const macIds = macSteps.map((step) => step.id);
+assert(macIds.includes("hotkeys-tiles"));
+assert(macIds.includes("layouts-themes"));
 assert(macIds.includes("export"));
 assert(macIds.includes("input-behavior"));
 assert(macIds.includes("mac-word-plugin"));
 assert(macIds.includes("mac-powerpoint-load"));
 assert(macIds.includes("mac-powerpoint-use"));
 assert(!macIds.includes("windows-office-manage"));
+assert(macSteps.find((step) => step.id === "hotkeys-tiles")?.description.includes("快捷键"));
+assert(macSteps.find((step) => step.id === "hotkeys-tiles")?.description.includes("分区"));
+assert(macSteps.find((step) => step.id === "layouts-themes")?.description.includes("经典布局"));
+assert(macSteps.find((step) => step.id === "layouts-themes")?.description.includes("Office"));
 assert(macSteps.find((step) => step.id === "export")?.description.includes("Markdown"));
 assert(macSteps.find((step) => step.id === "input-behavior")?.description.includes("Enter"));
 assert(macSteps.find((step) => step.id === "mac-word-plugin")?.description.includes("OMML"));

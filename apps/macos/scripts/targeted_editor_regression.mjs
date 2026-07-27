@@ -1007,6 +1007,7 @@ async function main() {
           activeLineId: lines[0].id,
           sourceOpen: false,
           latexCodeFormat: "raw",
+          theme: "dark",
         };
         localStorage.setItem(storageKey, JSON.stringify(persisted));
         location.reload();
@@ -1083,6 +1084,9 @@ async function main() {
           editorAfterSourceScroll: editorScroll.scrollTop,
           sourceAfterEditorScroll,
           sourceAfterOwnScroll: sourceScroller.scrollTop,
+          syntaxColors: [...document.querySelectorAll(".source-panel .cm-line span")]
+            .map((node) => getComputedStyle(node).color)
+            .filter((color, index, colors) => colors.indexOf(color) === index),
           pageScrollTop: document.scrollingElement?.scrollTop ?? 0,
           pageScrollHeight: document.scrollingElement?.scrollHeight ?? 0,
           pageClientHeight: document.scrollingElement?.clientHeight ?? 0,
@@ -1104,6 +1108,7 @@ async function main() {
         expanded.editorAfterOwnScroll <= 0 ||
         expanded.sourceAfterEditorScroll !== 0 ||
         expanded.sourceAfterOwnScroll <= 0 ||
+        !expanded.syntaxColors.includes("rgb(169, 221, 248)") ||
         expanded.editorAfterSourceScroll !== expanded.editorAfterOwnScroll ||
         boundaryGap < 14 ||
         boundaryGap > 18 ||
@@ -4460,15 +4465,23 @@ async function main() {
     }
 
     if (scenario === "export") {
+      const exportLatexLines = [
+        String.raw`\begin{pmatrix}a&b\\c&d\end{pmatrix}`,
+        String.raw`\frac{a}{b}+x^2`,
+        String.raw`\int_0^1 x^2\,\mathrm{d}x`,
+      ];
       await evaluate(`(() => {
         const storageKey = "visualtex-editor";
         const persisted = JSON.parse(localStorage.getItem(storageKey) || "{}");
-        const line = { id: crypto.randomUUID(), latex: "\\\\frac{a}{b}+x^2" };
+        const lines = ${JSON.stringify(exportLatexLines)}.map((latex) => ({
+          id: crypto.randomUUID(),
+          latex,
+        }));
         persisted.state = {
           ...(persisted.state || {}),
           title: "Export Test",
-          lines: [line],
-          activeLineId: line.id,
+          lines,
+          activeLineId: lines[0].id,
         };
         localStorage.setItem(storageKey, JSON.stringify(persisted));
         location.reload();
@@ -4476,10 +4489,11 @@ async function main() {
       await waitForEvaluation(`(() => ({
         ready:
           document.querySelector(".document-title-area input")?.value === "Export Test" &&
-          document.querySelector("math-field")?.value?.includes("\\\\frac"),
+          document.querySelectorAll("math-field").length === 3 &&
+          [...document.querySelectorAll("math-field")].some((field) => field.value?.includes("\\\\frac")),
         title: document.querySelector(".document-title-area input")?.value ?? "",
-        value: document.querySelector("math-field")?.value ?? "",
-      }))()`, "formula document prepared for export");
+        values: [...document.querySelectorAll("math-field")].map((field) => field.value ?? ""),
+      }))()`, "multi-row formula document prepared for export");
 
       await evaluate(`(() => {
         window.__visualtexCapturedExports = [];
@@ -4519,7 +4533,9 @@ async function main() {
           ready:
             item.filename.endsWith(".md") &&
             text.includes("Export Test") &&
-            text.includes("\\\\frac{a}{b}+x^2"),
+            text.includes("\\\\begin{pmatrix}") &&
+            text.includes("\\\\frac{a}{b}+x^2") &&
+            text.includes("\\\\int_0^1"),
           filename: item.filename,
           bytes: new TextEncoder().encode(text).length,
           text,
@@ -4531,13 +4547,21 @@ async function main() {
         const item = window.__visualtexCapturedExports?.[1];
         if (!item) return { ready: false };
         const text = await fetch(item.href).then((response) => response.text());
+        const opening = text.match(/^<svg\\b[^>]*\\bwidth="([^"]+)"[^>]*\\bheight="([^"]+)"/);
+        const width = Number.parseFloat(opening?.[1] ?? "NaN");
+        const height = Number.parseFloat(opening?.[2] ?? "NaN");
         return {
           ready:
             item.filename.endsWith(".svg") &&
             text.startsWith("<svg") &&
-            !text.includes("<foreignObject"),
+            !text.includes("<foreignObject") &&
+            Number.isFinite(width) &&
+            Number.isFinite(height) &&
+            height > width,
           filename: item.filename,
           bytes: new TextEncoder().encode(text).length,
+          width,
+          height,
         };
       })()`, "self-contained SVG Blob content");
 
@@ -4549,14 +4573,20 @@ async function main() {
           await fetch(item.href).then((response) => response.arrayBuffer()),
         );
         const expected = [137, 80, 78, 71, 13, 10, 26, 10];
+        const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        const width = bytes.length >= 24 ? view.getUint32(16) : 0;
+        const height = bytes.length >= 24 ? view.getUint32(20) : 0;
         return {
           ready:
             item.filename.endsWith(".png") &&
             bytes.length > expected.length &&
-            expected.every((value, index) => bytes[index] === value),
+            expected.every((value, index) => bytes[index] === value) &&
+            height > width,
           filename: item.filename,
           bytes: bytes.length,
           signature: [...bytes.slice(0, 8)],
+          width,
+          height,
         };
       })()`, "valid PNG Blob content", 10000);
 
