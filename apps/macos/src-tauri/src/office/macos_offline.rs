@@ -24,6 +24,7 @@ const REQUEST_FILE: &str = "request.json";
 const DISPATCH_FILE: &str = "dispatch.txt";
 const RESULT_PNG_FILE: &str = "formula.png";
 const RESULT_SVG_FILE: &str = "formula.svg";
+const RESULT_WORD_SVG_DOCX_FILE: &str = "formula-svg.docx";
 const WORD_POINTER_FILE: &str = "word-active-session.txt";
 const POWERPOINT_POINTER_FILE: &str = "powerpoint-active-session.txt";
 const WORD_RUNTIME_SUFFIX: &str =
@@ -38,6 +39,13 @@ const MAX_OMML_BYTES: usize = 4 * 1024 * 1024;
 const MAX_IDENTITY_CHARS: usize = 2048;
 const MAX_SHAPE_NAME_CHARS: usize = 128;
 const MAX_WORD_WIDTH_PT: f64 = 500.0;
+const WORD_REFERENCE_FONT_SIZE_PT: f64 = 14.0;
+const MIN_WORD_FONT_SIZE_PT: f64 = 1.0;
+const MAX_WORD_FONT_SIZE_PT: f64 = 512.0;
+const POWERPOINT_REFERENCE_FONT_SIZE_PT: f64 = 14.0;
+const DEFAULT_POWERPOINT_FONT_SIZE_PT: f64 = 18.0;
+const MIN_POWERPOINT_FONT_SIZE_PT: f64 = 1.0;
+const MAX_POWERPOINT_FONT_SIZE_PT: f64 = 512.0;
 static WORD_DISPATCH_LOCK: Mutex<()> = Mutex::new(());
 static POWERPOINT_DISPATCH_LOCK: Mutex<()> = Mutex::new(());
 
@@ -54,6 +62,12 @@ struct MacOfflinePowerPointRequest {
     height: f64,
     rotation: f64,
     z_order: u32,
+    #[serde(default)]
+    font_size_pt: Option<f64>,
+    #[serde(default)]
+    reference_width_pt: Option<f64>,
+    #[serde(default)]
+    reference_height_pt: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -72,7 +86,35 @@ struct MacOfflineSessionRequest {
     source_object_id: Option<String>,
     encoded_metadata: Option<String>,
     pending_marker: Option<String>,
+    #[serde(default)]
+    font_size_pt: Option<f64>,
+    #[serde(default)]
+    reference_width_pt: Option<f64>,
+    #[serde(default)]
+    reference_height_pt: Option<f64>,
     power_point: Option<MacOfflinePowerPointRequest>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct WordGeometry {
+    width: f64,
+    height: f64,
+    baseline: i32,
+    font_size_pt: f64,
+    reference_width_pt: f64,
+    reference_height_pt: f64,
+    reference_baseline_pt: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PowerPointGeometry {
+    left: f64,
+    top: f64,
+    width: f64,
+    height: f64,
+    font_size_pt: f64,
+    reference_width_pt: f64,
+    reference_height_pt: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -144,6 +186,10 @@ fn result_svg_path(host: OfficeHost, session_id: &str) -> Result<PathBuf, String
     Ok(session_directory(host, session_id)?.join(RESULT_SVG_FILE))
 }
 
+fn result_word_svg_docx_path(session_id: &str) -> Result<PathBuf, String> {
+    Ok(session_directory(OfficeHost::Word, session_id)?.join(RESULT_WORD_SVG_DOCX_FILE))
+}
+
 fn native_word_document_path(formula_id: &str) -> Result<PathBuf, String> {
     validate_uuid(formula_id, "Formula id")?;
     let directory = runtime_root(OfficeHost::Word)?.join("NativeDocuments");
@@ -159,6 +205,7 @@ fn cleanup_session_files_at(directory: &Path) -> Result<(), String> {
         DISPATCH_FILE,
         RESULT_PNG_FILE,
         RESULT_SVG_FILE,
+        RESULT_WORD_SVG_DOCX_FILE,
         "formula.docx",
     ] {
         let path = directory.join(name);
@@ -258,6 +305,29 @@ fn validate_request(request: &MacOfflineSessionRequest, session_id: &str) -> Res
             return Err("Offline Office metadata envelope is invalid".to_string());
         }
     }
+    for (value, label) in [
+        (request.font_size_pt, "fontSizePt"),
+        (request.reference_width_pt, "referenceWidthPt"),
+        (request.reference_height_pt, "referenceHeightPt"),
+    ] {
+        if let Some(value) = value {
+            if !value.is_finite() || value <= 0.0 {
+                return Err(format!("Offline Office {label} must be a positive finite number"));
+            }
+        }
+    }
+    if let Some(font_size) = request.font_size_pt {
+        if !(MIN_WORD_FONT_SIZE_PT..=MAX_WORD_FONT_SIZE_PT).contains(&font_size) {
+            return Err("Offline Office Word fontSizePt is outside the supported range".to_string());
+        }
+    }
+    if request.host != "word"
+        && (request.font_size_pt.is_some()
+            || request.reference_width_pt.is_some()
+            || request.reference_height_pt.is_some())
+    {
+        return Err("PowerPoint requests must not contain Word font-size metadata".to_string());
+    }
 
     match (request.host.as_str(), request.power_point.as_ref()) {
         ("word", None) => {}
@@ -288,6 +358,29 @@ fn validate_request(request: &MacOfflineSessionRequest, session_id: &str) -> Res
             }
             if powerpoint.width <= 0.0 || powerpoint.height <= 0.0 {
                 return Err("PowerPoint formula geometry must have positive dimensions".to_string());
+            }
+            for (value, label) in [
+                (powerpoint.font_size_pt, "fontSizePt"),
+                (powerpoint.reference_width_pt, "referenceWidthPt"),
+                (powerpoint.reference_height_pt, "referenceHeightPt"),
+            ] {
+                if let Some(value) = value {
+                    if !value.is_finite() || value <= 0.0 {
+                        return Err(format!(
+                            "PowerPoint formula {label} must be a positive finite number"
+                        ));
+                    }
+                }
+            }
+            if let Some(font_size) = powerpoint.font_size_pt {
+                if !(MIN_POWERPOINT_FONT_SIZE_PT..=MAX_POWERPOINT_FONT_SIZE_PT)
+                    .contains(&font_size)
+                {
+                    return Err(
+                        "PowerPoint formula fontSizePt is outside the supported range"
+                            .to_string(),
+                    );
+                }
             }
         }
         _ => unreachable!(),
@@ -375,6 +468,30 @@ fn validate_metadata(metadata: &VisualTeXFormulaMetadata) -> Result<(), String> 
     }
     if !matches!(metadata.display_mode.as_str(), "inline" | "block") {
         return Err("VisualTeX metadata displayMode is invalid".to_string());
+    }
+    for (value, label) in [
+        (metadata.render_width_px, "renderWidthPx"),
+        (metadata.render_height_px, "renderHeightPx"),
+        (metadata.reference_width_pt, "referenceWidthPt"),
+        (metadata.reference_height_pt, "referenceHeightPt"),
+    ] {
+        if let Some(value) = value {
+            if !value.is_finite() || value <= 0.0 {
+                return Err(format!("VisualTeX metadata {label} must be positive and finite"));
+            }
+        }
+    }
+    if let Some(value) = metadata.font_size_pt {
+        if !value.is_finite()
+            || !(MIN_WORD_FONT_SIZE_PT..=MAX_WORD_FONT_SIZE_PT).contains(&value)
+        {
+            return Err("VisualTeX metadata fontSizePt is outside the Office range".to_string());
+        }
+    }
+    if let Some(value) = metadata.reference_baseline_pt {
+        if !value.is_finite() || !(-256.0..=0.0).contains(&value) {
+            return Err("VisualTeX metadata referenceBaselinePt is invalid".to_string());
+        }
     }
     Ok(())
 }
@@ -813,7 +930,53 @@ fn with_dispatch_pointer<T>(
     result
 }
 
-fn calculate_word_geometry(session: &OfficeFormulaSession) -> Result<(f64, f64, i32), String> {
+fn scale_word_reference_geometry(
+    reference_width_pt: f64,
+    reference_height_pt: f64,
+    reference_baseline_pt: f64,
+    font_size_pt: f64,
+) -> Result<WordGeometry, String> {
+    if !reference_width_pt.is_finite()
+        || !reference_height_pt.is_finite()
+        || reference_width_pt <= 0.0
+        || reference_height_pt <= 0.0
+        || !reference_baseline_pt.is_finite()
+        || !(-256.0..=0.0).contains(&reference_baseline_pt)
+        || !font_size_pt.is_finite()
+        || !(MIN_WORD_FONT_SIZE_PT..=MAX_WORD_FONT_SIZE_PT).contains(&font_size_pt)
+    {
+        return Err("Word formula point-size reference geometry is invalid".to_string());
+    }
+    let point_scale = font_size_pt / WORD_REFERENCE_FONT_SIZE_PT;
+    let width = reference_width_pt * point_scale;
+    let height = reference_height_pt * point_scale;
+    if !width.is_finite()
+        || !height.is_finite()
+        || width <= 0.0
+        || height <= 0.0
+        || width > 10_000.0
+        || height > 10_000.0
+    {
+        return Err("Word formula point-size geometry is invalid".to_string());
+    }
+    let baseline = (reference_baseline_pt * point_scale)
+        .round()
+        .clamp(-256.0, 0.0) as i32;
+    Ok(WordGeometry {
+        width,
+        height,
+        baseline,
+        font_size_pt,
+        reference_width_pt,
+        reference_height_pt,
+        reference_baseline_pt,
+    })
+}
+
+fn calculate_word_geometry(
+    request: &MacOfflineSessionRequest,
+    session: &OfficeFormulaSession,
+) -> Result<WordGeometry, String> {
     let export = session
         .export_result
         .as_ref()
@@ -825,27 +988,55 @@ fn calculate_word_geometry(session: &OfficeFormulaSession) -> Result<(f64, f64, 
     {
         return Err("Word formula export has invalid dimensions".to_string());
     }
+
+    // VisualTeX renders Word images at a stable 14 pt reference size. The
+    // document-facing font size is then a pure geometric scale, so Word's
+    // native point-size box can drive an InlineShape exactly like an OMath.
     let natural_width = export.width * 0.75;
     let natural_height = export.height * 0.75;
-    let scale = f64::min(1.0, MAX_WORD_WIDTH_PT / natural_width);
-    let width = natural_width * scale;
-    let height = natural_height * scale;
-    let baseline = export
+    let reference_scale = f64::min(1.0, MAX_WORD_WIDTH_PT / natural_width);
+    let reference_width_pt = natural_width * reference_scale;
+    let reference_height_pt = natural_height * reference_scale;
+    let font_size_pt = request
+        .font_size_pt
+        .filter(|value| {
+            value.is_finite()
+                && *value >= MIN_WORD_FONT_SIZE_PT
+                && *value <= MAX_WORD_FONT_SIZE_PT
+        })
+        .or_else(|| {
+            session
+                .original_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.font_size_pt)
+                .filter(|value| {
+                    value.is_finite()
+                        && *value >= MIN_WORD_FONT_SIZE_PT
+                        && *value <= MAX_WORD_FONT_SIZE_PT
+                })
+        })
+        .unwrap_or(WORD_REFERENCE_FONT_SIZE_PT);
+    let reference_baseline_pt = export
         .baseline
         .filter(|value| value.is_finite() && *value >= 0.0 && *value <= export.height)
         .map(|value| {
             let descent_ratio = (export.height - value) / export.height;
-            -(height * descent_ratio).round().max(0.0) as i32
+            -(reference_height_pt * descent_ratio).round().max(0.0)
         })
-        .unwrap_or(0)
-        .clamp(-256, 0);
-    Ok((width, height, baseline))
+        .unwrap_or(0.0)
+        .clamp(-256.0, 0.0);
+    scale_word_reference_geometry(
+        reference_width_pt,
+        reference_height_pt,
+        reference_baseline_pt,
+        font_size_pt,
+    )
 }
 
 fn calculate_powerpoint_geometry(
     request: &MacOfflinePowerPointRequest,
     session: &OfficeFormulaSession,
-) -> Result<(f64, f64, f64, f64), String> {
+) -> Result<PowerPointGeometry, String> {
     let export = session
         .export_result
         .as_ref()
@@ -857,15 +1048,69 @@ fn calculate_powerpoint_geometry(
     {
         return Err("PowerPoint formula export has invalid dimensions".to_string());
     }
-    let height_ratio = session
-        .original_metadata
-        .as_ref()
-        .and_then(|metadata| metadata.render_height_px)
+
+    // MathJax exports at a stable 14 pt reference size. The imported SVG keeps
+    // its vector paths, so a PowerPoint point size is represented by uniformly
+    // scaling the natural SVG bounds rather than rasterizing or stretching it.
+    let reference_width_pt = export.width * 0.75;
+    let reference_height_pt = export.height * 0.75;
+    if !reference_width_pt.is_finite()
+        || !reference_height_pt.is_finite()
+        || reference_width_pt <= 0.0
+        || reference_height_pt <= 0.0
+    {
+        return Err("PowerPoint SVG reference geometry is invalid".to_string());
+    }
+
+    let original = session.original_metadata.as_ref();
+    let previous_reference_height = request
+        .reference_height_pt
         .filter(|value| value.is_finite() && *value > 0.0)
-        .map(|previous| export.height / previous)
-        .unwrap_or(1.0);
-    let target_height = request.height * height_ratio;
-    let target_width = target_height * (export.width / export.height);
+        .or_else(|| {
+            original
+                .and_then(|metadata| metadata.reference_height_pt)
+                .filter(|value| value.is_finite() && *value > 0.0)
+        })
+        .or_else(|| {
+            original
+                .and_then(|metadata| metadata.render_height_px)
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .map(|value| value * 0.75)
+        });
+
+    let declared_font_size = request
+        .font_size_pt
+        .filter(|value| {
+            value.is_finite()
+                && *value >= MIN_POWERPOINT_FONT_SIZE_PT
+                && *value <= MAX_POWERPOINT_FONT_SIZE_PT
+        })
+        .or_else(|| {
+            original
+                .and_then(|metadata| metadata.font_size_pt)
+                .filter(|value| {
+                    value.is_finite()
+                        && *value >= MIN_POWERPOINT_FONT_SIZE_PT
+                        && *value <= MAX_POWERPOINT_FONT_SIZE_PT
+                })
+        });
+
+    // The actual selected shape height wins when a user resized an existing SVG
+    // manually. This converts that physical height back to an equivalent point
+    // size and prevents the next edit from jumping to a stale stored value.
+    let observed_font_size = previous_reference_height
+        .map(|height| request.height / height * POWERPOINT_REFERENCE_FONT_SIZE_PT)
+        .filter(|value| {
+            value.is_finite()
+                && *value >= MIN_POWERPOINT_FONT_SIZE_PT
+                && *value <= MAX_POWERPOINT_FONT_SIZE_PT
+        });
+    let font_size_pt = observed_font_size
+        .or(declared_font_size)
+        .unwrap_or(DEFAULT_POWERPOINT_FONT_SIZE_PT);
+    let point_scale = font_size_pt / POWERPOINT_REFERENCE_FONT_SIZE_PT;
+    let target_width = reference_width_pt * point_scale;
+    let target_height = reference_height_pt * point_scale;
     let center_x = request.left + request.width / 2.0;
     let center_y = request.top + request.height / 2.0;
     let left = center_x - target_width / 2.0;
@@ -878,10 +1123,22 @@ fn calculate_powerpoint_geometry(
     ] {
         validate_finite_geometry(value, label)?;
     }
-    if target_width <= 0.0 || target_height <= 0.0 {
+    if target_width <= 0.0
+        || target_height <= 0.0
+        || target_width > 10_000.0
+        || target_height > 10_000.0
+    {
         return Err("PowerPoint target formula dimensions are invalid".to_string());
     }
-    Ok((left, top, target_width, target_height))
+    Ok(PowerPointGeometry {
+        left,
+        top,
+        width: target_width,
+        height: target_height,
+        font_size_pt,
+        reference_width_pt,
+        reference_height_pt,
+    })
 }
 
 fn materialize_result_png(session: &OfficeFormulaSession) -> Result<PathBuf, String> {
@@ -934,22 +1191,249 @@ fn decode_svg(value: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-fn materialize_powerpoint_svg(session: &OfficeFormulaSession) -> Result<PathBuf, String> {
+fn materialize_result_svg(session: &OfficeFormulaSession) -> Result<PathBuf, String> {
     let export = session
         .export_result
         .as_ref()
-        .ok_or_else(|| "PowerPoint Session has no formula export".to_string())?;
+        .ok_or_else(|| "Office Session has no formula export".to_string())?;
     let svg = decode_svg(&export.svg_base64)?;
-    let path = result_svg_path(OfficeHost::Powerpoint, &session.id)?;
+    let path = result_svg_path(session.host, &session.id)?;
     atomic_write(&path, &svg, 0o600)?;
     Ok(path)
 }
 
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xffff_ffff_u32;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            let mask = 0_u32.wrapping_sub(crc & 1);
+            crc = (crc >> 1) ^ (0xedb8_8320 & mask);
+        }
+    }
+    !crc
+}
+
+fn push_zip_u16(output: &mut Vec<u8>, value: u16) {
+    output.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_zip_u32(output: &mut Vec<u8>, value: u32) {
+    output.extend_from_slice(&value.to_le_bytes());
+}
+
+struct StoredZipEntry {
+    name: Vec<u8>,
+    crc: u32,
+    size: u32,
+    offset: u32,
+}
+
+fn build_stored_zip(entries: &[(&str, &[u8])]) -> Result<Vec<u8>, String> {
+    let entry_count = u16::try_from(entries.len())
+        .map_err(|_| "Word SVG staging package has too many ZIP entries".to_string())?;
+    let mut output = Vec::new();
+    let mut records = Vec::with_capacity(entries.len());
+
+    for (name, contents) in entries {
+        let name_bytes = name.as_bytes();
+        let name_length = u16::try_from(name_bytes.len())
+            .map_err(|_| "Word SVG staging package contains an overlong ZIP path".to_string())?;
+        let size = u32::try_from(contents.len())
+            .map_err(|_| "Word SVG staging package entry is too large".to_string())?;
+        let offset = u32::try_from(output.len())
+            .map_err(|_| "Word SVG staging package is too large".to_string())?;
+        let checksum = crc32(contents);
+
+        push_zip_u32(&mut output, 0x0403_4b50);
+        push_zip_u16(&mut output, 20);
+        push_zip_u16(&mut output, 0x0800);
+        push_zip_u16(&mut output, 0);
+        push_zip_u16(&mut output, 0);
+        push_zip_u16(&mut output, 33);
+        push_zip_u32(&mut output, checksum);
+        push_zip_u32(&mut output, size);
+        push_zip_u32(&mut output, size);
+        push_zip_u16(&mut output, name_length);
+        push_zip_u16(&mut output, 0);
+        output.extend_from_slice(name_bytes);
+        output.extend_from_slice(contents);
+
+        records.push(StoredZipEntry {
+            name: name_bytes.to_vec(),
+            crc: checksum,
+            size,
+            offset,
+        });
+    }
+
+    let central_offset = u32::try_from(output.len())
+        .map_err(|_| "Word SVG staging package is too large".to_string())?;
+    for record in &records {
+        let name_length = u16::try_from(record.name.len())
+            .map_err(|_| "Word SVG staging package contains an overlong ZIP path".to_string())?;
+        push_zip_u32(&mut output, 0x0201_4b50);
+        push_zip_u16(&mut output, 20);
+        push_zip_u16(&mut output, 20);
+        push_zip_u16(&mut output, 0x0800);
+        push_zip_u16(&mut output, 0);
+        push_zip_u16(&mut output, 0);
+        push_zip_u16(&mut output, 33);
+        push_zip_u32(&mut output, record.crc);
+        push_zip_u32(&mut output, record.size);
+        push_zip_u32(&mut output, record.size);
+        push_zip_u16(&mut output, name_length);
+        push_zip_u16(&mut output, 0);
+        push_zip_u16(&mut output, 0);
+        push_zip_u16(&mut output, 0);
+        push_zip_u16(&mut output, 0);
+        push_zip_u32(&mut output, 0);
+        push_zip_u32(&mut output, record.offset);
+        output.extend_from_slice(&record.name);
+    }
+    let central_size = u32::try_from(output.len())
+        .map_err(|_| "Word SVG staging package is too large".to_string())?
+        .checked_sub(central_offset)
+        .ok_or_else(|| "Word SVG staging package central directory is invalid".to_string())?;
+
+    push_zip_u32(&mut output, 0x0605_4b50);
+    push_zip_u16(&mut output, 0);
+    push_zip_u16(&mut output, 0);
+    push_zip_u16(&mut output, entry_count);
+    push_zip_u16(&mut output, entry_count);
+    push_zip_u32(&mut output, central_size);
+    push_zip_u32(&mut output, central_offset);
+    push_zip_u16(&mut output, 0);
+    Ok(output)
+}
+
+fn build_word_svg_docx(
+    svg: &[u8],
+    png: &[u8],
+    width_points: f64,
+    height_points: f64,
+) -> Result<Vec<u8>, String> {
+    let width_emu = (width_points * 12_700.0).round();
+    let height_emu = (height_points * 12_700.0).round();
+    if !width_emu.is_finite()
+        || !height_emu.is_finite()
+        || width_emu <= 0.0
+        || height_emu <= 0.0
+        || width_emu > i64::MAX as f64
+        || height_emu > i64::MAX as f64
+    {
+        return Err("Word SVG staging package dimensions are invalid".to_string());
+    }
+    let width_emu = width_emu as i64;
+    let height_emu = height_emu as i64;
+
+    let content_types = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="png" ContentType="image/png"/>
+  <Default Extension="svg" ContentType="image/svg+xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>"#;
+    let package_relationships = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>"#;
+    let document_relationships = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdPng" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/formula.png"/>
+  <Relationship Id="rIdSvg" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/formula.svg"/>
+</Relationships>"#;
+    let document = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:asvg="http://schemas.microsoft.com/office/drawing/2016/SVG/main">
+  <w:body>
+    <w:p>
+      <w:r>
+        <w:drawing>
+          <wp:inline distT="0" distB="0" distL="0" distR="0">
+            <wp:extent cx="{width_emu}" cy="{height_emu}"/>
+            <wp:effectExtent l="0" t="0" r="0" b="0"/>
+            <wp:docPr id="1" name="VisualTeX Formula" descr="VisualTeX SVG formula"/>
+            <wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>
+            <a:graphic>
+              <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+                <pic:pic>
+                  <pic:nvPicPr><pic:cNvPr id="0" name="formula.svg"/><pic:cNvPicPr/></pic:nvPicPr>
+                  <pic:blipFill>
+                    <a:blip r:embed="rIdPng" cstate="print">
+                      <a:extLst>
+                        <a:ext uri="{{96DAC541-7B7A-43D3-8B79-37D633B846F1}}"><asvg:svgBlip r:embed="rIdSvg"/></a:ext>
+                      </a:extLst>
+                    </a:blip>
+                    <a:stretch><a:fillRect/></a:stretch>
+                  </pic:blipFill>
+                  <pic:spPr>
+                    <a:xfrm><a:off x="0" y="0"/><a:ext cx="{width_emu}" cy="{height_emu}"/></a:xfrm>
+                    <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+                    <a:noFill/><a:ln><a:noFill/></a:ln>
+                  </pic:spPr>
+                </pic:pic>
+              </a:graphicData>
+            </a:graphic>
+          </wp:inline>
+        </w:drawing>
+      </w:r>
+    </w:p>
+    <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>
+  </w:body>
+</w:document>"#
+    );
+
+    build_stored_zip(&[
+        ("[Content_Types].xml", content_types),
+        ("_rels/.rels", package_relationships),
+        ("word/document.xml", document.as_bytes()),
+        ("word/_rels/document.xml.rels", document_relationships),
+        ("word/media/formula.png", png),
+        ("word/media/formula.svg", svg),
+    ])
+}
+
+fn materialize_word_svg_package(
+    session: &OfficeFormulaSession,
+    geometry: WordGeometry,
+) -> Result<(PathBuf, PathBuf, PathBuf), String> {
+    if session.host != OfficeHost::Word {
+        return Err("Word SVG package materialization requires a Word Session".to_string());
+    }
+    let export = session
+        .export_result
+        .as_ref()
+        .ok_or_else(|| "Word Session has no formula export".to_string())?;
+    let svg = decode_svg(&export.svg_base64)?;
+    let png = export
+        .png_base64
+        .as_deref()
+        .ok_or_else(|| "Word SVG staging requires a PNG compatibility preview".to_string())
+        .and_then(decode_png)?;
+    let svg_path = result_svg_path(OfficeHost::Word, &session.id)?;
+    let png_path = result_png_path(OfficeHost::Word, &session.id)?;
+    let document_path = result_word_svg_docx_path(&session.id)?;
+    atomic_write(&svg_path, &svg, 0o600)?;
+    atomic_write(&png_path, &png, 0o600)?;
+    let package = build_word_svg_docx(&svg, &png, geometry.width, geometry.height)?;
+    atomic_write(&document_path, &package, 0o600)?;
+    Ok((svg_path, document_path, png_path))
+}
+
+fn materialize_powerpoint_svg(session: &OfficeFormulaSession) -> Result<PathBuf, String> {
+    if session.host != OfficeHost::Powerpoint {
+        return Err("PowerPoint SVG materialization requires a PowerPoint Session".to_string());
+    }
+    materialize_result_svg(session)
+}
+
 fn commit_word(
-    state: &OfficeCompanionState,
     request: &MacOfflineSessionRequest,
     session: &OfficeFormulaSession,
     metadata: &str,
+    geometry: WordGeometry,
 ) -> Result<(), String> {
     let export = session
         .export_result
@@ -987,8 +1471,12 @@ fn commit_word(
     let native_document_path = native_word_document_path(&session.formula_id)?;
     atomic_write(&native_document_path, &omml_docx, 0o600)?;
 
-    let image_path = materialize_result_png(session)?;
-    let (width, height, baseline) = calculate_word_geometry(session)?;
+    // Word for Mac exposes SVG in the document format but its VBA
+    // InlineShapes.AddPicture API rejects a raw .svg file. Materialize a tiny
+    // DOCX containing an SVG blip plus a PNG compatibility preview, then let
+    // Word import its already-parsed InlineShape through FormattedText.
+    let (image_path, vector_document_path, fallback_image_path) =
+        materialize_word_svg_package(session, geometry)?;
     let source_marker = request
         .source_object_id
         .clone()
@@ -1019,6 +1507,14 @@ fn commit_word(
             if request.native_equation { "1" } else { "0" }.to_string(),
         ),
         ("imagePath", image_path.to_string_lossy().to_string()),
+        (
+            "vectorDocumentPath",
+            vector_document_path.to_string_lossy().to_string(),
+        ),
+        (
+            "fallbackImagePath",
+            fallback_image_path.to_string_lossy().to_string(),
+        ),
         ("metadata", metadata.to_string()),
         ("latexBase64", latex_base64),
         ("ommlBase64", omml_base64.to_string()),
@@ -1032,9 +1528,22 @@ fn commit_word(
             "sourceDocumentId",
             request.source_document_id.clone().unwrap_or_default(),
         ),
-        ("widthPoints", format!("{width:.6}")),
-        ("heightPoints", format!("{height:.6}")),
-        ("baseline", baseline.to_string()),
+        ("widthPoints", format!("{:.6}", geometry.width)),
+        ("heightPoints", format!("{:.6}", geometry.height)),
+        ("baseline", geometry.baseline.to_string()),
+        ("fontSizePt", format!("{:.6}", geometry.font_size_pt)),
+        (
+            "referenceWidthPt",
+            format!("{:.6}", geometry.reference_width_pt),
+        ),
+        (
+            "referenceHeightPt",
+            format!("{:.6}", geometry.reference_height_pt),
+        ),
+        (
+            "referenceBaselinePt",
+            format!("{:.6}", geometry.reference_baseline_pt),
+        ),
     ])?;
     atomic_write(
         &dispatch_path(OfficeHost::Word, &session.id)?,
@@ -1044,18 +1553,14 @@ fn commit_word(
     with_dispatch_pointer(OfficeHost::Word, &session.id, || {
         run_vba_callback(OfficeHost::Word)
     })?;
-    state
-        .formula_cache
-        .put(&session.formula_id, metadata_from_session(session))
-        .map_err(|error| format!("Formula metadata could not be saved: {error}"))?;
     Ok(())
 }
 
 fn commit_powerpoint(
-    state: &OfficeCompanionState,
     request: &MacOfflineSessionRequest,
     session: &OfficeFormulaSession,
     metadata: &str,
+    geometry: PowerPointGeometry,
 ) -> Result<(), String> {
     let powerpoint = request
         .power_point
@@ -1063,7 +1568,6 @@ fn commit_powerpoint(
         .ok_or_else(|| "PowerPoint request geometry is missing".to_string())?;
     let image_path = materialize_powerpoint_svg(session)?;
     let fallback_image_path = materialize_result_png(session).ok();
-    let (left, top, width, height) = calculate_powerpoint_geometry(powerpoint, session)?;
     let dispatch = dispatch_text(&[
         ("protocolVersion", OFFLINE_PROTOCOL_VERSION.to_string()),
         ("sessionId", session.id.clone()),
@@ -1089,10 +1593,19 @@ fn commit_powerpoint(
         ("sourceMarker", request.encoded_metadata.clone().unwrap_or_default()),
         ("sourceShapeName", powerpoint.shape_name.clone()),
         ("shapeName", format!("VisualTeX_{}", session.formula_id)),
-        ("targetLeft", format!("{left:.6}")),
-        ("targetTop", format!("{top:.6}")),
-        ("targetWidth", format!("{width:.6}")),
-        ("targetHeight", format!("{height:.6}")),
+        ("targetLeft", format!("{:.6}", geometry.left)),
+        ("targetTop", format!("{:.6}", geometry.top)),
+        ("targetWidth", format!("{:.6}", geometry.width)),
+        ("targetHeight", format!("{:.6}", geometry.height)),
+        ("fontSizePt", format!("{:.6}", geometry.font_size_pt)),
+        (
+            "referenceWidthPt",
+            format!("{:.6}", geometry.reference_width_pt),
+        ),
+        (
+            "referenceHeightPt",
+            format!("{:.6}", geometry.reference_height_pt),
+        ),
         ("rotation", format!("{:.6}", powerpoint.rotation)),
         ("zOrder", powerpoint.z_order.to_string()),
         ("presentationIdentity", powerpoint.presentation_identity.clone()),
@@ -1107,10 +1620,6 @@ fn commit_powerpoint(
     with_dispatch_pointer(OfficeHost::Powerpoint, &session.id, || {
         run_vba_callback(OfficeHost::Powerpoint)
     })?;
-    state
-        .formula_cache
-        .put(&session.formula_id, metadata_from_session(session))
-        .map_err(|error| format!("Formula metadata could not be saved: {error}"))?;
     Ok(())
 }
 
@@ -1183,21 +1692,55 @@ fn commit_session_blocking(
     if session.status != OfficeSessionStatus::Committing {
         return Err("Offline Office Session is not ready to commit".to_string());
     }
-    if session.mode == OfficeSessionMode::Edit && !session.dirty {
+    let request = read_request(&session_id)?;
+    let source_is_native_word_equation = session.host == OfficeHost::Word
+        && request
+            .source_object_id
+            .as_deref()
+            .is_some_and(|value| value.starts_with("VT_F_"));
+    let word_format_conversion_requested = session.host == OfficeHost::Word
+        && source_is_native_word_equation != request.native_equation;
+    if session.mode == OfficeSessionMode::Edit
+        && !session.dirty
+        && !word_format_conversion_requested
+    {
         let completed = complete_session(&state, &session_id)?;
         let _ = cleanup_session_files(session.host, &session_id);
         return Ok(completed);
     }
-    let request = read_request(&session_id)?;
-    let metadata = metadata_from_session(&session);
-    let encoded = encode_metadata(&metadata)?;
+    let mut metadata = metadata_from_session(&session);
     let result = match session.host {
-        OfficeHost::Word => commit_word(&state, &request, &session, &encoded),
-        OfficeHost::Powerpoint => commit_powerpoint(&state, &request, &session, &encoded),
+        OfficeHost::Word => {
+            let geometry = calculate_word_geometry(&request, &session)?;
+            metadata.font_size_pt = Some(geometry.font_size_pt);
+            metadata.reference_width_pt = Some(geometry.reference_width_pt);
+            metadata.reference_height_pt = Some(geometry.reference_height_pt);
+            metadata.reference_baseline_pt = Some(geometry.reference_baseline_pt);
+            let encoded = encode_metadata(&metadata)?;
+            commit_word(&request, &session, &encoded, geometry)
+        }
+        OfficeHost::Powerpoint => {
+            let powerpoint = request
+                .power_point
+                .as_ref()
+                .ok_or_else(|| "PowerPoint request geometry is missing".to_string())?;
+            let geometry = calculate_powerpoint_geometry(powerpoint, &session)?;
+            metadata.font_size_pt = Some(geometry.font_size_pt);
+            metadata.reference_width_pt = Some(geometry.reference_width_pt);
+            metadata.reference_height_pt = Some(geometry.reference_height_pt);
+            metadata.reference_baseline_pt = None;
+            let encoded = encode_metadata(&metadata)?;
+            commit_powerpoint(&request, &session, &encoded, geometry)
+        }
     };
     if let Err(error) = result {
         fail_session(&state, &session_id, &error);
         return Err(error);
+    }
+    if let Err(error) = state.formula_cache.put(&session.formula_id, metadata) {
+        let message = format!("Formula metadata could not be saved: {error}");
+        fail_session(&state, &session_id, &message);
+        return Err(message);
     }
     let completed = complete_session(&state, &session_id)?;
     let _ = cleanup_session_files(session.host, &session_id);
@@ -1409,6 +1952,69 @@ mod tests {
     }
 
     #[test]
+    fn word_image_geometry_scales_from_the_14_point_reference() {
+        let small = scale_word_reference_geometry(140.0, 28.0, -4.0, 10.5)
+            .expect("10.5 pt geometry should scale");
+        let large = scale_word_reference_geometry(140.0, 28.0, -4.0, 18.0)
+            .expect("18 pt geometry should scale");
+
+        assert!((small.width - 105.0).abs() < 0.001);
+        assert!((small.height - 21.0).abs() < 0.001);
+        assert_eq!(small.baseline, -3);
+        assert!((large.width - 180.0).abs() < 0.001);
+        assert!((large.height - 36.0).abs() < 0.001);
+        assert_eq!(large.baseline, -5);
+        assert!((large.width / small.width - 18.0 / 10.5).abs() < 0.001);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn word_svg_staging_docx_is_a_valid_ooxml_zip() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8"><path d="M0 0h16v8H0z"/></svg>"#;
+        let png = BASE64_STANDARD
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+            .expect("PNG fixture should decode");
+        let package = build_word_svg_docx(svg, &png, 16.0, 8.0)
+            .expect("Word SVG package should build");
+        assert!(package.starts_with(b"PK\x03\x04"));
+        assert!(package.windows(b"word/media/formula.svg".len()).any(|value| {
+            value == b"word/media/formula.svg"
+        }));
+        assert!(package.windows(b"drawing/2016/SVG/main".len()).any(|value| {
+            value == b"drawing/2016/SVG/main"
+        }));
+
+        let directory = tempfile::tempdir().expect("temporary directory should exist");
+        let path = directory.path().join("formula-svg.docx");
+        fs::write(&path, &package).expect("Word SVG package should be writable");
+        let output = Command::new("/usr/bin/unzip")
+            .args(["-tqq"])
+            .arg(&path)
+            .output()
+            .expect("macOS unzip should validate the package");
+        assert!(
+            output.status.success(),
+            "generated Word SVG DOCX is invalid: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "writes a real Word SVG probe DOCX to VISUALTEX_WORD_SVG_PROBE_PATH"]
+    fn write_word_svg_probe_docx() {
+        let path = std::env::var("VISUALTEX_WORD_SVG_PROBE_PATH")
+            .expect("set VISUALTEX_WORD_SVG_PROBE_PATH to an absolute .docx path");
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="160" height="80" viewBox="0 0 160 80"><rect width="160" height="80" fill="white"/><path d="M20 55L55 20L90 55L125 20" fill="none" stroke="black" stroke-width="8"/></svg>"#;
+        let png = BASE64_STANDARD
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+            .expect("PNG fixture should decode");
+        let package = build_word_svg_docx(svg, &png, 160.0, 80.0)
+            .expect("Word SVG package should build");
+        fs::write(path, package).expect("Word SVG probe should be writable");
+    }
+
+    #[test]
     fn native_word_documents_are_formula_scoped_and_outlive_sessions() {
         let formula_id = "12345678-1234-4234-9234-123456789abc";
         let path = native_word_document_path(formula_id)
@@ -1551,7 +2157,13 @@ mod tests {
         );
         let metadata = encode_metadata(&metadata_from_session(&session))
             .expect("live metadata should encode");
-        commit_powerpoint(&state, &request, &session, &metadata)
+        let powerpoint = request
+            .power_point
+            .as_ref()
+            .expect("live PowerPoint request should contain geometry");
+        let geometry = calculate_powerpoint_geometry(powerpoint, &session)
+            .expect("live PowerPoint geometry should resolve");
+        commit_powerpoint(&request, &session, &metadata, geometry)
             .expect("real PowerPoint PPAM SVG transaction should succeed");
         let svg_path = result_svg_path(OfficeHost::Powerpoint, &session_id)
             .expect("SVG result path should resolve");
@@ -1593,6 +2205,9 @@ mod tests {
                 "visualtex:pending:v1:32345678-1234-4234-9234-123456789abc:12345678-1234-4234-9234-123456789abc"
                     .to_string(),
             ),
+            font_size_pt: Some(10.5),
+            reference_width_pt: Some(60.0),
+            reference_height_pt: Some(15.0),
             power_point: None,
         };
         let json = serde_json::to_vec(&request).expect("UTF-8 request should encode");
@@ -1622,6 +2237,10 @@ mod tests {
             numbered: false,
             render_width_px: Some(50.0),
             render_height_px: Some(20.0),
+            font_size_pt: Some(10.5),
+            reference_width_pt: Some(37.5),
+            reference_height_pt: Some(15.0),
+            reference_baseline_pt: Some(-3.0),
             created_with_version: "1.1.0".to_string(),
             updated_with_version: "1.1.0".to_string(),
             created_at: "unix-ms:1".to_string(),
@@ -1631,6 +2250,10 @@ mod tests {
         let decoded = decode_metadata(&encoded).expect("metadata should decode");
         assert_eq!(decoded.formula_id, metadata.formula_id);
         assert_eq!(decoded.lines[0].latex, "x^2");
+        assert_eq!(decoded.font_size_pt, Some(10.5));
+        assert_eq!(decoded.reference_width_pt, Some(37.5));
+        assert_eq!(decoded.reference_height_pt, Some(15.0));
+        assert_eq!(decoded.reference_baseline_pt, Some(-3.0));
     }
 
     #[test]
@@ -1656,6 +2279,9 @@ mod tests {
             height: 40.0,
             rotation: 0.0,
             z_order: 2,
+            font_size_pt: None,
+            reference_width_pt: None,
+            reference_height_pt: None,
         };
         let session = OfficeFormulaSession {
             id: "32345678-1234-4234-9234-123456789abc".to_string(),
@@ -1694,6 +2320,10 @@ mod tests {
                 numbered: false,
                 render_width_px: Some(120.0),
                 render_height_px: Some(40.0),
+                font_size_pt: None,
+                reference_width_pt: None,
+                reference_height_pt: None,
+                reference_baseline_pt: None,
                 created_with_version: "1".to_string(),
                 updated_with_version: "1".to_string(),
                 created_at: "1".to_string(),
@@ -1708,11 +2338,29 @@ mod tests {
             updated_at: 1,
             expires_at: 2,
         };
-        let (left, top, width, height) =
+        let geometry =
             calculate_powerpoint_geometry(&request, &session).expect("geometry should scale");
-        assert!((height - 50.0).abs() < 0.001);
-        assert!((width - 300.0).abs() < 0.001);
-        assert!((left + width / 2.0 - 160.0).abs() < 0.001);
-        assert!((top + height / 2.0 - 220.0).abs() < 0.001);
+        assert!((geometry.height - 50.0).abs() < 0.001);
+        assert!((geometry.width - 300.0).abs() < 0.001);
+        assert!((geometry.left + geometry.width / 2.0 - 160.0).abs() < 0.001);
+        assert!((geometry.top + geometry.height / 2.0 - 220.0).abs() < 0.001);
+        assert!((geometry.font_size_pt - 18.6666666667).abs() < 0.001);
+        assert!((geometry.reference_width_pt - 225.0).abs() < 0.001);
+        assert!((geometry.reference_height_pt - 37.5).abs() < 0.001);
+
+        let mut create_request = request.clone();
+        create_request.font_size_pt = Some(28.0);
+        create_request.reference_width_pt = None;
+        create_request.reference_height_pt = None;
+        let mut create_session = session.clone();
+        create_session.mode = OfficeSessionMode::Create;
+        create_session.original_metadata = None;
+        let create_geometry = calculate_powerpoint_geometry(&create_request, &create_session)
+            .expect("declared PowerPoint point size should scale the SVG");
+        assert!((create_geometry.font_size_pt - 28.0).abs() < 0.001);
+        assert!((create_geometry.width - 450.0).abs() < 0.001);
+        assert!((create_geometry.height - 75.0).abs() < 0.001);
+        assert!((create_geometry.left + create_geometry.width / 2.0 - 160.0).abs() < 0.001);
+        assert!((create_geometry.top + create_geometry.height / 2.0 - 220.0).abs() < 0.001);
     }
 }

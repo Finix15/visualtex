@@ -22,6 +22,15 @@
                   size="normal"
                   imageMso="Delete"
                   onAction="VTPowerPointRibbonDelete"/>
+          <dropDown id="VisualTeX.Mac.PowerPoint.FormulaFontSize"
+                    label="SVG 公式字号"
+                    sizeString="自定义（512 pt）"
+                    getItemCount="VTPowerPointRibbonGetFormulaFontSizeItemCount"
+                    getItemLabel="VTPowerPointRibbonGetFormulaFontSizeItemLabel"
+                    getSelectedItemIndex="VTPowerPointRibbonGetFormulaFontSizeSelectedIndex"
+                    onAction="VTPowerPointRibbonApplyFormulaFontSizePreset"
+                    screentip="选择 SVG 公式字号"
+                    supertip="先选中一个或多个 VisualTeX SVG 公式，再从中文字号和磅值列表中选择；选择后立即应用，并保持中心、旋转和层级不变。"/>
           <button id="VisualTeX.Mac.PowerPoint.Open"
                   label="打开 VisualTeX"
                   size="normal"

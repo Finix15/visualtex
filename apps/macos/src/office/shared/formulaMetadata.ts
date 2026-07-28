@@ -15,6 +15,13 @@ export interface VisualTeXFormulaMetadata {
    * when a formula is replaced with a longer or taller expression. */
   renderWidthPx?: number;
   renderHeightPx?: number;
+  /** Office point size used to scale Word images or PowerPoint SVG formulas. */
+  fontSizePt?: number;
+  /** Vector/image dimensions at VisualTeX's 14 pt reference size. */
+  referenceWidthPt?: number;
+  referenceHeightPt?: number;
+  /** Word inline baseline at the 14 pt reference size; omitted for PowerPoint. */
+  referenceBaselinePt?: number;
   createdWithVersion: string;
   updatedWithVersion: string;
   createdAt: string;
@@ -30,6 +37,10 @@ export interface CreateFormulaMetadataInput {
   numbered?: boolean;
   renderWidthPx?: number;
   renderHeightPx?: number;
+  fontSizePt?: number;
+  referenceWidthPt?: number;
+  referenceHeightPt?: number;
+  referenceBaselinePt?: number;
   appVersion?: string;
   original?: VisualTeXFormulaMetadata | null;
 }
@@ -112,6 +123,23 @@ export function isVisualTeXFormulaMetadata(
       (typeof candidate.renderHeightPx === "number" &&
         Number.isFinite(candidate.renderHeightPx) &&
         candidate.renderHeightPx > 0)) &&
+    (candidate.fontSizePt === undefined ||
+      (typeof candidate.fontSizePt === "number" &&
+        Number.isFinite(candidate.fontSizePt) &&
+        candidate.fontSizePt > 0)) &&
+    (candidate.referenceWidthPt === undefined ||
+      (typeof candidate.referenceWidthPt === "number" &&
+        Number.isFinite(candidate.referenceWidthPt) &&
+        candidate.referenceWidthPt > 0)) &&
+    (candidate.referenceHeightPt === undefined ||
+      (typeof candidate.referenceHeightPt === "number" &&
+        Number.isFinite(candidate.referenceHeightPt) &&
+        candidate.referenceHeightPt > 0)) &&
+    (candidate.referenceBaselinePt === undefined ||
+      (typeof candidate.referenceBaselinePt === "number" &&
+        Number.isFinite(candidate.referenceBaselinePt) &&
+        candidate.referenceBaselinePt <= 0 &&
+        candidate.referenceBaselinePt >= -256)) &&
     typeof candidate.createdWithVersion === "string" &&
     typeof candidate.updatedWithVersion === "string" &&
     typeof candidate.createdAt === "string" &&
@@ -128,6 +156,10 @@ export function createFormulaMetadata({
   numbered = false,
   renderWidthPx,
   renderHeightPx,
+  fontSizePt,
+  referenceWidthPt,
+  referenceHeightPt,
+  referenceBaselinePt,
   appVersion = CURRENT_VISUALTEX_VERSION,
   original = null,
 }: CreateFormulaMetadataInput): VisualTeXFormulaMetadata {
@@ -146,6 +178,25 @@ export function createFormulaMetadata({
     renderHeightPx && Number.isFinite(renderHeightPx) && renderHeightPx > 0
       ? renderHeightPx
       : original?.renderHeightPx;
+  const resolvedFontSize =
+    fontSizePt && Number.isFinite(fontSizePt) && fontSizePt > 0
+      ? fontSizePt
+      : original?.fontSizePt;
+  const resolvedReferenceWidth =
+    referenceWidthPt && Number.isFinite(referenceWidthPt) && referenceWidthPt > 0
+      ? referenceWidthPt
+      : original?.referenceWidthPt;
+  const resolvedReferenceHeight =
+    referenceHeightPt && Number.isFinite(referenceHeightPt) && referenceHeightPt > 0
+      ? referenceHeightPt
+      : original?.referenceHeightPt;
+  const resolvedReferenceBaseline =
+    referenceBaselinePt !== undefined &&
+    Number.isFinite(referenceBaselinePt) &&
+    referenceBaselinePt <= 0 &&
+    referenceBaselinePt >= -256
+      ? referenceBaselinePt
+      : original?.referenceBaselinePt;
   return {
     schema: VISUALTEX_FORMULA_SCHEMA,
     schemaVersion: VISUALTEX_FORMULA_SCHEMA_VERSION,
@@ -158,6 +209,12 @@ export function createFormulaMetadata({
     numbered,
     ...(resolvedRenderWidth ? { renderWidthPx: resolvedRenderWidth } : {}),
     ...(resolvedRenderHeight ? { renderHeightPx: resolvedRenderHeight } : {}),
+    ...(resolvedFontSize ? { fontSizePt: resolvedFontSize } : {}),
+    ...(resolvedReferenceWidth ? { referenceWidthPt: resolvedReferenceWidth } : {}),
+    ...(resolvedReferenceHeight ? { referenceHeightPt: resolvedReferenceHeight } : {}),
+    ...(resolvedReferenceBaseline !== undefined
+      ? { referenceBaselinePt: resolvedReferenceBaseline }
+      : {}),
     createdWithVersion: original?.createdWithVersion ?? appVersion,
     updatedWithVersion: appVersion,
     createdAt: original?.createdAt ?? now,

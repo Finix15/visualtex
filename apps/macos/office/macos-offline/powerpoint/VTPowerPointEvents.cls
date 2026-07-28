@@ -12,6 +12,13 @@ Option Explicit
 Public WithEvents App As PowerPoint.Application
 Attribute App.VB_VarHelpID = -1
 
+Private Sub App_WindowSelectionChange(ByVal Sel As PowerPoint.Selection)
+    On Error Resume Next
+    If Sel Is Nothing Then Exit Sub
+    VisualTeX_SynchronizeSelectedFormulaSize Sel
+    On Error GoTo 0
+End Sub
+
 Private Sub App_WindowBeforeDoubleClick(ByVal Sel As PowerPoint.Selection, Cancel As Boolean)
     Dim selectedShape As PowerPoint.Shape
 

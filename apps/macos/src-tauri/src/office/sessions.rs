@@ -110,6 +110,14 @@ pub struct VisualTeXFormulaMetadata {
     pub render_width_px: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub render_height_px: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_size_pt: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_width_pt: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_height_pt: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_baseline_pt: Option<f64>,
     pub created_with_version: String,
     pub updated_with_version: String,
     pub created_at: String,
@@ -868,6 +876,10 @@ mod tests {
             numbered: false,
             render_width_px: None,
             render_height_px: None,
+            font_size_pt: None,
+            reference_width_pt: None,
+            reference_height_pt: None,
+            reference_baseline_pt: None,
             created_with_version: "1.0.6".to_string(),
             updated_with_version: "1.0.6".to_string(),
             created_at: "2026-07-12T00:00:00Z".to_string(),

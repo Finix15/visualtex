@@ -55,7 +55,8 @@ inspectAddin("VisualTeX.dotm", "word/vbaProject.bin", [
   "App_WindowBeforeDoubleClick",
   "App_WindowSelectionChange",
   "VisualTeX_StabilizeImageEquationNumberSelection",
-  "word-image-number-deterministic-assertion-20260723-r39",
+  "word-svg-baseline-number-font-20260728-r50",
+  "VTWordRibbonApplyImageFontSizePreset",
 ]);
 inspectAddin("VisualTeX.ppam", "ppt/vbaProject.bin", [
   packageVersion,
@@ -63,6 +64,9 @@ inspectAddin("VisualTeX.ppam", "ppt/vbaProject.bin", [
   "VTPowerPointEvents",
   "Auto_Open",
   "App_WindowBeforeDoubleClick",
+  "App_WindowSelectionChange",
+  "VTPowerPointRibbonApplyFormulaFontSizePreset",
+  "powerpoint-svg-font-size-dropdown-unicode-20260727-r3",
 ]);
 
 process.stdout.write("VisualTeX compiled macOS Office add-ins: PASS\n");

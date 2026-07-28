@@ -69,6 +69,7 @@ const powerpointAdapter = read("office/macos-offline/powerpoint/VTPowerPointAdap
 const powerpointEvents = read("office/macos-offline/powerpoint/VTPowerPointEvents.cls");
 const protocol = read("office/macos-offline/shared/VTProtocol.bas");
 const officePaths = read("office/macos-offline/shared/VTOfficePaths.bas");
+const metadata = read("office/macos-offline/shared/VTMetadata.bas");
 const launcher = read("office/macos-offline/shared/VTLauncher.bas");
 const wordScript = read("office/macos-offline/word/VisualTeXWord.scpt");
 const powerpointScript = read("office/macos-offline/powerpoint/VisualTeXPowerPoint.scpt");
@@ -98,6 +99,7 @@ for (const callback of [
   "VTWordRibbonNativeDisplay",
   "VTWordRibbonEdit",
   "VTWordRibbonConvertNative",
+  "VTWordRibbonConvertImage",
   "VTWordRibbonNumbering",
   "VTWordRibbonCrossReference",
   "VTWordRibbonOpen",
@@ -116,15 +118,55 @@ expectIncludes(wordRibbon, 'id="VisualTeX.Mac.Word.Tab"', "Word must expose a de
 expectIncludes(wordRibbon, 'label="VisualTeX"', "Word dedicated Ribbon tab must be labelled VisualTeX");
 expectIncludes(wordRibbon, 'insertAfterMso="TabInsert"', "Word VisualTeX tab must be placed after Insert");
 expectIncludes(wordRibbon, 'onLoad="VTWordRibbonOnLoad"', "Word Ribbon load must initialize the persistent double-click event sink");
+expectIncludes(wordRibbon, '<dropDown id="VisualTeX.Mac.Word.ImageFontSize"', "Word must expose an image-formula point-size drop-down");
+expectIncludes(wordRibbon, 'getItemLabel="VTWordRibbonGetImageFontSizeItemLabel"', "The Word point-size drop-down must show Chinese names with pt values");
+expectIncludes(wordRibbon, 'getSelectedItemIndex="VTWordRibbonGetImageFontSizeSelectedIndex"', "The Word point-size drop-down must report the selected formula size");
+expectIncludes(wordRibbon, 'onAction="VTWordRibbonApplyImageFontSizePreset"', "The Word point-size drop-down must apply its selected preset immediately");
+expect(!wordRibbon.includes('<editBox id="VisualTeX.Mac.Word.ImageFontSize"'), "Word must not require typing an image formula point size");
+expect(wordRibbon.indexOf('id="VisualTeX.Mac.Word.Numbering"') < wordRibbon.indexOf('id="VisualTeX.Mac.Word.ImageFontSize"'), "Word image formula size must appear after Update Equation Numbers");
 expect(!wordRibbon.includes('idMso="TabHome"'), "Word VisualTeX controls must not be injected into Home");
 expectIncludes(powerpointRibbon, 'id="VisualTeX.Mac.PowerPoint.Tab"', "PowerPoint must expose a dedicated VisualTeX Ribbon tab");
 expectIncludes(powerpointRibbon, 'label="VisualTeX"', "PowerPoint dedicated Ribbon tab must be labelled VisualTeX");
 expectIncludes(powerpointRibbon, 'insertAfterMso="TabInsert"', "PowerPoint VisualTeX tab must be placed after Insert");
 expectIncludes(powerpointRibbon, 'onLoad="VTPowerPointRibbonOnLoad"', "PowerPoint Ribbon load must initialize the persistent double-click event sink");
+expectIncludes(powerpointRibbon, '<dropDown id="VisualTeX.Mac.PowerPoint.FormulaFontSize"', "PowerPoint must expose an SVG formula point-size drop-down");
+expectIncludes(powerpointRibbon, 'getItemLabel="VTPowerPointRibbonGetFormulaFontSizeItemLabel"', "The PowerPoint point-size drop-down must show Chinese names with pt values");
+expectIncludes(powerpointRibbon, 'getSelectedItemIndex="VTPowerPointRibbonGetFormulaFontSizeSelectedIndex"', "The PowerPoint point-size drop-down must report the selected SVG formula size");
+expectIncludes(powerpointRibbon, 'onAction="VTPowerPointRibbonApplyFormulaFontSizePreset"', "The PowerPoint point-size drop-down must apply its selected preset immediately");
+expect(!powerpointRibbon.includes('<editBox id="VisualTeX.Mac.PowerPoint.FormulaFontSize"'), "PowerPoint must not require typing an SVG formula point size");
+expect(powerpointRibbon.indexOf('id="VisualTeX.Mac.PowerPoint.Delete"') < powerpointRibbon.indexOf('id="VisualTeX.Mac.PowerPoint.FormulaFontSize"'), "PowerPoint SVG formula size must appear after Delete Selected Formula instead of between the large buttons");
 expect(!powerpointRibbon.includes('idMso="TabHome"'), "PowerPoint VisualTeX controls must not be injected into Home");
+expectIncludes(metadata, "Public Function VTUnicodeText", "Dynamic Office Ribbon Chinese labels must be generated at runtime instead of relying on VBE source-file encoding");
+expectIncludes(metadata, "If codePoint > 32767 Then codePoint = codePoint - 65536", "Dynamic Office Ribbon labels must convert unsigned UTF-16 code units for Mac VBA");
+expectIncludes(metadata, "ChrW(codePoint)", "Dynamic Office Ribbon labels must use Unicode code points");
+expectIncludes(metadata, "VTFormulaFontPresetCount = 20", "The shared point-size list must include the four larger presets");
+for (const marker of [
+  "VTUnicodeText(20843, 21495)",
+  "VTUnicodeText(20116, 21495)",
+  "VTUnicodeText(23567, 22235)",
+  "VTUnicodeText(22235, 21495)",
+  "VTUnicodeText(23567, 20108)",
+  "VTUnicodeText(23567, 19968)",
+  "VTUnicodeText(21021, 21495)",
+  "Case 16: VTFormulaFontPresetSize = 48#",
+  "Case 17: VTFormulaFontPresetSize = 54#",
+  "Case 18: VTFormulaFontPresetSize = 72#",
+  "Case 19: VTFormulaFontPresetSize = 96#",
+]) {
+  expectIncludes(metadata, marker, `The shared Office point-size presets must include ${marker}`);
+}
+expect(!metadata.includes("八号（"), "VBA source must not embed Chinese point-size labels that Mac VBE can mis-encode");
+expectIncludes(metadata, "VTFormulaFontPresetIndex", "Word and PowerPoint must share one point-size preset mapping");
+expectIncludes(metadata, "VTUnicodeText(33258, 23450, 20041)", "A non-preset formula size must remain visible as a Unicode custom pt value");
+expectIncludes(wordAdapter, "VTWordRibbonGetImageFontSizeItemCount", "Word must expose a dynamic point-size drop-down item count callback");
+expectIncludes(wordAdapter, "VTWordRibbonApplyImageFontSizePreset", "Word must apply a selected image point-size preset immediately");
+expectIncludes(wordAdapter, "VTUnicodeText(28151, 21512, 23383, 21495)", "Word must report mixed selected image formula sizes without source-encoding corruption");
+expectIncludes(powerpointAdapter, "VTPowerPointRibbonGetFormulaFontSizeItemCount", "PowerPoint must expose a dynamic point-size drop-down item count callback");
+expectIncludes(powerpointAdapter, "VTPowerPointRibbonApplyFormulaFontSizePreset", "PowerPoint must apply a selected SVG point-size preset immediately");
+expectIncludes(powerpointAdapter, "VTUnicodeText(28151, 21512, 23383, 21495)", "PowerPoint must report mixed selected SVG formula sizes without source-encoding corruption");
 
 expectIncludes(wordAdapter, "Public Sub AutoExec()", "Word template must publish AutoExec health");
-expectIncludes(wordAdapter, '"word-image-number-deterministic-assertion-20260723-r39"', "Word health must identify the reviewed deterministic image-number assertion VBA revision");
+expectIncludes(wordAdapter, '"word-svg-baseline-number-font-20260728-r50"', "Word health must identify the SVG math-baseline and Cambria Math image-number revision");
 expectIncludes(wordAdapter, "VTInitializeWordEvents", "Word AutoExec must initialize its persistent application event sink");
 expectIncludes(wordEvents, "App_WindowBeforeDoubleClick", "Word must use its native application event for double-click editing");
 expectIncludes(wordEvents, "App_WindowSelectionChange", "Word must repair a clicked legacy image-number REF through the native selection-change event");
@@ -144,6 +186,38 @@ expectIncludes(wordAdapter, "Public Sub VTWordRibbonNativeInline", "The visible 
 expectIncludes(wordAdapter, "Public Sub VTWordRibbonNativeDisplay", "The visible OMML display Ribbon button must have a resolvable callback");
 expectIncludes(wordAdapter, "Public Sub VTWordRibbonCrossReference", "The visible Equation-reference Ribbon button must have a resolvable callback");
 expectIncludes(wordAdapter, "nativeEquation", "Word requests must preserve the direct native-equation intent");
+expectIncludes(wordAdapter, "VT_WORD_IMAGE_SCALE_VARIABLE_PREFIX", "Word must persist formula point size and reference image geometry per formula id");
+expectIncludes(wordAdapter, "VTPreferredWordFormulaFontSize(Selection.Range.Duplicate)", "New Word formulas must inherit the current selection point size");
+expectIncludes(wordEvents, "VisualTeX_SynchronizeSelectedImageFormulaSize Sel", "Word selection changes must synchronize the point-size drop-down with image geometry");
+expectIncludes(wordAdapter, 'name:="VisualTeX_WatchSelectedImageFormulaSize"', "Word must run a lightweight selected-image point-size watcher when events are insufficient");
+expectIncludes(wordAdapter, "formulaShape.Range.Font.Size = CSng(requestedFontSizePt)", "The shared scaling path must attempt the native Word Range.Font.Size property");
+expectIncludes(wordAdapter, "formulaShape.Width = CSng(targetWidth)", "Image formula point sizes must map to proportional width");
+expectIncludes(wordAdapter, "formulaShape.Height = CSng(targetHeight)", "Image formula point sizes must map to proportional height");
+expectIncludes(wordAdapter, "formulaShape.Range.Font.Position = 0", "Display image formula resizing must clear any inherited inline baseline raise");
+expectIncludes(wordAdapter, "VTRefreshNumberedImageFormulaFontLayout", "Every numbered image formula resize must refresh number size, mathematical baseline and tab geometry");
+expectIncludes(wordAdapter, "Private Function VTValidatedRoundedNonnegativePosition", "All Word image-number position calculations must share one Double-safe rounding path");
+expect(!wordAdapter.includes("Private Function VTValidatedWordPositionValue"), "The Word regression must not synchronously read and convert transient Font.Position values");
+expectIncludes(wordAdapter, '"The resized image Equation number baseline position"', "Production numbered-image resizing must use the shared SVG-baseline position calculation");
+expect(!wordAdapter.includes("expectedPosition = CLng(Int( _\n        (CDbl(formulaShape.Height) - requestedFontSizePt)"), "Production numbered-image resizing must not duplicate an unchecked CLng position calculation");
+expectIncludes(wordAdapter, 'regressionStage = "resize-numbered-image-to-24"', "The real-host regression must exercise the production 24-point resize path");
+expectIncludes(wordAdapter, "positionAt24 = expectedPositionAt24", "The 24-point regression report must reuse the position already validated by the complete layout assertion");
+expectIncludes(wordAdapter, ".Size = CSng(requestedFontSizePt)", "A numbered image formula must apply the selected point size to its visible number");
+expectIncludes(wordAdapter, "VTConfigureNumberedEquationParagraph paragraphRange", "Every numbered image resize must rebuild the exact centre and right tab stops");
+expectIncludes(wordAdapter, "expectedPosition = VTExpectedStaticImageEquationNumberPosition", "Every numbered image resize must rerun the shared mathematical-baseline algorithm");
+expectIncludes(wordAdapter, "VTCalculateStaticImageEquationNumberPosition = numberPosition", "Field reconciliation must return the validated position without synchronously rereading Font.Position");
+expect(!wordAdapter.includes("appliedPositionValue = CDbl(numberRange.Font.Position)"), "Word must not reread Font.Position immediately after applying the number layout");
+expectIncludes(wordAdapter, 'regressionStage = "record-image-vertical-after-field-refresh"', "The real-host regression must rely on the preceding complete layout assertion after field refresh");
+expectIncludes(wordAdapter, 'regressionStage = "write-success-report"', "The real-host regression must persist PASS before attempting temporary-document cleanup");
+expectIncludes(wordAdapter, 'regressionStage = "cleanup-successful-regression"', "Temporary Word document cleanup must be isolated from the successful regression result");
+expectIncludes(wordAdapter, "On Error Resume Next\n    If Not testDocument Is Nothing Then\n        testDocument.Close SaveChanges:=wdDoNotSaveChanges", "A Word cleanup overflow must not replace an already written PASS result");
+expectIncludes(wordAdapter, "Set candidate = VTAddWordFormulaPicture", "Word must insert formula artwork through the DOCX-staged SVG compatibility helper");
+expectIncludes(wordAdapter, "Set stagingDocument = Documents.Open", "Word must open the generated SVG staging DOCX instead of passing a raw SVG to AddPicture");
+expectIncludes(wordAdapter, "insertionRange.FormattedText = stagingShapeRange.FormattedText", "Word must transfer its parsed SVG InlineShape without clipboard or UI automation");
+expectIncludes(wordAdapter, 'vectorDocumentPath = CStr(dispatch("vectorDocumentPath"))', "Word must require the generated SVG staging DOCX path");
+expectIncludes(wordAdapter, 'fallbackImagePath = CStr(dispatch("fallbackImagePath"))', "Word must retain a required PNG preview only as an emergency compatibility fallback");
+expectIncludes(wordAdapter, "VTProbeInlineShapeRangeFontSizeBehavior", "Word must expose a real-host probe for InlineShape.Range.Font.Size behavior");
+expectIncludes(wordAdapter, "VisualTeX_ConvertSelectedToImageFormula", "Native OMML formulas must support conversion back to an image formula");
+expectIncludes(wordAdapter, "finalFormulaRange.Font.Size = CSng(sourceFontSizePt)", "Direct image-to-OMML conversion must preserve the source point size");
 expectIncludes(wordAdapter, "InlineShapes.AddPicture", "Word formula insertion must create an InlineShape");
 expectIncludes(wordAdapter, "placeholder.Width = 1", "Word pending placeholders must remain a one-pixel transaction target");
 expectIncludes(wordAdapter, "Selection.SetRange Start:=placeholder.Range.End", "Word must move the caret after the pending formula target");
@@ -167,26 +241,45 @@ expectIncludes(wordAdapter, "Set VTEnsureImageEquationNumber = VTInsertEquationN
 expectIncludes(wordAdapter, "VTEnsureNativeEquationArrayNumber(formulaRange, formulaId)", "New numbered OMML formulas must use the native single-paragraph Equation-array path");
 expectIncludes(wordAdapter, "If formulaRange.Information(wdWithInTable) Then", "Existing three-cell formulas must retain an explicit legacy compatibility branch");
 expectIncludes(wordAdapter, "NumRows:=1, NumColumns:=3", "Legacy numbered-table documents must remain readable and repairable");
-expectIncludes(wordAdapter, "Private Function VTCalculateStaticImageEquationNumberPosition", "Static image Equation numbers must use the reviewed deterministic height formula");
+expectIncludes(wordAdapter, "Private Function VTCalculateStaticImageEquationNumberPosition", "Static image Equation numbers must use the reviewed SVG mathematical-baseline formula");
 expectIncludes(wordAdapter, "Private Function VTStaticImageEquationNumberRange", "Image Equation numbers must expose a field-free visible number Range");
 expectIncludes(wordAdapter, "Private Function VTWriteStaticImageEquationNumber", "Image Equation renumbering must rewrite the visible number from the external SEQ result");
 expectIncludes(wordAdapter, 'insertionRange.Text = vbTab & "(" & normalizedNumber & ")"', "Static image-number creation must write the complete visible suffix without a REF field");
 expectIncludes(wordAdapter, "formulaParagraph.Fields.Count <> 0", "Image Equation verification must reject a visible formula paragraph that still contains fields");
 expectIncludes(wordAdapter, '"The refreshed image Equation number is not static."', "The real-host regression must reject a recreated visible image REF after field refresh");
 expect(!wordAdapter.includes(".Locked = True"), "Image Equation numbering must not lock Word fields and trigger runtime error 4605");
-expectIncludes(wordAdapter, "rawPosition = (formulaHeight - CDbl(numberSize)) / 2#", "Image-number alignment must match the reviewed Windows half-height-difference formula");
-expectIncludes(wordAdapter, "numberPosition = CLng(Int(rawPosition + 0.5#))", "Image-number alignment must use deterministic away-from-zero rounding for positive heights");
+expectIncludes(wordAdapter, "rawPosition = -referenceBaselinePt * baselineScale", "Image-number alignment must scale the exported SVG mathematical baseline");
+expectIncludes(wordAdapter, "rawPosition = (formulaHeight - numberSize) / 2#", "Legacy image formulas without baseline metadata must retain the outer-box-centre fallback");
+expectIncludes(wordAdapter, "CLng(Int(rawPosition + 0.5#))", "The shared image-number position helper must use deterministic away-from-zero rounding for positive heights");
 expect(!wordAdapter.includes("nextPosition = currentPosition - CLng(residual)"), "Static image-number alignment must not use the overflow-prone pagination feedback loop");
-expectIncludes(wordAdapter, "formulaCenterY = formulaBaselineY - formulaShape.Height / 2!", "The independent image regression must still verify the rendered visual center");
-expectIncludes(wordAdapter, "numberCenterY = numberBaselineY - numberLineHeight / 2! -", "The independent image regression must compare the visible number center after deterministic alignment");
+expectIncludes(wordAdapter, "VTExpectedStaticImageEquationNumberPosition", "The independent image regression must verify the exported mathematical baseline instead of glyph-box centres");
+expectIncludes(wordAdapter, "VT_WORD_EQUATION_NUMBER_FONT_NAME As String = \"Cambria Math\"", "Static image Equation numbers must use the same Western math font family as native OMML");
+expectIncludes(wordAdapter, ".NameAscii = VT_WORD_EQUATION_NUMBER_FONT_NAME", "Static image Equation number ASCII glyphs must be forced to Cambria Math");
+expectIncludes(wordAdapter, ".NameOther = VT_WORD_EQUATION_NUMBER_FONT_NAME", "Static image Equation number punctuation must be forced to Cambria Math");
+expectIncludes(wordAdapter, "baselineRatio = _\n                        referenceBaselinePt / previousReferenceHeightPt", "Directly resizing a block image must preserve its SVG baseline-to-height ratio");
+expectIncludes(wordAdapter, "referenceBaselinePt = _\n                        referenceHeightPt * baselineRatio", "Manual block-image geometry changes must not overwrite SVG baseline metadata with Range.Font.Position zero");
+expectIncludes(wordAdapter, "VTRefreshNumberedImageFormulaAfterGeometryChange", "Directly resizing a numbered block image must immediately refresh its mathematical baseline and number font");
+expectIncludes(wordAdapter, "If Not VTValidWordFormulaFontSize(actualWordFontSize) Or _", "Direct geometry changes must remain detectable when Mac Word does not persist InlineShape.Range.Font.Size");
 expectIncludes(wordAdapter, "Public Sub VisualTeX_RunWordImageNumberVerticalAlignmentRegression()", "Word must expose the dedicated 54.25 by 46.10 point image-number vertical-alignment regression");
 expectIncludes(wordAdapter, 'regressionStage = "calibrate-before-field-refresh"', "The dedicated image-number regression must measure actual baselines before field refresh");
 expectIncludes(wordAdapter, 'regressionStage = "select-static-visible-number"', "The dedicated image-number regression must select the static visible number and verify that its baseline remains stable");
+expectIncludes(wordAdapter, 'regressionStage = "resize-numbered-image-to-24"', "The real-host Word regression must enlarge a numbered image formula and verify number synchronization");
+expectIncludes(wordAdapter, 'regressionStage = "resize-numbered-image-back-to-10"', "The real-host Word regression must prove that repeated size changes do not accumulate number offsets");
+expectIncludes(wordAdapter, 'regressionStage = "direct-resize-numbered-image"', "The real-host Word regression must directly resize a numbered SVG image and refresh its baseline immediately");
+expectIncludes(wordAdapter, 'regressionStage = "restore-direct-resized-image"', "The real-host Word regression must restore direct image geometry without losing the SVG baseline ratio");
+expectIncludes(wordAdapter, "expectedManualResizePosition <> 18", "The direct-resize regression must require the baseline ratio to produce the expected 18-point number raise");
+expectIncludes(wordAdapter, "Abs(numberSizeAt24 - 24#) > 0.1", "The real-host Word regression must require the visible number to match the selected 24 pt formula size");
+expectIncludes(wordAdapter, 'positionAt24 = expectedPositionAt24', "The real-host Word regression report must reuse the 24 pt vertical centre already verified by the complete layout assertion");
 expectIncludes(wordAdapter, 'regressionStage = "reconcile-image-number-after-field-refresh"', "The dedicated image-number regression must identify failures specifically inside image renumbering after field refresh");
 expectIncludes(wordAdapter, '"positionBefore=" & CStr(positionBefore)', "The dedicated image-number PASS report must record the positive pre-refresh Position");
 expectIncludes(wordAdapter, '"positionAfterSelection=" & _', "The dedicated image-number PASS report must record the Position after selecting the REF result");
-expectIncludes(wordAdapter, '"alignmentFormula=round((imageHeight-fontSize)/2)"', "The dedicated image-number PASS report must record the deterministic Windows height formula");
-expectIncludes(wordAdapter, '"expectedPosition=18"', "The dedicated 46.10-point image fixture must report the deterministic 18-point number raise");
+expectIncludes(wordAdapter, '"alignmentFormula=round(-referenceBaselinePt*imageHeight/"', "The dedicated image-number PASS report must record the SVG mathematical-baseline formula");
+expectIncludes(wordAdapter, '"numberFont=" & VT_WORD_EQUATION_NUMBER_FONT_NAME', "The dedicated image-number PASS report must record Cambria Math numbering");
+expectIncludes(wordAdapter, '"expectedPosition=15"', "The dedicated baseline fixture must report the deterministic 15-point number raise");
+expectIncludes(wordAdapter, "numberSize = CDbl(numberRange.Font.Size)", "The image-number regression must promote Word font sentinels to Double before validation");
+expect(!wordAdapter.includes("positionValue = CDbl(numberRange.Font.Position)"), "The post-refresh image-number regression must not synchronously reread Word Font.Position");
+expectIncludes(wordAdapter, "expectedPosition = VTExpectedStaticImageEquationNumberPosition", "The image-number regression must use the shared SVG-baseline position calculation");
+expectIncludes(wordAdapter, 'stageName & "/" & assertionStage', "Image-number regression failures must identify the exact overflow-safe assertion stage");
 expectIncludes(wordAdapter, "Application.CaptionLabels(wdCaptionEquation)", "Numbered Word formulas must use Word's built-in Equation caption label");
 expectIncludes(wordAdapter, "VT_WORD_SEQUENCE_NUMBER_BOOKMARK_PREFIX", "Numbered Word formulas must Bookmark the native SEQ result separately");
 expectIncludes(wordAdapter, "Type:=wdFieldEmpty", "Numbered Word formulas must create a real localized Equation SEQ field in the formula paragraph");
@@ -219,7 +312,7 @@ expectIncludes(wordAdapter, "VT_WORD_NUMBER_BOOKMARK_PREFIX", "Word must retain 
 expect(!wordAdapter.includes("VisualTeXEquation"), "New Word numbering must not use the legacy VisualTeX-only sequence name");
 expectIncludes(wordAdapter, "Private Sub VTFormatVisibleEquationReference", "Visible Equation number formatting must be centralized and verified");
 expectIncludes(wordAdapter, "VTEquationNumberRaisePoints = 0!", "The temporary legacy image scaffold must remain neutral before static-number replacement");
-expectIncludes(wordAdapter, "numberPosition = VTCalculateStaticImageEquationNumberPosition", "Renumbering must reapply the deterministic image-number height formula after every field refresh");
+expectIncludes(wordAdapter, "numberPosition = VTCalculateStaticImageEquationNumberPosition", "Renumbering must reapply the SVG mathematical-baseline formula after every field refresh");
 expectIncludes(wordAdapter, "VTApplyStaticImageEquationNumberFormatting", "Static image numbering must format the complete ordinary-text parenthesized number as one range");
 expectIncludes(wordAdapter, "VTVisibleEquationReferenceFieldText", "Formula-side numbers must use a non-hyperlinked REF field");
 expectIncludes(wordAdapter, ".KeepTogether = False", "Numbered formula paragraphs must disable the pagination flag that Word displays as a black square");
@@ -596,9 +689,13 @@ expectIncludes(wordAdapter, "sourceDocumentId <> VTWordDocumentIdentity()", "Wor
 expectIncludes(wordAdapter, "Private Function VTWordBookmarkName", "Word pending Bookmarks must use one bounded name generator");
 expectIncludes(wordAdapter, "Len(VTWordBookmarkName) > 40", "Word Bookmark names must be guarded by the host length limit");
 expectIncludes(powerpointAdapter, "Public Sub Auto_Open()", "PowerPoint add-in must publish Auto_Open health");
+expectIncludes(powerpointAdapter, '"powerpoint-svg-font-size-dropdown-unicode-20260727-r3"', "PowerPoint health must identify the reviewed Unicode SVG point-size drop-down VBA revision");
+expectIncludes(powerpointAdapter, "Public Sub VTPowerPointRibbonOnLoad", "PowerPoint Ribbon load must retain its IRibbonUI handle and initialize events");
 expectIncludes(powerpointAdapter, "VisualTeX_DoubleClickEditSelected", "PowerPoint must expose a non-modal native double-click macro entry point");
 expectIncludes(powerpointAdapter, "VTInitializePowerPointEvents", "PowerPoint Auto_Open must initialize its persistent application event sink");
 expectIncludes(powerpointEvents, "App_WindowBeforeDoubleClick", "PowerPoint must use its native application event for double-click editing");
+expectIncludes(powerpointEvents, "App_WindowSelectionChange", "PowerPoint selection changes must synchronize SVG formula point-size state");
+expectIncludes(powerpointEvents, "VisualTeX_SynchronizeSelectedFormulaSize Sel", "PowerPoint selection changes must refresh the selected SVG formula size");
 expectIncludes(powerpointEvents, "Cancel = True", "PowerPoint must suppress the default double-click action for a VisualTeX formula");
 expectIncludes(powerpointEvents, "VisualTeX_EditShape", "PowerPoint double-click editing must preserve the clicked Shape target");
 expectIncludes(powerpointAdapter, "VisualTeXFormulaId", "PowerPoint add-in must persist formulaId tags");
@@ -612,6 +709,14 @@ expectIncludes(powerpointAdapter, "VTRestoreZOrder candidate, targetZOrder + 1",
 expectIncludes(powerpointAdapter, "VisualTeX PowerPoint SVG result is missing", "PowerPoint must require the vector SVG export instead of silently rasterizing formulas");
 expectIncludes(powerpointAdapter, "PowerPoint could not insert the VisualTeX SVG", "PowerPoint must report an explicit vector insertion failure");
 expectIncludes(powerpointAdapter, "fallbackImagePath", "PowerPoint may retain PNG only as a compatibility fallback for Office builds without SVG support");
+expectIncludes(powerpointAdapter, "VT_POWERPOINT_REFERENCE_FONT_SIZE_PT As Double = 14#", "PowerPoint SVG formulas must use a stable 14 pt reference size");
+expectIncludes(powerpointAdapter, "VTPreferredPowerPointFormulaFontSize", "New PowerPoint formulas must inherit a selected text or formula point size");
+expectIncludes(powerpointAdapter, "target.Width = CSng(targetWidth)", "PowerPoint SVG point sizes must map to proportional width");
+expectIncludes(powerpointAdapter, "target.Height = CSng(targetHeight)", "PowerPoint SVG point sizes must map to proportional height");
+expectIncludes(powerpointAdapter, "centerX - targetWidth / 2#", "PowerPoint SVG resizing must preserve the formula center");
+expectIncludes(powerpointAdapter, "VisualTeXFontSizePt", "PowerPoint shapes must persist their formula point size as a durable tag");
+expectIncludes(powerpointAdapter, "VisualTeXReferenceWidthPt", "PowerPoint shapes must persist the 14 pt SVG reference width");
+expectIncludes(powerpointAdapter, "VisualTeXReferenceHeightPt", "PowerPoint shapes must persist the 14 pt SVG reference height");
 expect(!wordAdapter.includes('Format$(Now, "yyyy-mm-dd\\Thh:nn:ss") & "Z"'), "Word health must not label local time as UTC");
 expect(!powerpointAdapter.includes('Format$(Now, "yyyy-mm-dd\\Thh:nn:ss") & "Z"'), "PowerPoint health must not label local time as UTC");
 
@@ -687,9 +792,18 @@ expectIncludes(rustRuntime, "deny_unknown_fields", "Offline request JSON must re
 expectIncludes(rustRuntime, "run_vba_callback", "Tauri runtime must return results through the VBA callback");
 expectIncludes(rustRuntime, 'join("NativeDocuments")', "Tauri must persist native Word staging DOCX files outside ephemeral Session directories");
 expectIncludes(rustRuntime, "atomic_write(&native_document_path, &omml_docx, 0o600)?", "Tauri must materialize each formula's durable native Word staging DOCX before dispatch");
-expectIncludes(rustRuntime, 'const RESULT_SVG_FILE: &str = "formula.svg"', "Native PowerPoint formulas must be materialized as SVG files");
+expectIncludes(rustRuntime, 'const RESULT_SVG_FILE: &str = "formula.svg"', "Native Office formulas must be materialized as SVG files");
+expectIncludes(rustRuntime, 'const RESULT_WORD_SVG_DOCX_FILE: &str = "formula-svg.docx"', "Word must receive SVG through a generated OOXML staging document");
+expectIncludes(rustRuntime, "build_word_svg_docx", "Tauri must package the SVG and PNG preview into a minimal Word document");
+expectIncludes(rustRuntime, 'xmlns:asvg="http://schemas.microsoft.com/office/drawing/2016/SVG/main"', "The Word staging DOCX must use Office SVG blip markup");
+expectIncludes(rustRuntime, '"vectorDocumentPath"', "Word dispatches must carry the generated SVG staging DOCX path");
+expectIncludes(rustRuntime, '"fallbackImagePath"', "Word and PowerPoint dispatches must retain PNG only as a compatibility fallback");
 expectIncludes(rustRuntime, "materialize_powerpoint_svg(session)?", "PowerPoint commits must insert the vector SVG export");
 expectIncludes(rustRuntime, "decode_svg", "PowerPoint SVG exports must be validated before Office receives them");
+expectIncludes(rustRuntime, "POWERPOINT_REFERENCE_FONT_SIZE_PT", "The native runtime must scale PowerPoint SVG geometry from a fixed point-size reference");
+expectIncludes(rustRuntime, "previous_reference_height", "PowerPoint edits must infer the current point size from existing SVG geometry");
+expectIncludes(rustRuntime, '("fontSizePt", format!', "PowerPoint dispatches must carry the resolved point size back to VBA");
+expectIncludes(rustRuntime, "metadata.font_size_pt = Some(geometry.font_size_pt)", "PowerPoint metadata must retain the resolved SVG point size");
 expectIncludes(wordAdapter, 'VTApplicationSupportRoot() & "/NativeDocuments/" & formulaId & ".docx"', "Word image-to-OMML conversion must resolve the same durable formula-scoped staging path");
 expectIncludes(rustRuntime, "hide_main_window(app)?", "Office formula requests must hide the main VisualTeX workspace");
 expectIncludes(rustRuntime, "open_editor_window(app, &session_id)", "Office formula requests must open the dedicated formula editor");
@@ -833,6 +947,12 @@ expectIncludes(
   "Debug builds must not resume the installed Office LaunchAgent",
 );
 expectIncludes(rustRuntime, '("latexBase64", latex_base64)', "Word dispatches must carry a base64url LaTeX payload without changing PowerPoint metadata envelopes");
+expectIncludes(rustRuntime, '("fontSizePt", format!', "Rust must dispatch the target Word formula point size");
+expectIncludes(rustRuntime, '"referenceWidthPt"', "Rust must dispatch the 14 pt reference width");
+expectIncludes(rustRuntime, '"referenceHeightPt"', "Rust must dispatch the 14 pt reference height");
+expectIncludes(rustRuntime, '"referenceBaselinePt"', "Rust must dispatch the 14 pt reference baseline");
+expectIncludes(rustRuntime, "WORD_REFERENCE_FONT_SIZE_PT", "Rust Word geometry must use a stable reference point size");
+expectIncludes(rustRuntime, "source_is_native_word_equation != request.native_equation", "An unchanged edit must still commit when the user requested image/OMML conversion");
 expectIncludes(rustRuntime, "cleanup_session_files_at", "Completed and cancelled Sessions must remove known local request artifacts");
 expectIncludes(rustRuntime, "DirectoryNotEmpty", "Session cleanup must preserve unknown files instead of deleting an entire directory recursively");
 expectIncludes(rustRuntime, "com.microsoft.Word/VisualTeXRuntime", "The desktop runtime must read Word's Application Scripts Session root");
@@ -861,7 +981,9 @@ expectIncludes(installer, "addin_installation_matches", "Installed status must r
 expectIncludes(installer, "powerpoint_script.clone()", "PowerPoint installed status must include its AppleScriptTask resource");
 expectIncludes(installer, 'health.plugin_version.as_deref() == Some(env!("CARGO_PKG_VERSION"))', "Installer must reject stale plug-in health versions");
 expect(!installer.includes("source_revision_matches"), "Runtime health must not reject a current-version add-in only because an optional sourceRevision field is absent");
-expectIncludes(packager, "word-image-number-deterministic-assertion-20260723-r39", "Packaging must reject a Word DOTM that predates coordinate-free deterministic image-number assertions");
+expectIncludes(packager, "word-svg-baseline-number-font-20260728-r50", "Packaging must reject a Word DOTM that lacks SVG-baseline alignment and Cambria Math image numbering");
+expectIncludes(packager, "powerpoint-svg-font-size-dropdown-unicode-20260727-r3", "Packaging must reject a PowerPoint PPAM that predates Unicode-safe point-size labels");
+expectIncludes(installer, "POWERPOINT_VBA_SOURCE_REVISION", "Installer validation must reject a stale PowerPoint PPAM without SVG point-size support");
 expectIncludes(installer, "Library/Application Scripts/com.microsoft.Word", "Installer must use Word's AppleScriptTask directory");
 expectIncludes(installer, "Library/Application Scripts/com.microsoft.Powerpoint", "Installer must use PowerPoint's AppleScriptTask directory");
 expectIncludes(installer, "addins.json", "Installer must require the compiled add-in checksum manifest");

@@ -25,7 +25,10 @@ const LEGACY_WORD_MANIFEST_ID: &str = "d6fcb260-4c37-4f73-a173-cf24674f81f2";
 const LEGACY_POWERPOINT_MANIFEST_ID: &str = "a6d13cf2-54e8-4dfa-a20c-15de864ab3c5";
 const WORD_VBA_ENTRY: &str = "word/vbaProject.bin";
 const POWERPOINT_VBA_ENTRY: &str = "ppt/vbaProject.bin";
-const WORD_VBA_SOURCE_REVISION: &str = "word-image-number-deterministic-assertion-20260723-r39";
+const WORD_VBA_SOURCE_REVISION: &str =
+    "word-svg-baseline-number-font-20260728-r50";
+const POWERPOINT_VBA_SOURCE_REVISION: &str =
+    "powerpoint-svg-font-size-dropdown-unicode-20260727-r3";
 const CUSTOM_UI_ENTRY: &str = "customUI/customUI14.xml";
 const CONTENT_TYPES_ENTRY: &str = "[Content_Types].xml";
 const CONTENT_TYPES_ZIP_PATTERN: &str = "\\[Content_Types\\].xml";
@@ -883,6 +886,7 @@ fn validate_compiled_addin(
             "VTWordEvents",
             "AutoExec",
             "App_WindowBeforeDoubleClick",
+            "VTWordRibbonApplyImageFontSizePreset",
             env!("CARGO_PKG_VERSION"),
             WORD_VBA_SOURCE_REVISION,
         ],
@@ -893,7 +897,10 @@ fn validate_compiled_addin(
             "VTPowerPointEvents",
             "Auto_Open",
             "App_WindowBeforeDoubleClick",
+            "App_WindowSelectionChange",
+            "VTPowerPointRibbonApplyFormulaFontSizePreset",
             env!("CARGO_PKG_VERSION"),
+            POWERPOINT_VBA_SOURCE_REVISION,
         ],
         _ => return Err(format!("Unsupported compiled add-in name {expected_name}")),
     };

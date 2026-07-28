@@ -16,6 +16,8 @@ Private Sub App_WindowSelectionChange(ByVal Sel As Word.Selection)
     On Error Resume Next
     If Sel Is Nothing Or VTWordInternalMutationActive() Then Exit Sub
     VisualTeX_StabilizeImageEquationNumberSelection Sel.Range
+    VisualTeX_SynchronizeSelectedImageFormulaSize Sel
+    VTInvalidateWordImageFontSizeControl
 End Sub
 
 Private Sub App_WindowBeforeDoubleClick(ByVal Sel As Word.Selection, Cancel As Boolean)

@@ -130,11 +130,16 @@ function validateMacroContainer(path, kind, options = {}) {
       packageVersion,
       ...(kind === "Word"
         ? [
-            "word-image-number-deterministic-assertion-20260723-r39",
+            "word-svg-baseline-number-font-20260728-r50",
             "App_WindowSelectionChange",
             "VisualTeX_StabilizeImageEquationNumberSelection",
+            "VTWordRibbonApplyImageFontSizePreset",
           ]
-        : []),
+        : [
+            "powerpoint-svg-font-size-dropdown-unicode-20260727-r3",
+            "App_WindowSelectionChange",
+            "VTPowerPointRibbonApplyFormulaFontSizePreset",
+          ]),
     ];
     const missingMarkers = expectedMarkers.filter(
       (marker) => !containsModuleName(vbaProject, marker),

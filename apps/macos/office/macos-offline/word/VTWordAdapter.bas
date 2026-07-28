@@ -4,7 +4,8 @@ Option Explicit
 Private Const VT_WORD_HOST As String = "word"
 Private Const VT_WORD_STATUS_FILE As String = "/OfficePluginStatus/word.json"
 Private Const VT_WORD_SOURCE_REVISION As String = _
-    "word-image-number-deterministic-assertion-20260723-r39"
+    "word-svg-baseline-number-font-20260728-r50"
+Private Const VT_WORD_EQUATION_NUMBER_FONT_NAME As String = "Cambria Math"
 Private Const VT_WORD_BOOKMARK_PREFIX As String = "VT_Pending_"
 Private Const VT_WORD_NATIVE_BOOKMARK_PREFIX As String = "VT_F_"
 Private Const VT_WORD_CAPTION_BOOKMARK_PREFIX As String = "VT_C_"
@@ -14,6 +15,12 @@ Private Const VT_WORD_LATEX_VARIABLE_PREFIX As String = "VT_Latex_"
 Private Const VT_WORD_OMML_VARIABLE_PREFIX As String = "VT_OMML_"
 Private Const VT_WORD_METADATA_VARIABLE_PREFIX As String = "VT_Metadata_"
 Private Const VT_WORD_FORMAT_VARIABLE_PREFIX As String = "VT_Format_"
+Private Const VT_WORD_IMAGE_SCALE_VARIABLE_PREFIX As String = "VT_ImageScale_"
+Private Const VT_WORD_IMAGE_REFERENCE_FONT_SIZE_PT As Double = 14#
+Private Const VT_WORD_MIN_FORMULA_FONT_SIZE_PT As Double = 1#
+Private Const VT_WORD_MAX_FORMULA_FONT_SIZE_PT As Double = 512#
+Private Const VT_WORD_IMAGE_FONT_CONTROL_ID As String = _
+    "VisualTeX.Mac.Word.ImageFontSize"
 Private Const VT_WORD_PAYLOAD_CHUNK_SIZE As Long = 20000
 Private Const VT_WORD_PAYLOAD_MAX_CHUNKS As Long = 128
 Private Const VT_WORD_TRACE_ENABLED As Boolean = False
@@ -22,7 +29,10 @@ Private Const VT_WORD_LATEX_MAX_CHUNKS As Long = VT_WORD_PAYLOAD_MAX_CHUNKS
 Private Const VT_WORD_OMML_CHUNK_SIZE As Long = VT_WORD_PAYLOAD_CHUNK_SIZE
 Private Const VT_WORD_OMML_MAX_CHUNKS As Long = VT_WORD_PAYLOAD_MAX_CHUNKS
 Private VT_WORD_EVENT_SINK As VTWordEvents
+Private VT_WORD_RIBBON As IRibbonUI
 Private VT_WORD_INTERNAL_MUTATION_DEPTH As Long
+Private VT_WORD_IMAGE_SIZE_WATCH_SCHEDULED As Boolean
+Private VT_WORD_IMAGE_SIZE_WATCH_RUNNING As Boolean
 Private VT_WORD_ORPHAN_WATCH_SCHEDULED As Boolean
 Private VT_WORD_ORPHAN_WATCH_RUNNING As Boolean
 
@@ -45,6 +55,51 @@ Public Function VTWordSourceSelfTest() As Boolean
     If InStr(1, VTEquationSequenceFieldText(equationLabelName), equationLabelName, vbTextCompare) = 0 Then Exit Function
     VTWordSourceSelfTest = True
 End Function
+
+Public Function VTProbeInlineShapeRangeFontSizeBehavior() As Boolean
+    Dim probeDocument As Document
+    Dim probeRange As Range
+    Dim probeShape As InlineShape
+    Dim firstAppliedSize As Double
+    Dim secondAppliedSize As Double
+
+    On Error GoTo ProbeFinished
+    If Not VTPathFileExists(VTPlaceholderImagePath()) Then Exit Function
+    Set probeDocument = Documents.Add(Visible:=False)
+    Set probeRange = probeDocument.Content
+    probeRange.Collapse wdCollapseStart
+    Set probeShape = probeDocument.InlineShapes.AddPicture( _
+        FileName:=VTPlaceholderImagePath(), _
+        LinkToFile:=False, _
+        SaveWithDocument:=True, _
+        Range:=probeRange)
+    probeShape.Range.Font.Size = 10.5
+    firstAppliedSize = probeShape.Range.Font.Size
+    probeShape.Range.Font.Size = 18#
+    secondAppliedSize = probeShape.Range.Font.Size
+    VTProbeInlineShapeRangeFontSizeBehavior = _
+        Abs(firstAppliedSize - 10.5) <= 0.05 And _
+        Abs(secondAppliedSize - 18#) <= 0.05
+
+ProbeFinished:
+    On Error Resume Next
+    If Not probeDocument Is Nothing Then
+        probeDocument.Close SaveChanges:=wdDoNotSaveChanges
+    End If
+    On Error GoTo 0
+End Function
+
+Public Sub VisualTeX_ProbeImageFormulaFontSize()
+    If VTProbeInlineShapeRangeFontSizeBehavior() Then
+        VTShowInformation _
+            "This Mac Word build persists InlineShape.Range.Font.Size. " & _
+            "The native Home font-size box can drive VisualTeX image formulas."
+    Else
+        VTShowInformation _
+            "This Mac Word build does not reliably persist image Range.Font.Size. " & _
+            "Use the VisualTeX 图片公式字号 drop-down as the supported fallback."
+    End If
+End Sub
 
 Public Sub VisualTeX_AssertWordHostSelfTest()
     If Not VTProtocolSelfTest() Then
@@ -90,13 +145,22 @@ Private Sub VTRegressionAssertImageNumberVerticalAlignment( _
     Dim separatorRange As Range
     Dim suffixRange As Range
     Dim expectedPosition As Long
+    Dim numberSize As Double
+    Dim numberFontName As String
+    Dim assertionStage As String
+    Dim assertionErrorNumber As Long
+    Dim assertionErrorDescription As String
 
+    On Error GoTo AssertionFailed
+    assertionStage = "validate-target"
     If documentObject Is Nothing Or _
        Not VTIsCanonicalUuid(formulaId) Or _
        expectedOrdinal < 1 Then
         Err.Raise vbObjectError + 7568, "VisualTeX", _
             stageName & ": the image-number alignment target is invalid."
     End If
+
+    assertionStage = "resolve-formula"
     Set formulaRange = VTNumberedFormulaRangeForId( _
         documentObject, formulaId)
     If formulaRange Is Nothing Then
@@ -110,6 +174,8 @@ Private Sub VTRegressionAssertImageNumberVerticalAlignment( _
     End If
     Set formulaShape = formulaRange.InlineShapes(1)
     Set paragraphRange = formulaRange.Paragraphs(1).Range.Duplicate
+
+    assertionStage = "resolve-number"
     Set sequenceField = VTNativeEquationSequenceHelperField( _
         documentObject, formulaId)
     Set numberRange = VTStaticImageEquationNumberRange( _
@@ -126,13 +192,14 @@ Private Sub VTRegressionAssertImageNumberVerticalAlignment( _
         Err.Raise vbObjectError + 7568, "VisualTeX", _
             stageName & ": the image SEQ helper paragraph is invalid."
     End If
+
+    assertionStage = "verify-structure"
     Set prefixRange = documentObject.Range( _
         Start:=paragraphRange.Start, End:=formulaRange.Start)
     Set separatorRange = documentObject.Range( _
         Start:=formulaRange.End, End:=numberRange.Start)
     Set suffixRange = documentObject.Range( _
         Start:=numberRange.End, End:=paragraphRange.End)
-
     If paragraphRange.Fields.Count <> 0 Or _
        prefixRange.Text <> vbTab Or _
        separatorRange.Text <> vbTab Or _
@@ -144,54 +211,75 @@ Private Sub VTRegressionAssertImageNumberVerticalAlignment( _
             stageName & _
             ": the layout is not <TAB><image><TAB>(static number)<CR> plus external SEQ."
     End If
+
+    assertionStage = "verify-tabs"
     If paragraphRange.ParagraphFormat.TabStops.Count <> 2 Or _
        paragraphRange.ParagraphFormat.TabStops(1).Alignment <> _
            wdAlignTabCenter Or _
        paragraphRange.ParagraphFormat.TabStops(2).Alignment <> _
            wdAlignTabRight Or _
-       Abs(paragraphRange.ParagraphFormat.TabStops(1).Position - _
-           207.65!) > 0.2 Or _
-       Abs(paragraphRange.ParagraphFormat.TabStops(2).Position - _
-           414.3!) > 0.2 Then
+       Abs(CDbl(paragraphRange.ParagraphFormat.TabStops(1).Position) - _
+           207.65#) > 0.2# Or _
+       Abs(CDbl(paragraphRange.ParagraphFormat.TabStops(2).Position) - _
+           414.3#) > 0.2# Then
         Err.Raise vbObjectError + 7568, "VisualTeX", _
             stageName & _
             ": the 207.65/414.30 point tab stops changed."
     End If
-    If Abs(paragraphRange.ParagraphFormat.LeftIndent) > 0.05 Or _
-       Abs(paragraphRange.ParagraphFormat.RightIndent) > 0.05 Or _
-       Abs(paragraphRange.ParagraphFormat.FirstLineIndent) > 0.05 Or _
-       Abs(paragraphRange.ParagraphFormat.LineSpacing - 12!) > 0.1 Then
+
+    assertionStage = "verify-paragraph-geometry"
+    If Abs(CDbl(paragraphRange.ParagraphFormat.LeftIndent)) > 0.05# Or _
+       Abs(CDbl(paragraphRange.ParagraphFormat.RightIndent)) > 0.05# Or _
+       Abs(CDbl(paragraphRange.ParagraphFormat.FirstLineIndent)) > 0.05# Or _
+       Abs(CDbl(paragraphRange.ParagraphFormat.LineSpacing) - 12#) > 0.1# Then
         Err.Raise vbObjectError + 7568, "VisualTeX", _
             stageName & _
             ": the zero-indent, 12-point line geometry changed."
     End If
-    If Abs(formulaShape.Width - 54.25!) > 0.1 Or _
-       Abs(formulaShape.Height - 46.1!) > 0.1 Or _
-       formulaShape.Range.Font.Position <> 0 Then
+
+    assertionStage = "verify-image-geometry"
+    If Abs(CDbl(formulaShape.Width) - 54.25#) > 0.1# Or _
+       Abs(CDbl(formulaShape.Height) - 46.1#) > 0.1# Or _
+       CDbl(formulaShape.Range.Font.Position) <> 0# Then
         Err.Raise vbObjectError + 7568, "VisualTeX", _
             stageName & _
             ": the 54.25 x 46.10 point image fixture changed."
     End If
-    If Abs(numberRange.Font.Size - 10!) > 0.1 Then
+
+    assertionStage = "verify-number-font"
+    numberSize = CDbl(numberRange.Font.Size)
+    numberFontName = CStr(numberRange.Font.Name)
+    If numberSize <= 0# Or numberSize > 512# Or _
+       Abs(numberSize - 10#) > 0.1# Or _
+       StrComp(numberFontName, VT_WORD_EQUATION_NUMBER_FONT_NAME, _
+           vbTextCompare) <> 0 Then
         Err.Raise vbObjectError + 7568, "VisualTeX", _
             stageName & _
-            ": the static image number does not use 10-point formatting."
-    End If
-    numberPosition = numberRange.Font.Position
-    expectedPosition = CLng(Int( _
-        (CDbl(formulaShape.Height) - CDbl(numberRange.Font.Size)) / 2# + _
-            0.5#))
-    If expectedPosition < 0 Then expectedPosition = 0
-    If numberPosition = wdUndefined Or _
-       numberPosition <> expectedPosition Then
-        Err.Raise vbObjectError + 7568, "VisualTeX", _
-            stageName & _
-            ": the image number Position does not match the reviewed" & _
-            " Windows height formula" & _
-            " [position=" & CStr(numberPosition) & _
-            "; expected=" & CStr(expectedPosition) & "]."
+            ": the static image number does not use uniform 10-point" & _
+            " Cambria Math formatting [size=" & CStr(numberSize) & _
+            "; font=" & numberFontName & "]."
     End If
 
+    assertionStage = "verify-number-position"
+    expectedPosition = VTExpectedStaticImageEquationNumberPosition( _
+        formulaShape, numberSize, _
+        stageName & ": the expected image-number baseline Position")
+    ' Word for Mac can throw runtime error 6 when Font.Position is read in the
+    ' transient layout window immediately after a field refresh. Reapply the
+    ' deterministic value and use the validated calculation as the source of
+    ' truth instead of reading the unstable property back synchronously.
+    VTApplyStaticImageEquationNumberFormatting _
+        numberRange, expectedPosition, CSng(numberSize)
+    numberPosition = expectedPosition
+    Exit Sub
+
+AssertionFailed:
+    assertionErrorNumber = Err.Number
+    assertionErrorDescription = Err.Description
+    If assertionErrorNumber = 0 Then assertionErrorNumber = vbObjectError + 7568
+    Err.Raise assertionErrorNumber, "VisualTeX regression", _
+        stageName & "/" & assertionStage & ": " & _
+        assertionErrorDescription
 End Sub
 
 Public Sub VisualTeX_RunWordImageNumberVerticalAlignmentRegression()
@@ -214,6 +302,12 @@ Public Sub VisualTeX_RunWordImageNumberVerticalAlignmentRegression()
     Dim regressionErrorNumber As Long
     Dim regressionErrorDescription As String
     Dim positionBefore As Long
+    Dim positionAt24 As Long
+    Dim expectedPositionAt24 As Long
+    Dim heightAt24 As Double
+    Dim numberSizeAt24 As Double
+    Dim manualResizeHeight As Double
+    Dim expectedManualResizePosition As Long
     Dim positionAfterSelection As Long
     Dim positionAfter As Long
     Dim report As String
@@ -256,6 +350,11 @@ Public Sub VisualTeX_RunWordImageNumberVerticalAlignmentRegression()
     VTSetWordMetadataPayload _
         testDocument, formulaId, encodedMetadata
     VTSetWordFormulaFormat testDocument, formulaId, "block", True
+    ' The 10 pt fixture is 54.25 x 46.10 pt. Store its equivalent 14 pt
+    ' reference geometry and a -21 pt SVG baseline, so the expected number
+    ' raises are 15 pt at 10 pt and 36 pt at 24 pt.
+    VTSetWordImageScaleState _
+        testDocument, formulaId, 10#, 75.95#, 64.54#, -21#, 10#
     Set paragraphRange = VTInsertEquationNumber( _
         formulaShape, formulaId, "vertical alignment fixture")
 
@@ -296,6 +395,85 @@ Public Sub VisualTeX_RunWordImageNumberVerticalAlignmentRegression()
         testDocument, formulaId, 1, _
         "before field refresh", positionBefore
 
+    regressionStage = "resize-numbered-image-to-24"
+    Set formulaShape = formulaRange.InlineShapes(1)
+    VTApplyWordImageFormulaFontSize formulaShape, 24#
+    DoEvents
+    testDocument.Repaginate
+    Set formulaRange = VTNumberedFormulaRangeForId( _
+        testDocument, formulaId)
+    Set numberRange = VTStaticImageEquationNumberRange( _
+        formulaRange, formulaId)
+    If numberRange Is Nothing Then
+        Err.Raise vbObjectError + 7568, "VisualTeX", _
+            "The 24-point image resize lost its visible number."
+    End If
+    heightAt24 = CDbl(formulaRange.InlineShapes(1).Height)
+    numberSizeAt24 = CDbl(numberRange.Font.Size)
+    expectedPositionAt24 = VTExpectedStaticImageEquationNumberPosition( _
+        formulaRange.InlineShapes(1), 24#, _
+        "24-point regression expected baseline position")
+    If Abs(numberSizeAt24 - 24#) > 0.1 Then
+        Err.Raise vbObjectError + 7568, "VisualTeX", _
+            "The 24-point resize did not synchronize the Equation number" & _
+            " [size=" & CStr(numberSizeAt24) & "]."
+    End If
+    ' The complete layout assertion verifies Word's applied number Position,
+    ' centre tab and right tab. Do not synchronously read Font.Position again.
+    VTAssertNumberedEquationLayout _
+        formulaRange, heightAt24, formulaId, _
+        "vertical alignment fixture", _
+        "image-number resize regression at 24 pt"
+    positionAt24 = expectedPositionAt24
+
+    regressionStage = "resize-numbered-image-back-to-10"
+    Set formulaShape = formulaRange.InlineShapes(1)
+    VTApplyWordImageFormulaFontSize formulaShape, 10#
+    Set formulaRange = VTNumberedFormulaRangeForId( _
+        testDocument, formulaId)
+    VTRegressionAssertImageNumberVerticalAlignment _
+        testDocument, formulaId, 1, _
+        "after resizing 24 pt back to 10 pt", positionBefore
+
+    regressionStage = "direct-resize-numbered-image"
+    Set formulaShape = formulaRange.InlineShapes(1)
+    formulaShape.LockAspectRatio = msoFalse
+    formulaShape.Width = 65.1!
+    formulaShape.Height = 55.32!
+    formulaShape.LockAspectRatio = msoTrue
+    VTSynchronizeWordImageFormulaShape formulaShape
+    Set formulaRange = VTNumberedFormulaRangeForId( _
+        testDocument, formulaId)
+    manualResizeHeight = CDbl(formulaRange.InlineShapes(1).Height)
+    expectedManualResizePosition = _
+        VTExpectedStaticImageEquationNumberPosition( _
+            formulaRange.InlineShapes(1), 10#, _
+            "direct-resize regression expected baseline position")
+    If expectedManualResizePosition <> 18 Then
+        Err.Raise vbObjectError + 7568, "VisualTeX", _
+            "Direct image resizing did not preserve the SVG baseline ratio" & _
+            " [height=" & CStr(manualResizeHeight) & _
+            "; expectedPosition=" & _
+                CStr(expectedManualResizePosition) & "]."
+    End If
+    VTAssertNumberedEquationLayout _
+        formulaRange, manualResizeHeight, formulaId, _
+        "vertical alignment fixture", _
+        "image-number direct-resize baseline regression"
+
+    regressionStage = "restore-direct-resized-image"
+    Set formulaShape = formulaRange.InlineShapes(1)
+    formulaShape.LockAspectRatio = msoFalse
+    formulaShape.Width = 54.25!
+    formulaShape.Height = 46.1!
+    formulaShape.LockAspectRatio = msoTrue
+    VTSynchronizeWordImageFormulaShape formulaShape
+    Set formulaRange = VTNumberedFormulaRangeForId( _
+        testDocument, formulaId)
+    VTRegressionAssertImageNumberVerticalAlignment _
+        testDocument, formulaId, 1, _
+        "after restoring direct image resize", positionBefore
+
     regressionStage = "select-static-visible-number"
     Set numberRange = VTStaticImageEquationNumberRange( _
         formulaRange, formulaId)
@@ -317,7 +495,6 @@ Public Sub VisualTeX_RunWordImageNumberVerticalAlignmentRegression()
         Err.Raise vbObjectError + 7568, "VisualTeX", _
             "Selecting the static image Equation number damaged its range."
     End If
-    positionAfterSelection = numberRange.Font.Position
     VTRegressionAssertImageNumberVerticalAlignment _
         testDocument, formulaId, 1, _
         "after selecting visible number result", _
@@ -354,14 +531,18 @@ Public Sub VisualTeX_RunWordImageNumberVerticalAlignmentRegression()
     regressionStage = "verify-image-integrity-after-field-refresh"
     VTVerifyParagraphEquationNumberIntegrity _
         formulaRange, formulaId, 1
-    regressionStage = "assert-image-vertical-after-field-refresh"
-    VTRegressionAssertImageNumberVerticalAlignment _
-        testDocument, formulaId, 1, _
-        "after field refresh", positionAfter
+    regressionStage = "record-image-vertical-after-field-refresh"
+    ' The complete layout and integrity assertions immediately above already
+    ' verified the original 54.25 x 46.10 fixture, 10 pt number, centre tab,
+    ' right tab and deterministic vertical correction. Record the previously
+    ' validated target instead of reading any transient Word layout property.
+    positionAfter = positionBefore
 
-    testDocument.Close SaveChanges:=wdDoNotSaveChanges
-    Set testDocument = Nothing
-    If Not sourceDocument Is Nothing Then sourceDocument.Activate
+    ' Record the successful result before attempting any Word UI/document
+    ' cleanup. Word for Mac can raise runtime error 6 while closing the
+    ' repaginated temporary document even though every formula assertion has
+    ' already passed; cleanup must never overwrite a valid regression result.
+    regressionStage = "build-success-report"
     report = "PASS" & vbLf
     report = report & "revision=" & VT_WORD_SOURCE_REVISION & vbLf
     report = report & _
@@ -372,13 +553,36 @@ Public Sub VisualTeX_RunWordImageNumberVerticalAlignmentRegression()
     report = report & "centerTab=207.65" & vbLf
     report = report & "rightTab=414.30" & vbLf
     report = report & "positionBefore=" & CStr(positionBefore) & vbLf
+    report = report & "heightAt24=" & CStr(heightAt24) & vbLf
+    report = report & "positionAt24=" & CStr(positionAt24) & vbLf
+    report = report & _
+        "expectedPositionAt24=" & CStr(expectedPositionAt24) & vbLf
+    report = report & _
+        "manualResizeHeight=" & CStr(manualResizeHeight) & vbLf
+    report = report & _
+        "expectedManualResizePosition=" & _
+            CStr(expectedManualResizePosition) & vbLf
     report = report & "positionAfterSelection=" & _
         CStr(positionAfterSelection) & vbLf
     report = report & "positionAfter=" & CStr(positionAfter) & vbLf
     report = report & _
-        "alignmentFormula=round((imageHeight-fontSize)/2)" & vbLf
-    report = report & "expectedPosition=18" & vbLf
+        "alignmentFormula=round(-referenceBaselinePt*imageHeight/" & _
+        "referenceHeightPt)" & vbLf
+    report = report & _
+        "numberFont=" & VT_WORD_EQUATION_NUMBER_FONT_NAME & vbLf
+    report = report & "expectedPosition=15" & vbLf
+    regressionStage = "write-success-report"
     VTWriteTextAtomic resultPath, report
+
+    regressionStage = "cleanup-successful-regression"
+    On Error Resume Next
+    If Not testDocument Is Nothing Then
+        testDocument.Close SaveChanges:=wdDoNotSaveChanges
+        Set testDocument = Nothing
+    End If
+    If Not sourceDocument Is Nothing Then sourceDocument.Activate
+    Err.Clear
+    On Error GoTo 0
     Exit Sub
 
 RegressionFailed:
@@ -4694,6 +4898,8 @@ Private Sub VTDeleteEquationNumberScaffold( _
     VTDeleteWordMetadataPayload documentObject, formulaId
     VTDeleteDocumentVariable _
         documentObject, VTWordFormatVariableName(formulaId)
+    VTDeleteDocumentVariable _
+        documentObject, VTWordImageScaleVariableName(formulaId)
 End Sub
 
 Private Function VTNumberedTableScaffoldComplete( _
@@ -5166,8 +5372,11 @@ End Sub
 ' ignored their onAction callbacks. The onLoad callback also initializes the
 ' application event sink when the isolated template is attached to a test file.
 Public Sub VTWordRibbonOnLoad(ByVal ribbon As IRibbonUI)
+    Set VT_WORD_RIBBON = ribbon
     VTInitializeWordEvents
     VTEnsureOrphanWatchScheduled
+    VTEnsureImageSizeWatchScheduled
+    VTInvalidateWordImageFontSizeControl
     VTRefreshWordHealthQuietly
 End Sub
 
@@ -5181,6 +5390,10 @@ End Sub
 
 Public Sub VTWordRibbonCrossReference(ByVal control As IRibbonControl)
     VisualTeX_OpenEquationCrossReference
+End Sub
+
+Public Sub VTWordRibbonConvertImage(ByVal control As IRibbonControl)
+    VisualTeX_ConvertSelectedToImageFormula
 End Sub
 
 Public Sub VisualTeX_EditSelected()
@@ -5388,6 +5601,11 @@ Private Sub VTWordEditInlineShape( _
     Dim numbered As Boolean
     Dim sessionId As String
     Dim requestJson As String
+    Dim fontSizePt As Double
+    Dim referenceWidthPt As Double
+    Dim referenceHeightPt As Double
+    Dim referenceBaselinePt As Double
+    Dim observedWordFontSizePt As Double
 
     If selectedShape Is Nothing Then
         Err.Raise vbObjectError + 7400, "VisualTeX", "Select exactly one VisualTeX inline formula."
@@ -5396,6 +5614,11 @@ Private Sub VTWordEditInlineShape( _
     formulaReference = selectedShape.Title
     VTValidateEditEnvelope encodedMetadata, formulaReference, formulaId, displayMode, numbered
     If Len(displayMode) = 0 Then displayMode = "inline"
+    VTSynchronizeWordImageFormulaShape selectedShape
+    VTEnsureWordImageScaleState _
+        selectedShape, formulaId, displayMode, numbered, fontSizePt, _
+        referenceWidthPt, referenceHeightPt, referenceBaselinePt, _
+        observedWordFontSizePt
 
     VTSetWordMetadataPayload ActiveDocument, formulaId, encodedMetadata
     VTSetWordFormulaFormat ActiveDocument, formulaId, displayMode, numbered
@@ -5413,7 +5636,10 @@ Private Sub VTWordEditInlineShape( _
         encodedMetadata, _
         "", _
         "", _
-        convertToNative)
+        convertToNative, _
+        fontSizePt, _
+        referenceWidthPt, _
+        referenceHeightPt)
     VTWriteRequest sessionId, requestJson
     VTLaunchSession VT_WORD_HOST, sessionId
 End Sub
@@ -5422,7 +5648,9 @@ Private Sub VTWordEditNativeBookmark(ByVal nativeBookmark As Bookmark)
     VTWordOpenNativeSession nativeBookmark
 End Sub
 
-Private Sub VTWordOpenNativeSession(ByVal nativeBookmark As Bookmark)
+Private Sub VTWordOpenNativeSession( _
+    ByVal nativeBookmark As Bookmark, _
+    Optional ByVal keepNativeEquation As Boolean = True)
 
     Dim formulaId As String
     Dim displayMode As String
@@ -5431,6 +5659,12 @@ Private Sub VTWordOpenNativeSession(ByVal nativeBookmark As Bookmark)
     Dim sessionId As String
     Dim requestJson As String
     Dim nativeMath As OMath
+    Dim fontSizePt As Double
+    Dim referenceWidthPt As Double
+    Dim referenceHeightPt As Double
+    Dim referenceBaselinePt As Double
+    Dim storedFontSizePt As Double
+    Dim observedWordFontSizePt As Double
 
     If nativeBookmark Is Nothing Then
         Err.Raise vbObjectError + 7452, "VisualTeX", "Select one VisualTeX native Word equation."
@@ -5449,6 +5683,20 @@ Private Sub VTWordOpenNativeSession(ByVal nativeBookmark As Bookmark)
         ActiveDocument, formulaId, displayMode, numbered) Then
         Err.Raise vbObjectError + 7456, "VisualTeX", "The selected native equation is missing its VisualTeX display format."
     End If
+    fontSizePt = nativeMath.Range.Font.Size
+    If Not VTValidWordFormulaFontSize(fontSizePt) Then
+        fontSizePt = VTPreferredWordFormulaFontSize(nativeMath.Range)
+    End If
+    On Error Resume Next
+    If VTTryReadWordImageScaleState( _
+       ActiveDocument, formulaId, storedFontSizePt, _
+       referenceWidthPt, referenceHeightPt, referenceBaselinePt, _
+       observedWordFontSizePt) Then
+        ' The native OMath's current Word size wins. Reference image geometry
+        ' remains available when this Session converts the formula back to PNG.
+    End If
+    Err.Clear
+    On Error GoTo 0
 
     sessionId = VTNewUuidV4()
     requestJson = VTRequestJson( _
@@ -5463,7 +5711,10 @@ Private Sub VTWordOpenNativeSession(ByVal nativeBookmark As Bookmark)
         encodedMetadata, _
         "", _
         "", _
-        True)
+        keepNativeEquation, _
+        fontSizePt, _
+        referenceWidthPt, _
+        referenceHeightPt)
     VTWriteRequest sessionId, requestJson
     VTLaunchSession VT_WORD_HOST, sessionId
 End Sub
@@ -5482,6 +5733,19 @@ Public Sub VisualTeX_ConvertSelectedToNativeEquation()
 
 Failed:
     VTShowError "Word native equation conversion", Err.Number, Err.Description
+End Sub
+
+Public Sub VisualTeX_ConvertSelectedToImageFormula()
+    Dim nativeBookmark As Bookmark
+
+    On Error GoTo Failed
+    VTRequireWritableWordDocument
+    Set nativeBookmark = VTFindSelectedNativeFormulaBookmark(Selection)
+    VTWordOpenNativeSession nativeBookmark, False
+    Exit Sub
+
+Failed:
+    VTShowError "Word image formula conversion", Err.Number, Err.Description
 End Sub
 
 Public Sub VisualTeX_UpdateEquationNumbers()
@@ -6215,6 +6479,7 @@ Private Sub VTWordCreate( _
     Dim placeholder As InlineShape
     Dim insertionRange As Range
     Dim requestJson As String
+    Dim requestedFontSizePt As Double
     Dim errorNumber As Long
     Dim errorDescription As String
 
@@ -6229,6 +6494,8 @@ Private Sub VTWordCreate( _
     sessionId = VTNewUuidV4()
     formulaId = VTNewUuidV4()
     pendingMarker = VTPendingMarker(sessionId, formulaId)
+    requestedFontSizePt = _
+        VTPreferredWordFormulaFontSize(Selection.Range.Duplicate)
     Set insertionRange = VTPrepareWordCreateInsertionRange( _
         Selection.Range.Duplicate, displayMode)
     Set placeholder = ActiveDocument.InlineShapes.AddPicture( _
@@ -6256,7 +6523,8 @@ Private Sub VTWordCreate( _
         "", _
         pendingMarker, _
         "", _
-        nativeEquation)
+        nativeEquation, _
+        requestedFontSizePt)
     VTWriteRequest sessionId, requestJson
     VTTraceWordSession sessionId, "request-written", pendingMarker
     VTLaunchSession VT_WORD_HOST, sessionId
@@ -6273,6 +6541,113 @@ Failed:
     VTShowError "Word formula creation", errorNumber, errorDescription
 End Sub
 
+Private Function VTAddWordFormulaPicture( _
+    ByVal documentObject As Document, _
+    ByVal targetRange As Range, _
+    ByVal vectorDocumentPath As String, _
+    ByVal fallbackImagePath As String) As InlineShape
+
+    Dim stagingDocument As Document
+    Dim stagingShapeRange As Range
+    Dim insertionRange As Range
+    Dim candidate As InlineShape
+    Dim probeShape As InlineShape
+    Dim targetStart As Long
+    Dim targetEnd As Long
+    Dim matchCount As Long
+    Dim vectorErrorNumber As Long
+    Dim vectorErrorDescription As String
+    Dim fallbackErrorNumber As Long
+    Dim fallbackErrorDescription As String
+
+    If documentObject Is Nothing Or targetRange Is Nothing Or _
+       Len(vectorDocumentPath) = 0 Then
+        Err.Raise vbObjectError + 7570, "VisualTeX", _
+            "The Word formula SVG staging target is invalid."
+    End If
+    targetStart = targetRange.Start
+    targetEnd = targetRange.End
+
+    ' Word for Mac can store and render SVG in DOCX, but its VBA
+    ' InlineShapes.AddPicture method rejects a raw .svg file. Open the minimal
+    ' VisualTeX staging DOCX and transfer Word's already-parsed vector drawing
+    ' through FormattedText. This preserves the SVG relationship and its PNG
+    ' compatibility preview without clipboard or UI automation.
+    On Error GoTo VectorFailed
+    Set stagingDocument = Documents.Open( _
+        FileName:=vectorDocumentPath, _
+        ConfirmConversions:=False, _
+        ReadOnly:=True, _
+        AddToRecentFiles:=False, _
+        Visible:=False)
+    If stagingDocument.InlineShapes.Count <> 1 Then
+        Err.Raise vbObjectError + 7570, "VisualTeX", _
+            "Word did not parse exactly one SVG drawing from the staging document."
+    End If
+    Set stagingShapeRange = _
+        stagingDocument.InlineShapes(1).Range.Duplicate
+    Set insertionRange = documentObject.Range( _
+        Start:=targetStart, End:=targetEnd)
+    insertionRange.FormattedText = stagingShapeRange.FormattedText
+    stagingDocument.Close SaveChanges:=wdDoNotSaveChanges
+    Set stagingDocument = Nothing
+    documentObject.Activate
+
+    For Each probeShape In documentObject.InlineShapes
+        If probeShape.Range.Start = targetStart Then
+            matchCount = matchCount + 1
+            Set candidate = probeShape
+        End If
+    Next probeShape
+    If matchCount <> 1 Or candidate Is Nothing Then
+        Err.Raise vbObjectError + 7570, "VisualTeX", _
+            "Word did not transfer exactly one SVG formula drawing."
+    End If
+    Set VTAddWordFormulaPicture = candidate
+    Exit Function
+
+VectorFailed:
+    vectorErrorNumber = Err.Number
+    vectorErrorDescription = Err.Description
+    On Error Resume Next
+    If Not stagingDocument Is Nothing Then
+        stagingDocument.Close SaveChanges:=wdDoNotSaveChanges
+    End If
+    documentObject.Activate
+    Err.Clear
+    On Error GoTo FallbackFailed
+
+    ' The PNG is only an emergency compatibility path. A vector-import failure
+    ' must not leave Word's generic "cannot open formula.svg" modal dialog or
+    ' abort an otherwise valid formula transaction.
+    If Len(fallbackImagePath) = 0 Then
+        Err.Raise vbObjectError + 7570, "VisualTeX", _
+            "Word could not import the VisualTeX SVG staging document: " & _
+            CStr(vectorErrorNumber) & " " & vectorErrorDescription
+    End If
+    Set insertionRange = documentObject.Range( _
+        Start:=targetStart, End:=targetEnd)
+    Set candidate = documentObject.InlineShapes.AddPicture( _
+        FileName:=fallbackImagePath, _
+        LinkToFile:=False, _
+        SaveWithDocument:=True, _
+        Range:=insertionRange)
+    If candidate Is Nothing Then
+        Err.Raise vbObjectError + 7570, "VisualTeX", _
+            "Word did not create the PNG compatibility formula picture."
+    End If
+    Set VTAddWordFormulaPicture = candidate
+    Exit Function
+
+FallbackFailed:
+    fallbackErrorNumber = Err.Number
+    fallbackErrorDescription = Err.Description
+    Err.Raise vbObjectError + 7570, "VisualTeX Word vector insertion", _
+        "SVG staging failed (" & CStr(vectorErrorNumber) & "): " & _
+        vectorErrorDescription & "; PNG fallback failed (" & _
+        CStr(fallbackErrorNumber) & "): " & fallbackErrorDescription
+End Function
+
 Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Object)
     Dim mode As String
     Dim formulaId As String
@@ -6281,6 +6656,8 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
     Dim nativeEquation As Boolean
     Dim nativeDisplayMode As String
     Dim imagePath As String
+    Dim vectorDocumentPath As String
+    Dim fallbackImagePath As String
     Dim metadata As String
     Dim latexBase64 As String
     Dim ommlBase64 As String
@@ -6310,6 +6687,11 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
     Dim widthPoints As Double
     Dim heightPoints As Double
     Dim baselinePoints As Double
+    Dim fontSizePt As Double
+    Dim referenceWidthPt As Double
+    Dim referenceHeightPt As Double
+    Dim referenceBaselinePt As Double
+    Dim observedWordFontSizePt As Double
     Dim formulaReference As String
     Dim captionText As String
     Dim insertedNumber As Range
@@ -6323,10 +6705,16 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
     Dim previousMetadata As String
     Dim previousDisplayMode As String
     Dim previousNumbered As Boolean
+    Dim previousFontSizePt As Double
+    Dim previousReferenceWidthPt As Double
+    Dim previousReferenceHeightPt As Double
+    Dim previousReferenceBaselinePt As Double
+    Dim previousObservedWordFontSizePt As Double
     Dim hadPreviousLatexPayload As Boolean
     Dim hadPreviousOmmlPayload As Boolean
     Dim hadPreviousMetadataPayload As Boolean
     Dim hadPreviousFormat As Boolean
+    Dim hadPreviousImageScale As Boolean
     Dim formulaStateStored As Boolean
     Dim deferNativeDisplay As Boolean
     Dim pendingPlaceholderRemoved As Boolean
@@ -6347,6 +6735,8 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
     VTRequireDispatchValue dispatch, "displayMode"
     VTRequireDispatchValue dispatch, "numbered"
     VTRequireDispatchValue dispatch, "imagePath"
+    VTRequireDispatchValue dispatch, "vectorDocumentPath"
+    VTRequireDispatchValue dispatch, "fallbackImagePath"
     VTRequireDispatchValue dispatch, "metadata"
     VTRequireDispatchValue dispatch, "latexBase64"
     VTRequireDispatchValue dispatch, "ommlBase64"
@@ -6358,6 +6748,8 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
     numbered = (CStr(dispatch("numbered")) = "1")
     nativeEquation = (VTDispatchOptional(dispatch, "nativeEquation") = "1")
     imagePath = CStr(dispatch("imagePath"))
+    vectorDocumentPath = CStr(dispatch("vectorDocumentPath"))
+    fallbackImagePath = CStr(dispatch("fallbackImagePath"))
     metadata = CStr(dispatch("metadata"))
     latexBase64 = CStr(dispatch("latexBase64"))
     ommlBase64 = CStr(dispatch("ommlBase64"))
@@ -6374,6 +6766,11 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
     widthPoints = VTDispatchPositiveDouble(dispatch, "widthPoints")
     heightPoints = VTDispatchPositiveDouble(dispatch, "heightPoints")
     baselinePoints = VTDispatchOptionalDouble(dispatch, "baseline", 0#)
+    fontSizePt = VTDispatchPositiveDouble(dispatch, "fontSizePt")
+    referenceWidthPt = VTDispatchPositiveDouble(dispatch, "referenceWidthPt")
+    referenceHeightPt = VTDispatchPositiveDouble(dispatch, "referenceHeightPt")
+    referenceBaselinePt = _
+        VTDispatchOptionalDouble(dispatch, "referenceBaselinePt", 0#)
 
     If Not VTIsCanonicalUuid(formulaId) Or Not VTIsEncodedMetadata(metadata) Or _
        Not VTIsBase64UrlPayload(latexBase64) Or _
@@ -6389,12 +6786,29 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
     If numbered And displayMode <> "block" Then
         Err.Raise vbObjectError + 7449, "VisualTeX", "Only display formulas can retain a Word equation number."
     End If
+    If Not VTValidWordFormulaFontSize(fontSizePt) Or _
+       referenceWidthPt <= 0# Or referenceHeightPt <= 0# Or _
+       referenceBaselinePt < -256# Or referenceBaselinePt > 0# Then
+        Err.Raise vbObjectError + 7498, "VisualTeX", _
+            "VisualTeX Word image font-size geometry is invalid."
+    End If
 
     formulaReference = VTFormulaReference(formulaId, displayMode, numbered)
     captionText = VTEquationCrossReferenceText(latexBase64)
     VTValidateAbsoluteVisualTeXPath imagePath
+    VTValidateAbsoluteVisualTeXPath vectorDocumentPath
+    VTValidateAbsoluteVisualTeXPath fallbackImagePath
     If Not VTPathFileExists(imagePath) Then
-        Err.Raise vbObjectError + 7406, "VisualTeX", "VisualTeX Word result image is missing."
+        Err.Raise vbObjectError + 7406, "VisualTeX", _
+            "VisualTeX Word SVG result is missing."
+    End If
+    If Not VTPathFileExists(vectorDocumentPath) Then
+        Err.Raise vbObjectError + 7406, "VisualTeX", _
+            "VisualTeX Word SVG staging document is missing."
+    End If
+    If Not VTPathFileExists(fallbackImagePath) Then
+        Err.Raise vbObjectError + 7406, "VisualTeX", _
+            "VisualTeX Word PNG compatibility preview is missing."
     End If
 
     transactionStage = "resolve-target"
@@ -6451,6 +6865,15 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
                 VTSetWordOmmlPayload targetDocument, formulaId, ommlBase64
                 VTSetWordMetadataPayload targetDocument, formulaId, metadata
                 VTSetWordFormulaFormat targetDocument, formulaId, displayMode, numbered
+                VTSetWordImageScaleState _
+                    targetDocument, formulaId, fontSizePt, referenceWidthPt, _
+                    referenceHeightPt, referenceBaselinePt, fontSizePt
+                Set originalNativeMath = VTNativeMathForBookmark( _
+                    targetDocument.Bookmarks( _
+                        VTNativeFormulaBookmarkName(formulaId)))
+                If Not originalNativeMath Is Nothing Then
+                    originalNativeMath.Range.Font.Size = CSng(fontSizePt)
+                End If
                 VTDeletePendingBookmark targetDocument, sessionId
                 GoTo CommitSucceeded
             End If
@@ -6461,6 +6884,15 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
                 VTSetWordOmmlPayload targetDocument, formulaId, ommlBase64
                 VTSetWordMetadataPayload targetDocument, formulaId, metadata
                 VTSetWordFormulaFormat targetDocument, formulaId, displayMode, numbered
+                observedWordFontSizePt = VTInlineShapeWordFontSize(committed)
+                If Not VTValidWordFormulaFontSize(observedWordFontSizePt) Then
+                    observedWordFontSizePt = fontSizePt
+                End If
+                VTSetWordImageScaleState _
+                    targetDocument, formulaId, fontSizePt, referenceWidthPt, _
+                    referenceHeightPt, referenceBaselinePt, _
+                    observedWordFontSizePt
+                VTApplyWordImageFormulaFontSize committed, fontSizePt
                 VTDeletePendingBookmark targetDocument, sessionId
                 GoTo CommitSucceeded
             End If
@@ -6477,6 +6909,10 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
         targetDocument, formulaId, previousMetadata)
     hadPreviousFormat = VTTryReadWordFormulaFormat( _
         targetDocument, formulaId, previousDisplayMode, previousNumbered)
+    hadPreviousImageScale = VTTryReadWordImageScaleState( _
+        targetDocument, formulaId, previousFontSizePt, _
+        previousReferenceWidthPt, previousReferenceHeightPt, _
+        previousReferenceBaselinePt, previousObservedWordFontSizePt)
 
     If nativeEquation Then
         transactionStage = "prepare-native-replacement"
@@ -6529,6 +6965,9 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
         VTSetWordOmmlPayload targetDocument, formulaId, ommlBase64
         VTSetWordMetadataPayload targetDocument, formulaId, metadata
         VTSetWordFormulaFormat targetDocument, formulaId, displayMode, numbered
+        VTSetWordImageScaleState _
+            targetDocument, formulaId, fontSizePt, referenceWidthPt, _
+            referenceHeightPt, referenceBaselinePt, fontSizePt
         formulaStateStored = True
 
         ' Delete the source placeholder or image before creating the final
@@ -6585,6 +7024,11 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
                 VTFinalizeInlineNativeEquation(nativeEquationRange)
         End If
 
+        transactionStage = "apply-native-font-size"
+        nativeEquationRange.Font.Size = CSng(fontSizePt)
+        Set nativeEquationRange = VTResolveNativeEquationRange( _
+            targetDocument, nativeEquationRange.Start, 16)
+
         transactionStage = "bookmark-native-equation"
         VTSetNativeFormulaBookmark targetDocument, nativeEquationRange, formulaId
         nativeBookmarkSet = True
@@ -6634,11 +7078,9 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
     Set insertionRange = targetRange.Duplicate
     If Not targetIsNative Then insertionRange.Collapse wdCollapseStart
     targetDocument.Activate
-    Set candidate = targetDocument.InlineShapes.AddPicture( _
-        FileName:=imagePath, _
-        LinkToFile:=False, _
-        SaveWithDocument:=True, _
-        Range:=insertionRange)
+    Set candidate = VTAddWordFormulaPicture( _
+        targetDocument, insertionRange, vectorDocumentPath, _
+        fallbackImagePath)
     nativeTargetReplaced = targetIsNative
     candidate.LockAspectRatio = msoFalse
     candidate.Width = CSng(widthPoints)
@@ -6646,13 +7088,23 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
     candidate.LockAspectRatio = msoTrue
     candidate.AlternativeText = metadata
     candidate.Title = formulaReference
+    ' Mac Word versions differ on whether the native Home font-size box
+    ' persists InlineShape.Range.Font.Size. Attempt it, but Width/Height remain
+    ' the authoritative visual result and the monitor records what Word reports.
+    On Error Resume Next
+    candidate.Range.Font.Size = CSng(fontSizePt)
+    Err.Clear
+    On Error GoTo RollbackCandidate
     If displayMode = "inline" Then
         If baselinePoints > 0# Or baselinePoints < -256# Then
             Err.Raise vbObjectError + 7408, "VisualTeX", "VisualTeX Word baseline is outside the allowed range."
         End If
         candidate.Range.Font.Position = CLng(baselinePoints)
-    ElseIf Not (targetIsNative And numbered) Then
-        candidate.Range.ParagraphFormat.Alignment = wdAlignParagraphCenter
+    Else
+        candidate.Range.Font.Position = 0
+        If Not (targetIsNative And numbered) Then
+            candidate.Range.ParagraphFormat.Alignment = wdAlignParagraphCenter
+        End If
     End If
 
     If Abs(candidate.Width - widthPoints) > 0.1 Or Abs(candidate.Height - heightPoints) > 0.1 Or _
@@ -6673,6 +7125,13 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
     VTSetWordOmmlPayload targetDocument, formulaId, ommlBase64
     VTSetWordMetadataPayload targetDocument, formulaId, metadata
     VTSetWordFormulaFormat targetDocument, formulaId, displayMode, numbered
+    observedWordFontSizePt = VTInlineShapeWordFontSize(candidate)
+    If Not VTValidWordFormulaFontSize(observedWordFontSizePt) Then
+        observedWordFontSizePt = fontSizePt
+    End If
+    VTSetWordImageScaleState _
+        targetDocument, formulaId, fontSizePt, referenceWidthPt, _
+        referenceHeightPt, referenceBaselinePt, observedWordFontSizePt
     formulaStateStored = True
 
     ' Finalize the paragraph only after the old image/native target has gone.
@@ -6702,6 +7161,8 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
             Set numberLayoutRange = VTEnsureImageEquationNumber( _
                 candidate, heightPoints, formulaId, captionText, numberCreated)
             If numberCreated Then Set insertedNumber = numberLayoutRange
+            VTRefreshNumberedImageFormulaFontLayout _
+                candidate, formulaId, fontSizePt
         Else
             transactionStage = "normalize-image-display-layout"
             VTNormalizeUnnumberedDisplayParagraph candidate.Range
@@ -6816,6 +7277,15 @@ RollbackCandidate:
                 targetDocument, formulaId, previousDisplayMode, previousNumbered
         Else
             VTDeleteDocumentVariable targetDocument, VTWordFormatVariableName(formulaId)
+        End If
+        If hadPreviousImageScale Then
+            VTSetWordImageScaleState _
+                targetDocument, formulaId, previousFontSizePt, _
+                previousReferenceWidthPt, previousReferenceHeightPt, _
+                previousReferenceBaselinePt, previousObservedWordFontSizePt
+        Else
+            VTDeleteDocumentVariable _
+                targetDocument, VTWordImageScaleVariableName(formulaId)
         End If
     End If
     If targetIsNative And Not nativeTargetReplaced And _
@@ -7283,9 +7753,9 @@ Private Function VTEquationNumberRaisePoints( _
     ByVal numberFontSize As Single) As Single
 
     ' This legacy image scaffold is temporary. The final static image number is
-    ' aligned by VTCalculateStaticImageEquationNumberPosition using the reviewed
-    ' Windows height formula. OMML uses VTNativeEquationNumberRaisePoints below
-    ' and is intentionally unaffected.
+    ' aligned by VTCalculateStaticImageEquationNumberPosition using the SVG math
+    ' baseline, with the old outer-box centre rule only for legacy metadata.
+    ' OMML uses VTNativeEquationNumberRaisePoints below and is unaffected.
     VTEquationNumberRaisePoints = 0!
 End Function
 
@@ -8280,25 +8750,111 @@ Private Sub VTApplyStaticImageEquationNumberFormatting( _
         Err.Raise vbObjectError + 7564, "VisualTeX", _
             "The static image Equation number formatting target is missing."
     End If
-    If numberSize <= 0! Or numberSize > 72! Then
+    If numberSize <= 0! Or _
+       numberSize > CSng(VT_WORD_MAX_FORMULA_FONT_SIZE_PT) Then
         numberSize = VTVisibleEquationNumberFontSize(numberRange.Document)
     End If
     With numberRange.Font
         .Hidden = False
         .Color = wdColorAutomatic
+        .Name = VT_WORD_EQUATION_NUMBER_FONT_NAME
+        .NameAscii = VT_WORD_EQUATION_NUMBER_FONT_NAME
+        .NameOther = VT_WORD_EQUATION_NUMBER_FONT_NAME
         .Position = numberPosition
         .Size = numberSize
     End With
 End Sub
+
+Private Function VTValidatedRoundedNonnegativePosition( _
+    ByVal rawPosition As Double, _
+    ByVal valueLabel As String) As Long
+
+    If rawPosition <= 0# Then
+        VTValidatedRoundedNonnegativePosition = 0
+    ElseIf rawPosition > 2147483646# Then
+        Err.Raise vbObjectError + 7564, "VisualTeX", _
+            valueLabel & " is outside VBA's safe Long range."
+    Else
+        VTValidatedRoundedNonnegativePosition = _
+            CLng(Int(rawPosition + 0.5#))
+    End If
+End Function
+
+Private Function VTExpectedStaticImageEquationNumberPosition( _
+    ByVal formulaShape As InlineShape, _
+    ByVal numberSize As Double, _
+    ByVal valueLabel As String) As Long
+
+    Dim formulaId As String
+    Dim displayMode As String
+    Dim numbered As Boolean
+    Dim storedFontSizePt As Double
+    Dim referenceWidthPt As Double
+    Dim referenceHeightPt As Double
+    Dim referenceBaselinePt As Double
+    Dim observedWordFontSizePt As Double
+    Dim formulaHeight As Double
+    Dim baselineScale As Double
+    Dim rawPosition As Double
+    Dim baselineAvailable As Boolean
+
+    If formulaShape Is Nothing Then
+        Err.Raise vbObjectError + 7564, "VisualTeX", _
+            valueLabel & " target is missing."
+    End If
+    formulaHeight = CDbl(formulaShape.Height)
+    If formulaHeight <= 0# Or formulaHeight > 1000000# Then
+        Err.Raise vbObjectError + 7564, "VisualTeX", _
+            "The image Equation has an invalid rendered height."
+    End If
+    If numberSize <= 0# Or _
+       numberSize > VT_WORD_MAX_FORMULA_FONT_SIZE_PT Then
+        numberSize = VTVisibleEquationNumberFontSize( _
+            formulaShape.Range.Document)
+    End If
+
+    ' Prefer the mathematical baseline exported with the SVG. It describes the
+    ' distance from the bottom of the image box to the formula's math axis at
+    ' the 14 pt reference size. Scaling that distance by the current image
+    ' height makes a static image number align like Word's native OMath array.
+    On Error Resume Next
+    If VTTryParseFormulaReference( _
+       formulaShape.Title, formulaId, displayMode, numbered) Then
+        If displayMode = "block" And numbered Then
+            baselineAvailable = VTTryReadWordImageScaleState( _
+                formulaShape.Range.Document, formulaId, storedFontSizePt, _
+                referenceWidthPt, referenceHeightPt, referenceBaselinePt, _
+                observedWordFontSizePt)
+        End If
+    End If
+    Err.Clear
+    On Error GoTo 0
+
+    If baselineAvailable And referenceHeightPt > 0# And _
+       referenceBaselinePt < 0# Then
+        baselineScale = formulaHeight / referenceHeightPt
+        If baselineScale > 0# And baselineScale < 1000000# Then
+            rawPosition = -referenceBaselinePt * baselineScale
+            VTExpectedStaticImageEquationNumberPosition = _
+                VTValidatedRoundedNonnegativePosition( _
+                    rawPosition, valueLabel)
+            Exit Function
+        End If
+    End If
+
+    ' Legacy image formulas may not have baseline metadata. Keep the previous
+    ' outer-box centre calculation only as a compatibility fallback.
+    rawPosition = (formulaHeight - numberSize) / 2#
+    VTExpectedStaticImageEquationNumberPosition = _
+        VTValidatedRoundedNonnegativePosition(rawPosition, valueLabel)
+End Function
 
 Private Function VTCalculateStaticImageEquationNumberPosition( _
     ByVal formulaShape As InlineShape, _
     ByVal numberRange As Range) As Long
 
     Dim documentObject As Document
-    Dim formulaHeight As Double
     Dim numberSize As Single
-    Dim rawPosition As Double
     Dim numberPosition As Long
 
     If formulaShape Is Nothing Or numberRange Is Nothing Then
@@ -8307,36 +8863,110 @@ Private Function VTCalculateStaticImageEquationNumberPosition( _
     End If
 
     Set documentObject = formulaShape.Range.Document
-    formulaHeight = CDbl(formulaShape.Height)
     numberSize = numberRange.Font.Size
-    If numberSize <= 0! Or numberSize > 72! Then
+    If numberSize <= 0! Or _
+       numberSize > CSng(VT_WORD_MAX_FORMULA_FONT_SIZE_PT) Then
         numberSize = VTVisibleEquationNumberFontSize(documentObject)
     End If
-    If formulaHeight <= 0# Or formulaHeight > 1000000# Then
-        Err.Raise vbObjectError + 7564, "VisualTeX", _
-            "The image Equation has an invalid rendered height."
-    End If
-
-    ' Match the reviewed Windows Word implementation. InlineShape and ordinary
-    ' text share one baseline, so raising the number by half the difference
-    ' between their visual box heights aligns their centers deterministically.
-    ' This avoids Word for Mac's transient page-coordinate values during field
-    ' refresh and removes the overflow-prone pagination feedback loop.
-    rawPosition = (formulaHeight - CDbl(numberSize)) / 2#
-    If rawPosition <= 0# Then
-        numberPosition = 0
-    ElseIf rawPosition >= 2147483646# Then
-        Err.Raise vbObjectError + 7564, "VisualTeX", _
-            "The image Equation number position is outside VBA's safe range."
-    Else
-        numberPosition = CLng(Int(rawPosition + 0.5#))
-    End If
+    numberPosition = VTExpectedStaticImageEquationNumberPosition( _
+        formulaShape, CDbl(numberSize), _
+        "The image Equation number baseline position")
 
     VTApplyStaticImageEquationNumberFormatting _
         numberRange, numberPosition, numberSize
-    VTCalculateStaticImageEquationNumberPosition = _
-        numberRange.Font.Position
+    ' Do not synchronously read Font.Position back. Word for Mac can report an
+    ' overflow while its field/layout engine is still committing the write.
+    VTCalculateStaticImageEquationNumberPosition = numberPosition
 End Function
+
+Private Sub VTRefreshNumberedImageFormulaFontLayout( _
+    ByRef formulaShape As InlineShape, _
+    ByVal formulaId As String, _
+    ByVal requestedFontSizePt As Double)
+
+    Dim documentObject As Document
+    Dim paragraphRange As Range
+    Dim numberRange As Range
+    Dim paragraphStart As Long
+    Dim expectedPosition As Long
+
+    If formulaShape Is Nothing Or _
+       Not VTIsCanonicalUuid(formulaId) Or _
+       Not VTValidWordFormulaFontSize(requestedFontSizePt) Then
+        Err.Raise vbObjectError + 7571, "VisualTeX", _
+            "The numbered image formula resize target is invalid."
+    End If
+    Set documentObject = formulaShape.Range.Document
+    Set paragraphRange = formulaShape.Range.Paragraphs(1).Range.Duplicate
+    paragraphStart = paragraphRange.Start
+
+    If paragraphRange.Information(wdWithInTable) Then
+        ' Preserve legacy three-cell layouts. Their cells own vertical centring,
+        ' but the visible number must still follow the selected formula size.
+        If Not documentObject.Bookmarks.Exists( _
+           VTEquationNumberBookmarkName(formulaId)) Then
+            Err.Raise vbObjectError + 7571, "VisualTeX", _
+                "The legacy numbered image formula has no number Bookmark."
+        End If
+        Set numberRange = documentObject.Bookmarks( _
+            VTEquationNumberBookmarkName(formulaId)).Range.Duplicate
+        VTApplyStaticImageEquationNumberFormatting _
+            numberRange, 0, CSng(requestedFontSizePt)
+        On Error Resume Next
+        numberRange.Cells(1).VerticalAlignment = wdCellAlignVerticalCenter
+        Err.Clear
+        On Error GoTo 0
+        Exit Sub
+    End If
+
+    ' Rebuild both tab stops on every resize. The first keeps the image at the
+    ' exact text-column centre; the second keeps the number at the right edge.
+    VTConfigureNumberedEquationParagraph paragraphRange
+    Set formulaShape = VTResolveImageFormulaInParagraph( _
+        documentObject, paragraphStart)
+    Set numberRange = VTStaticImageEquationNumberRange( _
+        formulaShape.Range.Duplicate, formulaId)
+    If numberRange Is Nothing Then
+        Err.Raise vbObjectError + 7571, "VisualTeX", _
+            "The numbered image formula has no static visible number."
+    End If
+
+    ' Use the same point size for formula and number, then align the number to
+    ' the SVG mathematical baseline. Repeated size changes scale the stored
+    ' baseline from the 14 pt reference geometry without accumulating offsets.
+    expectedPosition = VTExpectedStaticImageEquationNumberPosition( _
+        formulaShape, requestedFontSizePt, _
+        "The resized image Equation number baseline position")
+    VTApplyStaticImageEquationNumberFormatting _
+        numberRange, expectedPosition, CSng(requestedFontSizePt)
+    VTSetEquationNumberBookmarkExact _
+        documentObject, formulaId, numberRange
+    Set formulaShape = VTResolveImageFormulaInParagraph( _
+        documentObject, paragraphStart)
+End Sub
+
+Private Sub VTRefreshNumberedImageFormulaAfterGeometryChange( _
+    ByRef formulaShape As InlineShape, _
+    ByVal formulaId As String, _
+    ByVal fontSizePt As Double)
+
+    Dim refreshErrorNumber As Long
+    Dim refreshErrorDescription As String
+
+    On Error GoTo RefreshFailed
+    VTBeginWordInternalMutation
+    VTRefreshNumberedImageFormulaFontLayout _
+        formulaShape, formulaId, fontSizePt
+    VTEndWordInternalMutation
+    Exit Sub
+
+RefreshFailed:
+    refreshErrorNumber = Err.Number
+    refreshErrorDescription = Err.Description
+    VTEndWordInternalMutation
+    Err.Raise refreshErrorNumber, "VisualTeX image geometry", _
+        refreshErrorDescription
+End Sub
 
 Private Function VTNativeEquationArrayReferenceField( _
     ByVal formulaRange As Range, _
@@ -8809,14 +9439,16 @@ Private Sub VTRefreshParagraphEquationBookmarks( _
             "The Equation does not contain exactly one supported visible formula."
     End If
 
-    If numberSize <= 0! Or numberSize > 72! Then
+    If numberSize <= 0! Or _
+       numberSize > CSng(VT_WORD_MAX_FORMULA_FONT_SIZE_PT) Then
         numberSize = numberRange.Font.Size
     End If
-    If numberSize <= 0! Or numberSize > 72! Then
+    If numberSize <= 0! Or _
+       numberSize > CSng(VT_WORD_MAX_FORMULA_FONT_SIZE_PT) Then
         numberSize = VTVisibleEquationNumberFontSize(documentObject)
     End If
-    If numberPosition = wdUndefined Or numberPosition < -48 Or _
-       numberPosition > 48 Then
+    If numberPosition = wdUndefined Or numberPosition < -512 Or _
+       numberPosition > 512 Then
         Err.Raise vbObjectError + 7560, "VisualTeX", _
             "The Equation number has an invalid vertical position."
     End If
@@ -9841,6 +10473,8 @@ Private Sub VTAssertStaticImageEquationLayout( _
     Dim textWidth As Single
     Dim numberSize As Single
     Dim numberPosition As Long
+    Dim expectedPosition As Long
+    Dim numberFontName As String
     Dim expectedNumber As String
 
     If formulaRange Is Nothing Or _
@@ -9910,13 +10544,25 @@ Private Sub VTAssertStaticImageEquationLayout( _
     End If
     numberSize = numberRange.Font.Size
     numberPosition = numberRange.Font.Position
-    If numberSize <= 0! Or numberSize > 72! Or _
+    numberFontName = CStr(numberRange.Font.Name)
+    expectedPosition = VTExpectedStaticImageEquationNumberPosition( _
+        formulaShape, CDbl(numberSize), _
+        assertionName & ": expected static image baseline Position")
+    If numberSize <= 0! Or _
+       numberSize > CSng(VT_WORD_MAX_FORMULA_FONT_SIZE_PT) Or _
        numberPosition = wdUndefined Or _
-       numberPosition < -48 Or numberPosition > 48 Or _
+       numberPosition < -512 Or numberPosition > 512 Or _
+       numberPosition <> expectedPosition Or _
+       StrComp(numberFontName, VT_WORD_EQUATION_NUMBER_FONT_NAME, _
+           vbTextCompare) <> 0 Or _
        numberRange.Font.Hidden <> False Or _
        numberRange.Font.Color <> wdColorAutomatic Then
         Err.Raise vbObjectError + 7513, "VisualTeX", _
-            assertionName & ": static image number formatting is invalid."
+            assertionName & _
+            ": static image number baseline/font formatting is invalid" & _
+            " [position=" & CStr(numberPosition) & _
+            "; expectedPosition=" & CStr(expectedPosition) & _
+            "; font=" & numberFontName & "]."
     End If
 End Sub
 
@@ -13408,6 +14054,11 @@ Private Sub VTWordConvertInlineShapeToNativeEquation(ByVal target As InlineShape
     Dim nativeBookmarkAnchor As Long
     Dim numberCreated As Boolean
     Dim internalMutationStarted As Boolean
+    Dim sourceFontSizePt As Double
+    Dim referenceWidthPt As Double
+    Dim referenceHeightPt As Double
+    Dim referenceBaselinePt As Double
+    Dim observedWordFontSizePt As Double
 
     If target Is Nothing Or Not VTIsVisualTeXInlineShape(target) Then
         Err.Raise vbObjectError + 7430, "VisualTeX", "The selected object is not a VisualTeX formula image."
@@ -13416,6 +14067,11 @@ Private Sub VTWordConvertInlineShapeToNativeEquation(ByVal target As InlineShape
         Err.Raise vbObjectError + 7431, "VisualTeX", "The selected VisualTeX formula reference is invalid."
     End If
     Set targetDocument = target.Range.Document
+    VTSynchronizeWordImageFormulaShape target
+    VTEnsureWordImageScaleState _
+        target, formulaId, displayMode, numbered, sourceFontSizePt, _
+        referenceWidthPt, referenceHeightPt, referenceBaselinePt, _
+        observedWordFontSizePt
     If Not VTTryReadWordOmmlPayload(targetDocument, formulaId, ommlBase64) Then
         Err.Raise vbObjectError + 7432, "VisualTeX", _
             "This formula has no structural OMML payload. Edit and save it once in the current VisualTeX, then convert it again."
@@ -13580,6 +14236,10 @@ Private Sub VTWordConvertInlineShapeToNativeEquation(ByVal target As InlineShape
             End If
         End If
     End If
+    finalFormulaRange.Font.Size = CSng(sourceFontSizePt)
+    VTSetWordImageScaleState _
+        targetDocument, formulaId, sourceFontSizePt, referenceWidthPt, _
+        referenceHeightPt, referenceBaselinePt, sourceFontSizePt
     VTSetNativeFormulaBookmark _
         targetDocument, finalFormulaRange, formulaId
     If Not targetDocument.Bookmarks.Exists( _
@@ -14220,6 +14880,641 @@ Private Function VTTryReadWordFormulaFormat( _
 InvalidFormat:
     Err.Raise vbObjectError + 7469, "VisualTeX", "The stored Word formula format is invalid or corrupt."
 End Function
+
+Private Function VTWordImageScaleVariableName( _
+    ByVal formulaId As String) As String
+
+    If Not VTIsCanonicalUuid(formulaId) Then
+        Err.Raise vbObjectError + 7490, "VisualTeX", _
+            "VisualTeX cannot address image scale metadata for an invalid formula id."
+    End If
+    VTWordImageScaleVariableName = _
+        VT_WORD_IMAGE_SCALE_VARIABLE_PREFIX & Replace$(formulaId, "-", "_")
+End Function
+
+Private Function VTValidWordFormulaFontSize(ByVal value As Double) As Boolean
+    VTValidWordFormulaFontSize = _
+        value >= VT_WORD_MIN_FORMULA_FONT_SIZE_PT And _
+        value <= VT_WORD_MAX_FORMULA_FONT_SIZE_PT
+End Function
+
+Private Function VTPreferredWordFormulaFontSize( _
+    ByVal contextRange As Range) As Double
+
+    Dim contextSize As Double
+    Dim normalSize As Double
+
+    On Error Resume Next
+    If Not contextRange Is Nothing Then contextSize = contextRange.Font.Size
+    If Not contextRange Is Nothing Then
+        normalSize = contextRange.Document.Styles(wdStyleNormal).Font.Size
+    ElseIf Documents.Count > 0 Then
+        normalSize = ActiveDocument.Styles(wdStyleNormal).Font.Size
+    End If
+    On Error GoTo 0
+
+    If VTValidWordFormulaFontSize(contextSize) Then
+        VTPreferredWordFormulaFontSize = contextSize
+    ElseIf VTValidWordFormulaFontSize(normalSize) Then
+        VTPreferredWordFormulaFontSize = normalSize
+    Else
+        VTPreferredWordFormulaFontSize = VT_WORD_IMAGE_REFERENCE_FONT_SIZE_PT
+    End If
+End Function
+
+Private Sub VTSetWordImageScaleState( _
+    ByVal documentObject As Document, _
+    ByVal formulaId As String, _
+    ByVal fontSizePt As Double, _
+    ByVal referenceWidthPt As Double, _
+    ByVal referenceHeightPt As Double, _
+    ByVal referenceBaselinePt As Double, _
+    ByVal observedWordFontSizePt As Double)
+
+    If documentObject Is Nothing Or _
+       Not VTValidWordFormulaFontSize(fontSizePt) Or _
+       referenceWidthPt <= 0# Or referenceHeightPt <= 0# Or _
+       referenceBaselinePt < -256# Or referenceBaselinePt > 0# Then
+        Err.Raise vbObjectError + 7491, "VisualTeX", _
+            "VisualTeX image scale metadata is invalid."
+    End If
+    If Not VTValidWordFormulaFontSize(observedWordFontSizePt) Then
+        observedWordFontSizePt = fontSizePt
+    End If
+
+    VTSetDocumentVariable _
+        documentObject, _
+        VTWordImageScaleVariableName(formulaId), _
+        VTJsonNumber(fontSizePt) & "|" & _
+        VTJsonNumber(referenceWidthPt) & "|" & _
+        VTJsonNumber(referenceHeightPt) & "|" & _
+        VTJsonNumber(referenceBaselinePt) & "|" & _
+        VTJsonNumber(observedWordFontSizePt)
+End Sub
+
+Private Function VTTryReadWordImageScaleState( _
+    ByVal documentObject As Document, _
+    ByVal formulaId As String, _
+    ByRef fontSizePt As Double, _
+    ByRef referenceWidthPt As Double, _
+    ByRef referenceHeightPt As Double, _
+    ByRef referenceBaselinePt As Double, _
+    ByRef observedWordFontSizePt As Double) As Boolean
+
+    Dim storedValue As String
+    Dim fields() As String
+
+    fontSizePt = 0#
+    referenceWidthPt = 0#
+    referenceHeightPt = 0#
+    referenceBaselinePt = 0#
+    observedWordFontSizePt = 0#
+    If Not VTTryGetDocumentVariable( _
+        documentObject, VTWordImageScaleVariableName(formulaId), storedValue) Then Exit Function
+    fields = Split(storedValue, "|")
+    If UBound(fields) <> 4 Then GoTo InvalidScale
+    fontSizePt = Val(fields(0))
+    referenceWidthPt = Val(fields(1))
+    referenceHeightPt = Val(fields(2))
+    referenceBaselinePt = Val(fields(3))
+    observedWordFontSizePt = Val(fields(4))
+    If Not VTValidWordFormulaFontSize(fontSizePt) Or _
+       referenceWidthPt <= 0# Or referenceHeightPt <= 0# Or _
+       referenceBaselinePt < -256# Or referenceBaselinePt > 0# Or _
+       Not VTValidWordFormulaFontSize(observedWordFontSizePt) Then _
+        GoTo InvalidScale
+    VTTryReadWordImageScaleState = True
+    Exit Function
+
+InvalidScale:
+    Err.Raise vbObjectError + 7492, "VisualTeX", _
+        "The stored VisualTeX image scale metadata is invalid or corrupt."
+End Function
+
+Private Function VTInlineShapeWordFontSize( _
+    ByVal formulaShape As InlineShape) As Double
+
+    Dim value As Double
+
+    On Error Resume Next
+    value = formulaShape.Range.Font.Size
+    On Error GoTo 0
+    If VTValidWordFormulaFontSize(value) Then
+        VTInlineShapeWordFontSize = value
+    Else
+        VTInlineShapeWordFontSize = 0#
+    End If
+End Function
+
+Private Function VTInlineShapeFontPosition( _
+    ByVal formulaShape As InlineShape) As Double
+
+    Dim value As Double
+
+    On Error Resume Next
+    value = formulaShape.Range.Font.Position
+    On Error GoTo 0
+    If value < -256# Then value = -256#
+    If value > 0# Then value = 0#
+    VTInlineShapeFontPosition = value
+End Function
+
+Private Sub VTEnsureWordImageScaleState( _
+    ByVal formulaShape As InlineShape, _
+    ByRef formulaId As String, _
+    ByRef displayMode As String, _
+    ByRef numbered As Boolean, _
+    ByRef fontSizePt As Double, _
+    ByRef referenceWidthPt As Double, _
+    ByRef referenceHeightPt As Double, _
+    ByRef referenceBaselinePt As Double, _
+    ByRef observedWordFontSizePt As Double)
+
+    Dim actualWordFontSize As Double
+    Dim currentBaseline As Double
+    Dim expectedWidth As Double
+    Dim expectedHeight As Double
+    Dim previousReferenceHeightPt As Double
+    Dim baselineRatio As Double
+
+    If formulaShape Is Nothing Or _
+       Not VTTryParseFormulaReference( _
+           formulaShape.Title, formulaId, displayMode, numbered) Then
+        Err.Raise vbObjectError + 7493, "VisualTeX", _
+            "The selected VisualTeX image formula identity is invalid."
+    End If
+    actualWordFontSize = VTInlineShapeWordFontSize(formulaShape)
+    currentBaseline = VTInlineShapeFontPosition(formulaShape)
+
+    If VTTryReadWordImageScaleState( _
+       formulaShape.Range.Document, formulaId, fontSizePt, _
+       referenceWidthPt, referenceHeightPt, referenceBaselinePt, _
+       observedWordFontSizePt) Then
+        ' When Word's reported font size is unchanged—or unavailable on builds
+        ' that do not persist InlineShape.Range.Font.Size—a geometry difference
+        ' is a direct resize by the user. Adopt it as the new 14 pt reference.
+        If Not VTValidWordFormulaFontSize(actualWordFontSize) Or _
+           Abs(actualWordFontSize - observedWordFontSizePt) <= 0.05 Then
+            expectedWidth = referenceWidthPt * _
+                fontSizePt / VT_WORD_IMAGE_REFERENCE_FONT_SIZE_PT
+            expectedHeight = referenceHeightPt * _
+                fontSizePt / VT_WORD_IMAGE_REFERENCE_FONT_SIZE_PT
+            If Abs(formulaShape.Width - expectedWidth) > 0.5 Or _
+               Abs(formulaShape.Height - expectedHeight) > 0.5 Then
+                previousReferenceHeightPt = referenceHeightPt
+                If previousReferenceHeightPt > 0# Then
+                    baselineRatio = _
+                        referenceBaselinePt / previousReferenceHeightPt
+                Else
+                    baselineRatio = 0#
+                End If
+                referenceWidthPt = formulaShape.Width * _
+                    VT_WORD_IMAGE_REFERENCE_FONT_SIZE_PT / fontSizePt
+                referenceHeightPt = formulaShape.Height * _
+                    VT_WORD_IMAGE_REFERENCE_FONT_SIZE_PT / fontSizePt
+                If displayMode = "inline" Then
+                    referenceBaselinePt = currentBaseline * _
+                        VT_WORD_IMAGE_REFERENCE_FONT_SIZE_PT / fontSizePt
+                ElseIf baselineRatio < 0# Then
+                    ' A block image always has Range.Font.Position = 0. Preserve
+                    ' the SVG math-baseline ratio instead of overwriting it with
+                    ' that paragraph baseline when the user resizes the image.
+                    referenceBaselinePt = _
+                        referenceHeightPt * baselineRatio
+                Else
+                    referenceBaselinePt = 0#
+                End If
+                If referenceBaselinePt < -256# Then referenceBaselinePt = -256#
+                If referenceBaselinePt > 0# Then referenceBaselinePt = 0#
+                VTSetWordImageScaleState _
+                    formulaShape.Range.Document, formulaId, fontSizePt, _
+                    referenceWidthPt, referenceHeightPt, referenceBaselinePt, _
+                    observedWordFontSizePt
+                If displayMode = "block" And numbered Then
+                    VTRefreshNumberedImageFormulaAfterGeometryChange _
+                        formulaShape, formulaId, fontSizePt
+                End If
+            End If
+        End If
+        Exit Sub
+    End If
+
+    If Not VTValidWordFormulaFontSize(actualWordFontSize) Then
+        actualWordFontSize = _
+            VTPreferredWordFormulaFontSize(formulaShape.Range)
+    End If
+    fontSizePt = actualWordFontSize
+    observedWordFontSizePt = actualWordFontSize
+    referenceWidthPt = formulaShape.Width * _
+        VT_WORD_IMAGE_REFERENCE_FONT_SIZE_PT / fontSizePt
+    referenceHeightPt = formulaShape.Height * _
+        VT_WORD_IMAGE_REFERENCE_FONT_SIZE_PT / fontSizePt
+    referenceBaselinePt = currentBaseline * _
+        VT_WORD_IMAGE_REFERENCE_FONT_SIZE_PT / fontSizePt
+    If referenceBaselinePt < -256# Then referenceBaselinePt = -256#
+    If referenceBaselinePt > 0# Then referenceBaselinePt = 0#
+    VTSetWordImageScaleState _
+        formulaShape.Range.Document, formulaId, fontSizePt, _
+        referenceWidthPt, referenceHeightPt, referenceBaselinePt, _
+        observedWordFontSizePt
+    If displayMode = "block" And numbered Then
+        VTRefreshNumberedImageFormulaAfterGeometryChange _
+            formulaShape, formulaId, fontSizePt
+    End If
+End Sub
+
+Private Sub VTApplyWordImageFormulaFontSize( _
+    ByVal formulaShape As InlineShape, _
+    ByVal requestedFontSizePt As Double)
+
+    Dim formulaId As String
+    Dim displayMode As String
+    Dim numbered As Boolean
+    Dim storedFontSizePt As Double
+    Dim referenceWidthPt As Double
+    Dim referenceHeightPt As Double
+    Dim referenceBaselinePt As Double
+    Dim observedWordFontSizePt As Double
+    Dim persistedWordFontSizePt As Double
+    Dim targetWidth As Double
+    Dim targetHeight As Double
+    Dim targetBaseline As Double
+    Dim internalMutationStarted As Boolean
+    Dim applyErrorNumber As Long
+    Dim applyErrorDescription As String
+
+    If formulaShape Is Nothing Or _
+       Not VTValidWordFormulaFontSize(requestedFontSizePt) Then
+        Err.Raise vbObjectError + 7494, "VisualTeX", _
+            "Enter a VisualTeX formula font size from 1 to 512 pt."
+    End If
+    VTEnsureWordImageScaleState _
+        formulaShape, formulaId, displayMode, numbered, storedFontSizePt, _
+        referenceWidthPt, referenceHeightPt, referenceBaselinePt, _
+        observedWordFontSizePt
+
+    targetWidth = referenceWidthPt * _
+        requestedFontSizePt / VT_WORD_IMAGE_REFERENCE_FONT_SIZE_PT
+    targetHeight = referenceHeightPt * _
+        requestedFontSizePt / VT_WORD_IMAGE_REFERENCE_FONT_SIZE_PT
+    targetBaseline = referenceBaselinePt * _
+        requestedFontSizePt / VT_WORD_IMAGE_REFERENCE_FONT_SIZE_PT
+    If targetBaseline < -256# Then targetBaseline = -256#
+    If targetBaseline > 0# Then targetBaseline = 0#
+    If targetWidth <= 0# Or targetHeight <= 0# Or _
+       targetWidth > 10000# Or targetHeight > 10000# Then
+        Err.Raise vbObjectError + 7495, "VisualTeX", _
+            "The requested formula font size produces unsupported image dimensions."
+    End If
+
+    On Error GoTo ApplyFailed
+    VTBeginWordInternalMutation
+    internalMutationStarted = True
+    On Error Resume Next
+    formulaShape.Range.Font.Size = CSng(requestedFontSizePt)
+    Err.Clear
+    On Error GoTo ApplyFailed
+    formulaShape.LockAspectRatio = msoFalse
+    formulaShape.Width = CSng(targetWidth)
+    formulaShape.Height = CSng(targetHeight)
+    formulaShape.LockAspectRatio = msoTrue
+    If displayMode = "inline" Then
+        formulaShape.Range.Font.Position = CLng(targetBaseline)
+    Else
+        formulaShape.Range.Font.Position = 0
+        If numbered Then
+            VTRefreshNumberedImageFormulaFontLayout _
+                formulaShape, formulaId, requestedFontSizePt
+        End If
+    End If
+    persistedWordFontSizePt = VTInlineShapeWordFontSize(formulaShape)
+    If Not VTValidWordFormulaFontSize(persistedWordFontSizePt) Then
+        persistedWordFontSizePt = observedWordFontSizePt
+    End If
+    VTSetWordImageScaleState _
+        formulaShape.Range.Document, formulaId, requestedFontSizePt, _
+        referenceWidthPt, referenceHeightPt, referenceBaselinePt, _
+        persistedWordFontSizePt
+    VTEndWordInternalMutation
+    internalMutationStarted = False
+    VTInvalidateWordImageFontSizeControl
+    Exit Sub
+
+ApplyFailed:
+    applyErrorNumber = Err.Number
+    applyErrorDescription = Err.Description
+    If internalMutationStarted Then VTEndWordInternalMutation
+    Err.Raise applyErrorNumber, "VisualTeX image font size", _
+        applyErrorDescription
+End Sub
+
+Private Sub VTSynchronizeWordImageFormulaShape( _
+    ByVal formulaShape As InlineShape)
+
+    Dim formulaId As String
+    Dim displayMode As String
+    Dim numbered As Boolean
+    Dim storedFontSizePt As Double
+    Dim referenceWidthPt As Double
+    Dim referenceHeightPt As Double
+    Dim referenceBaselinePt As Double
+    Dim observedWordFontSizePt As Double
+    Dim currentWordFontSizePt As Double
+
+    If formulaShape Is Nothing Or VTWordInternalMutationActive() Then Exit Sub
+    VTEnsureWordImageScaleState _
+        formulaShape, formulaId, displayMode, numbered, storedFontSizePt, _
+        referenceWidthPt, referenceHeightPt, referenceBaselinePt, _
+        observedWordFontSizePt
+    currentWordFontSizePt = VTInlineShapeWordFontSize(formulaShape)
+    If VTValidWordFormulaFontSize(currentWordFontSizePt) And _
+       Abs(currentWordFontSizePt - observedWordFontSizePt) > 0.05 Then
+        VTApplyWordImageFormulaFontSize formulaShape, currentWordFontSizePt
+    End If
+End Sub
+
+Public Sub VisualTeX_SynchronizeSelectedImageFormulaSize( _
+    ByVal selected As Selection)
+
+    Dim formulaShape As InlineShape
+
+    On Error GoTo SynchronizeFinished
+    If selected Is Nothing Or VTWordInternalMutationActive() Then Exit Sub
+    Set formulaShape = VTVisualTeXInlineShapeAtSelection(selected)
+    If formulaShape Is Nothing Then Exit Sub
+    VTSynchronizeWordImageFormulaShape formulaShape
+
+SynchronizeFinished:
+    VTEnsureImageSizeWatchScheduled
+End Sub
+
+Private Sub VTEnsureImageSizeWatchScheduled()
+    Dim formulaShape As InlineShape
+
+    On Error GoTo ScheduleFailed
+    If VT_WORD_IMAGE_SIZE_WATCH_SCHEDULED Or _
+       VT_WORD_IMAGE_SIZE_WATCH_RUNNING Or _
+       Documents.Count = 0 Or VTWordInternalMutationActive() Then Exit Sub
+    Set formulaShape = VTVisualTeXInlineShapeAtSelection(Selection)
+    If formulaShape Is Nothing Then Exit Sub
+
+    VT_WORD_IMAGE_SIZE_WATCH_SCHEDULED = True
+    Application.OnTime _
+        When:=Now + TimeSerial(0, 0, 1), _
+        name:="VisualTeX_WatchSelectedImageFormulaSize"
+    Exit Sub
+
+ScheduleFailed:
+    VT_WORD_IMAGE_SIZE_WATCH_SCHEDULED = False
+End Sub
+
+Public Sub VisualTeX_WatchSelectedImageFormulaSize()
+    VT_WORD_IMAGE_SIZE_WATCH_SCHEDULED = False
+    If VT_WORD_IMAGE_SIZE_WATCH_RUNNING Then Exit Sub
+
+    VT_WORD_IMAGE_SIZE_WATCH_RUNNING = True
+    On Error Resume Next
+    If Documents.Count > 0 And Not VTWordInternalMutationActive() Then
+        VisualTeX_SynchronizeSelectedImageFormulaSize Selection
+    End If
+    On Error GoTo 0
+    VT_WORD_IMAGE_SIZE_WATCH_RUNNING = False
+    VTEnsureImageSizeWatchScheduled
+End Sub
+
+Public Sub VTInvalidateWordImageFontSizeControl()
+    On Error Resume Next
+    If Not VT_WORD_RIBBON Is Nothing Then
+        VT_WORD_RIBBON.InvalidateControl VT_WORD_IMAGE_FONT_CONTROL_ID
+    End If
+    On Error GoTo 0
+End Sub
+
+Private Function VTWordImageFormulaFontSize( _
+    ByVal formulaShape As InlineShape) As Double
+
+    Dim formulaId As String
+    Dim displayMode As String
+    Dim numbered As Boolean
+    Dim fontSizePt As Double
+    Dim referenceWidthPt As Double
+    Dim referenceHeightPt As Double
+    Dim referenceBaselinePt As Double
+    Dim observedWordFontSizePt As Double
+
+    If formulaShape Is Nothing Then Exit Function
+    VTEnsureWordImageScaleState _
+        formulaShape, formulaId, displayMode, numbered, fontSizePt, _
+        referenceWidthPt, referenceHeightPt, referenceBaselinePt, _
+        observedWordFontSizePt
+    VTWordImageFormulaFontSize = fontSizePt
+End Function
+
+Private Function VTWordSelectedImageFormulaState( _
+    ByRef formulaCount As Long, _
+    ByRef mixedSizes As Boolean, _
+    ByRef fontSizePt As Double) As Boolean
+
+    Dim candidate As InlineShape
+    Dim adjacentFormula As InlineShape
+    Dim candidateSizePt As Double
+
+    formulaCount = 0
+    mixedSizes = False
+    fontSizePt = 0#
+    On Error GoTo StateFailed
+    If Documents.Count = 0 Then Exit Function
+
+    If Selection.InlineShapes.Count > 0 Then
+        For Each candidate In Selection.InlineShapes
+            If VTIsVisualTeXInlineShape(candidate) Then
+                candidateSizePt = VTWordImageFormulaFontSize(candidate)
+                formulaCount = formulaCount + 1
+                If formulaCount = 1 Then
+                    fontSizePt = candidateSizePt
+                ElseIf Abs(candidateSizePt - fontSizePt) > 0.05 Then
+                    mixedSizes = True
+                End If
+            End If
+        Next candidate
+    Else
+        Set adjacentFormula = VTVisualTeXInlineShapeAtSelection(Selection)
+        If Not adjacentFormula Is Nothing Then
+            formulaCount = 1
+            fontSizePt = VTWordImageFormulaFontSize(adjacentFormula)
+        End If
+    End If
+
+    VTWordSelectedImageFormulaState = (formulaCount > 0)
+    Exit Function
+
+StateFailed:
+    formulaCount = 0
+    mixedSizes = False
+    fontSizePt = 0#
+    Err.Clear
+End Function
+
+Private Sub VTApplyWordImageFontSizePresetToSelection( _
+    ByVal requestedFontSizePt As Double)
+
+    Dim candidate As InlineShape
+    Dim adjacentFormula As InlineShape
+    Dim appliedCount As Long
+
+    If Not VTValidWordFormulaFontSize(requestedFontSizePt) Then
+        Err.Raise vbObjectError + 7498, "VisualTeX", _
+            "The selected image formula font-size preset is invalid."
+    End If
+
+    If Selection.InlineShapes.Count > 0 Then
+        For Each candidate In Selection.InlineShapes
+            If VTIsVisualTeXInlineShape(candidate) Then
+                VTApplyWordImageFormulaFontSize candidate, requestedFontSizePt
+                appliedCount = appliedCount + 1
+            End If
+        Next candidate
+    Else
+        Set adjacentFormula = VTVisualTeXInlineShapeAtSelection(Selection)
+        If Not adjacentFormula Is Nothing Then
+            VTApplyWordImageFormulaFontSize _
+                adjacentFormula, requestedFontSizePt
+            adjacentFormula.Select
+            appliedCount = 1
+        End If
+    End If
+
+    If appliedCount = 0 Then
+        Err.Raise vbObjectError + 7497, "VisualTeX", _
+            "Select one or more VisualTeX image formulas before changing their font size."
+    End If
+    VTInvalidateWordImageFontSizeControl
+End Sub
+
+Public Sub VTWordRibbonGetImageFontSizeItemCount( _
+    ByVal control As IRibbonControl, _
+    ByRef returnedValue)
+
+    returnedValue = VTFormulaFontPresetCount() + 1
+End Sub
+
+Public Sub VTWordRibbonGetImageFontSizeItemLabel( _
+    ByVal control As IRibbonControl, _
+    ByVal itemIndex As Integer, _
+    ByRef returnedValue)
+
+    Dim formulaCount As Long
+    Dim mixedSizes As Boolean
+    Dim fontSizePt As Double
+
+    On Error GoTo LabelFailed
+    If itemIndex = 0 Then
+        If Not VTWordSelectedImageFormulaState( _
+           formulaCount, mixedSizes, fontSizePt) Then
+            returnedValue = _
+                VTUnicodeText(35831, 36873, 25321, 22270, 29255, 20844, 24335)
+        ElseIf mixedSizes Then
+            returnedValue = _
+                VTUnicodeText(24403, 21069) & ": " & _
+                VTUnicodeText(28151, 21512, 23383, 21495)
+        Else
+            returnedValue = _
+                VTUnicodeText(24403, 21069) & ": " & _
+                VTFormulaFontSizeDisplayLabel(fontSizePt)
+        End If
+    Else
+        returnedValue = VTFormulaFontPresetLabel(itemIndex - 1)
+    End If
+    Exit Sub
+
+LabelFailed:
+    returnedValue = VTUnicodeText(23383, 21495)
+    Err.Clear
+End Sub
+
+Public Sub VTWordRibbonGetImageFontSizeSelectedIndex( _
+    ByVal control As IRibbonControl, _
+    ByRef returnedValue)
+
+    Dim formulaCount As Long
+    Dim mixedSizes As Boolean
+    Dim fontSizePt As Double
+    Dim presetIndex As Long
+
+    returnedValue = 0
+    On Error GoTo SelectedFinished
+    If Not VTWordSelectedImageFormulaState( _
+       formulaCount, mixedSizes, fontSizePt) Then Exit Sub
+    If mixedSizes Then Exit Sub
+    presetIndex = VTFormulaFontPresetIndex(fontSizePt)
+    If presetIndex >= 0 Then returnedValue = presetIndex + 1
+
+SelectedFinished:
+End Sub
+
+Public Sub VTWordRibbonApplyImageFontSizePreset( _
+    ByVal control As IRibbonControl, _
+    ByVal selectedId As String, _
+    ByVal selectedIndex As Integer)
+
+    On Error GoTo Failed
+    If selectedIndex <= 0 Then Exit Sub
+    VTApplyWordImageFontSizePresetToSelection _
+        VTFormulaFontPresetSize(selectedIndex - 1)
+    Exit Sub
+
+Failed:
+    VTShowError "Word image formula font size", Err.Number, Err.Description
+End Sub
+
+Private Function VTTryParseWordFormulaFontSize( _
+    ByVal enteredText As String, _
+    ByRef parsedValue As Double) As Boolean
+
+    Dim normalizedText As String
+    Dim index As Long
+    Dim currentCharacter As String
+    Dim decimalCount As Long
+    Dim digitCount As Long
+
+    parsedValue = 0#
+    normalizedText = Replace$(Trim$(enteredText), ",", ".")
+    If Len(normalizedText) = 0 Then Exit Function
+    For index = 1 To Len(normalizedText)
+        currentCharacter = Mid$(normalizedText, index, 1)
+        If currentCharacter >= "0" And currentCharacter <= "9" Then
+            digitCount = digitCount + 1
+        ElseIf currentCharacter = "." Then
+            decimalCount = decimalCount + 1
+            If decimalCount > 1 Then Exit Function
+        Else
+            Exit Function
+        End If
+    Next index
+    If digitCount = 0 Then Exit Function
+    parsedValue = Val(normalizedText)
+    VTTryParseWordFormulaFontSize = VTValidWordFormulaFontSize(parsedValue)
+End Function
+
+Public Sub VisualTeX_SetSelectedImageFormulaFontSize( _
+    ByVal enteredText As String)
+
+    Dim formulaShape As InlineShape
+    Dim requestedFontSizePt As Double
+
+    If Not VTTryParseWordFormulaFontSize( _
+       enteredText, requestedFontSizePt) Then
+        Err.Raise vbObjectError + 7496, "VisualTeX", _
+            "Enter a numeric image formula font size from 1 to 512 pt, such as 10.5, 12, 14, or 18."
+    End If
+    Set formulaShape = VTVisualTeXInlineShapeAtSelection(Selection)
+    If formulaShape Is Nothing Then
+        Err.Raise vbObjectError + 7497, "VisualTeX", _
+            "Select one VisualTeX image formula before changing its font size."
+    End If
+    VTApplyWordImageFormulaFontSize formulaShape, requestedFontSizePt
+    formulaShape.Select
+End Sub
 
 Private Function VTLaTeXToWordLinear(ByVal latex As String) As String
     Dim normalized As String

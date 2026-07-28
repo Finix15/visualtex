@@ -523,6 +523,10 @@ pub(crate) fn metadata_from_session(session: &OfficeFormulaSession) -> VisualTeX
             .as_ref()
             .map(|value| value.height)
             .filter(|value| value.is_finite() && *value > 0.0),
+        font_size_pt: original.and_then(|value| value.font_size_pt),
+        reference_width_pt: original.and_then(|value| value.reference_width_pt),
+        reference_height_pt: original.and_then(|value| value.reference_height_pt),
+        reference_baseline_pt: original.and_then(|value| value.reference_baseline_pt),
         created_with_version: original
             .map(|value| value.created_with_version.clone())
             .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string()),

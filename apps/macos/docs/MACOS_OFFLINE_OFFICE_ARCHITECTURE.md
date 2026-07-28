@@ -12,7 +12,7 @@ This document defines the native, completely offline macOS Word and PowerPoint i
 - The AppleScriptTask scripts accept no shell command, file path, LaTeX, image data, or arbitrary URL. They validate the UUID and open the fixed URL `visualtex://office/open?session=<uuid>` with `/usr/bin/open` and `quoted form of`.
 - Formula request and result payloads are local files under the Office application-group container at `~/Library/Group Containers/UBF8T346G9.Office/VisualTeX/OfficeSessions/<session-id>/`, which is accessible to both sandboxed Office hosts and the desktop app.
 - The Tauri application imports the request into the existing `SessionStore`; formula editing and export reuse the existing Office editor and metadata schema.
-- macOS continues to store formulas as PNG/SVG-backed `InlineShape`/`Shape` objects. It never registers or pretends to provide the Windows `VisualTeX.Formula.1` COM/OLE class.
+- macOS stores Word and PowerPoint picture formulas as SVG-backed `InlineShape`/`Shape` objects. PowerPoint imports the SVG directly. Word imports a minimal DOCX containing the SVG blip because Word for Mac VBA rejects raw `.svg` files through `InlineShapes.AddPicture`; PNG is retained only as the SVG compatibility preview and emergency fallback. It never registers or pretends to provide the Windows `VisualTeX.Formula.1` COM/OLE class.
 - No Office.js, XML manifest, trusted-certificate installation, WebView task pane, external network access, menu-language matching, coordinate clicking, mouse simulation, or keyboard simulation is part of this route. A private loopback TLS companion remains for Session/OCR APIs only. Double-click editing is handled by the host's native `Application.WindowBeforeDoubleClick` VBA event.
 
 ## Runtime sequence
@@ -23,8 +23,8 @@ This document defines the native, completely offline macOS Word and PowerPoint i
 2. VBA inserts a one-pixel transparent pending `InlineShape` at the current Range, writes the exact marker `visualtex:pending:v1:<sessionId>:<formulaId>` to `Title` and `AlternativeText`, and moves the Word caret after that object so pressing Enter cannot relocate the transaction target.
 3. VBA atomically writes `request.json` and calls `AppleScriptTask("VisualTeXWord.scpt", "OpenVisualTeXSession", sessionId)`.
 4. VisualTeX receives the custom URL, validates the UUID, imports the request into `SessionStore`, and opens a local Tauri editor window.
-5. On commit, VisualTeX writes an authenticated-by-location, strictly validated `dispatch.txt`, materializes the PNG locally, and asks Word to run the fixed `VTWordAdapter.VisualTeX_ApplyPendingResult` macro.
-6. The macro locates the pending object by its exact marker, creates and fully configures the replacement, and deletes the old object only after success.
+5. On commit, VisualTeX writes an authenticated-by-location, strictly validated `dispatch.txt`, materializes the validated SVG, its PNG compatibility preview, and `formula-svg.docx`, a minimal OOXML package that embeds both image parts.
+6. The macro opens `formula-svg.docx` invisibly, transfers Word's parsed SVG `InlineShape` through `FormattedText`, fully configures the replacement, and deletes the old object only after success. It uses the PNG only if that vector-document import fails.
 7. On cancel, the same fixed macro removes only the matching pending object. Closing a non-empty native editor performs the same commit transaction; closing an empty editor performs this cancel transaction before the Tauri window closes.
 
 ### Word edit
@@ -45,7 +45,9 @@ VBA creates a centered pending shape for create, or captures one selected formul
   OfficeSessions/<session-id>/
     request.json
     dispatch.txt
-    formula.png
+    formula.svg
+    formula-svg.docx  # Word SVG staging package
+    formula.png       # SVG preview and emergency fallback
   OfficePluginStatus/
     word.json
     powerpoint.json

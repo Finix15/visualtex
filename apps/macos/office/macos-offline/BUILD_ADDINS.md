@@ -14,7 +14,7 @@ The repository keeps VBA and Ribbon XML as reviewable source. Do not commit an e
    - `word/VTWordAdapter.bas`
    - `word/VTWordEvents.cls`
    - `word/VTRibbonCallbacks.bas`
-3. Run **Debug → Compile VBAProject**. Confirm `VTWordEvents` compiles and `AutoExec` initializes the application event sink.
+3. Run **Debug → Compile VBAProject**. Confirm `VTWordEvents` compiles, `AutoExec` initializes the application event sink, and the compiled project contains `word-svg-baseline-number-font-20260728-r50`, `App_WindowSelectionChange`, `VTWordRibbonApplyImageFontSizePreset`, and `VTRefreshNumberedImageFormulaFontLayout`.
 4. Save the template as exactly `VisualTeX.dotm`.
 5. Quit Word before packaging so Office has flushed `vbaProject.bin`.
 
@@ -32,7 +32,7 @@ PowerPoint for Mac loads `.ppam` files as add-ins and does not provide a reliabl
    - `powerpoint/VTPowerPointAdapter.bas`
    - `powerpoint/VTPowerPointEvents.cls`
    - `powerpoint/VTRibbonCallbacks.bas`
-3. Run **Debug → Compile VBAProject**. Confirm `VTPowerPointEvents` compiles and `Auto_Open` initializes the application event sink.
+3. Run **Debug → Compile VBAProject**. Confirm `VTPowerPointEvents` compiles, `Auto_Open` initializes the application event sink, and the compiled project contains `powerpoint-svg-font-size-dropdown-unicode-20260727-r3`, `App_WindowSelectionChange`, and `VTPowerPointRibbonApplyFormulaFontSizePreset`.
 4. Save the editable build input as a `.pptm` file and quit PowerPoint so Office flushes `ppt/vbaProject.bin`.
 5. Keep a known-good `VisualTeX.ppam` as the package shell. Do not attempt to open or edit the PPAM directly on macOS.
 

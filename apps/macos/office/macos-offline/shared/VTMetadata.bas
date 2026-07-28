@@ -1,6 +1,154 @@
 Attribute VB_Name = "VTMetadata"
 Option Explicit
 
+Public Function VTUnicodeText(ParamArray codePoints() As Variant) As String
+    Dim index As Long
+    Dim codePoint As Long
+
+    For index = LBound(codePoints) To UBound(codePoints)
+        codePoint = CLng(codePoints(index))
+        If codePoint < 0 Or codePoint > 65535 Then
+            Err.Raise vbObjectError + 7214, "VisualTeX", _
+                "The requested Ribbon Unicode code point is invalid."
+        End If
+        If codePoint > 32767 Then codePoint = codePoint - 65536
+        VTUnicodeText = VTUnicodeText & ChrW(codePoint)
+    Next index
+End Function
+
+Public Function VTFormulaFontPresetCount() As Long
+    VTFormulaFontPresetCount = 20
+End Function
+
+Public Function VTFormulaFontPresetSize( _
+    ByVal presetIndex As Long) As Double
+
+    Select Case presetIndex
+        Case 0: VTFormulaFontPresetSize = 5#
+        Case 1: VTFormulaFontPresetSize = 5.5
+        Case 2: VTFormulaFontPresetSize = 6.5
+        Case 3: VTFormulaFontPresetSize = 7.5
+        Case 4: VTFormulaFontPresetSize = 9#
+        Case 5: VTFormulaFontPresetSize = 10.5
+        Case 6: VTFormulaFontPresetSize = 12#
+        Case 7: VTFormulaFontPresetSize = 14#
+        Case 8: VTFormulaFontPresetSize = 15#
+        Case 9: VTFormulaFontPresetSize = 16#
+        Case 10: VTFormulaFontPresetSize = 18#
+        Case 11: VTFormulaFontPresetSize = 22#
+        Case 12: VTFormulaFontPresetSize = 24#
+        Case 13: VTFormulaFontPresetSize = 26#
+        Case 14: VTFormulaFontPresetSize = 36#
+        Case 15: VTFormulaFontPresetSize = 42#
+        Case 16: VTFormulaFontPresetSize = 48#
+        Case 17: VTFormulaFontPresetSize = 54#
+        Case 18: VTFormulaFontPresetSize = 72#
+        Case 19: VTFormulaFontPresetSize = 96#
+        Case Else
+            Err.Raise vbObjectError + 7212, "VisualTeX", _
+                "The requested formula font-size preset does not exist."
+    End Select
+End Function
+
+Public Function VTFormulaFontPresetLabel( _
+    ByVal presetIndex As Long) As String
+
+    Select Case presetIndex
+        Case 0
+            VTFormulaFontPresetLabel = _
+                VTUnicodeText(20843, 21495) & " (5 pt)"
+        Case 1
+            VTFormulaFontPresetLabel = _
+                VTUnicodeText(19971, 21495) & " (5.5 pt)"
+        Case 2
+            VTFormulaFontPresetLabel = _
+                VTUnicodeText(23567, 20845) & " (6.5 pt)"
+        Case 3
+            VTFormulaFontPresetLabel = _
+                VTUnicodeText(20845, 21495) & " (7.5 pt)"
+        Case 4
+            VTFormulaFontPresetLabel = _
+                VTUnicodeText(23567, 20116) & " (9 pt)"
+        Case 5
+            VTFormulaFontPresetLabel = _
+                VTUnicodeText(20116, 21495) & " (10.5 pt)"
+        Case 6
+            VTFormulaFontPresetLabel = _
+                VTUnicodeText(23567, 22235) & " (12 pt)"
+        Case 7
+            VTFormulaFontPresetLabel = _
+                VTUnicodeText(22235, 21495) & " (14 pt)"
+        Case 8
+            VTFormulaFontPresetLabel = _
+                VTUnicodeText(23567, 19977) & " (15 pt)"
+        Case 9
+            VTFormulaFontPresetLabel = _
+                VTUnicodeText(19977, 21495) & " (16 pt)"
+        Case 10
+            VTFormulaFontPresetLabel = _
+                VTUnicodeText(23567, 20108) & " (18 pt)"
+        Case 11
+            VTFormulaFontPresetLabel = _
+                VTUnicodeText(20108, 21495) & " (22 pt)"
+        Case 12
+            VTFormulaFontPresetLabel = _
+                VTUnicodeText(23567, 19968) & " (24 pt)"
+        Case 13
+            VTFormulaFontPresetLabel = _
+                VTUnicodeText(19968, 21495) & " (26 pt)"
+        Case 14
+            VTFormulaFontPresetLabel = _
+                VTUnicodeText(23567, 21021) & " (36 pt)"
+        Case 15
+            VTFormulaFontPresetLabel = _
+                VTUnicodeText(21021, 21495) & " (42 pt)"
+        Case 16
+            VTFormulaFontPresetLabel = "48 pt"
+        Case 17
+            VTFormulaFontPresetLabel = "54 pt"
+        Case 18
+            VTFormulaFontPresetLabel = "72 pt"
+        Case 19
+            VTFormulaFontPresetLabel = "96 pt"
+        Case Else
+            Err.Raise vbObjectError + 7213, "VisualTeX", _
+                "The requested formula font-size label does not exist."
+    End Select
+End Function
+
+Public Function VTFormulaFontPresetIndex( _
+    ByVal fontSizePt As Double) As Long
+
+    Dim presetIndex As Long
+
+    VTFormulaFontPresetIndex = -1
+    For presetIndex = 0 To VTFormulaFontPresetCount() - 1
+        If Abs(fontSizePt - VTFormulaFontPresetSize(presetIndex)) <= 0.05 Then
+            VTFormulaFontPresetIndex = presetIndex
+            Exit Function
+        End If
+    Next presetIndex
+End Function
+
+Public Function VTFormulaFontSizeDisplayLabel( _
+    ByVal fontSizePt As Double) As String
+
+    Dim presetIndex As Long
+
+    presetIndex = VTFormulaFontPresetIndex(fontSizePt)
+    If presetIndex >= 0 Then
+        VTFormulaFontSizeDisplayLabel = _
+            VTFormulaFontPresetLabel(presetIndex)
+    ElseIf fontSizePt > 0# Then
+        VTFormulaFontSizeDisplayLabel = _
+            VTUnicodeText(33258, 23450, 20041) & " (" & _
+            VTJsonNumber(fontSizePt) & " pt)"
+    Else
+        VTFormulaFontSizeDisplayLabel = _
+            VTUnicodeText(26410, 36873, 25321, 20844, 24335)
+    End If
+End Function
+
 Public Function VTIsEncodedMetadata(ByVal value As String) As Boolean
     Dim index As Long
     Dim current As String
@@ -89,7 +237,11 @@ Public Function VTRequestJson( _
     ByVal sourceObjectId As String, _
     ByVal encodedMetadata As String, _
     ByVal pendingMarker As String, _
-    Optional ByVal powerPointJson As String = "") As String
+    Optional ByVal powerPointJson As String = "", _
+    Optional ByVal nativeEquation As Boolean = False, _
+    Optional ByVal fontSizePt As Double = 0#, _
+    Optional ByVal referenceWidthPt As Double = 0#, _
+    Optional ByVal referenceHeightPt As Double = 0#) As String
 
     If Not VTIsCanonicalUuid(sessionId) Then
         Err.Raise vbObjectError + 7203, "VisualTeX", "Invalid VisualTeX Session id."
@@ -112,6 +264,16 @@ Public Function VTRequestJson( _
     If Len(encodedMetadata) > 0 And Not VTIsEncodedMetadata(encodedMetadata) Then
         Err.Raise vbObjectError + 7209, "VisualTeX", "Invalid VisualTeX metadata envelope."
     End If
+    If fontSizePt < 0# Or referenceWidthPt < 0# Or referenceHeightPt < 0# Then
+        Err.Raise vbObjectError + 7210, "VisualTeX", _
+            "Word image font-size metadata cannot be negative."
+    End If
+    If hostName <> "word" And _
+       (nativeEquation Or fontSizePt > 0# Or referenceWidthPt > 0# Or _
+        referenceHeightPt > 0#) Then
+        Err.Raise vbObjectError + 7211, "VisualTeX", _
+            "PowerPoint requests cannot contain Word-only formula metadata."
+    End If
 
     VTRequestJson = "{" & _
         """protocolVersion"":" & CStr(VT_PROTOCOL_VERSION) & "," & _
@@ -121,10 +283,14 @@ Public Function VTRequestJson( _
         """formulaId"":" & VTJsonNullableString(formulaId) & "," & _
         """displayMode"":" & VTJsonString(displayMode) & "," & _
         """numbered"":" & VTJsonBoolean(numbered) & "," & _
+        """nativeEquation"":" & VTJsonBoolean(nativeEquation) & "," & _
         """sourceDocumentId"":" & VTJsonNullableString(sourceDocumentId) & "," & _
         """sourceObjectId"":" & VTJsonNullableString(sourceObjectId) & "," & _
         """encodedMetadata"":" & VTJsonNullableString(encodedMetadata) & "," & _
         """pendingMarker"":" & VTJsonNullableString(pendingMarker) & "," & _
+        """fontSizePt"":" & IIf(fontSizePt > 0#, VTJsonNumber(fontSizePt), "null") & "," & _
+        """referenceWidthPt"":" & IIf(referenceWidthPt > 0#, VTJsonNumber(referenceWidthPt), "null") & "," & _
+        """referenceHeightPt"":" & IIf(referenceHeightPt > 0#, VTJsonNumber(referenceHeightPt), "null") & "," & _
         """powerPoint"":" & IIf(Len(powerPointJson) = 0, "null", powerPointJson) & _
         "}"
 End Function

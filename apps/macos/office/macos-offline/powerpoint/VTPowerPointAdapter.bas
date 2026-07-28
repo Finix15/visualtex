@@ -3,10 +3,24 @@ Option Explicit
 
 Private Const VT_POWERPOINT_HOST As String = "powerpoint"
 Private Const VT_POWERPOINT_STATUS_FILE As String = "/OfficePluginStatus/powerpoint.json"
+Private Const VT_POWERPOINT_SOURCE_REVISION As String = _
+    "powerpoint-svg-font-size-dropdown-unicode-20260727-r3"
 Private Const VT_SHAPE_PREFIX As String = "VisualTeX_"
 Private Const VT_DEFAULT_PLACEHOLDER_WIDTH As Single = 180!
 Private Const VT_DEFAULT_PLACEHOLDER_HEIGHT As Single = 42!
+Private Const VT_POWERPOINT_REFERENCE_FONT_SIZE_PT As Double = 14#
+Private Const VT_POWERPOINT_DEFAULT_FONT_SIZE_PT As Double = 18#
+Private Const VT_POWERPOINT_MIN_FONT_SIZE_PT As Double = 1#
+Private Const VT_POWERPOINT_MAX_FONT_SIZE_PT As Double = 512#
+Private Const VT_POWERPOINT_FONT_CONTROL_ID As String = _
+    "VisualTeX.Mac.PowerPoint.FormulaFontSize"
+Private Const VT_POWERPOINT_FONT_TAG As String = "VisualTeXFontSizePt"
+Private Const VT_POWERPOINT_REFERENCE_WIDTH_TAG As String = _
+    "VisualTeXReferenceWidthPt"
+Private Const VT_POWERPOINT_REFERENCE_HEIGHT_TAG As String = _
+    "VisualTeXReferenceHeightPt"
 Private VT_POWERPOINT_EVENT_SINK As VTPowerPointEvents
+Private VT_POWERPOINT_RIBBON As IRibbonUI
 
 Public Sub Auto_Open()
     On Error Resume Next
@@ -18,6 +32,13 @@ End Sub
 Public Sub VTInitializePowerPointEvents()
     Set VT_POWERPOINT_EVENT_SINK = New VTPowerPointEvents
     Set VT_POWERPOINT_EVENT_SINK.App = PowerPoint.Application
+End Sub
+
+Public Sub VTPowerPointRibbonOnLoad(ByVal ribbon As IRibbonUI)
+    Set VT_POWERPOINT_RIBBON = ribbon
+    VTInitializePowerPointEvents
+    VTInvalidatePowerPointFormulaFontSizeControl
+    VTWritePowerPointHealth
 End Sub
 
 Public Sub VisualTeX_NewFormula()
@@ -32,11 +53,15 @@ Public Sub VisualTeX_NewFormula()
     Dim slideHeight As Single
     Dim requestJson As String
     Dim powerPointJson As String
+    Dim requestedFontSizePt As Double
     Dim failureStage As String
 
     failureStage = "validate presentation"
     VTRequireWritablePowerPointPresentation
     Set currentSlide = ActiveWindow.View.Slide
+
+    failureStage = "resolve formula font size"
+    requestedFontSizePt = VTPreferredPowerPointFormulaFontSize()
 
     failureStage = "create identifiers"
     sessionId = VTNewUuidV4()
@@ -66,10 +91,13 @@ Public Sub VisualTeX_NewFormula()
     VTSetShapeTag placeholder, "VisualTeXFormulaId", formulaId
     VTSetShapeTag placeholder, "VisualTeXSessionId", sessionId
     VTSetShapeTag placeholder, "VisualTeXPending", "1"
+    VTSetShapeTag placeholder, VT_POWERPOINT_FONT_TAG, _
+        VTJsonNumber(requestedFontSizePt)
     placeholder.AlternativeText = pendingMarker
 
     failureStage = "build request"
-    powerPointJson = VTPowerPointGeometryJson(currentSlide, placeholder)
+    powerPointJson = VTPowerPointGeometryJson( _
+        currentSlide, placeholder, requestedFontSizePt)
     requestJson = VTRequestJson( _
         sessionId, _
         VT_POWERPOINT_HOST, _
@@ -161,6 +189,9 @@ Private Sub VTPowerPointEditShape(ByVal selectedShape As Shape)
     Dim sessionId As String
     Dim requestJson As String
     Dim powerPointJson As String
+    Dim fontSizePt As Double
+    Dim referenceWidthPt As Double
+    Dim referenceHeightPt As Double
 
     If selectedShape Is Nothing Then
         Err.Raise vbObjectError + 7500, "VisualTeX", "Select one VisualTeX formula shape."
@@ -173,9 +204,13 @@ Private Sub VTPowerPointEditShape(ByVal selectedShape As Shape)
     If Len(formulaId) = 0 Then
         Err.Raise vbObjectError + 7500, "VisualTeX", "The selected PowerPoint shape has no VisualTeX formula id."
     End If
+    VTEnsurePowerPointFormulaScaleState _
+        selectedShape, fontSizePt, referenceWidthPt, referenceHeightPt
 
     sessionId = VTNewUuidV4()
-    powerPointJson = VTPowerPointGeometryJson(ActiveWindow.View.Slide, selectedShape)
+    powerPointJson = VTPowerPointGeometryJson( _
+        ActiveWindow.View.Slide, selectedShape, fontSizePt, _
+        referenceWidthPt, referenceHeightPt)
     requestJson = VTRequestJson( _
         sessionId, _
         VT_POWERPOINT_HOST, _
@@ -260,6 +295,9 @@ Private Sub VTFinalizePowerPointDispatch(ByVal sessionId As String, ByVal dispat
     Dim targetWidth As Double
     Dim targetHeight As Double
     Dim targetRotation As Double
+    Dim fontSizePt As Double
+    Dim referenceWidthPt As Double
+    Dim referenceHeightPt As Double
     Dim currentSlide As Slide
     Dim committed As Shape
     Dim original As Shape
@@ -282,6 +320,9 @@ Private Sub VTFinalizePowerPointDispatch(ByVal sessionId As String, ByVal dispat
     VTRequireDispatchValue dispatch, "targetTop"
     VTRequireDispatchValue dispatch, "targetWidth"
     VTRequireDispatchValue dispatch, "targetHeight"
+    VTRequireDispatchValue dispatch, "fontSizePt"
+    VTRequireDispatchValue dispatch, "referenceWidthPt"
+    VTRequireDispatchValue dispatch, "referenceHeightPt"
     VTRequireDispatchValue dispatch, "rotation"
     VTRequireDispatchValue dispatch, "zOrder"
 
@@ -298,11 +339,21 @@ Private Sub VTFinalizePowerPointDispatch(ByVal sessionId As String, ByVal dispat
     targetTop = VTDispatchDoublePpt(dispatch, "targetTop")
     targetWidth = VTDispatchPositiveDoublePpt(dispatch, "targetWidth")
     targetHeight = VTDispatchPositiveDoublePpt(dispatch, "targetHeight")
+    fontSizePt = VTDispatchPositiveDoublePpt(dispatch, "fontSizePt")
+    referenceWidthPt = VTDispatchPositiveDoublePpt( _
+        dispatch, "referenceWidthPt")
+    referenceHeightPt = VTDispatchPositiveDoublePpt( _
+        dispatch, "referenceHeightPt")
     targetRotation = VTDispatchDoublePpt(dispatch, "rotation")
     targetZOrder = CLng(dispatch("zOrder"))
 
-    If Not VTIsCanonicalUuid(formulaId) Or shapeName <> VT_SHAPE_PREFIX & formulaId Or Not VTIsEncodedMetadata(metadata) Then
-        Err.Raise vbObjectError + 7504, "VisualTeX", "VisualTeX PowerPoint result metadata is invalid."
+    If Not VTIsCanonicalUuid(formulaId) Or _
+       shapeName <> VT_SHAPE_PREFIX & formulaId Or _
+       Not VTIsEncodedMetadata(metadata) Or _
+       Not VTValidPowerPointFormulaFontSize(fontSizePt) Or _
+       referenceWidthPt <= 0# Or referenceHeightPt <= 0# Then
+        Err.Raise vbObjectError + 7504, "VisualTeX", _
+            "VisualTeX PowerPoint result metadata is invalid."
     End If
     formulaReference = VTFormulaReference(formulaId, "block", False)
     If expectedPresentation <> VTPresentationIdentity() Then
@@ -330,7 +381,8 @@ Private Sub VTFinalizePowerPointDispatch(ByVal sessionId As String, ByVal dispat
     If Not committed Is Nothing Then
         If VTIsCommittedPowerPointShape( _
             committed, shapeName, formulaReference, metadata, formulaId, sessionId, _
-            targetLeft, targetTop, targetWidth, targetHeight, targetRotation, targetZOrder) Then
+            targetLeft, targetTop, targetWidth, targetHeight, targetRotation, _
+            targetZOrder, fontSizePt, referenceWidthPt, referenceHeightPt) Then
             Exit Sub
         End If
     End If
@@ -389,6 +441,8 @@ Private Sub VTFinalizePowerPointDispatch(ByVal sessionId As String, ByVal dispat
     VTSetShapeTag candidate, "VisualTeXFormulaId", formulaId
     VTSetShapeTag candidate, "VisualTeXSessionId", sessionId
     VTSetShapeTag candidate, "VisualTeXPending", "0"
+    VTSetPowerPointFormulaScaleState _
+        candidate, fontSizePt, referenceWidthPt, referenceHeightPt
     On Error Resume Next
     VTSetShapeTag candidate, "VisualTeXMetadata", metadata
     Err.Clear
@@ -409,7 +463,12 @@ Private Sub VTFinalizePowerPointDispatch(ByVal sessionId As String, ByVal dispat
        candidate.AlternativeText <> metadata Or candidate.Title <> formulaReference Or _
        candidate.Tags("VisualTeXFormulaId") <> formulaId Or _
        candidate.Tags("VisualTeXSessionId") <> sessionId Or _
-       candidate.Tags("VisualTeXPending") <> "0" Then
+       candidate.Tags("VisualTeXPending") <> "0" Or _
+       candidate.Tags(VT_POWERPOINT_FONT_TAG) <> VTJsonNumber(fontSizePt) Or _
+       candidate.Tags(VT_POWERPOINT_REFERENCE_WIDTH_TAG) <> _
+            VTJsonNumber(referenceWidthPt) Or _
+       candidate.Tags(VT_POWERPOINT_REFERENCE_HEIGHT_TAG) <> _
+            VTJsonNumber(referenceHeightPt) Then
         Err.Raise vbObjectError + 7520, "VisualTeX", "PowerPoint did not persist the VisualTeX formula properties."
     End If
 
@@ -440,7 +499,10 @@ Private Function VTIsCommittedPowerPointShape( _
     ByVal targetWidth As Double, _
     ByVal targetHeight As Double, _
     ByVal targetRotation As Double, _
-    ByVal targetZOrder As Long) As Boolean
+    ByVal targetZOrder As Long, _
+    ByVal fontSizePt As Double, _
+    ByVal referenceWidthPt As Double, _
+    ByVal referenceHeightPt As Double) As Boolean
 
     On Error GoTo NotCommitted
     VTIsCommittedPowerPointShape = _
@@ -455,7 +517,12 @@ Private Function VTIsCommittedPowerPointShape( _
         target.Title = formulaReference And _
         target.Tags("VisualTeXFormulaId") = formulaId And _
         target.Tags("VisualTeXSessionId") = sessionId And _
-        target.Tags("VisualTeXPending") = "0"
+        target.Tags("VisualTeXPending") = "0" And _
+        target.Tags(VT_POWERPOINT_FONT_TAG) = VTJsonNumber(fontSizePt) And _
+        target.Tags(VT_POWERPOINT_REFERENCE_WIDTH_TAG) = _
+            VTJsonNumber(referenceWidthPt) And _
+        target.Tags(VT_POWERPOINT_REFERENCE_HEIGHT_TAG) = _
+            VTJsonNumber(referenceHeightPt)
     Exit Function
 
 NotCommitted:
@@ -543,7 +610,431 @@ Private Function VTFindUniqueFormulaShape(ByVal shapeName As String) As Shape
     Set VTFindUniqueFormulaShape = match
 End Function
 
-Private Function VTPowerPointGeometryJson(ByVal currentSlide As Slide, ByVal target As Shape) As String
+Private Function VTValidPowerPointFormulaFontSize( _
+    ByVal value As Double) As Boolean
+
+    VTValidPowerPointFormulaFontSize = _
+        value >= VT_POWERPOINT_MIN_FONT_SIZE_PT And _
+        value <= VT_POWERPOINT_MAX_FONT_SIZE_PT
+End Function
+
+Private Function VTTryReadPowerPointShapeTagDouble( _
+    ByVal target As Shape, _
+    ByVal tagName As String, _
+    ByRef value As Double) As Boolean
+
+    Dim storedValue As String
+
+    value = 0#
+    If target Is Nothing Or Len(tagName) = 0 Then Exit Function
+    On Error GoTo InvalidValue
+    storedValue = target.Tags(tagName)
+    If Len(storedValue) = 0 Then Exit Function
+    value = VTParseInvariantDouble(storedValue)
+    If Abs(value) > 10000000# Then Exit Function
+    VTTryReadPowerPointShapeTagDouble = True
+    Exit Function
+
+InvalidValue:
+    value = 0#
+    Err.Clear
+End Function
+
+Private Sub VTSetPowerPointFormulaScaleState( _
+    ByVal target As Shape, _
+    ByVal fontSizePt As Double, _
+    ByVal referenceWidthPt As Double, _
+    ByVal referenceHeightPt As Double)
+
+    If target Is Nothing Or _
+       Not VTValidPowerPointFormulaFontSize(fontSizePt) Or _
+       referenceWidthPt <= 0# Or referenceHeightPt <= 0# Or _
+       referenceWidthPt > 10000# Or referenceHeightPt > 10000# Then
+        Err.Raise vbObjectError + 7523, "VisualTeX", _
+            "The PowerPoint formula point-size state is invalid."
+    End If
+    VTSetShapeTag target, VT_POWERPOINT_FONT_TAG, VTJsonNumber(fontSizePt)
+    VTSetShapeTag target, VT_POWERPOINT_REFERENCE_WIDTH_TAG, _
+        VTJsonNumber(referenceWidthPt)
+    VTSetShapeTag target, VT_POWERPOINT_REFERENCE_HEIGHT_TAG, _
+        VTJsonNumber(referenceHeightPt)
+End Sub
+
+Private Sub VTEnsurePowerPointFormulaScaleState( _
+    ByVal target As Shape, _
+    ByRef fontSizePt As Double, _
+    ByRef referenceWidthPt As Double, _
+    ByRef referenceHeightPt As Double)
+
+    Dim hasFontSize As Boolean
+    Dim hasReferenceWidth As Boolean
+    Dim hasReferenceHeight As Boolean
+    Dim observedFontSizePt As Double
+
+    If target Is Nothing Or Not VTIsVisualTeXPowerPointShape(target) Then
+        Err.Raise vbObjectError + 7524, "VisualTeX", _
+            "Select one VisualTeX PowerPoint SVG formula."
+    End If
+    hasFontSize = VTTryReadPowerPointShapeTagDouble( _
+        target, VT_POWERPOINT_FONT_TAG, fontSizePt)
+    hasReferenceWidth = VTTryReadPowerPointShapeTagDouble( _
+        target, VT_POWERPOINT_REFERENCE_WIDTH_TAG, referenceWidthPt)
+    hasReferenceHeight = VTTryReadPowerPointShapeTagDouble( _
+        target, VT_POWERPOINT_REFERENCE_HEIGHT_TAG, referenceHeightPt)
+
+    If Not hasFontSize Or _
+       Not VTValidPowerPointFormulaFontSize(fontSizePt) Then
+        fontSizePt = VT_POWERPOINT_DEFAULT_FONT_SIZE_PT
+    End If
+    If Not hasReferenceWidth Or Not hasReferenceHeight Or _
+       referenceWidthPt <= 0# Or referenceHeightPt <= 0# Then
+        referenceWidthPt = target.Width * _
+            VT_POWERPOINT_REFERENCE_FONT_SIZE_PT / fontSizePt
+        referenceHeightPt = target.Height * _
+            VT_POWERPOINT_REFERENCE_FONT_SIZE_PT / fontSizePt
+    Else
+        observedFontSizePt = target.Height / referenceHeightPt * _
+            VT_POWERPOINT_REFERENCE_FONT_SIZE_PT
+        If VTValidPowerPointFormulaFontSize(observedFontSizePt) Then
+            fontSizePt = observedFontSizePt
+        End If
+    End If
+    VTSetPowerPointFormulaScaleState _
+        target, fontSizePt, referenceWidthPt, referenceHeightPt
+End Sub
+
+Private Function VTPreferredPowerPointFormulaFontSize() As Double
+    Dim selectedShape As Shape
+    Dim selectedSize As Double
+    Dim referenceWidthPt As Double
+    Dim referenceHeightPt As Double
+
+    selectedSize = VT_POWERPOINT_DEFAULT_FONT_SIZE_PT
+    On Error GoTo UseDefault
+    If ActiveWindow Is Nothing Then GoTo UseDefault
+    If ActiveWindow.Selection.Type = ppSelectionText Then
+        selectedSize = ActiveWindow.Selection.TextRange.Font.Size
+    ElseIf ActiveWindow.Selection.Type = ppSelectionShapes And _
+           ActiveWindow.Selection.ShapeRange.Count = 1 Then
+        Set selectedShape = ActiveWindow.Selection.ShapeRange(1)
+        If VTIsVisualTeXPowerPointShape(selectedShape) Then
+            VTEnsurePowerPointFormulaScaleState _
+                selectedShape, selectedSize, referenceWidthPt, referenceHeightPt
+        ElseIf selectedShape.HasTextFrame = msoTrue Then
+            If selectedShape.TextFrame.HasText = msoTrue Then
+                selectedSize = selectedShape.TextFrame.TextRange.Font.Size
+            End If
+        End If
+    End If
+
+UseDefault:
+    If Not VTValidPowerPointFormulaFontSize(selectedSize) Then
+        selectedSize = VT_POWERPOINT_DEFAULT_FONT_SIZE_PT
+    End If
+    VTPreferredPowerPointFormulaFontSize = selectedSize
+End Function
+
+Private Sub VTApplyPowerPointFormulaFontSize( _
+    ByVal target As Shape, _
+    ByVal requestedFontSizePt As Double)
+
+    Dim storedFontSizePt As Double
+    Dim referenceWidthPt As Double
+    Dim referenceHeightPt As Double
+    Dim targetWidth As Double
+    Dim targetHeight As Double
+    Dim centerX As Double
+    Dim centerY As Double
+    Dim originalLeft As Single
+    Dim originalTop As Single
+    Dim originalWidth As Single
+    Dim originalHeight As Single
+    Dim resizeErrorNumber As Long
+    Dim resizeErrorDescription As String
+
+    If target Is Nothing Or _
+       Not VTValidPowerPointFormulaFontSize(requestedFontSizePt) Then
+        Err.Raise vbObjectError + 7525, "VisualTeX", _
+            "Enter a VisualTeX PowerPoint formula font size from 1 to 512 pt."
+    End If
+    VTEnsurePowerPointFormulaScaleState _
+        target, storedFontSizePt, referenceWidthPt, referenceHeightPt
+    targetWidth = referenceWidthPt * requestedFontSizePt / _
+        VT_POWERPOINT_REFERENCE_FONT_SIZE_PT
+    targetHeight = referenceHeightPt * requestedFontSizePt / _
+        VT_POWERPOINT_REFERENCE_FONT_SIZE_PT
+    If targetWidth <= 0# Or targetHeight <= 0# Or _
+       targetWidth > 10000# Or targetHeight > 10000# Then
+        Err.Raise vbObjectError + 7526, "VisualTeX", _
+            "The requested PowerPoint formula font size produces unsupported dimensions."
+    End If
+
+    originalLeft = target.Left
+    originalTop = target.Top
+    originalWidth = target.Width
+    originalHeight = target.Height
+    centerX = CDbl(originalLeft) + CDbl(originalWidth) / 2#
+    centerY = CDbl(originalTop) + CDbl(originalHeight) / 2#
+    On Error GoTo ResizeFailed
+    target.LockAspectRatio = msoFalse
+    target.Width = CSng(targetWidth)
+    target.Height = CSng(targetHeight)
+    target.Left = CSng(centerX - targetWidth / 2#)
+    target.Top = CSng(centerY - targetHeight / 2#)
+    target.LockAspectRatio = msoTrue
+    VTSetPowerPointFormulaScaleState _
+        target, requestedFontSizePt, referenceWidthPt, referenceHeightPt
+    If Abs(target.Width - targetWidth) > 0.1 Or _
+       Abs(target.Height - targetHeight) > 0.1 Or _
+       Abs((target.Left + target.Width / 2!) - centerX) > 0.1 Or _
+       Abs((target.Top + target.Height / 2!) - centerY) > 0.1 Then
+        Err.Raise vbObjectError + 7527, "VisualTeX", _
+            "PowerPoint did not persist the requested formula point size."
+    End If
+    VTInvalidatePowerPointFormulaFontSizeControl
+    Exit Sub
+
+ResizeFailed:
+    resizeErrorNumber = Err.Number
+    resizeErrorDescription = Err.Description
+    On Error Resume Next
+    target.LockAspectRatio = msoFalse
+    target.Left = originalLeft
+    target.Top = originalTop
+    target.Width = originalWidth
+    target.Height = originalHeight
+    target.LockAspectRatio = msoTrue
+    VTSetPowerPointFormulaScaleState _
+        target, storedFontSizePt, referenceWidthPt, referenceHeightPt
+    On Error GoTo 0
+    Err.Raise resizeErrorNumber, "VisualTeX PowerPoint formula font size", _
+        resizeErrorDescription
+End Sub
+
+Public Sub VisualTeX_SynchronizeSelectedFormulaSize( _
+    ByVal selected As PowerPoint.Selection)
+
+    Dim selectedShape As Shape
+    Dim fontSizePt As Double
+    Dim referenceWidthPt As Double
+    Dim referenceHeightPt As Double
+
+    On Error GoTo SynchronizeFinished
+    If selected Is Nothing Then Exit Sub
+    If selected.Type <> ppSelectionShapes Or _
+       selected.ShapeRange.Count <> 1 Then GoTo SynchronizeFinished
+    Set selectedShape = selected.ShapeRange(1)
+    If Not VTIsVisualTeXPowerPointShape(selectedShape) Then GoTo SynchronizeFinished
+    VTEnsurePowerPointFormulaScaleState _
+        selectedShape, fontSizePt, referenceWidthPt, referenceHeightPt
+
+SynchronizeFinished:
+    VTInvalidatePowerPointFormulaFontSizeControl
+End Sub
+
+Public Sub VisualTeX_SetSelectedFormulaFontSize( _
+    ByVal enteredText As String)
+
+    Dim selectedShape As Shape
+    Dim requestedFontSizePt As Double
+
+    If Not VTTryParsePowerPointFormulaFontSize( _
+       enteredText, requestedFontSizePt) Then
+        Err.Raise vbObjectError + 7528, "VisualTeX", _
+            "Enter a formula font size such as 18, 24, 28 or 32."
+    End If
+    Set selectedShape = VTSelectedSingleShape()
+    If Not VTIsVisualTeXPowerPointShape(selectedShape) Then
+        Err.Raise vbObjectError + 7529, "VisualTeX", _
+            "Select one VisualTeX PowerPoint SVG formula first."
+    End If
+    VTApplyPowerPointFormulaFontSize selectedShape, requestedFontSizePt
+End Sub
+
+Private Function VTTryParsePowerPointFormulaFontSize( _
+    ByVal enteredText As String, _
+    ByRef fontSizePt As Double) As Boolean
+
+    Dim normalized As String
+
+    fontSizePt = 0#
+    normalized = Trim$(enteredText)
+    If Len(normalized) = 0 Or Len(normalized) > 32 Then Exit Function
+    On Error GoTo InvalidSize
+    fontSizePt = VTParseInvariantDouble(normalized)
+    VTTryParsePowerPointFormulaFontSize = _
+        VTValidPowerPointFormulaFontSize(fontSizePt)
+    Exit Function
+
+InvalidSize:
+    fontSizePt = 0#
+    Err.Clear
+End Function
+
+Public Sub VTInvalidatePowerPointFormulaFontSizeControl()
+    On Error Resume Next
+    If Not VT_POWERPOINT_RIBBON Is Nothing Then
+        VT_POWERPOINT_RIBBON.InvalidateControl VT_POWERPOINT_FONT_CONTROL_ID
+    End If
+    On Error GoTo 0
+End Sub
+
+Private Function VTPowerPointSelectedFormulaFontState( _
+    ByRef formulaCount As Long, _
+    ByRef mixedSizes As Boolean, _
+    ByRef fontSizePt As Double) As Boolean
+
+    Dim candidate As Shape
+    Dim candidateSizePt As Double
+    Dim referenceWidthPt As Double
+    Dim referenceHeightPt As Double
+
+    formulaCount = 0
+    mixedSizes = False
+    fontSizePt = 0#
+    On Error GoTo StateFailed
+    If ActiveWindow Is Nothing Then Exit Function
+    If ActiveWindow.Selection.Type <> ppSelectionShapes Then Exit Function
+
+    For Each candidate In ActiveWindow.Selection.ShapeRange
+        If VTIsVisualTeXPowerPointShape(candidate) Then
+            VTEnsurePowerPointFormulaScaleState _
+                candidate, candidateSizePt, referenceWidthPt, _
+                referenceHeightPt
+            formulaCount = formulaCount + 1
+            If formulaCount = 1 Then
+                fontSizePt = candidateSizePt
+            ElseIf Abs(candidateSizePt - fontSizePt) > 0.05 Then
+                mixedSizes = True
+            End If
+        End If
+    Next candidate
+
+    VTPowerPointSelectedFormulaFontState = (formulaCount > 0)
+    Exit Function
+
+StateFailed:
+    formulaCount = 0
+    mixedSizes = False
+    fontSizePt = 0#
+    Err.Clear
+End Function
+
+Private Sub VTApplyPowerPointFontSizePresetToSelection( _
+    ByVal requestedFontSizePt As Double)
+
+    Dim candidate As Shape
+    Dim appliedCount As Long
+
+    If Not VTValidPowerPointFormulaFontSize(requestedFontSizePt) Then
+        Err.Raise vbObjectError + 7530, "VisualTeX", _
+            "The selected SVG formula font-size preset is invalid."
+    End If
+    If ActiveWindow Is Nothing Or _
+       ActiveWindow.Selection.Type <> ppSelectionShapes Then
+        Err.Raise vbObjectError + 7529, "VisualTeX", _
+            "Select one or more VisualTeX PowerPoint SVG formulas first."
+    End If
+
+    For Each candidate In ActiveWindow.Selection.ShapeRange
+        If VTIsVisualTeXPowerPointShape(candidate) Then
+            VTApplyPowerPointFormulaFontSize _
+                candidate, requestedFontSizePt
+            appliedCount = appliedCount + 1
+        End If
+    Next candidate
+    If appliedCount = 0 Then
+        Err.Raise vbObjectError + 7529, "VisualTeX", _
+            "Select one or more VisualTeX PowerPoint SVG formulas first."
+    End If
+    VTInvalidatePowerPointFormulaFontSizeControl
+End Sub
+
+Public Sub VTPowerPointRibbonGetFormulaFontSizeItemCount( _
+    ByVal control As IRibbonControl, _
+    ByRef returnedValue)
+
+    returnedValue = VTFormulaFontPresetCount() + 1
+End Sub
+
+Public Sub VTPowerPointRibbonGetFormulaFontSizeItemLabel( _
+    ByVal control As IRibbonControl, _
+    ByVal itemIndex As Integer, _
+    ByRef returnedValue)
+
+    Dim formulaCount As Long
+    Dim mixedSizes As Boolean
+    Dim fontSizePt As Double
+
+    On Error GoTo LabelFailed
+    If itemIndex = 0 Then
+        If Not VTPowerPointSelectedFormulaFontState( _
+           formulaCount, mixedSizes, fontSizePt) Then
+            returnedValue = _
+                VTUnicodeText(35831, 36873, 25321) & " SVG " & _
+                VTUnicodeText(20844, 24335)
+        ElseIf mixedSizes Then
+            returnedValue = _
+                VTUnicodeText(24403, 21069) & ": " & _
+                VTUnicodeText(28151, 21512, 23383, 21495)
+        Else
+            returnedValue = _
+                VTUnicodeText(24403, 21069) & ": " & _
+                VTFormulaFontSizeDisplayLabel(fontSizePt)
+        End If
+    Else
+        returnedValue = VTFormulaFontPresetLabel(itemIndex - 1)
+    End If
+    Exit Sub
+
+LabelFailed:
+    returnedValue = VTUnicodeText(23383, 21495)
+    Err.Clear
+End Sub
+
+Public Sub VTPowerPointRibbonGetFormulaFontSizeSelectedIndex( _
+    ByVal control As IRibbonControl, _
+    ByRef returnedValue)
+
+    Dim formulaCount As Long
+    Dim mixedSizes As Boolean
+    Dim fontSizePt As Double
+    Dim presetIndex As Long
+
+    returnedValue = 0
+    On Error GoTo SelectedFinished
+    If Not VTPowerPointSelectedFormulaFontState( _
+       formulaCount, mixedSizes, fontSizePt) Then Exit Sub
+    If mixedSizes Then Exit Sub
+    presetIndex = VTFormulaFontPresetIndex(fontSizePt)
+    If presetIndex >= 0 Then returnedValue = presetIndex + 1
+
+SelectedFinished:
+End Sub
+
+Public Sub VTPowerPointRibbonApplyFormulaFontSizePreset( _
+    ByVal control As IRibbonControl, _
+    ByVal selectedId As String, _
+    ByVal selectedIndex As Integer)
+
+    On Error GoTo Failed
+    If selectedIndex <= 0 Then Exit Sub
+    VTApplyPowerPointFontSizePresetToSelection _
+        VTFormulaFontPresetSize(selectedIndex - 1)
+    Exit Sub
+
+Failed:
+    VTShowError "PowerPoint SVG formula font size", _
+        Err.Number, Err.Description
+End Sub
+
+Private Function VTPowerPointGeometryJson( _
+    ByVal currentSlide As Slide, _
+    ByVal target As Shape, _
+    Optional ByVal fontSizePt As Double = 0#, _
+    Optional ByVal referenceWidthPt As Double = 0#, _
+    Optional ByVal referenceHeightPt As Double = 0#) As String
+
     VTPowerPointGeometryJson = "{" & _
         """presentationIdentity"":" & VTJsonString(VTPresentationIdentity()) & "," & _
         """slideIndex"":" & CStr(currentSlide.SlideIndex) & "," & _
@@ -554,7 +1045,13 @@ Private Function VTPowerPointGeometryJson(ByVal currentSlide As Slide, ByVal tar
         """width"":" & VTJsonNumber(target.Width) & "," & _
         """height"":" & VTJsonNumber(target.Height) & "," & _
         """rotation"":" & VTJsonNumber(target.Rotation) & "," & _
-        """zOrder"":" & CStr(target.ZOrderPosition) & _
+        """zOrder"":" & CStr(target.ZOrderPosition) & "," & _
+        """fontSizePt"":" & _
+            IIf(fontSizePt > 0#, VTJsonNumber(fontSizePt), "null") & "," & _
+        """referenceWidthPt"":" & _
+            IIf(referenceWidthPt > 0#, VTJsonNumber(referenceWidthPt), "null") & "," & _
+        """referenceHeightPt"":" & _
+            IIf(referenceHeightPt > 0#, VTJsonNumber(referenceHeightPt), "null") & _
         "}"
 End Function
 
@@ -634,6 +1131,8 @@ Private Sub VTWritePowerPointHealth()
     payload = "{" & _
         """loaded"":true," & _
         """pluginVersion"":" & VTJsonString(VT_PLUGIN_VERSION) & "," & _
+        """sourceRevision"":" & _
+            VTJsonString(VT_POWERPOINT_SOURCE_REVISION) & "," & _
         """host"":""powerpoint""," & _
         """timestamp"":" & VTJsonString(Format$(Now, "yyyy-mm-dd\Thh:nn:ss")) & _
         "}"
