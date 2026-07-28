@@ -3,9 +3,9 @@ import { rm, writeFile } from "node:fs/promises";
 import process from "node:process";
 
 const scenario = process.argv[2];
-if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "native-structure-audit", "native-structure-input-over", "native-structure-input-under", "native-structure-input-multi", "native-structure-input-core", "native-space-selection", "candidate-query-reset", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "accent-placeholder", "caret-probe", "vertical-structure-probe", "vertical-structure-navigation", "scripts", "upright", "suggestions", "navigation", "geometry", "source-layout", "toolbar-compact", "formula-tiles", "cursor-placement", "settings", "layout", "delete", "export"]).has(scenario)) {
+if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "native-structure-audit", "native-structure-input-over", "native-structure-input-under", "native-structure-input-multi", "native-structure-input-core", "native-space-selection", "candidate-query-reset", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "accent-placeholder", "caret-probe", "vertical-structure-probe", "vertical-structure-navigation", "scripts", "upright", "context-style", "suggestions", "navigation", "geometry", "source-layout", "toolbar-compact", "formula-tiles", "cursor-placement", "settings", "layout", "delete", "export"]).has(scenario)) {
   throw new Error(
-    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|native-structure-audit|native-structure-input-over|native-structure-input-under|native-structure-input-multi|native-structure-input-core|native-space-selection|candidate-query-reset|raw-placeholder-visual|placeholder-selection|structural-placeholder|accent-placeholder|caret-probe|vertical-structure-probe|vertical-structure-navigation|scripts|upright|suggestions|navigation|geometry|source-layout|toolbar-compact|formula-tiles|cursor-placement|settings|layout|delete|export>",
+    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|native-structure-audit|native-structure-input-over|native-structure-input-under|native-structure-input-multi|native-structure-input-core|native-space-selection|candidate-query-reset|raw-placeholder-visual|placeholder-selection|structural-placeholder|accent-placeholder|caret-probe|vertical-structure-probe|vertical-structure-navigation|scripts|upright|context-style|suggestions|navigation|geometry|source-layout|toolbar-compact|formula-tiles|cursor-placement|settings|layout|delete|export>",
   );
 }
 
@@ -5447,6 +5447,190 @@ async function main() {
 
       console.log(JSON.stringify({ cases }, null, 2));
       console.log("Targeted independent script auto-exit regression passed");
+      return;
+    }
+
+    if (scenario === "context-style") {
+      await focusField();
+      await clearField();
+      await typeText("abc");
+
+      const contextPoint = await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        field.selection = {
+          ranges: [[0, field.lastOffset]],
+          direction: "forward",
+        };
+        window.__visualtexStyleMenuEvents = [];
+        field.shadowRoot?.addEventListener("menu-select", (event) => {
+          window.__visualtexStyleMenuEvents.push({
+            id: event.detail?.id ?? "",
+            defaultPrevented: event.defaultPrevented,
+          });
+        });
+        const bounds = field.shadowRoot
+          ?.querySelector('[part="content"]')
+          ?.getBoundingClientRect();
+        return bounds
+          ? { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }
+          : null;
+      })()`);
+      if (!contextPoint) throw new Error("Unable to resolve formula bounds");
+
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: contextPoint.x,
+        y: contextPoint.y,
+        button: "right",
+        buttons: 2,
+        clickCount: 1,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: contextPoint.x,
+        y: contextPoint.y,
+        button: "right",
+        buttons: 0,
+        clickCount: 1,
+      });
+      await waitForEvaluation(`(() => {
+        const field = document.querySelector("math-field");
+        const menu = field?.shadowRoot?.querySelector("menu.ui-menu-container");
+        return { ready: Boolean(menu && getComputedStyle(menu).display !== "none") };
+      })()`, "MathLive context menu");
+
+      await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        const root = field?.shadowRoot?.querySelector("menu.ui-menu-container");
+        const colorItem = [...(root?.querySelectorAll(":scope > li") ?? [])]
+          .find((item) => /^(颜色|Color)$/.test(item.textContent?.trim() ?? ""));
+        colorItem?.click();
+      })()`);
+      const redPoint = await waitForEvaluation(`(() => {
+        const field = document.querySelector("math-field");
+        const submenu = [...(field?.shadowRoot?.querySelectorAll("menu.swatches-submenu") ?? [])]
+          .find((menu) => getComputedStyle(menu).display !== "none");
+        const red = [...(submenu?.querySelectorAll(":scope > li") ?? [])]
+          .find((item) => item.getAttribute("aria-label") === "red");
+        const bounds = red?.getBoundingClientRect();
+        return bounds
+          ? { ready: true, x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }
+          : { ready: false };
+      })()`, "foreground color swatch");
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: redPoint.x,
+        y: redPoint.y,
+        button: "left",
+        buttons: 1,
+        clickCount: 1,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: redPoint.x,
+        y: redPoint.y,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+      });
+      const foregroundState = await waitForEvaluation(`(() => {
+        const field = document.querySelector("math-field");
+        const persisted = JSON.parse(localStorage.getItem("visualtex-editor") || "{}");
+        const value = field?.value ?? "";
+        return {
+          ready:
+            field?.queryStyle({ color: "red" }) === "all" &&
+            persisted.state?.lines?.[0]?.latex === value,
+          value,
+          storeValue: persisted.state?.lines?.[0]?.latex ?? "",
+          queryStyle: field?.queryStyle({ color: "red" }) ?? "none",
+        };
+      })()`, "foreground color application");
+
+      const backgroundDispatch = await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        field.selection = {
+          ranges: [[0, field.lastOffset]],
+          direction: "forward",
+        };
+        const menuRoot = field.shadowRoot;
+        const event = new CustomEvent("menu-select", {
+          bubbles: true,
+          cancelable: true,
+          detail: { id: "background-color-yellow" },
+        });
+        const dispatchResult = menuRoot?.dispatchEvent(event) ?? true;
+        return { dispatchResult, defaultPrevented: event.defaultPrevented };
+      })()`);
+      const backgroundState = await waitForEvaluation(`(() => {
+        const field = document.querySelector("math-field");
+        const persisted = JSON.parse(localStorage.getItem("visualtex-editor") || "{}");
+        const value = field?.value ?? "";
+        return {
+          ready:
+            field?.queryStyle({ backgroundColor: "yellow" }) === "all" &&
+            persisted.state?.lines?.[0]?.latex === value,
+          value,
+          storeValue: persisted.state?.lines?.[0]?.latex ?? "",
+          queryStyle:
+            field?.queryStyle({ backgroundColor: "yellow" }) ?? "none",
+          events: window.__visualtexStyleMenuEvents ?? [],
+        };
+      })()`, "background color application");
+
+      await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        field.position = field.lastOffset;
+        field.focus();
+      })()`);
+      const visualState = await waitForEvaluation(`(() => {
+        const field = document.querySelector("math-field");
+        const background = field?.shadowRoot?.querySelector(".ML__bg");
+        const backgroundColor = background
+          ? getComputedStyle(background, "::before").backgroundColor
+          : "";
+        const redText = [...(field?.shadowRoot?.querySelectorAll('[style*="color"]') ?? [])]
+          .some((node) => getComputedStyle(node).color === "rgb(215, 23, 11)");
+        return {
+          ready:
+            Boolean(background) &&
+            backgroundColor !== "" &&
+            backgroundColor !== "rgba(0, 0, 0, 0)" &&
+            redText,
+          backgroundColor,
+          redText,
+        };
+      })()`, "rendered foreground and background colors");
+
+      const interceptedIds = new Set(
+        backgroundState.events
+          .filter((event) => event.defaultPrevented)
+          .map((event) => event.id),
+      );
+      if (
+        !foregroundState.value.includes("\\textcolor{red}") ||
+        !backgroundDispatch.defaultPrevented ||
+        backgroundDispatch.dispatchResult ||
+        !interceptedIds.has("background-color-yellow")
+      ) {
+        throw new Error(
+          `Context style interception failed: ${JSON.stringify({
+            foregroundState,
+            backgroundDispatch,
+            backgroundState,
+            visualState,
+          })}`,
+        );
+      }
+
+      console.log(
+        JSON.stringify(
+          { foregroundState, backgroundState, visualState },
+          null,
+          2,
+        ),
+      );
+      console.log("Targeted context style regression passed");
       return;
     }
 

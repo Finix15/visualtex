@@ -96,6 +96,47 @@ interface Props {
   overlay?: ReactNode;
 }
 
+const mathLiveContextStyleColors = new Set([
+  "red",
+  "orange",
+  "yellow",
+  "lime",
+  "green",
+  "teal",
+  "cyan",
+  "blue",
+  "indigo",
+  "purple",
+  "magenta",
+  "black",
+  "dark-grey",
+  "grey",
+  "light-grey",
+  "white",
+]);
+
+function mathLiveContextMenuStyle(
+  id: unknown,
+): Pick<Style, "color" | "backgroundColor"> | null {
+  if (typeof id !== "string") return null;
+
+  const backgroundPrefix = "background-color-";
+  if (id.startsWith(backgroundPrefix)) {
+    const color = id.slice(backgroundPrefix.length);
+    return mathLiveContextStyleColors.has(color)
+      ? { backgroundColor: color }
+      : null;
+  }
+
+  const foregroundPrefix = "color-";
+  if (id.startsWith(foregroundPrefix)) {
+    const color = id.slice(foregroundPrefix.length);
+    return mathLiveContextStyleColors.has(color) ? { color } : null;
+  }
+
+  return null;
+}
+
 interface FormulaFieldEdit {
   lineId: string;
   beforeLatex: string;
@@ -4791,6 +4832,22 @@ function FormulaField(props: FormulaFieldProps) {
 
       propsRef.current.onKeyDown(propsRef.current.index, event, field);
     };
+    const handleMenuSelect = (event: Event) => {
+      const style = mathLiveContextMenuStyle(
+        (event as CustomEvent<{ id?: unknown }>).detail?.id,
+      );
+      if (!style) return;
+
+      // MathLive's native color swatches dispatch a cancelable menu-select
+      // event before running their callback. WKWebView can complete the menu
+      // interaction without reliably invoking that callback, leaving the
+      // selection unchanged. Own only these two style submenus and use the
+      // public MathfieldElement API so input events, history and source sync
+      // continue through VisualTeX's existing edit path.
+      event.preventDefault();
+      field.applyStyle(style, { operation: "toggle" });
+      syncFrameSize();
+    };
     const handlePaste = (event: ClipboardEvent) => {
       const clipboard = event.clipboardData;
       if (!clipboard || !propsRef.current.onPasteImage) return;
@@ -4933,6 +4990,7 @@ function FormulaField(props: FormulaFieldProps) {
     keyboardSink?.addEventListener("input", scheduleInputActivity, true);
     keyboardSink?.addEventListener("keyup", scheduleInputActivity, true);
     field.addEventListener("paste", handlePaste, true);
+    field.shadowRoot?.addEventListener("menu-select", handleMenuSelect);
     host.addEventListener("pointerdown", handlePointerDown, true);
     window.addEventListener("pointerup", handlePointerSelectionEnd, true);
     window.addEventListener("pointercancel", handlePointerSelectionEnd, true);
@@ -4995,6 +5053,7 @@ function FormulaField(props: FormulaFieldProps) {
       keyboardSink?.removeEventListener("input", scheduleInputActivity, true);
       keyboardSink?.removeEventListener("keyup", scheduleInputActivity, true);
       field.removeEventListener("paste", handlePaste, true);
+      field.shadowRoot?.removeEventListener("menu-select", handleMenuSelect);
       host.removeEventListener("pointerdown", handlePointerDown, true);
       window.removeEventListener("pointerup", handlePointerSelectionEnd, true);
       window.removeEventListener("pointercancel", handlePointerSelectionEnd, true);
