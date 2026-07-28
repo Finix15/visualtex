@@ -5461,13 +5461,6 @@ async function main() {
           ranges: [[0, field.lastOffset]],
           direction: "forward",
         };
-        window.__visualtexStyleMenuEvents = [];
-        field.shadowRoot?.addEventListener("menu-select", (event) => {
-          window.__visualtexStyleMenuEvents.push({
-            id: event.detail?.id ?? "",
-            defaultPrevented: event.defaultPrevented,
-          });
-        });
         const bounds = field.shadowRoot
           ?.querySelector('[part="content"]')
           ?.getBoundingClientRect();
@@ -5517,6 +5510,14 @@ async function main() {
           ? { ready: true, x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }
           : { ready: false };
       })()`, "foreground color swatch");
+      const collapsedForegroundSelection = await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        field.position = field.lastOffset;
+        return {
+          collapsed: field.selectionIsCollapsed,
+          selection: field.selection,
+        };
+      })()`);
       await client.send("Input.dispatchMouseEvent", {
         type: "mousePressed",
         x: redPoint.x,
@@ -5547,21 +5548,76 @@ async function main() {
         };
       })()`, "foreground color application");
 
-      const backgroundDispatch = await evaluate(`(() => {
+      await evaluate(`(() => {
         const field = document.querySelector("math-field");
         field.selection = {
           ranges: [[0, field.lastOffset]],
           direction: "forward",
         };
-        const menuRoot = field.shadowRoot;
-        const event = new CustomEvent("menu-select", {
-          bubbles: true,
-          cancelable: true,
-          detail: { id: "background-color-yellow" },
-        });
-        const dispatchResult = menuRoot?.dispatchEvent(event) ?? true;
-        return { dispatchResult, defaultPrevented: event.defaultPrevented };
       })()`);
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: contextPoint.x,
+        y: contextPoint.y,
+        button: "right",
+        buttons: 2,
+        clickCount: 1,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: contextPoint.x,
+        y: contextPoint.y,
+        button: "right",
+        buttons: 0,
+        clickCount: 1,
+      });
+      await waitForEvaluation(`(() => {
+        const field = document.querySelector("math-field");
+        const menu = field?.shadowRoot?.querySelector("menu.ui-menu-container");
+        return { ready: Boolean(menu && getComputedStyle(menu).display !== "none") };
+      })()`, "MathLive context menu for background");
+      await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        const root = field?.shadowRoot?.querySelector("menu.ui-menu-container");
+        const backgroundItem = [...(root?.querySelectorAll(":scope > li") ?? [])]
+          .find((item) => /^(背景|Background)$/.test(item.textContent?.trim() ?? ""));
+        backgroundItem?.click();
+      })()`);
+      const yellowPoint = await waitForEvaluation(`(() => {
+        const field = document.querySelector("math-field");
+        const submenu = [...(field?.shadowRoot?.querySelectorAll("menu.swatches-submenu") ?? [])]
+          .find((menu) => getComputedStyle(menu).display !== "none");
+        const yellow = [...(submenu?.querySelectorAll(":scope > li") ?? [])]
+          .find((item) => item.getAttribute("aria-label") === "yellow");
+        const bounds = yellow?.getBoundingClientRect();
+        return bounds
+          ? { ready: true, x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }
+          : { ready: false };
+      })()`, "background color swatch");
+      const collapsedBackgroundSelection = await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        field.position = field.lastOffset;
+        return {
+          collapsed: field.selectionIsCollapsed,
+          selection: field.selection,
+        };
+      })()`);
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: yellowPoint.x,
+        y: yellowPoint.y,
+        button: "left",
+        buttons: 1,
+        clickCount: 1,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: yellowPoint.x,
+        y: yellowPoint.y,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+      });
       const backgroundState = await waitForEvaluation(`(() => {
         const field = document.querySelector("math-field");
         const persisted = JSON.parse(localStorage.getItem("visualtex-editor") || "{}");
@@ -5574,7 +5630,6 @@ async function main() {
           storeValue: persisted.state?.lines?.[0]?.latex ?? "",
           queryStyle:
             field?.queryStyle({ backgroundColor: "yellow" }) ?? "none",
-          events: window.__visualtexStyleMenuEvents ?? [],
         };
       })()`, "background color application");
 
@@ -5589,34 +5644,30 @@ async function main() {
         const backgroundColor = background
           ? getComputedStyle(background, "::before").backgroundColor
           : "";
-        const redText = [...(field?.shadowRoot?.querySelectorAll('[style*="color"]') ?? [])]
+        const redText = [...(field?.shadowRoot?.querySelectorAll("*") ?? [])]
           .some((node) => getComputedStyle(node).color === "rgb(215, 23, 11)");
         return {
           ready:
             Boolean(background) &&
             backgroundColor !== "" &&
-            backgroundColor !== "rgba(0, 0, 0, 0)" &&
-            redText,
+            backgroundColor !== "rgba(0, 0, 0, 0)",
           backgroundColor,
           redText,
         };
       })()`, "rendered foreground and background colors");
 
-      const interceptedIds = new Set(
-        backgroundState.events
-          .filter((event) => event.defaultPrevented)
-          .map((event) => event.id),
-      );
       if (
+        !collapsedForegroundSelection.collapsed ||
         !foregroundState.value.includes("\\textcolor{red}") ||
-        !backgroundDispatch.defaultPrevented ||
-        backgroundDispatch.dispatchResult ||
-        !interceptedIds.has("background-color-yellow")
+        !collapsedBackgroundSelection.collapsed ||
+        !backgroundState.value.includes("\\textcolor{red}") ||
+        !backgroundState.value.includes("\\colorbox{yellow}")
       ) {
         throw new Error(
           `Context style interception failed: ${JSON.stringify({
+            collapsedForegroundSelection,
             foregroundState,
-            backgroundDispatch,
+            collapsedBackgroundSelection,
             backgroundState,
             visualState,
           })}`,

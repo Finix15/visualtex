@@ -4832,22 +4832,53 @@ function FormulaField(props: FormulaFieldProps) {
 
       propsRef.current.onKeyDown(propsRef.current.index, event, field);
     };
-    const handleMenuSelect = (event: Event) => {
-      const style = mathLiveContextMenuStyle(
-        (event as CustomEvent<{ id?: unknown }>).detail?.id,
-      );
-      if (!style) return;
-
-      // MathLive's native color swatches dispatch a cancelable menu-select
-      // event before running their callback. WKWebView can complete the menu
-      // interaction without reliably invoking that callback, leaving the
-      // selection unchanged. Own only these two style submenus and use the
-      // public MathfieldElement API so input events, history and source sync
-      // continue through VisualTeX's existing edit path.
-      event.preventDefault();
+    let contextStyleSelection: MathSelectionSnapshot | null = null;
+    const captureContextStyleSelection = () => {
+      // A right-button pointerdown is captured inside MathLive's shadow root
+      // before its own editor handler can collapse the selection. Keep that
+      // earlier snapshot; contextmenu is a keyboard-menu fallback only.
+      contextStyleSelection ??= captureSelection(field);
+    };
+    const handleContextStylePointerDown = (event: Event) => {
+      const pointerEvent = event as PointerEvent;
+      if (
+        pointerEvent.button === 2 ||
+        (pointerEvent.button === 0 && pointerEvent.ctrlKey)
+      ) {
+        contextStyleSelection = captureSelection(field);
+      }
+    };
+    const applyContextMenuStyle = (
+      style: Pick<Style, "color" | "backgroundColor">,
+    ) => {
+      const selection = contextStyleSelection
+        ? clampSelection(contextStyleSelection, field.lastOffset)
+        : captureSelection(field);
+      field.focus();
+      field.selection = selection;
+      contextStyleSelection = null;
       field.applyStyle(style, { operation: "toggle" });
       syncFrameSize();
     };
+    type MathLiveMenuItem = (typeof field.menuItems)[number];
+    const overrideContextStyleMenuItems = (
+      items: readonly MathLiveMenuItem[],
+    ): MathLiveMenuItem[] =>
+      items.map((item) => {
+        if ("submenu" in item) {
+          return {
+            ...item,
+            submenu: overrideContextStyleMenuItems(item.submenu),
+          };
+        }
+        const style =
+          "id" in item ? mathLiveContextMenuStyle(item.id) : null;
+        if (!style) return item;
+        return {
+          ...item,
+          onMenuSelect: () => applyContextMenuStyle(style),
+        };
+      });
     const handlePaste = (event: ClipboardEvent) => {
       const clipboard = event.clipboardData;
       if (!clipboard || !propsRef.current.onPasteImage) return;
@@ -4884,7 +4915,21 @@ function FormulaField(props: FormulaFieldProps) {
       });
     };
     const handlePointerDown = (event: PointerEvent) => {
+      const clickedMathLiveMenu = event.composedPath().some(
+        (target) =>
+          target instanceof HTMLElement &&
+          Boolean(target.closest("menu.ui-menu-container")),
+      );
+      if (clickedMathLiveMenu) return;
+
+      const opensContextMenu =
+        event.button === 2 || (event.button === 0 && event.ctrlKey);
+      if (opensContextMenu) {
+        contextStyleSelection = captureSelection(field);
+        return;
+      }
       if (event.button !== 0) return;
+      contextStyleSelection = null;
       installPointerPlaceholderSnapshotStyle(field);
       visualTexPointerSelectingFields.add(field);
       field.classList.add(visualTexPointerSelectingClass);
@@ -4960,6 +5005,7 @@ function FormulaField(props: FormulaFieldProps) {
       propsRef.current.onFocus(propsRef.current.index, field);
     };
     host.replaceChildren(field);
+    field.menuItems = overrideContextStyleMenuItems(field.menuItems);
     installVisualTexStructuralPlaceholderStyle(field);
     defaultInlineShortcutsRef.current = { ...field.inlineShortcuts };
     field.inlineShortcuts = resolveVisualTexInlineShortcuts(
@@ -4990,7 +5036,16 @@ function FormulaField(props: FormulaFieldProps) {
     keyboardSink?.addEventListener("input", scheduleInputActivity, true);
     keyboardSink?.addEventListener("keyup", scheduleInputActivity, true);
     field.addEventListener("paste", handlePaste, true);
-    field.shadowRoot?.addEventListener("menu-select", handleMenuSelect);
+    field.shadowRoot?.addEventListener(
+      "pointerdown",
+      handleContextStylePointerDown,
+      true,
+    );
+    field.shadowRoot?.addEventListener(
+      "contextmenu",
+      captureContextStyleSelection,
+      true,
+    );
     host.addEventListener("pointerdown", handlePointerDown, true);
     window.addEventListener("pointerup", handlePointerSelectionEnd, true);
     window.addEventListener("pointercancel", handlePointerSelectionEnd, true);
@@ -5053,7 +5108,16 @@ function FormulaField(props: FormulaFieldProps) {
       keyboardSink?.removeEventListener("input", scheduleInputActivity, true);
       keyboardSink?.removeEventListener("keyup", scheduleInputActivity, true);
       field.removeEventListener("paste", handlePaste, true);
-      field.shadowRoot?.removeEventListener("menu-select", handleMenuSelect);
+      field.shadowRoot?.removeEventListener(
+        "pointerdown",
+        handleContextStylePointerDown,
+        true,
+      );
+      field.shadowRoot?.removeEventListener(
+        "contextmenu",
+        captureContextStyleSelection,
+        true,
+      );
       host.removeEventListener("pointerdown", handlePointerDown, true);
       window.removeEventListener("pointerup", handlePointerSelectionEnd, true);
       window.removeEventListener("pointercancel", handlePointerSelectionEnd, true);
