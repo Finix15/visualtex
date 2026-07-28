@@ -104,6 +104,10 @@ import {
   shouldOpenOnboardingInitially,
   shouldShowMacOfficeFirstRun,
 } from "./platform";
+import {
+  readLocalStorage,
+  writeLocalStorage,
+} from "./runtime/safeStorage";
 
 type InlineOcrStatus = "running" | "cancelling" | "success" | "error" | "cancelled";
 
@@ -152,16 +156,16 @@ function App() {
     shouldShowMacOfficeFirstRun(
       DESKTOP_PLATFORM,
       isTauriEnvironment(),
-      window.localStorage.getItem(MAC_OFFICE_FIRST_RUN_STORAGE_KEY) === "true",
+      readLocalStorage(MAC_OFFICE_FIRST_RUN_STORAGE_KEY) === "true",
     ),
   );
   const [onboardingOpen, setOnboardingOpen] = useState(() =>
     shouldOpenOnboardingInitially(
-      window.localStorage.getItem(ONBOARDING_STORAGE_KEY) === "true",
+      readLocalStorage(ONBOARDING_STORAGE_KEY) === "true",
       shouldShowMacOfficeFirstRun(
         DESKTOP_PLATFORM,
         isTauriEnvironment(),
-        window.localStorage.getItem(MAC_OFFICE_FIRST_RUN_STORAGE_KEY) === "true",
+        readLocalStorage(MAC_OFFICE_FIRST_RUN_STORAGE_KEY) === "true",
       ),
     ),
   );
@@ -176,11 +180,11 @@ function App() {
   const [savedPulse, setSavedPulse] = useState(false);
   const [editorHistoryBusy, setEditorHistoryBusy] = useState(false);
   const [exportDirectory, setExportDirectory] = useState(() =>
-    window.localStorage.getItem(EXPORT_DIRECTORY_STORAGE_KEY) ?? "",
+    readLocalStorage(EXPORT_DIRECTORY_STORAGE_KEY) ?? "",
   );
   const [exportBusy, setExportBusy] = useState(false);
   const [ocrModel, setOcrModel] = useState<OcrModelName>(() => {
-    const stored = window.localStorage.getItem(OCR_MODEL_STORAGE_KEY);
+    const stored = readLocalStorage(OCR_MODEL_STORAGE_KEY);
     return OCR_MODELS.some((item) => item.id === stored)
       ? (stored as OcrModelName)
       : DEFAULT_OCR_MODEL;
@@ -476,7 +480,7 @@ function App() {
           const availableModel = resolveAvailableOcrModel(runtime, ocrModel);
           if (availableModel !== ocrModel) {
             setOcrModel(availableModel);
-            window.localStorage.setItem(OCR_MODEL_STORAGE_KEY, availableModel);
+            writeLocalStorage(OCR_MODEL_STORAGE_KEY, availableModel);
           }
           return prewarmOcrModel(availableModel);
         })
@@ -492,7 +496,7 @@ function App() {
   const handleOcrModelChange = (nextModel: OcrModelName) => {
     if (inlineOcrBusyRef.current || nextModel === ocrModel) return;
     setOcrModel(nextModel);
-    window.localStorage.setItem(OCR_MODEL_STORAGE_KEY, nextModel);
+    writeLocalStorage(OCR_MODEL_STORAGE_KEY, nextModel);
   };
 
   const cancelInlineOcr = async () => {
@@ -559,7 +563,7 @@ function App() {
       const availableOcrModel = resolveAvailableOcrModel(runtime, ocrModel);
       if (availableOcrModel !== ocrModel) {
         setOcrModel(availableOcrModel);
-        window.localStorage.setItem(OCR_MODEL_STORAGE_KEY, availableOcrModel);
+        writeLocalStorage(OCR_MODEL_STORAGE_KEY, availableOcrModel);
       }
 
       unlisten = await listenOcrRecognitionProgress((progress) => {
@@ -730,7 +734,7 @@ function App() {
     const directory = Array.isArray(selected) ? selected[0] : selected;
     if (!directory) return "";
     setExportDirectory(directory);
-    window.localStorage.setItem(EXPORT_DIRECTORY_STORAGE_KEY, directory);
+    writeLocalStorage(EXPORT_DIRECTORY_STORAGE_KEY, directory);
     return directory;
   };
 
@@ -882,9 +886,9 @@ function App() {
   };
 
   const finishMacOfficeFirstRun = useCallback((installed: boolean) => {
-    window.localStorage.setItem(MAC_OFFICE_FIRST_RUN_STORAGE_KEY, "true");
+    writeLocalStorage(MAC_OFFICE_FIRST_RUN_STORAGE_KEY, "true");
     setMacOfficeFirstRunOpen(false);
-    if (window.localStorage.getItem(ONBOARDING_STORAGE_KEY) !== "true") {
+    if (readLocalStorage(ONBOARDING_STORAGE_KEY) !== "true") {
       setOnboardingOpen(true);
     }
     setToast(
@@ -895,7 +899,7 @@ function App() {
   }, [isEn]);
 
   const finishOnboarding = useCallback(() => {
-    window.localStorage.setItem(ONBOARDING_STORAGE_KEY, "true");
+    writeLocalStorage(ONBOARDING_STORAGE_KEY, "true");
     setOnboardingOpen(false);
     window.requestAnimationFrame(() => editorRef.current?.focus());
   }, []);

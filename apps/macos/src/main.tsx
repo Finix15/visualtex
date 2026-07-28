@@ -1,3 +1,7 @@
+import { installBrowserCompatibility } from "./runtime/browserCompatibility";
+
+installBrowserCompatibility();
+
 function describeBootError(value: unknown): string {
   if (value instanceof Error) return value.stack || value.message;
   if (typeof value === "string") return value;

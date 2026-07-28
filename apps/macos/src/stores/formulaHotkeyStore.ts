@@ -10,6 +10,8 @@ import {
   type FormulaHotkeyTargetKind,
 } from "../shortcuts/formulaHotkeys";
 import type { LatexCommand } from "../types/command";
+import { createUuid } from "../runtime/browserCompatibility";
+import { safeStorage } from "../runtime/safeStorage";
 
 interface FormulaHotkeyState {
   bindings: FormulaHotkeyBinding[];
@@ -111,7 +113,7 @@ function normalizeBindings(value: unknown) {
       id:
         typeof candidate.id === "string" && candidate.id
           ? candidate.id
-          : crypto.randomUUID(),
+          : createUuid(),
       target,
       chord,
       updatedAt:
@@ -135,7 +137,7 @@ export const useFormulaHotkeyStore = create<FormulaHotkeyState>()(
             (binding) => binding.target.id === target.id,
           );
           const next: FormulaHotkeyBinding = {
-            id: existing?.id ?? crypto.randomUUID(),
+            id: existing?.id ?? createUuid(),
             target,
             chord,
             updatedAt: Date.now(),
@@ -168,7 +170,7 @@ export const useFormulaHotkeyStore = create<FormulaHotkeyState>()(
     {
       name: "visualtex-formula-hotkeys-v1",
       version: 1,
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => safeStorage),
       partialize: (state) => ({ bindings: state.bindings }),
       merge: (persistedState, currentState) => {
         const persisted = persistedState as Partial<FormulaHotkeyState>;

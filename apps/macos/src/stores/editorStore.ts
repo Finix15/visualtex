@@ -18,6 +18,8 @@ import {
 } from "../clipboard/LatexCopyService";
 import { normalizeChineseLatex } from "../editor/normalizeChineseLatex";
 import { normalizeMultilineLatex } from "../editor/normalizeChineseLatex";
+import { createUuid } from "../runtime/browserCompatibility";
+import { safeStorage } from "../runtime/safeStorage";
 
 export type Language = "cn" | "en";
 export type EditorLayout = "standard" | "classic";
@@ -102,7 +104,7 @@ function normalizeEditorZoom(value: unknown) {
 
 export function createFormulaLine(
   latex = "",
-  id: string = crypto.randomUUID(),
+  id: string = createUuid(),
 ): FormulaLine {
   return {
     id,
@@ -116,8 +118,8 @@ function uniqueLineId(candidate: unknown, usedIds: Set<string>) {
     usedIds.add(normalized);
     return normalized;
   }
-  let nextId: string = crypto.randomUUID();
-  while (usedIds.has(nextId)) nextId = crypto.randomUUID();
+  let nextId: string = createUuid();
+  while (usedIds.has(nextId)) nextId = createUuid();
   usedIds.add(nextId);
   return nextId;
 }
@@ -357,7 +359,7 @@ export const useEditorStore = create<EditorState>()(
           );
           if (!latex.trim() || state.history[0]?.latex === latex) return state;
           const next: FormulaHistoryItem = {
-            id: crypto.randomUUID(),
+            id: createUuid(),
             latex,
             createdAt: Date.now(),
           };
@@ -414,7 +416,7 @@ export const useEditorStore = create<EditorState>()(
     }),
     {
       name: "visualtex-editor",
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => safeStorage),
       partialize: (state) => ({
         title: state.title,
         lines: state.lines,

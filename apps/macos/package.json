@@ -34,6 +34,8 @@
     "test:macos-offline-office:full": "node scripts/run_macos_offline_acceptance.mjs",
     "package:macos-offline-office": "node scripts/package_macos_offline_addins.mjs",
     "test:platform-onboarding": "tsx scripts/platform_onboarding_smoke.mjs",
+    "test:startup-compatibility": "tsx scripts/startup_compatibility_smoke.mjs",
+    "test:startup-browser": "node scripts/startup_browser_regression.mjs",
     "verify:mac-dmg": "bash scripts/verify_macos_dmg.sh"
   },
   "dependencies": {

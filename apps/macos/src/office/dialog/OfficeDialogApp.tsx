@@ -36,6 +36,11 @@ import type {
   MathEditorInsertionTarget,
 } from "../../editor/MathEditor";
 import { latexToSvg } from "../../export/latexToSvg";
+import { createUuid } from "../../runtime/browserCompatibility";
+import {
+  readLocalStorage,
+  writeLocalStorage,
+} from "../../runtime/safeStorage";
 import { latexLinesToOmmlArtifacts } from "../omml/latexToOmml";
 import {
   invokeTauri,
@@ -151,7 +156,7 @@ export function OfficeDialogApp() {
   const [toast, setToast] = useState("");
   const [ocrOpen, setOcrOpen] = useState(false);
   const [ocrModel, setOcrModel] = useState<OcrModelName>(() => {
-    const stored = window.localStorage.getItem(OCR_MODEL_STORAGE_KEY);
+    const stored = readLocalStorage(OCR_MODEL_STORAGE_KEY);
     return OCR_MODELS.some((item) => item.id === stored)
       ? (stored as OcrModelName)
       : DEFAULT_OCR_MODEL;
@@ -250,7 +255,7 @@ export function OfficeDialogApp() {
     skipAutosaveForSessionRef.current = session.id;
     const nextLines = session.lines.length
       ? session.lines
-      : [{ id: crypto.randomUUID(), latex: "" }];
+      : [{ id: createUuid(), latex: "" }];
     useEditorStore.getState().replaceDocumentState({
       title: session.title || (isEn ? "Office Formula" : "Office 公式"),
       lines: nextLines,
@@ -665,7 +670,7 @@ export function OfficeDialogApp() {
           const availableModel = resolveAvailableOcrModel(runtime, ocrModel);
           if (availableModel !== ocrModel) {
             setOcrModel(availableModel);
-            window.localStorage.setItem(OCR_MODEL_STORAGE_KEY, availableModel);
+            writeLocalStorage(OCR_MODEL_STORAGE_KEY, availableModel);
           }
           return prewarmOcrModel(availableModel);
         })
@@ -681,7 +686,7 @@ export function OfficeDialogApp() {
   const handleOcrModelChange = (nextModel: OcrModelName) => {
     if (inlineOcrBusyRef.current || nextModel === ocrModel) return;
     setOcrModel(nextModel);
-    window.localStorage.setItem(OCR_MODEL_STORAGE_KEY, nextModel);
+    writeLocalStorage(OCR_MODEL_STORAGE_KEY, nextModel);
   };
 
   const cancelInlineOcr = async () => {
@@ -749,7 +754,7 @@ export function OfficeDialogApp() {
       const availableOcrModel = resolveAvailableOcrModel(runtime, ocrModel);
       if (availableOcrModel !== ocrModel) {
         setOcrModel(availableOcrModel);
-        window.localStorage.setItem(OCR_MODEL_STORAGE_KEY, availableOcrModel);
+        writeLocalStorage(OCR_MODEL_STORAGE_KEY, availableOcrModel);
       }
 
       unlisten = await listenOcrRecognitionProgress((progress) => {

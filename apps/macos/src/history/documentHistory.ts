@@ -5,6 +5,7 @@ import {
   normalizeFormulaLines,
   useEditorStore,
 } from "../stores/editorStore";
+import { createUuid } from "../runtime/browserCompatibility";
 import type {
   DocumentSnapshot,
   HistoryEntry,
@@ -69,7 +70,7 @@ export function reconcileFormulaLines(
 ): FormulaLine[] {
   const normalizedValues = values.length ? values : [""];
   return normalizedValues.map((latex, index) => ({
-    id: currentLines[index]?.id ?? crypto.randomUUID(),
+    id: currentLines[index]?.id ?? createUuid(),
     latex,
   }));
 }

@@ -7,6 +7,7 @@ import { desktopOcrTransport } from "../ocr/ocrTransport";
 import { OfficeDialogApp } from "../office/dialog/OfficeDialogApp";
 import { DesktopApp } from "./DesktopApp";
 import { applyDocumentTheme, readSynchronizedTheme } from "../themeSync";
+import { VisualTexErrorBoundary } from "../runtime/VisualTexErrorBoundary";
 
 configureOcrTransport(desktopOcrTransport);
 
@@ -22,6 +23,8 @@ if (officeFormulaView) {
 
 createRoot(root).render(
   <StrictMode>
-    {officeFormulaView ? <OfficeDialogApp /> : <DesktopApp />}
+    <VisualTexErrorBoundary>
+      {officeFormulaView ? <OfficeDialogApp /> : <DesktopApp />}
+    </VisualTexErrorBoundary>
   </StrictMode>,
 );

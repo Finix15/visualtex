@@ -1,7 +1,8 @@
 {
   "bundle": {
     "macOS": {
-      "infoPlist": "Info.macos.plist"
+      "infoPlist": "Info.macos.plist",
+      "minimumSystemVersion": "11.0"
     },
     "resources": {
       "../office/macos-offline/BUILD_ADDINS.md": "office/macos-offline/BUILD_ADDINS.md",
