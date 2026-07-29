@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="apps/macos/src-tauri/app-icon.svg" width="150" alt="VisualTeX" />
+  <img src="apps/macos/src-tauri/app-icon.svg" width="200" alt="VisualTeX" />
   <h1>VisualTeX</h1>
   <p><strong>可视化公式编辑器与 Microsoft Office 原生公式插件</strong></p>
   <p><strong>Visual formula editor with native Microsoft Office integration</strong></p>
