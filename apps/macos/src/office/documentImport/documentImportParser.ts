@@ -581,7 +581,12 @@ function parseStructuredLines(
 
 function resolvedSourceKind(source: string, requested: DocumentImportSourceKind) {
   if (requested !== "auto") return requested;
-  return /\\(?:documentclass|begin\s*\{document\}|section\*?\s*\{|usepackage|begin\s*\{itemize\})\b/.test(
+  // LaTeX fragments pasted from notes often omit both \documentclass and the
+  // document environment. Structural commands and environments must still
+  // select the LaTeX parser. Do not end this pattern with \b: environment
+  // matches end in `}`, which is not a word character, so that boundary made
+  // valid `\begin{itemize}` fragments fail auto-detection.
+  return /\\(?:documentclass|usepackage|(?:part|chapter|section|subsection|subsubsection|paragraph|subparagraph)\*?\s*\{|item(?:\[[^\]]*\])?\s|begin\s*\{(?:document|itemize|enumerate|quote|quotation|center|flushleft|flushright|abstract|description)\})/.test(
     source,
   )
     ? "latex"

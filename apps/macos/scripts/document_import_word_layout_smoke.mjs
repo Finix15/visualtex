@@ -19,6 +19,7 @@ for (const required of [
   "VTPrepareWordCreateInsertionRange",
   "VTInsertNativeEquationAtRange",
   "VTFinalizeInlineNativeEquation",
+  "VTPlaceCaretAfterInlineNativeEquation",
   "VTPromoteNativeEquationToDisplay",
   "VTEnsureNativeEquationNumber",
   "VTAddWordFormulaPicture",
@@ -59,6 +60,7 @@ assert.match(
   "Imported prose must not inherit italic formatting from the insertion caret",
 );
 for (const required of [
+  "VTPrepareDocumentImportParagraph",
   "VTFinalizeDocumentImportParagraph",
   "wdStyleHeading1",
   "wdStyleHeading2",
@@ -71,6 +73,16 @@ for (const required of [
     `Structured document import is missing Word formatting behavior ${required}`,
   );
 }
+assert.match(
+  adapter,
+  /VTPlaceCaretAfterInlineNativeEquation formulaRange[\s\S]*Set cursorRange = Selection\.Range\.Duplicate/,
+  "Batch OMML insertion must leave the first equation before inserting another inline equation",
+);
+assert.match(
+  adapter,
+  /replacesInlineMathAnchor[\s\S]*insertionRange\.Text = plainText/,
+  "Text after inline OMML must replace the temporary math-boundary anchor",
+);
 assert.match(
   ribbon,
   /id="VisualTeX\.Mac\.Word\.DocumentImport"[\s\S]*onAction="VTWordRibbonDocumentImport"/,

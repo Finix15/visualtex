@@ -532,6 +532,22 @@ try {
       fontSizePt: 18,
       artifactDirectory: sessionDirectory,
     }),
+    formulaItem({
+      formulaId: crypto.randomUUID(),
+      latex: String.raw`\sum_{i=1}^{\infty}{a_k\left( x-x_0 \right) ^k}`,
+      displayMode: "inline",
+      numbered: false,
+      fontSizePt: 12,
+      artifactDirectory: sessionDirectory,
+    }),
+    formulaItem({
+      formulaId: crypto.randomUUID(),
+      latex: String.raw`\sum_{i=1}^{\infty}{a_kP_k\left( x \right)}`,
+      displayMode: "inline",
+      numbered: false,
+      fontSizePt: 12,
+      artifactDirectory: sessionDirectory,
+    }),
   ];
   nativeFiles.push(...formulas.map((formula) => formula.nativePath));
 
@@ -539,6 +555,8 @@ try {
   const followingParagraphId = crypto.randomUUID();
   const headingParagraphId = crypto.randomUUID();
   const bulletParagraphId = crypto.randomUUID();
+  const bulletParagraph2Id = crypto.randomUUID();
+  const bulletFormulaParagraphId = crypto.randomUUID();
   const numberParagraphId = crypto.randomUUID();
   const endingParagraphId = crypto.randomUUID();
   const items = [];
@@ -589,7 +607,7 @@ try {
     end: true,
   });
   appendFormula(items, 6, formulas[2]);
-  appendText(items, 7, "项目符号正文", {
+  appendText(items, 7, "多项式逼近的逼近系数和原函数原则上没有硬性关系。", {
     id: bulletParagraphId,
     style: "normal",
     alignment: "left",
@@ -598,7 +616,52 @@ try {
     start: true,
     end: true,
   });
-  appendText(items, 8, "编号列表正文", {
+  appendText(items, 8, "多项式逼近是全局性的，而幂级数逼近有收敛半径。", {
+    id: bulletParagraph2Id,
+    style: "normal",
+    alignment: "left",
+    listKind: "bullet",
+    listLevel: 1,
+    start: true,
+    end: true,
+  });
+  appendText(items, 9, "形式上的区别：幂级数的形式是", {
+    id: bulletFormulaParagraphId,
+    style: "normal",
+    alignment: "left",
+    listKind: "bullet",
+    listLevel: 1,
+    start: true,
+    end: false,
+  });
+  appendFormula(items, 10, formulas[3], {
+    id: bulletFormulaParagraphId,
+    style: "normal",
+    alignment: "left",
+    listKind: "bullet",
+    listLevel: 1,
+    start: false,
+    end: false,
+  });
+  appendText(items, 11, "而多项式级数的形式是", {
+    id: bulletFormulaParagraphId,
+    style: "normal",
+    alignment: "left",
+    listKind: "bullet",
+    listLevel: 1,
+    start: false,
+    end: false,
+  });
+  appendFormula(items, 12, formulas[4], {
+    id: bulletFormulaParagraphId,
+    style: "normal",
+    alignment: "left",
+    listKind: "bullet",
+    listLevel: 1,
+    start: false,
+    end: true,
+  });
+  appendText(items, 13, "编号列表正文", {
     id: numberParagraphId,
     style: "normal",
     alignment: "left",
@@ -607,7 +670,7 @@ try {
     start: true,
     end: true,
   });
-  appendText(items, 9, "结尾文字。", {
+  appendText(items, 14, "结尾文字。", {
     id: endingParagraphId,
     style: "normal",
     alignment: "left",
@@ -624,7 +687,7 @@ try {
     ["outputKind", outputKind],
     ["sourceDocumentId", request.sourceDocumentId],
     ["bookmarkName", request.documentImport.bookmarkName],
-    ["itemCount", "10"],
+    ["itemCount", "15"],
     ...items,
   ];
   writeFileSync(manifestPath, manifestText(entries), { mode: 0o600 });
@@ -700,7 +763,9 @@ try {
       "set inlineShapeObject to inline shape 1 of documentObject",
       "set displayShapeObject to inline shape 2 of documentObject",
       "set numberedShapeObject to inline shape 3 of documentObject",
-      'set alternativeTexts to (alternative text of inlineShapeObject) & "|" & (alternative text of displayShapeObject) & "|" & (alternative text of numberedShapeObject)',
+      "set listFormulaShapeObject1 to inline shape 4 of documentObject",
+      "set listFormulaShapeObject2 to inline shape 5 of documentObject",
+      'set alternativeTexts to (alternative text of inlineShapeObject) & "|" & (alternative text of displayShapeObject) & "|" & (alternative text of numberedShapeObject) & "|" & (alternative text of listFormulaShapeObject1) & "|" & (alternative text of listFormulaShapeObject2)',
       "set inlineSize to font size of font object of text object of inlineShapeObject",
       "set inlineWidth to width of inlineShapeObject",
       "set inlineHeight to height of inlineShapeObject",
@@ -817,12 +882,12 @@ try {
       throw new Error(`OMML import unexpectedly created ${shapeCount} inline shapes`);
     }
   } else {
-    if (shapeCount !== 3) {
-      throw new Error(`Image import created ${shapeCount} inline shapes instead of 3`);
+    if (shapeCount !== 5) {
+      throw new Error(`Image import created ${shapeCount} inline shapes instead of 5`);
     }
     const metadataPayloads = alternativeText.split("|");
     if (
-      metadataPayloads.length !== 3 ||
+      metadataPayloads.length !== 5 ||
       metadataPayloads.some((value) => !value.startsWith("visualtex:v1:deflate:"))
     ) {
       throw new Error("Image formulas did not retain three independent VisualTeX metadata payloads");

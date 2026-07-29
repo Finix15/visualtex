@@ -136,6 +136,8 @@ async function main() {
       String.raw`\mathtt{x}`,
       String.raw`\operatorname{sin}x`,
       String.raw`\sum_{b}^{a}xc`,
+      String.raw`\sum_{i=1}^{\infty}{a_k\left( x-x_0 \right) ^k}`,
+      String.raw`\sum_{i=1}^{\infty}{a_kP_k\left( x \right)}`,
       String.raw`\sqrt{x}`,
       String.raw`x_i^2`,
       String.raw`\begin{pmatrix}a&b\\c&d\end{pmatrix}`,
@@ -183,6 +185,8 @@ async function main() {
       monospace,
       operatorName,
       sum,
+      pastedPowerSeries,
+      pastedPolynomialSeries,
       root,
       scripts,
       matrix,
@@ -236,6 +240,25 @@ async function main() {
 
     expectIncludes(sum, '<m:chr m:val="∑"/>', "Summation must use an OMML n-ary operator.");
     expectIncludes(sum, '<m:limLoc m:val="undOvr"/>', "Summation limits must use above-and-below placement.");
+    for (const [formula, label] of [
+      [pastedPowerSeries, "pasted power series"],
+      [pastedPolynomialSeries, "pasted polynomial series"],
+    ]) {
+      expectIncludes(formula, '<m:chr m:val="∑"/>', `${label} must preserve its summation operator.`);
+      expectIncludes(formula, "<m:sub>", `${label} must preserve the lower summation limit.`);
+      expectIncludes(formula, "<m:sup>", `${label} must preserve the infinite upper limit.`);
+      expect(!formula.includes("\\sum"), `${label} must not leak raw LaTeX into Word OMML.`);
+    }
+    expectIncludes(pastedPowerSeries, "<m:d>", "The pasted power series must preserve scalable parentheses.");
+    expect(
+      pastedPowerSeries.includes("<m:sSub>") || pastedPowerSeries.includes("<m:sSubSup>"),
+      "The pasted power series must preserve x_0 and a_k subscripts.",
+    );
+    expect(
+      pastedPowerSeries.includes("<m:sSup>") || pastedPowerSeries.includes("<m:sSubSup>"),
+      "The pasted power series must preserve the kth power.",
+    );
+    expectIncludes(pastedPolynomialSeries, "<m:t>P</m:t>", "The pasted polynomial series must preserve P_k(x)." );
 
     expectIncludes(root, "<m:rad>", "Square root must use an OMML radical node.");
     expectIncludes(scripts, "<m:sSubSup>", "Combined scripts must use an OMML subscript/superscript node.");

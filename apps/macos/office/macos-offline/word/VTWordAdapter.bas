@@ -4,7 +4,7 @@ Option Explicit
 Private Const VT_WORD_HOST As String = "word"
 Private Const VT_WORD_STATUS_FILE As String = "/OfficePluginStatus/word.json"
 Private Const VT_WORD_SOURCE_REVISION As String = _
-    "word-structured-document-import-20260729-r53"
+    "word-structured-document-import-20260729-r54"
 Private Const VT_WORD_EQUATION_NUMBER_FONT_NAME As String = "Cambria Math"
 Private Const VT_WORD_BOOKMARK_PREFIX As String = "VT_Pending_"
 Private Const VT_WORD_DOCUMENT_IMPORT_BOOKMARK_PREFIX As String = "VT_D_"
@@ -6346,6 +6346,7 @@ Private Sub VTDocumentImportInsertText( _
     Dim insertionRange As Range
     Dim insertedRange As Range
     Dim insertionStart As Long
+    Dim replacesInlineMathAnchor As Boolean
 
     If cursorRange Is Nothing Then
         Err.Raise vbObjectError + 7583, "VisualTeX", _
@@ -6358,9 +6359,21 @@ Private Sub VTDocumentImportInsertText( _
     plainText = Replace$(plainText, vbLf, vbCr)
 
     insertionStart = cursorRange.Start
-    Set insertionRange = cursorRange.Document.Range( _
-        Start:=insertionStart, End:=insertionStart)
-    insertionRange.InsertBefore plainText
+    replacesInlineMathAnchor = _
+        cursorRange.End = cursorRange.Start + 1 And _
+        cursorRange.Text = ChrW(8288) And _
+        cursorRange.OMaths.Count = 0
+    If replacesInlineMathAnchor Then
+        ' VTPlaceCaretAfterInlineNativeEquation selects a U+2060 boundary
+        ' outside OMath. Replace that temporary marker with the next prose
+        ' fragment so the paragraph contains no hidden separator character.
+        Set insertionRange = cursorRange.Duplicate
+        insertionRange.Text = plainText
+    Else
+        Set insertionRange = cursorRange.Document.Range( _
+            Start:=insertionStart, End:=insertionStart)
+        insertionRange.InsertBefore plainText
+    End If
     Set insertedRange = cursorRange.Document.Range( _
         Start:=insertionStart, End:=insertionStart + Len(plainText))
     ' Imported prose is plain Word text. It must not inherit an italic, bold,
@@ -6484,6 +6497,28 @@ Private Sub VTApplyDocumentImportParagraphFormat( _
     End If
 End Sub
 
+Private Sub VTPrepareDocumentImportParagraph( _
+    ByVal cursorRange As Range, _
+    ByVal paragraphStyle As String, _
+    ByVal paragraphAlignment As String, _
+    ByVal listKind As String, _
+    ByVal listLevel As Long)
+
+    Dim paragraphRange As Range
+
+    If cursorRange Is Nothing Then
+        Err.Raise vbObjectError + 7587, "VisualTeX", _
+            "The document paragraph insertion point is missing."
+    End If
+    Set paragraphRange = cursorRange.Paragraphs(1).Range.Duplicate
+    ' Word for Mac can reject ListFormat.ApplyBulletDefault/ApplyNumberDefault
+    ' with error 5904 when the Range already contains an OMath object. Apply
+    ' the paragraph style and list template while the target paragraph is still
+    ' empty, then insert prose and independent inline formulas into it.
+    VTApplyDocumentImportParagraphFormat _
+        paragraphRange, paragraphStyle, paragraphAlignment, listKind, listLevel
+End Sub
+
 Private Sub VTFinalizeDocumentImportParagraph( _
     ByRef cursorRange As Range, _
     ByVal paragraphStart As Long, _
@@ -6506,6 +6541,18 @@ Private Sub VTFinalizeDocumentImportParagraph( _
     End If
     VTTraceDocumentImportStage sessionId, "paragraph-range-start", itemIndex
     Set documentObject = cursorRange.Document
+    If cursorRange.End = cursorRange.Start + 1 And _
+       cursorRange.Text = ChrW(8288) And _
+       cursorRange.OMaths.Count = 0 Then
+        ' A paragraph ending with an inline equation still owns the verified
+        ' U+2060 boundary selected by VTPlaceCaretAfterInlineNativeEquation.
+        ' Replace it with the real paragraph mark instead of leaving a hidden
+        ' character or collapsing the insertion point back into OMath.
+        nextStart = cursorRange.Start
+        cursorRange.Text = vbCr
+        Set cursorRange = documentObject.Range( _
+            Start:=nextStart, End:=nextStart)
+    End If
     If paragraphStart < 0 Or paragraphStart > cursorRange.Start Then
         Err.Raise vbObjectError + 7587, "VisualTeX", _
             "The document paragraph boundary is invalid."
@@ -6518,10 +6565,10 @@ Private Sub VTFinalizeDocumentImportParagraph( _
             "An imported text paragraph crossed an unexpected Word paragraph boundary."
     End If
     Set paragraphRange = contentRange.Paragraphs(1).Range.Duplicate
-    VTTraceDocumentImportStage sessionId, "paragraph-format-start", itemIndex
-    VTApplyDocumentImportParagraphFormat _
-        paragraphRange, paragraphStyle, paragraphAlignment, listKind, listLevel
-    VTTraceDocumentImportStage sessionId, "paragraph-format-complete", itemIndex
+    ' Paragraph/list formatting was applied before any content was inserted.
+    ' Reapplying a list template here would make a Range containing native
+    ' equations non-editable in Word for Mac (runtime error 5904).
+    VTTraceDocumentImportStage sessionId, "paragraph-format-preserved", itemIndex
 
     nextStart = cursorRange.Start
     If nextStart < documentObject.Content.End Then
@@ -6731,8 +6778,11 @@ Private Sub VTDocumentImportInsertFormula( _
             VTPlaceCaretAfterDisplayFormula formulaRange, formulaId
             Set cursorRange = Selection.Range.Duplicate
         Else
-            Set cursorRange = targetDocument.Range( _
-                Start:=formulaRange.End, End:=formulaRange.End)
+            ' A collapsed Range at OMath.Range.End remains inside the equation
+            ' on Word for Mac. Establish a verified text boundary so a later
+            ' inline formula in the same paragraph creates a separate OMath.
+            VTPlaceCaretAfterInlineNativeEquation formulaRange
+            Set cursorRange = Selection.Range.Duplicate
         End If
         Exit Sub
     End If
@@ -6890,9 +6940,11 @@ Private Sub VTCommitWordDocumentImportDispatch( _
     Dim itemParagraphEnd As Boolean
     Dim errorNumber As Long
     Dim errorDescription As String
+    Dim transactionStage As String
     Dim internalMutationStarted As Boolean
 
     On Error GoTo Failed
+    transactionStage = "commit-enter"
     VTTraceDocumentImportStage sessionId, "commit-enter", -1
     VTRequireWritableWordDocument
     VTRequireDispatchValue dispatch, "sourceDocumentId"
@@ -6987,6 +7039,10 @@ Private Sub VTCommitWordDocumentImportDispatch( _
                 activeListKind = itemListKind
                 activeListLevel = itemListLevel
                 activeParagraphStart = cursorRange.Start
+                transactionStage = "paragraph-prepare item " & CStr(itemIndex)
+                VTPrepareDocumentImportParagraph _
+                    cursorRange, activeParagraphStyle, _
+                    activeParagraphAlignment, activeListKind, activeListLevel
             ElseIf activeParagraphId <> itemParagraphId Then
                 Err.Raise vbObjectError + 7587, "VisualTeX", _
                     "An imported Word paragraph continuation is missing its start."
@@ -7009,6 +7065,7 @@ Private Sub VTCommitWordDocumentImportDispatch( _
         End If
 
         VTTraceDocumentImportStage sessionId, "item-metadata-resolved", itemIndex
+        transactionStage = "item-content item " & CStr(itemIndex)
         Select Case itemKind
             Case "text"
                 VTDocumentImportInsertText _
@@ -7031,6 +7088,7 @@ Private Sub VTCommitWordDocumentImportDispatch( _
                     "The imported Word paragraph end is invalid."
             End If
             VTTraceDocumentImportStage sessionId, "paragraph-finalize-start", itemIndex
+            transactionStage = "paragraph-finalize item " & CStr(itemIndex)
             VTFinalizeDocumentImportParagraph _
                 cursorRange, activeParagraphStart, activeParagraphStyle, _
                 activeParagraphAlignment, activeListKind, activeListLevel, _
@@ -7061,6 +7119,8 @@ Private Sub VTCommitWordDocumentImportDispatch( _
 Failed:
     errorNumber = Err.Number
     errorDescription = Err.Description
+    VTWriteWordFailureTrace _
+        sessionId, transactionStage, errorNumber, errorDescription
     On Error Resume Next
     If internalMutationStarted Then VTEndWordInternalMutation
     If insertedEnd > insertionStart Then
@@ -7084,7 +7144,7 @@ Failed:
     End If
     On Error GoTo 0
     Err.Raise errorNumber, "VisualTeX Word document import", _
-        errorDescription
+        transactionStage & ": " & errorDescription
 End Sub
 
 Public Sub VisualTeX_ApplyPendingResult()

@@ -150,4 +150,44 @@ assert.equal(
   2,
 );
 
+const pastedItemizeFragment = String.raw`多项式逼近和幂级数逼近的区别
+	\begin{itemize}
+		\item 多项式逼近的逼近系数和原函数原则上说没什么硬性关系，而幂级数的系数是严格依赖原函数在某些点的解析性的
+		\item 多项式逼近是全局性的，而幂级数逼近是有收敛半径的
+		\item 形式上的区别：幂级数的形式是$\sum_{i=1}^{\infty}{a_k\left( x-x_0 \right) ^k}$而多项式级数的形式是$\sum_{i=1}^{\infty}{a_kP_k\left( x \right)}$
+	\end{itemize}
+	所以从逼近效果来看，多项式级数逼近要比幂级数逼近要容易得多`;
+const pastedBlocks = parseLatexMarkdownDocument(pastedItemizeFragment, "auto", 12);
+const pastedBulletParagraphs = new Set(
+  pastedBlocks
+    .filter((block) => block.listKind === "bullet" && block.paragraphStart)
+    .map((block) => block.paragraphId),
+);
+assert.equal(
+  pastedBulletParagraphs.size,
+  3,
+  "A headerless itemize fragment must auto-detect as LaTeX and create three list items",
+);
+const pastedFormulas = pastedBlocks.filter((block) => block.kind === "formula");
+assert.deepEqual(
+  pastedFormulas.map((block) => block.latex),
+  [
+    String.raw`\sum_{i=1}^{\infty}{a_k\left( x-x_0 \right) ^k}`,
+    String.raw`\sum_{i=1}^{\infty}{a_kP_k\left( x \right)}`,
+  ],
+);
+assert.ok(pastedFormulas.every((block) => block.listKind === "bullet"));
+assert.equal(pastedFormulas[0]?.paragraphEnd, false);
+assert.equal(pastedFormulas[1]?.paragraphEnd, true);
+assert.equal(
+  pastedBlocks.at(-1)?.kind === "text" ? pastedBlocks.at(-1)?.listKind : undefined,
+  "none",
+);
+assert.ok(
+  pastedBlocks
+    .filter((block) => block.kind === "text")
+    .every((block) => !/[\\](?:begin|end|item)\b/.test(block.text)),
+  "LaTeX list commands must never leak into imported Word prose",
+);
+
 console.log("Document import parser smoke test passed");
