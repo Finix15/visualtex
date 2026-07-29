@@ -38,6 +38,13 @@ const outputPath = resolve(
   argument("--output") ?? join(scratchRoot, "VisualTeXWordBuild.dotm"),
 );
 const outputDocumentName = basename(outputPath);
+const protocolPath = join(
+  repositoryRoot,
+  "office",
+  "macos-offline",
+  "shared",
+  "VTProtocol.bas",
+);
 const adapterPath = join(
   repositoryRoot,
   "office",
@@ -355,6 +362,8 @@ function compileVbaProject() {
 }
 
 function replaceAndCompileAdapter() {
+  removeVbaModule("VTProtocol");
+  importVbaModule(protocolPath);
   removeVbaModule("VTWordAdapter");
   importVbaModule(adapterPath);
   removeVbaModule("VTRibbonCallbacks");
@@ -393,13 +402,14 @@ def normalize_vba(value: str) -> str:
         index += 1
     return "".join(output)
 
-base_path, adapter_path, callbacks_path = sys.argv[1:4]
+base_path, protocol_path, adapter_path, callbacks_path = sys.argv[1:5]
 parser = VBA_Parser(base_path)
 try:
     macros = {name: code for _, _, name, code in parser.extract_macros()}
 finally:
     parser.close()
 checks = [
+    ("VTProtocol.bas", protocol_path),
     ("VTWordAdapter.bas", adapter_path),
     ("VTRibbonCallbacks.bas", callbacks_path),
 ]
@@ -415,6 +425,7 @@ print("MATCH" if matched else "MISMATCH")
     "-c",
     checker,
     basePath,
+    protocolPath,
     adapterPath,
     ribbonCallbacksPath,
   ], { timeout: 90_000 });
@@ -429,6 +440,7 @@ function verifyBuiltVba(path) {
     { encoding: "buffer" },
   );
   const required = [
+    "VTFileBridgeCall",
     "VTFinalizeInlineNativeEquation",
     "VTInsertRegisteredEquationCaption",
     "VTWriteWordFailureTrace",

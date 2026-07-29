@@ -1,8 +1,6 @@
 -- Source form for the compiled AppleScriptTask file installed as
 -- ~/Library/Application Scripts/com.microsoft.Powerpoint/VisualTeXPowerPoint.scpt
 
-use framework "Foundation"
-use framework "AppKit"
 use scripting additions
 
 property runtimeSuffix : "Library/Application Scripts/com.microsoft.Powerpoint/VisualTeXRuntime"
@@ -12,10 +10,11 @@ on OpenVisualTeXSession(sessionId)
     try
         set safeSessionId to my validateSessionId(sessionId as text)
         set visualTeXURL to "visualtex://office/open?session=" & safeSessionId
-        set targetURL to current application's NSURL's URLWithString:visualTeXURL
-        if targetURL is missing value then error "VisualTeX Session URL is invalid" number 7107
-        set openedURL to ((current application's NSWorkspace's sharedWorkspace())'s openURL:targetURL) as boolean
-        if not openedURL then error "VisualTeX Session URL could not be opened" number 7108
+        -- Office's AppleScriptTask host is unreliable when one compiled script
+        -- mixes LaunchServices object bridging with later native file calls.
+        -- The URL payload is a validated UUID and is shell-quoted as one fixed
+        -- argument, so /usr/bin/open remains deterministic and non-injectable.
+        do shell script "/usr/bin/open " & quoted form of visualTeXURL
         return "ok|1"
     on error errorMessage number errorNumber
         return my errorResponse(errorNumber, errorMessage)
@@ -24,11 +23,7 @@ end OpenVisualTeXSession
 
 on OpenVisualTeXApplication(ignoredValue)
     try
-        set workspaceObject to current application's NSWorkspace's sharedWorkspace()
-        set targetURL to workspaceObject's URLForApplicationWithBundleIdentifier:"com.visualtex.studio"
-        if targetURL is missing value then error "VisualTeX application is not installed" number 7109
-        set openedURL to (workspaceObject's openURL:targetURL) as boolean
-        if not openedURL then error "VisualTeX application could not be opened" number 7110
+        do shell script "/usr/bin/open -b " & quoted form of "com.visualtex.studio"
         return "ok|1"
     on error errorMessage number errorNumber
         return my errorResponse(errorNumber, errorMessage)
@@ -46,23 +41,24 @@ on EnsureVisualTeXDirectory(relativePath)
 end EnsureVisualTeXDirectory
 
 on WriteVisualTeXFile(argumentText)
+    set temporaryPath to ""
     try
         set {relativePath, encodedData} to my splitPair(argumentText as text)
         set targetPath to my absoluteRuntimePath(relativePath)
-        set parentPath to ((current application's NSString's stringWithString:targetPath)'s stringByDeletingLastPathComponent()) as text
+        set parentPath to do shell script "/usr/bin/dirname " & quoted form of targetPath
         my ensureDirectory(parentPath)
         set normalizedData to my normalizeBase64Url(encodedData)
-        set decodedData to current application's NSData's alloc()'s initWithBase64EncodedString:normalizedData options:0
-        if decodedData is missing value then error "VisualTeX file bridge Base64URL payload is invalid" number 7125
-        set writeSucceeded to (decodedData's writeToFile:targetPath atomically:true) as boolean
-        if not writeSucceeded then error "VisualTeX runtime file could not be written" number 7126
-        set fileManager to current application's NSFileManager's defaultManager()
-        set fileAttributes to current application's NSDictionary's dictionaryWithObject:384 forKey:(current application's NSFilePosixPermissions)
-        set attributeError to reference
-        set attributesApplied to (fileManager's setAttributes:fileAttributes ofItemAtPath:targetPath |error|:attributeError) as boolean
-        if not attributesApplied then error "VisualTeX runtime file permissions could not be applied" number 7127
+        set temporaryPath to do shell script "/usr/bin/mktemp " & quoted form of (targetPath & ".tmp.XXXXXX")
+        do shell script "/usr/bin/printf %s " & quoted form of normalizedData & " | /usr/bin/base64 -D > " & quoted form of temporaryPath
+        do shell script "/bin/chmod 600 " & quoted form of temporaryPath & " && /bin/mv -f " & quoted form of temporaryPath & space & quoted form of targetPath
+        set temporaryPath to ""
         return "ok|1"
     on error errorMessage number errorNumber
+        if temporaryPath is not "" then
+            try
+                do shell script "/bin/rm -f " & quoted form of temporaryPath
+            end try
+        end if
         return my errorResponse(errorNumber, errorMessage)
     end try
 end WriteVisualTeXFile
@@ -70,11 +66,8 @@ end WriteVisualTeXFile
 on ReadVisualTeXFile(relativePath)
     try
         set targetPath to my absoluteRuntimePath(relativePath as text)
-        set fileManager to current application's NSFileManager's defaultManager()
-        if not ((fileManager's fileExistsAtPath:targetPath) as boolean) then error "VisualTeX runtime file does not exist" number 7128
-        set fileData to current application's NSData's dataWithContentsOfFile:targetPath
-        if fileData is missing value then error "VisualTeX runtime file could not be read" number 7129
-        set encodedData to (fileData's base64EncodedStringWithOptions:0) as text
+        do shell script "/bin/test -f " & quoted form of targetPath
+        set encodedData to do shell script "/usr/bin/base64 < " & quoted form of targetPath & " | /usr/bin/tr -d '\r\n'"
         set encodedData to my replaceText(encodedData, "+", "-")
         set encodedData to my replaceText(encodedData, "/", "_")
         repeat while encodedData ends with "="
@@ -93,11 +86,12 @@ end ReadVisualTeXFile
 on VisualTeXFileExists(relativePath)
     try
         set targetPath to my absoluteRuntimePath(relativePath as text)
-        set fileManager to current application's NSFileManager's defaultManager()
-        if ((fileManager's fileExistsAtPath:targetPath) as boolean) then
+        try
+            do shell script "/bin/test -f " & quoted form of targetPath
             return "ok|1"
-        end if
-        return "ok|0"
+        on error
+            return "ok|0"
+        end try
     on error errorMessage number errorNumber
         return my errorResponse(errorNumber, errorMessage)
     end try
@@ -106,11 +100,7 @@ end VisualTeXFileExists
 on DeleteVisualTeXFile(relativePath)
     try
         set targetPath to my absoluteRuntimePath(relativePath as text)
-        set fileManager to current application's NSFileManager's defaultManager()
-        if not ((fileManager's fileExistsAtPath:targetPath) as boolean) then return "ok|1"
-        set deleteError to reference
-        set deleted to (fileManager's removeItemAtPath:targetPath |error|:deleteError) as boolean
-        if not deleted then error "VisualTeX runtime file could not be deleted" number 7130
+        do shell script "/bin/rm -f " & quoted form of targetPath
         return "ok|1"
     on error errorMessage number errorNumber
         return my errorResponse(errorNumber, errorMessage)
@@ -124,18 +114,14 @@ on absoluteRuntimePath(relativePath)
 end absoluteRuntimePath
 
 on ensureRuntimeRoot()
-    set homePath to (current application's NSHomeDirectory()) as text
-    set rootPath to homePath & "/" & runtimeSuffix
+    set homePath to POSIX path of (path to home folder)
+    set rootPath to homePath & runtimeSuffix
     my ensureDirectory(rootPath)
     return rootPath
 end ensureRuntimeRoot
 
 on ensureDirectory(targetPath)
-    set fileManager to current application's NSFileManager's defaultManager()
-    set directoryError to reference
-    set directoryAttributes to current application's NSDictionary's dictionaryWithObject:448 forKey:(current application's NSFilePosixPermissions)
-    set created to (fileManager's createDirectoryAtPath:targetPath withIntermediateDirectories:true attributes:directoryAttributes |error|:directoryError) as boolean
-    if not created then error "VisualTeX runtime directory could not be created" number 7131
+    do shell script "/bin/mkdir -p " & quoted form of targetPath & " && /bin/chmod 700 " & quoted form of targetPath
 end ensureDirectory
 
 on validateRelativePath(candidate)

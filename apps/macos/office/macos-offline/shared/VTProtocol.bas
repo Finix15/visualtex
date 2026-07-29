@@ -494,9 +494,15 @@ Private Function VTFileBridgeCall(ByVal handlerName As String, ByVal parameterVa
     Dim response As String
     Dim fields() As String
     Dim detail As String
+    Dim attempt As Long
 
 #If Mac Then
-    response = AppleScriptTask(VTFileBridgeScriptName(), handlerName, parameterValue)
+    For attempt = 1 To 3
+        response = AppleScriptTask( _
+            VTFileBridgeScriptName(), handlerName, parameterValue)
+        If Len(response) > 0 Then Exit For
+        If attempt < 3 Then DoEvents
+    Next attempt
 #Else
     Err.Raise vbObjectError + 7126, "VisualTeX", "The VisualTeX native Office file bridge is available only on macOS."
 #End If
@@ -506,13 +512,17 @@ Private Function VTFileBridgeCall(ByVal handlerName As String, ByVal parameterVa
         Exit Function
     End If
 
-    detail = "The VisualTeX native file bridge returned an invalid response."
+    detail = "The VisualTeX native file bridge handler " & _
+        handlerName & " returned an invalid response."
     If Left$(response, 6) = "error|" Then
         fields = Split(response, "|")
         If UBound(fields) >= 2 Then detail = fields(2)
         If UBound(fields) >= 1 Then detail = detail & " (AppleScript error " & fields(1) & ")"
     ElseIf Len(response) = 0 Then
-        detail = "The VisualTeX native file bridge returned no response. Check that " & VTFileBridgeScriptName() & " is installed and compiled."
+        detail = "The VisualTeX native file bridge handler " & _
+            handlerName & " returned no response for " & parameterValue & _
+            ". Check that " & VTFileBridgeScriptName() & _
+            " is installed and compiled."
     End If
     Err.Raise vbObjectError + 7127, "VisualTeX", detail
 End Function
@@ -714,6 +724,10 @@ Public Function VTProtocolSelfTest() As Boolean
     VTEnsureDirectory VTSessionRoot()
     testPath = VTSessionRoot() & "/protocol-self-test.txt"
     VTWriteTextAtomic testPath, sample
+    If Not VTPathFileExists(testPath) Then
+        Err.Raise vbObjectError + 7122, "VisualTeX", _
+            "VisualTeX file-existence self-test failed."
+    End If
     If VTReadText(testPath, 1024) <> sample Then
         Err.Raise vbObjectError + 7122, "VisualTeX", "VisualTeX UTF-8 self-test failed."
     End If

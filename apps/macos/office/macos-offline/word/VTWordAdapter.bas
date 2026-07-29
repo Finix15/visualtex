@@ -4,7 +4,7 @@ Option Explicit
 Private Const VT_WORD_HOST As String = "word"
 Private Const VT_WORD_STATUS_FILE As String = "/OfficePluginStatus/word.json"
 Private Const VT_WORD_SOURCE_REVISION As String = _
-    "word-structured-document-import-20260729-r57"
+    "word-structured-document-import-20260729-r59"
 Private Const VT_WORD_EQUATION_NUMBER_FONT_NAME As String = "Cambria Math"
 Private Const VT_WORD_BOOKMARK_PREFIX As String = "VT_Pending_"
 Private Const VT_WORD_DOCUMENT_IMPORT_BOOKMARK_PREFIX As String = "VT_D_"
@@ -7341,9 +7341,9 @@ Private Sub VTCommitWordDocumentImportDispatch( _
 Failed:
     errorNumber = Err.Number
     errorDescription = Err.Description
+    On Error Resume Next
     VTWriteWordFailureTrace _
         sessionId, transactionStage, errorNumber, errorDescription
-    On Error Resume Next
     If internalMutationStarted Then VTEndWordInternalMutation
     If insertedEnd > insertionStart Then
         Set rollbackRange = targetDocument.Range( _
@@ -7402,11 +7402,13 @@ Public Sub VisualTeX_ApplyPendingResult()
 Failed:
     callbackErrorNumber = Err.Number
     callbackErrorDescription = Err.Description
+    On Error Resume Next
     If Len(sessionId) > 0 Then
         VTWriteWordFailureTrace _
             sessionId, "document-import-callback", _
             callbackErrorNumber, callbackErrorDescription
     End If
+    On Error GoTo 0
     Err.Raise callbackErrorNumber, "VisualTeX Word callback", _
         callbackErrorDescription
 End Sub

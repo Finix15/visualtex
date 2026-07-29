@@ -166,7 +166,7 @@ expectIncludes(powerpointAdapter, "VTPowerPointRibbonApplyFormulaFontSizePreset"
 expectIncludes(powerpointAdapter, "VTUnicodeText(28151, 21512, 23383, 21495)", "PowerPoint must report mixed selected SVG formula sizes without source-encoding corruption");
 
 expectIncludes(wordAdapter, "Public Sub AutoExec()", "Word template must publish AutoExec health");
-expectIncludes(wordAdapter, '"word-structured-document-import-20260729-r57"', "Word health must identify the structured document-import, metadata-recovery, and real image-edit regression revision");
+expectIncludes(wordAdapter, '"word-structured-document-import-20260729-r59"', "Word health must identify the structured document-import, metadata-recovery, and real image-edit regression revision");
 expectIncludes(wordAdapter, "VTInitializeWordEvents", "Word AutoExec must initialize its persistent application event sink");
 expectIncludes(wordEvents, "App_WindowBeforeDoubleClick", "Word must use its native application event for double-click editing");
 expectIncludes(wordEvents, "App_WindowSelectionChange", "Word must repair a clicked legacy image-number REF through the native selection-change event");
@@ -746,6 +746,9 @@ expectIncludes(protocol, "VTBase64UrlEncodeUtf8", "VBA must encode runtime file 
 expectIncludes(protocol, 'VTFileBridgeCall("WriteVisualTeXFile"', "VBA runtime writes must use the fixed AppleScriptTask file bridge");
 expectIncludes(protocol, "WriteVisualTeXFile creates the Session parent directory atomically", "Request writes must avoid a redundant directory-creation AppleScriptTask round trip");
 expectIncludes(protocol, 'VTFileBridgeCall("ReadVisualTeXFile"', "VBA runtime reads must use the fixed AppleScriptTask file bridge");
+expectIncludes(protocol, "For attempt = 1 To 3", "The Office file bridge must retry transient empty AppleScriptTask responses");
+expectIncludes(protocol, "If Len(response) > 0 Then Exit For", "The Office file bridge retry must stop immediately after a valid response");
+expectIncludes(protocol, "VisualTeX file-existence self-test failed", "The host self-test must exercise the file-existence bridge handler");
 expectIncludes(protocol, 'VTFileBridgeCall("EnsureVisualTeXDirectory"', "VBA runtime directory creation must use the fixed AppleScriptTask file bridge");
 expectIncludes(protocol, 'VTFileBridgeCall("VisualTeXFileExists"', "VBA runtime existence checks must use the fixed AppleScriptTask file bridge");
 expectIncludes(protocol, "VTRuntimeRelativePath", "VBA must reduce every bridged path to a validated runtime-relative path");
@@ -756,21 +759,25 @@ expectIncludes(powerpointAdapter, "VTParseInvariantDouble", "PowerPoint must use
 expect(!wordAdapter.includes("Application.DecimalSeparator"), "Word VBA must not reference the Excel-only Application.DecimalSeparator property");
 expect(!powerpointAdapter.includes("Application.DecimalSeparator"), "PowerPoint VBA must not reference the Excel-only Application.DecimalSeparator property");
 expectIncludes(launcher, "AppleScriptTask", "VBA launcher must use AppleScriptTask");
-expectIncludes(wordScript, "NSWorkspace's sharedWorkspace())'s openURL:targetURL", "Word AppleScriptTask must open the validated Session URL without spawning a shell");
-expectIncludes(powerpointScript, "NSWorkspace's sharedWorkspace())'s openURL:targetURL", "PowerPoint AppleScriptTask must open the validated Session URL without spawning a shell");
-expect(!wordScript.includes('do shell script "/usr/bin/open " & quoted form of visualTeXURL'), "Word Session launch must not spawn /usr/bin/open");
-expect(!powerpointScript.includes('do shell script "/usr/bin/open " & quoted form of visualTeXURL'), "PowerPoint Session launch must not spawn /usr/bin/open");
+expectIncludes(wordScript, 'do shell script "/usr/bin/open " & quoted form of visualTeXURL', "Word AppleScriptTask must launch the validated Session URL as one quoted argument");
+expectIncludes(powerpointScript, 'do shell script "/usr/bin/open " & quoted form of visualTeXURL', "PowerPoint AppleScriptTask must launch the validated Session URL as one quoted argument");
+expectIncludes(wordScript, 'do shell script "/usr/bin/open -b " & quoted form of "com.visualtex.studio"', "Word must open only the fixed VisualTeX bundle identifier");
+expectIncludes(powerpointScript, 'do shell script "/usr/bin/open -b " & quoted form of "com.visualtex.studio"', "PowerPoint must open only the fixed VisualTeX bundle identifier");
 expect(!wordScript.includes("System Events"), "Word AppleScriptTask must not use UI automation");
 expect(!powerpointScript.includes("System Events"), "PowerPoint AppleScriptTask must not use UI automation");
 for (const [host, script] of [["Word", wordScript], ["PowerPoint", powerpointScript]]) {
   expectIncludes(script, "validateRelativePath", `${host} file bridge must validate every runtime-relative path`);
   expectIncludes(script, "absoluteRuntimePath", `${host} file bridge must join paths only beneath its fixed runtime root`);
-  expectIncludes(script, "writeToFile:targetPath atomically:true", `${host} file bridge must atomically persist decoded runtime data`);
-  expectIncludes(script, "createDirectoryAtPath:targetPath withIntermediateDirectories:true", `${host} file bridge must create runtime directories without spawning mkdir`);
-  expectIncludes(script, "setAttributes:fileAttributes ofItemAtPath:targetPath", `${host} file bridge must apply runtime file permissions without spawning chmod`);
-  expectIncludes(script, "initWithBase64EncodedString", `${host} file bridge must decode Base64URL payloads without shell interpolation`);
+  expectIncludes(script, 'set parentPath to do shell script "/usr/bin/dirname " & quoted form of targetPath', `${host} file bridge must quote the validated destination before resolving its parent`);
+  expectIncludes(script, 'set temporaryPath to do shell script "/usr/bin/mktemp " & quoted form of (targetPath & ".tmp.XXXXXX")', `${host} file bridge must create its temporary file beside the validated destination`);
+  expectIncludes(script, 'quoted form of normalizedData & " | /usr/bin/base64 -D > " & quoted form of temporaryPath', `${host} file bridge must quote both encoded data and the temporary path`);
+  expectIncludes(script, 'do shell script "/bin/chmod 600 " & quoted form of temporaryPath & " && /bin/mv -f " & quoted form of temporaryPath & space & quoted form of targetPath', `${host} file bridge must atomically move a permission-restricted temporary file`);
+  expectIncludes(script, 'set encodedData to do shell script "/usr/bin/base64 < " & quoted form of targetPath', `${host} file bridge must quote the validated read path`);
+  expectIncludes(script, 'do shell script "/bin/mkdir -p " & quoted form of targetPath & " && /bin/chmod 700 " & quoted form of targetPath', `${host} runtime directory creation must quote its validated path`);
+  expectIncludes(script, 'do shell script "/usr/bin/open " & quoted form of visualTeXURL', `${host} Session launch must avoid NSURL bridging and quote the validated URL`);
+  expect(!script.includes("openURL:targetURL"), `${host} Session launch must not pass NSURL objects through AppleScriptTask`);
+  expect(!script.includes('use framework "Foundation"'), `${host} AppleScriptTask must avoid AppleScriptObjC file bridging that becomes unstable in long Word Sessions`);
   expectIncludes(script, 'candidate contains ".."', `${host} file bridge must reject traversal components`);
-  expect(!script.includes("do shell script"), `${host} AppleScriptTask file operations must remain completely shell-free`);
   expect(!script.match(/sh -c/i), `${host} AppleScriptTask must not invoke an arbitrary shell program string`);
 }
 
@@ -985,7 +992,7 @@ expectIncludes(installer, "addin_installation_matches", "Installed status must r
 expectIncludes(installer, "powerpoint_script.clone()", "PowerPoint installed status must include its AppleScriptTask resource");
 expectIncludes(installer, 'health.plugin_version.as_deref() == Some(env!("CARGO_PKG_VERSION"))', "Installer must reject stale plug-in health versions");
 expect(!installer.includes("source_revision_matches"), "Runtime health must not reject a current-version add-in only because an optional sourceRevision field is absent");
-expectIncludes(packager, "word-structured-document-import-20260729-r57", "Packaging must reject a Word DOTM that lacks the structured document-import and image-title recovery revision");
+expectIncludes(packager, "word-structured-document-import-20260729-r59", "Packaging must reject a Word DOTM that lacks the structured document-import and image-title recovery revision");
 expectIncludes(packager, "powerpoint-svg-font-size-dropdown-unicode-20260727-r3", "Packaging must reject a PowerPoint PPAM that predates Unicode-safe point-size labels");
 expectIncludes(installer, "POWERPOINT_VBA_SOURCE_REVISION", "Installer validation must reject a stale PowerPoint PPAM without SVG point-size support");
 expectIncludes(installer, "Library/Application Scripts/com.microsoft.Word", "Installer must use Word's AppleScriptTask directory");
