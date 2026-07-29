@@ -4,9 +4,10 @@ Option Explicit
 Private Const VT_WORD_HOST As String = "word"
 Private Const VT_WORD_STATUS_FILE As String = "/OfficePluginStatus/word.json"
 Private Const VT_WORD_SOURCE_REVISION As String = _
-    "word-svg-baseline-number-font-20260728-r50"
+    "word-document-import-20260729-r52"
 Private Const VT_WORD_EQUATION_NUMBER_FONT_NAME As String = "Cambria Math"
 Private Const VT_WORD_BOOKMARK_PREFIX As String = "VT_Pending_"
+Private Const VT_WORD_DOCUMENT_IMPORT_BOOKMARK_PREFIX As String = "VT_D_"
 Private Const VT_WORD_NATIVE_BOOKMARK_PREFIX As String = "VT_F_"
 Private Const VT_WORD_CAPTION_BOOKMARK_PREFIX As String = "VT_C_"
 Private Const VT_WORD_NUMBER_BOOKMARK_PREFIX As String = "VT_R_"
@@ -111,6 +112,80 @@ Public Sub VisualTeX_AssertWordHostSelfTest()
             "The VisualTeX Word source self-test failed."
     End If
     VTInitializeWordEvents
+End Sub
+
+Public Sub VisualTeX_ExportActiveDocumentPdfForRegression()
+    Dim requestPath As String
+    Dim statusPath As String
+    Dim outputPath As String
+    Dim runtimeRoot As String
+    Dim scratchRoot As String
+    Dim homeBoundary As Long
+    Dim exportStage As String
+    Dim exportErrorNumber As Long
+    Dim exportErrorDescription As String
+
+    runtimeRoot = VTApplicationSupportRoot()
+    statusPath = _
+        runtimeRoot & _
+        "/document-import-regression-pdf-status.txt"
+    On Error GoTo Failed
+    If Documents.Count = 0 Then
+        Err.Raise vbObjectError + 7590, "VisualTeX", _
+            "The PDF regression export requires an active Word document."
+    End If
+    requestPath = _
+        runtimeRoot & _
+        "/document-import-regression-pdf-path.txt"
+    outputPath = Trim$(VTReadText(requestPath, 4096))
+    homeBoundary = InStr( _
+        1, runtimeRoot, "/Library/Application Scripts/", vbBinaryCompare)
+    If homeBoundary <= 1 Then
+        Err.Raise vbObjectError + 7590, "VisualTeX", _
+            "The PDF regression export could not resolve the user home path."
+    End If
+    scratchRoot = _
+        Left$(runtimeRoot, homeBoundary - 1) & _
+        "/Library/Group Containers/UBF8T346G9.Office/VisualTeX/Scratch/"
+    If Len(outputPath) <= Len(scratchRoot) Or _
+       Left$(outputPath, Len(scratchRoot)) <> scratchRoot Or _
+       InStr(outputPath, "..") > 0 Or _
+       InStr(outputPath, vbCr) > 0 Or _
+       InStr(outputPath, vbLf) > 0 Or _
+       InStr(outputPath, Chr$(0)) > 0 Then
+        Err.Raise vbObjectError + 7590, "VisualTeX", _
+            "The PDF regression export rejected an unsafe output path."
+    End If
+
+    exportStage = "ExportAsFixedFormat"
+    On Error Resume Next
+    ActiveDocument.ExportAsFixedFormat _
+        OutputFileName:=outputPath, _
+        ExportFormat:=wdExportFormatPDF
+    exportErrorNumber = Err.Number
+    exportErrorDescription = Err.Description
+    Err.Clear
+    On Error GoTo Failed
+    If exportErrorNumber <> 0 Then
+        exportStage = "SaveAs2"
+        ActiveDocument.SaveAs2 _
+            FileName:=outputPath, _
+            FileFormat:=wdFormatPDF, _
+            AddToRecentFiles:=False
+    End If
+    VTWriteTextAtomic statusPath, "ok|" & exportStage
+    Exit Sub
+
+Failed:
+    exportErrorNumber = Err.Number
+    exportErrorDescription = Err.Description
+    On Error Resume Next
+    VTWriteTextAtomic _
+        statusPath, _
+        "error|" & CStr(exportErrorNumber) & "|" & _
+        exportErrorDescription & "|stage=" & exportStage & _
+        "|root=" & runtimeRoot & "|output=" & outputPath
+    On Error GoTo 0
 End Sub
 
 Private Function VTAppendRegressionParagraph( _
@@ -5346,6 +5421,101 @@ Public Sub VisualTeX_WatchOrphanedNumberedDisplay()
     VTEnsureOrphanWatchScheduled
 End Sub
 
+Private Function VTDocumentImportBookmarkName(ByVal sessionId As String) As String
+    If Not VTIsCanonicalUuid(sessionId) Then
+        Err.Raise vbObjectError + 7580, "VisualTeX", _
+            "The document import Session id is invalid."
+    End If
+    VTDocumentImportBookmarkName = _
+        VT_WORD_DOCUMENT_IMPORT_BOOKMARK_PREFIX & _
+        Replace$(Left$(sessionId, 24), "-", "")
+    If Len(VTDocumentImportBookmarkName) > 40 Then
+        Err.Raise vbObjectError + 7580, "VisualTeX", _
+            "The document import Bookmark name is too long."
+    End If
+End Function
+
+Private Function VTDocumentImportRequestJson( _
+    ByVal sessionId As String, _
+    ByVal sourceDocumentId As String, _
+    ByVal bookmarkName As String, _
+    ByVal defaultFontSizePt As Double) As String
+
+    VTDocumentImportRequestJson = "{" & _
+        """protocolVersion"":" & CStr(VT_PROTOCOL_VERSION) & "," & _
+        """sessionId"":" & VTJsonString(sessionId) & "," & _
+        """host"":""word""," & _
+        """mode"":""create""," & _
+        """operation"":""documentImport""," & _
+        """formulaId"":null," & _
+        """displayMode"":""inline""," & _
+        """numbered"":false," & _
+        """nativeEquation"":false,"
+    VTDocumentImportRequestJson = _
+        VTDocumentImportRequestJson & _
+        """sourceDocumentId"":" & VTJsonString(sourceDocumentId) & "," & _
+        """sourceObjectId"":null," & _
+        """encodedMetadata"":null," & _
+        """pendingMarker"":null," & _
+        """fontSizePt"":null," & _
+        """referenceWidthPt"":null," & _
+        """referenceHeightPt"":null," & _
+        """powerPoint"":null,"
+    VTDocumentImportRequestJson = _
+        VTDocumentImportRequestJson & _
+        """documentImport"":{" & _
+        """bookmarkName"":" & VTJsonString(bookmarkName) & "," & _
+        """defaultFontSizePt"":" & VTJsonNumber(defaultFontSizePt) & _
+        "}}"
+End Function
+
+Public Sub VisualTeX_InsertLatexMarkdownDocument()
+    Dim sessionId As String
+    Dim bookmarkName As String
+    Dim sourceDocumentId As String
+    Dim insertionRange As Range
+    Dim defaultFontSizePt As Double
+    Dim requestJson As String
+    Dim errorNumber As Long
+    Dim errorDescription As String
+
+    On Error GoTo Failed
+    VTRequireWritableWordDocument
+    VTRefreshWordHealthQuietly
+    VTCleanupOrphanedNumberedDisplaySelection Selection.Range
+
+    sessionId = VTNewUuidV4()
+    bookmarkName = VTDocumentImportBookmarkName(sessionId)
+    sourceDocumentId = VTWordDocumentIdentity()
+    defaultFontSizePt = _
+        VTPreferredWordFormulaFontSize(Selection.Range.Duplicate)
+    Set insertionRange = Selection.Range.Duplicate
+    insertionRange.Collapse wdCollapseStart
+    If ActiveDocument.Bookmarks.Exists(bookmarkName) Then
+        ActiveDocument.Bookmarks(bookmarkName).Delete
+    End If
+    ActiveDocument.Bookmarks.Add Name:=bookmarkName, Range:=insertionRange
+
+    requestJson = VTDocumentImportRequestJson( _
+        sessionId, sourceDocumentId, bookmarkName, defaultFontSizePt)
+    VTWriteRequest sessionId, requestJson
+    VTLaunchSession VT_WORD_HOST, sessionId
+    Exit Sub
+
+Failed:
+    errorNumber = Err.Number
+    errorDescription = Err.Description
+    On Error Resume Next
+    If Len(bookmarkName) > 0 Then
+        If ActiveDocument.Bookmarks.Exists(bookmarkName) Then
+            ActiveDocument.Bookmarks(bookmarkName).Delete
+        End If
+    End If
+    If Len(sessionId) > 0 Then VTDeleteSessionFiles sessionId
+    On Error GoTo 0
+    VTShowError "Word LaTeX/Markdown import", errorNumber, errorDescription
+End Sub
+
 Public Sub VisualTeX_CreateInline()
     VTWordCreate "inline", False
 End Sub
@@ -5378,6 +5548,34 @@ Public Sub VTWordRibbonOnLoad(ByVal ribbon As IRibbonUI)
     VTEnsureImageSizeWatchScheduled
     VTInvalidateWordImageFontSizeControl
     VTRefreshWordHealthQuietly
+End Sub
+
+Public Sub VTWordRibbonDocumentImport(ByVal control As IRibbonControl)
+    VisualTeX_InsertLatexMarkdownDocument
+End Sub
+
+Public Sub VTWordRibbonInline(ByVal control As IRibbonControl)
+    VisualTeX_CreateInline
+End Sub
+
+Public Sub VTWordRibbonDisplay(ByVal control As IRibbonControl)
+    VisualTeX_CreateDisplay
+End Sub
+
+Public Sub VTWordRibbonEdit(ByVal control As IRibbonControl)
+    VisualTeX_EditSelected
+End Sub
+
+Public Sub VTWordRibbonConvertNative(ByVal control As IRibbonControl)
+    VisualTeX_ConvertSelectedToNativeEquation
+End Sub
+
+Public Sub VTWordRibbonNumbering(ByVal control As IRibbonControl)
+    VisualTeX_UpdateEquationNumbers
+End Sub
+
+Public Sub VTWordRibbonOpen(ByVal control As IRibbonControl)
+    VisualTeX_OpenApplication
 End Sub
 
 Public Sub VTWordRibbonNativeInline(ByVal control As IRibbonControl)
@@ -6070,6 +6268,512 @@ Failed:
     VTShowError "application launch", Err.Number, Err.Description
 End Sub
 
+Private Function VTReadDocumentImportManifest( _
+    ByVal manifestPath As String, _
+    ByVal sessionId As String) As Object
+
+    Dim dictionary As Object
+    Dim contents As String
+    Dim rows() As String
+    Dim row As Variant
+    Dim separator As Long
+    Dim key As String
+    Dim value As String
+
+    VTValidateAbsoluteVisualTeXPath manifestPath
+    Set dictionary = New Collection
+    contents = Replace$(VTReadText(manifestPath, 16777216), vbCrLf, vbLf)
+    contents = Replace$(contents, vbCr, vbLf)
+    rows = Split(contents, vbLf)
+    For Each row In rows
+        If Len(CStr(row)) > 0 Then
+            separator = InStr(1, CStr(row), "=", vbBinaryCompare)
+            If separator <= 1 Then
+                Err.Raise vbObjectError + 7581, "VisualTeX", _
+                    "The document import manifest contains an invalid row."
+            End If
+            key = Left$(CStr(row), separator - 1)
+            value = Mid$(CStr(row), separator + 1)
+            If VTCollectionHasKey(dictionary, key) Then
+                Err.Raise vbObjectError + 7581, "VisualTeX", _
+                    "The document import manifest contains a duplicate key."
+            End If
+            dictionary.Add value, key
+        End If
+    Next row
+    VTRequireDispatchValue dictionary, "protocolVersion"
+    VTRequireDispatchValue dictionary, "sessionId"
+    VTRequireDispatchValue dictionary, "outputKind"
+    VTRequireDispatchValue dictionary, "sourceDocumentId"
+    VTRequireDispatchValue dictionary, "bookmarkName"
+    VTRequireDispatchValue dictionary, "itemCount"
+    If CStr(dictionary("protocolVersion")) <> _
+       CStr(VT_PROTOCOL_VERSION) Or _
+       CStr(dictionary("sessionId")) <> sessionId Then
+        Err.Raise vbObjectError + 7581, "VisualTeX", _
+            "The document import manifest identity is invalid."
+    End If
+    Set VTReadDocumentImportManifest = dictionary
+End Function
+
+Private Function VTDocumentImportItemKey( _
+    ByVal itemIndex As Long, _
+    ByVal suffix As String) As String
+
+    If itemIndex < 0 Or Len(suffix) = 0 Then
+        Err.Raise vbObjectError + 7582, "VisualTeX", _
+            "The document import item key is invalid."
+    End If
+    VTDocumentImportItemKey = "item" & CStr(itemIndex) & suffix
+End Function
+
+Private Function VTDocumentImportRequired( _
+    ByVal manifest As Object, _
+    ByVal itemIndex As Long, _
+    ByVal suffix As String) As String
+
+    Dim key As String
+    key = VTDocumentImportItemKey(itemIndex, suffix)
+    VTRequireDispatchValue manifest, key
+    VTDocumentImportRequired = CStr(manifest(key))
+End Function
+
+Private Sub VTDocumentImportInsertText( _
+    ByRef cursorRange As Range, _
+    ByVal textBase64 As String)
+
+    Dim plainText As String
+    Dim insertionRange As Range
+    Dim insertionStart As Long
+
+    If cursorRange Is Nothing Then
+        Err.Raise vbObjectError + 7583, "VisualTeX", _
+            "The document import text insertion point is missing."
+    End If
+    plainText = VTBase64UrlDecodeUtf8(textBase64)
+    If Len(plainText) = 0 Then Exit Sub
+    plainText = Replace$(plainText, vbCrLf, vbLf)
+    plainText = Replace$(plainText, vbCr, vbLf)
+    plainText = Replace$(plainText, vbLf, vbCr)
+
+    insertionStart = cursorRange.Start
+    Set insertionRange = cursorRange.Document.Range( _
+        Start:=insertionStart, End:=insertionStart)
+    insertionRange.InsertBefore plainText
+    Set cursorRange = cursorRange.Document.Range( _
+        Start:=insertionStart + Len(plainText), _
+        End:=insertionStart + Len(plainText))
+End Sub
+
+Private Sub VTDeleteDocumentImportedFormulaState( _
+    ByVal documentObject As Document, _
+    ByVal formulaId As String)
+
+    Dim bookmarkName As String
+
+    On Error Resume Next
+    VTDeleteWordLatexPayload documentObject, formulaId
+    VTDeleteWordOmmlPayload documentObject, formulaId
+    VTDeleteWordMetadataPayload documentObject, formulaId
+    VTDeleteDocumentVariable documentObject, VTWordFormatVariableName(formulaId)
+    VTDeleteDocumentVariable documentObject, VTWordImageScaleVariableName(formulaId)
+    bookmarkName = VTNativeFormulaBookmarkName(formulaId)
+    If documentObject.Bookmarks.Exists(bookmarkName) Then
+        documentObject.Bookmarks(bookmarkName).Delete
+    End If
+    bookmarkName = VTEquationCaptionBookmarkName(formulaId)
+    If documentObject.Bookmarks.Exists(bookmarkName) Then
+        documentObject.Bookmarks(bookmarkName).Delete
+    End If
+    On Error GoTo 0
+End Sub
+
+Private Sub VTDocumentImportInsertFormula( _
+    ByRef cursorRange As Range, _
+    ByVal manifest As Object, _
+    ByVal itemIndex As Long, _
+    ByVal outputKind As String, _
+    ByRef insertedFormulaIds As Collection)
+
+    Dim targetDocument As Document
+    Dim targetRange As Range
+    Dim formulaRange As Range
+    Dim candidate As InlineShape
+    Dim numberLayoutRange As Range
+    Dim formulaId As String
+    Dim latexBase64 As String
+    Dim ommlBase64 As String
+    Dim nativeDocumentPath As String
+    Dim displayMode As String
+    Dim numbered As Boolean
+    Dim metadata As String
+    Dim imagePath As String
+    Dim vectorDocumentPath As String
+    Dim fallbackImagePath As String
+    Dim captionText As String
+    Dim formulaReference As String
+    Dim fontSizePt As Double
+    Dim widthPoints As Double
+    Dim heightPoints As Double
+    Dim baselinePoints As Double
+    Dim referenceWidthPt As Double
+    Dim referenceHeightPt As Double
+    Dim referenceBaselinePt As Double
+    Dim observedWordFontSizePt As Double
+    Dim numberCreated As Boolean
+
+    If cursorRange Is Nothing Then
+        Err.Raise vbObjectError + 7584, "VisualTeX", _
+            "The document formula insertion point is missing."
+    End If
+    Set targetDocument = cursorRange.Document
+    formulaId = VTDocumentImportRequired( _
+        manifest, itemIndex, "formulaId")
+    latexBase64 = VTDocumentImportRequired( _
+        manifest, itemIndex, "latexBase64")
+    displayMode = VTDocumentImportRequired( _
+        manifest, itemIndex, "displayMode")
+    numbered = (VTDocumentImportRequired( _
+        manifest, itemIndex, "numbered") = "1")
+    fontSizePt = VTDispatchPositiveDouble( _
+        manifest, VTDocumentImportItemKey(itemIndex, "fontSizePt"))
+    metadata = VTDocumentImportRequired( _
+        manifest, itemIndex, "metadata")
+    ommlBase64 = VTDocumentImportRequired( _
+        manifest, itemIndex, "ommlBase64")
+    nativeDocumentPath = VTDocumentImportRequired( _
+        manifest, itemIndex, "nativeDocumentPath")
+    widthPoints = VTDispatchPositiveDouble( _
+        manifest, VTDocumentImportItemKey(itemIndex, "widthPoints"))
+    heightPoints = VTDispatchPositiveDouble( _
+        manifest, VTDocumentImportItemKey(itemIndex, "heightPoints"))
+    baselinePoints = VTDispatchOptionalDouble( _
+        manifest, VTDocumentImportItemKey(itemIndex, "baseline"), 0#)
+    referenceWidthPt = VTDispatchPositiveDouble( _
+        manifest, VTDocumentImportItemKey(itemIndex, "referenceWidthPt"))
+    referenceHeightPt = VTDispatchPositiveDouble( _
+        manifest, VTDocumentImportItemKey(itemIndex, "referenceHeightPt"))
+    referenceBaselinePt = VTDispatchOptionalDouble( _
+        manifest, _
+        VTDocumentImportItemKey(itemIndex, "referenceBaselinePt"), 0#)
+
+    If Not VTIsCanonicalUuid(formulaId) Or _
+       Not VTIsBase64UrlPayload(latexBase64) Or _
+       Not VTIsBase64UrlPayload(ommlBase64) Or _
+       Not VTIsEncodedMetadata(metadata) Then
+        Err.Raise vbObjectError + 7584, "VisualTeX", _
+            "A document formula contains invalid VisualTeX metadata."
+    End If
+    If displayMode <> "inline" And displayMode <> "block" Then
+        Err.Raise vbObjectError + 7584, "VisualTeX", _
+            "A document formula has an invalid display mode."
+    End If
+    If numbered And displayMode <> "block" Then
+        Err.Raise vbObjectError + 7584, "VisualTeX", _
+            "Only document display formulas can be numbered."
+    End If
+    If Not VTValidWordFormulaFontSize(fontSizePt) Or _
+       referenceWidthPt <= 0# Or referenceHeightPt <= 0# Or _
+       referenceBaselinePt < -256# Or referenceBaselinePt > 0# Then
+        Err.Raise vbObjectError + 7584, "VisualTeX", _
+            "A document formula has invalid point-size geometry."
+    End If
+    VTValidateAbsoluteVisualTeXPath nativeDocumentPath
+    If Not VTPathFileExists(nativeDocumentPath) Then
+        Err.Raise vbObjectError + 7584, "VisualTeX", _
+            "A document formula native Word staging file is missing."
+    End If
+
+    formulaReference = VTFormulaReference( _
+        formulaId, displayMode, numbered)
+    captionText = VTEquationCrossReferenceText(latexBase64)
+    Set targetRange = cursorRange.Duplicate
+    targetRange.Collapse wdCollapseStart
+    If displayMode = "block" Then
+        Set targetRange = VTPrepareWordCreateInsertionRange( _
+            targetRange, displayMode)
+    End If
+
+    If outputKind = "omml" Then
+        Set formulaRange = VTInsertNativeEquationAtRange( _
+            targetRange, ommlBase64, nativeDocumentPath, _
+            displayMode, displayMode = "block", False)
+        VTSetWordLatexPayload targetDocument, formulaId, latexBase64
+        VTSetWordOmmlPayload targetDocument, formulaId, ommlBase64
+        VTSetWordMetadataPayload targetDocument, formulaId, metadata
+        VTSetWordFormulaFormat _
+            targetDocument, formulaId, displayMode, numbered
+        VTSetWordImageScaleState _
+            targetDocument, formulaId, fontSizePt, _
+            referenceWidthPt, referenceHeightPt, referenceBaselinePt, _
+            fontSizePt
+        VTSetNativeFormulaBookmark targetDocument, formulaRange, formulaId
+
+        If displayMode = "block" Then
+            If numbered Then
+                numberCreated = False
+                Set numberLayoutRange = VTEnsureNativeEquationNumber( _
+                    formulaRange, heightPoints, formulaId, captionText, _
+                    numberCreated)
+                Set formulaRange = _
+                    VTNativeMathForBookmark( _
+                        targetDocument.Bookmarks( _
+                            VTNativeFormulaBookmarkName(formulaId))).Range.Duplicate
+            Else
+                Set formulaRange = _
+                    VTPromoteNativeEquationToDisplay(formulaRange)
+            End If
+        Else
+            Set formulaRange = _
+                VTFinalizeInlineNativeEquation(formulaRange)
+        End If
+        formulaRange.Font.Size = CSng(fontSizePt)
+        VTSetNativeFormulaBookmark targetDocument, formulaRange, formulaId
+        insertedFormulaIds.Add formulaId
+
+        If displayMode = "block" Then
+            VTPlaceCaretAfterDisplayFormula formulaRange, formulaId
+            Set cursorRange = Selection.Range.Duplicate
+        Else
+            Set cursorRange = targetDocument.Range( _
+                Start:=formulaRange.End, End:=formulaRange.End)
+        End If
+        Exit Sub
+    End If
+
+    If outputKind <> "image" Then
+        Err.Raise vbObjectError + 7584, "VisualTeX", _
+            "The document formula output kind is invalid."
+    End If
+    imagePath = VTDocumentImportRequired( _
+        manifest, itemIndex, "imagePath")
+    vectorDocumentPath = VTDocumentImportRequired( _
+        manifest, itemIndex, "vectorDocumentPath")
+    fallbackImagePath = VTDocumentImportRequired( _
+        manifest, itemIndex, "fallbackImagePath")
+    VTValidateAbsoluteVisualTeXPath imagePath
+    VTValidateAbsoluteVisualTeXPath vectorDocumentPath
+    VTValidateAbsoluteVisualTeXPath fallbackImagePath
+    If Not VTPathFileExists(imagePath) Or _
+       Not VTPathFileExists(vectorDocumentPath) Or _
+       Not VTPathFileExists(fallbackImagePath) Then
+        Err.Raise vbObjectError + 7584, "VisualTeX", _
+            "A document formula SVG staging file is missing."
+    End If
+
+    Set candidate = VTAddWordFormulaPicture( _
+        targetDocument, targetRange, vectorDocumentPath, _
+        fallbackImagePath)
+    candidate.LockAspectRatio = msoFalse
+    candidate.Width = CSng(widthPoints)
+    candidate.Height = CSng(heightPoints)
+    candidate.LockAspectRatio = msoTrue
+    candidate.AlternativeText = metadata
+    candidate.Title = formulaReference
+    On Error Resume Next
+    candidate.Range.Font.Size = CSng(fontSizePt)
+    On Error GoTo 0
+    If displayMode = "inline" Then
+        candidate.Range.Font.Position = CLng(baselinePoints)
+    Else
+        candidate.Range.Font.Position = 0
+        candidate.Range.ParagraphFormat.Alignment = wdAlignParagraphCenter
+    End If
+
+    VTSetWordLatexPayload targetDocument, formulaId, latexBase64
+    VTSetWordOmmlPayload targetDocument, formulaId, ommlBase64
+    VTSetWordMetadataPayload targetDocument, formulaId, metadata
+    VTSetWordFormulaFormat _
+        targetDocument, formulaId, displayMode, numbered
+    observedWordFontSizePt = VTInlineShapeWordFontSize(candidate)
+    If Not VTValidWordFormulaFontSize(observedWordFontSizePt) Then
+        observedWordFontSizePt = fontSizePt
+    End If
+    VTSetWordImageScaleState _
+        targetDocument, formulaId, fontSizePt, _
+        referenceWidthPt, referenceHeightPt, referenceBaselinePt, _
+        observedWordFontSizePt
+
+    If displayMode = "block" Then
+        If numbered Then
+            numberCreated = False
+            Set numberLayoutRange = VTEnsureImageEquationNumber( _
+                candidate, heightPoints, formulaId, captionText, _
+                numberCreated)
+            VTRefreshNumberedImageFormulaFontLayout _
+                candidate, formulaId, fontSizePt
+        Else
+            VTNormalizeUnnumberedDisplayParagraph candidate.Range
+        End If
+    End If
+    insertedFormulaIds.Add formulaId
+
+    If displayMode = "block" Then
+        VTPlaceCaretAfterDisplayFormula candidate.Range, formulaId
+        Set cursorRange = Selection.Range.Duplicate
+    Else
+        Set cursorRange = targetDocument.Range( _
+            Start:=candidate.Range.End, End:=candidate.Range.End)
+    End If
+End Sub
+
+Private Sub VTCancelWordDocumentImportDispatch( _
+    ByVal dispatch As Object)
+
+    Dim sourceDocumentId As String
+    Dim bookmarkName As String
+
+    VTRequireWritableWordDocument
+    VTRequireDispatchValue dispatch, "sourceDocumentId"
+    VTRequireDispatchValue dispatch, "bookmarkName"
+    sourceDocumentId = CStr(dispatch("sourceDocumentId"))
+    bookmarkName = CStr(dispatch("bookmarkName"))
+    If sourceDocumentId <> VTWordDocumentIdentity() Then
+        Err.Raise vbObjectError + 7585, "VisualTeX", _
+            "The active Word document changed while the document importer was open."
+    End If
+    If Left$(bookmarkName, _
+       Len(VT_WORD_DOCUMENT_IMPORT_BOOKMARK_PREFIX)) <> _
+       VT_WORD_DOCUMENT_IMPORT_BOOKMARK_PREFIX Then
+        Err.Raise vbObjectError + 7585, "VisualTeX", _
+            "The document import Bookmark is invalid."
+    End If
+    If ActiveDocument.Bookmarks.Exists(bookmarkName) Then
+        ActiveDocument.Bookmarks(bookmarkName).Delete
+    End If
+End Sub
+
+Private Sub VTCommitWordDocumentImportDispatch( _
+    ByVal sessionId As String, _
+    ByVal dispatch As Object)
+
+    Dim manifest As Object
+    Dim insertedFormulaIds As Collection
+    Dim targetDocument As Document
+    Dim anchorBookmark As Bookmark
+    Dim cursorRange As Range
+    Dim rollbackRange As Range
+    Dim formulaId As Variant
+    Dim manifestPath As String
+    Dim sourceDocumentId As String
+    Dim bookmarkName As String
+    Dim outputKind As String
+    Dim itemKind As String
+    Dim itemCount As Long
+    Dim itemIndex As Long
+    Dim insertionStart As Long
+    Dim insertedEnd As Long
+    Dim errorNumber As Long
+    Dim errorDescription As String
+    Dim internalMutationStarted As Boolean
+
+    On Error GoTo Failed
+    VTRequireWritableWordDocument
+    VTRequireDispatchValue dispatch, "sourceDocumentId"
+    VTRequireDispatchValue dispatch, "bookmarkName"
+    VTRequireDispatchValue dispatch, "documentImportPath"
+    sourceDocumentId = CStr(dispatch("sourceDocumentId"))
+    bookmarkName = CStr(dispatch("bookmarkName"))
+    manifestPath = CStr(dispatch("documentImportPath"))
+    If sourceDocumentId <> VTWordDocumentIdentity() Then
+        Err.Raise vbObjectError + 7586, "VisualTeX", _
+            "The active Word document changed while the document importer was open."
+    End If
+    If Not ActiveDocument.Bookmarks.Exists(bookmarkName) Then
+        Err.Raise vbObjectError + 7586, "VisualTeX", _
+            "The document import insertion point no longer exists."
+    End If
+
+    Set manifest = VTReadDocumentImportManifest( _
+        manifestPath, sessionId)
+    If CStr(manifest("sourceDocumentId")) <> sourceDocumentId Or _
+       CStr(manifest("bookmarkName")) <> bookmarkName Then
+        Err.Raise vbObjectError + 7586, "VisualTeX", _
+            "The document import manifest target does not match Word."
+    End If
+    outputKind = CStr(manifest("outputKind"))
+    If outputKind <> "omml" And outputKind <> "image" Then
+        Err.Raise vbObjectError + 7586, "VisualTeX", _
+            "The document import formula output kind is invalid."
+    End If
+    If Not IsNumeric(manifest("itemCount")) Then
+        Err.Raise vbObjectError + 7586, "VisualTeX", _
+            "The document import item count is invalid."
+    End If
+    itemCount = CLng(manifest("itemCount"))
+    If itemCount < 1 Or itemCount > 2048 Then
+        Err.Raise vbObjectError + 7586, "VisualTeX", _
+            "The document import item count is outside the supported range."
+    End If
+
+    Set targetDocument = ActiveDocument
+    Set anchorBookmark = targetDocument.Bookmarks(bookmarkName)
+    insertionStart = anchorBookmark.Range.Start
+    insertedEnd = insertionStart
+    Set cursorRange = targetDocument.Range( _
+        Start:=insertionStart, End:=insertionStart)
+    anchorBookmark.Delete
+    Set insertedFormulaIds = New Collection
+    VTBeginWordInternalMutation
+    internalMutationStarted = True
+
+    For itemIndex = 0 To itemCount - 1
+        itemKind = VTDocumentImportRequired( _
+            manifest, itemIndex, "kind")
+        Select Case itemKind
+            Case "text"
+                VTDocumentImportInsertText _
+                    cursorRange, _
+                    VTDocumentImportRequired( _
+                        manifest, itemIndex, "textBase64")
+            Case "formula"
+                VTDocumentImportInsertFormula _
+                    cursorRange, manifest, itemIndex, outputKind, _
+                    insertedFormulaIds
+            Case Else
+                Err.Raise vbObjectError + 7586, "VisualTeX", _
+                    "The document import contains an unsupported item."
+        End Select
+        insertedEnd = cursorRange.Start
+    Next itemIndex
+
+    If internalMutationStarted Then
+        VTEndWordInternalMutation
+        internalMutationStarted = False
+    End If
+    cursorRange.Collapse wdCollapseStart
+    cursorRange.Select
+    Exit Sub
+
+Failed:
+    errorNumber = Err.Number
+    errorDescription = Err.Description
+    On Error Resume Next
+    If internalMutationStarted Then VTEndWordInternalMutation
+    If insertedEnd > insertionStart Then
+        Set rollbackRange = targetDocument.Range( _
+            Start:=insertionStart, End:=insertedEnd)
+        rollbackRange.Delete
+    End If
+    If Not insertedFormulaIds Is Nothing Then
+        For Each formulaId In insertedFormulaIds
+            VTDeleteDocumentImportedFormulaState _
+                targetDocument, CStr(formulaId)
+        Next formulaId
+    End If
+    If Not targetDocument Is Nothing Then
+        If Not targetDocument.Bookmarks.Exists(bookmarkName) Then
+            Set cursorRange = targetDocument.Range( _
+                Start:=insertionStart, End:=insertionStart)
+            targetDocument.Bookmarks.Add _
+                Name:=bookmarkName, Range:=cursorRange
+        End If
+    End If
+    On Error GoTo 0
+    Err.Raise errorNumber, "VisualTeX Word document import", _
+        errorDescription
+End Sub
+
 Public Sub VisualTeX_ApplyPendingResult()
     Dim sessionId As String
     Dim dispatch As Object
@@ -6089,6 +6793,10 @@ Public Sub VisualTeX_ApplyPendingResult()
     Select Case actionName
         Case "commit": VTCommitWordDispatch sessionId, dispatch
         Case "cancel": VTCancelWordDispatch sessionId, dispatch
+        Case "documentCommit": _
+            VTCommitWordDocumentImportDispatch sessionId, dispatch
+        Case "documentCancel": _
+            VTCancelWordDocumentImportDispatch dispatch
         Case Else
             Err.Raise vbObjectError + 7403, "VisualTeX", "The VisualTeX Word dispatch action is invalid."
     End Select

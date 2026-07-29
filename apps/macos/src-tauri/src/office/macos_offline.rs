@@ -25,6 +25,7 @@ const DISPATCH_FILE: &str = "dispatch.txt";
 const RESULT_PNG_FILE: &str = "formula.png";
 const RESULT_SVG_FILE: &str = "formula.svg";
 const RESULT_WORD_SVG_DOCX_FILE: &str = "formula-svg.docx";
+const DOCUMENT_IMPORT_MANIFEST_FILE: &str = "document-import.txt";
 const WORD_POINTER_FILE: &str = "word-active-session.txt";
 const POWERPOINT_POINTER_FILE: &str = "powerpoint-active-session.txt";
 const WORD_RUNTIME_SUFFIX: &str =
@@ -36,6 +37,7 @@ const PENDING_PREFIX: &str = "visualtex:pending:v1:";
 const MAX_REQUEST_BYTES: u64 = 256 * 1024;
 const MAX_METADATA_BYTES: usize = 2 * 1024 * 1024;
 const MAX_OMML_BYTES: usize = 4 * 1024 * 1024;
+const MAX_DOCUMENT_IMPORT_MANIFEST_BYTES: usize = 16 * 1024 * 1024;
 const MAX_IDENTITY_CHARS: usize = 2048;
 const MAX_SHAPE_NAME_CHARS: usize = 128;
 const MAX_WORD_WIDTH_PT: f64 = 500.0;
@@ -72,11 +74,20 @@ struct MacOfflinePowerPointRequest {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MacOfflineDocumentImportRequest {
+    bookmark_name: String,
+    default_font_size_pt: f64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct MacOfflineSessionRequest {
     protocol_version: u32,
     session_id: String,
     host: String,
     mode: String,
+    #[serde(default)]
+    operation: Option<String>,
     formula_id: Option<String>,
     display_mode: String,
     numbered: bool,
@@ -93,6 +104,55 @@ struct MacOfflineSessionRequest {
     #[serde(default)]
     reference_height_pt: Option<f64>,
     power_point: Option<MacOfflinePowerPointRequest>,
+    #[serde(default)]
+    document_import: Option<MacOfflineDocumentImportRequest>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MacOfflineDocumentImportPublicRequest {
+    protocol_version: u32,
+    session_id: String,
+    host: String,
+    source_document_id: String,
+    bookmark_name: String,
+    default_font_size_pt: f64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MacOfflineDocumentImportCommitInput {
+    output_kind: String,
+    items: Vec<MacOfflineDocumentImportCommitItem>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase", rename_all_fields = "camelCase")]
+pub enum MacOfflineDocumentImportCommitItem {
+    Text {
+        text: String,
+    },
+    Formula {
+        formula_id: String,
+        latex: String,
+        display_mode: String,
+        #[serde(default)]
+        numbered: bool,
+        font_size_pt: f64,
+        metadata: VisualTeXFormulaMetadata,
+        omml_base64: String,
+        omml_docx_base64: String,
+        #[serde(default)]
+        svg_base64: Option<String>,
+        #[serde(default)]
+        png_base64: Option<String>,
+        #[serde(default)]
+        width: Option<f64>,
+        #[serde(default)]
+        height: Option<f64>,
+        #[serde(default)]
+        baseline: Option<f64>,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -178,6 +238,10 @@ fn dispatch_path(host: OfficeHost, session_id: &str) -> Result<PathBuf, String> 
     Ok(session_directory(host, session_id)?.join(DISPATCH_FILE))
 }
 
+fn document_import_manifest_path(session_id: &str) -> Result<PathBuf, String> {
+    Ok(session_directory(OfficeHost::Word, session_id)?.join(DOCUMENT_IMPORT_MANIFEST_FILE))
+}
+
 fn result_png_path(host: OfficeHost, session_id: &str) -> Result<PathBuf, String> {
     Ok(session_directory(host, session_id)?.join(RESULT_PNG_FILE))
 }
@@ -206,6 +270,7 @@ fn cleanup_session_files_at(directory: &Path) -> Result<(), String> {
         RESULT_PNG_FILE,
         RESULT_SVG_FILE,
         RESULT_WORD_SVG_DOCX_FILE,
+        DOCUMENT_IMPORT_MANIFEST_FILE,
         "formula.docx",
     ] {
         let path = directory.join(name);
@@ -213,6 +278,18 @@ fn cleanup_session_files_at(directory: &Path) -> Result<(), String> {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(format!("Unable to remove {}: {error}", path.display())),
+        }
+    }
+    if let Ok(entries) = fs::read_dir(directory) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("document-formula-") {
+                let path = entry.path();
+                if path.is_file() {
+                    let _ = fs::remove_file(path);
+                }
+            }
         }
     }
     match fs::remove_dir(directory) {
@@ -273,6 +350,45 @@ fn validate_request(request: &MacOfflineSessionRequest, session_id: &str) -> Res
     }
     if !matches!(request.mode.as_str(), "create" | "edit") {
         return Err("Offline Office request mode must be create or edit".to_string());
+    }
+    let operation = request.operation.as_deref().unwrap_or("formula");
+    if operation == "documentImport" {
+        if request.host != "word" || request.mode != "create" {
+            return Err("Document import is supported only as a new Word operation".to_string());
+        }
+        let document_import = request
+            .document_import
+            .as_ref()
+            .ok_or_else(|| "Document import request is missing its insertion anchor".to_string())?;
+        let source_document_id = request
+            .source_document_id
+            .as_deref()
+            .ok_or_else(|| "Document import request is missing the Word document identity".to_string())?;
+        validate_bounded_text(source_document_id, MAX_IDENTITY_CHARS, "sourceDocumentId")?;
+        validate_bounded_text(&document_import.bookmark_name, 40, "documentImport bookmarkName")?;
+        if !document_import.bookmark_name.starts_with("VT_D_") {
+            return Err("Document import bookmark name is invalid".to_string());
+        }
+        if !document_import.default_font_size_pt.is_finite()
+            || !(MIN_WORD_FONT_SIZE_PT..=MAX_WORD_FONT_SIZE_PT)
+                .contains(&document_import.default_font_size_pt)
+        {
+            return Err("Document import default font size is outside the supported range".to_string());
+        }
+        if request.formula_id.is_some()
+            || request.encoded_metadata.is_some()
+            || request.pending_marker.is_some()
+            || request.power_point.is_some()
+            || request.document_import.is_none()
+            || request.numbered
+            || request.native_equation
+        {
+            return Err("Document import request contains formula-only fields".to_string());
+        }
+        return Ok(());
+    }
+    if operation != "formula" || request.document_import.is_some() {
+        return Err("Unsupported offline Office operation".to_string());
     }
     if !matches!(request.display_mode.as_str(), "inline" | "block") {
         return Err("Offline Office displayMode must be inline or block".to_string());
@@ -655,6 +771,10 @@ fn editor_window_label(session_id: &str) -> String {
     format!("office-native-{}", session_id.replace('-', ""))
 }
 
+fn document_import_window_label(session_id: &str) -> String {
+    format!("office-native-document-{}", session_id.replace('-', ""))
+}
+
 fn editor_window_session_id(window: &WebviewWindow) -> Option<String> {
     let url = window.url().ok()?;
     url.query_pairs()
@@ -709,6 +829,33 @@ fn open_editor_window(app: &AppHandle, session_id: &str) -> Result<(), String> {
         .center()
         .build()
         .map_err(|error| format!("Unable to open the VisualTeX Office editor: {error}"))?;
+    window.show().map_err(|error| error.to_string())?;
+    crate::office::background::activate_foreground_app(app)?;
+    window.set_focus().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn open_document_import_window(app: &AppHandle, session_id: &str) -> Result<(), String> {
+    crate::office::background::activate_foreground_app(app)?;
+    crate::office::background::install_application_icon(app)?;
+
+    let label = document_import_window_label(session_id);
+    if let Some(window) = app.get_webview_window(&label) {
+        window.show().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+    let theme = crate::persisted_app_theme(app);
+    let path = format!(
+        "index.html?view=office-document-import&sessionId={session_id}&transport=tauri&theme={theme}"
+    );
+    let window = WebviewWindowBuilder::new(app, label, WebviewUrl::App(path.into()))
+        .title("VisualTeX LaTeX / Markdown Import")
+        .inner_size(1260.0, 840.0)
+        .min_inner_size(860.0, 620.0)
+        .center()
+        .build()
+        .map_err(|error| format!("Unable to open the VisualTeX document importer: {error}"))?;
     window.show().map_err(|error| error.to_string())?;
     crate::office::background::activate_foreground_app(app)?;
     window.set_focus().map_err(|error| error.to_string())?;
@@ -773,14 +920,21 @@ pub(crate) fn handle_open_url(app: &AppHandle, value: &str) -> Result<(), String
     let request = read_request(&session_id)?;
     let host = host_from_request_name(&request.host)?;
     ensure_runtime_root(host)?;
+
+    crate::office::background::hide_main_window(app)?;
+    if request.operation.as_deref() == Some("documentImport") {
+        for (label, window) in app.webview_windows() {
+            if label.starts_with("office-native-")
+                && label != document_import_window_label(&session_id)
+            {
+                let _ = window.destroy();
+            }
+        }
+        return open_document_import_window(app, &session_id);
+    }
+
     import_request(state.inner(), request)?;
     close_other_editor_windows_for_host(app, state.inner(), host, &session_id);
-
-    // Office formula requests must open only the dedicated formula editor.
-    // Keeping the main VisualTeX workspace visible makes Word/PowerPoint
-    // insertion look like a jump into the full application instead of a
-    // focused Office editing transaction.
-    crate::office::background::hide_main_window(app)?;
     open_editor_window(app, &session_id)
 }
 
@@ -848,10 +1002,18 @@ fn sanitize_dispatch_value(value: &str, label: &str) -> Result<String, String> {
 }
 
 fn dispatch_text(entries: &[(&str, String)]) -> Result<String, String> {
+    let dynamic = entries
+        .iter()
+        .map(|(key, value)| ((*key).to_string(), value.clone()))
+        .collect::<Vec<_>>();
+    dynamic_dispatch_text(&dynamic)
+}
+
+fn dynamic_dispatch_text(entries: &[(String, String)]) -> Result<String, String> {
     let mut seen = std::collections::HashSet::new();
     let mut output = String::new();
     for (key, value) in entries {
-        if !seen.insert(*key)
+        if !seen.insert(key.as_str())
             || key.is_empty()
             || !key.bytes().all(|byte| byte.is_ascii_alphanumeric())
         {
@@ -1656,6 +1818,391 @@ fn cancel_host(request: &MacOfflineSessionRequest) -> Result<(), String> {
     Ok(())
 }
 
+fn document_import_request_data(
+    request: &MacOfflineSessionRequest,
+) -> Result<MacOfflineDocumentImportPublicRequest, String> {
+    if request.operation.as_deref() != Some("documentImport") || request.host != "word" {
+        return Err("Offline Office request is not a Word document import".to_string());
+    }
+    let document_import = request
+        .document_import
+        .as_ref()
+        .ok_or_else(|| "Document import request is missing insertion information".to_string())?;
+    Ok(MacOfflineDocumentImportPublicRequest {
+        protocol_version: request.protocol_version,
+        session_id: request.session_id.clone(),
+        host: request.host.clone(),
+        source_document_id: request
+            .source_document_id
+            .clone()
+            .ok_or_else(|| "Document import request is missing the Word document identity".to_string())?,
+        bookmark_name: document_import.bookmark_name.clone(),
+        default_font_size_pt: document_import.default_font_size_pt,
+    })
+}
+
+fn document_formula_file_path(
+    session_id: &str,
+    formula_id: &str,
+    extension: &str,
+) -> Result<PathBuf, String> {
+    validate_uuid(formula_id, "Document formula id")?;
+    if !extension.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+        return Err("Document formula file extension is invalid".to_string());
+    }
+    Ok(session_directory(OfficeHost::Word, session_id)?.join(format!(
+        "document-formula-{formula_id}.{extension}"
+    )))
+}
+
+fn validate_document_omml_payload(value: &str) -> Result<(), String> {
+    let bytes = URL_SAFE_NO_PAD
+        .decode(value)
+        .map_err(|_| "Document formula OMML payload is not valid Base64URL".to_string())?;
+    if bytes.is_empty() || bytes.len() > MAX_OMML_BYTES {
+        return Err("Document formula OMML payload is empty or too large".to_string());
+    }
+    let omml = std::str::from_utf8(&bytes)
+        .map_err(|_| "Document formula OMML payload is not UTF-8".to_string())?;
+    if !omml.trim_start().starts_with("<m:oMath")
+        || !omml.contains("http://schemas.openxmlformats.org/officeDocument/2006/math")
+        || omml.contains("<!DOCTYPE")
+        || omml.contains("<!ENTITY")
+    {
+        return Err("Document formula OMML payload is not a safe Office Math fragment".to_string());
+    }
+    Ok(())
+}
+
+fn decode_document_native_docx(value: &str) -> Result<Vec<u8>, String> {
+    let bytes = URL_SAFE_NO_PAD
+        .decode(value)
+        .map_err(|_| "Document formula native DOCX is not valid Base64URL".to_string())?;
+    if bytes.len() < 128
+        || bytes.len() > MAX_OMML_BYTES * 8
+        || !bytes.starts_with(b"PK\x03\x04")
+    {
+        return Err("Document formula native DOCX payload is invalid or too large".to_string());
+    }
+    Ok(bytes)
+}
+
+fn calculate_document_image_geometry(
+    width: f64,
+    height: f64,
+    baseline: f64,
+    font_size_pt: f64,
+) -> Result<WordGeometry, String> {
+    if !width.is_finite()
+        || !height.is_finite()
+        || !baseline.is_finite()
+        || width <= 0.0
+        || height <= 0.0
+        || baseline < 0.0
+        || baseline > height
+    {
+        return Err("Document formula SVG geometry is invalid".to_string());
+    }
+    let natural_width = width * 0.75;
+    let natural_height = height * 0.75;
+    let reference_scale = f64::min(1.0, MAX_WORD_WIDTH_PT / natural_width);
+    let reference_width_pt = natural_width * reference_scale;
+    let reference_height_pt = natural_height * reference_scale;
+    let descent_ratio = (height - baseline) / height;
+    let reference_baseline_pt = -(reference_height_pt * descent_ratio)
+        .round()
+        .max(0.0)
+        .clamp(0.0, 256.0);
+    scale_word_reference_geometry(
+        reference_width_pt,
+        reference_height_pt,
+        reference_baseline_pt,
+        font_size_pt,
+    )
+}
+
+fn commit_document_import_blocking(
+    state: OfficeCompanionState,
+    session_id: String,
+    input: MacOfflineDocumentImportCommitInput,
+) -> Result<(), String> {
+    validate_uuid(&session_id, "Session id")?;
+    let request = read_request(&session_id)?;
+    let public_request = document_import_request_data(&request)?;
+    if input.output_kind != "omml" && input.output_kind != "image" {
+        return Err("Document formula output kind must be omml or image".to_string());
+    }
+    if input.items.is_empty() || input.items.len() > 2048 {
+        return Err("Document import must contain 1 to 2048 blocks".to_string());
+    }
+
+    let mut entries = vec![
+        ("protocolVersion".to_string(), OFFLINE_PROTOCOL_VERSION.to_string()),
+        ("sessionId".to_string(), session_id.clone()),
+        ("outputKind".to_string(), input.output_kind.clone()),
+        (
+            "sourceDocumentId".to_string(),
+            public_request.source_document_id.clone(),
+        ),
+        ("bookmarkName".to_string(), public_request.bookmark_name.clone()),
+        ("itemCount".to_string(), input.items.len().to_string()),
+    ];
+    let mut metadata_to_cache = Vec::new();
+    let mut formula_count = 0usize;
+    let mut text_bytes = 0usize;
+
+    for (index, item) in input.items.iter().enumerate() {
+        let prefix = format!("item{index}");
+        match item {
+            MacOfflineDocumentImportCommitItem::Text { text } => {
+                text_bytes = text_bytes.saturating_add(text.len());
+                if text_bytes > 4 * 1024 * 1024 {
+                    return Err("Document import text exceeds the 4 MB limit".to_string());
+                }
+                entries.push((format!("{prefix}kind"), "text".to_string()));
+                entries.push((
+                    format!("{prefix}textBase64"),
+                    URL_SAFE_NO_PAD.encode(text.as_bytes()),
+                ));
+            }
+            MacOfflineDocumentImportCommitItem::Formula {
+                formula_id,
+                latex,
+                display_mode,
+                numbered,
+                font_size_pt,
+                metadata,
+                omml_base64,
+                omml_docx_base64,
+                svg_base64,
+                png_base64,
+                width,
+                height,
+                baseline,
+            } => {
+                formula_count += 1;
+                if formula_count > 512 {
+                    return Err("Document import supports at most 512 formulas".to_string());
+                }
+                validate_uuid(formula_id, "Document formula id")?;
+                if latex.trim().is_empty() || latex.len() > 1_000_000 || latex.contains('\0') {
+                    return Err("A document formula contains invalid or excessive LaTeX".to_string());
+                }
+                if !matches!(display_mode.as_str(), "inline" | "block") {
+                    return Err("Document formula display mode is invalid".to_string());
+                }
+                if *numbered && display_mode != "block" {
+                    return Err("Only document display formulas can be numbered".to_string());
+                }
+                if !font_size_pt.is_finite()
+                    || !(MIN_WORD_FONT_SIZE_PT..=MAX_WORD_FONT_SIZE_PT).contains(font_size_pt)
+                {
+                    return Err("Document formula font size is outside the supported range".to_string());
+                }
+                validate_document_omml_payload(omml_base64)?;
+                let native_docx = decode_document_native_docx(omml_docx_base64)?;
+                let native_document_path = native_word_document_path(formula_id)?;
+                atomic_write(&native_document_path, &native_docx, 0o600)?;
+
+                let mut resolved_metadata = metadata.clone();
+                validate_metadata(&resolved_metadata)?;
+                if resolved_metadata.formula_id != *formula_id
+                    || resolved_metadata.display_mode != *display_mode
+                    || resolved_metadata.numbered != *numbered
+                    || resolved_metadata.latex != latex.trim()
+                {
+                    return Err("Document formula metadata does not match its formula block".to_string());
+                }
+                resolved_metadata.font_size_pt = Some(*font_size_pt);
+
+                let mut image_path = String::new();
+                let mut vector_document_path = String::new();
+                let mut fallback_image_path = String::new();
+                let geometry = if input.output_kind == "image" {
+                    let svg_value = svg_base64
+                        .as_deref()
+                        .ok_or_else(|| "Image document formula is missing SVG data".to_string())?;
+                    let png_value = png_base64
+                        .as_deref()
+                        .ok_or_else(|| "Image document formula is missing PNG data".to_string())?;
+                    let svg = decode_svg(svg_value)?;
+                    let png = decode_png(png_value)?;
+                    let width = width.ok_or_else(|| "Image document formula width is missing".to_string())?;
+                    let height = height.ok_or_else(|| "Image document formula height is missing".to_string())?;
+                    let baseline = baseline.unwrap_or(height);
+                    let geometry = calculate_document_image_geometry(
+                        width,
+                        height,
+                        baseline,
+                        *font_size_pt,
+                    )?;
+                    let svg_path = document_formula_file_path(&session_id, formula_id, "svg")?;
+                    let png_path = document_formula_file_path(&session_id, formula_id, "png")?;
+                    let vector_path = document_formula_file_path(&session_id, formula_id, "docx")?;
+                    atomic_write(&svg_path, &svg, 0o600)?;
+                    atomic_write(&png_path, &png, 0o600)?;
+                    let package = build_word_svg_docx(
+                        &svg,
+                        &png,
+                        geometry.width,
+                        geometry.height,
+                    )?;
+                    atomic_write(&vector_path, &package, 0o600)?;
+                    image_path = svg_path.to_string_lossy().to_string();
+                    fallback_image_path = png_path.to_string_lossy().to_string();
+                    vector_document_path = vector_path.to_string_lossy().to_string();
+                    resolved_metadata.render_width_px = Some(width);
+                    resolved_metadata.render_height_px = Some(height);
+                    resolved_metadata.reference_width_pt = Some(geometry.reference_width_pt);
+                    resolved_metadata.reference_height_pt = Some(geometry.reference_height_pt);
+                    resolved_metadata.reference_baseline_pt = Some(geometry.reference_baseline_pt);
+                    geometry
+                } else {
+                    resolved_metadata.reference_width_pt = None;
+                    resolved_metadata.reference_height_pt = None;
+                    resolved_metadata.reference_baseline_pt = None;
+                    WordGeometry {
+                        width: *font_size_pt,
+                        height: (*font_size_pt * 1.8).max(18.0),
+                        baseline: 0,
+                        font_size_pt: *font_size_pt,
+                        reference_width_pt: WORD_REFERENCE_FONT_SIZE_PT,
+                        reference_height_pt: WORD_REFERENCE_FONT_SIZE_PT,
+                        reference_baseline_pt: 0.0,
+                    }
+                };
+                let encoded_metadata = encode_metadata(&resolved_metadata)?;
+                metadata_to_cache.push(resolved_metadata);
+
+                entries.push((format!("{prefix}kind"), "formula".to_string()));
+                entries.push((format!("{prefix}formulaId"), formula_id.clone()));
+                entries.push((
+                    format!("{prefix}latexBase64"),
+                    URL_SAFE_NO_PAD.encode(latex.trim().as_bytes()),
+                ));
+                entries.push((format!("{prefix}displayMode"), display_mode.clone()));
+                entries.push((
+                    format!("{prefix}numbered"),
+                    if *numbered { "1" } else { "0" }.to_string(),
+                ));
+                entries.push((
+                    format!("{prefix}fontSizePt"),
+                    format!("{:.6}", font_size_pt),
+                ));
+                entries.push((format!("{prefix}metadata"), encoded_metadata));
+                entries.push((format!("{prefix}ommlBase64"), omml_base64.clone()));
+                entries.push((
+                    format!("{prefix}nativeDocumentPath"),
+                    native_document_path.to_string_lossy().to_string(),
+                ));
+                entries.push((format!("{prefix}imagePath"), image_path));
+                entries.push((
+                    format!("{prefix}vectorDocumentPath"),
+                    vector_document_path,
+                ));
+                entries.push((
+                    format!("{prefix}fallbackImagePath"),
+                    fallback_image_path,
+                ));
+                entries.push((
+                    format!("{prefix}widthPoints"),
+                    format!("{:.6}", geometry.width),
+                ));
+                entries.push((
+                    format!("{prefix}heightPoints"),
+                    format!("{:.6}", geometry.height),
+                ));
+                entries.push((
+                    format!("{prefix}baseline"),
+                    geometry.baseline.to_string(),
+                ));
+                entries.push((
+                    format!("{prefix}referenceWidthPt"),
+                    format!("{:.6}", geometry.reference_width_pt),
+                ));
+                entries.push((
+                    format!("{prefix}referenceHeightPt"),
+                    format!("{:.6}", geometry.reference_height_pt),
+                ));
+                entries.push((
+                    format!("{prefix}referenceBaselinePt"),
+                    format!("{:.6}", geometry.reference_baseline_pt),
+                ));
+            }
+        }
+    }
+    if formula_count == 0 && text_bytes == 0 {
+        return Err("Document import contains no visible content".to_string());
+    }
+
+    let manifest = dynamic_dispatch_text(&entries)?;
+    if manifest.len() > MAX_DOCUMENT_IMPORT_MANIFEST_BYTES {
+        return Err(
+            "Document import expands beyond the 16 MB Word transfer limit; split the source into smaller imports"
+                .to_string(),
+        );
+    }
+    let manifest_path = document_import_manifest_path(&session_id)?;
+    atomic_write(&manifest_path, manifest.as_bytes(), 0o600)?;
+    let dispatch = dispatch_text(&[
+        ("protocolVersion", OFFLINE_PROTOCOL_VERSION.to_string()),
+        ("sessionId", session_id.clone()),
+        ("action", "documentCommit".to_string()),
+        ("host", "word".to_string()),
+        (
+            "sourceDocumentId",
+            public_request.source_document_id.clone(),
+        ),
+        ("bookmarkName", public_request.bookmark_name.clone()),
+        (
+            "documentImportPath",
+            manifest_path.to_string_lossy().to_string(),
+        ),
+    ])?;
+    atomic_write(
+        &dispatch_path(OfficeHost::Word, &session_id)?,
+        dispatch.as_bytes(),
+        0o600,
+    )?;
+    with_dispatch_pointer(OfficeHost::Word, &session_id, || {
+        run_vba_callback(OfficeHost::Word)
+    })?;
+
+    for metadata in metadata_to_cache {
+        let formula_id = metadata.formula_id.clone();
+        let _ = state.formula_cache.put(&formula_id, metadata);
+    }
+    let _ = cleanup_session_files(OfficeHost::Word, &session_id);
+    Ok(())
+}
+
+fn cancel_document_import_blocking(session_id: String) -> Result<(), String> {
+    validate_uuid(&session_id, "Session id")?;
+    let request = read_request(&session_id)?;
+    let public_request = document_import_request_data(&request)?;
+    let dispatch = dispatch_text(&[
+        ("protocolVersion", OFFLINE_PROTOCOL_VERSION.to_string()),
+        ("sessionId", session_id.clone()),
+        ("action", "documentCancel".to_string()),
+        ("host", "word".to_string()),
+        (
+            "sourceDocumentId",
+            public_request.source_document_id,
+        ),
+        ("bookmarkName", public_request.bookmark_name),
+    ])?;
+    atomic_write(
+        &dispatch_path(OfficeHost::Word, &session_id)?,
+        dispatch.as_bytes(),
+        0o600,
+    )?;
+    with_dispatch_pointer(OfficeHost::Word, &session_id, || {
+        run_vba_callback(OfficeHost::Word)
+    })?;
+    let _ = cleanup_session_files(OfficeHost::Word, &session_id);
+    Ok(())
+}
+
 fn complete_session(
     state: &OfficeCompanionState,
     session_id: &str,
@@ -1771,6 +2318,38 @@ fn cancel_session_blocking(
         .map_err(|error| error.to_string())?;
     let _ = cleanup_session_files(host, &session_id);
     Ok(cancelled)
+}
+
+#[tauri::command]
+pub fn get_macos_offline_document_import_request(
+    session_id: String,
+) -> Result<MacOfflineDocumentImportPublicRequest, String> {
+    validate_uuid(&session_id, "Session id")?;
+    let request = read_request(&session_id)?;
+    document_import_request_data(&request)
+}
+
+#[tauri::command]
+pub async fn commit_macos_offline_document_import(
+    session_id: String,
+    input: MacOfflineDocumentImportCommitInput,
+    state: tauri::State<'_, OfficeCompanionState>,
+) -> Result<(), String> {
+    let state = state.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        commit_document_import_blocking(state, session_id, input)
+    })
+    .await
+    .map_err(|error| format!("Offline document import task failed: {error}"))?
+}
+
+#[tauri::command]
+pub async fn cancel_macos_offline_document_import(
+    session_id: String,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || cancel_document_import_blocking(session_id))
+        .await
+        .map_err(|error| format!("Offline document import cancel task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -2194,6 +2773,7 @@ mod tests {
             session_id: session_id.clone(),
             host: "word".to_string(),
             mode: "create".to_string(),
+            operation: None,
             formula_id: Some("12345678-1234-4234-9234-123456789abc".to_string()),
             display_mode: "inline".to_string(),
             numbered: false,
@@ -2209,6 +2789,7 @@ mod tests {
             reference_width_pt: Some(60.0),
             reference_height_pt: Some(15.0),
             power_point: None,
+            document_import: None,
         };
         let json = serde_json::to_vec(&request).expect("UTF-8 request should encode");
         let decoded: MacOfflineSessionRequest =

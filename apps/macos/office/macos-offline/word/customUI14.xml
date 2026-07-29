@@ -6,6 +6,15 @@
       <tab id="VisualTeX.Mac.Word.Tab"
            label="VisualTeX"
            insertAfterMso="TabInsert">
+        <group id="VisualTeX.Mac.Word.DocumentGroup" label="文档导入">
+          <button id="VisualTeX.Mac.Word.DocumentImport"
+                  label="插入 LaTeX / Markdown"
+                  size="large"
+                  imageMso="FileOpen"
+                  onAction="VTWordRibbonDocumentImport"
+                  screentip="解析并插入 LaTeX 或 Markdown"
+                  supertip="文字按 Word 普通文本插入；每个行内公式和行间公式作为独立的 OMML 或 SVG 图片公式插入，可分别编辑、调整字号和设置编号。"/>
+        </group>
         <group id="VisualTeX.Mac.Word.Group" label="公式工具">
           <button id="VisualTeX.Mac.Word.Inline"
                   label="新建行内公式"

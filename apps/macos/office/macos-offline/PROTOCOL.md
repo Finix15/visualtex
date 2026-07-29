@@ -68,6 +68,48 @@ Rules:
 - A new PowerPoint formula inherits a selected text/formula size when available and otherwise uses 18 pt. Editing or rerendering preserves the point size while allowing the new SVG width and height to follow the formula's natural aspect ratio.
 - All strings reject NUL and control characters, and every numeric geometry value must be finite and bounded.
 
+## Document import request
+
+Word can open a dedicated LaTeX/Markdown document importer by adding these fields to the normal request envelope:
+
+```json
+{
+  "protocolVersion": 1,
+  "sessionId": "uuid",
+  "host": "word",
+  "mode": "create",
+  "operation": "documentImport",
+  "formulaId": null,
+  "displayMode": "inline",
+  "numbered": false,
+  "nativeEquation": false,
+  "sourceDocumentId": "bounded Word document identity",
+  "sourceObjectId": null,
+  "encodedMetadata": null,
+  "pendingMarker": null,
+  "fontSizePt": null,
+  "referenceWidthPt": null,
+  "referenceHeightPt": null,
+  "powerPoint": null,
+  "documentImport": {
+    "bookmarkName": "VT_D_<bounded insertion bookmark>",
+    "defaultFontSizePt": 12.0
+  }
+}
+```
+
+The importer parses plain-text and formula blocks in the app. Text remains ordinary Word text. Each formula receives its own UUID, LaTeX source, display mode, optional equation-number flag, point size, OMML payload, native staging document, and VisualTeX metadata. A batch chooses one representation for all formula blocks: native Word OMML or VisualTeX SVG image formulas. Formula identity and sizing remain independent after insertion.
+
+The app materializes a line-oriented `document-import.txt` manifest in the Session directory and invokes the normal Word callback with `action=documentCommit`. Text is UTF-8 Base64URL encoded. Formula entries reference only validated files under the Word VisualTeX runtime. Word performs the insertion as one rollback-capable transaction and reuses the normal inline baseline, unnumbered display centering, numbered display three-column true-centering, metadata, equation-number, and cross-reference routines. `action=documentCancel` removes only the zero-width insertion bookmark.
+
+Limits:
+
+- 1–2048 total blocks.
+- At most 512 formula blocks.
+- At most 4 MiB of decoded text.
+- Each formula has an independent font size from 1 to 512 pt.
+- Numbering is allowed only for display formulas.
+
 ## Dispatch file
 
 Location:

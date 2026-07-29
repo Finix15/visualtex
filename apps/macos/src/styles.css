@@ -9690,3 +9690,373 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
     grid-template-rows: minmax(0, 1fr) clamp(210px, 32vh, 238px);
   }
 }
+
+.document-import-app {
+  width: 100vw;
+  height: 100vh;
+  min-width: 720px;
+  min-height: 560px;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  background: var(--bg-global);
+  color: var(--text-primary);
+  overflow: hidden;
+}
+
+.document-import-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 18px 22px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-primary);
+}
+
+.document-import-header h1 {
+  margin: 5px 0 3px;
+  font-size: 20px;
+  line-height: 1.25;
+}
+
+.document-import-header p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.document-import-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--accent-primary);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.document-import-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-height: 74px;
+  padding: 10px 22px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-secondary);
+}
+
+.document-import-toolbar > label {
+  display: grid;
+  gap: 5px;
+  min-width: 118px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.document-import-toolbar select,
+.document-import-formula-card select,
+.document-import-formula-card input,
+.document-import-formula-card textarea,
+.document-import-source-pane textarea {
+  color: var(--text-primary);
+  background: var(--surface-primary);
+  border: 1px solid var(--border-default);
+  border-radius: 7px;
+  outline: none;
+}
+
+.document-import-toolbar select:focus,
+.document-import-formula-card select:focus,
+.document-import-formula-card input:focus,
+.document-import-formula-card textarea:focus,
+.document-import-source-pane textarea:focus {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 18%, transparent);
+}
+
+.document-import-toolbar select {
+  height: 34px;
+  padding: 0 9px;
+}
+
+.document-import-output-kind {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.document-import-output-kind legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.document-import-output-kind > label {
+  min-width: 220px;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 9px;
+  background: var(--surface-primary);
+  cursor: pointer;
+}
+
+.document-import-output-kind > label.is-selected {
+  border-color: var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-primary) 9%, var(--surface-primary));
+}
+
+.document-import-output-kind input {
+  margin: 0;
+}
+
+.document-import-output-kind span {
+  display: grid;
+  gap: 2px;
+}
+
+.document-import-output-kind strong {
+  font-size: 12px;
+}
+
+.document-import-output-kind small {
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.document-import-summary {
+  margin-left: auto;
+  display: grid;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.document-import-summary span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.document-import-workspace {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(300px, 0.9fr) minmax(380px, 1.1fr);
+  gap: 1px;
+  background: var(--border-subtle);
+}
+
+.document-import-source-pane,
+.document-import-preview-pane {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: var(--surface-primary);
+}
+
+.document-import-pane-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.document-import-pane-title strong {
+  font-size: 12px;
+}
+
+.document-import-pane-title span {
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.document-import-source-pane textarea {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  resize: none;
+  border: 0;
+  border-radius: 0;
+  padding: 16px;
+  font: 12px/1.65 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  background: var(--editor-surface, var(--surface-primary));
+}
+
+.document-import-source-pane textarea:focus {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent-primary) 20%, transparent);
+}
+
+.document-import-preview-document {
+  min-height: 0;
+  overflow: auto;
+  padding: 20px clamp(18px, 3vw, 38px) 42px;
+  background: var(--bg-global);
+}
+
+.document-import-text-preview {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 13px/1.75 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--text-primary);
+}
+
+.document-import-formula-card {
+  margin: 10px 0;
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  background: var(--surface-primary);
+  box-shadow: 0 2px 8px rgba(20, 24, 34, 0.05);
+  overflow: hidden;
+}
+
+.document-import-formula-card.is-inline {
+  margin-block: 6px;
+}
+
+.document-import-formula-card > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-secondary);
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.document-import-formula-card > header > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.document-import-formula-card select {
+  height: 28px;
+  padding: 0 7px;
+  font-size: 10px;
+}
+
+.document-import-formula-card header label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.document-import-formula-card input[type="number"] {
+  width: 62px;
+  height: 28px;
+  padding: 0 6px;
+  font-size: 10px;
+}
+
+.document-import-formula-preview {
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 13px 18px;
+  overflow-x: auto;
+}
+
+.document-import-formula-card.is-inline .document-import-formula-preview {
+  justify-content: flex-start;
+  min-height: 48px;
+  padding-block: 9px;
+}
+
+.document-import-formula-card > textarea {
+  display: block;
+  width: calc(100% - 18px);
+  min-height: 52px;
+  margin: 0 9px 9px;
+  padding: 8px 9px;
+  resize: vertical;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.document-import-formula-error {
+  color: var(--danger-text, #b3261e);
+  font-size: 11px;
+}
+
+.document-import-empty,
+.document-import-state {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.document-import-empty strong,
+.document-import-state strong {
+  color: var(--text-primary);
+}
+
+.document-import-empty span,
+.document-import-state p {
+  max-width: 440px;
+  margin: 0;
+  font-size: 11px;
+}
+
+.document-import-state {
+  width: 100vw;
+  height: 100vh;
+  background: var(--bg-global);
+}
+
+.document-import-state.is-error svg,
+.document-import-error {
+  color: var(--danger-text, #b3261e);
+}
+
+.document-import-footer {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 18px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface-primary);
+}
+
+.document-import-footer > div {
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.document-import-error,
+.document-import-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+@media (max-width: 900px) {
+  .document-import-output-kind > label {
+    min-width: 180px;
+  }
+
+  .document-import-summary {
+    display: none;
+  }
+}

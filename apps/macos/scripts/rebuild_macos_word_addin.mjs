@@ -45,6 +45,13 @@ const adapterPath = join(
   "word",
   "VTWordAdapter.bas",
 );
+const ribbonCallbacksPath = join(
+  repositoryRoot,
+  "office",
+  "macos-offline",
+  "word",
+  "VTRibbonCallbacks.bas",
+);
 const startupRoot = join(
   homedir(),
   "Library",
@@ -164,12 +171,21 @@ function closeWordWithoutSaving() {
   sleep(1_500);
 }
 
-function adapterSourceForCodeWindow() {
-  const source = readFileSync(adapterPath, "utf8");
-  return source.replace(/^Attribute VB_Name = "VTWordAdapter"\r?\n/, "");
-}
-
 function openVbeWindow() {
+  const existingWindows = bestEffort("/usr/bin/osascript", [
+    "-e",
+    'tell application "System Events"',
+    "-e",
+    'if exists process "Microsoft Word" then',
+    "-e",
+    'tell process "Microsoft Word" to return name of every window',
+    "-e",
+    "end if",
+    "-e",
+    "end tell",
+  ], { timeout: 5_000 });
+  if (existingWindows.includes("Microsoft Visual Basic")) return;
+
   osascript([
     'tell application "Microsoft Word" to activate',
     'tell application "System Events"',
@@ -195,31 +211,12 @@ function openVbeWindow() {
       "end tell",
     ], { timeout: 5_000 });
     if (windowNames.includes("Microsoft Visual Basic")) return;
-    if (attempt === 9 || attempt === 19) {
-      bestEffort("/usr/bin/osascript", [
-        "-e",
-        'tell application "Microsoft Word" to activate',
-        "-e",
-        'tell application "System Events"',
-        "-e",
-        'tell process "Microsoft Word"',
-        "-e",
-        "set frontmost to true",
-        "-e",
-        'click menu item "Visual Basic 编辑器" of menu 1 of menu item "宏" of menu 1 of menu bar item "工具" of menu bar 1',
-        "-e",
-        "end tell",
-        "-e",
-        "end tell",
-      ], { timeout: 10_000 });
-    }
   }
   throw new Error("Word did not open its Visual Basic Editor window.");
 }
 
-function openAdapterCodeWindow() {
+function openModuleCodeWindow(moduleName) {
   openVbeWindow();
-
   osascript([
     'tell application "System Events"',
     'tell process "Microsoft Word"',
@@ -240,34 +237,72 @@ function openAdapterCodeWindow() {
     "end if",
     "set rowIndex to rowIndex + 1",
     "end repeat",
-    "set adapterRow to 0",
+    "set moduleRow to 0",
     "repeat with rowIndex from 1 to count of rows of projectOutline",
     "set rowCell to UI element 1 of row rowIndex of projectOutline",
     "set rowNames to name of every UI element of rowCell as text",
-    'if rowNames contains "VTWordAdapter" then set adapterRow to rowIndex',
+    `if rowNames contains ${JSON.stringify(moduleName)} then set moduleRow to rowIndex`,
     "end repeat",
-    'if adapterRow is 0 then error "VTWordAdapter was not found in the Word VBA project"',
-    "select row adapterRow of projectOutline",
+    `if moduleRow is 0 then error ${JSON.stringify(`${moduleName} was not found in the Word VBA project`)}`,
+    "select row moduleRow of projectOutline",
     'click menu item "代码" of menu 1 of menu bar item "查看" of menu bar 1',
-    "delay 1",
+    "delay 0.7",
     "end tell",
     "end tell",
   ]);
 }
 
-function replaceAndCompileAdapter() {
-  run("/usr/bin/pbcopy", [], { input: adapterSourceForCodeWindow() });
+function removeVbaModule(moduleName) {
+  openModuleCodeWindow(moduleName);
+  osascript([
+    'tell application "System Events"',
+    'tell process "Microsoft Word"',
+    "set frontmost to true",
+    'set vbeWindow to first window whose name contains "Microsoft Visual Basic"',
+    'perform action "AXRaise" of vbeWindow',
+    `click menu item ${JSON.stringify(`删除 ${moduleName}...`)} of menu 1 of menu bar item "文件" of menu bar 1`,
+    "delay 0.8",
+    'set alertWindow to first window whose description is "警告"',
+    'perform action "AXRaise" of alertWindow',
+    'click button "否" of alertWindow',
+    "delay 0.9",
+    "end tell",
+    "end tell",
+  ]);
+}
+
+function importVbaModule(modulePath) {
+  osascript([
+    'tell application "System Events"',
+    'tell process "Microsoft Word"',
+    "set frontmost to true",
+    'set vbeWindow to first window whose name contains "Microsoft Visual Basic"',
+    'perform action "AXRaise" of vbeWindow',
+    'click menu item "导入文件..." of menu 1 of menu bar item "文件" of menu bar 1',
+    "delay 0.9",
+    'set importWindow to first window whose name is "导入文件"',
+    'perform action "AXRaise" of importWindow',
+    'click at {730, 360}',
+    'keystroke "g" using {command down, shift down}',
+    "delay 0.6",
+    'set pathField to value of attribute "AXFocusedUIElement"',
+    `set value of pathField to ${JSON.stringify(modulePath)}`,
+    "key code 36",
+    "delay 0.9",
+    "key code 36",
+    "delay 1.5",
+    "end tell",
+    "end tell",
+  ], 60_000);
+}
+
+function compileVbaProject() {
   const compileState = osascript([
     'tell application "System Events"',
     'tell process "Microsoft Word"',
     "set frontmost to true",
     'set vbeWindow to first window whose name contains "Microsoft Visual Basic"',
     'perform action "AXRaise" of vbeWindow',
-    "click at {800, 500}",
-    'click menu item "全选" of menu 1 of menu bar item "编辑" of menu bar 1',
-    "delay 0.5",
-    'click menu item "粘贴" of menu 1 of menu bar item "编辑" of menu bar 1',
-    "delay 2",
     'click menu item "编译 Project" of menu 1 of menu bar item "调试" of menu bar 1',
     "delay 2",
     "set failureText to \"\"",
@@ -282,12 +317,53 @@ function replaceAndCompileAdapter() {
     "end tell",
     "end tell",
   ]);
-  if (compileState.trim()) {
-    throw new Error(`Word VBE compile failed: ${compileState.trim()}`);
-  }
+  if (!compileState.trim()) return;
+
+  const highlighted = bestEffort("/usr/bin/osascript", [
+    "-e",
+    'tell application "System Events"',
+    "-e",
+    'tell process "Microsoft Word"',
+    "-e",
+    "set frontmost to true",
+    "-e",
+    "key code 36",
+    "-e",
+    "delay 0.7",
+    "-e",
+    'set focusedElement to value of attribute "AXFocusedUIElement"',
+    "-e",
+    'set selectedValue to ""',
+    "-e",
+    "try",
+    "-e",
+    'set selectedValue to value of attribute "AXSelectedText" of focusedElement as text',
+    "-e",
+    "end try",
+    "-e",
+    "return selectedValue",
+    "-e",
+    "end tell",
+    "-e",
+    "end tell",
+  ], { timeout: 10_000 }).trim();
+  throw new Error(
+    `Word VBE compile failed: ${compileState.trim()}${
+      highlighted ? `\nHighlighted statement: ${highlighted}` : ""
+    }`,
+  );
 }
 
-function baseContainsCurrentAdapterSource() {
+function replaceAndCompileAdapter() {
+  removeVbaModule("VTWordAdapter");
+  importVbaModule(adapterPath);
+  removeVbaModule("VTRibbonCallbacks");
+  importVbaModule(ribbonCallbacksPath);
+  openModuleCodeWindow("VTWordAdapter");
+  compileVbaProject();
+}
+
+function baseContainsCurrentVbaSources() {
   const checker = String.raw`
 from pathlib import Path
 import sys
@@ -317,21 +393,30 @@ def normalize_vba(value: str) -> str:
         index += 1
     return "".join(output)
 
-base_path, source_path = sys.argv[1:3]
+base_path, adapter_path, callbacks_path = sys.argv[1:4]
 parser = VBA_Parser(base_path)
 try:
     macros = {name: code for _, _, name, code in parser.extract_macros()}
 finally:
     parser.close()
-built = macros.get("VTWordAdapter.bas")
-source = Path(source_path).read_text(encoding="utf-8")
-print("MATCH" if built is not None and normalize_vba(built) == normalize_vba(source) else "MISMATCH")
+checks = [
+    ("VTWordAdapter.bas", adapter_path),
+    ("VTRibbonCallbacks.bas", callbacks_path),
+]
+matched = all(
+    macros.get(module_name) is not None
+    and normalize_vba(macros[module_name])
+        == normalize_vba(Path(source_path).read_text(encoding="utf-8"))
+    for module_name, source_path in checks
+)
+print("MATCH" if matched else "MISMATCH")
 `;
   const result = bestEffort("/usr/bin/python3", [
     "-c",
     checker,
     basePath,
     adapterPath,
+    ribbonCallbacksPath,
   ], { timeout: 90_000 });
   return result.trim() === "MATCH";
 }
@@ -348,6 +433,8 @@ function verifyBuiltVba(path) {
     "VTInsertRegisteredEquationCaption",
     "VTWriteWordFailureTrace",
     "VisualTeX_RunWordNativeRegression",
+    "VisualTeX_InsertLatexMarkdownDocument",
+    "VTCommitWordDocumentImportDispatch",
   ];
   for (const value of required) {
     const utf8 = Buffer.from(value, "utf8");
@@ -361,11 +448,11 @@ function verifyBuiltVba(path) {
 mkdirSync(dirname(outputPath), { recursive: true });
 if (!existsSync(basePath)) throw new Error(`Base Word template is missing: ${basePath}`);
 
-if (baseContainsCurrentAdapterSource()) {
+if (baseContainsCurrentVbaSources()) {
   copyFileSync(basePath, outputPath);
   verifyBuiltVba(outputPath);
   process.stdout.write(
-    `The compiled base already contains the current VTWordAdapter source; copied and verified ${outputPath}.\n`,
+    `The compiled base already contains the current Word VBA sources; copied and verified ${outputPath}.\n`,
   );
   process.exit(0);
 }
@@ -385,7 +472,6 @@ try {
     "end tell",
   ]);
   sleep(3_500);
-  openAdapterCodeWindow();
   replaceAndCompileAdapter();
   osascript([
     'tell application "Microsoft Word"',
