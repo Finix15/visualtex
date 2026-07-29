@@ -4,7 +4,7 @@ Option Explicit
 Private Const VT_WORD_HOST As String = "word"
 Private Const VT_WORD_STATUS_FILE As String = "/OfficePluginStatus/word.json"
 Private Const VT_WORD_SOURCE_REVISION As String = _
-    "word-document-import-20260729-r52"
+    "word-structured-document-import-20260729-r53"
 Private Const VT_WORD_EQUATION_NUMBER_FONT_NAME As String = "Cambria Math"
 Private Const VT_WORD_BOOKMARK_PREFIX As String = "VT_Pending_"
 Private Const VT_WORD_DOCUMENT_IMPORT_BOOKMARK_PREFIX As String = "VT_D_"
@@ -6344,6 +6344,7 @@ Private Sub VTDocumentImportInsertText( _
 
     Dim plainText As String
     Dim insertionRange As Range
+    Dim insertedRange As Range
     Dim insertionStart As Long
 
     If cursorRange Is Nothing Then
@@ -6360,9 +6361,204 @@ Private Sub VTDocumentImportInsertText( _
     Set insertionRange = cursorRange.Document.Range( _
         Start:=insertionStart, End:=insertionStart)
     insertionRange.InsertBefore plainText
+    Set insertedRange = cursorRange.Document.Range( _
+        Start:=insertionStart, End:=insertionStart + Len(plainText))
+    ' Imported prose is plain Word text. It must not inherit an italic, bold,
+    ' raised-baseline, or underline state left behind by the insertion caret or
+    ' by an adjacent native equation.
+    On Error Resume Next
+    insertedRange.Font.Reset
+    insertedRange.Font.Bold = False
+    insertedRange.Font.Italic = False
+    insertedRange.Font.Underline = wdUnderlineNone
+    insertedRange.Font.Position = 0
+    On Error GoTo 0
     Set cursorRange = cursorRange.Document.Range( _
         Start:=insertionStart + Len(plainText), _
         End:=insertionStart + Len(plainText))
+End Sub
+
+Private Function VTDocumentImportParagraphValue( _
+    ByVal manifest As Object, _
+    ByVal itemIndex As Long, _
+    ByVal suffix As String) As String
+
+    VTDocumentImportParagraphValue = VTDispatchOptional( _
+        manifest, VTDocumentImportItemKey(itemIndex, suffix))
+End Function
+
+Private Function VTDocumentImportParagraphFlag( _
+    ByVal manifest As Object, _
+    ByVal itemIndex As Long, _
+    ByVal suffix As String) As Boolean
+
+    Dim value As String
+    value = VTDocumentImportParagraphValue(manifest, itemIndex, suffix)
+    If Len(value) = 0 Or value = "0" Then
+        VTDocumentImportParagraphFlag = False
+    ElseIf value = "1" Then
+        VTDocumentImportParagraphFlag = True
+    Else
+        Err.Raise vbObjectError + 7587, "VisualTeX", _
+            "A document paragraph Boolean value is invalid."
+    End If
+End Function
+
+Private Sub VTApplyDocumentImportParagraphFormat( _
+    ByVal paragraphRange As Range, _
+    ByVal paragraphStyle As String, _
+    ByVal paragraphAlignment As String, _
+    ByVal listKind As String, _
+    ByVal listLevel As Long)
+
+    Dim levelIndex As Long
+
+    If paragraphRange Is Nothing Then
+        Err.Raise vbObjectError + 7587, "VisualTeX", _
+            "The imported Word paragraph Range is missing."
+    End If
+    Select Case paragraphStyle
+        Case "", "normal"
+            paragraphRange.Style = wdStyleNormal
+        Case "heading1"
+            paragraphRange.Style = wdStyleHeading1
+        Case "heading2"
+            paragraphRange.Style = wdStyleHeading2
+        Case "heading3"
+            paragraphRange.Style = wdStyleHeading3
+        Case "heading4"
+            paragraphRange.Style = wdStyleHeading4
+        Case "quote"
+            paragraphRange.Style = wdStyleNormal
+            paragraphRange.ParagraphFormat.LeftIndent = 36!
+            paragraphRange.ParagraphFormat.RightIndent = 36!
+        Case "code"
+            paragraphRange.Style = wdStyleNormal
+            paragraphRange.Font.Name = "Menlo"
+        Case Else
+            Err.Raise vbObjectError + 7587, "VisualTeX", _
+                "The imported Word paragraph style is invalid."
+    End Select
+
+    Select Case paragraphAlignment
+        Case "", "left"
+            paragraphRange.ParagraphFormat.Alignment = wdAlignParagraphLeft
+        Case "center"
+            paragraphRange.ParagraphFormat.Alignment = wdAlignParagraphCenter
+        Case "right"
+            paragraphRange.ParagraphFormat.Alignment = wdAlignParagraphRight
+        Case "justify"
+            paragraphRange.ParagraphFormat.Alignment = wdAlignParagraphJustify
+        Case Else
+            Err.Raise vbObjectError + 7587, "VisualTeX", _
+                "The imported Word paragraph alignment is invalid."
+    End Select
+
+    Select Case listKind
+        Case "", "none"
+            On Error Resume Next
+            paragraphRange.ListFormat.RemoveNumbers
+            On Error GoTo 0
+        Case "bullet"
+            paragraphRange.ListFormat.ApplyBulletDefault
+        Case "number"
+            paragraphRange.ListFormat.ApplyNumberDefault
+        Case Else
+            Err.Raise vbObjectError + 7587, "VisualTeX", _
+                "The imported Word list kind is invalid."
+    End Select
+    If listKind <> "" And listKind <> "none" Then
+        If listLevel < 1 Or listLevel > 9 Then
+            Err.Raise vbObjectError + 7587, "VisualTeX", _
+                "The imported Word list level is invalid."
+        End If
+        For levelIndex = 2 To listLevel
+            paragraphRange.ListFormat.ListIndent
+        Next levelIndex
+    End If
+
+    If paragraphStyle = "normal" Or paragraphStyle = "quote" Or _
+       paragraphStyle = "code" Or Len(paragraphStyle) = 0 Then
+        paragraphRange.ParagraphFormat.SpaceBefore = 0!
+        paragraphRange.ParagraphFormat.SpaceAfter = 0!
+    End If
+End Sub
+
+Private Sub VTFinalizeDocumentImportParagraph( _
+    ByRef cursorRange As Range, _
+    ByVal paragraphStart As Long, _
+    ByVal paragraphStyle As String, _
+    ByVal paragraphAlignment As String, _
+    ByVal listKind As String, _
+    ByVal listLevel As Long, _
+    ByVal sessionId As String, _
+    ByVal itemIndex As Long)
+
+    Dim documentObject As Document
+    Dim contentRange As Range
+    Dim paragraphRange As Range
+    Dim boundaryRange As Range
+    Dim nextStart As Long
+
+    If cursorRange Is Nothing Then
+        Err.Raise vbObjectError + 7587, "VisualTeX", _
+            "The document paragraph insertion point is missing."
+    End If
+    VTTraceDocumentImportStage sessionId, "paragraph-range-start", itemIndex
+    Set documentObject = cursorRange.Document
+    If paragraphStart < 0 Or paragraphStart > cursorRange.Start Then
+        Err.Raise vbObjectError + 7587, "VisualTeX", _
+            "The document paragraph boundary is invalid."
+    End If
+    Set contentRange = documentObject.Range( _
+        Start:=paragraphStart, End:=cursorRange.Start)
+    VTTraceDocumentImportStage sessionId, "paragraph-range-created", itemIndex
+    If contentRange.Paragraphs.Count <> 1 Then
+        Err.Raise vbObjectError + 7587, "VisualTeX", _
+            "An imported text paragraph crossed an unexpected Word paragraph boundary."
+    End If
+    Set paragraphRange = contentRange.Paragraphs(1).Range.Duplicate
+    VTTraceDocumentImportStage sessionId, "paragraph-format-start", itemIndex
+    VTApplyDocumentImportParagraphFormat _
+        paragraphRange, paragraphStyle, paragraphAlignment, listKind, listLevel
+    VTTraceDocumentImportStage sessionId, "paragraph-format-complete", itemIndex
+
+    nextStart = cursorRange.Start
+    If nextStart < documentObject.Content.End Then
+        Set boundaryRange = documentObject.Range( _
+            Start:=nextStart, End:=nextStart + 1)
+        If boundaryRange.Text = vbCr Then
+            If boundaryRange.End < documentObject.Content.End Then
+                nextStart = boundaryRange.End
+            Else
+                ' Word's final paragraph mark cannot be used as a collapsed
+                ' Range at Content.End. Insert one real paragraph boundary
+                ' before it, then keep the caret before the final mark.
+                Set boundaryRange = documentObject.Range( _
+                    Start:=nextStart, End:=nextStart)
+                boundaryRange.InsertAfter vbCr
+                nextStart = nextStart + 1
+            End If
+        Else
+            Set boundaryRange = documentObject.Range( _
+                Start:=nextStart, End:=nextStart)
+            boundaryRange.InsertAfter vbCr
+            nextStart = nextStart + 1
+        End If
+    Else
+        Set boundaryRange = documentObject.Range( _
+            Start:=documentObject.Content.End - 1, _
+            End:=documentObject.Content.End - 1)
+        boundaryRange.InsertAfter vbCr
+        nextStart = documentObject.Content.End - 1
+    End If
+    If nextStart >= documentObject.Content.End Then
+        nextStart = documentObject.Content.End - 1
+    End If
+    VTTraceDocumentImportStage sessionId, "paragraph-boundary-complete", itemIndex
+    Set cursorRange = documentObject.Range( _
+        Start:=nextStart, End:=nextStart)
+    VTTraceDocumentImportStage sessionId, "paragraph-cursor-complete", itemIndex
 End Sub
 
 Private Sub VTDeleteDocumentImportedFormulaState( _
@@ -6617,6 +6813,22 @@ Private Sub VTDocumentImportInsertFormula( _
     End If
 End Sub
 
+Private Sub VTTraceDocumentImportStage( _
+    ByVal sessionId As String, _
+    ByVal stageName As String, _
+    ByVal itemIndex As Long)
+
+    If Not VT_WORD_TRACE_ENABLED Then Exit Sub
+    On Error Resume Next
+    VTWriteTextAtomic _
+        VTSessionDirectory(sessionId) & "/document-import-stage.txt", _
+        "stage=" & stageName & vbLf & _
+        "itemIndex=" & CStr(itemIndex) & vbLf & _
+        "time=" & CStr(Now) & vbLf
+    Err.Clear
+    On Error GoTo 0
+End Sub
+
 Private Sub VTCancelWordDocumentImportDispatch( _
     ByVal dispatch As Object)
 
@@ -6659,15 +6871,29 @@ Private Sub VTCommitWordDocumentImportDispatch( _
     Dim bookmarkName As String
     Dim outputKind As String
     Dim itemKind As String
+    Dim itemParagraphId As String
+    Dim itemParagraphStyle As String
+    Dim itemParagraphAlignment As String
+    Dim itemListKind As String
+    Dim activeParagraphId As String
+    Dim activeParagraphStyle As String
+    Dim activeParagraphAlignment As String
+    Dim activeListKind As String
     Dim itemCount As Long
     Dim itemIndex As Long
+    Dim itemListLevel As Long
+    Dim activeListLevel As Long
     Dim insertionStart As Long
     Dim insertedEnd As Long
+    Dim activeParagraphStart As Long
+    Dim itemParagraphStart As Boolean
+    Dim itemParagraphEnd As Boolean
     Dim errorNumber As Long
     Dim errorDescription As String
     Dim internalMutationStarted As Boolean
 
     On Error GoTo Failed
+    VTTraceDocumentImportStage sessionId, "commit-enter", -1
     VTRequireWritableWordDocument
     VTRequireDispatchValue dispatch, "sourceDocumentId"
     VTRequireDispatchValue dispatch, "bookmarkName"
@@ -6718,8 +6944,71 @@ Private Sub VTCommitWordDocumentImportDispatch( _
     internalMutationStarted = True
 
     For itemIndex = 0 To itemCount - 1
+        VTTraceDocumentImportStage sessionId, "item-start", itemIndex
         itemKind = VTDocumentImportRequired( _
             manifest, itemIndex, "kind")
+        itemParagraphId = VTDocumentImportParagraphValue( _
+            manifest, itemIndex, "paragraphId")
+        itemParagraphStyle = VTDocumentImportParagraphValue( _
+            manifest, itemIndex, "paragraphStyle")
+        itemParagraphAlignment = VTDocumentImportParagraphValue( _
+            manifest, itemIndex, "paragraphAlignment")
+        itemListKind = VTDocumentImportParagraphValue( _
+            manifest, itemIndex, "listKind")
+        itemParagraphStart = VTDocumentImportParagraphFlag( _
+            manifest, itemIndex, "paragraphStart")
+        itemParagraphEnd = VTDocumentImportParagraphFlag( _
+            manifest, itemIndex, "paragraphEnd")
+        itemListLevel = 0
+        If Len(VTDocumentImportParagraphValue( _
+           manifest, itemIndex, "listLevel")) > 0 Then
+            If Not IsNumeric(VTDocumentImportParagraphValue( _
+               manifest, itemIndex, "listLevel")) Then
+                Err.Raise vbObjectError + 7587, "VisualTeX", _
+                    "The imported Word list level is invalid."
+            End If
+            itemListLevel = CLng(VTDocumentImportParagraphValue( _
+                manifest, itemIndex, "listLevel"))
+        End If
+
+        If Len(itemParagraphId) > 0 Then
+            If Not VTIsCanonicalUuid(itemParagraphId) Then
+                Err.Raise vbObjectError + 7587, "VisualTeX", _
+                    "The imported Word paragraph id is invalid."
+            End If
+            If itemParagraphStart Then
+                If Len(activeParagraphId) > 0 Then
+                    Err.Raise vbObjectError + 7587, "VisualTeX", _
+                        "Imported Word paragraphs overlap."
+                End If
+                activeParagraphId = itemParagraphId
+                activeParagraphStyle = itemParagraphStyle
+                activeParagraphAlignment = itemParagraphAlignment
+                activeListKind = itemListKind
+                activeListLevel = itemListLevel
+                activeParagraphStart = cursorRange.Start
+            ElseIf activeParagraphId <> itemParagraphId Then
+                Err.Raise vbObjectError + 7587, "VisualTeX", _
+                    "An imported Word paragraph continuation is missing its start."
+            ElseIf activeParagraphStyle <> itemParagraphStyle Or _
+                   activeParagraphAlignment <> itemParagraphAlignment Or _
+                   activeListKind <> itemListKind Or _
+                   activeListLevel <> itemListLevel Then
+                Err.Raise vbObjectError + 7587, "VisualTeX", _
+                    "An imported Word paragraph changed formatting mid-paragraph."
+            End If
+        ElseIf Len(activeParagraphId) > 0 Then
+            Err.Raise vbObjectError + 7587, "VisualTeX", _
+                "Imported paragraph content is missing paragraph metadata."
+        ElseIf itemParagraphStart Or itemParagraphEnd Or _
+               Len(itemParagraphStyle) > 0 Or _
+               Len(itemParagraphAlignment) > 0 Or _
+               Len(itemListKind) > 0 Or itemListLevel <> 0 Then
+            Err.Raise vbObjectError + 7587, "VisualTeX", _
+                "Imported paragraph metadata is incomplete."
+        End If
+
+        VTTraceDocumentImportStage sessionId, "item-metadata-resolved", itemIndex
         Select Case itemKind
             Case "text"
                 VTDocumentImportInsertText _
@@ -6734,9 +7023,33 @@ Private Sub VTCommitWordDocumentImportDispatch( _
                 Err.Raise vbObjectError + 7586, "VisualTeX", _
                     "The document import contains an unsupported item."
         End Select
+        VTTraceDocumentImportStage sessionId, "item-content-inserted", itemIndex
+        If itemParagraphEnd Then
+            If Len(activeParagraphId) = 0 Or _
+               activeParagraphId <> itemParagraphId Then
+                Err.Raise vbObjectError + 7587, "VisualTeX", _
+                    "The imported Word paragraph end is invalid."
+            End If
+            VTTraceDocumentImportStage sessionId, "paragraph-finalize-start", itemIndex
+            VTFinalizeDocumentImportParagraph _
+                cursorRange, activeParagraphStart, activeParagraphStyle, _
+                activeParagraphAlignment, activeListKind, activeListLevel, _
+                sessionId, itemIndex
+            activeParagraphId = ""
+            activeParagraphStyle = ""
+            activeParagraphAlignment = ""
+            activeListKind = ""
+            activeListLevel = 0
+            VTTraceDocumentImportStage sessionId, "paragraph-finalize-complete", itemIndex
+        End If
         insertedEnd = cursorRange.Start
+        VTTraceDocumentImportStage sessionId, "item-complete", itemIndex
     Next itemIndex
 
+    If Len(activeParagraphId) > 0 Then
+        Err.Raise vbObjectError + 7587, "VisualTeX", _
+            "The imported Word paragraph ended before its boundary."
+    End If
     If internalMutationStarted Then
         VTEndWordInternalMutation
         internalMutationStarted = False
@@ -6779,6 +7092,8 @@ Public Sub VisualTeX_ApplyPendingResult()
     Dim dispatch As Object
     Dim actionName As String
     Dim hostName As String
+    Dim callbackErrorNumber As Long
+    Dim callbackErrorDescription As String
 
     On Error GoTo Failed
     sessionId = VTReadActiveSessionId(VT_WORD_HOST)
@@ -6803,7 +7118,15 @@ Public Sub VisualTeX_ApplyPendingResult()
     Exit Sub
 
 Failed:
-    Err.Raise Err.Number, "VisualTeX Word callback", Err.Description
+    callbackErrorNumber = Err.Number
+    callbackErrorDescription = Err.Description
+    If Len(sessionId) > 0 Then
+        VTWriteWordFailureTrace _
+            sessionId, "document-import-callback", _
+            callbackErrorNumber, callbackErrorDescription
+    End If
+    Err.Raise callbackErrorNumber, "VisualTeX Word callback", _
+        callbackErrorDescription
 End Sub
 
 Private Function VTPrepareWordCreateInsertionRange( _

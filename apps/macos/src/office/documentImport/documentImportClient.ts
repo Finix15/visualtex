@@ -3,6 +3,9 @@ import { invokeTauri } from "../shared/tauriTransport";
 import type {
   DocumentFormulaDisplayMode,
   DocumentFormulaOutputKind,
+  DocumentListKind,
+  DocumentParagraphAlignment,
+  DocumentParagraphStyle,
 } from "./documentImportParser";
 
 export interface MacosDocumentImportRequest {
@@ -14,12 +17,24 @@ export interface MacosDocumentImportRequest {
   defaultFontSizePt: number;
 }
 
-export interface DocumentImportTextCommitItem {
+export interface DocumentImportParagraphCommitMetadata {
+  paragraphId?: string;
+  paragraphStyle?: DocumentParagraphStyle;
+  paragraphAlignment?: DocumentParagraphAlignment;
+  listKind?: DocumentListKind;
+  listLevel?: number;
+  paragraphStart?: boolean;
+  paragraphEnd?: boolean;
+}
+
+export interface DocumentImportTextCommitItem
+  extends DocumentImportParagraphCommitMetadata {
   kind: "text";
   text: string;
 }
 
-export interface DocumentImportFormulaCommitItem {
+export interface DocumentImportFormulaCommitItem
+  extends DocumentImportParagraphCommitMetadata {
   kind: "formula";
   formulaId: string;
   latex: string;

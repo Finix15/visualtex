@@ -9912,6 +9912,62 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
   color: var(--text-primary);
 }
 
+.document-import-text-preview[data-paragraph-start="true"] {
+  margin-top: 8px;
+}
+
+.document-import-text-preview.is-heading1,
+.document-import-text-preview.is-heading2,
+.document-import-text-preview.is-heading3,
+.document-import-text-preview.is-heading4 {
+  color: var(--text-primary);
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.document-import-text-preview.is-heading1 {
+  margin-top: 16px;
+  font-size: 21px;
+}
+
+.document-import-text-preview.is-heading2 {
+  margin-top: 14px;
+  font-size: 18px;
+}
+
+.document-import-text-preview.is-heading3 {
+  margin-top: 12px;
+  font-size: 15px;
+}
+
+.document-import-text-preview.is-heading4 {
+  margin-top: 10px;
+  font-size: 13px;
+}
+
+.document-import-text-preview.is-quote {
+  padding-left: 12px;
+  border-left: 3px solid var(--border-default);
+  color: var(--text-secondary);
+}
+
+.document-import-text-preview.is-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.document-import-text-preview.is-bullet,
+.document-import-text-preview.is-number {
+  display: flex;
+  gap: 8px;
+  padding-left: 12px;
+}
+
+.document-import-list-marker {
+  flex: 0 0 16px;
+  color: var(--text-secondary);
+  text-align: right;
+}
+
 .document-import-formula-card {
   margin: 10px 0;
   border: 1px solid var(--border-default);

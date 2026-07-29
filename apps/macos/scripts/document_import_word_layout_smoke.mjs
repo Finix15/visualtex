@@ -54,6 +54,24 @@ assert.match(
   "Numbered image formulas must use the normal true-centering number layout",
 );
 assert.match(
+  adapter,
+  /insertedRange\.Font\.Reset[\s\S]*insertedRange\.Font\.Italic = False/,
+  "Imported prose must not inherit italic formatting from the insertion caret",
+);
+for (const required of [
+  "VTFinalizeDocumentImportParagraph",
+  "wdStyleHeading1",
+  "wdStyleHeading2",
+  "ApplyBulletDefault",
+  "ApplyNumberDefault",
+  "paragraphRange.ParagraphFormat.SpaceAfter = 0!",
+]) {
+  assert.ok(
+    adapter.includes(required),
+    `Structured document import is missing Word formatting behavior ${required}`,
+  );
+}
+assert.match(
   ribbon,
   /id="VisualTeX\.Mac\.Word\.DocumentImport"[\s\S]*onAction="VTWordRibbonDocumentImport"/,
   "Word Ribbon must expose the document import command",

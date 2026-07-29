@@ -45,5 +45,6 @@ apps/*/office/windows/ole/manifests/VisualTeX.*.xml
 .DS_Store
 *.log
 .tmp-*
+~$*
 .agents/
 .codex/

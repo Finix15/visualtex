@@ -121,6 +121,12 @@ async function main() {
         let callbackId = 1;
         const callbacks = new Map();
         window.__VISUALTEX_DOCUMENT_IMPORT_CALLS__ = [];
+        Object.defineProperty(HTMLCanvasElement.prototype, "toBlob", {
+          configurable: true,
+          value(callback) {
+            callback(null);
+          },
+        });
         window.__TAURI_INTERNALS__ = {
           metadata: {
             currentWindow: { label: "office-native-document-test" },
@@ -315,11 +321,13 @@ E=mc^2
         !formula.ommlBase64 ||
         !formula.ommlDocxBase64 ||
         !formula.svgBase64 ||
-        !formula.pngBase64 ||
+        formula.pngBase64 ||
         !(formula.width > 0) ||
         !(formula.height > 0)
       ) {
-        throw new Error(`Incomplete image formula payload: ${JSON.stringify(formula)}`);
+        throw new Error(
+          `SVG fallback regression payload is invalid: ${JSON.stringify(formula)}`,
+        );
       }
     }
     if (formulas[0].formulaId === formulas[1].formulaId) {
@@ -338,7 +346,7 @@ E=mc^2
       fontSizePt: formula.fontSizePt,
       hasOmml: Boolean(formula.ommlBase64),
       hasSvg: Boolean(formula.svgBase64),
-      hasPng: Boolean(formula.pngBase64),
+      usesBackendPngFallback: !formula.pngBase64,
     })) }, null, 2));
     console.log("Document import browser regression passed");
   } finally {

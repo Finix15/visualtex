@@ -3,14 +3,34 @@ import { createUuid } from "../../runtime/browserCompatibility";
 export type DocumentImportSourceKind = "auto" | "markdown" | "latex";
 export type DocumentFormulaDisplayMode = "inline" | "block";
 export type DocumentFormulaOutputKind = "omml" | "image";
+export type DocumentParagraphStyle =
+  | "normal"
+  | "heading1"
+  | "heading2"
+  | "heading3"
+  | "heading4"
+  | "quote"
+  | "code";
+export type DocumentListKind = "none" | "bullet" | "number";
+export type DocumentParagraphAlignment = "left" | "center" | "right" | "justify";
 
-export interface DocumentTextBlock {
+export interface DocumentParagraphMetadata {
+  paragraphId?: string;
+  paragraphStyle?: DocumentParagraphStyle;
+  paragraphAlignment?: DocumentParagraphAlignment;
+  listKind?: DocumentListKind;
+  listLevel?: number;
+  paragraphStart?: boolean;
+  paragraphEnd?: boolean;
+}
+
+export interface DocumentTextBlock extends DocumentParagraphMetadata {
   id: string;
   kind: "text";
   text: string;
 }
 
-export interface DocumentFormulaBlock {
+export interface DocumentFormulaBlock extends DocumentParagraphMetadata {
   id: string;
   kind: "formula";
   latex: string;
@@ -20,6 +40,18 @@ export interface DocumentFormulaBlock {
 }
 
 export type DocumentImportBlock = DocumentTextBlock | DocumentFormulaBlock;
+
+interface ExtractedFormula {
+  token: string;
+  block: DocumentFormulaBlock;
+}
+
+interface ParagraphContext {
+  style: DocumentParagraphStyle;
+  alignment: DocumentParagraphAlignment;
+  listKind: DocumentListKind;
+  listLevel: number;
+}
 
 const blockEnvironmentNames = new Set([
   "equation",
@@ -34,6 +66,26 @@ const blockEnvironmentNames = new Set([
   "multline*",
   "displaymath",
 ]);
+const formulaTokenPrefix = "\uE000VT_FORMULA_";
+const formulaTokenSuffix = "\uE001";
+const formulaTokenPattern = /\uE000VT_FORMULA_(\d+)\uE001/g;
+const markerPrefix = "\uE100VT_";
+const markerSuffix = "\uE101";
+
+function marker(value: string) {
+  return `${markerPrefix}${value}${markerSuffix}`;
+}
+
+function leadingMarker(line: string) {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith(markerPrefix)) return null;
+  const end = trimmed.indexOf(markerSuffix, markerPrefix.length);
+  if (end < 0) return null;
+  return {
+    value: trimmed.slice(markerPrefix.length, end),
+    rest: trimmed.slice(end + markerSuffix.length),
+  };
+}
 
 function isEscaped(source: string, index: number) {
   let slashCount = 0;
@@ -68,6 +120,7 @@ function unwrapSimpleLatexCommands(source: string) {
     "textnormal",
     "mbox",
     "caption",
+    "footnote",
   ];
   const commandPattern = new RegExp(
     `\\\\(?:${oneArgumentCommands.join("|")})\\s*\\{([^{}]*)\\}`,
@@ -78,31 +131,15 @@ function unwrapSimpleLatexCommands(source: string) {
     if (next === value) break;
     value = next;
   }
-  value = value.replace(/\\href\s*\{[^{}]*\}\s*\{([^{}]*)\}/g, "$1");
-  return value;
+  return value.replace(/\\href\s*\{[^{}]*\}\s*\{([^{}]*)\}/g, "$1");
 }
 
-function plainTextFromMarkup(raw: string, sourceKind: DocumentImportSourceKind) {
+function cleanInlineMarkup(raw: string, sourceKind: DocumentImportSourceKind) {
   let value = raw.replace(/\r\n?/g, "\n");
-  if (sourceKind !== "markdown") {
-    value = stripLatexComments(value);
-    value = value
-      .replace(/\\documentclass(?:\[[^\]]*\])?\s*\{[^{}]*\}/g, "")
-      .replace(/\\usepackage(?:\[[^\]]*\])?\s*\{[^{}]*\}/g, "")
-      .replace(/\\(?:title|author|date)\s*\{([^{}]*)\}/g, "$1\n")
-      .replace(/\\maketitle\b/g, "")
-      .replace(/\\begin\s*\{document\}|\\end\s*\{document\}/g, "")
-      .replace(
-        /\\(?:part|chapter|section|subsection|subsubsection|paragraph|subparagraph)\*?\s*\{([^{}]*)\}/g,
-        "\n$1\n",
-      )
-      .replace(/\\item(?:\[[^\]]*\])?\s*/g, "\n• ")
-      .replace(/\\begin\s*\{(?:itemize|enumerate|description|center|flushleft|flushright|quote|quotation)\}/g, "\n")
-      .replace(/\\end\s*\{(?:itemize|enumerate|description|center|flushleft|flushright|quote|quotation)\}/g, "\n")
-      .replace(/\\(?:newline|linebreak|par)\b/g, "\n")
-      .replace(/\\\\(?:\[[^\]]*\])?/g, "\n");
-    value = unwrapSimpleLatexCommands(value);
-    value = value
+  if (sourceKind === "latex") {
+    value = unwrapSimpleLatexCommands(value)
+      .replace(/\\(?:newline|linebreak)\b/g, "\n")
+      .replace(/\\\\(?:\[[^\]]*\])?/g, "\n")
       .replace(/\\%/g, "%")
       .replace(/\\&/g, "&")
       .replace(/\\#/g, "#")
@@ -112,26 +149,20 @@ function plainTextFromMarkup(raw: string, sourceKind: DocumentImportSourceKind) 
       .replace(/\\\}/g, "}")
       .replace(/~/g, " ")
       .replace(/\\[a-zA-Z@]+\*?(?:\[[^\]]*\])?/g, "");
+  } else {
+    value = value
+      .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+      .replace(/`([^`]+)`/g, "$1")
+      .replace(/\*\*([^*]+)\*\*/g, "$1")
+      .replace(/__([^_]+)__/g, "$1")
+      .replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, "$1")
+      .replace(/(?<!_)_([^_\n]+)_(?!_)/g, "$1")
+      .replace(/~~([^~]+)~~/g, "$1");
   }
-
-  value = value
-    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
-    .replace(/^\s*>\s?/gm, "")
-    .replace(/^\s*[-+*]\s+/gm, "• ")
-    .replace(/^\s*(\d+)\.\s+/gm, "$1. ")
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/\*\*([^*]+)\*\*/g, "$1")
-    .replace(/__([^_]+)__/g, "$1")
-    .replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, "$1")
-    .replace(/(?<!_)_([^_\n]+)_(?!_)/g, "$1")
-    .replace(/~~([^~]+)~~/g, "$1")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n[ \t]+/g, "\n")
-    .replace(/\n{3,}/g, "\n\n");
-
-  return value;
+  return value
+    .replace(/[ \t]*\n[ \t]*/g, " ")
+    .replace(/[ \t]{2,}/g, " ");
 }
 
 interface MathDelimiter {
@@ -225,24 +256,334 @@ function findClosingDelimiter(source: string, delimiter: MathDelimiter) {
   return -1;
 }
 
-function appendTextBlock(
+function extractFormulas(source: string, defaultFontSizePt: number) {
+  const formulas: ExtractedFormula[] = [];
+  let output = "";
+  let textStart = 0;
+  let cursor = 0;
+
+  while (cursor < source.length) {
+    const delimiter = delimiterAt(source, cursor);
+    if (!delimiter) {
+      cursor += 1;
+      continue;
+    }
+    const closeIndex = findClosingDelimiter(source, delimiter);
+    if (closeIndex < 0) {
+      cursor += delimiter.opening.length;
+      continue;
+    }
+
+    output += source.slice(textStart, cursor);
+    const latex = (delimiter.environment
+      ? source.slice(cursor, closeIndex + delimiter.closing.length)
+      : source.slice(delimiter.contentStart, closeIndex)
+    )
+      .trim()
+      .replace(/^\s*\\displaystyle\s*/, "")
+      .replace(/\\label\s*\{[^{}]*\}/g, "")
+      .replace(/\\tag\*?\s*\{[^{}]*\}/g, "")
+      .trim();
+
+    if (latex) {
+      const token = `${formulaTokenPrefix}${formulas.length}${formulaTokenSuffix}`;
+      formulas.push({
+        token,
+        block: {
+          id: createUuid(),
+          kind: "formula",
+          latex,
+          displayMode: delimiter.displayMode,
+          numbered: delimiter.displayMode === "block" && delimiter.numbered,
+          fontSizePt: Math.min(512, Math.max(1, defaultFontSizePt)),
+        },
+      });
+      output += delimiter.displayMode === "block" ? `\n${token}\n` : token;
+    } else {
+      output += source.slice(cursor, closeIndex + delimiter.closing.length);
+    }
+    cursor = closeIndex + delimiter.closing.length;
+    textStart = cursor;
+  }
+  output += source.slice(textStart);
+  return { text: output, formulas };
+}
+
+function formulaFromToken(token: string, formulas: ExtractedFormula[]) {
+  const match = token.match(/^\uE000VT_FORMULA_(\d+)\uE001$/);
+  const index = match ? Number(match[1]) : -1;
+  return Number.isInteger(index) ? formulas[index]?.block : undefined;
+}
+
+function defaultContext(): ParagraphContext {
+  return { style: "normal", alignment: "left", listKind: "none", listLevel: 0 };
+}
+
+function headingStyle(level: number): DocumentParagraphStyle {
+  if (level <= 1) return "heading1";
+  if (level === 2) return "heading2";
+  if (level === 3) return "heading3";
+  return "heading4";
+}
+
+function normalizeLatexStructure(source: string) {
+  return source
+    .replace(/\\documentclass(?:\[[^\]]*\])?\s*\{[^{}]*\}/g, "")
+    .replace(/\\usepackage(?:\[[^\]]*\])?\s*\{[^{}]*\}/g, "")
+    .replace(/\\begin\s*\{document\}|\\end\s*\{document\}/g, "")
+    .replace(/\\maketitle\b/g, "")
+    .replace(/\\title\s*\{([^{}]*)\}/g, `\n${marker("HEADING:1")}$1\n`)
+    .replace(/\\author\s*\{([^{}]*)\}/g, `\n${marker("CENTER")}$1\n`)
+    .replace(/\\date\s*\{([^{}]*)\}/g, `\n${marker("CENTER")}$1\n`)
+    .replace(/\\(?:part|chapter|section)\*?\s*\{([^{}]*)\}/g, `\n${marker("HEADING:1")}$1\n`)
+    .replace(/\\subsection\*?\s*\{([^{}]*)\}/g, `\n${marker("HEADING:2")}$1\n`)
+    .replace(/\\subsubsection\*?\s*\{([^{}]*)\}/g, `\n${marker("HEADING:3")}$1\n`)
+    .replace(/\\(?:paragraph|subparagraph)\*?\s*\{([^{}]*)\}/g, `\n${marker("HEADING:4")}$1\n`)
+    .replace(/\\begin\s*\{itemize\}/g, `\n${marker("LIST_START:bullet")}\n`)
+    .replace(/\\end\s*\{itemize\}/g, `\n${marker("LIST_END")}\n`)
+    .replace(/\\begin\s*\{enumerate\}/g, `\n${marker("LIST_START:number")}\n`)
+    .replace(/\\end\s*\{enumerate\}/g, `\n${marker("LIST_END")}\n`)
+    .replace(/\\item(?:\[[^\]]*\])?\s*/g, `\n${marker("ITEM")}`)
+    .replace(/\\begin\s*\{(?:quote|quotation)\}/g, `\n${marker("QUOTE_START")}\n`)
+    .replace(/\\end\s*\{(?:quote|quotation)\}/g, `\n${marker("QUOTE_END")}\n`)
+    .replace(/\\begin\s*\{center\}/g, `\n${marker("ALIGN:center")}\n`)
+    .replace(/\\end\s*\{center\}/g, `\n${marker("ALIGN:left")}\n`)
+    .replace(/\\begin\s*\{flushright\}/g, `\n${marker("ALIGN:right")}\n`)
+    .replace(/\\end\s*\{flushright\}/g, `\n${marker("ALIGN:left")}\n`)
+    .replace(/\\begin\s*\{flushleft\}/g, `\n${marker("ALIGN:left")}\n`)
+    .replace(/\\end\s*\{flushleft\}/g, `\n${marker("ALIGN:left")}\n`)
+    .replace(/\\begin\s*\{(?:abstract|description)\}/g, "\n")
+    .replace(/\\end\s*\{(?:abstract|description)\}/g, "\n")
+    .replace(/\\par\b/g, "\n\n");
+}
+
+function emitParagraph(
   blocks: DocumentImportBlock[],
   raw: string,
+  context: ParagraphContext,
+  formulas: ExtractedFormula[],
   sourceKind: DocumentImportSourceKind,
 ) {
-  const text = plainTextFromMarkup(raw, sourceKind);
-  if (!text) return;
-  const previous = blocks.at(-1);
-  if (previous?.kind === "text") {
-    previous.text += text;
-  } else {
-    blocks.push({ id: createUuid(), kind: "text", text });
+  if (!raw.trim()) return;
+  const paragraphId = createUuid();
+  const content: DocumentImportBlock[] = [];
+  let cursor = 0;
+  formulaTokenPattern.lastIndex = 0;
+  for (let match = formulaTokenPattern.exec(raw); match; match = formulaTokenPattern.exec(raw)) {
+    const text = cleanInlineMarkup(raw.slice(cursor, match.index), sourceKind);
+    if (text) content.push({ id: createUuid(), kind: "text", text });
+    const formula = formulaFromToken(match[0], formulas);
+    if (formula) content.push({ ...formula });
+    cursor = match.index + match[0].length;
   }
+  const tail = cleanInlineMarkup(raw.slice(cursor), sourceKind);
+  if (tail) content.push({ id: createUuid(), kind: "text", text: tail });
+  if (!content.length) return;
+
+  const firstText = content.find((block): block is DocumentTextBlock => block.kind === "text");
+  const lastText = [...content]
+    .reverse()
+    .find((block): block is DocumentTextBlock => block.kind === "text");
+  if (firstText) firstText.text = firstText.text.replace(/^\s+/, "");
+  if (lastText) lastText.text = lastText.text.replace(/\s+$/, "");
+
+  const visible = content.filter((block) => block.kind === "formula" || block.text.length > 0);
+  visible.forEach((block, index) => {
+    Object.assign(block, {
+      paragraphId,
+      paragraphStyle: context.style,
+      paragraphAlignment: context.alignment,
+      listKind: context.listKind,
+      listLevel: context.listLevel,
+      paragraphStart: index === 0,
+      paragraphEnd: index === visible.length - 1,
+    });
+  });
+  blocks.push(...visible);
+}
+
+function emitDisplayFormula(
+  blocks: DocumentImportBlock[],
+  token: string,
+  formulas: ExtractedFormula[],
+) {
+  const formula = formulaFromToken(token, formulas);
+  if (formula) blocks.push({ ...formula });
+}
+
+function parseStructuredLines(
+  source: string,
+  formulas: ExtractedFormula[],
+  sourceKind: DocumentImportSourceKind,
+) {
+  const blocks: DocumentImportBlock[] = [];
+  const listStack: DocumentListKind[] = [];
+  let alignment: DocumentParagraphAlignment = "left";
+  let quoteDepth = 0;
+  let current = "";
+  let currentContext = defaultContext();
+  let codeFence = false;
+
+  const flush = () => {
+    emitParagraph(blocks, current, currentContext, formulas, sourceKind);
+    current = "";
+    currentContext = {
+      style: quoteDepth > 0 ? "quote" : codeFence ? "code" : "normal",
+      alignment,
+      listKind: "none",
+      listLevel: 0,
+    };
+  };
+
+  const beginParagraph = (context: ParagraphContext, text: string) => {
+    flush();
+    currentContext = context;
+    current = text;
+  };
+
+  for (const originalLine of source.split("\n")) {
+    const line = originalLine.replace(/[ \t]+$/g, "");
+    const trimmed = line.trim();
+    const leading = leadingMarker(trimmed);
+    const control = leading?.value;
+
+    if (control) {
+      if (control.startsWith("HEADING:")) {
+        const title = leading?.rest ?? "";
+        beginParagraph(
+          {
+            style: headingStyle(Number(control.split(":")[1])),
+            alignment: "left",
+            listKind: "none",
+            listLevel: 0,
+          },
+          title,
+        );
+        flush();
+      } else if (control.startsWith("LIST_START:")) {
+        flush();
+        listStack.push(control.endsWith("number") ? "number" : "bullet");
+      } else if (control === "LIST_END") {
+        flush();
+        listStack.pop();
+      } else if (control === "ITEM") {
+        beginParagraph(
+          {
+            style: "normal",
+            alignment,
+            listKind: listStack.at(-1) ?? "bullet",
+            listLevel: Math.max(1, listStack.length),
+          },
+          leading?.rest ?? "",
+        );
+      } else if (control === "QUOTE_START") {
+        flush();
+        quoteDepth += 1;
+      } else if (control === "QUOTE_END") {
+        flush();
+        quoteDepth = Math.max(0, quoteDepth - 1);
+      } else if (control.startsWith("ALIGN:")) {
+        flush();
+        const value = control.split(":")[1];
+        alignment = value === "center" || value === "right" ? value : "left";
+      } else if (control === "CENTER") {
+        beginParagraph(
+          { style: "normal", alignment: "center", listKind: "none", listLevel: 0 },
+          leading?.rest ?? "",
+        );
+        flush();
+      }
+      continue;
+    }
+
+    const displayFormula = formulaFromToken(trimmed, formulas);
+    if (displayFormula?.displayMode === "block") {
+      flush();
+      emitDisplayFormula(blocks, trimmed, formulas);
+      continue;
+    }
+
+    if (sourceKind === "markdown") {
+      if (/^```/.test(trimmed)) {
+        flush();
+        codeFence = !codeFence;
+        continue;
+      }
+      const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
+      if (heading) {
+        beginParagraph(
+          {
+            style: headingStyle(heading[1].length),
+            alignment: "left",
+            listKind: "none",
+            listLevel: 0,
+          },
+          heading[2],
+        );
+        flush();
+        continue;
+      }
+      const bullet = line.match(/^(\s*)[-+*]\s+(.+)$/);
+      if (bullet) {
+        beginParagraph(
+          {
+            style: "normal",
+            alignment: "left",
+            listKind: "bullet",
+            listLevel: Math.max(1, Math.floor(bullet[1].length / 2) + 1),
+          },
+          bullet[2],
+        );
+        continue;
+      }
+      const numbered = line.match(/^(\s*)\d+[.)]\s+(.+)$/);
+      if (numbered) {
+        beginParagraph(
+          {
+            style: "normal",
+            alignment: "left",
+            listKind: "number",
+            listLevel: Math.max(1, Math.floor(numbered[1].length / 2) + 1),
+          },
+          numbered[2],
+        );
+        continue;
+      }
+      const quote = trimmed.match(/^>\s?(.*)$/);
+      if (quote) {
+        beginParagraph(
+          { style: "quote", alignment: "left", listKind: "none", listLevel: 0 },
+          quote[1],
+        );
+        continue;
+      }
+    }
+
+    if (!trimmed) {
+      flush();
+      continue;
+    }
+    if (!current) {
+      currentContext = {
+        style: quoteDepth > 0 ? "quote" : codeFence ? "code" : "normal",
+        alignment,
+        listKind: "none",
+        listLevel: 0,
+      };
+      current = trimmed;
+    } else {
+      current += ` ${trimmed}`;
+    }
+  }
+  flush();
+  return blocks;
 }
 
 function resolvedSourceKind(source: string, requested: DocumentImportSourceKind) {
   if (requested !== "auto") return requested;
-  return /\\(?:documentclass|begin\s*\{document\}|section\*?\s*\{|usepackage)\b/.test(source)
+  return /\\(?:documentclass|begin\s*\{document\}|section\*?\s*\{|usepackage|begin\s*\{itemize\})\b/.test(
+    source,
+  )
     ? "latex"
     : "markdown";
 }
@@ -252,56 +593,13 @@ export function parseLatexMarkdownDocument(
   requestedKind: DocumentImportSourceKind = "auto",
   defaultFontSizePt = 12,
 ): DocumentImportBlock[] {
-  const normalized = source.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
+  let normalized = source.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
   const sourceKind = resolvedSourceKind(normalized, requestedKind);
-  const blocks: DocumentImportBlock[] = [];
-  let textStart = 0;
-  let cursor = 0;
-
-  while (cursor < normalized.length) {
-    const delimiter = delimiterAt(normalized, cursor);
-    if (!delimiter) {
-      cursor += 1;
-      continue;
-    }
-    const closeIndex = findClosingDelimiter(normalized, delimiter);
-    if (closeIndex < 0) {
-      cursor += delimiter.opening.length;
-      continue;
-    }
-
-    appendTextBlock(blocks, normalized.slice(textStart, cursor), sourceKind);
-    const latex = (delimiter.environment
-      ? normalized.slice(cursor, closeIndex + delimiter.closing.length)
-      : normalized.slice(delimiter.contentStart, closeIndex)
-    )
-      .trim()
-      .replace(/^\s*\\displaystyle\s*/, "")
-      .replace(/\\label\s*\{[^{}]*\}/g, "")
-      .replace(/\\tag\*?\s*\{[^{}]*\}/g, "")
-      .trim();
-    if (latex) {
-      blocks.push({
-        id: createUuid(),
-        kind: "formula",
-        latex,
-        displayMode: delimiter.displayMode,
-        numbered: delimiter.displayMode === "block" && delimiter.numbered,
-        fontSizePt: Math.min(512, Math.max(1, defaultFontSizePt)),
-      });
-    } else {
-      appendTextBlock(
-        blocks,
-        normalized.slice(cursor, closeIndex + delimiter.closing.length),
-        sourceKind,
-      );
-    }
-    cursor = closeIndex + delimiter.closing.length;
-    textStart = cursor;
-  }
-
-  appendTextBlock(blocks, normalized.slice(textStart), sourceKind);
-  return blocks.filter((block) => block.kind === "formula" || block.text.length > 0);
+  if (sourceKind === "latex") normalized = stripLatexComments(normalized);
+  const extracted = extractFormulas(normalized, defaultFontSizePt);
+  const structured =
+    sourceKind === "latex" ? normalizeLatexStructure(extracted.text) : extracted.text;
+  return parseStructuredLines(structured, extracted.formulas, sourceKind);
 }
 
 export function mergeDocumentImportBlocks(

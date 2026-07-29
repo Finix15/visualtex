@@ -38,6 +38,8 @@ const MAX_REQUEST_BYTES: u64 = 256 * 1024;
 const MAX_METADATA_BYTES: usize = 2 * 1024 * 1024;
 const MAX_OMML_BYTES: usize = 4 * 1024 * 1024;
 const MAX_DOCUMENT_IMPORT_MANIFEST_BYTES: usize = 16 * 1024 * 1024;
+const TRANSPARENT_PNG_BASE64: &str =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAEAQH/8l0Z8QAAAABJRU5ErkJggg==";
 const MAX_IDENTITY_CHARS: usize = 2048;
 const MAX_SHAPE_NAME_CHARS: usize = 128;
 const MAX_WORD_WIDTH_PT: f64 = 500.0;
@@ -131,6 +133,20 @@ pub struct MacOfflineDocumentImportCommitInput {
 pub enum MacOfflineDocumentImportCommitItem {
     Text {
         text: String,
+        #[serde(default)]
+        paragraph_id: Option<String>,
+        #[serde(default)]
+        paragraph_style: Option<String>,
+        #[serde(default)]
+        paragraph_alignment: Option<String>,
+        #[serde(default)]
+        list_kind: Option<String>,
+        #[serde(default)]
+        list_level: Option<u32>,
+        #[serde(default)]
+        paragraph_start: bool,
+        #[serde(default)]
+        paragraph_end: bool,
     },
     Formula {
         formula_id: String,
@@ -152,7 +168,32 @@ pub enum MacOfflineDocumentImportCommitItem {
         height: Option<f64>,
         #[serde(default)]
         baseline: Option<f64>,
+        #[serde(default)]
+        paragraph_id: Option<String>,
+        #[serde(default)]
+        paragraph_style: Option<String>,
+        #[serde(default)]
+        paragraph_alignment: Option<String>,
+        #[serde(default)]
+        list_kind: Option<String>,
+        #[serde(default)]
+        list_level: Option<u32>,
+        #[serde(default)]
+        paragraph_start: bool,
+        #[serde(default)]
+        paragraph_end: bool,
     },
+}
+
+#[derive(Debug, Clone)]
+struct DocumentParagraphTransfer {
+    id: String,
+    style: String,
+    alignment: String,
+    list_kind: String,
+    list_level: u32,
+    start: bool,
+    end: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1887,6 +1928,19 @@ fn decode_document_native_docx(value: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+fn decode_document_image_fallback_png(value: Option<&str>) -> Result<Vec<u8>, String> {
+    if let Some(value) = value {
+        return decode_png(value);
+    }
+    let bytes = BASE64_STANDARD
+        .decode(TRANSPARENT_PNG_BASE64)
+        .map_err(|_| "Built-in SVG fallback PNG is invalid".to_string())?;
+    if bytes.len() < 8 || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err("Built-in SVG fallback PNG is invalid".to_string());
+    }
+    Ok(bytes)
+}
+
 fn calculate_document_image_geometry(
     width: f64,
     height: f64,
@@ -1921,6 +1975,83 @@ fn calculate_document_image_geometry(
     )
 }
 
+fn resolve_document_paragraph_transfer(
+    paragraph_id: &Option<String>,
+    paragraph_style: &Option<String>,
+    paragraph_alignment: &Option<String>,
+    list_kind: &Option<String>,
+    list_level: Option<u32>,
+    paragraph_start: bool,
+    paragraph_end: bool,
+) -> Result<Option<DocumentParagraphTransfer>, String> {
+    let Some(id) = paragraph_id.as_deref() else {
+        if paragraph_style.is_some()
+            || paragraph_alignment.is_some()
+            || list_kind.is_some()
+            || list_level.is_some()
+            || paragraph_start
+            || paragraph_end
+        {
+            return Err("Document paragraph metadata is missing its paragraph id".to_string());
+        }
+        return Ok(None);
+    };
+    validate_uuid(id, "Document paragraph id")?;
+    let style = paragraph_style.as_deref().unwrap_or("normal");
+    if !matches!(
+        style,
+        "normal" | "heading1" | "heading2" | "heading3" | "heading4" | "quote" | "code"
+    ) {
+        return Err("Document paragraph style is invalid".to_string());
+    }
+    let alignment = paragraph_alignment.as_deref().unwrap_or("left");
+    if !matches!(alignment, "left" | "center" | "right" | "justify") {
+        return Err("Document paragraph alignment is invalid".to_string());
+    }
+    let resolved_list_kind = list_kind.as_deref().unwrap_or("none");
+    if !matches!(resolved_list_kind, "none" | "bullet" | "number") {
+        return Err("Document paragraph list kind is invalid".to_string());
+    }
+    let resolved_list_level = list_level.unwrap_or(0);
+    if (resolved_list_kind == "none" && resolved_list_level != 0)
+        || (resolved_list_kind != "none" && !(1..=9).contains(&resolved_list_level))
+    {
+        return Err("Document paragraph list level is invalid".to_string());
+    }
+    Ok(Some(DocumentParagraphTransfer {
+        id: id.to_string(),
+        style: style.to_string(),
+        alignment: alignment.to_string(),
+        list_kind: resolved_list_kind.to_string(),
+        list_level: resolved_list_level,
+        start: paragraph_start,
+        end: paragraph_end,
+    }))
+}
+
+fn append_document_paragraph_entries(
+    entries: &mut Vec<(String, String)>,
+    prefix: &str,
+    paragraph: Option<&DocumentParagraphTransfer>,
+) {
+    let value = |field: &str| format!("{prefix}{field}");
+    if let Some(paragraph) = paragraph {
+        entries.push((value("paragraphId"), paragraph.id.clone()));
+        entries.push((value("paragraphStyle"), paragraph.style.clone()));
+        entries.push((value("paragraphAlignment"), paragraph.alignment.clone()));
+        entries.push((value("listKind"), paragraph.list_kind.clone()));
+        entries.push((value("listLevel"), paragraph.list_level.to_string()));
+        entries.push((
+            value("paragraphStart"),
+            if paragraph.start { "1" } else { "0" }.to_string(),
+        ));
+        entries.push((
+            value("paragraphEnd"),
+            if paragraph.end { "1" } else { "0" }.to_string(),
+        ));
+    }
+}
+
 fn commit_document_import_blocking(
     state: OfficeCompanionState,
     session_id: String,
@@ -1950,11 +2081,42 @@ fn commit_document_import_blocking(
     let mut metadata_to_cache = Vec::new();
     let mut formula_count = 0usize;
     let mut text_bytes = 0usize;
+    let mut active_paragraph_id: Option<String> = None;
 
     for (index, item) in input.items.iter().enumerate() {
         let prefix = format!("item{index}");
         match item {
-            MacOfflineDocumentImportCommitItem::Text { text } => {
+            MacOfflineDocumentImportCommitItem::Text {
+                text,
+                paragraph_id,
+                paragraph_style,
+                paragraph_alignment,
+                list_kind,
+                list_level,
+                paragraph_start,
+                paragraph_end,
+            } => {
+                let paragraph = resolve_document_paragraph_transfer(
+                    paragraph_id,
+                    paragraph_style,
+                    paragraph_alignment,
+                    list_kind,
+                    *list_level,
+                    *paragraph_start,
+                    *paragraph_end,
+                )?;
+                if let Some(paragraph) = paragraph.as_ref() {
+                    if paragraph.start {
+                        if active_paragraph_id.is_some() {
+                            return Err("Document paragraphs overlap in the transfer stream".to_string());
+                        }
+                        active_paragraph_id = Some(paragraph.id.clone());
+                    } else if active_paragraph_id.as_deref() != Some(paragraph.id.as_str()) {
+                        return Err("Document paragraph continuation has no matching start".to_string());
+                    }
+                } else if active_paragraph_id.is_some() {
+                    return Err("Document paragraph content is missing paragraph metadata".to_string());
+                }
                 text_bytes = text_bytes.saturating_add(text.len());
                 if text_bytes > 4 * 1024 * 1024 {
                     return Err("Document import text exceeds the 4 MB limit".to_string());
@@ -1964,6 +2126,10 @@ fn commit_document_import_blocking(
                     format!("{prefix}textBase64"),
                     URL_SAFE_NO_PAD.encode(text.as_bytes()),
                 ));
+                append_document_paragraph_entries(&mut entries, &prefix, paragraph.as_ref());
+                if paragraph.as_ref().is_some_and(|value| value.end) {
+                    active_paragraph_id = None;
+                }
             }
             MacOfflineDocumentImportCommitItem::Formula {
                 formula_id,
@@ -1979,7 +2145,38 @@ fn commit_document_import_blocking(
                 width,
                 height,
                 baseline,
+                paragraph_id,
+                paragraph_style,
+                paragraph_alignment,
+                list_kind,
+                list_level,
+                paragraph_start,
+                paragraph_end,
             } => {
+                let paragraph = resolve_document_paragraph_transfer(
+                    paragraph_id,
+                    paragraph_style,
+                    paragraph_alignment,
+                    list_kind,
+                    *list_level,
+                    *paragraph_start,
+                    *paragraph_end,
+                )?;
+                if display_mode == "block" && paragraph.is_some() {
+                    return Err("Display formulas must own their Word paragraph".to_string());
+                }
+                if let Some(paragraph) = paragraph.as_ref() {
+                    if paragraph.start {
+                        if active_paragraph_id.is_some() {
+                            return Err("Document paragraphs overlap in the transfer stream".to_string());
+                        }
+                        active_paragraph_id = Some(paragraph.id.clone());
+                    } else if active_paragraph_id.as_deref() != Some(paragraph.id.as_str()) {
+                        return Err("Document paragraph continuation has no matching start".to_string());
+                    }
+                } else if active_paragraph_id.is_some() {
+                    return Err("Document paragraph content is missing paragraph metadata".to_string());
+                }
                 formula_count += 1;
                 if formula_count > 512 {
                     return Err("Document import supports at most 512 formulas".to_string());
@@ -2022,11 +2219,8 @@ fn commit_document_import_blocking(
                     let svg_value = svg_base64
                         .as_deref()
                         .ok_or_else(|| "Image document formula is missing SVG data".to_string())?;
-                    let png_value = png_base64
-                        .as_deref()
-                        .ok_or_else(|| "Image document formula is missing PNG data".to_string())?;
                     let svg = decode_svg(svg_value)?;
-                    let png = decode_png(png_value)?;
+                    let png = decode_document_image_fallback_png(png_base64.as_deref())?;
                     let width = width.ok_or_else(|| "Image document formula width is missing".to_string())?;
                     let height = height.ok_or_else(|| "Image document formula height is missing".to_string())?;
                     let baseline = baseline.unwrap_or(height);
@@ -2128,8 +2322,15 @@ fn commit_document_import_blocking(
                     format!("{prefix}referenceBaselinePt"),
                     format!("{:.6}", geometry.reference_baseline_pt),
                 ));
+                append_document_paragraph_entries(&mut entries, &prefix, paragraph.as_ref());
+                if paragraph.as_ref().is_some_and(|value| value.end) {
+                    active_paragraph_id = None;
+                }
             }
         }
+    }
+    if active_paragraph_id.is_some() {
+        return Err("Document paragraph transfer ended before its paragraph boundary".to_string());
     }
     if formula_count == 0 && text_bytes == 0 {
         return Err("Document import contains no visible content".to_string());
@@ -2544,6 +2745,22 @@ mod tests {
         assert!((large.height - 36.0).abs() < 0.001);
         assert_eq!(large.baseline, -5);
         assert!((large.width / small.width - 18.0 / 10.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn document_image_fallback_png_is_available_when_webview_rasterization_fails() {
+        let fallback = decode_document_image_fallback_png(None)
+            .expect("built-in SVG compatibility PNG should decode");
+        assert!(fallback.starts_with(b"\x89PNG\r\n\x1a\n"));
+
+        let supplied = BASE64_STANDARD.encode(
+            BASE64_STANDARD
+                .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+                .expect("PNG fixture should decode"),
+        );
+        let decoded = decode_document_image_fallback_png(Some(&supplied))
+            .expect("supplied PNG fallback should decode");
+        assert!(decoded.starts_with(b"\x89PNG\r\n\x1a\n"));
     }
 
     #[cfg(target_os = "macos")]

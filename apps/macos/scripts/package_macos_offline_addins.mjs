@@ -130,7 +130,7 @@ function validateMacroContainer(path, kind, options = {}) {
       packageVersion,
       ...(kind === "Word"
         ? [
-            "word-document-import-20260729-r52",
+            "word-structured-document-import-20260729-r53",
             "App_WindowSelectionChange",
             "VisualTeX_StabilizeImageEquationNumberSelection",
             "VTWordRibbonApplyImageFontSizePreset",

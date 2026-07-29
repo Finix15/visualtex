@@ -410,12 +410,25 @@ function formulaItem({
   };
 }
 
-function appendText(entries, index, text) {
-  entries.push([`item${index}kind`, "text"]);
-  entries.push([`item${index}textBase64`, base64Url(text)]);
+function appendParagraphMetadata(entries, index, paragraph) {
+  if (!paragraph) return;
+  const prefix = `item${index}`;
+  entries.push([`${prefix}paragraphId`, paragraph.id]);
+  entries.push([`${prefix}paragraphStyle`, paragraph.style ?? "normal"]);
+  entries.push([`${prefix}paragraphAlignment`, paragraph.alignment ?? "left"]);
+  entries.push([`${prefix}listKind`, paragraph.listKind ?? "none"]);
+  entries.push([`${prefix}listLevel`, String(paragraph.listLevel ?? 0)]);
+  entries.push([`${prefix}paragraphStart`, paragraph.start ? "1" : "0"]);
+  entries.push([`${prefix}paragraphEnd`, paragraph.end ? "1" : "0"]);
 }
 
-function appendFormula(entries, index, formula) {
+function appendText(entries, index, text, paragraph) {
+  entries.push([`item${index}kind`, "text"]);
+  entries.push([`item${index}textBase64`, base64Url(text)]);
+  appendParagraphMetadata(entries, index, paragraph);
+}
+
+function appendFormula(entries, index, formula, paragraph) {
   const prefix = `item${index}`;
   entries.push([`${prefix}kind`, "formula"]);
   entries.push([`${prefix}formulaId`, formula.formulaId]);
@@ -435,6 +448,7 @@ function appendFormula(entries, index, formula) {
   entries.push([`${prefix}referenceWidthPt`, formula.referenceWidthPt.toFixed(6)]);
   entries.push([`${prefix}referenceHeightPt`, formula.referenceHeightPt.toFixed(6)]);
   entries.push([`${prefix}referenceBaselinePt`, formula.referenceBaselinePt.toFixed(6)]);
+  appendParagraphMetadata(entries, index, paragraph);
 }
 
 const before = new Set(
@@ -521,14 +535,87 @@ try {
   ];
   nativeFiles.push(...formulas.map((formula) => formula.nativePath));
 
+  const bodyParagraphId = crypto.randomUUID();
+  const followingParagraphId = crypto.randomUUID();
+  const headingParagraphId = crypto.randomUUID();
+  const bulletParagraphId = crypto.randomUUID();
+  const numberParagraphId = crypto.randomUUID();
+  const endingParagraphId = crypto.randomUUID();
   const items = [];
-  appendText(items, 0, "开头文字：");
-  appendFormula(items, 1, formulas[0]);
-  appendText(items, 2, "，行内公式之后。\n\n");
-  appendFormula(items, 3, formulas[1]);
-  appendText(items, 4, "\n未编号行间公式之后。\n\n");
-  appendFormula(items, 5, formulas[2]);
-  appendText(items, 6, "\n结尾文字。\n");
+  appendText(items, 0, "结构化测试", {
+    id: headingParagraphId,
+    style: "heading1",
+    alignment: "left",
+    listKind: "none",
+    listLevel: 0,
+    start: true,
+    end: true,
+  });
+  appendText(items, 1, "开头文字：", {
+    id: bodyParagraphId,
+    style: "normal",
+    alignment: "left",
+    listKind: "none",
+    listLevel: 0,
+    start: true,
+    end: false,
+  });
+  appendFormula(items, 2, formulas[0], {
+    id: bodyParagraphId,
+    style: "normal",
+    alignment: "left",
+    listKind: "none",
+    listLevel: 0,
+    start: false,
+    end: false,
+  });
+  appendText(items, 3, "，行内公式之后。", {
+    id: bodyParagraphId,
+    style: "normal",
+    alignment: "left",
+    listKind: "none",
+    listLevel: 0,
+    start: false,
+    end: true,
+  });
+  appendFormula(items, 4, formulas[1]);
+  appendText(items, 5, "未编号行间公式之后。", {
+    id: followingParagraphId,
+    style: "normal",
+    alignment: "left",
+    listKind: "none",
+    listLevel: 0,
+    start: true,
+    end: true,
+  });
+  appendFormula(items, 6, formulas[2]);
+  appendText(items, 7, "项目符号正文", {
+    id: bulletParagraphId,
+    style: "normal",
+    alignment: "left",
+    listKind: "bullet",
+    listLevel: 1,
+    start: true,
+    end: true,
+  });
+  appendText(items, 8, "编号列表正文", {
+    id: numberParagraphId,
+    style: "normal",
+    alignment: "left",
+    listKind: "number",
+    listLevel: 1,
+    start: true,
+    end: true,
+  });
+  appendText(items, 9, "结尾文字。", {
+    id: endingParagraphId,
+    style: "normal",
+    alignment: "left",
+    listKind: "none",
+    listLevel: 0,
+    start: true,
+    end: true,
+  });
 
   const manifestPath = join(sessionDirectory, "document-import.txt");
   const entries = [
@@ -537,7 +624,7 @@ try {
     ["outputKind", outputKind],
     ["sourceDocumentId", request.sourceDocumentId],
     ["bookmarkName", request.documentImport.bookmarkName],
-    ["itemCount", "7"],
+    ["itemCount", "10"],
     ...items,
   ];
   writeFileSync(manifestPath, manifestText(entries), { mode: 0o600 });
@@ -989,6 +1076,18 @@ try {
     ),
   );
   console.log("Word document import integration passed");
+} catch (error) {
+  if (sessionDirectory) {
+    const stagePath = join(sessionDirectory, "document-import-stage.txt");
+    if (existsSync(stagePath)) {
+      console.error(`Last Word document-import stage:\n${readFileSync(stagePath, "utf8")}`);
+    }
+    const failurePath = join(sessionDirectory, "word-failure.log");
+    if (existsSync(failurePath)) {
+      console.error(`Word document-import failure:\n${readFileSync(failurePath, "utf8")}`);
+    }
+  }
+  throw error;
 } finally {
   try {
     runAppleScript(['tell application "Microsoft Word" to quit saving no'], 20_000);

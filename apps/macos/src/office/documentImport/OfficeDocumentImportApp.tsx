@@ -27,6 +27,7 @@ import {
   type VisualTeXFormulaMetadata,
 } from "../shared/formulaMetadata";
 import { createUuid } from "../../runtime/browserCompatibility";
+import { documentImportErrorMessage } from "./documentImportErrors";
 import {
   cancelMacosDocumentImport,
   closeMacosDocumentImportWindow,
@@ -114,6 +115,16 @@ async function prepareFormulaCommitItem(
   if (!line.latex) throw new Error("存在空公式，请填写或删除后再插入。");
   const omml = latexLinesToOmmlArtifacts([line.latex], block.displayMode);
 
+  const paragraphMetadata = {
+    paragraphId: block.paragraphId,
+    paragraphStyle: block.paragraphStyle,
+    paragraphAlignment: block.paragraphAlignment,
+    listKind: block.listKind,
+    listLevel: block.listLevel,
+    paragraphStart: block.paragraphStart,
+    paragraphEnd: block.paragraphEnd,
+  };
+
   let metadata: VisualTeXFormulaMetadata;
   if (outputKind === "image") {
     const svg = latexToSvg(line.latex, {
@@ -122,8 +133,18 @@ async function prepareFormulaCommitItem(
       paddingPx: block.displayMode === "inline" ? 1 : 10,
       background: "transparent",
     });
-    const { svgToPng } = await import("../../export/svgToPng");
-    const png = await svgToPng(svg, { scale: 2, background: "transparent" });
+    let pngBase64: string | undefined;
+    try {
+      const { svgToPng } = await import("../../export/svgToPng");
+      pngBase64 = (
+        await svgToPng(svg, { scale: 2, background: "transparent" })
+      ).base64;
+    } catch (reason) {
+      console.warn(
+        "VisualTeX document import could not create the optional PNG fallback",
+        reason,
+      );
+    }
     const resolvedBaseline = svg.baseline ?? svg.height;
     const reference = calculateReferenceGeometry(
       svg.width,
@@ -153,10 +174,11 @@ async function prepareFormulaCommitItem(
       ommlBase64: omml.ommlBase64,
       ommlDocxBase64: omml.ommlDocxBase64,
       svgBase64: svg.base64,
-      pngBase64: png.base64,
+      ...(pngBase64 ? { pngBase64 } : {}),
       width: svg.width,
       height: svg.height,
       baseline: resolvedBaseline,
+      ...paragraphMetadata,
     };
   }
 
@@ -179,6 +201,7 @@ async function prepareFormulaCommitItem(
     metadata,
     ommlBase64: omml.ommlBase64,
     ommlDocxBase64: omml.ommlDocxBase64,
+    ...paragraphMetadata,
   };
 }
 
@@ -209,7 +232,7 @@ export function OfficeDocumentImportApp() {
     void getMacosDocumentImportRequest(sessionId)
       .then((value) => setRequest(value))
       .catch((reason) =>
-        setError(reason instanceof Error ? reason.message : "无法读取 Word 文档导入请求。"),
+        setError(documentImportErrorMessage(reason, "无法读取 Word 文档导入请求。")),
       )
       .finally(() => setLoading(false));
   }, [sessionId]);
@@ -270,7 +293,7 @@ export function OfficeDocumentImportApp() {
       allowNativeCloseRef.current = true;
       await closeMacosDocumentImportWindow();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "无法取消文档导入。");
+      setError(documentImportErrorMessage(reason, "无法取消文档导入。"));
       setBusy(false);
       nativeCloseInFlightRef.current = false;
     }
@@ -299,7 +322,19 @@ export function OfficeDocumentImportApp() {
       );
       let formulaIndex = 0;
       const items: DocumentImportCommitItem[] = blocks.map((block) => {
-        if (block.kind === "text") return { kind: "text", text: block.text };
+        if (block.kind === "text") {
+          return {
+            kind: "text",
+            text: block.text,
+            paragraphId: block.paragraphId,
+            paragraphStyle: block.paragraphStyle,
+            paragraphAlignment: block.paragraphAlignment,
+            listKind: block.listKind,
+            listLevel: block.listLevel,
+            paragraphStart: block.paragraphStart,
+            paragraphEnd: block.paragraphEnd,
+          };
+        }
         const prepared = preparedFormulas[formulaIndex];
         formulaIndex += 1;
         return prepared;
@@ -309,7 +344,7 @@ export function OfficeDocumentImportApp() {
       allowNativeCloseRef.current = true;
       await closeMacosDocumentImportWindow();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "无法将内容插入 Word。");
+      setError(documentImportErrorMessage(reason, "无法将内容插入 Word。"));
       setToast("");
       setBusy(false);
     }
@@ -329,11 +364,7 @@ export function OfficeDocumentImportApp() {
         else unlisten = dispose;
       })
       .catch((reason) => {
-        setError(
-          reason instanceof Error
-            ? reason.message
-            : "无法注册文档导入窗口关闭处理。",
-        );
+        setError(documentImportErrorMessage(reason, "无法注册文档导入窗口关闭处理。"));
       });
     return () => {
       disposed = true;
@@ -453,7 +484,16 @@ export function OfficeDocumentImportApp() {
             ) : (
               blocks.map((block, index) =>
                 block.kind === "text" ? (
-                  <div key={block.id} className="document-import-text-preview">
+                  <div
+                    key={block.id}
+                    className={`document-import-text-preview is-${block.paragraphStyle ?? "normal"} is-${block.listKind ?? "none"}`}
+                    data-paragraph-start={block.paragraphStart ? "true" : undefined}
+                  >
+                    {block.paragraphStart && block.listKind === "bullet" ? (
+                      <span className="document-import-list-marker">•</span>
+                    ) : block.paragraphStart && block.listKind === "number" ? (
+                      <span className="document-import-list-marker">1.</span>
+                    ) : null}
                     {block.text}
                   </div>
                 ) : (
