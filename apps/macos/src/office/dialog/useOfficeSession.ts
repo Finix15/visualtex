@@ -5,6 +5,7 @@ import {
   type OfficeFormulaSession,
   type UpdateOfficeSessionInput,
 } from "../api/sessionClient";
+import { errorMessage } from "../../runtime/errorMessage";
 
 function sessionIdFromLocation() {
   const query = new URLSearchParams(window.location.search).get("sessionId");
@@ -33,8 +34,7 @@ export function useOfficeSession() {
       setError("");
       return next;
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Unable to load Office session.";
-      setError(message);
+      setError(errorMessage(reason, "Unable to load Office session."));
       return null;
     } finally {
       setLoading(false);

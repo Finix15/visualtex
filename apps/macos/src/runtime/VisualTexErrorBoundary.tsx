@@ -1,17 +1,18 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { errorMessage } from "./errorMessage";
 
 interface Props {
   children: ReactNode;
 }
 
 interface State {
-  error: Error | null;
+  error: unknown | null;
 }
 
 export class VisualTexErrorBoundary extends Component<Props, State> {
   state: State = { error: null };
 
-  static getDerivedStateFromError(error: Error): State {
+  static getDerivedStateFromError(error: unknown): State {
     return { error };
   }
 
@@ -60,7 +61,9 @@ export class VisualTexErrorBoundary extends Component<Props, State> {
             font: "12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace",
           }}
         >
-          {error.stack || error.message || String(error)}
+          {error instanceof Error && error.stack
+            ? error.stack
+            : errorMessage(error, "Unknown VisualTeX interface error")}
         </pre>
         <button
           type="button"

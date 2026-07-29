@@ -4,7 +4,7 @@ Option Explicit
 Private Const VT_WORD_HOST As String = "word"
 Private Const VT_WORD_STATUS_FILE As String = "/OfficePluginStatus/word.json"
 Private Const VT_WORD_SOURCE_REVISION As String = _
-    "word-structured-document-import-20260729-r54"
+    "word-structured-document-import-20260729-r57"
 Private Const VT_WORD_EQUATION_NUMBER_FONT_NAME As String = "Cambria Math"
 Private Const VT_WORD_BOOKMARK_PREFIX As String = "VT_Pending_"
 Private Const VT_WORD_DOCUMENT_IMPORT_BOOKMARK_PREFIX As String = "VT_D_"
@@ -185,6 +185,71 @@ Failed:
         "error|" & CStr(exportErrorNumber) & "|" & _
         exportErrorDescription & "|stage=" & exportStage & _
         "|root=" & runtimeRoot & "|output=" & outputPath
+    On Error GoTo 0
+End Sub
+
+Public Sub VisualTeX_RunSelectedImageEditRecoveryRegression()
+    Dim statusPath As String
+    Dim selectedShape As InlineShape
+    Dim documentObject As Document
+    Dim encodedMetadata As String
+    Dim storedMetadata As String
+    Dim formulaReference As String
+    Dim formulaId As String
+    Dim displayMode As String
+    Dim numbered As Boolean
+    Dim regressionErrorNumber As Long
+    Dim regressionErrorDescription As String
+
+    statusPath = _
+        VTApplicationSupportRoot() & _
+        "/document-import-regression-image-edit-status.txt"
+    On Error GoTo Failed
+    If Documents.Count = 0 Or Selection.InlineShapes.Count <> 1 Then
+        Err.Raise vbObjectError + 7591, "VisualTeX", _
+            "The image edit recovery regression requires one selected inline shape."
+    End If
+    Set selectedShape = Selection.InlineShapes(1)
+    Set documentObject = selectedShape.Range.Document
+    encodedMetadata = selectedShape.AlternativeText
+    If Not VTIsEncodedMetadata(encodedMetadata) Then
+        Err.Raise vbObjectError + 7591, "VisualTeX", _
+            "The selected regression image is missing VisualTeX metadata."
+    End If
+
+    selectedShape.Title = ""
+    If Len(selectedShape.Title) <> 0 Then
+        Err.Raise vbObjectError + 7591, "VisualTeX", _
+            "Word did not clear the image formula Title for the regression."
+    End If
+    VisualTeX_DoubleClickEditSelected
+
+    formulaReference = selectedShape.Title
+    If Not VTTryParseFormulaReference( _
+       formulaReference, formulaId, displayMode, numbered) Then
+        Err.Raise vbObjectError + 7591, "VisualTeX", _
+            "Double-click editing did not restore the image formula Title."
+    End If
+    If Not VTTryReadWordMetadataPayload( _
+       documentObject, formulaId, storedMetadata) Then
+        Err.Raise vbObjectError + 7591, "VisualTeX", _
+            "The restored image formula UUID has no Word metadata payload."
+    End If
+    If StrComp(storedMetadata, encodedMetadata, vbBinaryCompare) <> 0 Then
+        Err.Raise vbObjectError + 7591, "VisualTeX", _
+            "The restored image formula UUID does not match AlternativeText."
+    End If
+    VTWriteTextAtomic statusPath, "ok|" & formulaReference
+    Exit Sub
+
+Failed:
+    regressionErrorNumber = Err.Number
+    regressionErrorDescription = Err.Description
+    On Error Resume Next
+    VTWriteTextAtomic _
+        statusPath, _
+        "error|" & CStr(regressionErrorNumber) & "|" & _
+        regressionErrorDescription
     On Error GoTo 0
 End Sub
 
@@ -5670,6 +5735,69 @@ InvalidSelection:
     VTIsVisualTeXNativeSelection = False
 End Function
 
+Private Function VTTryFormulaIdForMetadataPayload( _
+    ByVal documentObject As Document, _
+    ByVal encodedMetadata As String, _
+    ByRef formulaId As String) As Boolean
+
+    Dim candidateVariable As Object
+    Dim variableName As String
+    Dim compactFormulaId As String
+    Dim candidateFormulaId As String
+    Dim storedMetadata As String
+    Dim matchedFormulaId As String
+    Dim metadataReadable As Boolean
+    Dim matchCount As Long
+    Dim prefixLength As Long
+    Dim suffixLength As Long
+
+    On Error GoTo ResolveFailed
+    formulaId = ""
+    If documentObject Is Nothing Or _
+       Not VTIsEncodedMetadata(encodedMetadata) Then Exit Function
+    prefixLength = Len(VT_WORD_METADATA_VARIABLE_PREFIX)
+    suffixLength = Len("_Count")
+
+    For Each candidateVariable In documentObject.Variables
+        variableName = CStr(candidateVariable.Name)
+        If Len(variableName) > prefixLength + suffixLength And _
+           Left$(variableName, prefixLength) = _
+               VT_WORD_METADATA_VARIABLE_PREFIX And _
+           Right$(variableName, suffixLength) = "_Count" Then
+            compactFormulaId = Mid$( _
+                variableName, prefixLength + 1, _
+                Len(variableName) - prefixLength - suffixLength)
+            candidateFormulaId = Replace$(compactFormulaId, "_", "-")
+            If VTIsCanonicalUuid(candidateFormulaId) Then
+                storedMetadata = ""
+                metadataReadable = False
+                On Error Resume Next
+                Err.Clear
+                metadataReadable = VTTryReadWordMetadataPayload( _
+                    documentObject, candidateFormulaId, storedMetadata)
+                Err.Clear
+                On Error GoTo ResolveFailed
+                If metadataReadable And _
+                   StrComp(storedMetadata, encodedMetadata, _
+                       vbBinaryCompare) = 0 Then
+                    matchCount = matchCount + 1
+                    matchedFormulaId = candidateFormulaId
+                End If
+            End If
+        End If
+    Next candidateVariable
+
+    If matchCount = 1 Then
+        formulaId = matchedFormulaId
+        VTTryFormulaIdForMetadataPayload = True
+    End If
+    Exit Function
+
+ResolveFailed:
+    formulaId = ""
+    VTTryFormulaIdForMetadataPayload = False
+End Function
+
 Private Function VTTryRestoreVisualTeXInlineShapeReference( _
     ByVal selectedShape As InlineShape) As Boolean
 
@@ -5687,11 +5815,27 @@ Private Function VTTryRestoreVisualTeXInlineShapeReference( _
 
     On Error GoTo RestoreFailed
     If selectedShape Is Nothing Then Exit Function
-    If Len(selectedShape.Title) <> 0 Then Exit Function
     encodedMetadata = selectedShape.AlternativeText
     If Not VTIsEncodedMetadata(encodedMetadata) Then Exit Function
 
     Set documentObject = selectedShape.Range.Document
+    If VTTryFormulaIdForMetadataPayload( _
+       documentObject, encodedMetadata, formulaId) Then
+        If Not VTTryReadWordFormulaFormat( _
+           documentObject, formulaId, displayMode, numbered) Then Exit Function
+        If Not VTTryReadWordMetadataPayload( _
+           documentObject, formulaId, storedMetadata) Then Exit Function
+        If StrComp(storedMetadata, encodedMetadata, vbBinaryCompare) <> 0 Then
+            Exit Function
+        End If
+        formulaReference = VTFormulaReference(formulaId, displayMode, numbered)
+        selectedShape.Title = formulaReference
+        VTTryRestoreVisualTeXInlineShapeReference = _
+            (StrComp(selectedShape.Title, formulaReference, _
+                vbBinaryCompare) = 0)
+        Exit Function
+    End If
+
     Set paragraphRange = selectedShape.Range.Paragraphs(1).Range.Duplicate
     If paragraphRange.Information(wdWithInTable) Or _
        paragraphRange.InlineShapes.Count <> 1 Or _
@@ -5736,20 +5880,84 @@ RestoreFailed:
     VTTryRestoreVisualTeXInlineShapeReference = False
 End Function
 
+Private Function VTTryResolveVisualTeXInlineShapeReference( _
+    ByVal selectedShape As InlineShape, _
+    ByRef formulaId As String, _
+    ByRef displayMode As String, _
+    ByRef numbered As Boolean) As Boolean
+
+    Dim documentObject As Document
+    Dim encodedMetadata As String
+    Dim storedMetadata As String
+    Dim storedDisplayMode As String
+    Dim storedNumbered As Boolean
+    Dim metadataReadable As Boolean
+    Dim formatReadable As Boolean
+
+    On Error GoTo InvalidShape
+    formulaId = ""
+    displayMode = ""
+    numbered = False
+    If selectedShape Is Nothing Then Exit Function
+    encodedMetadata = selectedShape.AlternativeText
+    If Not VTIsEncodedMetadata(encodedMetadata) Then Exit Function
+
+    If VTTryParseFormulaReference( _
+       selectedShape.Title, formulaId, displayMode, numbered) Then
+        Set documentObject = selectedShape.Range.Document
+        On Error Resume Next
+        Err.Clear
+        metadataReadable = VTTryReadWordMetadataPayload( _
+            documentObject, formulaId, storedMetadata)
+        Err.Clear
+        On Error GoTo InvalidShape
+        If Not metadataReadable Then
+            ' Legacy image formulas can have a valid compact reference before
+            ' their document Variables are populated by the first edit.
+            VTTryResolveVisualTeXInlineShapeReference = True
+            Exit Function
+        End If
+        If StrComp(storedMetadata, encodedMetadata, vbBinaryCompare) = 0 Then
+            On Error Resume Next
+            Err.Clear
+            formatReadable = VTTryReadWordFormulaFormat( _
+                documentObject, formulaId, storedDisplayMode, storedNumbered)
+            Err.Clear
+            On Error GoTo InvalidShape
+            If formatReadable Then
+                displayMode = storedDisplayMode
+                numbered = storedNumbered
+                selectedShape.Title = _
+                    VTFormulaReference(formulaId, displayMode, numbered)
+            End If
+            VTTryResolveVisualTeXInlineShapeReference = True
+            Exit Function
+        End If
+    End If
+
+    If Not VTTryRestoreVisualTeXInlineShapeReference( _
+       selectedShape) Then Exit Function
+    If Not VTTryParseFormulaReference( _
+       selectedShape.Title, formulaId, displayMode, numbered) Then Exit Function
+    VTTryResolveVisualTeXInlineShapeReference = True
+    Exit Function
+
+InvalidShape:
+    formulaId = ""
+    displayMode = ""
+    numbered = False
+    VTTryResolveVisualTeXInlineShapeReference = False
+End Function
+
 Public Function VTIsVisualTeXInlineShape(ByVal selectedShape As InlineShape) As Boolean
     Dim formulaId As String
     Dim displayMode As String
     Dim numbered As Boolean
 
     On Error GoTo InvalidShape
-    If selectedShape Is Nothing Then Exit Function
-    If Not VTIsEncodedMetadata(selectedShape.AlternativeText) Then Exit Function
-    If Not VTTryParseFormulaReference( _
-       selectedShape.Title, formulaId, displayMode, numbered) Then
-        If Not VTTryRestoreVisualTeXInlineShapeReference( _
-           selectedShape) Then Exit Function
-    End If
-    VTIsVisualTeXInlineShape = True
+    VTIsVisualTeXInlineShape = _
+        VTTryResolveVisualTeXInlineShapeReference( _
+            selectedShape, formulaId, displayMode, numbered)
     Exit Function
 InvalidShape:
     VTIsVisualTeXInlineShape = False
@@ -5792,8 +6000,8 @@ End Function
 Private Sub VTWordEditInlineShape( _
     ByVal selectedShape As InlineShape, _
     Optional ByVal convertToNative As Boolean = False)
+    Dim documentObject As Document
     Dim encodedMetadata As String
-    Dim formulaReference As String
     Dim formulaId As String
     Dim displayMode As String
     Dim numbered As Boolean
@@ -5808,18 +6016,21 @@ Private Sub VTWordEditInlineShape( _
     If selectedShape Is Nothing Then
         Err.Raise vbObjectError + 7400, "VisualTeX", "Select exactly one VisualTeX inline formula."
     End If
+    If Not VTTryResolveVisualTeXInlineShapeReference( _
+       selectedShape, formulaId, displayMode, numbered) Then
+        Err.Raise vbObjectError + 7400, "VisualTeX", _
+            "The selected image does not contain recoverable VisualTeX edit metadata."
+    End If
+    Set documentObject = selectedShape.Range.Document
     encodedMetadata = selectedShape.AlternativeText
-    formulaReference = selectedShape.Title
-    VTValidateEditEnvelope encodedMetadata, formulaReference, formulaId, displayMode, numbered
-    If Len(displayMode) = 0 Then displayMode = "inline"
     VTSynchronizeWordImageFormulaShape selectedShape
     VTEnsureWordImageScaleState _
         selectedShape, formulaId, displayMode, numbered, fontSizePt, _
         referenceWidthPt, referenceHeightPt, referenceBaselinePt, _
         observedWordFontSizePt
 
-    VTSetWordMetadataPayload ActiveDocument, formulaId, encodedMetadata
-    VTSetWordFormulaFormat ActiveDocument, formulaId, displayMode, numbered
+    VTSetWordMetadataPayload documentObject, formulaId, encodedMetadata
+    VTSetWordFormulaFormat documentObject, formulaId, displayMode, numbered
 
     sessionId = VTNewUuidV4()
     requestJson = VTRequestJson( _
@@ -5850,6 +6061,7 @@ Private Sub VTWordOpenNativeSession( _
     ByVal nativeBookmark As Bookmark, _
     Optional ByVal keepNativeEquation As Boolean = True)
 
+    Dim documentObject As Document
     Dim formulaId As String
     Dim displayMode As String
     Dim numbered As Boolean
@@ -5870,31 +6082,41 @@ Private Sub VTWordOpenNativeSession( _
     If Not VTTryFormulaIdFromNativeBookmark(nativeBookmark.Name, formulaId) Then
         Err.Raise vbObjectError + 7453, "VisualTeX", "The selected VisualTeX native equation bookmark is invalid."
     End If
+    Set documentObject = nativeBookmark.Range.Document
     Set nativeMath = VTNativeMathForBookmark(nativeBookmark)
     If nativeMath Is Nothing Then
         Err.Raise vbObjectError + 7454, "VisualTeX", "The selected VisualTeX bookmark no longer contains exactly one native equation."
     End If
-    If Not VTTryReadWordMetadataPayload(ActiveDocument, formulaId, encodedMetadata) Then
+    If Not VTTryReadWordMetadataPayload(documentObject, formulaId, encodedMetadata) Then
         Err.Raise vbObjectError + 7455, "VisualTeX", "The selected native equation is missing VisualTeX edit metadata."
     End If
     If Not VTTryReadWordFormulaFormat( _
-        ActiveDocument, formulaId, displayMode, numbered) Then
+        documentObject, formulaId, displayMode, numbered) Then
         Err.Raise vbObjectError + 7456, "VisualTeX", "The selected native equation is missing its VisualTeX display format."
     End If
-    fontSizePt = nativeMath.Range.Font.Size
-    If Not VTValidWordFormulaFontSize(fontSizePt) Then
-        fontSizePt = VTPreferredWordFormulaFontSize(nativeMath.Range)
-    End If
+
+    ' OMath.Range.Font.Size can report the surrounding paragraph's default
+    ' size (commonly 11 pt) even when the visible imported equation and its
+    ' identity bookmark retain the requested point size. The bookmark Range is
+    ' the same range used by Word's font-size UI and is therefore authoritative.
+    fontSizePt = nativeBookmark.Range.Font.Size
     On Error Resume Next
     If VTTryReadWordImageScaleState( _
-       ActiveDocument, formulaId, storedFontSizePt, _
+       documentObject, formulaId, storedFontSizePt, _
        referenceWidthPt, referenceHeightPt, referenceBaselinePt, _
        observedWordFontSizePt) Then
-        ' The native OMath's current Word size wins. Reference image geometry
-        ' remains available when this Session converts the formula back to PNG.
+        If Not VTValidWordFormulaFontSize(fontSizePt) Then
+            fontSizePt = storedFontSizePt
+        End If
     End If
     Err.Clear
     On Error GoTo 0
+    If Not VTValidWordFormulaFontSize(fontSizePt) Then
+        fontSizePt = nativeMath.Range.Font.Size
+    End If
+    If Not VTValidWordFormulaFontSize(fontSizePt) Then
+        fontSizePt = VTPreferredWordFormulaFontSize(nativeBookmark.Range)
+    End If
 
     sessionId = VTNewUuidV4()
     requestJson = VTRequestJson( _

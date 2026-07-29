@@ -26,6 +26,7 @@ import {
   createFormulaMetadata,
   type VisualTeXFormulaMetadata,
 } from "../shared/formulaMetadata";
+import { normalizeFormulaEditorDocument } from "../shared/formulaEditorDocument";
 import { createUuid } from "../../runtime/browserCompatibility";
 import { documentImportErrorMessage } from "./documentImportErrors";
 import {
@@ -113,6 +114,7 @@ async function prepareFormulaCommitItem(
   const formulaId = createUuid();
   const line = { id: createUuid(), latex: block.latex.trim() };
   if (!line.latex) throw new Error("存在空公式，请填写或删除后再插入。");
+  const editorDocument = normalizeFormulaEditorDocument([line], "raw");
   const omml = latexLinesToOmmlArtifacts([line.latex], block.displayMode);
 
   const paragraphMetadata = {
@@ -154,8 +156,8 @@ async function prepareFormulaCommitItem(
     metadata = createFormulaMetadata({
       formulaId,
       title: block.displayMode === "inline" ? "Imported inline formula" : "Imported display formula",
-      lines: [line],
-      codeFormat: "raw",
+      lines: editorDocument.lines,
+      codeFormat: editorDocument.codeFormat,
       displayMode: block.displayMode,
       numbered: block.displayMode === "block" && block.numbered,
       fontSizePt: block.fontSizePt,
@@ -185,8 +187,8 @@ async function prepareFormulaCommitItem(
   metadata = createFormulaMetadata({
     formulaId,
     title: block.displayMode === "inline" ? "Imported inline formula" : "Imported display formula",
-    lines: [line],
-    codeFormat: "raw",
+    lines: editorDocument.lines,
+    codeFormat: editorDocument.codeFormat,
     displayMode: block.displayMode,
     numbered: block.displayMode === "block" && block.numbered,
     fontSizePt: block.fontSizePt,

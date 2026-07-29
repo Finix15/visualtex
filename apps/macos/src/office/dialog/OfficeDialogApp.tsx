@@ -37,6 +37,7 @@ import type {
 } from "../../editor/MathEditor";
 import { latexToSvg } from "../../export/latexToSvg";
 import { createUuid } from "../../runtime/browserCompatibility";
+import { errorMessage } from "../../runtime/errorMessage";
 import {
   readLocalStorage,
   writeLocalStorage,
@@ -46,6 +47,7 @@ import {
   invokeTauri,
   onCurrentTauriWindowCloseRequested,
 } from "../shared/tauriTransport";
+import { normalizeFormulaEditorDocument } from "../shared/formulaEditorDocument";
 import {
   cancelMacosOfflineOfficeSession,
   commitMacosOfflineOfficeSession,
@@ -232,16 +234,31 @@ export function OfficeDialogApp() {
   const inlineOcrIsBusy =
     inlineOcr?.status === "running" || inlineOcr?.status === "cancelling";
 
-  const originalFingerprint = useMemo(() => {
-    if (!session) return "";
-    return documentFingerprint(
-      session.originalMetadata?.title ?? session.title,
+  const editableSessionDocument = useMemo(
+    () =>
+      session
+        ? normalizeFormulaEditorDocument(session.lines, session.codeFormat)
+        : null,
+    [session],
+  );
+  const editableOriginalDocument = useMemo(() => {
+    if (!session) return null;
+    return normalizeFormulaEditorDocument(
       session.originalMetadata?.lines ?? session.lines,
       session.originalMetadata?.codeFormat ?? session.codeFormat,
+    );
+  }, [session]);
+
+  const originalFingerprint = useMemo(() => {
+    if (!session || !editableOriginalDocument) return "";
+    return documentFingerprint(
+      session.originalMetadata?.title ?? session.title,
+      editableOriginalDocument.lines,
+      editableOriginalDocument.codeFormat,
       session.originalMetadata?.displayMode ?? session.displayMode,
       session.originalMetadata?.numbered ?? session.numbered ?? false,
     );
-  }, [session?.id]);
+  }, [editableOriginalDocument, session]);
 
   const currentFingerprint = useMemo(
     () => documentFingerprint(title, lines, latexCodeFormat, displayMode, numbered),
@@ -250,11 +267,17 @@ export function OfficeDialogApp() {
   const dirty = Boolean(session) && currentFingerprint !== originalFingerprint;
 
   useEffect(() => {
-    if (!session || loadedSessionIdRef.current === session.id) return;
+    if (
+      !session ||
+      !editableSessionDocument ||
+      loadedSessionIdRef.current === session.id
+    ) {
+      return;
+    }
     loadedSessionIdRef.current = session.id;
     skipAutosaveForSessionRef.current = session.id;
-    const nextLines = session.lines.length
-      ? session.lines
+    const nextLines = editableSessionDocument.lines.length
+      ? editableSessionDocument.lines
       : [{ id: createUuid(), latex: "" }];
     useEditorStore.getState().replaceDocumentState({
       title: session.title || (isEn ? "Office Formula" : "Office 公式"),
@@ -267,10 +290,10 @@ export function OfficeDialogApp() {
       formulaAlignment: useEditorStore.getState().formulaAlignment,
       selectionByLineId: {},
     });
-    if (isLatexCodeFormat(session.codeFormat)) {
+    if (isLatexCodeFormat(editableSessionDocument.codeFormat)) {
       useEditorStore
         .getState()
-        .setLatexCodeFormat(session.codeFormat as LatexCodeFormat);
+        .setLatexCodeFormat(editableSessionDocument.codeFormat as LatexCodeFormat);
     }
     setAutoCommitOnClose(session.autoCommitOnClose);
     setDisplayMode(session.displayMode);
@@ -278,7 +301,7 @@ export function OfficeDialogApp() {
     const loadedFingerprint = documentFingerprint(
       session.title,
       nextLines,
-      session.codeFormat,
+      editableSessionDocument.codeFormat,
       session.displayMode,
       session.displayMode === "block" && Boolean(session.numbered),
     );
@@ -286,7 +309,7 @@ export function OfficeDialogApp() {
     latestCompleteExportRef.current = session.exportResult?.pngBase64
       ? { fingerprint: loadedFingerprint, exportResult: session.exportResult }
       : null;
-  }, [session?.id, isEn]);
+  }, [editableSessionDocument, session?.id, isEn]);
 
   const captureSnapshot = useCallback(
     (): DocumentSnapshot =>
@@ -440,13 +463,12 @@ export function OfficeDialogApp() {
           }
         })
         .catch((reason) => {
-          const message =
-            reason instanceof Error
-              ? reason.message
-              : isEn
-                ? "Unable to save the Office formula"
-                : "无法保存 Office 公式";
-          setToast(message);
+          setToast(
+            errorMessage(
+              reason,
+              isEn ? "Unable to save the Office formula" : "无法保存 Office 公式",
+            ),
+          );
         });
       // Windows OLE inserts a PNG file. Keep rasterization off the critical
       // keystroke-save path, but persist the full export as soon as it is
@@ -487,13 +509,12 @@ export function OfficeDialogApp() {
         latestCompleteExportRef.current = null;
       }
     } catch (reason) {
-      const message =
-        reason instanceof Error
-          ? reason.message
-          : isEn
-            ? "Unable to export the Office formula"
-            : "无法导出 Office 公式";
-      setToast(message);
+      setToast(
+        errorMessage(
+          reason,
+          isEn ? "Unable to export the Office formula" : "无法导出 Office 公式",
+        ),
+      );
     }
   }, [
     sessionId,
@@ -816,12 +837,7 @@ export function OfficeDialogApp() {
       );
       scheduleInlineOcrClear(1800);
     } catch (reason) {
-      const message =
-        reason instanceof Error
-          ? reason.message
-          : typeof reason === "string"
-            ? reason
-            : "";
+      const message = errorMessage(reason, "");
       const cancelled =
         inlineOcrCancelRequestedRef.current || message.includes("OCR_CANCELLED");
       if (cancelled) {
@@ -936,8 +952,10 @@ export function OfficeDialogApp() {
           await closeOfficeEditorWindow();
         } catch (closeError) {
           finalizingRef.current = false;
-          const detail =
-            closeError instanceof Error ? closeError.message : String(closeError);
+          const detail = errorMessage(
+            closeError,
+            isEn ? "Unknown window error" : "未知窗口错误",
+          );
           setToast(
             isEn
               ? `The formula was inserted, but the editor could not close: ${detail}`
@@ -956,13 +974,12 @@ export function OfficeDialogApp() {
       window.close();
     } catch (error) {
       finalizingRef.current = false;
-      const message =
-        error instanceof Error
-          ? error.message
-          : isEn
-            ? "Unable to insert the Office formula"
-            : "无法插入 Office 公式";
-      setToast(message);
+      setToast(
+        errorMessage(
+          error,
+          isEn ? "Unable to insert the Office formula" : "无法插入 Office 公式",
+        ),
+      );
     }
   }, [closeOfficeEditorWindow, isEn, latex, saveCurrentSession]);
 
@@ -983,13 +1000,12 @@ export function OfficeDialogApp() {
       messageOfficeParent({ type: "visualtex-cancel", sessionId: next.id });
     } catch (error) {
       finalizingRef.current = false;
-      const message =
-        error instanceof Error
-          ? error.message
-          : isEn
-            ? "Unable to cancel the Office formula"
-            : "无法取消 Office 公式";
-      setToast(message);
+      setToast(
+        errorMessage(
+          error,
+          isEn ? "Unable to cancel the Office formula" : "无法取消 Office 公式",
+        ),
+      );
     }
   }, [closeOfficeEditorWindow, isEn, saveCurrentSession]);
 
@@ -1019,8 +1035,10 @@ export function OfficeDialogApp() {
         }
       })
       .catch((reason) => {
-        const message =
-          reason instanceof Error ? reason.message : String(reason);
+        const message = errorMessage(
+          reason,
+          isEn ? "Unknown window error" : "未知窗口错误",
+        );
         setToast(
           isEn
             ? `Unable to register window close handling: ${message}`

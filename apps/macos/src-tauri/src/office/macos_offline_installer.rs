@@ -26,7 +26,7 @@ const LEGACY_POWERPOINT_MANIFEST_ID: &str = "a6d13cf2-54e8-4dfa-a20c-15de864ab3c
 const WORD_VBA_ENTRY: &str = "word/vbaProject.bin";
 const POWERPOINT_VBA_ENTRY: &str = "ppt/vbaProject.bin";
 const WORD_VBA_SOURCE_REVISION: &str =
-    "word-structured-document-import-20260729-r54";
+    "word-structured-document-import-20260729-r57";
 const POWERPOINT_VBA_SOURCE_REVISION: &str =
     "powerpoint-svg-font-size-dropdown-unicode-20260727-r3";
 const CUSTOM_UI_ENTRY: &str = "customUI/customUI14.xml";

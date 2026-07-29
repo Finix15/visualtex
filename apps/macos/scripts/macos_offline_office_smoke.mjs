@@ -166,7 +166,7 @@ expectIncludes(powerpointAdapter, "VTPowerPointRibbonApplyFormulaFontSizePreset"
 expectIncludes(powerpointAdapter, "VTUnicodeText(28151, 21512, 23383, 21495)", "PowerPoint must report mixed selected SVG formula sizes without source-encoding corruption");
 
 expectIncludes(wordAdapter, "Public Sub AutoExec()", "Word template must publish AutoExec health");
-expectIncludes(wordAdapter, '"word-structured-document-import-20260729-r54"', "Word health must identify the structured document-import, SVG baseline, and equation-number revision");
+expectIncludes(wordAdapter, '"word-structured-document-import-20260729-r57"', "Word health must identify the structured document-import, metadata-recovery, and real image-edit regression revision");
 expectIncludes(wordAdapter, "VTInitializeWordEvents", "Word AutoExec must initialize its persistent application event sink");
 expectIncludes(wordEvents, "App_WindowBeforeDoubleClick", "Word must use its native application event for double-click editing");
 expectIncludes(wordEvents, "App_WindowSelectionChange", "Word must repair a clicked legacy image-number REF through the native selection-change event");
@@ -770,7 +770,7 @@ for (const [host, script] of [["Word", wordScript], ["PowerPoint", powerpointScr
   expectIncludes(script, "setAttributes:fileAttributes ofItemAtPath:targetPath", `${host} file bridge must apply runtime file permissions without spawning chmod`);
   expectIncludes(script, "initWithBase64EncodedString", `${host} file bridge must decode Base64URL payloads without shell interpolation`);
   expectIncludes(script, 'candidate contains ".."', `${host} file bridge must reject traversal components`);
-  expectIncludes(script, 'quoted form of targetPath', `${host} fixed maintenance commands must shell-quote validated paths`);
+  expect(!script.includes("do shell script"), `${host} AppleScriptTask file operations must remain completely shell-free`);
   expect(!script.match(/sh -c/i), `${host} AppleScriptTask must not invoke an arbitrary shell program string`);
 }
 
@@ -985,7 +985,7 @@ expectIncludes(installer, "addin_installation_matches", "Installed status must r
 expectIncludes(installer, "powerpoint_script.clone()", "PowerPoint installed status must include its AppleScriptTask resource");
 expectIncludes(installer, 'health.plugin_version.as_deref() == Some(env!("CARGO_PKG_VERSION"))', "Installer must reject stale plug-in health versions");
 expect(!installer.includes("source_revision_matches"), "Runtime health must not reject a current-version add-in only because an optional sourceRevision field is absent");
-expectIncludes(packager, "word-structured-document-import-20260729-r54", "Packaging must reject a Word DOTM that lacks the structured document-import and equation-layout revision");
+expectIncludes(packager, "word-structured-document-import-20260729-r57", "Packaging must reject a Word DOTM that lacks the structured document-import and image-title recovery revision");
 expectIncludes(packager, "powerpoint-svg-font-size-dropdown-unicode-20260727-r3", "Packaging must reject a PowerPoint PPAM that predates Unicode-safe point-size labels");
 expectIncludes(installer, "POWERPOINT_VBA_SOURCE_REVISION", "Installer validation must reject a stale PowerPoint PPAM without SVG point-size support");
 expectIncludes(installer, "Library/Application Scripts/com.microsoft.Word", "Installer must use Word's AppleScriptTask directory");

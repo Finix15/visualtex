@@ -17,6 +17,7 @@ import {
   decodeFormulaMetadata,
   encodeFormulaMetadata,
 } from "../src/office/shared/formulaMetadata.ts";
+import { normalizeFormulaEditorDocument } from "../src/office/shared/formulaEditorDocument.ts";
 
 const repositoryRoot = resolve(new URL("..", import.meta.url).pathname);
 const templatePath = join(
@@ -34,6 +35,10 @@ const pdfExportRequestPath = join(
 const pdfExportStatusPath = join(
   runtimeRoot,
   "document-import-regression-pdf-status.txt",
+);
+const imageEditStatusPath = join(
+  runtimeRoot,
+  "document-import-regression-image-edit-status.txt",
 );
 const officeScratchRoot = join(
   homedir(),
@@ -61,6 +66,14 @@ const transparentPng = Buffer.from(
   "base64",
 );
 const sleep = (ms) => new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
+const legacyAlignLatex = String.raw`\begin{align}
+a &= b + c \\
+d &= e
+\end{align}`;
+const legacyAlignStarLatex = String.raw`\begin{align*}
+x &= y \\
+y &= z
+\end{align*}`;
 
 function runAppleScript(lines, timeout = 60_000) {
   const args = lines.flatMap((line) => ["-e", line]);
@@ -297,6 +310,68 @@ function nativeBookmark(id) {
   return `VT_F_${compactFormulaId(id)}`;
 }
 
+function currentSessionIds() {
+  return new Set(
+    existsSync(sessionsRoot)
+      ? readdirSync(sessionsRoot, { withFileTypes: true })
+          .filter((entry) => entry.isDirectory())
+          .map((entry) => entry.name)
+      : [],
+  );
+}
+
+function validateFormulaEditSession(
+  sessionId,
+  formula,
+  expectedCodeFormat,
+  expectedLines,
+) {
+  const requestPath = join(sessionsRoot, sessionId, "request.json");
+  const request = JSON.parse(readFileSync(requestPath, "utf8"));
+  if (
+    request.mode !== "edit" ||
+    request.host !== "word" ||
+    request.formulaId !== formula.formulaId ||
+    request.displayMode !== formula.displayMode ||
+    Boolean(request.numbered) !== formula.numbered
+  ) {
+    throw new Error(
+      `Unexpected Word formula edit request: ${JSON.stringify(request)}`,
+    );
+  }
+  const metadata = decodeFormulaMetadata(request.encodedMetadata ?? "");
+  if (!metadata || metadata.formulaId !== formula.formulaId) {
+    throw new Error(`Word edit Session lost formula metadata for ${formula.formulaId}`);
+  }
+  const normalized = normalizeFormulaEditorDocument(
+    metadata.lines,
+    metadata.codeFormat,
+  );
+  if (
+    normalized.codeFormat !== expectedCodeFormat ||
+    JSON.stringify(normalized.lines.map((line) => line.latex)) !==
+      JSON.stringify(expectedLines)
+  ) {
+    throw new Error(
+      `Word edit Session did not restore ${expectedCodeFormat}: ${JSON.stringify({
+        metadata,
+        normalized,
+      })}`,
+    );
+  }
+  if (normalized.lines[0]?.id !== formula.metadataLineId) {
+    throw new Error("Word edit normalization did not preserve the imported formula line UUID");
+  }
+  if (
+    Math.abs((request.fontSizePt ?? 0) - formula.fontSizePt) > 0.1
+  ) {
+    throw new Error(
+      `Word edit Session lost formula font size: ${request.fontSizePt}`,
+    );
+  }
+  return { request, metadata, normalized };
+}
+
 async function waitForNewSession(before, timeoutMs = 12_000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
@@ -319,15 +394,37 @@ async function waitForNewSession(before, timeoutMs = 12_000) {
   throw new Error("Word did not create a VisualTeX document import Session");
 }
 
+async function waitForFormulaEditSession(before, formulaId, timeoutMs = 12_000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    for (const sessionId of currentSessionIds()) {
+      if (before.has(sessionId)) continue;
+      const requestPath = join(sessionsRoot, sessionId, "request.json");
+      if (!existsSync(requestPath)) continue;
+      try {
+        const request = JSON.parse(readFileSync(requestPath, "utf8"));
+        if (request.mode === "edit" && request.formulaId === formulaId) {
+          return sessionId;
+        }
+      } catch {
+        // The request may still be in the middle of its atomic write.
+      }
+    }
+    await sleep(100);
+  }
+  throw new Error(`Word did not create an edit Session for ${formulaId}`);
+}
+
 function formulaItem({
   formulaId,
   latex,
+  metadataLatex = latex,
   displayMode,
   numbered,
   fontSizePt,
   artifactDirectory,
 }) {
-  const line = { id: crypto.randomUUID(), latex };
+  const line = { id: crypto.randomUUID(), latex: metadataLatex };
   const omml = ommlForLatex(latex);
   const nativePath = join(nativeRoot, `${formulaId}.docx`);
   writeFileSync(nativePath, minimalDocxBytes(omml));
@@ -392,6 +489,8 @@ function formulaItem({
   return {
     formulaId,
     latex,
+    metadataLatex,
+    metadataLineId: line.id,
     displayMode,
     numbered,
     fontSizePt,
@@ -451,16 +550,11 @@ function appendFormula(entries, index, formula, paragraph) {
   appendParagraphMetadata(entries, index, paragraph);
 }
 
-const before = new Set(
-  existsSync(sessionsRoot)
-    ? readdirSync(sessionsRoot, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => entry.name)
-    : [],
-);
+const before = currentSessionIds();
 let sessionDirectory = "";
 let installedWordAddinBackedUp = false;
 const nativeFiles = [];
+const editSessionDirectories = [];
 
 try {
   mkdirSync(sessionsRoot, { recursive: true });
@@ -519,6 +613,7 @@ try {
     formulaItem({
       formulaId: crypto.randomUUID(),
       latex: "12345=67890",
+      metadataLatex: outputKind === "omml" ? legacyAlignLatex : "12345=67890",
       displayMode: "block",
       numbered: false,
       fontSizePt: 14,
@@ -527,6 +622,8 @@ try {
     formulaItem({
       formulaId: crypto.randomUUID(),
       latex: "24680=13579",
+      metadataLatex:
+        outputKind === "omml" ? legacyAlignStarLatex : "24680=13579",
       displayMode: "block",
       numbered: true,
       fontSizePt: 18,
@@ -1058,6 +1155,105 @@ try {
     );
   }
 
+  const editRegressions = [];
+  if (outputKind === "image") {
+    const formula = formulas[0];
+    const sessionsBeforeEdit = currentSessionIds();
+    rmSync(imageEditStatusPath, { force: true });
+    runAppleScript([
+      'tell application "Microsoft Word"',
+      `set documentObject to document ${JSON.stringify(testDocumentName)}`,
+      "activate object documentObject",
+      "activate",
+      "set formulaShape to inline shape 1 of documentObject",
+      "select text object of formulaShape",
+      'run VB macro macro name "VisualTeX_RunSelectedImageEditRecoveryRegression"',
+      "end tell",
+    ], 60_000);
+    const imageEditStatus = existsSync(imageEditStatusPath)
+      ? readFileSync(imageEditStatusPath, "utf8").trim()
+      : "missing-status";
+    if (!imageEditStatus.startsWith("ok|")) {
+      throw new Error(`Word image edit recovery regression failed: ${imageEditStatus}`);
+    }
+    const restoredReference = imageEditStatus.slice(3);
+    const editSessionId = await waitForFormulaEditSession(
+      sessionsBeforeEdit,
+      formula.formulaId,
+    );
+    editSessionDirectories.push(join(sessionsRoot, editSessionId));
+    const editSession = validateFormulaEditSession(
+      editSessionId,
+      formula,
+      "raw",
+      [formula.metadataLatex],
+    );
+    const expectedReference =
+      `visualtex:formula-ref:v1:${formula.formulaId}:` +
+      `${formula.displayMode}:${formula.numbered ? "1" : "0"}`;
+    if (restoredReference !== expectedReference) {
+      throw new Error(
+        `Word did not restore the image formula Title before editing: ${JSON.stringify({
+          restoredReference,
+          expectedReference,
+        })}`,
+      );
+    }
+    editRegressions.push({
+      kind: "image-double-click-title-recovery",
+      sessionId: editSessionId,
+      formulaId: formula.formulaId,
+      restoredReference,
+      latex: editSession.normalized.lines[0].latex,
+    });
+  } else {
+    const nativeEditCases = [
+      {
+        formula: formulas[1],
+        codeFormat: "align",
+        lines: ["a = b + c", "d = e"],
+      },
+      {
+        formula: formulas[2],
+        codeFormat: "align-star",
+        lines: ["x = y", "y = z"],
+      },
+    ];
+    for (const editCase of nativeEditCases) {
+      const sessionsBeforeEdit = currentSessionIds();
+      runAppleScript([
+        'tell application "Microsoft Word"',
+        `set documentObject to document ${JSON.stringify(testDocumentName)}`,
+        "activate object documentObject",
+        "activate",
+        `select text object of bookmark ${JSON.stringify(nativeBookmark(editCase.formula.formulaId))} of documentObject`,
+        'run VB macro macro name "VisualTeX_DoubleClickEditSelected"',
+        "end tell",
+      ], 60_000);
+      const editSessionId = await waitForFormulaEditSession(
+        sessionsBeforeEdit,
+        editCase.formula.formulaId,
+      );
+      editSessionDirectories.push(join(sessionsRoot, editSessionId));
+      const editSession = validateFormulaEditSession(
+        editSessionId,
+        editCase.formula,
+        editCase.codeFormat,
+        editCase.lines,
+      );
+      editRegressions.push({
+        kind: "omml-multiline-edit",
+        sessionId: editSessionId,
+        formulaId: editCase.formula.formulaId,
+        codeFormat: editSession.normalized.codeFormat,
+        lines: editSession.normalized.lines.map((line) => line.latex),
+        displayMode: editSession.request.displayMode,
+        numbered: editSession.request.numbered,
+        fontSizePt: editSession.request.fontSizePt,
+      });
+    }
+  }
+
   console.log(
     JSON.stringify(
       {
@@ -1135,6 +1331,7 @@ try {
           },
         },
         documentText,
+        editRegressions,
       },
       null,
       2,
@@ -1165,12 +1362,16 @@ try {
   });
   rmSync(pdfExportRequestPath, { force: true });
   rmSync(pdfExportStatusPath, { force: true });
+  rmSync(imageEditStatusPath, { force: true });
   rmSync(coordinatePdfPath, { force: true });
   if (installedWordAddinBackedUp && existsSync(installedWordAddinBackupPath)) {
     copyFileSync(installedWordAddinBackupPath, installedWordAddinPath);
   }
   rmSync(installedWordAddinBackupPath, { force: true });
   if (sessionDirectory) rmSync(sessionDirectory, { recursive: true, force: true });
+  for (const editSessionDirectory of editSessionDirectories) {
+    rmSync(editSessionDirectory, { recursive: true, force: true });
+  }
   rmSync(join(sessionsRoot, "word-active-session.txt"), { force: true });
   for (const nativeFile of nativeFiles) rmSync(nativeFile, { force: true });
 }
