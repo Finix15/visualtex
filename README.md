@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="apps/macos/src-tauri/app-icon.svg" width="112" alt="VisualTeX" />
+  <img src="apps/macos/src-tauri/app-icon.svg" width="150" alt="VisualTeX" />
   <h1>VisualTeX</h1>
   <p><strong>可视化公式编辑器与 Microsoft Office 原生公式插件</strong></p>
   <p><strong>Visual formula editor with native Microsoft Office integration</strong></p>
@@ -16,7 +16,7 @@
 <div align="center">
   <p><strong>VisualTeX QQ 交流群：<code>1045801770</code></strong></p>
   <p>欢迎交流使用问题、功能建议、Office 插件与项目开发。</p>
-  <img src="apps/macos/public/qq-group-card.svg" width="360" alt="VisualTeX QQ 交流群 1045801770" />
+  <img src="apps/macos/public/qq-group-card.svg" width="300" alt="VisualTeX QQ 交流群 1045801770" />
 </div>
 
 VisualTeX 是一款面向数学、物理、工程与科研写作的桌面公式编辑器。它提供结构化可视化输入、LaTeX 源码编辑、本地图片公式识别，以及 Word 和 PowerPoint 原生公式工作流。
