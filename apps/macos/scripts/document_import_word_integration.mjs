@@ -17,7 +17,11 @@ import {
   decodeFormulaMetadata,
   encodeFormulaMetadata,
 } from "../src/office/shared/formulaMetadata.ts";
-import { normalizeFormulaEditorDocument } from "../src/office/shared/formulaEditorDocument.ts";
+import {
+  normalizeFormulaEditorDocument,
+  serializeFormulaEditorDocument,
+} from "../src/office/shared/formulaEditorDocument.ts";
+import { renderOfficeFormulaArtifacts } from "../src/office/shared/formulaRenderArtifacts.ts";
 
 const repositoryRoot = resolve(new URL("..", import.meta.url).pathname);
 const templatePath = join(
@@ -40,6 +44,10 @@ const imageEditStatusPath = join(
   runtimeRoot,
   "document-import-regression-image-edit-status.txt",
 );
+const formulaRegressionStatusPath = join(
+  runtimeRoot,
+  "document-import-regression-formula-status.txt",
+);
 const officeScratchRoot = join(
   homedir(),
   "Library/Group Containers/UBF8T346G9.Office/VisualTeX/Scratch",
@@ -60,6 +68,7 @@ const coordinatePdfPath = join(
 const sessionsRoot = join(runtimeRoot, "OfficeSessions");
 const nativeRoot = join(runtimeRoot, "NativeDocuments");
 const outputKind = process.argv.includes("--image") ? "image" : "omml";
+const physicalDoubleClick = process.argv.includes("--physical-double-click");
 const referenceFontSizePt = 14;
 const transparentPng = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAEAQH/8l0Z8QAAAABJRU5ErkJggg==",
@@ -67,12 +76,12 @@ const transparentPng = Buffer.from(
 );
 const sleep = (ms) => new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
 const legacyAlignLatex = String.raw`\begin{align}
-a &= b + c \\
-d &= e
+1 &= 22 + 333 \\
+44444 &= 55
 \end{align}`;
 const legacyAlignStarLatex = String.raw`\begin{align*}
-x &= y \\
-y &= z
+666 &= 777 + 8 \\
+999999 &= 0
 \end{align*}`;
 
 function runAppleScript(lines, timeout = 60_000) {
@@ -111,13 +120,52 @@ function escapeXml(value) {
     .replaceAll(">", "&gt;");
 }
 
-function ommlForLatex(latex) {
+function ommlRun(text, align = false) {
+  if (!text) return "";
+  const runProperties = align
+    ? '<m:rPr><m:scr m:val="roman"/><m:sty m:val="p"/></m:rPr>'
+    : "";
+  const equationArrayAlignment = align ? "&" : "";
+  return `<m:r>${runProperties}<m:t>${escapeXml(`${equationArrayAlignment}${text}`)}</m:t></m:r>`;
+}
+
+function ommlBodyForLatex(latex, alignRelation = false) {
+  const normalized = latex.replaceAll("&", "").trim();
+  if (alignRelation) {
+    const relationIndex = normalized.indexOf("=");
+    if (relationIndex >= 0) {
+      return (
+        ommlRun(normalized.slice(0, relationIndex)) +
+        ommlRun("=", true) +
+        ommlRun(normalized.slice(relationIndex + 1))
+      );
+    }
+  }
   const superscript = latex.match(/^(.*?)([A-Za-z])\^\{?(\d+)\}?$/);
-  const body = superscript
+  return superscript
     ? `<m:r><m:t>${escapeXml(superscript[1])}</m:t></m:r>` +
       `<m:sSup><m:e><m:r><m:t>${escapeXml(superscript[2])}</m:t></m:r></m:e>` +
       `<m:sup><m:r><m:t>${escapeXml(superscript[3])}</m:t></m:r></m:sup></m:sSup>`
-    : `<m:r><m:t>${escapeXml(latex)}</m:t></m:r>`;
+    : ommlRun(normalized);
+}
+
+function ommlForFormula(lines, codeFormat) {
+  const relationAligned = [
+    "align",
+    "align-star",
+    "aligned",
+    "equation-split",
+    "equation-star-split",
+  ].includes(codeFormat);
+  const converted = lines.map((line) =>
+    ommlBodyForLatex(line, relationAligned),
+  );
+  const body =
+    converted.length === 1 && !relationAligned
+      ? converted[0]
+      : `<m:eqArr><m:eqArrPr><m:baseJc m:val="center"/></m:eqArrPr>${converted
+          .map((line) => `<m:e>${line}</m:e>`)
+          .join("")}</m:eqArr>`;
   return `<m:oMath xmlns:m="${MATH_NAMESPACE}" xmlns:w="${WORD_NAMESPACE}">${body}</m:oMath>`;
 }
 
@@ -170,7 +218,7 @@ function wordSvgDocxBytes(svg, png, widthPoints, heightPoints) {
 </Relationships>`;
   const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:asvg="http://schemas.microsoft.com/office/drawing/2016/SVG/main">
-  <w:body><w:p><w:r><w:drawing>
+  <w:body><w:p><w:fldSimple w:instr=" MACROBUTTON VisualTeX_DoubleClickEditSelected "><w:r><w:drawing>
     <wp:inline distT="0" distB="0" distL="0" distR="0">
       <wp:extent cx="${widthEmu}" cy="${heightEmu}"/>
       <wp:effectExtent l="0" t="0" r="0" b="0"/>
@@ -184,7 +232,7 @@ function wordSvgDocxBytes(svg, png, widthPoints, heightPoints) {
         </pic:pic>
       </a:graphicData></a:graphic>
     </wp:inline>
-  </w:drawing></w:r></w:p><w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:body>
+  </w:drawing></w:r></w:fldSimple></w:p><w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:body>
 </w:document>`;
   return zipSync(
     {
@@ -220,6 +268,33 @@ function calculateImageGeometry(svg, fontSizePt) {
     referenceHeightPt,
     referenceBaselinePt,
   };
+}
+
+function svgRelationshipPositions(svgMarkup) {
+  const relationshipPattern =
+    /<g data-mml-node="mtd" transform="translate\(([-+\d.]+),[-+\d.]+\)">(?:(?!<g data-mml-node="mtd")[\s\S])*?<g data-mml-node="mo" transform="translate\(([-+\d.]+),[-+\d.]+\)"><use data-c="3D"/g;
+  return [...svgMarkup.matchAll(relationshipPattern)].map(
+    (match) => Number(match[1]) + Number(match[2]),
+  );
+}
+
+function assertAlignedSvg(svgMarkup, expectedRows, label) {
+  const positions = svgRelationshipPositions(svgMarkup);
+  if (
+    positions.length !== expectedRows ||
+    positions.some((position) => !Number.isFinite(position))
+  ) {
+    throw new Error(
+      `${label} did not expose ${expectedRows} SVG relationship positions: ${JSON.stringify(positions)}`,
+    );
+  }
+  const spread = Math.max(...positions) - Math.min(...positions);
+  if (spread > 0.01) {
+    throw new Error(
+      `${label} SVG relationship columns are not aligned: ${JSON.stringify({ positions, spread })}`,
+    );
+  }
+  return { positions, spread };
 }
 
 function rasterBounds(band, components) {
@@ -300,6 +375,123 @@ function manifestText(entries) {
       return `${key}=${text}`;
     })
     .join("\n") + "\n";
+}
+
+function parseRegressionReport(reportText) {
+  const lines = reportText.trim().split(/\r?\n/);
+  if (lines[0] !== "PASS") {
+    throw new Error(`Word formula regression failed: ${reportText}`);
+  }
+  return Object.fromEntries(
+    lines.slice(1).map((line) => {
+      const separator = line.indexOf("=");
+      if (separator <= 0) {
+        throw new Error(`Invalid Word formula regression line: ${line}`);
+      }
+      return [line.slice(0, separator), line.slice(separator + 1)];
+    }),
+  );
+}
+
+function numericReportValue(report, key) {
+  const value = Number(report[key]);
+  if (!Number.isFinite(value)) {
+    throw new Error(`Word formula regression omitted ${key}: ${JSON.stringify(report)}`);
+  }
+  return value;
+}
+
+function runFormulaRegressionReport(testDocumentName, formulas) {
+  const formulaCount = formulas.length;
+  const displayFormulaCount = formulas.filter(
+    (formula) => formula.displayMode === "block",
+  ).length;
+  const alignedFormulaCountExpected = formulas.filter((formula) =>
+    ["align", "align-star"].includes(formula.codeFormat),
+  ).length;
+  rmSync(formulaRegressionStatusPath, { force: true });
+  runAppleScript([
+    'tell application "Microsoft Word"',
+    `activate object document ${JSON.stringify(testDocumentName)}`,
+    'run VB macro macro name "VisualTeX_RunDocumentImportFormulaRegression"',
+    "end tell",
+  ], 60_000);
+  if (!existsSync(formulaRegressionStatusPath)) {
+    throw new Error("Word did not write the document-import formula regression report");
+  }
+  const report = parseRegressionReport(
+    readFileSync(formulaRegressionStatusPath, "utf8"),
+  );
+if (report.revision !== "word-structured-document-import-20260730-r62") {
+    throw new Error(`Word loaded the wrong VisualTeX source revision: ${report.revision}`);
+  }
+
+  const documentMathCount = numericReportValue(report, "documentMathCount");
+  const nativeFormulaCount = numericReportValue(report, "nativeFormulaCount");
+  const nativeDisplayCount = numericReportValue(report, "nativeDisplayCount");
+  const invalidNativeRangeCount = numericReportValue(
+    report,
+    "invalidNativeRangeCount",
+  );
+  const emptyMathCount = numericReportValue(report, "emptyMathCount");
+  const alignedFormulaCount = numericReportValue(report, "alignedFormulaCount");
+  const imageFormulaCount = numericReportValue(report, "imageFormulaCount");
+  const imageDisplayCount = numericReportValue(report, "imageDisplayCount");
+  const maximumImageSpaceBefore = numericReportValue(
+    report,
+    "maximumImageSpaceBefore",
+  );
+  const maximumImageSpaceAfter = numericReportValue(
+    report,
+    "maximumImageSpaceAfter",
+  );
+
+  if (outputKind === "omml") {
+    if (
+      documentMathCount !== formulaCount ||
+      nativeFormulaCount !== formulaCount ||
+      nativeDisplayCount !== displayFormulaCount ||
+      invalidNativeRangeCount !== 0 ||
+      emptyMathCount !== 0 ||
+      alignedFormulaCount !== alignedFormulaCountExpected ||
+      imageFormulaCount !== 0
+    ) {
+      throw new Error(
+        `Word OMML formula structure regression failed: ${JSON.stringify(report)}`,
+      );
+    }
+    for (const [key, expected] of [
+      // Numbered native equations retain their existing zero-spaced table
+      // layout; unnumbered native equations inherit the configured Normal
+      // style spacing. Image-only normalization must not change either case.
+      ["minimumNativeSpaceBefore", 0],
+      ["maximumNativeSpaceBefore", 6],
+      ["minimumNativeSpaceAfter", 0],
+      ["maximumNativeSpaceAfter", 9],
+    ]) {
+      if (Math.abs(numericReportValue(report, key) - expected) > 0.05) {
+        throw new Error(
+          `OMML paragraph spacing changed for ${key}: ${JSON.stringify(report)}`,
+        );
+      }
+    }
+  } else if (
+    documentMathCount !== 0 ||
+    nativeFormulaCount !== 0 ||
+    nativeDisplayCount !== 0 ||
+    invalidNativeRangeCount !== 0 ||
+    emptyMathCount !== 0 ||
+    alignedFormulaCount !== 0 ||
+    imageFormulaCount !== formulaCount ||
+    imageDisplayCount !== displayFormulaCount ||
+    maximumImageSpaceBefore > 0.01 ||
+    maximumImageSpaceAfter > 0.01
+  ) {
+    throw new Error(
+      `Word image formula structure regression failed: ${JSON.stringify(report)}`,
+    );
+  }
+  return report;
 }
 
 function compactFormulaId(id) {
@@ -419,13 +611,35 @@ function formulaItem({
   formulaId,
   latex,
   metadataLatex = latex,
+  expectedCodeFormat,
   displayMode,
   numbered,
   fontSizePt,
   artifactDirectory,
 }) {
-  const line = { id: crypto.randomUUID(), latex: metadataLatex };
-  const omml = ommlForLatex(latex);
+  const normalized = normalizeFormulaEditorDocument(
+    [{ id: crypto.randomUUID(), latex: metadataLatex }],
+    "raw",
+  );
+  if (expectedCodeFormat && normalized.codeFormat !== expectedCodeFormat) {
+    throw new Error(
+      `Formula fixture did not normalize as ${expectedCodeFormat}: ${JSON.stringify(normalized)}`,
+    );
+  }
+  const canonicalLatex = serializeFormulaEditorDocument(normalized);
+  const normalizedLines = normalized.lines.map((line) => line.latex);
+  const omml = ommlForFormula(normalizedLines, normalized.codeFormat);
+  if (["align", "align-star"].includes(normalized.codeFormat)) {
+    if (
+      (omml.match(/<m:oMath\b/g) ?? []).length !== 1 ||
+      (omml.match(/<m:eqArr>/g) ?? []).length !== 1 ||
+      (omml.match(/&amp;/g) ?? []).length !== normalizedLines.length
+    ) {
+      throw new Error(
+        `Aligned fixture is not one relationship-aligned OMML equation array: ${omml}`,
+      );
+    }
+  }
   const nativePath = join(nativeRoot, `${formulaId}.docx`);
   writeFileSync(nativePath, minimalDocxBytes(omml));
 
@@ -440,9 +654,10 @@ function formulaItem({
   let referenceBaselinePt = 0;
   let renderWidthPx;
   let renderHeightPx;
+  let svgAlignment;
 
   if (outputKind === "image") {
-    const svg = latexToSvg(latex, {
+    const svg = latexToSvg(canonicalLatex, {
       displayMode: displayMode === "block",
       fontSizePt: referenceFontSizePt,
       paddingPx: displayMode === "inline" ? 1 : 10,
@@ -459,6 +674,13 @@ function formulaItem({
     } = geometry);
     renderWidthPx = svg.width;
     renderHeightPx = svg.height;
+    if (["align", "align-star"].includes(normalized.codeFormat)) {
+      svgAlignment = assertAlignedSvg(
+        svg.svg,
+        normalized.lines.length,
+        `Initial ${normalized.codeFormat} image`,
+      );
+    }
     const stem = `document-formula-${compactFormulaId(formulaId)}`;
     imagePath = join(artifactDirectory, `${stem}.svg`);
     fallbackImagePath = join(artifactDirectory, `${stem}.png`);
@@ -475,8 +697,9 @@ function formulaItem({
   const metadata = createFormulaMetadata({
     formulaId,
     title: displayMode === "inline" ? "Integration inline formula" : "Integration display formula",
-    lines: [line],
-    codeFormat: "raw",
+    lines: normalized.lines,
+    codeFormat: normalized.codeFormat,
+    sourceLatex: canonicalLatex,
     displayMode,
     numbered,
     fontSizePt,
@@ -488,9 +711,12 @@ function formulaItem({
   });
   return {
     formulaId,
-    latex,
-    metadataLatex,
-    metadataLineId: line.id,
+    latex: canonicalLatex,
+    metadataLatex: canonicalLatex,
+    metadataLineId: normalized.lines[0].id,
+    metadataLines: normalizedLines,
+    codeFormat: normalized.codeFormat,
+    pdfToken: normalizedLines.join(""),
     displayMode,
     numbered,
     fontSizePt,
@@ -506,7 +732,165 @@ function formulaItem({
     referenceWidthPt,
     referenceHeightPt,
     referenceBaselinePt,
+    svgAlignment,
   };
+}
+
+function editedImageFormulaArtifacts(
+  formula,
+  editSession,
+  updatedLineLatex,
+  artifactDirectory,
+) {
+  const updatedLines = editSession.normalized.lines.map((line, index) => ({
+    ...line,
+    latex: updatedLineLatex[index] ?? line.latex,
+  }));
+  if (updatedLines.length !== updatedLineLatex.length) {
+    throw new Error(
+      `Edited ${formula.codeFormat} fixture changed its row count unexpectedly`,
+    );
+  }
+  const rendered = renderOfficeFormulaArtifacts({
+    lines: updatedLines,
+    codeFormat: editSession.normalized.codeFormat,
+    displayMode: formula.displayMode,
+    includeWordOmml: false,
+  });
+  const svgAlignment = assertAlignedSvg(
+    rendered.svg.svg,
+    rendered.lines.length,
+    `Edited ${rendered.codeFormat} image`,
+  );
+  const geometry = calculateImageGeometry(rendered.svg, formula.fontSizePt);
+  const stem = `edited-${compactFormulaId(formula.formulaId)}`;
+  const imagePath = join(artifactDirectory, `${stem}.svg`);
+  const fallbackImagePath = join(artifactDirectory, `${stem}.png`);
+  const vectorDocumentPath = join(artifactDirectory, `${stem}-svg.docx`);
+  writeFileSync(imagePath, rendered.svg.svg, { mode: 0o600 });
+  writeFileSync(fallbackImagePath, transparentPng, { mode: 0o600 });
+  writeFileSync(
+    vectorDocumentPath,
+    wordSvgDocxBytes(
+      rendered.svg.svg,
+      transparentPng,
+      geometry.widthPoints,
+      geometry.heightPoints,
+    ),
+    { mode: 0o600 },
+  );
+
+  const omml = ommlForFormula(
+    rendered.lines.map((line) => line.latex),
+    rendered.codeFormat,
+  );
+  writeFileSync(formula.nativePath, minimalDocxBytes(omml), { mode: 0o600 });
+  const metadata = createFormulaMetadata({
+    formulaId: formula.formulaId,
+    title: editSession.metadata.title,
+    lines: rendered.lines,
+    codeFormat: rendered.codeFormat,
+    sourceLatex: rendered.canonicalLatex,
+    displayMode: formula.displayMode,
+    numbered: formula.numbered,
+    fontSizePt: formula.fontSizePt,
+    referenceWidthPt: geometry.referenceWidthPt,
+    referenceHeightPt: geometry.referenceHeightPt,
+    referenceBaselinePt: geometry.referenceBaselinePt,
+    renderWidthPx: rendered.svg.width,
+    renderHeightPx: rendered.svg.height,
+    original: editSession.metadata,
+  });
+  return {
+    lines: rendered.lines,
+    codeFormat: rendered.codeFormat,
+    canonicalLatex: rendered.canonicalLatex,
+    metadata: encodeFormulaMetadata(metadata),
+    ommlBase64: Buffer.from(omml, "utf8").toString("base64url"),
+    imagePath,
+    fallbackImagePath,
+    vectorDocumentPath,
+    ...geometry,
+    renderWidthPx: rendered.svg.width,
+    renderHeightPx: rendered.svg.height,
+    svgAlignment,
+  };
+}
+
+function commitEditedImageFormula(
+  testDocumentName,
+  sessionId,
+  formula,
+  editSession,
+  updatedLineLatex,
+) {
+  const sessionDirectory = join(sessionsRoot, sessionId);
+  const artifacts = editedImageFormulaArtifacts(
+    formula,
+    editSession,
+    updatedLineLatex,
+    sessionDirectory,
+  );
+  const request = editSession.request;
+  const dispatch = manifestText([
+    ["protocolVersion", "1"],
+    ["sessionId", sessionId],
+    ["action", "commit"],
+    ["host", "word"],
+    ["mode", "edit"],
+    ["formulaId", formula.formulaId],
+    ["displayMode", formula.displayMode],
+    ["numbered", formula.numbered ? "1" : "0"],
+    ["nativeEquation", "0"],
+    ["imagePath", artifacts.imagePath],
+    ["vectorDocumentPath", artifacts.vectorDocumentPath],
+    ["fallbackImagePath", artifacts.fallbackImagePath],
+    ["metadata", artifacts.metadata],
+    ["latexBase64", base64Url(artifacts.canonicalLatex)],
+    ["ommlBase64", artifacts.ommlBase64],
+    ["nativeDocumentPath", formula.nativePath],
+    ["pendingMarker", request.pendingMarker ?? ""],
+    [
+      "sourceMarker",
+      request.sourceObjectId ?? request.encodedMetadata ?? "",
+    ],
+    ["sourceDocumentId", request.sourceDocumentId ?? ""],
+    ["widthPoints", artifacts.widthPoints.toFixed(6)],
+    ["heightPoints", artifacts.heightPoints.toFixed(6)],
+    ["baseline", artifacts.baseline.toFixed(6)],
+    ["fontSizePt", formula.fontSizePt.toFixed(6)],
+    ["referenceWidthPt", artifacts.referenceWidthPt.toFixed(6)],
+    ["referenceHeightPt", artifacts.referenceHeightPt.toFixed(6)],
+    ["referenceBaselinePt", artifacts.referenceBaselinePt.toFixed(6)],
+  ]);
+  writeFileSync(join(sessionDirectory, "dispatch.txt"), dispatch, { mode: 0o600 });
+  writeFileSync(join(sessionsRoot, "word-active-session.txt"), sessionId, {
+    mode: 0o600,
+  });
+  runAppleScript([
+    'tell application "Microsoft Word"',
+    `activate object document ${JSON.stringify(testDocumentName)}`,
+    'run VB macro macro name "VisualTeX_ApplyPendingResult"',
+    "end tell",
+  ], 90_000);
+
+  formula.latex = artifacts.canonicalLatex;
+  formula.metadataLatex = artifacts.canonicalLatex;
+  formula.metadataLines = artifacts.lines.map((line) => line.latex);
+  formula.codeFormat = artifacts.codeFormat;
+  formula.metadata = artifacts.metadata;
+  formula.ommlBase64 = artifacts.ommlBase64;
+  formula.imagePath = artifacts.imagePath;
+  formula.vectorDocumentPath = artifacts.vectorDocumentPath;
+  formula.fallbackImagePath = artifacts.fallbackImagePath;
+  formula.widthPoints = artifacts.widthPoints;
+  formula.heightPoints = artifacts.heightPoints;
+  formula.baseline = artifacts.baseline;
+  formula.referenceWidthPt = artifacts.referenceWidthPt;
+  formula.referenceHeightPt = artifacts.referenceHeightPt;
+  formula.referenceBaselinePt = artifacts.referenceBaselinePt;
+  formula.svgAlignment = artifacts.svgAlignment;
+  return artifacts;
 }
 
 function appendParagraphMetadata(entries, index, paragraph) {
@@ -578,9 +962,19 @@ try {
     rmSync(installedWordAddinPath, { force: true });
     installedWordAddinBackedUp = true;
   }
+  if (physicalDoubleClick) {
+    // Word only applies same-name built-in command overrides from a loaded
+    // global template. A DOTM opened as a document is sufficient for normal
+    // macro integration, but it cannot validate a physical picture double
+    // click. Install the reviewed resource into Startup for this one run and
+    // restore the user's previous add-in in finally.
+    copyFileSync(templatePath, installedWordAddinPath);
+  }
   const testDocumentName = runAppleScript([
     'tell application "Microsoft Word"',
-    `open file name ${JSON.stringify(templatePath)}`,
+    ...(physicalDoubleClick
+      ? ["make new document"]
+      : [`open file name ${JSON.stringify(templatePath)}`]),
     "set testDocument to active document",
     "activate",
     'run VB macro macro name "VisualTeX_InsertLatexMarkdownDocument"',
@@ -607,13 +1001,12 @@ try {
       latex: "101=202",
       displayMode: "inline",
       numbered: false,
-      fontSizePt: 10.5,
+      fontSizePt: 11,
       artifactDirectory: sessionDirectory,
     }),
     formulaItem({
       formulaId: crypto.randomUUID(),
       latex: "12345=67890",
-      metadataLatex: outputKind === "omml" ? legacyAlignLatex : "12345=67890",
       displayMode: "block",
       numbered: false,
       fontSizePt: 14,
@@ -622,8 +1015,6 @@ try {
     formulaItem({
       formulaId: crypto.randomUUID(),
       latex: "24680=13579",
-      metadataLatex:
-        outputKind === "omml" ? legacyAlignStarLatex : "24680=13579",
       displayMode: "block",
       numbered: true,
       fontSizePt: 18,
@@ -643,6 +1034,24 @@ try {
       displayMode: "inline",
       numbered: false,
       fontSizePt: 12,
+      artifactDirectory: sessionDirectory,
+    }),
+    formulaItem({
+      formulaId: crypto.randomUUID(),
+      latex: legacyAlignLatex,
+      expectedCodeFormat: "align",
+      displayMode: "block",
+      numbered: false,
+      fontSizePt: 14,
+      artifactDirectory: sessionDirectory,
+    }),
+    formulaItem({
+      formulaId: crypto.randomUUID(),
+      latex: legacyAlignStarLatex,
+      expectedCodeFormat: "align-star",
+      displayMode: "block",
+      numbered: false,
+      fontSizePt: 14,
       artifactDirectory: sessionDirectory,
     }),
   ];
@@ -767,7 +1176,9 @@ try {
     start: true,
     end: true,
   });
-  appendText(items, 14, "结尾文字。", {
+  appendFormula(items, 14, formulas[5]);
+  appendFormula(items, 15, formulas[6]);
+  appendText(items, 16, "结尾文字。", {
     id: endingParagraphId,
     style: "normal",
     alignment: "left",
@@ -784,7 +1195,7 @@ try {
     ["outputKind", outputKind],
     ["sourceDocumentId", request.sourceDocumentId],
     ["bookmarkName", request.documentImport.bookmarkName],
-    ["itemCount", "15"],
+    ["itemCount", "17"],
     ...items,
   ];
   writeFileSync(manifestPath, manifestText(entries), { mode: 0o600 });
@@ -804,9 +1215,14 @@ try {
   runAppleScript([
     'tell application "Microsoft Word"',
     `activate object document ${JSON.stringify(testDocumentName)}`,
+    'run VB macro macro name "VisualTeX_ConfigureDocumentImportParagraphSpacingRegression"',
     'run VB macro macro name "VisualTeX_ApplyPendingResult"',
     "end tell",
   ], 90_000);
+  let formulaRegressionReport = runFormulaRegressionReport(
+    testDocumentName,
+    formulas,
+  );
 
   const pdfPath = coordinatePdfPath;
   rmSync(pdfPath, { force: true });
@@ -862,7 +1278,9 @@ try {
       "set numberedShapeObject to inline shape 3 of documentObject",
       "set listFormulaShapeObject1 to inline shape 4 of documentObject",
       "set listFormulaShapeObject2 to inline shape 5 of documentObject",
-      'set alternativeTexts to (alternative text of inlineShapeObject) & "|" & (alternative text of displayShapeObject) & "|" & (alternative text of numberedShapeObject) & "|" & (alternative text of listFormulaShapeObject1) & "|" & (alternative text of listFormulaShapeObject2)',
+      "set alignShapeObject to inline shape 6 of documentObject",
+      "set alignStarShapeObject to inline shape 7 of documentObject",
+      'set alternativeTexts to (alternative text of inlineShapeObject) & "|" & (alternative text of displayShapeObject) & "|" & (alternative text of numberedShapeObject) & "|" & (alternative text of listFormulaShapeObject1) & "|" & (alternative text of listFormulaShapeObject2) & "|" & (alternative text of alignShapeObject) & "|" & (alternative text of alignStarShapeObject)',
       "set inlineSize to font size of font object of text object of inlineShapeObject",
       "set inlineWidth to width of inlineShapeObject",
       "set inlineHeight to height of inlineShapeObject",
@@ -918,7 +1336,12 @@ try {
     join(repositoryRoot, "scripts/pdf_formula_geometry.swift"),
     pdfPath,
     ...(outputKind === "omml"
-      ? [formulas[1].latex, formulas[2].latex]
+      ? [
+          formulas[1].pdfToken,
+          formulas[2].pdfToken,
+          formulas[5].pdfToken,
+          formulas[6].pdfToken,
+        ]
       : ["--number-only"]),
   ];
   const swiftGeometry = spawnSync(
@@ -936,6 +1359,33 @@ try {
     );
   }
   const renderedGeometry = JSON.parse(swiftGeometry.stdout);
+  const ommlAlignmentGeometry = [];
+  if (outputKind === "omml") {
+    if (!Array.isArray(renderedGeometry.aligned) || renderedGeometry.aligned.length !== 2) {
+      throw new Error(
+        `PDF regression did not return both aligned OMML formulas: ${swiftGeometry.stdout}`,
+      );
+    }
+    for (const [index, alignedFormula] of renderedGeometry.aligned.entries()) {
+      const positions = alignedFormula.relationshipXs;
+      if (
+        !Array.isArray(positions) ||
+        positions.length !== 2 ||
+        positions.some((position) => !Number.isFinite(position))
+      ) {
+        throw new Error(
+          `Aligned OMML formula ${index + 1} did not expose both PDF relationship positions: ${JSON.stringify(alignedFormula)}`,
+        );
+      }
+      const spread = Math.max(...positions) - Math.min(...positions);
+      if (spread > 0.5) {
+        throw new Error(
+          `Aligned OMML formula ${index + 1} has a misaligned relationship column: ${JSON.stringify({ positions, spread })}`,
+        );
+      }
+      ommlAlignmentGeometry.push({ positions, spread });
+    }
+  }
 
   const [documentText, bookmarkText, alternativeText, numericText] =
     inspection.split("\n---VT---\n");
@@ -979,15 +1429,19 @@ try {
       throw new Error(`OMML import unexpectedly created ${shapeCount} inline shapes`);
     }
   } else {
-    if (shapeCount !== 5) {
-      throw new Error(`Image import created ${shapeCount} inline shapes instead of 5`);
+    if (shapeCount !== formulas.length) {
+      throw new Error(
+        `Image import created ${shapeCount} inline shapes instead of ${formulas.length}`,
+      );
     }
     const metadataPayloads = alternativeText.split("|");
     if (
-      metadataPayloads.length !== 5 ||
+      metadataPayloads.length !== formulas.length ||
       metadataPayloads.some((value) => !value.startsWith("visualtex:v1:deflate:"))
     ) {
-      throw new Error("Image formulas did not retain three independent VisualTeX metadata payloads");
+      throw new Error(
+        "Image formulas did not retain independent VisualTeX metadata payloads",
+      );
     }
     metadataPayloads.forEach((payload, index) => {
       const metadata = decodeFormulaMetadata(payload);
@@ -1070,7 +1524,7 @@ try {
   );
 
   const sizes = [inlineSize, displaySize, numberedSize];
-  const expectedSizes = [10.5, 14, 18];
+  const expectedSizes = [11, 14, 18];
   if (outputKind === "omml") {
     sizes.forEach((size, index) => {
       if (!Number.isFinite(size) || Math.abs(size - expectedSizes[index]) > 0.1) {
@@ -1157,66 +1611,152 @@ try {
 
   const editRegressions = [];
   if (outputKind === "image") {
-    const formula = formulas[0];
-    const sessionsBeforeEdit = currentSessionIds();
-    rmSync(imageEditStatusPath, { force: true });
-    runAppleScript([
-      'tell application "Microsoft Word"',
-      `set documentObject to document ${JSON.stringify(testDocumentName)}`,
-      "activate object documentObject",
-      "activate",
-      "set formulaShape to inline shape 1 of documentObject",
-      "select text object of formulaShape",
-      'run VB macro macro name "VisualTeX_RunSelectedImageEditRecoveryRegression"',
-      "end tell",
-    ], 60_000);
-    const imageEditStatus = existsSync(imageEditStatusPath)
-      ? readFileSync(imageEditStatusPath, "utf8").trim()
-      : "missing-status";
-    if (!imageEditStatus.startsWith("ok|")) {
-      throw new Error(`Word image edit recovery regression failed: ${imageEditStatus}`);
-    }
-    const restoredReference = imageEditStatus.slice(3);
-    const editSessionId = await waitForFormulaEditSession(
-      sessionsBeforeEdit,
-      formula.formulaId,
-    );
-    editSessionDirectories.push(join(sessionsRoot, editSessionId));
-    const editSession = validateFormulaEditSession(
-      editSessionId,
-      formula,
-      "raw",
-      [formula.metadataLatex],
-    );
-    const expectedReference =
-      `visualtex:formula-ref:v1:${formula.formulaId}:` +
-      `${formula.displayMode}:${formula.numbered ? "1" : "0"}`;
-    if (restoredReference !== expectedReference) {
-      throw new Error(
-        `Word did not restore the image formula Title before editing: ${JSON.stringify({
-          restoredReference,
-          expectedReference,
-        })}`,
+    const imageEditCases = [
+      {
+        formula: formulas[0],
+        inlineShapeIndex: 1,
+        codeFormat: "raw",
+        expectedLines: formulas[0].metadataLines,
+        recovery: true,
+      },
+      {
+        formula: formulas[5],
+        inlineShapeIndex: 6,
+        codeFormat: "align",
+        expectedLines: formulas[5].metadataLines,
+        updatedLines: ["1 = 22 + 333 + q", "44444 = 55 + r"],
+      },
+      {
+        formula: formulas[6],
+        inlineShapeIndex: 7,
+        codeFormat: "align-star",
+        expectedLines: formulas[6].metadataLines,
+        updatedLines: ["666 = 777 + 8 + s", "999999 = 0 + t"],
+      },
+    ];
+
+    for (const editCase of imageEditCases) {
+      const sessionsBeforeEdit = currentSessionIds();
+      if (editCase.recovery) rmSync(imageEditStatusPath, { force: true });
+      runAppleScript([
+        'tell application "Microsoft Word"',
+        `set documentObject to document ${JSON.stringify(testDocumentName)}`,
+        "activate object documentObject",
+        "activate",
+        `set formulaShape to inline shape ${editCase.inlineShapeIndex} of documentObject`,
+        "select text object of formulaShape",
+        editCase.recovery
+          ? 'run VB macro macro name "VisualTeX_RunSelectedImageEditRecoveryRegression"'
+          : 'run VB macro macro name "VisualTeX_DoubleClickEditSelected"',
+        "end tell",
+      ], 60_000);
+      const editSessionId = await waitForFormulaEditSession(
+        sessionsBeforeEdit,
+        editCase.formula.formulaId,
       );
+      editSessionDirectories.push(join(sessionsRoot, editSessionId));
+      const editSession = validateFormulaEditSession(
+        editSessionId,
+        editCase.formula,
+        editCase.codeFormat,
+        editCase.expectedLines,
+      );
+
+      let restoredReference;
+      if (editCase.recovery) {
+        const imageEditStatus = existsSync(imageEditStatusPath)
+          ? readFileSync(imageEditStatusPath, "utf8").trim()
+          : "missing-status";
+        if (!imageEditStatus.startsWith("ok|")) {
+          throw new Error(
+            `Word image edit recovery regression failed: ${imageEditStatus}`,
+          );
+        }
+        restoredReference = imageEditStatus.slice(3);
+        const expectedReference =
+          `visualtex:formula-ref:v1:${editCase.formula.formulaId}:` +
+          `${editCase.formula.displayMode}:${editCase.formula.numbered ? "1" : "0"}`;
+        if (restoredReference !== expectedReference) {
+          throw new Error(
+            `Word did not restore the image formula Title before editing: ${JSON.stringify({
+              restoredReference,
+              expectedReference,
+            })}`,
+          );
+        }
+      }
+
+      const regression = {
+        kind: editCase.recovery
+          ? "image-double-click-title-recovery"
+          : "image-batch-double-click",
+        sessionId: editSessionId,
+        formulaId: editCase.formula.formulaId,
+        codeFormat: editSession.normalized.codeFormat,
+        lines: editSession.normalized.lines.map((line) => line.latex),
+        ...(restoredReference ? { restoredReference } : {}),
+      };
+
+      if (editCase.updatedLines) {
+        const replacement = commitEditedImageFormula(
+          testDocumentName,
+          editSessionId,
+          editCase.formula,
+          editSession,
+          editCase.updatedLines,
+        );
+        const sessionsBeforeReplacementEdit = currentSessionIds();
+        runAppleScript([
+          'tell application "Microsoft Word"',
+          `set documentObject to document ${JSON.stringify(testDocumentName)}`,
+          "activate object documentObject",
+          "activate",
+          `set formulaShape to inline shape ${editCase.inlineShapeIndex} of documentObject`,
+          "select text object of formulaShape",
+          'run VB macro macro name "VisualTeX_DoubleClickEditSelected"',
+          "end tell",
+        ], 60_000);
+        const replacementEditSessionId = await waitForFormulaEditSession(
+          sessionsBeforeReplacementEdit,
+          editCase.formula.formulaId,
+        );
+        editSessionDirectories.push(
+          join(sessionsRoot, replacementEditSessionId),
+        );
+        const replacementEditSession = validateFormulaEditSession(
+          replacementEditSessionId,
+          editCase.formula,
+          editCase.codeFormat,
+          editCase.updatedLines,
+        );
+        Object.assign(regression, {
+          kind: "image-align-edit-replacement",
+          replacementSessionId: replacementEditSessionId,
+          replacementLatex: replacement.canonicalLatex,
+          replacementLines: replacementEditSession.normalized.lines.map(
+            (line) => line.latex,
+          ),
+          svgRelationshipPositions: replacement.svgAlignment.positions,
+          svgRelationshipSpread: replacement.svgAlignment.spread,
+        });
+      }
+      editRegressions.push(regression);
     }
-    editRegressions.push({
-      kind: "image-double-click-title-recovery",
-      sessionId: editSessionId,
-      formulaId: formula.formulaId,
-      restoredReference,
-      latex: editSession.normalized.lines[0].latex,
-    });
+    formulaRegressionReport = runFormulaRegressionReport(
+      testDocumentName,
+      formulas,
+    );
   } else {
     const nativeEditCases = [
       {
-        formula: formulas[1],
+        formula: formulas[5],
         codeFormat: "align",
-        lines: ["a = b + c", "d = e"],
+        lines: ["1 = 22 + 333", "44444 = 55"],
       },
       {
-        formula: formulas[2],
+        formula: formulas[6],
         codeFormat: "align-star",
-        lines: ["x = y", "y = z"],
+        lines: ["666 = 777 + 8", "999999 = 0"],
       },
     ];
     for (const editCase of nativeEditCases) {
@@ -1254,6 +1794,46 @@ try {
     }
   }
 
+  if (physicalDoubleClick) {
+    if (outputKind !== "image") {
+      throw new Error("Physical double-click regression requires --image");
+    }
+    const physicalFormula = formulas[1];
+    const sessionsBeforePhysicalEdit = currentSessionIds();
+    runAppleScript([
+      'tell application "Microsoft Word"',
+      `set documentObject to document ${JSON.stringify(testDocumentName)}`,
+      "activate object documentObject",
+      "activate",
+      'run VB macro macro name "VisualTeX_AssertWordHostSelfTest"',
+      "set formulaShape to inline shape 2 of documentObject",
+      "select text object of formulaShape",
+      "end tell",
+    ]);
+    console.log(
+      `WORD_PHYSICAL_DOUBLE_CLICK_READY|${testDocumentName}|${physicalFormula.formulaId}`,
+    );
+    const physicalEditSessionId = await waitForFormulaEditSession(
+      sessionsBeforePhysicalEdit,
+      physicalFormula.formulaId,
+      600_000,
+    );
+    editSessionDirectories.push(join(sessionsRoot, physicalEditSessionId));
+    const physicalEditSession = validateFormulaEditSession(
+      physicalEditSessionId,
+      physicalFormula,
+      physicalFormula.codeFormat,
+      physicalFormula.metadataLines,
+    );
+    editRegressions.push({
+      kind: "image-physical-double-click",
+      sessionId: physicalEditSessionId,
+      formulaId: physicalFormula.formulaId,
+      codeFormat: physicalEditSession.normalized.codeFormat,
+      lines: physicalEditSession.normalized.lines.map((line) => line.latex),
+    });
+  }
+
   console.log(
     JSON.stringify(
       {
@@ -1264,6 +1844,11 @@ try {
           displayMode: formula.displayMode,
           numbered: formula.numbered,
           fontSizePt: formula.fontSizePt,
+          codeFormat: formula.codeFormat,
+          lines: formula.metadataLines,
+          ...(formula.svgAlignment
+            ? { svgAlignment: formula.svgAlignment }
+            : {}),
           ...(outputKind === "omml"
             ? { bookmark: nativeBookmark(formula.formulaId) }
             : { inlineShapeIndex: index + 1 }),
@@ -1328,9 +1913,11 @@ try {
             },
             formulaCenterDifference: renderedFormulaCenterDifference,
             centerTolerancePt,
+            ommlAlignmentGeometry,
           },
         },
         documentText,
+        formulaRegressionReport,
         editRegressions,
       },
       null,
@@ -1363,7 +1950,9 @@ try {
   rmSync(pdfExportRequestPath, { force: true });
   rmSync(pdfExportStatusPath, { force: true });
   rmSync(imageEditStatusPath, { force: true });
+  rmSync(formulaRegressionStatusPath, { force: true });
   rmSync(coordinatePdfPath, { force: true });
+  rmSync(installedWordAddinPath, { force: true });
   if (installedWordAddinBackedUp && existsSync(installedWordAddinBackupPath)) {
     copyFileSync(installedWordAddinBackupPath, installedWordAddinPath);
   }

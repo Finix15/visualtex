@@ -64,6 +64,7 @@ CODE_RESOURCES="$APP_PATH/Contents/_CodeSignature/CodeResources"
 EXECUTABLE="$APP_PATH/Contents/MacOS/visualtex"
 RESOURCES="$APP_PATH/Contents/Resources"
 APP_ICON="$RESOURCES/icon.icns"
+STIX_LICENSE="$RESOURCES/licenses/STIXTwoMath-OFL-1.1.txt"
 OFFICE_ROOT="$RESOURCES/office/macos-offline"
 OCR_ROOT="$RESOURCES/ocr/offline/macos-arm64"
 
@@ -76,6 +77,16 @@ if [[ ! -x "$EXECUTABLE" ]]; then
 fi
 require_directory "$RESOURCES" "Application Resources"
 require_file "$APP_ICON" "macOS application icon"
+require_file "$STIX_LICENSE" "STIX Two Math OFL license"
+for marker in \
+  'Copyright 2001-2021 The STIX Fonts Project Authors' \
+  'SIL OPEN FONT LICENSE Version 1.1' \
+  'Reserved Font Name "TM Math"'; do
+  if ! grep -Fq "$marker" "$STIX_LICENSE"; then
+    echo "STIX Two Math OFL license is missing required text: $marker" >&2
+    exit 1
+  fi
+done
 ICON_CHECK_PNG="$ICON_CHECK_DIR/icon-32.png"
 sips -s format png -z 32 32 "$APP_ICON" --out "$ICON_CHECK_PNG" >/dev/null
 python3 "$PROJECT_ROOT/scripts/verify_macos_app_icon.py" "$ICON_CHECK_PNG" \

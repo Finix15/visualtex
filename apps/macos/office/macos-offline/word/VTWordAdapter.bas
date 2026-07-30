@@ -4,7 +4,7 @@ Option Explicit
 Private Const VT_WORD_HOST As String = "word"
 Private Const VT_WORD_STATUS_FILE As String = "/OfficePluginStatus/word.json"
 Private Const VT_WORD_SOURCE_REVISION As String = _
-    "word-structured-document-import-20260729-r59"
+    "word-structured-document-import-20260730-r62"
 Private Const VT_WORD_EQUATION_NUMBER_FONT_NAME As String = "Cambria Math"
 Private Const VT_WORD_BOOKMARK_PREFIX As String = "VT_Pending_"
 Private Const VT_WORD_DOCUMENT_IMPORT_BOOKMARK_PREFIX As String = "VT_D_"
@@ -217,12 +217,44 @@ Public Sub VisualTeX_RunSelectedImageEditRecoveryRegression()
             "The selected regression image is missing VisualTeX metadata."
     End If
 
+    formulaReference = selectedShape.Title
+    If Not VTTryParseFormulaReference( _
+       formulaReference, formulaId, displayMode, numbered) Then
+        Err.Raise vbObjectError + 7591, "VisualTeX", _
+            "The selected regression image is missing its compact reference."
+    End If
+
+    ' Title-only recovery: Variables must restore AlternativeText.
+    selectedShape.AlternativeText = ""
+    If Not VTIsVisualTeXInlineShape(selectedShape) Or _
+       StrComp(selectedShape.AlternativeText, encodedMetadata, _
+           vbBinaryCompare) <> 0 Then
+        Err.Raise vbObjectError + 7591, "VisualTeX", _
+            "Word Variables did not restore the image AlternativeText."
+    End If
+
+    ' Word SVG round-trips can swap the two accessibility properties.
+    selectedShape.Title = encodedMetadata
+    selectedShape.AlternativeText = formulaReference
+    If Not VTIsVisualTeXInlineShape(selectedShape) Or _
+       StrComp(selectedShape.Title, formulaReference, _
+           vbBinaryCompare) <> 0 Or _
+       StrComp(selectedShape.AlternativeText, encodedMetadata, _
+           vbBinaryCompare) <> 0 Then
+        Err.Raise vbObjectError + 7591, "VisualTeX", _
+            "Double-click recognition did not repair swapped image metadata."
+    End If
+
+    ' Metadata-only recovery: the unique Variables payload must restore Title.
     selectedShape.Title = ""
     If Len(selectedShape.Title) <> 0 Then
         Err.Raise vbObjectError + 7591, "VisualTeX", _
             "Word did not clear the image formula Title for the regression."
     End If
-    VisualTeX_DoubleClickEditSelected
+    If Not VTHandleWordBeforeDoubleClick(Selection) Then
+        Err.Raise vbObjectError + 7591, "VisualTeX", _
+            "The real double-click handler did not recognize the image formula."
+    End If
 
     formulaReference = selectedShape.Title
     If Not VTTryParseFormulaReference( _
@@ -251,6 +283,221 @@ Failed:
         "error|" & CStr(regressionErrorNumber) & "|" & _
         regressionErrorDescription
     On Error GoTo 0
+End Sub
+
+Public Sub VisualTeX_RunDocumentImportFormulaRegression()
+    Dim statusPath As String
+    Dim documentObject As Document
+    Dim candidateBookmark As Bookmark
+    Dim candidateMath As OMath
+    Dim candidateShape As InlineShape
+    Dim formulaRange As Range
+    Dim relationRange As Range
+    Dim paragraphRange As Range
+    Dim formulaText As String
+    Dim formulaId As String
+    Dim displayMode As String
+    Dim numbered As Boolean
+    Dim nativeFormulaCount As Long
+    Dim nativeDisplayCount As Long
+    Dim invalidNativeRangeCount As Long
+    Dim emptyMathCount As Long
+    Dim alignedFormulaCount As Long
+    Dim relationCount As Long
+    Dim relationIndex As Long
+    Dim imageFormulaCount As Long
+    Dim imageDisplayCount As Long
+    Dim relationPosition As Double
+    Dim minimumRelationPosition As Double
+    Dim maximumRelationPosition As Double
+    Dim maximumAlignmentError As Double
+    Dim maximumImageSpaceBefore As Double
+    Dim maximumImageSpaceAfter As Double
+    Dim minimumNativeSpaceBefore As Double
+    Dim maximumNativeSpaceBefore As Double
+    Dim minimumNativeSpaceAfter As Double
+    Dim maximumNativeSpaceAfter As Double
+    Dim report As String
+    Dim regressionErrorNumber As Long
+    Dim regressionErrorDescription As String
+
+    statusPath = VTApplicationSupportRoot() & _
+        "/document-import-regression-formula-status.txt"
+    On Error GoTo Failed
+    If Documents.Count = 0 Then
+        Err.Raise vbObjectError + 7592, "VisualTeX", _
+            "The document-import formula regression requires an active document."
+    End If
+    Set documentObject = ActiveDocument
+    minimumNativeSpaceBefore = 1000000#
+    minimumNativeSpaceAfter = 1000000#
+
+    For Each candidateMath In documentObject.OMaths
+        If Not VTOMathHasMeaningfulContent(candidateMath) Then
+            emptyMathCount = emptyMathCount + 1
+        End If
+    Next candidateMath
+
+    For Each candidateBookmark In documentObject.Bookmarks
+        If Left$(candidateBookmark.Name, _
+           Len(VT_WORD_NATIVE_BOOKMARK_PREFIX)) = _
+           VT_WORD_NATIVE_BOOKMARK_PREFIX Then
+            nativeFormulaCount = nativeFormulaCount + 1
+            Set formulaRange = candidateBookmark.Range.Duplicate
+            If VTTryFormulaIdFromNativeBookmark( _
+               candidateBookmark.Name, formulaId) Then
+                If VTTryReadWordFormulaFormat( _
+                   documentObject, formulaId, displayMode, numbered) Then
+                    If displayMode = "block" Then
+                        nativeDisplayCount = nativeDisplayCount + 1
+                        Set paragraphRange = _
+                            formulaRange.Paragraphs(1).Range.Duplicate
+                        If CDbl(paragraphRange.ParagraphFormat.SpaceBefore) < _
+                           minimumNativeSpaceBefore Then
+                            minimumNativeSpaceBefore = CDbl( _
+                                paragraphRange.ParagraphFormat.SpaceBefore)
+                        End If
+                        If CDbl(paragraphRange.ParagraphFormat.SpaceBefore) > _
+                           maximumNativeSpaceBefore Then
+                            maximumNativeSpaceBefore = CDbl( _
+                                paragraphRange.ParagraphFormat.SpaceBefore)
+                        End If
+                        If CDbl(paragraphRange.ParagraphFormat.SpaceAfter) < _
+                           minimumNativeSpaceAfter Then
+                            minimumNativeSpaceAfter = CDbl( _
+                                paragraphRange.ParagraphFormat.SpaceAfter)
+                        End If
+                        If CDbl(paragraphRange.ParagraphFormat.SpaceAfter) > _
+                           maximumNativeSpaceAfter Then
+                            maximumNativeSpaceAfter = CDbl( _
+                                paragraphRange.ParagraphFormat.SpaceAfter)
+                        End If
+                    End If
+                End If
+            End If
+            If formulaRange.OMaths.Count <> 1 Then
+                invalidNativeRangeCount = invalidNativeRangeCount + 1
+            Else
+                formulaText = formulaRange.Text
+                relationCount = 0
+                minimumRelationPosition = 1000000#
+                maximumRelationPosition = -1000000#
+                For relationIndex = 1 To Len(formulaText)
+                    If Mid$(formulaText, relationIndex, 1) = "=" Then
+                        Set relationRange = documentObject.Range( _
+                            Start:=formulaRange.Start + relationIndex - 1, _
+                            End:=formulaRange.Start + relationIndex)
+                        relationPosition = CDbl(relationRange.Information( _
+                            wdHorizontalPositionRelativeToPage))
+                        If relationPosition >= 0# Then
+                            relationCount = relationCount + 1
+                            If relationPosition < minimumRelationPosition Then
+                                minimumRelationPosition = relationPosition
+                            End If
+                            If relationPosition > maximumRelationPosition Then
+                                maximumRelationPosition = relationPosition
+                            End If
+                        End If
+                    End If
+                Next relationIndex
+                If relationCount >= 2 Then
+                    alignedFormulaCount = alignedFormulaCount + 1
+                    If maximumRelationPosition - minimumRelationPosition > _
+                       maximumAlignmentError Then
+                        maximumAlignmentError = _
+                            maximumRelationPosition - minimumRelationPosition
+                    End If
+                End If
+            End If
+        End If
+    Next candidateBookmark
+
+    For Each candidateShape In documentObject.InlineShapes
+        If VTIsVisualTeXInlineShape(candidateShape) Then
+            imageFormulaCount = imageFormulaCount + 1
+            If VTTryParseFormulaReference( _
+               candidateShape.Title, formulaId, displayMode, numbered) Then
+                If displayMode = "block" Then
+                    imageDisplayCount = imageDisplayCount + 1
+                    Set paragraphRange = _
+                        candidateShape.Range.Paragraphs(1).Range.Duplicate
+                    If Abs(CDbl(paragraphRange.ParagraphFormat.SpaceBefore)) > _
+                       maximumImageSpaceBefore Then
+                        maximumImageSpaceBefore = Abs(CDbl( _
+                            paragraphRange.ParagraphFormat.SpaceBefore))
+                    End If
+                    If Abs(CDbl(paragraphRange.ParagraphFormat.SpaceAfter)) > _
+                       maximumImageSpaceAfter Then
+                        maximumImageSpaceAfter = Abs(CDbl( _
+                            paragraphRange.ParagraphFormat.SpaceAfter))
+                    End If
+                End If
+            End If
+        End If
+    Next candidateShape
+
+    If nativeDisplayCount = 0 Then
+        minimumNativeSpaceBefore = 0#
+        minimumNativeSpaceAfter = 0#
+    End If
+
+    report = "PASS" & vbLf
+    report = report & "revision=" & VT_WORD_SOURCE_REVISION & vbLf
+    report = report & "documentMathCount=" & _
+        CStr(documentObject.OMaths.Count) & vbLf
+    report = report & "nativeFormulaCount=" & _
+        CStr(nativeFormulaCount) & vbLf
+    report = report & "nativeDisplayCount=" & _
+        CStr(nativeDisplayCount) & vbLf
+    report = report & "invalidNativeRangeCount=" & _
+        CStr(invalidNativeRangeCount) & vbLf
+    report = report & "emptyMathCount=" & CStr(emptyMathCount) & vbLf
+    report = report & "alignedFormulaCount=" & _
+        CStr(alignedFormulaCount) & vbLf
+    report = report & "maximumAlignmentError=" & _
+        CStr(maximumAlignmentError) & vbLf
+    report = report & "minimumNativeSpaceBefore=" & _
+        CStr(minimumNativeSpaceBefore) & vbLf
+    report = report & "maximumNativeSpaceBefore=" & _
+        CStr(maximumNativeSpaceBefore) & vbLf
+    report = report & "minimumNativeSpaceAfter=" & _
+        CStr(minimumNativeSpaceAfter) & vbLf
+    report = report & "maximumNativeSpaceAfter=" & _
+        CStr(maximumNativeSpaceAfter) & vbLf
+    report = report & "imageFormulaCount=" & _
+        CStr(imageFormulaCount) & vbLf
+    report = report & "imageDisplayCount=" & _
+        CStr(imageDisplayCount) & vbLf
+    report = report & "maximumImageSpaceBefore=" & _
+        CStr(maximumImageSpaceBefore) & vbLf
+    report = report & "maximumImageSpaceAfter=" & _
+        CStr(maximumImageSpaceAfter) & vbLf
+    VTWriteTextAtomic statusPath, report
+    Exit Sub
+
+Failed:
+    regressionErrorNumber = Err.Number
+    regressionErrorDescription = Err.Description
+    On Error Resume Next
+    VTWriteTextAtomic statusPath, _
+        "FAIL" & vbLf & _
+        "revision=" & VT_WORD_SOURCE_REVISION & vbLf & _
+        "errorNumber=" & CStr(regressionErrorNumber) & vbLf & _
+        "errorDescription=" & _
+            Replace$(Replace$(regressionErrorDescription, vbCr, " "), _
+                vbLf, " ") & vbLf
+    On Error GoTo 0
+End Sub
+
+Public Sub VisualTeX_ConfigureDocumentImportParagraphSpacingRegression()
+    If Documents.Count = 0 Then
+        Err.Raise vbObjectError + 7592, "VisualTeX", _
+            "The document-import spacing regression requires an active document."
+    End If
+    With ActiveDocument.Styles(wdStyleNormal).ParagraphFormat
+        .SpaceBefore = 6!
+        .SpaceAfter = 9!
+    End With
 End Sub
 
 Private Function VTAppendRegressionParagraph( _
@@ -5675,33 +5922,56 @@ Failed:
 End Sub
 
 Public Sub VisualTeX_DoubleClickEditSelected()
+    On Error Resume Next
+    VTHandleWordBeforeDoubleClick Selection
+    On Error GoTo 0
+End Sub
+
+Public Sub FormatPicture()
+    ' Word for Mac does not raise WindowBeforeDoubleClick for an InlineShape.
+    ' Its physical picture double-click invokes the built-in FormatPicture
+    ' command directly, so this global-template command override is the only
+    ' reliable path into the same VisualTeX target resolver used by OMML.
+    On Error GoTo OpenNativePictureFormatter
+    If VTHandleWordBeforeDoubleClick(Selection) Then Exit Sub
+
+OpenNativePictureFormatter:
+    ' WordBasic dispatches the original built-in command without resolving
+    ' this same-name VBA override again. Ordinary pictures therefore retain
+    ' Word's native formatting behavior.
+    On Error Resume Next
+    WordBasic.FormatPicture
+    On Error GoTo 0
+End Sub
+
+Public Function VTHandleWordBeforeDoubleClick( _
+    ByVal selected As Word.Selection) As Boolean
+
     Dim selectedShape As InlineShape
     Dim nativeBookmark As Bookmark
 
-    ' This entry point is invoked for every global Word double-click. It must be
-    ' a strict no-op unless the clicked target is a validated VisualTeX image or
-    ' native OMML bookmark. In particular, ordinary text and blank document
-    ' space must never surface a VBA runtime error.
+    ' Both the real Application event and the regression macro use this one
+    ' target resolver. It must remain a strict no-op for ordinary Word content.
     On Error GoTo IgnoreDoubleClick
-    If Documents.Count = 0 Then Exit Sub
-    Set selectedShape = VTVisualTeXInlineShapeAtSelection(Selection)
+    If Documents.Count = 0 Or selected Is Nothing Or _
+       VTWordInternalMutationActive() Then Exit Function
+    Set selectedShape = VTVisualTeXInlineShapeAtSelection(selected)
     If Not selectedShape Is Nothing Then
-        VTRequireWritableWordDocument
-        VTRefreshWordHealthQuietly
-        VTWordEditInlineShape selectedShape
-        Exit Sub
+        VTHandleWordBeforeDoubleClick = True
+        VisualTeX_EditInlineShape selectedShape
+        Exit Function
     End If
-    Set nativeBookmark = VTFindNativeFormulaBookmark(Selection.Range, False)
-    If nativeBookmark Is Nothing Then Exit Sub
-    VTRequireWritableWordDocument
-    VTRefreshWordHealthQuietly
-    VTWordEditNativeBookmark nativeBookmark
-    Exit Sub
+    Set nativeBookmark = VTFindNativeFormulaBookmark(selected.Range, False)
+    If nativeBookmark Is Nothing Then Exit Function
+    VTHandleWordBeforeDoubleClick = True
+    VisualTeX_EditNativeSelection selected.Range
+    Exit Function
 
 IgnoreDoubleClick:
     ' Preserve Word's native double-click behavior for every non-VisualTeX
     ' target, including empty space and ordinary document text.
-End Sub
+    VTHandleWordBeforeDoubleClick = False
+End Function
 
 Public Sub VisualTeX_EditInlineShape(ByVal selectedShape As InlineShape)
     On Error GoTo Failed
@@ -5893,48 +6163,76 @@ Private Function VTTryResolveVisualTeXInlineShapeReference( _
     Dim storedNumbered As Boolean
     Dim metadataReadable As Boolean
     Dim formatReadable As Boolean
+    Dim referenceReadable As Boolean
+    Dim titleValue As String
+    Dim alternativeValue As String
 
     On Error GoTo InvalidShape
     formulaId = ""
     displayMode = ""
     numbered = False
     If selectedShape Is Nothing Then Exit Function
-    encodedMetadata = selectedShape.AlternativeText
-    If Not VTIsEncodedMetadata(encodedMetadata) Then Exit Function
+    Set documentObject = selectedShape.Range.Document
+    titleValue = selectedShape.Title
+    alternativeValue = selectedShape.AlternativeText
+    If VTIsEncodedMetadata(alternativeValue) Then
+        encodedMetadata = alternativeValue
+    ElseIf VTIsEncodedMetadata(titleValue) Then
+        ' Word can swap Title and AlternativeText while round-tripping an SVG
+        ' drawing. Treat both properties as recoverable carriers, then restore
+        ' the canonical VisualTeX layout below.
+        encodedMetadata = titleValue
+    End If
 
-    If VTTryParseFormulaReference( _
-       selectedShape.Title, formulaId, displayMode, numbered) Then
-        Set documentObject = selectedShape.Range.Document
+    referenceReadable = VTTryParseFormulaReference( _
+        titleValue, formulaId, displayMode, numbered)
+    If Not referenceReadable Then
+        referenceReadable = VTTryParseFormulaReference( _
+            alternativeValue, formulaId, displayMode, numbered)
+    End If
+    If referenceReadable Then
         On Error Resume Next
         Err.Clear
         metadataReadable = VTTryReadWordMetadataPayload( _
             documentObject, formulaId, storedMetadata)
         Err.Clear
         On Error GoTo InvalidShape
-        If Not metadataReadable Then
+        If metadataReadable Then
+            If Len(encodedMetadata) > 0 And _
+               StrComp(storedMetadata, encodedMetadata, _
+                   vbBinaryCompare) <> 0 Then GoTo InvalidShape
+            encodedMetadata = storedMetadata
+        ElseIf Len(encodedMetadata) = 0 Then
+            Exit Function
+        Else
             ' Legacy image formulas can have a valid compact reference before
             ' their document Variables are populated by the first edit.
-            VTTryResolveVisualTeXInlineShapeReference = True
-            Exit Function
         End If
-        If StrComp(storedMetadata, encodedMetadata, vbBinaryCompare) = 0 Then
-            On Error Resume Next
-            Err.Clear
-            formatReadable = VTTryReadWordFormulaFormat( _
-                documentObject, formulaId, storedDisplayMode, storedNumbered)
-            Err.Clear
-            On Error GoTo InvalidShape
-            If formatReadable Then
-                displayMode = storedDisplayMode
-                numbered = storedNumbered
-                selectedShape.Title = _
-                    VTFormulaReference(formulaId, displayMode, numbered)
-            End If
-            VTTryResolveVisualTeXInlineShapeReference = True
-            Exit Function
+
+        On Error Resume Next
+        Err.Clear
+        formatReadable = VTTryReadWordFormulaFormat( _
+            documentObject, formulaId, storedDisplayMode, storedNumbered)
+        Err.Clear
+        On Error GoTo InvalidShape
+        If formatReadable Then
+            displayMode = storedDisplayMode
+            numbered = storedNumbered
         End If
+        selectedShape.AlternativeText = encodedMetadata
+        selectedShape.Title = _
+            VTFormulaReference(formulaId, displayMode, numbered)
+        If StrComp(selectedShape.AlternativeText, encodedMetadata, _
+           vbBinaryCompare) <> 0 Then GoTo InvalidShape
+        VTTryResolveVisualTeXInlineShapeReference = True
+        Exit Function
     End If
 
+    If Len(encodedMetadata) = 0 Then Exit Function
+    ' Reference-free legacy/batch images are resolved by matching their
+    ' compressed payload to the document Variables, then both shape properties
+    ' are repaired before the edit Session is launched.
+    selectedShape.AlternativeText = encodedMetadata
     If Not VTTryRestoreVisualTeXInlineShapeReference( _
        selectedShape) Then Exit Function
     If Not VTTryParseFormulaReference( _
@@ -7073,6 +7371,7 @@ Private Sub VTDocumentImportInsertFormula( _
         Else
             VTNormalizeUnnumberedDisplayParagraph candidate.Range
         End If
+        VTNormalizeImageDisplayParagraph candidate.Range
     End If
     insertedFormulaIds.Add formulaId
 
@@ -8482,6 +8781,8 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
             transactionStage = "normalize-image-display-layout"
             VTNormalizeUnnumberedDisplayParagraph candidate.Range
         End If
+        transactionStage = "normalize-image-paragraph-spacing"
+        VTNormalizeImageDisplayParagraph candidate.Range
     End If
     VTDeletePendingBookmark targetDocument, sessionId
 
@@ -14698,6 +14999,20 @@ Private Sub VTNormalizeUnnumberedDisplayParagraph( _
     End With
 End Sub
 
+Private Sub VTNormalizeImageDisplayParagraph(ByVal formulaRange As Range)
+    Dim paragraphRange As Range
+
+    If formulaRange Is Nothing Then Exit Sub
+    Set paragraphRange = formulaRange.Paragraphs(1).Range.Duplicate
+    ' Image display formulas own their visual height already. Extra paragraph
+    ' spacing compounds that height and creates a much larger gap than native
+    ' OMML. Keep this image-only so existing OMML paragraph spacing is untouched.
+    With paragraphRange.ParagraphFormat
+        .SpaceBefore = 0!
+        .SpaceAfter = 0!
+    End With
+End Sub
+
 Private Sub VTDeleteTrailingInlineNativeSeparator( _
     ByVal equationRange As Range)
 
@@ -14874,6 +15189,7 @@ Private Function VTInsertNativeEquationAtRange( _
     Dim replacementBackupRange As Range
     Dim replacementRange As Range
     Dim nativeEquation As OMath
+    Dim originalReplacementMath As OMath
     Dim failedReplacementMath As OMath
     Dim candidateMath As OMath
     Dim existingMaths As Collection
@@ -14884,6 +15200,10 @@ Private Function VTInsertNativeEquationAtRange( _
     Dim stagingEquationLength As Long
     Dim candidateDistance As Long
     Dim bestDistance As Long
+    Dim probeStart As Long
+    Dim probeEnd As Long
+    Dim mathIndex As Long
+    Dim candidateEligible As Boolean
     Dim replacementApplied As Boolean
     Dim conversionErrorNumber As Long
     Dim conversionErrorDescription As String
@@ -14925,6 +15245,9 @@ Private Function VTInsertNativeEquationAtRange( _
     On Error GoTo RollbackConversion
 
     If replaceTarget Then
+        If targetRange.OMaths.Count = 1 Then
+            Set originalReplacementMath = targetRange.OMaths(1)
+        End If
         Set replacementBackupDocument = Documents.Add(Visible:=False)
         Set replacementBackupRange = replacementBackupDocument.Content
         replacementBackupRange.Collapse wdCollapseStart
@@ -14959,32 +15282,34 @@ Private Function VTInsertNativeEquationAtRange( _
     End If
     Set stagingEquationRange = stagingDocument.OMaths(1).Range.Duplicate
     stagingEquationLength = stagingEquationRange.End - stagingEquationRange.Start
+    probeStart = insertionStart - 2
+    If probeStart < 0 Then probeStart = 0
+    probeEnd = insertionStart + stagingEquationLength + 32
     insertionRange.FormattedText = stagingEquationRange.FormattedText
     replacementApplied = replaceTarget
     stagingDocument.Close SaveChanges:=wdDoNotSaveChanges
     Set stagingDocument = Nothing
 
     ' FormattedText does not reliably expand the caller's Range on every Word
-    ' for Mac build. Complex n-ary equations can also begin a few characters
-    ' away from the nominal insertion boundary. Resolve the closest new OMath
-    ' inside the transferred payload span instead of requiring Start <= +1.
-    If replaceTarget Then
-        If targetDocument.OMaths.Count < beforeMathCount Then
-            Err.Raise vbObjectError + 7434, "VisualTeX", _
-                "Word did not replace the native equation from the OMML payload."
-        End If
-    ElseIf targetDocument.OMaths.Count < beforeMathCount + 1 Then
-        Err.Raise vbObjectError + 7434, "VisualTeX", _
-            "Word did not add a native equation from the OMML payload."
-    End If
+    ' for Mac build. Resolve exactly one meaningful transferred OMath, then
+    ' remove only new empty OMath shells created in the same transfer span.
+    ' These shells are the dotted blank placeholders Word otherwise leaves
+    ' below equation-array payloads.
     bestDistance = 2147483647
     For Each candidateMath In targetDocument.OMaths
-        If replaceTarget Or _
-           Not VTOMathCollectionContains(existingMaths, candidateMath) Then
+        candidateEligible = _
+            Not VTOMathCollectionContains(existingMaths, candidateMath)
+        If replaceTarget And Not originalReplacementMath Is Nothing Then
+            If candidateMath Is originalReplacementMath Then
+                candidateEligible = True
+            End If
+        End If
+        If candidateEligible Then
             Set candidateRange = candidateMath.Range.Duplicate
             candidateDistance = Abs(candidateRange.Start - insertionStart)
-            If candidateRange.Start >= insertionStart - 2 And _
-               candidateRange.Start <= insertionStart + stagingEquationLength + 4 Then
+            If candidateRange.End >= probeStart And _
+               candidateRange.Start <= probeEnd And _
+               VTOMathHasMeaningfulContent(candidateMath) Then
                 If candidateDistance < bestDistance Then
                     bestDistance = candidateDistance
                     matchCount = 1
@@ -14997,6 +15322,34 @@ Private Function VTInsertNativeEquationAtRange( _
     Next candidateMath
     If matchCount <> 1 Or nativeEquation Is Nothing Then
         Err.Raise vbObjectError + 7434, "VisualTeX", "Word did not insert exactly one native equation from the OMML payload."
+    End If
+
+    For mathIndex = targetDocument.OMaths.Count To 1 Step -1
+        Set candidateMath = targetDocument.OMaths(mathIndex)
+        candidateEligible = _
+            Not VTOMathCollectionContains(existingMaths, candidateMath)
+        If replaceTarget And Not originalReplacementMath Is Nothing Then
+            If candidateMath Is originalReplacementMath Then
+                candidateEligible = True
+            End If
+        End If
+        If candidateEligible Then
+            Set candidateRange = candidateMath.Range.Duplicate
+            If candidateRange.End >= probeStart And _
+               candidateRange.Start <= probeEnd And _
+               Not VTOMathHasMeaningfulContent(candidateMath) Then
+                candidateRange.Delete
+            End If
+        End If
+    Next mathIndex
+    If replaceTarget Then
+        If targetDocument.OMaths.Count <> beforeMathCount Then
+            Err.Raise vbObjectError + 7434, "VisualTeX", _
+                "Word did not replace the native equation as one clean OMath object."
+        End If
+    ElseIf targetDocument.OMaths.Count <> beforeMathCount + 1 Then
+        Err.Raise vbObjectError + 7434, "VisualTeX", _
+            "Word did not add exactly one clean OMath object from the payload."
     End If
 
     Set equationRange = nativeEquation.Range.Duplicate
@@ -15023,6 +15376,16 @@ RollbackConversion:
     conversionErrorDescription = Err.Description
     On Error Resume Next
     If Not stagingDocument Is Nothing Then stagingDocument.Close SaveChanges:=wdDoNotSaveChanges
+    For mathIndex = targetDocument.OMaths.Count To 1 Step -1
+        Set candidateMath = targetDocument.OMaths(mathIndex)
+        candidateEligible = _
+            Not VTOMathCollectionContains(existingMaths, candidateMath)
+        If candidateEligible Then
+            Set candidateRange = candidateMath.Range.Duplicate
+            If candidateRange.End >= probeStart And _
+               candidateRange.Start <= probeEnd Then candidateRange.Delete
+        End If
+    Next mathIndex
     If replaceTarget And replacementApplied And _
        Not replacementBackupRange Is Nothing Then
         If Not nativeEquation Is Nothing Then
@@ -15253,6 +15616,29 @@ Private Function VTOMathCollectionContains( _
             Exit Function
         End If
     Next existingMath
+End Function
+
+Private Function VTOMathHasMeaningfulContent( _
+    ByVal candidateMath As OMath) As Boolean
+
+    Dim value As String
+
+    If candidateMath Is Nothing Then Exit Function
+    On Error GoTo EmptyMath
+    value = candidateMath.Range.Text
+    value = Replace$(value, vbCr, "")
+    value = Replace$(value, vbLf, "")
+    value = Replace$(value, vbTab, "")
+    value = Replace$(value, Chr$(7), "")
+    value = Replace$(value, ChrW(160), "")
+    value = Replace$(value, ChrW(8203), "")
+    value = Replace$(value, ChrW(8288), "")
+    value = Replace$(value, ChrW(65279), "")
+    VTOMathHasMeaningfulContent = (Len(Trim$(value)) > 0)
+    Exit Function
+
+EmptyMath:
+    VTOMathHasMeaningfulContent = False
 End Function
 
 Private Sub VTValidateOmmlFragment(ByVal ommlXml As String)
@@ -16535,6 +16921,9 @@ Private Sub VTSynchronizeWordImageFormulaShape( _
     Dim referenceBaselinePt As Double
     Dim observedWordFontSizePt As Double
     Dim currentWordFontSizePt As Double
+    Dim normalFontSizePt As Double
+    Dim expectedWidthPt As Double
+    Dim expectedHeightPt As Double
 
     If formulaShape Is Nothing Or VTWordInternalMutationActive() Then Exit Sub
     VTEnsureWordImageScaleState _
@@ -16544,6 +16933,23 @@ Private Sub VTSynchronizeWordImageFormulaShape( _
     currentWordFontSizePt = VTInlineShapeWordFontSize(formulaShape)
     If VTValidWordFormulaFontSize(currentWordFontSizePt) And _
        Abs(currentWordFontSizePt - observedWordFontSizePt) > 0.05 Then
+        ' Selecting an InlineShape can make Word for Mac report the Normal
+        ' paragraph font (commonly 11 pt) instead of the font stored on the
+        ' shape Range. Do not mistake that host-selection artifact for a user
+        ' resize when the image geometry still exactly represents the stored
+        ' VisualTeX point size.
+        On Error Resume Next
+        normalFontSizePt = _
+            formulaShape.Range.Document.Styles(wdStyleNormal).Font.Size
+        On Error GoTo 0
+        expectedWidthPt = referenceWidthPt * _
+            storedFontSizePt / VT_WORD_IMAGE_REFERENCE_FONT_SIZE_PT
+        expectedHeightPt = referenceHeightPt * _
+            storedFontSizePt / VT_WORD_IMAGE_REFERENCE_FONT_SIZE_PT
+        If VTValidWordFormulaFontSize(normalFontSizePt) And _
+           Abs(currentWordFontSizePt - normalFontSizePt) <= 0.05 And _
+           Abs(formulaShape.Width - expectedWidthPt) <= 0.5 And _
+           Abs(formulaShape.Height - expectedHeightPt) <= 0.5 Then Exit Sub
         VTApplyWordImageFormulaFontSize formulaShape, currentWordFontSizePt
     End If
 End Sub

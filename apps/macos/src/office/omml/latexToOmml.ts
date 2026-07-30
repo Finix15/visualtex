@@ -9,6 +9,11 @@ import { STATE } from "mathjax-full/js/core/MathItem.js";
 import { SerializedMmlVisitor } from "mathjax-full/js/core/MmlTree/SerializedMmlVisitor.js";
 import type { MmlNode } from "mathjax-full/js/core/MmlTree/MmlNode.js";
 import { normalizeMathLiveCanonicalUprightCommands } from "../../editor/normalizeChineseLatex.ts";
+import {
+  MATHJAX_INTEGRAL_OPERATOR_CHARACTERS,
+  normalizeMathJaxUnsupportedNaryCommands,
+} from "../../export/mathJaxCompatibility.ts";
+import type { LatexCodeFormat } from "../../types/formula";
 
 export type OmmlDisplayMode = "inline" | "block";
 
@@ -41,12 +46,7 @@ const mathDocument = mathjax.document("", {
 const serializedMmlVisitor = new SerializedMmlVisitor(mathDocument.mmlFactory);
 
 const NARY_OPERATORS = new Set([
-  "∫",
-  "∬",
-  "∭",
-  "∮",
-  "∯",
-  "∰",
+  ...MATHJAX_INTEGRAL_OPERATOR_CHARACTERS,
   "∑",
   "∏",
   "∐",
@@ -138,8 +138,10 @@ const ACCENT_CHARACTERS = new Set([
 function normalizeLines(lines: string[]) {
   const normalized = lines
     .map((line) =>
-      normalizeMathLiveCanonicalUprightCommands(
-        line.replace(/\r\n?/g, "\n"),
+      normalizeMathJaxUnsupportedNaryCommands(
+        normalizeMathLiveCanonicalUprightCommands(
+          line.replace(/\r\n?/g, "\n"),
+        ),
       ).trim(),
     )
     .filter(Boolean);
@@ -197,6 +199,7 @@ type OmmlScript =
 type OmmlStyle = "p" | "b" | "i" | "bi";
 
 interface OmmlRunProperties {
+  equationArrayAlignment?: boolean;
   normalText?: boolean;
   script?: OmmlScript;
   style?: OmmlStyle;
@@ -221,7 +224,13 @@ const MATH_VARIANT_RUN_PROPERTIES: Record<string, OmmlRunProperties> = {
 };
 
 function ommlRun(value: string, properties: OmmlRunProperties = {}) {
-  const text = sanitizeXmlText(value);
+  // OMML equation arrays use literal ampersands as non-rendering alignment
+  // controls: every odd ampersand is an alignment point and the beginning of
+  // each row is the implied spacer. m:aln is a different mechanism and Word
+  // does not use it to align rows inside m:eqArr.
+  const text = sanitizeXmlText(
+    `${properties.equationArrayAlignment ? "&" : ""}${value}`,
+  );
   if (!text) return "";
   const propertyBody = [
     properties.normalText ? "<m:nor/>" : "",
@@ -276,6 +285,77 @@ function parseMathMl(latex: string, displayMode: OmmlDisplayMode) {
   return documentObject.documentElement;
 }
 
+const RELATION_ALIGNMENT_TOKENS = new Set([
+  "=",
+  "≠",
+  "<",
+  ">",
+  "≤",
+  "≥",
+  "≈",
+  "≃",
+  "≅",
+  "≡",
+  "∼",
+  "∝",
+  "∈",
+  "∉",
+  "⊂",
+  "⊃",
+  "⊆",
+  "⊇",
+  "→",
+  "←",
+  "⇒",
+  "⇐",
+  "⇔",
+]);
+
+const ALIGNMENT_TRANSPARENT_ELEMENTS = new Set([
+  "math",
+  "mrow",
+  "mstyle",
+  "mpadded",
+  "maction",
+  "semantics",
+]);
+
+const ALIGNMENT_ATTRIBUTE = "data-visualtex-omml-alignment";
+
+function findTopLevelRelationElement(element: Element): Element | null {
+  const name = elementName(element);
+  if (
+    name === "mo" &&
+    RELATION_ALIGNMENT_TOKENS.has(normalizedTokenText(element).trim())
+  ) {
+    return element;
+  }
+  if (!ALIGNMENT_TRANSPARENT_ELEMENTS.has(name)) return null;
+  for (const child of elementChildren(element)) {
+    if (["annotation", "annotation-xml"].includes(elementName(child))) continue;
+    const relation = findTopLevelRelationElement(child);
+    if (relation) return relation;
+  }
+  return null;
+}
+
+function markTopLevelRelationAlignment(mathElement: Element) {
+  findTopLevelRelationElement(mathElement)?.setAttribute(
+    ALIGNMENT_ATTRIBUTE,
+    "true",
+  );
+}
+
+function relationAlignedCodeFormat(codeFormat: string) {
+  return [
+    "align",
+    "align-star",
+    "aligned",
+    "equation-split",
+    "equation-star-split",
+  ].includes(codeFormat);
+}
+
 function effectiveMathVariant(element: Element) {
   let current: Element | null = element;
   while (current) {
@@ -290,28 +370,44 @@ function effectiveMathVariant(element: Element) {
 
 function tokenRunProperties(element: Element): OmmlRunProperties {
   const name = elementName(element);
+  const equationArrayAlignment =
+    element.getAttribute(ALIGNMENT_ATTRIBUTE) === "true";
   const variant = effectiveMathVariant(element);
   const explicitProperties = variant
     ? MATH_VARIANT_RUN_PROPERTIES[variant]
     : undefined;
 
   if (name === "mtext" || name === "ms") {
-    return explicitProperties
+    const properties = explicitProperties
       ? { ...explicitProperties, normalText: true }
       : { normalText: true };
+    return equationArrayAlignment
+      ? { ...properties, equationArrayAlignment }
+      : properties;
   }
-  if (explicitProperties) return explicitProperties;
+  if (explicitProperties) {
+    return equationArrayAlignment
+      ? { ...explicitProperties, equationArrayAlignment }
+      : explicitProperties;
+  }
 
   if (name === "mn" || name === "mo") {
-    return { script: "roman", style: "p" };
+    return {
+      script: "roman",
+      style: "p",
+      ...(equationArrayAlignment ? { equationArrayAlignment } : {}),
+    };
   }
   if (name === "mi") {
     const tokenLength = Array.from(normalizedTokenText(element).trim()).length;
-    return tokenLength > 1
+    const properties: OmmlRunProperties = tokenLength > 1
       ? { script: "roman", style: "p" }
       : {};
+    return equationArrayAlignment
+      ? { ...properties, equationArrayAlignment }
+      : properties;
   }
-  return {};
+  return equationArrayAlignment ? { equationArrayAlignment } : {};
 }
 
 function mspaceText(element: Element) {
@@ -831,16 +927,20 @@ function minimalDocxBytes(omml: string) {
 export function latexLinesToOmml(
   lines: string[],
   displayMode: OmmlDisplayMode,
+  codeFormat: LatexCodeFormat | string = "raw",
 ) {
   const normalized = normalizeLines(lines);
+  const alignRelations = relationAlignedCodeFormat(codeFormat);
   const converted = normalized.map((line) => {
     const mathElement = parseMathMl(line, displayMode);
+    if (alignRelations) markTopLevelRelationAlignment(mathElement);
     return convertSequence(elementChildren(mathElement));
   });
+  const useEquationArray = converted.length > 1 || alignRelations;
   const body =
-    converted.length === 1
+    !useEquationArray
       ? converted[0]
-      : `<m:eqArr>${converted
+      : `<m:eqArr><m:eqArrPr><m:baseJc m:val="center"/></m:eqArrPr>${converted
           .map((line) => `<m:e>${line}</m:e>`)
           .join("")}</m:eqArr>`;
   return wrapOmml(body);
@@ -849,8 +949,9 @@ export function latexLinesToOmml(
 export function latexLinesToOmmlArtifacts(
   lines: string[],
   displayMode: OmmlDisplayMode,
+  codeFormat: LatexCodeFormat | string = "raw",
 ): OmmlArtifacts {
-  const omml = latexLinesToOmml(lines, displayMode);
+  const omml = latexLinesToOmml(lines, displayMode, codeFormat);
   return {
     omml,
     ommlBase64: utf8ToBase64Url(omml),

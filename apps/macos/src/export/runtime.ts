@@ -5,6 +5,10 @@ import { liteAdaptor } from "mathjax-full/js/adaptors/liteAdaptor.js";
 import { RegisterHTMLHandler } from "mathjax-full/js/handlers/html.js";
 import { AllPackages } from "mathjax-full/js/input/tex/AllPackages.js";
 import { normalizeMathLiveCanonicalUprightCommands } from "../editor/normalizeChineseLatex.ts";
+import {
+  normalizeMathJaxUnsupportedNaryCommands,
+  registerMathJaxIntegralGlyphs,
+} from "./mathJaxCompatibility.ts";
 import type {
   PngExportOptions,
   PngExportResult,
@@ -31,6 +35,7 @@ const svgOutput = new SVG({
   fontCache: "local",
   internalSpeechTitles: false,
 });
+registerMathJaxIntegralGlyphs(svgOutput.font);
 const mathDocument = mathjax.document("", {
   InputJax: texInput,
   OutputJax: svgOutput,
@@ -71,8 +76,10 @@ function isSingleCompleteEnvironment(source: string) {
 }
 
 function prepareLatex(latex: string) {
-  const normalized = normalizeMathLiveCanonicalUprightCommands(
-    latex.replace(/\r\n?/g, "\n"),
+  const normalized = normalizeMathJaxUnsupportedNaryCommands(
+    normalizeMathLiveCanonicalUprightCommands(
+      latex.replace(/\r\n?/g, "\n"),
+    ),
   ).trim();
   if (!normalized) throw new Error("Cannot export an empty formula.");
 

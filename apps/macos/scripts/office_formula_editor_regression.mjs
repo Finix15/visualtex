@@ -4,6 +4,8 @@ import {
   serializeFormulaEditorDocument,
 } from "../src/office/shared/formulaEditorDocument.ts";
 import { createFormulaMetadata } from "../src/office/shared/formulaMetadata.ts";
+import { renderOfficeFormulaArtifacts } from "../src/office/shared/formulaRenderArtifacts.ts";
+import { latexToSvg } from "../src/export/latexToSvg.ts";
 import { errorMessage } from "../src/runtime/errorMessage.ts";
 
 function normalize(source, codeFormat = "raw") {
@@ -148,6 +150,33 @@ for (const testCase of multilineCases) {
     canonicalSource,
     `${testCase.name} metadata must store the canonical serialized source`,
   );
+  if (testCase.codeFormat === "align" || testCase.codeFormat === "align-star") {
+    const rendered = renderOfficeFormulaArtifacts({
+      lines: normalized.lines,
+      codeFormat: normalized.codeFormat,
+      displayMode: "block",
+      includeWordOmml: false,
+    });
+    const firstImportSvg = latexToSvg(canonicalSource, {
+      displayMode: true,
+      fontSizePt: 14,
+      paddingPx: 10,
+      background: "transparent",
+    });
+    assert.equal(
+      rendered.canonicalLatex,
+      canonicalSource,
+      `${testCase.name} edit rendering must rebuild the complete environment`,
+    );
+    assert.equal(
+      rendered.svg.svg.replace(/MJX-\d+-/g, "MJX-N-"),
+      firstImportSvg.svg.replace(/MJX-\d+-/g, "MJX-N-"),
+      `${testCase.name} first import and edit replacement must share the same SVG`,
+    );
+    assert.equal(rendered.svg.width, firstImportSvg.width);
+    assert.equal(rendered.svg.height, firstImportSvg.height);
+    assert.equal(rendered.svg.baseline, firstImportSvg.baseline);
+  }
 }
 
 const equation = normalize(String.raw`\begin{equation}E=mc^2\end{equation}`);

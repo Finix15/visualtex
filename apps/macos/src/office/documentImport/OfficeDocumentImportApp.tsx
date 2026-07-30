@@ -19,8 +19,6 @@ import {
   X,
 } from "lucide-react";
 import { MathPreview } from "../../components/MathPreview";
-import { latexToSvg } from "../../export/latexToSvg";
-import { latexLinesToOmmlArtifacts } from "../omml/latexToOmml";
 import { onCurrentTauriWindowCloseRequested } from "../shared/tauriTransport";
 import {
   createFormulaMetadata,
@@ -28,8 +26,11 @@ import {
 } from "../shared/formulaMetadata";
 import {
   normalizeFormulaEditorDocument,
-  serializeFormulaEditorDocument,
 } from "../shared/formulaEditorDocument";
+import {
+  OFFICE_FORMULA_REFERENCE_FONT_SIZE_PT,
+  renderOfficeFormulaArtifacts,
+} from "../shared/formulaRenderArtifacts";
 import { createUuid } from "../../runtime/browserCompatibility";
 import { documentImportErrorMessage } from "./documentImportErrors";
 import {
@@ -50,7 +51,7 @@ import {
 } from "./documentImportParser";
 
 const MAX_WORD_REFERENCE_WIDTH_PT = 500;
-const REFERENCE_FONT_SIZE_PT = 14;
+const REFERENCE_FONT_SIZE_PT = OFFICE_FORMULA_REFERENCE_FONT_SIZE_PT;
 
 class FormulaPreviewBoundary extends Component<
   { children: ReactNode; message: string },
@@ -118,8 +119,16 @@ async function prepareFormulaCommitItem(
   const line = { id: createUuid(), latex: block.latex.trim() };
   if (!line.latex) throw new Error("存在空公式，请填写或删除后再插入。");
   const editorDocument = normalizeFormulaEditorDocument([line], "raw");
-  const canonicalLatex = serializeFormulaEditorDocument(editorDocument);
-  const omml = latexLinesToOmmlArtifacts([line.latex], block.displayMode);
+  const artifacts = renderOfficeFormulaArtifacts({
+    lines: editorDocument.lines,
+    codeFormat: editorDocument.codeFormat,
+    displayMode: block.displayMode,
+  });
+  const { canonicalLatex, svg } = artifacts;
+  if (!artifacts.omml) {
+    throw new Error("无法生成 Word OMML 公式制品。");
+  }
+  const omml = artifacts.omml;
 
   const paragraphMetadata = {
     paragraphId: block.paragraphId,
@@ -133,12 +142,6 @@ async function prepareFormulaCommitItem(
 
   let metadata: VisualTeXFormulaMetadata;
   if (outputKind === "image") {
-    const svg = latexToSvg(line.latex, {
-      displayMode: block.displayMode === "block",
-      fontSizePt: REFERENCE_FONT_SIZE_PT,
-      paddingPx: block.displayMode === "inline" ? 1 : 10,
-      background: "transparent",
-    });
     let pngBase64: string | undefined;
     try {
       const { svgToPng } = await import("../../export/svgToPng");

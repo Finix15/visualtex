@@ -354,7 +354,7 @@ export function normalizeMathLiveCanonicalUprightCommands(
 
 const differentialFractionCommands = ["\\dfrac", "\\tfrac", "\\frac"];
 const integralCommandPattern =
-  /\\(?:oiiint|oiint|oint|iiint|iint|int)(?![A-Za-z])/g;
+  /\\(?:ointctrclockwise|varointclockwise|intclockwise|cirfnint|rppolint|scpolint|intlarhk|pointint|oiiint|iiiint|quatint|npolint|sumint|intbar|intBar|intcap|intcup|oiint|iiint|fint|awint|intx|upint|lowint|oint|iint|int)(?![A-Za-z])/g;
 const nonVariableCommands = new Set([
   "sin",
   "cos",
@@ -379,6 +379,27 @@ const nonVariableCommands = new Set([
   "oint",
   "oiint",
   "oiiint",
+  "iiiint",
+  "intclockwise",
+  "varointclockwise",
+  "ointctrclockwise",
+  "sumint",
+  "intbar",
+  "intBar",
+  "fint",
+  "cirfnint",
+  "awint",
+  "rppolint",
+  "scpolint",
+  "npolint",
+  "pointint",
+  "quatint",
+  "intlarhk",
+  "intx",
+  "intcap",
+  "intcup",
+  "upint",
+  "lowint",
   "sum",
   "prod",
   "frac",

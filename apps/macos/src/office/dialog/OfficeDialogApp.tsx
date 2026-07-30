@@ -35,19 +35,18 @@ import type {
   MathEditorHandle,
   MathEditorInsertionTarget,
 } from "../../editor/MathEditor";
-import { latexToSvg } from "../../export/latexToSvg";
 import { createUuid } from "../../runtime/browserCompatibility";
 import { errorMessage } from "../../runtime/errorMessage";
 import {
   readLocalStorage,
   writeLocalStorage,
 } from "../../runtime/safeStorage";
-import { latexLinesToOmmlArtifacts } from "../omml/latexToOmml";
 import {
   invokeTauri,
   onCurrentTauriWindowCloseRequested,
 } from "../shared/tauriTransport";
 import { normalizeFormulaEditorDocument } from "../shared/formulaEditorDocument";
+import { renderOfficeFormulaArtifacts } from "../shared/formulaRenderArtifacts";
 import {
   cancelMacosOfflineOfficeSession,
   commitMacosOfflineOfficeSession,
@@ -370,19 +369,14 @@ export function OfficeDialogApp() {
 
   const generateSvgExportResult = useCallback((): OfficeExportResult | null => {
     if (!latex.trim()) return null;
-    const svg = latexToSvg(latex, {
-      displayMode: displayMode === "block",
-      fontSizePt: 14,
-      paddingPx: displayMode === "inline" ? 1 : 10,
-      background: "transparent",
+    const artifacts = renderOfficeFormulaArtifacts({
+      lines,
+      codeFormat: latexCodeFormat,
+      displayMode,
+      includeWordOmml: session?.host === "word",
     });
-    const wordArtifacts =
-      session?.host === "word"
-        ? latexLinesToOmmlArtifacts(
-            lines.map((line) => line.latex),
-            displayMode,
-          )
-        : null;
+    const { svg } = artifacts;
+    const wordArtifacts = artifacts.omml;
     return {
       svg: svg.svg,
       svgBase64: svg.base64,
@@ -396,7 +390,7 @@ export function OfficeDialogApp() {
       height: svg.height,
       baseline: svg.baseline,
     };
-  }, [latex, displayMode, lines, session?.host]);
+  }, [latex, displayMode, lines, latexCodeFormat, session?.host]);
 
   const generateExportResult = useCallback(async (): Promise<OfficeExportResult | null> => {
     const base = generateSvgExportResult();

@@ -40,7 +40,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "ocr/worker.py": "ocr/worker.py"
+      "ocr/worker.py": "ocr/worker.py",
+      "../src/math/STIXTwoMath-OFL-1.1.txt": "licenses/STIXTwoMath-OFL-1.1.txt"
     },
     "macOS": {
       "signingIdentity": "-"

@@ -59,6 +59,13 @@ const ribbonCallbacksPath = join(
   "word",
   "VTRibbonCallbacks.bas",
 );
+const wordEventsPath = join(
+  repositoryRoot,
+  "office",
+  "macos-offline",
+  "word",
+  "VTWordEvents.cls",
+);
 const startupRoot = join(
   homedir(),
   "Library",
@@ -235,7 +242,7 @@ function openModuleCodeWindow(moduleName) {
     "repeat while rowIndex is less than or equal to count of rows of projectOutline",
     "set rowCell to UI element 1 of row rowIndex of projectOutline",
     "set rowNames to name of every UI element of rowCell as text",
-    'if rowNames contains "模块表" or rowNames contains "Modules" then',
+    'if rowNames contains "模块表" or rowNames contains "Modules" or rowNames contains "类模块" or rowNames contains "Class Modules" then',
     "try",
     'set disclosure to first UI element of rowCell whose role is "AXDisclosureTriangle"',
     "if value of disclosure is false then click disclosure",
@@ -368,6 +375,8 @@ function replaceAndCompileAdapter() {
   importVbaModule(adapterPath);
   removeVbaModule("VTRibbonCallbacks");
   importVbaModule(ribbonCallbacksPath);
+  removeVbaModule("VTWordEvents");
+  importVbaModule(wordEventsPath);
   openModuleCodeWindow("VTWordAdapter");
   compileVbaProject();
 }
@@ -375,6 +384,8 @@ function replaceAndCompileAdapter() {
 function baseContainsCurrentVbaSources() {
   const checker = String.raw`
 from pathlib import Path
+from decimal import Decimal, InvalidOperation
+import re
 import sys
 try:
     from oletools.olevba import VBA_Parser
@@ -382,14 +393,53 @@ except Exception:
     print("UNAVAILABLE")
     raise SystemExit(0)
 
+NUMBER_LITERAL = re.compile(
+    r"(?<![\w&])"
+    r"((?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)"
+    r"(?:[#%!@&^])?"
+    r"(?![\w])",
+    re.IGNORECASE,
+)
+
+def normalize_number(match: re.Match[str]) -> str:
+    try:
+        fixed = format(Decimal(match.group(1)), "f")
+    except InvalidOperation:
+        return match.group(0)
+    if "." in fixed:
+        fixed = fixed.rstrip("0").rstrip(".")
+    return "0" if fixed in {"", "-0"} else fixed
+
+def strip_vbe_metadata(value: str) -> str:
+    lines = value.replace("\r\n", "\n").split("\n")
+    if lines and lines[0].lstrip("\ufeff").strip().lower() == "version 1.0 class":
+        while lines:
+            line = lines.pop(0)
+            if line.strip().lower() == "end":
+                break
+    return "\n".join(
+        line for line in lines
+        if not line.lstrip().lower().startswith("attribute ")
+    )
+
 def normalize_vba(value: str) -> str:
-    value = value.replace("\r\n", "\n").strip()
+    value = strip_vbe_metadata(value).strip()
     output = []
+    non_string = []
     in_string = False
     index = 0
+
+    def flush_non_string() -> None:
+        if not non_string:
+            return
+        segment = "".join(non_string).lower()
+        output.append(NUMBER_LITERAL.sub(normalize_number, segment))
+        non_string.clear()
+
     while index < len(value):
         character = value[index]
         if character == '"':
+            flush_non_string()
             output.append(character)
             if in_string and index + 1 < len(value) and value[index + 1] == '"':
                 output.append('"')
@@ -398,11 +448,15 @@ def normalize_vba(value: str) -> str:
             in_string = not in_string
             index += 1
             continue
-        output.append(character if in_string else character.lower())
+        if in_string:
+            output.append(character)
+        else:
+            non_string.append(character)
         index += 1
+    flush_non_string()
     return "".join(output)
 
-base_path, protocol_path, adapter_path, callbacks_path = sys.argv[1:5]
+base_path, protocol_path, adapter_path, callbacks_path, events_path = sys.argv[1:6]
 parser = VBA_Parser(base_path)
 try:
     macros = {name: code for _, _, name, code in parser.extract_macros()}
@@ -412,6 +466,7 @@ checks = [
     ("VTProtocol.bas", protocol_path),
     ("VTWordAdapter.bas", adapter_path),
     ("VTRibbonCallbacks.bas", callbacks_path),
+    ("VTWordEvents.cls", events_path),
 ]
 matched = all(
     macros.get(module_name) is not None
@@ -428,6 +483,7 @@ print("MATCH" if matched else "MISMATCH")
     protocolPath,
     adapterPath,
     ribbonCallbacksPath,
+    wordEventsPath,
   ], { timeout: 90_000 });
   return result.trim() === "MATCH";
 }
@@ -447,6 +503,10 @@ function verifyBuiltVba(path) {
     "VisualTeX_RunWordNativeRegression",
     "VisualTeX_InsertLatexMarkdownDocument",
     "VTCommitWordDocumentImportDispatch",
+    "VTWordEvents",
+    "VTHandleWordBeforeDoubleClick",
+    "App_WindowBeforeDoubleClick",
+    "FormatPicture",
   ];
   for (const value of required) {
     const utf8 = Buffer.from(value, "utf8");

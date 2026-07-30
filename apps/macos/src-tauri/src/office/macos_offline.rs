@@ -1572,6 +1572,40 @@ fn scale_word_reference_geometry(
     })
 }
 
+fn calculate_word_svg_geometry(
+    width: f64,
+    height: f64,
+    baseline: Option<f64>,
+    font_size_pt: f64,
+) -> Result<WordGeometry, String> {
+    if !width.is_finite()
+        || !height.is_finite()
+        || width <= 0.0
+        || height <= 0.0
+        || baseline.is_some_and(|value| !value.is_finite() || value < 0.0 || value > height)
+    {
+        return Err("Word formula SVG geometry is invalid".to_string());
+    }
+    let natural_width = width * 0.75;
+    let natural_height = height * 0.75;
+    let reference_scale = f64::min(1.0, MAX_WORD_WIDTH_PT / natural_width);
+    let reference_width_pt = natural_width * reference_scale;
+    let reference_height_pt = natural_height * reference_scale;
+    let reference_baseline_pt = baseline
+        .map(|value| {
+            let descent_ratio = (height - value) / height;
+            -(reference_height_pt * descent_ratio).round().max(0.0)
+        })
+        .unwrap_or(0.0)
+        .clamp(-256.0, 0.0);
+    scale_word_reference_geometry(
+        reference_width_pt,
+        reference_height_pt,
+        reference_baseline_pt,
+        font_size_pt,
+    )
+}
+
 fn calculate_word_geometry(
     request: &MacOfflineSessionRequest,
     session: &OfficeFormulaSession,
@@ -1588,14 +1622,6 @@ fn calculate_word_geometry(
         return Err("Word formula export has invalid dimensions".to_string());
     }
 
-    // VisualTeX renders Word images at a stable 14 pt reference size. The
-    // document-facing font size is then a pure geometric scale, so Word's
-    // native point-size box can drive an InlineShape exactly like an OMath.
-    let natural_width = export.width * 0.75;
-    let natural_height = export.height * 0.75;
-    let reference_scale = f64::min(1.0, MAX_WORD_WIDTH_PT / natural_width);
-    let reference_width_pt = natural_width * reference_scale;
-    let reference_height_pt = natural_height * reference_scale;
     let font_size_pt = request
         .font_size_pt
         .filter(|value| {
@@ -1615,19 +1641,15 @@ fn calculate_word_geometry(
                 })
         })
         .unwrap_or(WORD_REFERENCE_FONT_SIZE_PT);
-    let reference_baseline_pt = export
+    let baseline = export
         .baseline
-        .filter(|value| value.is_finite() && *value >= 0.0 && *value <= export.height)
-        .map(|value| {
-            let descent_ratio = (export.height - value) / export.height;
-            -(reference_height_pt * descent_ratio).round().max(0.0)
-        })
-        .unwrap_or(0.0)
-        .clamp(-256.0, 0.0);
-    scale_word_reference_geometry(
-        reference_width_pt,
-        reference_height_pt,
-        reference_baseline_pt,
+        .filter(|value| value.is_finite() && *value >= 0.0 && *value <= export.height);
+    // Document import and edit replacement share this exact 14 pt reference
+    // geometry path, including maximum width, descent and baseline rounding.
+    calculate_word_svg_geometry(
+        export.width,
+        export.height,
+        baseline,
         font_size_pt,
     )
 }
@@ -2032,6 +2054,7 @@ fn commit_word(
     request: &MacOfflineSessionRequest,
     session: &OfficeFormulaSession,
     metadata: &str,
+    canonical_latex: &str,
     geometry: WordGeometry,
 ) -> Result<(), String> {
     let export = session
@@ -2082,12 +2105,7 @@ fn commit_word(
         .or_else(|| request.encoded_metadata.clone())
         .unwrap_or_default();
     let pending_marker = request.pending_marker.clone().unwrap_or_default();
-    let latex = session
-        .lines
-        .iter()
-        .map(|line| line.latex.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
+    let latex = canonical_latex.trim();
     if latex.is_empty() {
         return Err("Word native-equation conversion requires non-empty LaTeX".to_string());
     }
@@ -2353,22 +2371,7 @@ fn calculate_document_image_geometry(
     {
         return Err("Document formula SVG geometry is invalid".to_string());
     }
-    let natural_width = width * 0.75;
-    let natural_height = height * 0.75;
-    let reference_scale = f64::min(1.0, MAX_WORD_WIDTH_PT / natural_width);
-    let reference_width_pt = natural_width * reference_scale;
-    let reference_height_pt = natural_height * reference_scale;
-    let descent_ratio = (height - baseline) / height;
-    let reference_baseline_pt = -(reference_height_pt * descent_ratio)
-        .round()
-        .max(0.0)
-        .clamp(0.0, 256.0);
-    scale_word_reference_geometry(
-        reference_width_pt,
-        reference_height_pt,
-        reference_baseline_pt,
-        font_size_pt,
-    )
+    calculate_word_svg_geometry(width, height, Some(baseline), font_size_pt)
 }
 
 fn resolve_document_paragraph_transfer(
@@ -2856,12 +2859,19 @@ fn commit_session_blocking(
     let result = match session.host {
         OfficeHost::Word => {
             let geometry = calculate_word_geometry(&request, &session)?;
+            metadata.latex = canonical_document_formula_latex(&metadata)?;
             metadata.font_size_pt = Some(geometry.font_size_pt);
             metadata.reference_width_pt = Some(geometry.reference_width_pt);
             metadata.reference_height_pt = Some(geometry.reference_height_pt);
             metadata.reference_baseline_pt = Some(geometry.reference_baseline_pt);
             let encoded = encode_metadata(&metadata)?;
-            commit_word(&request, &session, &encoded, geometry)
+            commit_word(
+                &request,
+                &session,
+                &encoded,
+                &metadata.latex,
+                geometry,
+            )
         }
         OfficeHost::Powerpoint => {
             let powerpoint = request

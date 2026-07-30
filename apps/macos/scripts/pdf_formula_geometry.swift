@@ -12,6 +12,7 @@ struct FormulaBounds: Codable {
     let height: Double
     let centerX: Double
     let centerY: Double
+    let relationshipXs: [Double]
 }
 
 struct GeometryReport: Codable {
@@ -20,6 +21,7 @@ struct GeometryReport: Codable {
     let unnumbered: FormulaBounds
     let numbered: FormulaBounds
     let equationNumber: FormulaBounds
+    let aligned: [FormulaBounds]
     let pageText: String
 }
 
@@ -56,7 +58,7 @@ enum GeometryError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .usage:
-            return "Usage: swift pdf_formula_geometry.swift <pdf> <unnumbered-token> <numbered-token> | <pdf> --number-only"
+            return "Usage: swift pdf_formula_geometry.swift <pdf> <unnumbered-token> <numbered-token> [<align-token> <align-star-token>] | <pdf> --number-only"
         case .unreadablePdf(let path):
             return "Unable to open PDF: \(path)"
         case .missingToken(let token):
@@ -71,6 +73,21 @@ func formulaBounds(page: PDFPage, pageIndex: Int, text: String, range: NSRange) 
     guard let selection = page.selection(for: range) else { return nil }
     let bounds = selection.bounds(for: page)
     guard !bounds.isNull, !bounds.isEmpty else { return nil }
+    var relationshipXs: [Double] = []
+    if let pageText = page.string {
+        let source = pageText as NSString
+        let rangeEnd = min(source.length, range.location + range.length)
+        if range.location < rangeEnd {
+            for index in range.location..<rangeEnd where source.character(at: index) == 61 {
+                if let relationSelection = page.selection(for: NSRange(location: index, length: 1)) {
+                    let relationBounds = relationSelection.bounds(for: page)
+                    if !relationBounds.isNull, !relationBounds.isEmpty {
+                        relationshipXs.append(relationBounds.midX)
+                    }
+                }
+            }
+        }
+    }
     return FormulaBounds(
         pageIndex: pageIndex,
         text: text,
@@ -81,7 +98,8 @@ func formulaBounds(page: PDFPage, pageIndex: Int, text: String, range: NSRange) 
         width: bounds.width,
         height: bounds.height,
         centerX: bounds.midX,
-        centerY: bounds.midY
+        centerY: bounds.midY,
+        relationshipXs: relationshipXs
     )
 }
 
@@ -89,7 +107,14 @@ func tokenRangeIgnoringWhitespace(token: String, in pageText: String) -> NSRange
     let source = pageText as NSString
     let target = token as NSString
     let whitespace = CharacterSet.whitespacesAndNewlines
-    guard target.length > 0 else { return nil }
+    let targetUnits = (0..<target.length).compactMap { index -> unichar? in
+        let unit = target.character(at: index)
+        if let scalar = UnicodeScalar(unit), whitespace.contains(scalar) {
+            return nil
+        }
+        return unit
+    }
+    guard !targetUnits.isEmpty else { return nil }
 
     for start in 0..<source.length {
         let firstScalar = UnicodeScalar(source.character(at: start))
@@ -98,18 +123,18 @@ func tokenRangeIgnoringWhitespace(token: String, in pageText: String) -> NSRange
         var targetIndex = 0
         var lastMatched = start
 
-        while sourceIndex < source.length && targetIndex < target.length {
+        while sourceIndex < source.length && targetIndex < targetUnits.count {
             let sourceUnit = source.character(at: sourceIndex)
             if let scalar = UnicodeScalar(sourceUnit), whitespace.contains(scalar) {
                 sourceIndex += 1
                 continue
             }
-            if sourceUnit != target.character(at: targetIndex) { break }
+            if sourceUnit != targetUnits[targetIndex] { break }
             lastMatched = sourceIndex
             sourceIndex += 1
             targetIndex += 1
         }
-        if targetIndex == target.length {
+        if targetIndex == targetUnits.count {
             return NSRange(location: start, length: lastMatched - start + 1)
         }
     }
@@ -275,7 +300,9 @@ func findEquationNumber(document: PDFDocument, numbered: FormulaBounds) throws -
 }
 
 do {
-    guard CommandLine.arguments.count == 3 || CommandLine.arguments.count == 4 else {
+    guard CommandLine.arguments.count == 3 ||
+          CommandLine.arguments.count == 4 ||
+          CommandLine.arguments.count == 6 else {
         throw GeometryError.usage
     }
     let pdfPath = CommandLine.arguments[1]
@@ -309,6 +336,12 @@ do {
     let numberedToken = CommandLine.arguments[3]
     let unnumbered = try findToken(unnumberedToken, document: document)
     let numbered = try findToken(numberedToken, document: document)
+    let aligned = CommandLine.arguments.count == 6
+        ? [
+            try findToken(CommandLine.arguments[4], document: document),
+            try findToken(CommandLine.arguments[5], document: document),
+        ]
+        : []
     let equationNumber = try findEquationNumber(document: document, numbered: numbered)
     guard let page = document.page(at: numbered.pageIndex) else {
         throw GeometryError.unreadablePdf(pdfPath)
@@ -320,6 +353,7 @@ do {
         unnumbered: unnumbered,
         numbered: numbered,
         equationNumber: equationNumber,
+        aligned: aligned,
         pageText: page.string ?? ""
     )
     let encoder = JSONEncoder()

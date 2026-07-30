@@ -72,6 +72,36 @@ function expectIncludes(value, fragment, message) {
   expect(value.includes(fragment), `${message}\nMissing: ${fragment}\nActual: ${value}`);
 }
 
+const uncommonIntegralOperators = [
+  ["iint", "∬"],
+  ["iiint", "∭"],
+  ["iiiint", "⨌"],
+  ["oint", "∮"],
+  ["oiint", "∯"],
+  ["oiiint", "∰"],
+  ["intclockwise", "∱"],
+  ["varointclockwise", "∲"],
+  ["ointctrclockwise", "∳"],
+  ["sumint", "⨋"],
+  ["intbar", "⨍"],
+  ["intBar", "⨎"],
+  ["fint", "⨏"],
+  ["cirfnint", "⨐"],
+  ["awint", "⨑"],
+  ["intctrclockwise", "⨑"],
+  ["rppolint", "⨒"],
+  ["scpolint", "⨓"],
+  ["npolint", "⨔"],
+  ["pointint", "⨕"],
+  ["quatint", "⨖"],
+  ["intlarhk", "⨗"],
+  ["intx", "⨘"],
+  ["intcap", "⨙"],
+  ["intcup", "⨚"],
+  ["upint", "⨛"],
+  ["lowint", "⨜"],
+];
+
 async function main() {
   const vite = spawn(
     process.execPath,
@@ -206,6 +236,60 @@ async function main() {
     expectIncludes(integral, "<m:sup>", "Integral must preserve the upper limit.");
     expectIncludes(integral, "<m:e>", "Integral must preserve the integrand as its body.");
 
+    const uncommonIntegralFormulas = uncommonIntegralOperators.map(
+      ([command]) => `\\${command}_{a}^{b} f(x)\\,\\mathrm{d}x`,
+    );
+    const uncommonIntegralExpression = `
+      (async () => {
+        const module = await import(${JSON.stringify(`${baseUrl}/src/office/omml/latexToOmml.ts`)});
+        return ${JSON.stringify(uncommonIntegralFormulas)}.map((latex) =>
+          module.latexLinesToOmml([latex], 'block')
+        );
+      })()
+    `;
+    const uncommonIntegralEvaluation = await client.send("Runtime.evaluate", {
+      expression: uncommonIntegralExpression,
+      awaitPromise: true,
+      returnByValue: true,
+    });
+    if (uncommonIntegralEvaluation.exceptionDetails) {
+      throw new Error(
+        uncommonIntegralEvaluation.exceptionDetails.exception?.description ??
+          "Uncommon integral OMML generation failed.",
+      );
+    }
+    const uncommonIntegralResults = uncommonIntegralEvaluation.result?.value;
+    expect(
+      Array.isArray(uncommonIntegralResults) &&
+        uncommonIntegralResults.length === uncommonIntegralOperators.length,
+      "OMML regression did not return every uncommon integral.",
+    );
+    for (let index = 0; index < uncommonIntegralOperators.length; index += 1) {
+      const [command, character] = uncommonIntegralOperators[index];
+      const omml = uncommonIntegralResults[index];
+      expectIncludes(
+        omml,
+        `<m:chr m:val="${character}"/>`,
+        `\\${command} must use its canonical OMML n-ary character.`,
+      );
+      expect(
+        (omml.match(/<m:nary>/g) ?? []).length === 1,
+        `\\${command} must produce exactly one structural OMML n-ary object.`,
+      );
+      expectIncludes(
+        omml,
+        '<m:limLoc m:val="subSup"/>',
+        `\\${command} must keep integral limits beside the operator.`,
+      );
+      expectIncludes(omml, "<m:sub>", `\\${command} must preserve its lower limit.`);
+      expectIncludes(omml, "<m:sup>", `\\${command} must preserve its upper limit.`);
+      expectIncludes(omml, "<m:t>f</m:t>", `\\${command} must preserve its integrand.`);
+      expect(
+        !omml.includes(command),
+        `\\${command} must not leak the raw unsupported command into Word OMML.`,
+      );
+    }
+
     expect(!uprightSymbols.includes("differentialD"), "MathLive differentialD must not leak into OMML.");
     expect(!uprightSymbols.includes("capitalDifferentialD"), "MathLive capitalDifferentialD must not leak into OMML.");
     expect(!uprightSymbols.includes("exponentialE"), "MathLive exponentialE must not leak into OMML.");
@@ -290,6 +374,35 @@ async function main() {
     const multiLine = multiLineEvaluation.result?.value;
     expectIncludes(multiLine, "<m:eqArr>", "Multiple editor lines must use one OMML equation array.");
     expect((multiLine.match(/<m:e>/g) ?? []).length >= 2, "Equation arrays must preserve every editor line.");
+
+    const alignedExpression = `
+      (async () => {
+        const module = await import(${JSON.stringify(`${baseUrl}/src/office/omml/latexToOmml.ts`)});
+        return module.latexLinesToOmml(['a=b+c', 'long=d'], 'block', 'align');
+      })()
+    `;
+    const alignedEvaluation = await client.send("Runtime.evaluate", {
+      expression: alignedExpression,
+      awaitPromise: true,
+      returnByValue: true,
+    });
+    if (alignedEvaluation.exceptionDetails) {
+      throw new Error(alignedEvaluation.exceptionDetails.exception?.description ?? "Aligned OMML generation failed.");
+    }
+    const aligned = alignedEvaluation.result?.value;
+    expectIncludes(aligned, "<m:eqArrPr><m:baseJc m:val=\"center\"/></m:eqArrPr>", "Aligned rows must use one centered equation array.");
+    expect(
+      (aligned.match(/&amp;/g) ?? []).length === 2,
+      "Every align row must expose exactly one OMML equation-array alignment control.",
+    );
+    expect(
+      (aligned.match(/<m:oMath\b/g) ?? []).length === 1,
+      "Aligned OMML must contain exactly one formula root and no empty formula objects.",
+    );
+    expect(
+      /<m:rPr>(?:<m:scr[^>]*\/>|<m:sty[^>]*\/>)+<\/m:rPr><m:t>&amp;=<\/m:t>/.test(aligned),
+      "Each OMML equation-array alignment control must precede its relationship operator.",
+    );
 
     const docxExpression = `
       (async () => {

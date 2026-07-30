@@ -10,7 +10,6 @@ import {
 } from "react";
 import {
   MathfieldElement,
-  convertLatexToMarkup,
   type Style,
 } from "mathlive";
 import { flushSync } from "react-dom";
@@ -58,7 +57,15 @@ import {
   resolveVisualTexInlineShortcuts,
   type VisualTexInlineShortcutDefinitions,
 } from "./normalizeChineseLatex";
+import {
+  convertVisualTexLatexToMarkup,
+  installMathLiveContourIntegralShadowStyle,
+} from "./mathLiveIntegralCompatibility";
 import { ImeCompositionGuard } from "./imeCompositionGuard";
+import {
+  nativeSuggestionPreviewHasVisibleInk,
+  resolveNativeSuggestionPreview,
+} from "./nativeSuggestionPreviews";
 
 export interface MathEditorInsertionTarget {
   lineId: string;
@@ -1001,35 +1008,6 @@ const wrapperCommandPreviews = new Map<string, string>([
   ["\\boldsymbol", "\\boldsymbol{\\alpha A}"],
   ["\\mathnormal", "\\mathnormal{ABC}"],
 ]);
-const nativeCommandPreviews = new Map<string, string>([
-  ...wrapperCommandPreviews,
-  ["\\overset", "\\overset{▢}{▢}"],
-  ["\\underset", "\\underset{▢}{▢}"],
-  ["\\overunderset", "\\overunderset{▢}{▢}{▢}"],
-  ["\\stackrel", "\\stackrel{▢}{▢}"],
-  ["\\stackbin", "\\stackbin{▢}{▢}"],
-  ["\\overarc", "\\overarc{▢}"],
-  ["\\overline", "\\overline{▢}"],
-  ["\\overbrace", "\\overbrace{▢}"],
-  ["\\overgroup", "\\overgroup{▢}"],
-  ["\\overparen", "\\overparen{▢}"],
-  ["\\overleftarrow", "\\overleftarrow{▢}"],
-  ["\\overrightarrow", "\\overrightarrow{▢}"],
-  ["\\overleftrightarrow", "\\overleftrightarrow{▢}"],
-  ["\\overleftharpoon", "\\overleftharpoon{▢}"],
-  ["\\overrightharpoon", "\\overrightharpoon{▢}"],
-  ["\\overlinesegment", "\\overlinesegment{▢}"],
-  ["\\underarc", "\\underarc{▢}"],
-  ["\\underline", "\\underline{▢}"],
-  ["\\underbrace", "\\underbrace{▢}"],
-  ["\\undergroup", "\\undergroup{▢}"],
-  ["\\underparen", "\\underparen{▢}"],
-  ["\\underleftarrow", "\\underleftarrow{▢}"],
-  ["\\underrightarrow", "\\underrightarrow{▢}"],
-  ["\\underleftrightarrow", "\\underleftrightarrow{▢}"],
-  ["\\underlinesegment", "\\underlinesegment{▢}"],
-]);
-
 function visibleCommandSuggestions(
   rawQuery: string,
   usage: Record<string, CommandUsage>,
@@ -1148,20 +1126,49 @@ function decorateNativeSuggestionPreviews() {
 
   panel.querySelectorAll<HTMLElement>("li[data-command]").forEach((item) => {
     const command = item.dataset.command ?? "";
-    const previewLatex = nativeCommandPreviews.get(command);
     const preview = item.querySelector<HTMLElement>(".ML__popover__command");
-    if (!previewLatex || !preview) return;
-    if (preview.dataset.visualtexPreview === previewLatex) return;
+    if (!preview) return;
+    const decoratedCommand = preview.dataset.visualtexPreviewCommand;
+    if (
+      preview.dataset.visualtexPreview &&
+      decoratedCommand === command
+    ) {
+      return;
+    }
+    if (preview.dataset.visualtexPreview) {
+      preview.innerHTML = convertVisualTexLatexToMarkup(command, {
+        defaultMode: "math",
+      });
+      delete preview.dataset.visualtexPreview;
+      delete preview.dataset.visualtexPreviewKind;
+      delete preview.dataset.visualtexPreviewCommand;
+      delete item.dataset.visualtexPreviewKind;
+      item.classList.remove("has-visualtex-command-preview");
+    }
+    const resolved = resolveNativeSuggestionPreview(command, preview);
+    if (!resolved) return;
+    let previewLatex = resolved.latex;
+    let previewKind = resolved.kind;
 
-    preview.innerHTML = convertLatexToMarkup(previewLatex, {
+    preview.innerHTML = convertVisualTexLatexToMarkup(previewLatex, {
       defaultMode: "math",
     });
+    if (!nativeSuggestionPreviewHasVisibleInk(preview)) {
+      preview.innerHTML = convertVisualTexLatexToMarkup("\\boxed{?}", {
+        defaultMode: "math",
+      });
+      previewLatex = "\\boxed{?}";
+      previewKind = "fallback";
+    }
     preview.querySelectorAll<HTMLElement>(".ML__cmr").forEach((node) => {
       if (node.textContent?.trim() !== "▢") return;
       node.classList.add("visualtex-native-preview-placeholder");
     });
     preview.dataset.visualtexPreview = previewLatex;
+    preview.dataset.visualtexPreviewKind = previewKind;
+    preview.dataset.visualtexPreviewCommand = command;
     preview.setAttribute("aria-label", command);
+    item.dataset.visualtexPreviewKind = previewKind;
     item.classList.add("has-visualtex-command-preview");
   });
   scheduleStableNativeInputPopoverSync();
@@ -1352,7 +1359,7 @@ function predictedFormulaRowHeight(
     probe.style.pointerEvents = "none";
     probe.style.fontSize = metrics.fontSize + "px";
     probe.style.lineHeight = "normal";
-    probe.innerHTML = convertLatexToMarkup(latex, {
+    probe.innerHTML = convertVisualTexLatexToMarkup(latex, {
       defaultMode: "math",
     });
     measurementHost.append(probe);
@@ -3504,6 +3511,7 @@ function FormulaField(props: FormulaFieldProps) {
       "--formula-row-height",
       initialRowHeight + "px",
     );
+    installMathLiveContourIntegralShadowStyle(field);
     installVisualTexStructuralPlaceholderStyle(field);
 
     let pointerPlaceholderFrame = 0;
@@ -3659,7 +3667,7 @@ function FormulaField(props: FormulaFieldProps) {
       let renderedWidth = 0;
       if (content) {
         wrapperMeasure.style.fontSize = field.style.fontSize;
-        wrapperMeasure.innerHTML = convertLatexToMarkup(
+        wrapperMeasure.innerHTML = convertVisualTexLatexToMarkup(
           pendingWrapperInput.command + "{" + content + "}",
           { defaultMode: "math" },
         );
@@ -5006,6 +5014,7 @@ function FormulaField(props: FormulaFieldProps) {
     };
     host.replaceChildren(field);
     field.menuItems = overrideContextStyleMenuItems(field.menuItems);
+    installMathLiveContourIntegralShadowStyle(field);
     installVisualTexStructuralPlaceholderStyle(field);
     defaultInlineShortcutsRef.current = { ...field.inlineShortcuts };
     field.inlineShortcuts = resolveVisualTexInlineShortcuts(

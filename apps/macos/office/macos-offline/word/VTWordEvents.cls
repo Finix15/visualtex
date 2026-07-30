@@ -21,20 +21,9 @@ Private Sub App_WindowSelectionChange(ByVal Sel As Word.Selection)
 End Sub
 
 Private Sub App_WindowBeforeDoubleClick(ByVal Sel As Word.Selection, Cancel As Boolean)
-    Dim selectedFormula As InlineShape
-
     On Error GoTo IgnoreDoubleClick
     If Sel Is Nothing Then Exit Sub
-    Set selectedFormula = VTVisualTeXInlineShapeAtSelection(Sel)
-    If Not selectedFormula Is Nothing Then
-        Cancel = True
-        VisualTeX_EditInlineShape selectedFormula
-        Exit Sub
-    End If
-    If VTIsVisualTeXNativeSelection(Sel.Range) Then
-        Cancel = True
-        VisualTeX_EditNativeSelection Sel.Range
-    End If
+    Cancel = VTHandleWordBeforeDoubleClick(Sel)
     Exit Sub
 
 IgnoreDoubleClick:
