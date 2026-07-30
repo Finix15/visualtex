@@ -222,6 +222,16 @@ async function main() {
 E=mc^2
 \end{equation}
 
+\begin{align}
+a &= b + c \\
+d &= e
+\end{align}
+
+\begin{align*}
+x &= y \\
+y &= z
+\end{align*}
+
 结尾文字。`;
     await evaluate(`(() => {
       const textarea = document.querySelector(".document-import-source-pane textarea");
@@ -236,7 +246,7 @@ E=mc^2
 
     const parseStarted = Date.now();
     while (Date.now() - parseStarted < 10_000) {
-      if ((await evaluate(`document.querySelectorAll(".document-import-formula-card").length`)) === 2) {
+      if ((await evaluate(`document.querySelectorAll(".document-import-formula-card").length`)) === 4) {
         break;
       }
       await sleep(80);
@@ -252,11 +262,9 @@ E=mc^2
       };
     })()`);
     if (
-      parsed.count !== 2 ||
-      parsed.modes[0] !== "inline" ||
-      parsed.modes[1] !== "block" ||
-      parsed.numbered[0] !== false ||
-      parsed.numbered[1] !== true
+      parsed.count !== 4 ||
+      parsed.modes.join(",") !== "inline,block,block,block" ||
+      parsed.numbered.join(",") !== "false,true,true,false"
     ) {
       throw new Error(`Unexpected parsed formula blocks: ${JSON.stringify(parsed)}`);
     }
@@ -267,7 +275,7 @@ E=mc^2
       );
       imageRadio?.click();
       const cards = [...document.querySelectorAll(".document-import-formula-card")];
-      const sizes = [10.5, 18];
+      const sizes = [10.5, 18, 14, 16];
       cards.forEach((card, index) => {
         const input = card.querySelector('input[type="number"]');
         const setter = Object.getOwnPropertyDescriptor(
@@ -301,7 +309,7 @@ E=mc^2
     const input = commit.input;
     const formulas = input?.items?.filter((item) => item.kind === "formula") ?? [];
     const texts = input?.items?.filter((item) => item.kind === "text") ?? [];
-    if (input?.outputKind !== "image" || formulas.length !== 2 || texts.length < 2) {
+    if (input?.outputKind !== "image" || formulas.length !== 4 || texts.length < 2) {
       throw new Error(`Unexpected document import commit: ${JSON.stringify(commit)}`);
     }
     if (
@@ -310,7 +318,13 @@ E=mc^2
       formulas[0].fontSizePt !== 10.5 ||
       formulas[1].displayMode !== "block" ||
       formulas[1].numbered !== true ||
-      formulas[1].fontSizePt !== 18
+      formulas[1].fontSizePt !== 18 ||
+      formulas[2].displayMode !== "block" ||
+      formulas[2].numbered !== true ||
+      formulas[2].fontSizePt !== 14 ||
+      formulas[3].displayMode !== "block" ||
+      formulas[3].numbered !== false ||
+      formulas[3].fontSizePt !== 16
     ) {
       throw new Error(`Independent formula settings were lost: ${JSON.stringify(formulas)}`);
     }
@@ -330,8 +344,42 @@ E=mc^2
         );
       }
     }
-    if (formulas[0].formulaId === formulas[1].formulaId) {
+    if (new Set(formulas.map((formula) => formula.formulaId)).size !== formulas.length) {
       throw new Error("Imported formulas did not receive independent identities");
+    }
+    const multilineExpectations = [
+      {
+        formula: formulas[2],
+        codeFormat: "align",
+        lines: ["a = b + c", "d = e"],
+        environment: "align",
+      },
+      {
+        formula: formulas[3],
+        codeFormat: "align-star",
+        lines: ["x = y", "y = z"],
+        environment: "align*",
+      },
+    ];
+    for (const expectation of multilineExpectations) {
+      const metadataLines = expectation.formula.metadata.lines.map(
+        (line) => line.latex,
+      );
+      if (
+        expectation.formula.metadata.codeFormat !== expectation.codeFormat ||
+        JSON.stringify(metadataLines) !== JSON.stringify(expectation.lines) ||
+        expectation.formula.latex !== expectation.formula.metadata.latex ||
+        !expectation.formula.latex.startsWith(
+          `\\begin{${expectation.environment}}\n`,
+        ) ||
+        !expectation.formula.latex.endsWith(
+          `\n\\end{${expectation.environment}}`,
+        )
+      ) {
+        throw new Error(
+          `Multiline formula canonical metadata is inconsistent: ${JSON.stringify(expectation.formula)}`,
+        );
+      }
     }
 
     const closed = await evaluate(

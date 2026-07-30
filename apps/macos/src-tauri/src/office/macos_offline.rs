@@ -653,6 +653,402 @@ fn validate_metadata(metadata: &VisualTeXFormulaMetadata) -> Result<(), String> 
     Ok(())
 }
 
+fn replace_mathlive_latex_command(
+    source: &str,
+    command: &str,
+    replacement: &str,
+) -> String {
+    let pattern = format!("\\{command}");
+    let mut output = String::with_capacity(source.len());
+    let mut cursor = 0;
+    while let Some(relative) = source[cursor..].find(&pattern) {
+        let start = cursor + relative;
+        let end = start + pattern.len();
+        output.push_str(&source[cursor..start]);
+        let followed_by_command_letter = source[end..]
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_alphabetic());
+        if followed_by_command_letter {
+            output.push_str(&pattern);
+        } else {
+            output.push_str(replacement);
+        }
+        cursor = end;
+    }
+    output.push_str(&source[cursor..]);
+    output
+}
+
+fn normalize_mathlive_upright_commands(source: &str) -> String {
+    let mut normalized = source.to_string();
+    for (command, replacement) in [
+        ("capitalDifferentialD", "\\mathrm{D}"),
+        ("differentialD", "\\mathrm{d}"),
+        ("exponentialE", "\\mathrm{e}"),
+        ("imaginaryI", "\\mathrm{i}"),
+        ("imaginaryJ", "\\mathrm{j}"),
+    ] {
+        normalized = replace_mathlive_latex_command(&normalized, command, replacement);
+    }
+    for prefix in ["\\mathrm{d", "\\textrm{d"] {
+        let mut output = String::with_capacity(normalized.len());
+        let mut cursor = 0;
+        while let Some(relative) = normalized[cursor..].find(prefix) {
+            let start = cursor + relative;
+            let variable_start = start + prefix.len();
+            output.push_str(&normalized[cursor..start]);
+            let Some(variable) = normalized[variable_start..].chars().next() else {
+                output.push_str(prefix);
+                cursor = variable_start;
+                continue;
+            };
+            let variable_end = variable_start + variable.len_utf8();
+            if variable.is_ascii_alphabetic()
+                && normalized[variable_end..].starts_with('}')
+            {
+                output.push_str("\\mathrm{d}");
+                output.push(variable);
+                cursor = variable_end + 1;
+            } else {
+                output.push_str(prefix);
+                cursor = variable_start;
+            }
+        }
+        output.push_str(&normalized[cursor..]);
+        normalized = output;
+    }
+    normalized
+}
+
+fn latex_character_is_escaped(source: &str, index: usize) -> bool {
+    let bytes = source.as_bytes();
+    let mut cursor = index;
+    let mut slash_count = 0;
+    while cursor > 0 && bytes[cursor - 1] == b'\\' {
+        slash_count += 1;
+        cursor -= 1;
+    }
+    slash_count % 2 == 1
+}
+
+fn read_latex_environment_token(
+    source: &str,
+    index: usize,
+) -> Option<(bool, String, usize)> {
+    let rest = source.get(index..)?;
+    let (is_begin, name_start) = if rest.starts_with("\\begin{") {
+        (true, index + "\\begin{".len())
+    } else if rest.starts_with("\\end{") {
+        (false, index + "\\end{".len())
+    } else {
+        return None;
+    };
+    let name_end = source[name_start..].find('}')? + name_start;
+    let name = &source[name_start..name_end];
+    if name.is_empty()
+        || !name
+            .chars()
+            .enumerate()
+            .all(|(position, character)| {
+                character.is_ascii_alphabetic()
+                    || (character == '*' && position == name.chars().count() - 1)
+            })
+    {
+        return None;
+    }
+    Some((is_begin, name.to_string(), name_end + 1))
+}
+
+fn update_latex_environment_stack(
+    environments: &mut Vec<String>,
+    is_begin: bool,
+    name: String,
+) {
+    if is_begin {
+        environments.push(name);
+    } else if let Some(index) = environments.iter().rposition(|value| value == &name) {
+        environments.remove(index);
+    }
+}
+
+fn has_top_level_alignment_marker(source: &str) -> bool {
+    let mut brace_depth = 0_u32;
+    let mut environments = Vec::new();
+    let mut index = 0;
+    while index < source.len() {
+        if let Some((is_begin, name, end)) = read_latex_environment_token(source, index) {
+            update_latex_environment_stack(&mut environments, is_begin, name);
+            index = end;
+            continue;
+        }
+        let character = source[index..].chars().next().expect("valid UTF-8");
+        if character == '{' && !latex_character_is_escaped(source, index) {
+            brace_depth += 1;
+        } else if character == '}' && !latex_character_is_escaped(source, index) {
+            brace_depth = brace_depth.saturating_sub(1);
+        } else if character == '&'
+            && !latex_character_is_escaped(source, index)
+            && brace_depth == 0
+            && environments.is_empty()
+        {
+            return true;
+        }
+        index += character.len_utf8();
+    }
+    false
+}
+
+fn top_level_relation_index(source: &str) -> Option<usize> {
+    const RELATION_COMMANDS: &[&str] = &[
+        "\\Longleftrightarrow",
+        "\\Longrightarrow",
+        "\\Leftrightarrow",
+        "\\Rightarrow",
+        "\\leftrightarrow",
+        "\\rightarrow",
+        "\\leftarrow",
+        "\\subseteq",
+        "\\supseteq",
+        "\\notin",
+        "\\approx",
+        "\\equiv",
+        "\\simeq",
+        "\\propto",
+        "\\mapsto",
+        "\\subset",
+        "\\supset",
+        "\\cong",
+        "\\neq",
+        "\\leq",
+        "\\geq",
+        "\\sim",
+        "\\to",
+        "\\ne",
+        "\\le",
+        "\\ge",
+        "\\in",
+    ];
+    let mut brace_depth = 0_u32;
+    let mut environments = Vec::new();
+    let mut index = 0;
+    while index < source.len() {
+        if let Some((is_begin, name, end)) = read_latex_environment_token(source, index) {
+            update_latex_environment_stack(&mut environments, is_begin, name);
+            index = end;
+            continue;
+        }
+        let character = source[index..].chars().next().expect("valid UTF-8");
+        if character == '{' && !latex_character_is_escaped(source, index) {
+            brace_depth += 1;
+            index += 1;
+            continue;
+        }
+        if character == '}' && !latex_character_is_escaped(source, index) {
+            brace_depth = brace_depth.saturating_sub(1);
+            index += 1;
+            continue;
+        }
+        if brace_depth == 0 && environments.is_empty() {
+            if matches!(character, '=' | '<' | '>') {
+                return Some(index);
+            }
+            if character == '\\' {
+                for command in RELATION_COMMANDS {
+                    if !source[index..].starts_with(command) {
+                        continue;
+                    }
+                    let next = source[index + command.len()..].chars().next();
+                    if next.is_some_and(|value| value.is_ascii_alphabetic()) {
+                        continue;
+                    }
+                    return Some(index);
+                }
+            }
+        }
+        index += character.len_utf8();
+    }
+    None
+}
+
+fn add_latex_alignment_marker(source: &str) -> String {
+    if source.is_empty() || has_top_level_alignment_marker(source) {
+        return source.to_string();
+    }
+    let Some(index) = top_level_relation_index(source) else {
+        return source.to_string();
+    };
+    format!("{}&{}", &source[..index], &source[index..])
+}
+
+fn wrap_latex_environment(name: &str, body: &str) -> String {
+    format!("\\begin{{{name}}}\n{body}\n\\end{{{name}}}")
+}
+
+fn format_document_formula_rows(lines: &[String], align_relations: bool) -> String {
+    lines
+        .iter()
+        .enumerate()
+        .map(|(index, line)| {
+            let content = if align_relations {
+                add_latex_alignment_marker(line)
+            } else {
+                line.clone()
+            };
+            if index + 1 < lines.len() {
+                format!("{content} \\\\")
+            } else {
+                content
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn canonical_document_formula_latex(
+    metadata: &VisualTeXFormulaMetadata,
+) -> Result<String, String> {
+    let source = normalize_mathlive_upright_commands(
+        &metadata
+            .lines
+            .iter()
+            .map(|line| line.latex.as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .replace("\r\n", "\n")
+    .replace('\r', "\n");
+    let mut lines = source
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    let joined = lines.join("\n");
+    let formatted = match metadata.code_format.as_str() {
+        "raw" => joined,
+        "inline-dollar" => lines
+            .iter()
+            .map(|line| format!("${line}$"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        "inline-paren" => lines
+            .iter()
+            .map(|line| format!("\\({line}\\)"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        "display-dollar" => lines
+            .iter()
+            .map(|line| format!("$$\n{line}\n$$"))
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+        "display-bracket" => lines
+            .iter()
+            .map(|line| format!("\\[\n{line}\n\\]"))
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+        "equation" => lines
+            .iter()
+            .map(|line| wrap_latex_environment("equation", line))
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+        "equation-star" => lines
+            .iter()
+            .map(|line| wrap_latex_environment("equation*", line))
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+        "align" => wrap_latex_environment(
+            "align",
+            &format_document_formula_rows(&lines, true),
+        ),
+        "align-star" => wrap_latex_environment(
+            "align*",
+            &format_document_formula_rows(&lines, true),
+        ),
+        "aligned" => format!(
+            "\\[\n{}\n\\]",
+            wrap_latex_environment(
+                "aligned",
+                &format_document_formula_rows(&lines, true),
+            )
+        ),
+        "gather" => wrap_latex_environment(
+            "gather",
+            &format_document_formula_rows(&lines, false),
+        ),
+        "gather-star" => wrap_latex_environment(
+            "gather*",
+            &format_document_formula_rows(&lines, false),
+        ),
+        "multline" => wrap_latex_environment(
+            "multline",
+            &format_document_formula_rows(&lines, false),
+        ),
+        "multline-star" => wrap_latex_environment(
+            "multline*",
+            &format_document_formula_rows(&lines, false),
+        ),
+        "equation-split" => wrap_latex_environment(
+            "equation",
+            &wrap_latex_environment(
+                "split",
+                &format_document_formula_rows(&lines, true),
+            ),
+        ),
+        "equation-star-split" => wrap_latex_environment(
+            "equation*",
+            &wrap_latex_environment(
+                "split",
+                &format_document_formula_rows(&lines, true),
+            ),
+        ),
+        _ => {
+            return Err(format!(
+                "Document formula metadata codeFormat is unsupported: {}",
+                metadata.code_format
+            ))
+        }
+    };
+    Ok(formatted)
+}
+
+fn normalized_serialized_latex(source: &str) -> String {
+    source
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .trim()
+        .to_string()
+}
+
+fn validate_document_formula_metadata_match(
+    metadata: &VisualTeXFormulaMetadata,
+    formula_id: &str,
+    latex: &str,
+    display_mode: &str,
+    numbered: bool,
+) -> Result<String, String> {
+    validate_metadata(metadata)?;
+    if metadata.formula_id != formula_id
+        || metadata.display_mode != display_mode
+        || metadata.numbered != numbered
+    {
+        return Err("Document formula metadata identity does not match its formula block".to_string());
+    }
+    let canonical_latex = canonical_document_formula_latex(metadata)?;
+    if normalized_serialized_latex(&metadata.latex) != canonical_latex
+        || normalized_serialized_latex(latex) != canonical_latex
+    {
+        return Err(
+            "Document formula metadata canonical LaTeX does not match its formula block"
+                .to_string(),
+        );
+    }
+    Ok(canonical_latex)
+}
+
 fn encode_metadata(metadata: &VisualTeXFormulaMetadata) -> Result<String, String> {
     validate_metadata(metadata)?;
     let json = serde_json::to_vec(metadata)
@@ -2202,14 +2598,14 @@ fn commit_document_import_blocking(
                 atomic_write(&native_document_path, &native_docx, 0o600)?;
 
                 let mut resolved_metadata = metadata.clone();
-                validate_metadata(&resolved_metadata)?;
-                if resolved_metadata.formula_id != *formula_id
-                    || resolved_metadata.display_mode != *display_mode
-                    || resolved_metadata.numbered != *numbered
-                    || resolved_metadata.latex != latex.trim()
-                {
-                    return Err("Document formula metadata does not match its formula block".to_string());
-                }
+                let canonical_latex = validate_document_formula_metadata_match(
+                    &resolved_metadata,
+                    formula_id,
+                    latex,
+                    display_mode,
+                    *numbered,
+                )?;
+                resolved_metadata.latex = canonical_latex.clone();
                 resolved_metadata.font_size_pt = Some(*font_size_pt);
 
                 let mut image_path = String::new();
@@ -2272,7 +2668,7 @@ fn commit_document_import_blocking(
                 entries.push((format!("{prefix}formulaId"), formula_id.clone()));
                 entries.push((
                     format!("{prefix}latexBase64"),
-                    URL_SAFE_NO_PAD.encode(latex.trim().as_bytes()),
+                    URL_SAFE_NO_PAD.encode(canonical_latex.as_bytes()),
                 ));
                 entries.push((format!("{prefix}displayMode"), display_mode.clone()));
                 entries.push((
@@ -3052,6 +3448,206 @@ mod tests {
         assert_eq!(decoded.reference_width_pt, Some(37.5));
         assert_eq!(decoded.reference_height_pt, Some(15.0));
         assert_eq!(decoded.reference_baseline_pt, Some(-3.0));
+    }
+
+    fn document_formula_metadata(
+        code_format: &str,
+        lines: &[&str],
+        latex: &str,
+        display_mode: &str,
+        numbered: bool,
+    ) -> VisualTeXFormulaMetadata {
+        VisualTeXFormulaMetadata {
+            schema: "visualtex-formula".to_string(),
+            schema_version: 1,
+            formula_id: "12345678-1234-4234-9234-123456789abc".to_string(),
+            title: "Imported formula".to_string(),
+            latex: latex.to_string(),
+            lines: lines
+                .iter()
+                .map(|latex| crate::office::sessions::MetadataLine {
+                    id: Uuid::new_v4().to_string(),
+                    latex: (*latex).to_string(),
+                })
+                .collect(),
+            code_format: code_format.to_string(),
+            display_mode: display_mode.to_string(),
+            numbered,
+            render_width_px: None,
+            render_height_px: None,
+            font_size_pt: Some(14.0),
+            reference_width_pt: None,
+            reference_height_pt: None,
+            reference_baseline_pt: None,
+            created_with_version: "1.2.3".to_string(),
+            updated_with_version: "1.2.3".to_string(),
+            created_at: "unix-ms:1".to_string(),
+            updated_at: "unix-ms:1".to_string(),
+        }
+    }
+
+    #[test]
+    fn document_formula_metadata_rebuilds_canonical_multiline_environments() {
+        let cases = [
+            (
+                "align",
+                vec!["a = b + c", "d = e"],
+                r"\begin{align}
+a &= b + c \\
+d &= e
+\end{align}",
+            ),
+            (
+                "align-star",
+                vec!["x = y", "y = z"],
+                r"\begin{align*}
+x &= y \\
+y &= z
+\end{align*}",
+            ),
+            (
+                "aligned",
+                vec!["p = q", "r = s"],
+                r"\[
+\begin{aligned}
+p &= q \\
+r &= s
+\end{aligned}
+\]",
+            ),
+            (
+                "gather",
+                vec!["a=b", "c=d"],
+                r"\begin{gather}
+a=b \\
+c=d
+\end{gather}",
+            ),
+            (
+                "multline-star",
+                vec!["a+b+c", "=d+e"],
+                r"\begin{multline*}
+a+b+c \\
+=d+e
+\end{multline*}",
+            ),
+            (
+                "equation-split",
+                vec!["a = b", "c = d"],
+                r"\begin{equation}
+\begin{split}
+a &= b \\
+c &= d
+\end{split}
+\end{equation}",
+            ),
+            (
+                "equation-star-split",
+                vec!["a = b", "c = d"],
+                r"\begin{equation*}
+\begin{split}
+a &= b \\
+c &= d
+\end{split}
+\end{equation*}",
+            ),
+        ];
+
+        for (code_format, lines, expected) in cases {
+            let metadata = document_formula_metadata(
+                code_format,
+                &lines,
+                expected,
+                "block",
+                false,
+            );
+            assert_eq!(
+                canonical_document_formula_latex(&metadata).unwrap(),
+                expected,
+                "{code_format} canonical source"
+            );
+            assert_eq!(
+                validate_document_formula_metadata_match(
+                    &metadata,
+                    &metadata.formula_id,
+                    expected,
+                    "block",
+                    false,
+                )
+                .unwrap(),
+                expected,
+                "{code_format} metadata match"
+            );
+        }
+    }
+
+    #[test]
+    fn document_formula_metadata_match_rejects_structural_drift() {
+        let canonical = r"\begin{align}
+a &= b \\
+c &= d
+\end{align}";
+        let metadata = document_formula_metadata(
+            "align",
+            &["a = b", "c = d"],
+            canonical,
+            "block",
+            true,
+        );
+        assert!(validate_document_formula_metadata_match(
+            &metadata,
+            &metadata.formula_id,
+            canonical,
+            "block",
+            true,
+        )
+        .is_ok());
+        assert!(validate_document_formula_metadata_match(
+            &metadata,
+            "22345678-1234-4234-9234-123456789abc",
+            canonical,
+            "block",
+            true,
+        )
+        .is_err());
+        assert!(validate_document_formula_metadata_match(
+            &metadata,
+            &metadata.formula_id,
+            canonical,
+            "inline",
+            true,
+        )
+        .is_err());
+        assert!(validate_document_formula_metadata_match(
+            &metadata,
+            &metadata.formula_id,
+            canonical,
+            "block",
+            false,
+        )
+        .is_err());
+        assert!(validate_document_formula_metadata_match(
+            &metadata,
+            &metadata.formula_id,
+            r"\begin{align}
+a &= b \\
+c &= e
+\end{align}",
+            "block",
+            true,
+        )
+        .is_err());
+
+        let mut stale_metadata = metadata.clone();
+        stale_metadata.latex = "a = b\nc = d".to_string();
+        assert!(validate_document_formula_metadata_match(
+            &stale_metadata,
+            &stale_metadata.formula_id,
+            canonical,
+            "block",
+            true,
+        )
+        .is_err());
     }
 
     #[test]

@@ -1,4 +1,5 @@
 import {
+  formatLatex,
   isLatexCodeFormat,
   parseLatexSource,
 } from "../../clipboard/LatexCopyService";
@@ -13,6 +14,13 @@ export interface FormulaEditorLine {
 export interface FormulaEditorDocument {
   lines: FormulaEditorLine[];
   codeFormat: LatexCodeFormat;
+}
+
+export function serializeFormulaEditorDocument(document: FormulaEditorDocument) {
+  return formatLatex(
+    document.lines.map((line) => line.latex).join("\n"),
+    document.codeFormat,
+  );
 }
 
 interface DetectedFormulaEnvironment {
@@ -61,6 +69,13 @@ function detectFormulaEnvironment(source: string): DetectedFormulaEnvironment | 
           : "equation-split",
       source: normalized,
     };
+  }
+
+  const alignedDisplay = normalized.match(
+    /^\\\[\s*(\\begin\s*\{aligned\}[\s\S]*\\end\s*\{aligned\})\s*\\\]$/,
+  );
+  if (alignedDisplay) {
+    return { codeFormat: "aligned", source: alignedDisplay[1] };
   }
 
   const environment = normalized.match(

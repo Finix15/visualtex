@@ -26,7 +26,10 @@ import {
   createFormulaMetadata,
   type VisualTeXFormulaMetadata,
 } from "../shared/formulaMetadata";
-import { normalizeFormulaEditorDocument } from "../shared/formulaEditorDocument";
+import {
+  normalizeFormulaEditorDocument,
+  serializeFormulaEditorDocument,
+} from "../shared/formulaEditorDocument";
 import { createUuid } from "../../runtime/browserCompatibility";
 import { documentImportErrorMessage } from "./documentImportErrors";
 import {
@@ -115,6 +118,7 @@ async function prepareFormulaCommitItem(
   const line = { id: createUuid(), latex: block.latex.trim() };
   if (!line.latex) throw new Error("存在空公式，请填写或删除后再插入。");
   const editorDocument = normalizeFormulaEditorDocument([line], "raw");
+  const canonicalLatex = serializeFormulaEditorDocument(editorDocument);
   const omml = latexLinesToOmmlArtifacts([line.latex], block.displayMode);
 
   const paragraphMetadata = {
@@ -158,6 +162,7 @@ async function prepareFormulaCommitItem(
       title: block.displayMode === "inline" ? "Imported inline formula" : "Imported display formula",
       lines: editorDocument.lines,
       codeFormat: editorDocument.codeFormat,
+      sourceLatex: canonicalLatex,
       displayMode: block.displayMode,
       numbered: block.displayMode === "block" && block.numbered,
       fontSizePt: block.fontSizePt,
@@ -168,7 +173,7 @@ async function prepareFormulaCommitItem(
     return {
       kind: "formula",
       formulaId,
-      latex: line.latex,
+      latex: canonicalLatex,
       displayMode: block.displayMode,
       numbered: block.displayMode === "block" && block.numbered,
       fontSizePt: block.fontSizePt,
@@ -189,6 +194,7 @@ async function prepareFormulaCommitItem(
     title: block.displayMode === "inline" ? "Imported inline formula" : "Imported display formula",
     lines: editorDocument.lines,
     codeFormat: editorDocument.codeFormat,
+    sourceLatex: canonicalLatex,
     displayMode: block.displayMode,
     numbered: block.displayMode === "block" && block.numbered,
     fontSizePt: block.fontSizePt,
@@ -196,7 +202,7 @@ async function prepareFormulaCommitItem(
   return {
     kind: "formula",
     formulaId,
-    latex: line.latex,
+    latex: canonicalLatex,
     displayMode: block.displayMode,
     numbered: block.displayMode === "block" && block.numbered,
     fontSizePt: block.fontSizePt,

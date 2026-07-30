@@ -33,6 +33,8 @@ export interface CreateFormulaMetadataInput {
   title: string;
   lines: VisualTeXFormulaMetadata["lines"];
   codeFormat: string;
+  /** Canonical serialized source for formats whose editable lines omit wrappers. */
+  sourceLatex?: string;
   displayMode?: "inline" | "block";
   numbered?: boolean;
   renderWidthPx?: number;
@@ -152,6 +154,7 @@ export function createFormulaMetadata({
   title,
   lines,
   codeFormat,
+  sourceLatex,
   displayMode = "block",
   numbered = false,
   renderWidthPx,
@@ -197,12 +200,14 @@ export function createFormulaMetadata({
     referenceBaselinePt >= -256
       ? referenceBaselinePt
       : original?.referenceBaselinePt;
+  const resolvedLatex = sourceLatex?.replace(/\r\n?/g, "\n").trim() ||
+    lines.map((line) => line.latex).join("\n");
   return {
     schema: VISUALTEX_FORMULA_SCHEMA,
     schemaVersion: VISUALTEX_FORMULA_SCHEMA_VERSION,
     formulaId,
     title,
-    latex: lines.map((line) => line.latex).join("\n"),
+    latex: resolvedLatex,
     lines: lines.map((line) => ({ ...line })),
     codeFormat,
     displayMode,

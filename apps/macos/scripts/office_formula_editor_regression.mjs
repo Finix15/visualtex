@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
-import { normalizeFormulaEditorDocument } from "../src/office/shared/formulaEditorDocument.ts";
+import {
+  normalizeFormulaEditorDocument,
+  serializeFormulaEditorDocument,
+} from "../src/office/shared/formulaEditorDocument.ts";
+import { createFormulaMetadata } from "../src/office/shared/formulaMetadata.ts";
 import { errorMessage } from "../src/runtime/errorMessage.ts";
 
 function normalize(source, codeFormat = "raw") {
@@ -118,6 +122,31 @@ for (const testCase of multilineCases) {
     new Set(normalized.lines.map((line) => line.id)).size,
     normalized.lines.length,
     `${testCase.name} row UUIDs must remain unique`,
+  );
+  const canonicalSource = serializeFormulaEditorDocument(normalized);
+  const roundTrip = normalize(canonicalSource, normalized.codeFormat);
+  assert.equal(
+    serializeFormulaEditorDocument(roundTrip),
+    canonicalSource,
+    `${testCase.name} canonical source must be stable`,
+  );
+  assert.deepEqual(
+    roundTrip.lines.map((line) => line.latex),
+    testCase.lines,
+    `${testCase.name} canonical source must preserve every row`,
+  );
+  const metadata = createFormulaMetadata({
+    formulaId: "12345678-1234-4234-9234-123456789abc",
+    title: testCase.name,
+    lines: normalized.lines,
+    codeFormat: normalized.codeFormat,
+    sourceLatex: canonicalSource,
+    displayMode: "block",
+  });
+  assert.equal(
+    metadata.latex,
+    canonicalSource,
+    `${testCase.name} metadata must store the canonical serialized source`,
   );
 }
 
