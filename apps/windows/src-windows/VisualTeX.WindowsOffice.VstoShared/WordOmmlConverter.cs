@@ -17,6 +17,8 @@ internal static class WordOmmlConverter
         "http://schemas.openxmlformats.org/officeDocument/2006/math";
     private const string WordNamespace =
         "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    private const string NaryCharacters = "∑∏∐∫∬∭∮∯∰∱∲∳⨑⋀⋁⋂⋃";
+    private const string ExtendedIntegralCharacters = "∯∰∱∲∳⨑";
     private static readonly object TransformLock = new();
     private static XslCompiledTransform? _mathMlToOmml;
     private static XslCompiledTransform? _ommlToMathMl;
@@ -108,7 +110,11 @@ internal static class WordOmmlConverter
     {
         if (string.IsNullOrWhiteSpace(mathMl))
             throw new InvalidDataException("VisualTeX did not provide MathML for the Word OMML formula.");
+        mathMl = NormalizeNestedEmptyBaseScripts(mathMl);
+        mathMl = NormalizeMathMlAccents(mathMl);
         mathMl = NormalizeNaryArguments(mathMl);
+        var placeholderResult = ReplaceExtendedIntegralsWithOfficePlaceholders(mathMl);
+        mathMl = placeholderResult.MathMl;
         var display = IsBlockMathMl(mathMl);
         var transform = GetTransform();
         var inputSettings = new XmlReaderSettings
@@ -129,7 +135,9 @@ internal static class WordOmmlConverter
             transform.Transform(source, output);
         var transformed = outputText.ToString();
         var omml = ExtractSingleOMath(transformed);
+        omml = RestoreExtendedIntegralCharacters(omml, placeholderResult.NaryCharacters);
         omml = NormalizeExplicitUprightRuns(omml, mathMl);
+        omml = NormalizeExplicitTableColumnAlignment(omml, mathMl);
         return NormalizeDisplayNaryOmml(omml, display);
     }
 
@@ -173,6 +181,164 @@ internal static class WordOmmlConverter
         return ommlDocument.Root?.ToString(SaveOptions.DisableFormatting) ?? omml;
     }
 
+    internal static string NormalizeMathMlAccents(string mathMl)
+    {
+        if (string.IsNullOrWhiteSpace(mathMl)) return mathMl;
+
+        var settings = new XmlReaderSettings
+        {
+            DtdProcessing = DtdProcessing.Prohibit,
+            XmlResolver = null,
+            IgnoreComments = true,
+            IgnoreWhitespace = false,
+            MaxCharactersInDocument = 4_000_000,
+        };
+        using var text = new StringReader(mathMl);
+        using var reader = XmlReader.Create(text, settings);
+        var document = XDocument.Load(reader, LoadOptions.PreserveWhitespace);
+        XNamespace presentationMath = "http://www.w3.org/1998/Math/MathML";
+
+        var accentCharacters = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["^"] = "\u0302",
+            ["~"] = "\u0303",
+            ["→"] = "\u20D7",
+            ["←"] = "\u20D6",
+            ["˙"] = "\u0307",
+            ["¨"] = "\u0308",
+            ["ˇ"] = "\u030C",
+            ["˘"] = "\u0306",
+            ["´"] = "\u0301",
+            ["`"] = "\u0300",
+            ["˚"] = "\u030A",
+        };
+
+        foreach (var mover in document.Descendants(presentationMath + "mover").ToList())
+        {
+            var children = mover.Elements().ToArray();
+            if (children.Length != 2) continue;
+            var mark = children[1];
+            if (mark.Name != presentationMath + "mo") continue;
+            if (string.Equals(
+                    mark.Attribute("accent")?.Value,
+                    "false",
+                    StringComparison.OrdinalIgnoreCase)
+                || string.Equals(
+                    mover.Attribute("accent")?.Value,
+                    "false",
+                    StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var sourceCharacter = mark.Value;
+            if (!accentCharacters.TryGetValue(sourceCharacter, out var combiningCharacter))
+                continue;
+
+            // Office's MML2OMML.XSL only creates a native m:acc node when the
+            // MathML mover is explicitly marked as an accent and the mark is a
+            // combining accent character. MathJax emits spacing characters
+            // such as ^, ˙ and → without accent=true, which Office otherwise
+            // converts into m:limUpp or replacement glyphs/placeholder boxes.
+            mover.SetAttributeValue("accent", "true");
+            mark.SetAttributeValue("accent", "true");
+            mark.SetAttributeValue("stretchy", null);
+            mark.SetAttributeValue("data-mjx-pseudoscript", null);
+            mark.Value = combiningCharacter;
+        }
+
+        return document.ToString(SaveOptions.DisableFormatting);
+    }
+
+    internal static string NormalizeNestedEmptyBaseScripts(string mathMl)
+    {
+        if (string.IsNullOrWhiteSpace(mathMl)) return mathMl;
+        var settings = new XmlReaderSettings
+        {
+            DtdProcessing = DtdProcessing.Prohibit,
+            XmlResolver = null,
+            IgnoreComments = true,
+            IgnoreWhitespace = false,
+            MaxCharactersInDocument = 4_000_000,
+        };
+        using var text = new StringReader(mathMl);
+        using var reader = XmlReader.Create(text, settings);
+        var document = XDocument.Load(reader, LoadOptions.PreserveWhitespace);
+        XNamespace mathMlNamespace = "http://www.w3.org/1998/Math/MathML";
+        var simpleScriptNames = new HashSet<XName>
+        {
+            mathMlNamespace + "msub",
+            mathMlNamespace + "msup",
+        };
+        var allScriptNames = new HashSet<XName>(simpleScriptNames)
+        {
+            mathMlNamespace + "msubsup",
+        };
+        var transparentWrappers = new HashSet<XName>
+        {
+            mathMlNamespace + "mrow",
+            mathMlNamespace + "mstyle",
+            mathMlNamespace + "mpadded",
+            mathMlNamespace + "mphantom",
+            mathMlNamespace + "semantics",
+        };
+
+        bool IsEmptyMathNode(XElement element)
+        {
+            if (element.Name == mathMlNamespace + "mspace") return false;
+            if (element.Nodes().OfType<XText>().Any(node => !string.IsNullOrWhiteSpace(node.Value)))
+                return false;
+            var children = element.Elements().ToArray();
+            return children.Length == 0 || children.All(IsEmptyMathNode);
+        }
+
+        bool IsOnlyContentOfOuterScriptArgument(XElement candidate)
+        {
+            XElement current = candidate;
+            while (current.Parent is XElement parent)
+            {
+                if (transparentWrappers.Contains(parent.Name))
+                {
+                    if (parent.Elements().Any(sibling =>
+                            sibling != current && !IsEmptyMathNode(sibling)))
+                        return false;
+                    if (parent.Nodes().OfType<XText>().Any(node =>
+                            !string.IsNullOrWhiteSpace(node.Value)))
+                        return false;
+                    current = parent;
+                    continue;
+                }
+                if (!allScriptNames.Contains(parent.Name)) return false;
+                var children = parent.Elements().ToList();
+                var position = children.IndexOf(current);
+                return position >= 1;
+            }
+            return false;
+        }
+
+        foreach (var script in document
+                     .Descendants()
+                     .Where(element => simpleScriptNames.Contains(element.Name))
+                     .Reverse()
+                     .ToList())
+        {
+            var children = script.Elements().ToArray();
+            if (children.Length < 2
+                || !IsEmptyMathNode(children[0])
+                || !IsOnlyContentOfOuterScriptArgument(script))
+                continue;
+
+            // MathJax represents sources such as f_{_{\\mathrm H}} as an
+            // outer subscript whose argument contains another subscript with
+            // an empty base. Office faithfully renders that empty base as a
+            // dotted equation placeholder. Inside an existing script slot the
+            // extra empty-base level carries no useful layout information, so
+            // replace it with its visible script argument. Standalone empty-
+            // base scripts are intentionally preserved for prescript/tensor
+            // notation.
+            script.ReplaceWith(new XElement(children[1]));
+        }
+        return document.ToString(SaveOptions.DisableFormatting);
+    }
+
     internal static string NormalizeNaryArguments(string mathMl)
     {
         if (string.IsNullOrWhiteSpace(mathMl)) return mathMl;
@@ -197,7 +363,6 @@ internal static class WordOmmlConverter
             mathMlNamespace + "msup",
             mathMlNamespace + "msubsup",
         };
-        const string naryCharacters = "∑∏∐∫∬∭∮∯∰⋀⋁⋂⋃";
         var display = string.Equals(
             document.Root?.Attribute("display")?.Value,
             "block",
@@ -208,7 +373,7 @@ internal static class WordOmmlConverter
                          .Descendants(mathMlNamespace + "mo")
                          .Where(element =>
                              !string.IsNullOrEmpty(element.Value)
-                             && element.Value.All(character => naryCharacters.IndexOf(character) >= 0)
+                             && element.Value.All(character => NaryCharacters.IndexOf(character) >= 0)
                              && (element.Parent is null || !limitNames.Contains(element.Parent.Name)))
                          .ToList())
             {
@@ -238,7 +403,7 @@ internal static class WordOmmlConverter
             var op = limit.Elements().FirstOrDefault();
             if (op?.Name != mathMlNamespace + "mo"
                 || string.IsNullOrEmpty(op.Value)
-                || op.Value.Any(character => naryCharacters.IndexOf(character) < 0))
+                || op.Value.Any(character => NaryCharacters.IndexOf(character) < 0))
                 continue;
             var argument = limit.ElementsAfterSelf().FirstOrDefault();
             if (argument is null
@@ -254,6 +419,92 @@ internal static class WordOmmlConverter
             argument.ReplaceWith(new XElement(mathMlNamespace + "mrow", argument));
         }
         return document.ToString(SaveOptions.DisableFormatting);
+    }
+
+    internal static (string MathMl, IReadOnlyList<string> NaryCharacters)
+        ReplaceExtendedIntegralsWithOfficePlaceholders(string mathMl)
+    {
+        if (string.IsNullOrWhiteSpace(mathMl))
+            return (mathMl, Array.Empty<string>());
+
+        var settings = new XmlReaderSettings
+        {
+            DtdProcessing = DtdProcessing.Prohibit,
+            XmlResolver = null,
+            IgnoreComments = true,
+            IgnoreWhitespace = false,
+            MaxCharactersInDocument = 4_000_000,
+        };
+        using var text = new StringReader(mathMl);
+        using var reader = XmlReader.Create(text, settings);
+        var document = XDocument.Load(reader, LoadOptions.PreserveWhitespace);
+        XNamespace presentationMath = "http://www.w3.org/1998/Math/MathML";
+        var operators = document
+            .Descendants(presentationMath + "mo")
+            .Where(element =>
+                element.Value.Length == 1
+                && NaryCharacters.IndexOf(element.Value[0]) >= 0)
+            .ToArray();
+        var characters = operators.Select(element => element.Value).ToArray();
+
+        foreach (var op in operators)
+        {
+            if (ExtendedIntegralCharacters.IndexOf(op.Value[0]) >= 0)
+            {
+                // Office's MML2OMML transform knows how to attach limits and
+                // the following operand to a standard integral. Use it only as
+                // a structural placeholder; the exact extended character is
+                // restored in OMML immediately after the transform.
+                op.Value = "∫";
+            }
+        }
+
+        return (document.ToString(SaveOptions.DisableFormatting), characters);
+    }
+
+    internal static string RestoreExtendedIntegralCharacters(
+        string omml,
+        IReadOnlyList<string> sourceNaryCharacters)
+    {
+        if (sourceNaryCharacters.Count == 0
+            || !sourceNaryCharacters.Any(character =>
+                character.Length == 1
+                && ExtendedIntegralCharacters.IndexOf(character[0]) >= 0))
+            return omml;
+
+        var document = XDocument.Parse(omml, LoadOptions.PreserveWhitespace);
+        XNamespace math = MathNamespace;
+        var naries = document.Descendants(math + "nary").ToArray();
+        if (naries.Length != sourceNaryCharacters.Count)
+        {
+            throw new InvalidDataException(
+                "Office changed the number of n-ary operators while converting extended integrals. "
+                + $"MathML={sourceNaryCharacters.Count}; OMML={naries.Length}.");
+        }
+
+        for (var index = 0; index < sourceNaryCharacters.Count; index++)
+        {
+            var sourceCharacter = sourceNaryCharacters[index];
+            if (sourceCharacter.Length != 1
+                || ExtendedIntegralCharacters.IndexOf(sourceCharacter[0]) < 0)
+                continue;
+
+            var properties = naries[index].Element(math + "naryPr");
+            if (properties is null)
+            {
+                properties = new XElement(math + "naryPr");
+                naries[index].AddFirst(properties);
+            }
+            var character = properties.Element(math + "chr");
+            if (character is null)
+            {
+                character = new XElement(math + "chr");
+                properties.AddFirst(character);
+            }
+            character.SetAttributeValue(math + "val", sourceCharacter);
+        }
+
+        return document.Root?.ToString(SaveOptions.DisableFormatting) ?? omml;
     }
 
     private static bool IsBlockMathMl(string mathMl)
@@ -279,6 +530,98 @@ internal static class WordOmmlConverter
         {
             return false;
         }
+    }
+
+    internal static string NormalizeExplicitTableColumnAlignment(
+        string omml,
+        string mathMl)
+    {
+        if (string.IsNullOrWhiteSpace(omml) || string.IsNullOrWhiteSpace(mathMl))
+            return omml;
+
+        XNamespace presentationMath = "http://www.w3.org/1998/Math/MathML";
+        XNamespace officeMath = MathNamespace;
+        var sourceDocument = XDocument.Parse(mathMl, LoadOptions.PreserveWhitespace);
+        var targetDocument = XDocument.Parse(omml, LoadOptions.PreserveWhitespace);
+        var sourceTables = sourceDocument
+            .Descendants(presentationMath + "mtable")
+            .Where(table => !string.IsNullOrWhiteSpace(table.Attribute("columnalign")?.Value))
+            .Select(table =>
+            {
+                var rows = table.Elements(presentationMath + "mtr").ToArray();
+                var columnCount = rows.Length == 0
+                    ? 0
+                    : rows.Max(row => row.Elements(presentationMath + "mtd").Count());
+                var raw = (table.Attribute("columnalign")?.Value ?? string.Empty)
+                    .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+                if (columnCount <= 0 || raw.Length == 0) return null;
+                var alignments = Enumerable.Range(0, columnCount)
+                    .Select(index => NormalizeMathMlColumnAlignment(
+                        raw[Math.Min(index, raw.Length - 1)]))
+                    .ToArray();
+                return new
+                {
+                    RowCount = rows.Length,
+                    ColumnCount = columnCount,
+                    Alignments = alignments,
+                };
+            })
+            .Where(table => table is not null)
+            .ToArray();
+        if (sourceTables.Length == 0) return omml;
+
+        var matrices = targetDocument.Descendants(officeMath + "m").ToList();
+        var used = new HashSet<XElement>();
+        foreach (var sourceTable in sourceTables)
+        {
+            var target = matrices.FirstOrDefault(matrix =>
+            {
+                if (used.Contains(matrix)) return false;
+                var rows = matrix.Elements(officeMath + "mr").ToArray();
+                if (rows.Length != sourceTable!.RowCount) return false;
+                return rows.All(row =>
+                    row.Elements(officeMath + "e").Count() == sourceTable.ColumnCount);
+            });
+            if (target is null) continue;
+            used.Add(target);
+
+            var properties = target.Element(officeMath + "mPr");
+            if (properties is null)
+            {
+                properties = new XElement(officeMath + "mPr");
+                target.AddFirst(properties);
+            }
+            var columns = new XElement(officeMath + "mcs");
+            foreach (var alignment in sourceTable!.Alignments)
+            {
+                columns.Add(
+                    new XElement(
+                        officeMath + "mc",
+                        new XElement(
+                            officeMath + "mcPr",
+                            new XElement(
+                                officeMath + "count",
+                                new XAttribute(officeMath + "val", "1")),
+                            new XElement(
+                                officeMath + "mcJc",
+                                new XAttribute(officeMath + "val", alignment)))));
+            }
+            var existing = properties.Element(officeMath + "mcs");
+            if (existing is null) properties.Add(columns);
+            else existing.ReplaceWith(columns);
+        }
+
+        return targetDocument.Root?.ToString(SaveOptions.DisableFormatting) ?? omml;
+    }
+
+    private static string NormalizeMathMlColumnAlignment(string value)
+    {
+        return value.Trim().ToLowerInvariant() switch
+        {
+            "left" => "left",
+            "right" => "right",
+            _ => "center",
+        };
     }
 
     internal static string NormalizeDisplayNaryOmml(string omml, bool display)
@@ -382,6 +725,18 @@ internal static class WordOmmlConverter
     internal static string ComputeOmmlFingerprint(string wordOpenXml)
     {
         var normalized = ExtractSingleOMath(wordOpenXml);
+        var document = XDocument.Parse(normalized, LoadOptions.PreserveWhitespace);
+        XNamespace word = WordNamespace;
+
+        // Word stores the visible math size in ordinary run properties. Font
+        // size is presentation state, not formula content: changing 14 pt to
+        // 18 pt must not force an OMML -> MathML -> LaTeX source refresh.
+        document
+            .Descendants()
+            .Where(element => element.Name == word + "sz" || element.Name == word + "szCs")
+            .Remove();
+
+        normalized = document.Root?.ToString(SaveOptions.DisableFormatting) ?? normalized;
         using var hash = SHA256.Create();
         var bytes = hash.ComputeHash(Encoding.UTF8.GetBytes(normalized));
         return string.Concat(bytes.Select(value => value.ToString("x2")));

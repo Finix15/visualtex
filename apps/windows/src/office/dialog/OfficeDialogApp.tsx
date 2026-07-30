@@ -28,6 +28,7 @@ import type {
   MathEditorHandle,
   MathEditorInsertionTarget,
 } from "../../editor/MathEditor";
+import { readErrorMessage } from "../../errors/readErrorMessage";
 import { latexToMathMl, latexToSvg } from "../../export/latexToSvg";
 import {
   closeOfficeSessionWindow,
@@ -180,6 +181,18 @@ export function OfficeDialogApp() {
   const historyState = useHistorySnapshot();
   const isEn = language === "en";
   const latex = joinFormulaLines(lines);
+  const officeFontSizePt = Math.round(
+    Math.min(
+      200,
+      Math.max(
+        5,
+        session?.fontSizePt ??
+          session?.originalMetadata?.fontSizePt ??
+          session?.originalMetadata?.renderFontSizePt ??
+          14,
+      ),
+    ) * 2,
+  ) / 2;
 
   useEffect(() => {
     let disposed = false;
@@ -341,7 +354,7 @@ export function OfficeDialogApp() {
     if (!sourceLatex.trim()) return null;
     const svg = latexToSvg(sourceLatex, {
       displayMode: sourceDisplayMode === "block",
-      fontSizePt: 14,
+      fontSizePt: officeFontSizePt,
       paddingPx: sourceDisplayMode === "inline" ? 1 : 10,
       background: "transparent",
     });
@@ -353,7 +366,7 @@ export function OfficeDialogApp() {
       height: svg.height,
       baseline: svg.baseline,
     };
-  }, [latex, displayMode]);
+  }, [latex, displayMode, officeFontSizePt]);
 
   const generateExportResult = useCallback(async (
     sourceLatex: string = latex,
@@ -436,12 +449,17 @@ export function OfficeDialogApp() {
           error: null,
         });
       } catch (reason) {
-        const message =
-          reason instanceof Error
-            ? reason.message
-            : isEn
-              ? "Formula format conversion failed"
-              : "公式格式转换失败";
+        const detail = readErrorMessage(
+          reason,
+          isEn ? "Formula format conversion failed" : "公式格式转换失败",
+        );
+        const sourceFormula = joinFormulaLines(session.lines).trim();
+        const formulaPreview = sourceFormula.length <= 500
+          ? sourceFormula
+          : `${sourceFormula.slice(0, 500)}…`;
+        const message = isEn
+          ? `Formula rendering failed: ${detail}\nFormula: ${formulaPreview}`
+          : `公式渲染失败：${detail}\n公式：${formulaPreview}`;
         try {
           await save({ status: "failed", error: message });
         } catch {
@@ -973,13 +991,10 @@ export function OfficeDialogApp() {
       window.close();
     } catch (error) {
       finalizingRef.current = false;
-      const message =
-        error instanceof Error
-          ? error.message
-          : isEn
-            ? "Unable to insert the PowerPoint formula"
-            : "无法插入 PowerPoint 公式";
-      setToast(message);
+      setToast(readErrorMessage(
+        error,
+        isEn ? "Unable to insert the Office formula" : "无法插入 Office 公式",
+      ));
     }
   };
 

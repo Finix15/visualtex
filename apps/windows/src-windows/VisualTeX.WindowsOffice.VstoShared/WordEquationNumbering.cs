@@ -95,12 +95,14 @@ internal static class WordEquationNumbering
             return;
         }
 
+        var formulaFontSizePoints = (float)FormulaFontSize.ResolveSemanticFontSize(metadata);
         if (metadata.Numbered)
         {
             ConfigureNumberedDisplayFormula(
                 document,
                 formulaRange,
                 formulaHeightPoints,
+                formulaFontSizePoints,
                 metadata.FormulaId);
         }
         else
@@ -125,6 +127,7 @@ internal static class WordEquationNumbering
             UpdateEquationNumberFields(
                 document,
                 formulaHeightPoints,
+                formulaFontSizePoints,
                 metadata.FormulaId);
         }
         // Formula-format conversion updates the document field collection. Word
@@ -258,6 +261,7 @@ internal static class WordEquationNumbering
                             document,
                             formulaRange,
                             shape.Height,
+                            (float)FormulaFontSize.ResolveSemanticFontSize(metadata),
                             metadata.FormulaId);
                         numberedFormulaIds.Add(metadata.FormulaId);
                     }
@@ -293,6 +297,7 @@ internal static class WordEquationNumbering
                             document,
                             formulaRange,
                             WordOmmlFormulaStore.EstimateHeightPoints(bookmark),
+                            (float)FormulaFontSize.ResolveSemanticFontSize(metadata),
                             formulaId);
                         numberedFormulaIds.Add(formulaId);
                     }
@@ -325,7 +330,11 @@ internal static class WordEquationNumbering
                     shape = inlineShapes[index];
                     var metadata = ReadMetadata(shape);
                     if (metadata?.DisplayMode == "block" && metadata.Numbered)
-                        UpdateEquationNumberFields(document, shape.Height, metadata.FormulaId);
+                        UpdateEquationNumberFields(
+                            document,
+                            shape.Height,
+                            (float)FormulaFontSize.ResolveSemanticFontSize(metadata),
+                            metadata.FormulaId);
                 }
                 finally { Release(shape); }
             }
@@ -341,6 +350,7 @@ internal static class WordEquationNumbering
                         UpdateEquationNumberFields(
                             document,
                             WordOmmlFormulaStore.EstimateHeightPoints(bookmark),
+                            (float)FormulaFontSize.ResolveSemanticFontSize(metadata),
                             formulaId);
                 }
                 finally { Release(bookmark); }
@@ -359,6 +369,7 @@ internal static class WordEquationNumbering
         Document document,
         Range formulaRange,
         float formulaHeightPoints,
+        float formulaFontSizePoints,
         string formulaId)
     {
         EnsureNumberedOmmlIsDisplay(formulaRange);
@@ -374,6 +385,7 @@ internal static class WordEquationNumbering
             document,
             formulaRange,
             formulaHeightPoints,
+            formulaFontSizePoints,
             formulaId);
     }
 
@@ -504,18 +516,35 @@ internal static class WordEquationNumbering
         ParagraphFormat? format = null;
         TabStops? tabStops = null;
         ListFormat? listFormat = null;
+        OMaths? maths = null;
         try
         {
             paragraphs = formulaRange.Paragraphs;
             paragraph = paragraphs[1];
             paragraphRange = paragraph.Range;
             format = paragraph.Format;
+            var nativeOmmlParagraph = false;
+            try
+            {
+                maths = formulaRange.OMaths;
+                nativeOmmlParagraph = maths.Count > 0
+                    && !(bool)formulaRange.get_Information(WdInformation.wdWithInTable);
+            }
+            catch { }
             format.LeftIndent = 0f;
             format.RightIndent = 0f;
             format.FirstLineIndent = 0f;
-            format.SpaceBefore = 0f;
-            format.SpaceAfter = 0f;
-            format.LineSpacingRule = WdLineSpacing.wdLineSpaceSingle;
+            if (!nativeOmmlParagraph)
+            {
+                // OLE/picture formulas carry their own transparent preview
+                // margins, so their host paragraph must stay compact. Native
+                // OMML formulas have no image padding and should retain the
+                // document paragraph style exactly as a formula inserted by
+                // Word itself would.
+                format.SpaceBefore = 0f;
+                format.SpaceAfter = 0f;
+                format.LineSpacingRule = WdLineSpacing.wdLineSpaceSingle;
+            }
             format.KeepTogether = 0;
             format.KeepWithNext = 0;
             format.PageBreakBefore = 0;
@@ -574,6 +603,7 @@ internal static class WordEquationNumbering
         }
         finally
         {
+            Release(maths);
             Release(listFormat);
             Release(tabStops);
             Release(format);
@@ -713,7 +743,9 @@ internal static class WordEquationNumbering
                 formulaId,
                 nativeSequenceName,
                 out var captionRange,
-                out var numberRange))
+                out var numberRange)
+            && captionRange is not null
+            && numberRange is not null)
         {
             try { StyleNativeCaption(captionRange, numberRange); }
             finally
@@ -1053,6 +1085,7 @@ internal static class WordEquationNumbering
         Document document,
         Range formulaRange,
         float formulaHeightPoints,
+        float formulaFontSizePoints,
         string formulaId)
     {
         var targetBookmarkName = NativeNumberBookmarkName(formulaId);
@@ -1066,6 +1099,7 @@ internal static class WordEquationNumbering
             document,
             formulaRange,
             formulaHeightPoints,
+            formulaFontSizePoints,
             formulaId,
             targetBookmarkName);
     }
@@ -1166,6 +1200,7 @@ internal static class WordEquationNumbering
         Document document,
         Range formulaRange,
         float formulaHeightPoints,
+        float formulaFontSizePoints,
         string formulaId,
         string targetBookmarkName)
     {
@@ -1224,7 +1259,8 @@ internal static class WordEquationNumbering
             }
             AlignEquationNumberVertically(
                 bookmarkRange,
-                tableLayout ? 0f : formulaHeightPoints);
+                tableLayout ? 0f : formulaHeightPoints,
+                formulaFontSizePoints);
         }
         finally
         {
@@ -1410,6 +1446,7 @@ internal static class WordEquationNumbering
     private static void UpdateEquationNumberFields(
         Document document,
         float formulaHeightPoints,
+        float formulaFontSizePoints,
         string formulaId)
     {
         UpdateFieldInBookmark(
@@ -1432,7 +1469,8 @@ internal static class WordEquationNumbering
             // numbers disagree because their measured heights differ.
             AlignEquationNumberVertically(
                 range,
-                IsNumberedEquationTable(range) ? 0f : formulaHeightPoints);
+                IsNumberedEquationTable(range) ? 0f : formulaHeightPoints,
+                formulaFontSizePoints);
         }
         finally
         {
@@ -1549,19 +1587,14 @@ internal static class WordEquationNumbering
 
     private static void AlignEquationNumberVertically(
         Range numberRange,
-        float formulaHeightPoints)
+        float formulaHeightPoints,
+        float formulaFontSizePoints)
     {
         Microsoft.Office.Interop.Word.Font? font = null;
         try
         {
             font = numberRange.Font;
-            var numberFontSize = 11f;
-            try { numberFontSize = font.Size; } catch { }
-            if (float.IsNaN(numberFontSize)
-                || float.IsInfinity(numberFontSize)
-                || numberFontSize <= 2f
-                || numberFontSize > 256f)
-                numberFontSize = 11f;
+            var numberFontSize = FormulaFontSize.Normalize(formulaFontSizePoints);
 
             // The native caption target is deliberately white and one point.
             // Word propagates that appearance into REF results unless the

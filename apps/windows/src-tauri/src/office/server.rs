@@ -256,6 +256,39 @@ fn open_desktop_session_window(
 }
 
 #[cfg(target_os = "windows")]
+fn open_desktop_bulk_import_window(
+    app: tauri::AppHandle,
+    session_id: String,
+) -> Result<(), String> {
+    let label = format!("office-import-{}", session_id.replace('-', ""));
+    let url = tauri::Url::parse(&format!(
+        "https://127.0.0.1:{}/dialog/{}?runtime=vsto-bulk-import",
+        crate::office::state::OFFICE_PORT,
+        session_id
+    ))
+    .map_err(|error| format!("Unable to construct the VisualTeX import URL: {error}"))?;
+
+    if let Some(window) = app.get_webview_window(&label) {
+        window
+            .navigate(url)
+            .map_err(|error| format!("Unable to navigate the VisualTeX import window: {error}"))?;
+        return bring_session_window_to_front(&window);
+    }
+
+    let window = WebviewWindowBuilder::new(&app, label, WebviewUrl::External(url))
+        .title("VisualTeX · Word 文档批量导入")
+        .inner_size(1380.0, 880.0)
+        .min_inner_size(900.0, 620.0)
+        .resizable(true)
+        .center()
+        .focused(true)
+        .visible(true)
+        .build()
+        .map_err(|error| format!("Unable to create the VisualTeX import window: {error}"))?;
+    bring_session_window_to_front(&window)
+}
+
+#[cfg(target_os = "windows")]
 fn open_desktop_conversion_window(
     app: tauri::AppHandle,
     session_id: String,
@@ -308,6 +341,7 @@ async fn close_desktop_session(
         let labels = [
             format!("office-session-{suffix}"),
             format!("office-convert-{suffix}"),
+            format!("office-import-{suffix}"),
         ];
         tauri::async_runtime::spawn(async move {
             // Return the HTTP response before closing the WebView that issued
@@ -374,6 +408,63 @@ async fn open_desktop_session(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({
                     "error": format!("VisualTeX Session window task failed: {error}")
+                })),
+            )
+                .into_response(),
+        }
+    }
+}
+
+async fn open_desktop_bulk_import(
+    AxumPath(session_id): AxumPath<String>,
+    State(context): State<ServerContext>,
+) -> Response {
+    if !valid_session_id(&session_id) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let store = context.companion.session_store.clone();
+    let lookup_id = session_id.clone();
+    if let Err(error) = run_session_operation(move || store.get(&lookup_id)).await {
+        return session_error_response(error);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        return (
+            StatusCode::NOT_IMPLEMENTED,
+            Json(serde_json::json!({
+                "error": "Word document import is available only on Windows"
+            })),
+        )
+            .into_response();
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let Some(app) = context.companion.app.clone() else {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "error": "The VisualTeX desktop application is unavailable"
+                })),
+            )
+                .into_response();
+        };
+        match tokio::task::spawn_blocking(move || {
+            open_desktop_bulk_import_window(app, session_id)
+        })
+        .await
+        {
+            Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+            Ok(Err(error)) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": error })),
+            )
+                .into_response(),
+            Err(error) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("VisualTeX import window task failed: {error}")
                 })),
             )
                 .into_response(),
@@ -849,6 +940,12 @@ fn metadata_from_session(session: &OfficeFormulaSession) -> VisualTeXFormulaMeta
             .as_ref()
             .and_then(|value| value.baseline)
             .filter(|value| value.is_finite() && *value >= 0.0),
+        font_size_pt: Some(session.font_size_pt),
+        render_font_size_pt: session
+            .export_result
+            .as_ref()
+            .map(|_| session.font_size_pt)
+            .or_else(|| original.and_then(|value| value.render_font_size_pt)),
         created_with_version: original
             .map(|value| value.created_with_version.clone())
             .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string()),
@@ -1454,6 +1551,10 @@ pub(crate) fn build_router(companion: OfficeCompanionState) -> Router {
         .route(
             "/app/sessions/{session_id}/convert",
             post(open_desktop_conversion),
+        )
+        .route(
+            "/app/sessions/{session_id}/bulk-import",
+            post(open_desktop_bulk_import),
         )
         .route(
             "/app/sessions/{session_id}/close",

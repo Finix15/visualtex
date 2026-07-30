@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { readErrorMessage } from "../../errors/readErrorMessage";
 import {
   getOfficeSession,
   updateOfficeSession,
@@ -33,8 +34,7 @@ export function useOfficeSession() {
       setError("");
       return next;
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Unable to load Office session.";
-      setError(message);
+      setError(readErrorMessage(reason, "Unable to load Office session."));
       return null;
     } finally {
       setLoading(false);

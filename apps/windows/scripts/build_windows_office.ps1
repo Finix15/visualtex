@@ -13,6 +13,21 @@ $powerPointProject = Join-Path $root "src-windows\VisualTeX.PowerPointVsto\Visua
 $installerProject = Join-Path $root "src-windows\VisualTeX.WindowsOffice.Installer\VisualTeX.WindowsOffice.Installer.wixproj"
 $oleServerProject = Join-Path $root "src-windows\VisualTeX.FormulaOleServer\VisualTeX.FormulaOleServer.vcxproj"
 $resourceRoot = Join-Path $root "src-tauri\resources\windows-office"
+$oleBuildRoot = Join-Path $root "src-windows\artifacts\formula-ole-server"
+
+function Stop-BuildOleServerProcesses {
+    $normalizedRoot = [IO.Path]::GetFullPath($oleBuildRoot).TrimEnd('\') + '\'
+    foreach ($process in Get-CimInstance Win32_Process -Filter "Name='VisualTeX.FormulaOleServer.exe'" -ErrorAction SilentlyContinue) {
+        $path = [string]$process.ExecutablePath
+        if ([string]::IsNullOrWhiteSpace($path)) { continue }
+        $normalizedPath = [IO.Path]::GetFullPath($path)
+        if (-not $normalizedPath.StartsWith($normalizedRoot, [StringComparison]::OrdinalIgnoreCase)) { continue }
+        Stop-Process -Id ([int]$process.ProcessId) -Force -ErrorAction SilentlyContinue
+        Write-Host "Stopped acceptance-owned OLE Server PID=$($process.ProcessId) before rebuild: $normalizedPath"
+    }
+    Start-Sleep -Milliseconds 300
+}
+
 $dotnet = $null
 foreach ($candidate in @(
     (Join-Path $env:LOCALAPPDATA "Microsoft\dotnet\dotnet.exe"),
@@ -36,6 +51,7 @@ if (-not $SkipTests) {
     if ($LASTEXITCODE -ne 0) { throw "Windows Office tests failed." }
     & (Join-Path $PSScriptRoot "test_windows_formula_ole_server.ps1") -Configuration $Configuration
     if ($LASTEXITCODE -ne 0) { throw "Native Formula OLE tests failed." }
+    Stop-BuildOleServerProcesses
 }
 
 & (Join-Path $PSScriptRoot "build_windows_ole_bridge.ps1") -Configuration $Configuration
@@ -76,6 +92,7 @@ foreach ($architecture in $architectures) {
     $packagePlatform = $architecture.PackagePlatform
     $olePlatform = $architecture.OlePlatform
     Write-Host "Building native Office integration for $packagePlatform Office."
+    Stop-BuildOleServerProcesses
 
     & $msbuild $oleServerProject /m /p:Configuration=$Configuration /p:Platform=$olePlatform
     if ($LASTEXITCODE -ne 0) {

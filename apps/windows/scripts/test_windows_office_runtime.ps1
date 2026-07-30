@@ -5,10 +5,126 @@ param(
     [string]$VisualTeXPath,
     [switch]$CompanionOnly,
     [switch]$ForceCloseOffice,
-    [string]$ReportPath
+    [string]$ReportPath,
+    [switch]$ArchitectureRelaunched
 )
 
 $ErrorActionPreference = "Stop"
+
+function Quote-ProcessArgument([string]$Value) {
+    return '"' + $Value.Replace('"', '\"') + '"'
+}
+
+function Resolve-ForwardedPath([string]$Value) {
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $Value }
+    $trimmed = $Value.Trim().Trim('"')
+    if ([IO.Path]::IsPathRooted($trimmed)) { return [IO.Path]::GetFullPath($trimmed) }
+    return [IO.Path]::GetFullPath((Join-Path (Get-Location).Path $trimmed))
+}
+
+function Resolve-EarlyOfficePlatform {
+    if ($OfficePlatform -in @("x86", "x64")) { return $OfficePlatform }
+    foreach ($view in @(
+        [Microsoft.Win32.RegistryView]::Registry64,
+        [Microsoft.Win32.RegistryView]::Registry32
+    )) {
+        $baseKey = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+            [Microsoft.Win32.RegistryHive]::LocalMachine,
+            $view)
+        try {
+            $configuration = $baseKey.OpenSubKey("SOFTWARE\Microsoft\Office\ClickToRun\Configuration")
+            if ($null -ne $configuration) {
+                try {
+                    $platform = [string]$configuration.GetValue("Platform", "")
+                    if ($platform -in @("x86", "x64")) { return $platform }
+                } finally { $configuration.Dispose() }
+            }
+        } finally { $baseKey.Dispose() }
+    }
+    foreach ($candidate in @(
+        @{ Platform = "x64"; View = [Microsoft.Win32.RegistryView]::Registry64 },
+        @{ Platform = "x86"; View = [Microsoft.Win32.RegistryView]::Registry32 }
+    )) {
+        $baseKey = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+            [Microsoft.Win32.RegistryHive]::LocalMachine,
+            $candidate.View)
+        try {
+            $word = $baseKey.OpenSubKey("SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\WINWORD.EXE")
+            $powerPoint = $baseKey.OpenSubKey("SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\POWERPNT.EXE")
+            try {
+                if ($null -ne $word -and $null -ne $powerPoint) { return $candidate.Platform }
+            } finally {
+                if ($null -ne $word) { $word.Dispose() }
+                if ($null -ne $powerPoint) { $powerPoint.Dispose() }
+            }
+        } finally { $baseKey.Dispose() }
+    }
+    return $(if ([Environment]::Is64BitOperatingSystem) { "x64" } else { "x86" })
+}
+
+function Resolve-PowerShellExecutable([string]$TargetPlatform) {
+    $windowsRoot = if ([string]::IsNullOrWhiteSpace($env:WINDIR)) { "C:\Windows" } else { $env:WINDIR }
+    if (-not [Environment]::Is64BitOperatingSystem) {
+        return Join-Path $windowsRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+    }
+    if ($TargetPlatform -eq "x86") {
+        return Join-Path $windowsRoot "SysWOW64\WindowsPowerShell\v1.0\powershell.exe"
+    }
+    if (-not [Environment]::Is64BitProcess) {
+        $sysnative = Join-Path $windowsRoot "Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+        if (Test-Path -LiteralPath $sysnative -PathType Leaf) { return $sysnative }
+    }
+    return Join-Path $windowsRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+}
+
+$earlyOfficePlatform = Resolve-EarlyOfficePlatform
+$requiresArchitectureRelaunch =
+    ($earlyOfficePlatform -eq "x64" -and -not [Environment]::Is64BitProcess) -or
+    ($earlyOfficePlatform -eq "x86" -and [Environment]::Is64BitProcess)
+if ($requiresArchitectureRelaunch) {
+    if ($ArchitectureRelaunched) {
+        throw "Unable to relaunch Office runtime verification in a PowerShell process matching $earlyOfficePlatform Office."
+    }
+    $arguments = New-Object System.Collections.Generic.List[string]
+    foreach ($value in @(
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        (Quote-ProcessArgument $PSCommandPath),
+        "-ArchitectureRelaunched",
+        "-OfficePlatform",
+        $earlyOfficePlatform
+    )) {
+        [void]$arguments.Add($value)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($VisualTeXPath)) {
+        [void]$arguments.Add("-VisualTeXPath")
+        [void]$arguments.Add((Quote-ProcessArgument (Resolve-ForwardedPath $VisualTeXPath)))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ReportPath)) {
+        [void]$arguments.Add("-ReportPath")
+        [void]$arguments.Add((Quote-ProcessArgument (Resolve-ForwardedPath $ReportPath)))
+    }
+    if ($CompanionOnly) { [void]$arguments.Add("-CompanionOnly") }
+    if ($ForceCloseOffice) { [void]$arguments.Add("-ForceCloseOffice") }
+    $process = Start-Process `
+        -FilePath (Resolve-PowerShellExecutable $earlyOfficePlatform) `
+        -ArgumentList ($arguments -join " ") `
+        -PassThru
+    try {
+        # Wait only for the direct architecture-matched PowerShell child. The runtime
+        # probe may start the long-lived VisualTeX companion, which would make
+        # Start-Process -Wait block on the descendant process tree indefinitely.
+        $process.WaitForExit()
+        $exitCode = $process.ExitCode
+    } finally {
+        $process.Dispose()
+    }
+    exit $exitCode
+}
+
 Add-Type -AssemblyName System.Net.Http
 $logRoot = Join-Path $env:LOCALAPPDATA "VisualTeX\office\install-logs"
 New-Item -Path $logRoot -ItemType Directory -Force | Out-Null
@@ -85,6 +201,40 @@ function Resolve-OfficePlatform([string]$Requested) {
     throw "Unable to determine the installed Office architecture."
 }
 
+function Resolve-OfficeExecutablePath {
+    param(
+        [ValidateSet("Word", "PowerPoint")][string]$HostName,
+        [string]$Architecture
+    )
+    $fileName = if ($HostName -eq "Word") { "WINWORD.EXE" } else { "POWERPNT.EXE" }
+    $appPath = [string](Get-RegistryValue `
+        ([Microsoft.Win32.RegistryHive]::LocalMachine) `
+        "SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\$fileName" `
+        "(default)" `
+        $Architecture)
+    if (-not [string]::IsNullOrWhiteSpace($appPath) -and
+        (Test-Path -LiteralPath $appPath -PathType Leaf)) {
+        return [IO.Path]::GetFullPath($appPath)
+    }
+    $configuration = Get-ItemProperty `
+        "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration" `
+        -ErrorAction SilentlyContinue
+    $clientFolder = [string]$configuration.ClientFolder
+    if (-not [string]::IsNullOrWhiteSpace($clientFolder)) {
+        $candidate = Join-Path $clientFolder $fileName
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return [IO.Path]::GetFullPath($candidate)
+        }
+    }
+    foreach ($root in @($env:ProgramFiles, ${env:ProgramFiles(x86)}) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) {
+        $candidate = Join-Path $root "Microsoft Office\Root\Office16\$fileName"
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return [IO.Path]::GetFullPath($candidate)
+        }
+    }
+    throw "Unable to resolve the installed $HostName executable ($fileName)."
+}
+
 function Test-CertificateTrusted {
     $modeKey = "HKCU:\Software\VisualTeX\OfficeIntegration"
     $thumbprint = (Get-ItemProperty -LiteralPath $modeKey -Name CertificateThumbprint -ErrorAction SilentlyContinue).CertificateThumbprint
@@ -116,32 +266,54 @@ function Test-CertificateTrusted {
 
 function Get-VstoRuntimeState([string]$Architecture) {
     $subKey = "SOFTWARE\Microsoft\VSTO Runtime Setup\v4R"
+    $registryState = $null
     foreach ($registryArchitecture in @($Architecture, "x86", "x64") | Select-Object -Unique) {
         $install = Get-RegistryValue ([Microsoft.Win32.RegistryHive]::LocalMachine) $subKey "Install" $registryArchitecture
         $clr40 = Get-RegistryValue ([Microsoft.Win32.RegistryHive]::LocalMachine) $subKey "VSTORFeature_CLR40" $registryArchitecture
         $version = Get-RegistryValue ([Microsoft.Win32.RegistryHive]::LocalMachine) $subKey "Version" $registryArchitecture
-        $installed =
+        $registered =
             ($null -ne $install -and [int]$install -eq 1) -or
             ($null -ne $clr40 -and [int]$clr40 -eq 1) -or
             (-not [string]::IsNullOrWhiteSpace([string]$version))
-        if ($installed) {
-            return [pscustomobject]@{
-                installed = $true
+        if ($registered -and $null -eq $registryState) {
+            $registryState = [pscustomobject]@{
                 install = $install
                 clr40 = $clr40
                 version = $version
                 registryView = $registryArchitecture
-                key = "HKLM\$subKey"
             }
         }
     }
+
+    $commonFiles = if ($Architecture -eq "x86") {
+        [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonProgramFilesX86)
+    } else {
+        [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonProgramFiles)
+    }
+    $loaderPath = if ([string]::IsNullOrWhiteSpace($commonFiles)) {
+        ""
+    } else {
+        Join-Path $commonFiles "Microsoft Shared\VSTO\10.0\VSTOLoader.dll"
+    }
+    $loaderPresent =
+        -not [string]::IsNullOrWhiteSpace($loaderPath) -and
+        (Test-Path -LiteralPath $loaderPath -PathType Leaf)
+    $loaderVersion = if ($loaderPresent) {
+        [string](Get-Item -LiteralPath $loaderPath).VersionInfo.ProductVersion
+    } else { "" }
+
     return [pscustomobject]@{
-        installed = $false
-        install = $null
-        clr40 = $null
-        version = $null
-        registryView = "none"
+        installed = $null -ne $registryState
+        architectureRuntimePresent = $loaderPresent
+        install = if ($null -ne $registryState) { $registryState.install } else { $null }
+        clr40 = if ($null -ne $registryState) { $registryState.clr40 } else { $null }
+        version = if ($null -ne $registryState) { $registryState.version } else { $null }
+        registryView = if ($null -ne $registryState) { $registryState.registryView } else { "none" }
         key = "HKLM\$subKey"
+        targetArchitecture = $Architecture
+        loaderPath = $loaderPath
+        loaderPresent = $loaderPresent
+        loaderVersion = $loaderVersion
     }
 }
 
@@ -211,7 +383,166 @@ function Test-MsiInstalled([int]$TimeoutSeconds = 10) {
 
 function Get-LoadBehavior([ValidateSet("Word", "PowerPoint")][string]$HostName, [string]$Architecture) {
     $progId = if ($HostName -eq "Word") { "VisualTeX.WordVsto" } else { "VisualTeX.PowerPointVsto" }
-    return Get-RegistryValue ([Microsoft.Win32.RegistryHive]::CurrentUser) "Software\Microsoft\Office\$HostName\Addins\$progId" "LoadBehavior" $Architecture
+    $subKey = "Software\Microsoft\Office\$HostName\Addins\$progId"
+    $perUser = Get-RegistryValue ([Microsoft.Win32.RegistryHive]::CurrentUser) $subKey "LoadBehavior" $Architecture
+    if ($null -ne $perUser) { return $perUser }
+    return Get-RegistryValue ([Microsoft.Win32.RegistryHive]::LocalMachine) $subKey "LoadBehavior" $Architecture
+}
+
+function Resolve-MachineOfficeInstallRoot([string]$Architecture) {
+    $programFilesRoot = if ($Architecture -eq "x64") {
+        if (-not [string]::IsNullOrWhiteSpace($env:ProgramW6432)) {
+            $env:ProgramW6432
+        } elseif ([Environment]::Is64BitProcess) {
+            $env:ProgramFiles
+        } else {
+            $null
+        }
+    } else {
+        if (-not [string]::IsNullOrWhiteSpace(${env:ProgramFiles(x86)})) {
+            ${env:ProgramFiles(x86)}
+        } else {
+            $env:ProgramFiles
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($programFilesRoot)) {
+        throw "Unable to resolve Program Files for $Architecture Office runtime verification."
+    }
+    return Join-Path $programFilesRoot "VisualTeX\WindowsOffice\VSTO"
+}
+
+function Test-RegistryKeyInView {
+    param(
+        [Microsoft.Win32.RegistryHive]$Hive,
+        [string]$SubKey,
+        [string]$Architecture
+    )
+    $baseKey = [Microsoft.Win32.RegistryKey]::OpenBaseKey($Hive, (Get-RegistryView $Architecture))
+    try {
+        $key = $baseKey.OpenSubKey($SubKey, $false)
+        if ($null -eq $key) { return $false }
+        $key.Dispose()
+        return $true
+    } finally {
+        $baseKey.Dispose()
+    }
+}
+
+function Convert-FileUriToPath([string]$Value) {
+    if ([string]::IsNullOrWhiteSpace($Value)) { return "" }
+    try {
+        $uri = [Uri]$Value
+        if ($uri.IsFile) { return [IO.Path]::GetFullPath($uri.LocalPath) }
+    } catch { }
+    return $Value.Trim('"')
+}
+
+function Get-ManagedComRegistrationState {
+    param(
+        [ValidateSet("Word", "PowerPoint")][string]$HostName,
+        [string]$Architecture
+    )
+    $progId = if ($HostName -eq "Word") { "VisualTeX.WordVsto" } else { "VisualTeX.PowerPointVsto" }
+    $clsid = if ($HostName -eq "Word") {
+        "{F1B68342-F9C6-4E7D-A9C6-A2F64C3558A1}"
+    } else {
+        "{7E586D2D-57B0-4D14-AB24-EBA9021A5E6D}"
+    }
+    $className = if ($HostName -eq "Word") {
+        "VisualTeX.WordVsto.ThisAddIn"
+    } else {
+        "VisualTeX.PowerPointVsto.ThisAddIn"
+    }
+    $assemblyFile = if ($HostName -eq "Word") {
+        "VisualTeX.WordVsto.dll"
+    } else {
+        "VisualTeX.PowerPointVsto.dll"
+    }
+    $installRoot = Resolve-MachineOfficeInstallRoot $Architecture
+    $expectedAssemblyPath = Join-Path $installRoot $assemblyFile
+    $progIdClsid = [string](Get-RegistryValue `
+        ([Microsoft.Win32.RegistryHive]::LocalMachine) `
+        "Software\Classes\$progId\CLSID" `
+        "(default)" `
+        $Architecture)
+    $classKey = "Software\Classes\CLSID\$clsid"
+    $inproc = [string](Get-RegistryValue `
+        ([Microsoft.Win32.RegistryHive]::LocalMachine) `
+        "$classKey\InprocServer32" `
+        "(default)" `
+        $Architecture)
+    $registeredClass = [string](Get-RegistryValue `
+        ([Microsoft.Win32.RegistryHive]::LocalMachine) `
+        "$classKey\InprocServer32" `
+        "Class" `
+        $Architecture)
+    $assembly = [string](Get-RegistryValue `
+        ([Microsoft.Win32.RegistryHive]::LocalMachine) `
+        "$classKey\InprocServer32" `
+        "Assembly" `
+        $Architecture)
+    $codeBase = [string](Get-RegistryValue `
+        ([Microsoft.Win32.RegistryHive]::LocalMachine) `
+        "$classKey\InprocServer32" `
+        "CodeBase" `
+        $Architecture)
+    $codeBasePath = Convert-FileUriToPath $codeBase
+    $categoryKey = "$classKey\Implemented Categories\{62C8FE65-4EBB-45E7-B440-6E39B2CDBF29}"
+    $categoryPresent = Test-RegistryKeyInView `
+        ([Microsoft.Win32.RegistryHive]::LocalMachine) `
+        $categoryKey `
+        $Architecture
+    $legacyPerUserProgId = Test-RegistryKeyInView `
+        ([Microsoft.Win32.RegistryHive]::CurrentUser) `
+        "Software\Classes\$progId" `
+        $Architecture
+    $legacyPerUserClsid = Test-RegistryKeyInView `
+        ([Microsoft.Win32.RegistryHive]::CurrentUser) `
+        $classKey `
+        $Architecture
+    $legacyPerUserAddin = Test-RegistryKeyInView `
+        ([Microsoft.Win32.RegistryHive]::CurrentUser) `
+        "Software\Microsoft\Office\$HostName\Addins\$progId" `
+        $Architecture
+    $codeBaseMatches = $false
+    if (-not [string]::IsNullOrWhiteSpace($codeBasePath)) {
+        try {
+            $codeBaseMatches = [string]::Equals(
+                [IO.Path]::GetFullPath($codeBasePath),
+                [IO.Path]::GetFullPath($expectedAssemblyPath),
+                [StringComparison]::OrdinalIgnoreCase)
+        } catch { $codeBaseMatches = $false }
+    }
+    $passed =
+        [string]::Equals($progIdClsid, $clsid, [StringComparison]::OrdinalIgnoreCase) -and
+        [string]::Equals($inproc, "mscoree.dll", [StringComparison]::OrdinalIgnoreCase) -and
+        [string]::Equals($registeredClass, $className, [StringComparison]::Ordinal) -and
+        -not [string]::IsNullOrWhiteSpace($assembly) -and
+        $categoryPresent -and
+        (Test-Path -LiteralPath $expectedAssemblyPath -PathType Leaf) -and
+        $codeBaseMatches -and
+        -not $legacyPerUserProgId -and
+        -not $legacyPerUserClsid -and
+        -not $legacyPerUserAddin
+    return [pscustomobject]@{
+        host = $HostName
+        architecture = $Architecture
+        progId = $progId
+        clsid = $clsid
+        progIdClsid = $progIdClsid
+        inprocServer32 = $inproc
+        className = $registeredClass
+        assembly = $assembly
+        codeBase = $codeBase
+        codeBasePath = $codeBasePath
+        expectedAssemblyPath = $expectedAssemblyPath
+        implementedCategoryPresent = $categoryPresent
+        codeBaseMatches = $codeBaseMatches
+        legacyPerUserProgId = $legacyPerUserProgId
+        legacyPerUserClsid = $legacyPerUserClsid
+        legacyPerUserAddin = $legacyPerUserAddin
+        passed = $passed
+    }
 }
 
 function Get-DisabledItems([ValidateSet("Word", "PowerPoint")][string]$HostName) {
@@ -382,6 +713,19 @@ function Get-PortOwner([int]$Port, [int]$PathRetryMilliseconds = 3000) {
     }
 }
 
+function Test-IsAdministrator {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Start-CompanionAsInteractiveUser([string]$Executable) {
+    if (Test-IsAdministrator) {
+        throw "Companion runtime verification must run in the interactive user's non-elevated session. The machine-wide installer must return before starting VisualTeX."
+    }
+    return Start-Process -FilePath $Executable -ArgumentList "--office-background" -WindowStyle Hidden -PassThru
+}
+
 function Test-CompanionRuntime {
     param(
         [object]$IntegrationState,
@@ -508,7 +852,10 @@ function Test-CompanionRuntime {
         }
         if ($null -eq $matchingProcess) {
             try {
-                $matchingProcess = Start-Process -FilePath $executable -ArgumentList "--office-background" -WindowStyle Hidden -PassThru
+                $matchingProcess = Start-CompanionAsInteractiveUser $executable
+                if ($null -eq $matchingProcess) {
+                    throw "The interactive user shell did not expose the started VisualTeX companion process within 8 seconds."
+                }
                 $startedProcessId = $matchingProcess.Id
             } catch {
                 $exceptionChain = @(Get-ExceptionChain $_.Exception)
@@ -650,12 +997,42 @@ function Test-CompanionRuntime {
     }
 }
 
+function Test-ManagedComActivation([string]$ProgId) {
+    $instance = $null
+    try {
+        $type = [Type]::GetTypeFromProgID($ProgId, $true)
+        $instance = [Activator]::CreateInstance($type)
+        if ($null -eq $instance) { throw "CoCreateInstance returned null." }
+        return [pscustomobject]@{
+            progId = $ProgId
+            passed = $true
+            clsid = [string]$type.GUID
+            error = ""
+            hresult = "0x00000000"
+        }
+    } catch {
+        $errorRecord = $_
+        $exception = $errorRecord.Exception
+        return [pscustomobject]@{
+            progId = $ProgId
+            passed = $false
+            clsid = ""
+            error = $exception.ToString()
+            hresult = ('0x{0:X8}' -f ([uint32]$exception.HResult))
+        }
+    } finally {
+        if ($null -ne $instance -and [Runtime.InteropServices.Marshal]::IsComObject($instance)) {
+            try { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($instance) } catch { }
+        }
+    }
+}
+
 function Test-OleLocalServer([string]$Architecture) {
     $clsid = "{8FF7F5AA-0D60-48D5-ADBD-65A64B4C827B}"
     $subKey = "Software\Classes\CLSID\$clsid\LocalServer32"
-    $server = [string](Get-RegistryValue ([Microsoft.Win32.RegistryHive]::CurrentUser) $subKey "ServerExecutable" $Architecture)
+    $server = [string](Get-RegistryValue ([Microsoft.Win32.RegistryHive]::LocalMachine) $subKey "ServerExecutable" $Architecture)
     if ([string]::IsNullOrWhiteSpace($server)) {
-        $server = [string](Get-RegistryValue ([Microsoft.Win32.RegistryHive]::CurrentUser) $subKey "(default)" $Architecture)
+        $server = [string](Get-RegistryValue ([Microsoft.Win32.RegistryHive]::LocalMachine) $subKey "(default)" $Architecture)
         $server = $server.Trim('"')
     }
     if ([string]::IsNullOrWhiteSpace($server) -or
@@ -704,46 +1081,178 @@ function Test-OleLocalServer([string]$Architecture) {
     }
 }
 
+function Release-ComObject([object]$Value) {
+    if ($null -ne $Value -and [Runtime.InteropServices.Marshal]::IsComObject($Value)) {
+        try { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($Value) } catch { }
+    }
+}
+
+function Get-ComAddInItem([object]$Collection, [object]$Index) {
+    if ($null -eq $Collection) { return $null }
+    return $Collection.Item($Index)
+}
+
 function Test-OfficeComAddIn {
     param(
         [ValidateSet("Word", "PowerPoint")][string]$HostName,
-        [string]$ProgId
+        [string]$ProgId,
+        [int]$StartupTimeoutSeconds = 15
     )
     $application = $null
+    $startedProcess = $null
+    $officeExecutable = ""
+    $addIns = $null
     $addIn = $null
+    $stage = "resolve-office-executable"
+    $inventory = @()
+    $connectAttempted = $false
     try {
-        $comType = if ($HostName -eq "Word") { "Word.Application" } else { "PowerPoint.Application" }
-        $application = New-Object -ComObject $comType
-        Start-Sleep -Milliseconds 1200
-        $addIn = $application.COMAddIns.Item($ProgId)
+        $officeExecutable = Resolve-OfficeExecutablePath $HostName $script:resolvedOfficePlatform
+        $rotProgId = if ($HostName -eq "Word") { "Word.Application" } else { "PowerPoint.Application" }
+        $stage = "start-desktop-office"
+        $startedProcess = Start-Process -FilePath $officeExecutable -PassThru
+        if ($null -eq $startedProcess) {
+            throw "$HostName desktop process did not start."
+        }
+
+        $stage = "attach-running-office"
+        $attachDeadline = [DateTimeOffset]::UtcNow.AddSeconds($StartupTimeoutSeconds)
+        do {
+            Start-Sleep -Milliseconds 300
+            try {
+                $application = [Runtime.InteropServices.Marshal]::GetActiveObject($rotProgId)
+            } catch { $application = $null }
+        } while ($null -eq $application -and [DateTimeOffset]::UtcNow -lt $attachDeadline)
+        if ($null -eq $application) {
+            throw "The normally started $HostName desktop application did not register '$rotProgId' in the Running Object Table within $StartupTimeoutSeconds seconds."
+        }
+
+        $stage = "enumerate-com-addins"
+        $deadline = [DateTimeOffset]::UtcNow.AddSeconds($StartupTimeoutSeconds)
+        do {
+            Release-ComObject $addIn
+            $addIn = $null
+            Release-ComObject $addIns
+            $addIns = $application.COMAddIns
+            $inventory = @()
+            if ($null -ne $addIns) {
+                $count = 0
+                try { $count = [int]$addIns.Count } catch { $count = 0 }
+                for ($index = 1; $index -le $count; $index++) {
+                    $candidate = $null
+                    try {
+                        $candidate = Get-ComAddInItem $addIns $index
+                        if ($null -eq $candidate) { continue }
+                        $candidateProgId = [string]$candidate.ProgId
+                        $candidateDescription = [string]$candidate.Description
+                        $candidateConnected = $false
+                        try { $candidateConnected = [bool]$candidate.Connect } catch { }
+                        $inventory += [pscustomobject]@{
+                            index = $index
+                            progId = $candidateProgId
+                            description = $candidateDescription
+                            connected = $candidateConnected
+                        }
+                        if ([string]::Equals($candidateProgId, $ProgId, [StringComparison]::OrdinalIgnoreCase)) {
+                            $addIn = $candidate
+                            $candidate = $null
+                        }
+                    } catch {
+                        $inventory += [pscustomobject]@{
+                            index = $index
+                            progId = ""
+                            description = ""
+                            connected = $false
+                            enumerationError = $_.Exception.Message
+                        }
+                    } finally {
+                        Release-ComObject $candidate
+                    }
+                }
+            }
+            if ($null -ne $addIn) { break }
+            Start-Sleep -Milliseconds 300
+        } while ([DateTimeOffset]::UtcNow -lt $deadline)
+
+        if ($null -eq $addIn) {
+            $discovered = @($inventory | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.progId) } | ForEach-Object { $_.progId })
+            return [pscustomobject]@{
+                host = $HostName
+                progId = $ProgId
+                enumerated = $false
+                connected = $false
+                connectAttempted = $false
+                description = ""
+                discoveredProgIds = $discovered
+                inventory = $inventory
+                stage = $stage
+                startupMode = "desktop-executable-rot"
+                executable = $officeExecutable
+                processId = if ($null -ne $startedProcess) { $startedProcess.Id } else { $null }
+                error = "The normally started $HostName desktop application did not enumerate '$ProgId' within $StartupTimeoutSeconds seconds. Discovered COM add-ins: $($discovered -join ', ')"
+            }
+        }
+
+        $stage = "read-connect"
         $connected = [bool]$addIn.Connect
+        if (-not $connected) {
+            $stage = "connect-addin"
+            $connectAttempted = $true
+            $addIn.Connect = $true
+            $connectDeadline = [DateTimeOffset]::UtcNow.AddSeconds(5)
+            do {
+                Start-Sleep -Milliseconds 200
+                $connected = [bool]$addIn.Connect
+            } while (-not $connected -and [DateTimeOffset]::UtcNow -lt $connectDeadline)
+        }
         return [pscustomobject]@{
             host = $HostName
             progId = $ProgId
+            enumerated = $true
             connected = $connected
+            connectAttempted = $connectAttempted
             description = [string]$addIn.Description
-            error = ""
+            discoveredProgIds = @($inventory | ForEach-Object { $_.progId })
+            inventory = $inventory
+            stage = "complete"
+            startupMode = "desktop-executable-rot"
+            executable = $officeExecutable
+            processId = if ($null -ne $startedProcess) { $startedProcess.Id } else { $null }
+            error = if ($connected) { "" } else { "Office enumerated '$ProgId' but COMAddIn.Connect remained false." }
         }
     } catch {
         return [pscustomobject]@{
             host = $HostName
             progId = $ProgId
+            enumerated = $null -ne $addIn
             connected = $false
-            description = ""
+            connectAttempted = $connectAttempted
+            description = if ($null -ne $addIn) { [string]$addIn.Description } else { "" }
+            discoveredProgIds = @($inventory | ForEach-Object { $_.progId })
+            inventory = $inventory
+            stage = $stage
+            startupMode = "desktop-executable-rot"
+            executable = $officeExecutable
+            processId = if ($null -ne $startedProcess) { $startedProcess.Id } else { $null }
             error = $_.Exception.ToString()
         }
     } finally {
         if ($null -ne $application) {
             try { $application.Quit() } catch { }
         }
-        if ($null -ne $addIn -and [Runtime.InteropServices.Marshal]::IsComObject($addIn)) {
-            [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($addIn)
-        }
-        if ($null -ne $application -and [Runtime.InteropServices.Marshal]::IsComObject($application)) {
-            [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($application)
-        }
+        Release-ComObject $addIn
+        Release-ComObject $addIns
+        Release-ComObject $application
         [GC]::Collect()
         [GC]::WaitForPendingFinalizers()
+        if ($null -ne $startedProcess) {
+            try {
+                if (-not $startedProcess.HasExited -and -not $startedProcess.WaitForExit(3000)) {
+                    Stop-Process -Id $startedProcess.Id -Force -ErrorAction SilentlyContinue
+                }
+            } catch { }
+            try { $startedProcess.Dispose() } catch { }
+        }
     }
 }
 
@@ -756,6 +1265,8 @@ function Write-Report {
         [object]$MsiState,
         [object]$OleState,
         [object]$CompanionState,
+        [object]$WordComRegistration,
+        [object]$PowerPointComRegistration,
         [object[]]$WordDisabledItems,
         [object[]]$PowerPointDisabledItems,
         [object[]]$Events
@@ -773,6 +1284,8 @@ function Write-Report {
         msi = $MsiState
         oleLocalServer = $OleState
         companion = $CompanionState
+        wordComRegistration = $WordComRegistration
+        powerPointComRegistration = $PowerPointComRegistration
         wordDisabledItems = $WordDisabledItems
         powerPointDisabledItems = $PowerPointDisabledItems
         recentLoadEvents = $Events
@@ -789,6 +1302,8 @@ $vstoRuntime = $null
 $msiState = $null
 $oleState = $null
 $companionState = $null
+$wordComRegistration = $null
+$powerPointComRegistration = $null
 $wordDisabledItems = @()
 $powerPointDisabledItems = @()
 $events = @()
@@ -855,7 +1370,10 @@ try {
     }
 
     $vstoRuntime = Get-VstoRuntimeState $script:resolvedOfficePlatform
-    Add-Check "VSTO Runtime" ([bool]$vstoRuntime.installed) "$($vstoRuntime.key); Install=$($vstoRuntime.install); VSTORFeature_CLR40=$($vstoRuntime.clr40); Version=$($vstoRuntime.version); registryView=$($vstoRuntime.registryView)"
+    $vstoRuntimeHealthy =
+        [bool]$vstoRuntime.installed -and
+        [bool]$vstoRuntime.architectureRuntimePresent
+    Add-Check "VSTO Runtime" $vstoRuntimeHealthy "$($vstoRuntime.key); Install=$($vstoRuntime.install); VSTORFeature_CLR40=$($vstoRuntime.clr40); Version=$($vstoRuntime.version); registryView=$($vstoRuntime.registryView); Target=$($vstoRuntime.targetArchitecture); Loader=$($vstoRuntime.loaderPath); LoaderVersion=$($vstoRuntime.loaderVersion)"
 
     $msiState = Test-MsiInstalled 10
     Add-Check "Office MSI installed" ([bool]$msiState.installed) "ProductCode=$($msiState.productCode); Source=$($msiState.source)"
@@ -864,6 +1382,22 @@ try {
     $powerPointLoadBehaviorBefore = Get-LoadBehavior PowerPoint $script:resolvedOfficePlatform
     Add-Check "Word LoadBehavior before startup" ($wordLoadBehaviorBefore -eq 3) "LoadBehavior=$wordLoadBehaviorBefore"
     Add-Check "PowerPoint LoadBehavior before startup" ($powerPointLoadBehaviorBefore -eq 3) "LoadBehavior=$powerPointLoadBehaviorBefore"
+
+    $wordComRegistration = Get-ManagedComRegistrationState Word $script:resolvedOfficePlatform
+    Add-Check `
+        "Word managed COM registration" `
+        ([bool]$wordComRegistration.passed) `
+        "Architecture=$($wordComRegistration.architecture); Scope=HKLM; CLSID=$($wordComRegistration.progIdClsid); Inproc=$($wordComRegistration.inprocServer32); Class=$($wordComRegistration.className); CodeBase=$($wordComRegistration.codeBasePath); Category=$($wordComRegistration.implementedCategoryPresent); LegacyHKCU=$($wordComRegistration.legacyPerUserProgId -or $wordComRegistration.legacyPerUserClsid -or $wordComRegistration.legacyPerUserAddin)"
+    $powerPointComRegistration = Get-ManagedComRegistrationState PowerPoint $script:resolvedOfficePlatform
+    Add-Check `
+        "PowerPoint managed COM registration" `
+        ([bool]$powerPointComRegistration.passed) `
+        "Architecture=$($powerPointComRegistration.architecture); Scope=HKLM; CLSID=$($powerPointComRegistration.progIdClsid); Inproc=$($powerPointComRegistration.inprocServer32); Class=$($powerPointComRegistration.className); CodeBase=$($powerPointComRegistration.codeBasePath); Category=$($powerPointComRegistration.implementedCategoryPresent); LegacyHKCU=$($powerPointComRegistration.legacyPerUserProgId -or $powerPointComRegistration.legacyPerUserClsid -or $powerPointComRegistration.legacyPerUserAddin)"
+
+    $wordComActivation = Test-ManagedComActivation "VisualTeX.WordVsto"
+    Add-Check "Word managed COM activation" ([bool]$wordComActivation.passed) "ProgID=$($wordComActivation.progId); CLSID=$($wordComActivation.clsid); HRESULT=$($wordComActivation.hresult); Error=$($wordComActivation.error)"
+    $powerPointComActivation = Test-ManagedComActivation "VisualTeX.PowerPointVsto"
+    Add-Check "PowerPoint managed COM activation" ([bool]$powerPointComActivation.passed) "ProgID=$($powerPointComActivation.progId); CLSID=$($powerPointComActivation.clsid); HRESULT=$($powerPointComActivation.hresult); Error=$($powerPointComActivation.error)"
 
     $oleState = Test-OleLocalServer $script:resolvedOfficePlatform
     Add-Check "OLE LocalServer" ([bool]$oleState.healthy) "CLSID=$($oleState.clsid); Server=$($oleState.server); EmbeddingProbe=$($oleState.embeddingProbe); Error=$($oleState.error)"
@@ -931,10 +1465,11 @@ try {
     New-ItemProperty -LiteralPath $modeKey -Name "CompanionCertificateMatches" -PropertyType DWord -Value ([int][bool]$companionState.certificateMatches) -Force | Out-Null
     New-ItemProperty -LiteralPath $modeKey -Name "CompanionProtocolMatches" -PropertyType DWord -Value ([int][bool]$companionState.protocolMatches) -Force | Out-Null
     New-ItemProperty -LiteralPath $modeKey -Name "OfficeRuntimeVerified" -PropertyType DWord -Value ([int]$companionVerified) -Force | Out-Null
+    New-ItemProperty -LiteralPath $modeKey -Name "RuntimeVerificationPending" -PropertyType DWord -Value ([int](-not $companionVerified)) -Force | Out-Null
     New-ItemProperty -LiteralPath $modeKey -Name "LastRuntimeError" -PropertyType String -Value $(if ($script:failures.Count -eq 0) { "" } else { $script:failures -join "; " }) -Force | Out-Null
     New-ItemProperty -LiteralPath $modeKey -Name "LastRuntimeReport" -PropertyType String -Value $ReportPath -Force | Out-Null
 
-    Write-Report $wordResult $powerPointResult $certificateState $vstoRuntime $msiState $oleState $companionState $wordDisabledItems $powerPointDisabledItems $events
+    Write-Report $wordResult $powerPointResult $certificateState $vstoRuntime $msiState $oleState $companionState $wordComRegistration $powerPointComRegistration $wordDisabledItems $powerPointDisabledItems $events
     if ($script:failures.Count -gt 0) {
         throw "Office runtime verification failed: $($script:failures -join '; ')"
     }
@@ -960,6 +1495,8 @@ try {
     if ($null -eq $msiState) { $msiState = [pscustomobject]@{ installed = $false; productCode = "" } }
     if ($null -eq $oleState) { $oleState = [pscustomobject]@{ healthy = $false; server = ""; clsid = "{8FF7F5AA-0D60-48D5-ADBD-65A64B4C827B}"; embeddingProbe = $false; error = "Not evaluated" } }
     if ($null -eq $companionState) { $companionState = [pscustomobject]@{ executable = ""; appDataRoot = ""; port = 0; expectedProtocol = 0; processRunning = $false; portListening = $false; httpsHealthy = $false; certificateMatches = $false; protocolMatches = $false; certificatePath = ""; expectedThumbprint = ""; localThumbprint = ""; remoteThumbprint = ""; health = $null; errors = @("Not evaluated") } }
+    if ($null -eq $wordComRegistration) { $wordComRegistration = [pscustomobject]@{ host = "Word"; architecture = $script:resolvedOfficePlatform; passed = $false; error = "Not evaluated" } }
+    if ($null -eq $powerPointComRegistration) { $powerPointComRegistration = [pscustomobject]@{ host = "PowerPoint"; architecture = $script:resolvedOfficePlatform; passed = $false; error = "Not evaluated" } }
     try {
         $modeKey = "HKCU:\Software\VisualTeX\OfficeIntegration"
         if (-not (Test-Path -LiteralPath $modeKey)) { New-Item -Path $modeKey -Force | Out-Null }
@@ -978,10 +1515,11 @@ try {
         foreach ($valueName in $failedRuntimeValues) {
             New-ItemProperty -LiteralPath $modeKey -Name $valueName -PropertyType DWord -Value 0 -Force | Out-Null
         }
+        New-ItemProperty -LiteralPath $modeKey -Name "RuntimeVerificationPending" -PropertyType DWord -Value 1 -Force | Out-Null
         $runtimeError = if ($script:failures.Count -gt 0) { $script:failures -join "; " } else { $_.Exception.Message }
         New-ItemProperty -LiteralPath $modeKey -Name "LastRuntimeError" -PropertyType String -Value $runtimeError -Force | Out-Null
         New-ItemProperty -LiteralPath $modeKey -Name "LastRuntimeReport" -PropertyType String -Value $ReportPath -Force | Out-Null
-        Write-Report $wordResult $powerPointResult $certificateState $vstoRuntime $msiState $oleState $companionState $wordDisabledItems $powerPointDisabledItems $events
+        Write-Report $wordResult $powerPointResult $certificateState $vstoRuntime $msiState $oleState $companionState $wordComRegistration $powerPointComRegistration $wordDisabledItems $powerPointDisabledItems $events
     } catch { }
     throw
 }

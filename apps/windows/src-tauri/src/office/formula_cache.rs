@@ -233,6 +233,8 @@ mod tests {
             render_width_px: Some(80.0),
             render_height_px: Some(20.0),
             baseline: Some(16.0),
+            font_size_pt: Some(14.0),
+            render_font_size_pt: Some(14.0),
             created_with_version: "1.0.6".to_string(),
             updated_with_version: "1.0.6".to_string(),
             created_at: "2026-07-12T00:00:00Z".to_string(),

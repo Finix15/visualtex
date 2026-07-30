@@ -108,6 +108,12 @@ function Test-RibbonComDispatch(
         if ($ribbonXml -match '<tab\s+idMso="TabHome"') {
             throw "$ClassName still injects VisualTeX directly into the built-in Home tab."
         }
+        $isWordAddIn = $ClassName -eq "VisualTeX.WordVsto.ThisAddIn"
+        $missingBulkImport = $ribbonXml -notmatch 'OnBulkImport' -or
+            $ribbonXml -notmatch 'tag="batchImport"'
+        if ($isWordAddIn -and $missingBulkImport) {
+            throw "$ClassName Ribbon XML is missing the bulk import callback or high-DPI icon tag."
+        }
 
         $unknown = [Runtime.InteropServices.Marshal]::GetIUnknownForObject($instance)
         $callbackPointer = [IntPtr]::Zero
@@ -152,7 +158,8 @@ Test-RibbonComDispatch `
         "OnExportSelectedAsPicture",
         "OnDeleteSelected",
         "OnOpenDesktop",
-        "OnInsertEquationReference"
+        "OnInsertEquationReference",
+        "OnBulkImport"
     )
 
 Test-RibbonComDispatch `

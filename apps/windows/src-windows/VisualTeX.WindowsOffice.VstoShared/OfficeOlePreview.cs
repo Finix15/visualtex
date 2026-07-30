@@ -305,6 +305,14 @@ internal static class OfficeOlePreview
             switch (name)
             {
                 case "svg":
+                    RenderNestedSvg(
+                        graphics,
+                        element,
+                        transform,
+                        style,
+                        definitionReference,
+                        referenceStack);
+                    return;
                 case "g":
                     foreach (var child in element.Elements())
                         RenderElement(graphics, child, transform, style, definitionReference, referenceStack);
@@ -329,10 +337,141 @@ internal static class OfficeOlePreview
                 case "ellipse":
                     RenderEllipse(graphics, element, transform, style, name == "circle");
                     return;
+                case "text":
+                    RenderText(graphics, element, transform, style);
+                    return;
                 default:
                     throw new InvalidDataException(
                         $"SVG element <{name}> is not supported by the native vector EMF renderer.");
             }
+        }
+
+        private void RenderNestedSvg(
+            Graphics graphics,
+            XElement element,
+            SvgMatrix transform,
+            SvgStyle style,
+            bool definitionReference,
+            HashSet<string> referenceStack)
+        {
+            var x = ReadNumber(element.Attribute("x")?.Value, 0);
+            var y = ReadNumber(element.Attribute("y")?.Value, 0);
+            var viewBoxValue = element.Attribute("viewBox")?.Value;
+            if (string.IsNullOrWhiteSpace(viewBoxValue))
+            {
+                var translated = transform.Multiply(SvgMatrix.Translate(x, y));
+                foreach (var child in element.Elements())
+                    RenderElement(graphics, child, translated, style, definitionReference, referenceStack);
+                return;
+            }
+
+            var viewBox = ParseViewBox(viewBoxValue);
+            var width = ReadNumber(element.Attribute("width")?.Value, viewBox.Width);
+            var height = ReadNumber(element.Attribute("height")?.Value, viewBox.Height);
+            if (!IsPositiveFinite(width) || !IsPositiveFinite(height))
+                throw new InvalidDataException("Nested SVG viewport dimensions are invalid.");
+
+            var viewportTransform = CreateViewBoxTransform(
+                x,
+                y,
+                width,
+                height,
+                viewBox,
+                element.Attribute("preserveAspectRatio")?.Value);
+            var childTransform = transform.Multiply(viewportTransform);
+
+            var overflow = element.Attribute("overflow")?.Value;
+            if (string.IsNullOrWhiteSpace(overflow))
+            {
+                var declarations = ParseTextStyleDeclarations(element.Attribute("style")?.Value);
+                declarations.TryGetValue("overflow", out overflow);
+            }
+            var clipViewport = !string.Equals(
+                overflow?.Trim(),
+                "visible",
+                StringComparison.OrdinalIgnoreCase);
+            GraphicsState? state = null;
+            try
+            {
+                if (clipViewport)
+                {
+                    state = graphics.Save();
+                    using var clipPath = new GraphicsPath(FillMode.Winding);
+                    clipPath.AddRectangle(new RectangleF(
+                        (float)x,
+                        (float)y,
+                        (float)width,
+                        (float)height));
+                    ApplyTransform(clipPath, transform);
+                    graphics.SetClip(clipPath, CombineMode.Intersect);
+                }
+                foreach (var child in element.Elements())
+                    RenderElement(
+                        graphics,
+                        child,
+                        childTransform,
+                        style,
+                        definitionReference,
+                        referenceStack);
+            }
+            finally
+            {
+                if (state is not null) graphics.Restore(state);
+            }
+        }
+
+        private static SvgMatrix CreateViewBoxTransform(
+            double x,
+            double y,
+            double width,
+            double height,
+            SvgViewBox viewBox,
+            string? preserveAspectRatio)
+        {
+            var tokens = (preserveAspectRatio ?? "xMidYMid meet")
+                .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+                .Where(token => !string.Equals(token, "defer", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            var align = tokens.Length > 0 ? tokens[0] : "xMidYMid";
+            var mode = tokens.Length > 1 ? tokens[1] : "meet";
+            if (tokens.Length > 2)
+                throw new InvalidDataException("Nested SVG preserveAspectRatio is invalid.");
+
+            var scaleX = width / viewBox.Width;
+            var scaleY = height / viewBox.Height;
+            if (string.Equals(align, "none", StringComparison.OrdinalIgnoreCase))
+            {
+                return SvgMatrix.Translate(x, y)
+                    .Multiply(SvgMatrix.Scale(scaleX, scaleY))
+                    .Multiply(SvgMatrix.Translate(-viewBox.X, -viewBox.Y));
+            }
+
+            var match = Regex.Match(
+                align,
+                @"^x(Min|Mid|Max)Y(Min|Mid|Max)$",
+                RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+            if (!match.Success)
+                throw new InvalidDataException(
+                    $"Unsupported nested SVG preserveAspectRatio alignment '{align}'.");
+            var slice = string.Equals(mode, "slice", StringComparison.OrdinalIgnoreCase);
+            if (!slice && !string.Equals(mode, "meet", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException(
+                    $"Unsupported nested SVG preserveAspectRatio mode '{mode}'.");
+
+            var scale = slice ? Math.Max(scaleX, scaleY) : Math.Min(scaleX, scaleY);
+            var renderedWidth = viewBox.Width * scale;
+            var renderedHeight = viewBox.Height * scale;
+            static double AlignmentOffset(string value, double remaining) =>
+                string.Equals(value, "Min", StringComparison.OrdinalIgnoreCase)
+                    ? 0
+                    : string.Equals(value, "Mid", StringComparison.OrdinalIgnoreCase)
+                        ? remaining / 2
+                        : remaining;
+            var offsetX = AlignmentOffset(match.Groups[1].Value, width - renderedWidth);
+            var offsetY = AlignmentOffset(match.Groups[2].Value, height - renderedHeight);
+            return SvgMatrix.Translate(x + offsetX, y + offsetY)
+                .Multiply(SvgMatrix.Scale(scale, scale))
+                .Multiply(SvgMatrix.Translate(-viewBox.X, -viewBox.Y));
         }
 
         private void RenderUse(
@@ -465,6 +604,211 @@ internal static class OfficeOlePreview
                 (float)(ry * 2));
             ApplyTransform(path, transform);
             PaintPath(graphics, path, style, transform);
+        }
+
+        private static void RenderText(
+            Graphics graphics,
+            XElement element,
+            SvgMatrix transform,
+            SvgStyle style)
+        {
+            if (element.HasElements)
+                throw new InvalidDataException(
+                    "Nested SVG text content is not supported by the native vector EMF renderer.");
+
+            var text = element.Value;
+            if (string.IsNullOrEmpty(text)) return;
+            if (text.Length > 4096 || text.Any(character => char.IsControl(character)
+                                                        && character is not '\t' and not '\r' and not '\n'))
+                throw new InvalidDataException("SVG text content is invalid.");
+
+            var declarations = ParseTextStyleDeclarations(element.Attribute("style")?.Value);
+            string Attribute(string name, string fallback) =>
+                element.Attribute(name)?.Value
+                ?? (declarations.TryGetValue(name, out var value) ? value : fallback);
+
+            var fontSize = ReadNumber(Attribute("font-size", "1000"), 1000);
+            if (!IsPositiveFinite(fontSize) || fontSize > 100000)
+                throw new InvalidDataException("SVG text font size is invalid.");
+
+            var x = ReadFirstNumber(element.Attribute("x")?.Value, 0)
+                    + ReadFirstNumber(element.Attribute("dx")?.Value, 0);
+            var y = ReadFirstNumber(element.Attribute("y")?.Value, 0)
+                    + ReadFirstNumber(element.Attribute("dy")?.Value, 0);
+            var requestedStyle = ResolveFontStyle(
+                Attribute("font-weight", "normal"),
+                Attribute("font-style", "normal"));
+
+            using var fontFamily = ResolveFontFamily(
+                Attribute("font-family", "serif"),
+                text,
+                requestedStyle,
+                out var fontStyle);
+            var emHeight = fontFamily.GetEmHeight(fontStyle);
+            var cellAscent = fontFamily.GetCellAscent(fontStyle);
+            if (emHeight <= 0 || cellAscent <= 0)
+                throw new InvalidDataException(
+                    $"SVG text font '{fontFamily.Name}' has invalid metrics.");
+
+            var baselineOffset = fontSize * cellAscent / emHeight;
+            using var format = (StringFormat)StringFormat.GenericTypographic.Clone();
+            format.FormatFlags |= StringFormatFlags.MeasureTrailingSpaces
+                                  | StringFormatFlags.NoClip
+                                  | StringFormatFlags.NoWrap;
+            using var path = new GraphicsPath(FillMode.Winding);
+            path.AddString(
+                text,
+                fontFamily,
+                (int)fontStyle,
+                (float)fontSize,
+                new PointF((float)x, (float)(y - baselineOffset)),
+                format);
+            if (path.PointCount == 0)
+                throw new InvalidDataException(
+                    $"SVG text font '{fontFamily.Name}' produced no vector glyph outlines.");
+
+            var textAnchor = Attribute("text-anchor", "start").Trim();
+            if (!string.Equals(textAnchor, "start", StringComparison.OrdinalIgnoreCase))
+            {
+                var bounds = path.GetBounds();
+                var offset = string.Equals(textAnchor, "middle", StringComparison.OrdinalIgnoreCase)
+                    ? -bounds.Width / 2f
+                    : string.Equals(textAnchor, "end", StringComparison.OrdinalIgnoreCase)
+                        ? -bounds.Width
+                        : throw new InvalidDataException(
+                            $"Unsupported SVG text-anchor '{textAnchor}'.");
+                using var anchorTransform = new Matrix();
+                anchorTransform.Translate(offset, 0);
+                path.Transform(anchorTransform);
+            }
+
+            ApplyTransform(path, transform);
+            PaintPath(graphics, path, style, transform);
+        }
+
+        private static Dictionary<string, string> ParseTextStyleDeclarations(string? value)
+        {
+            var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (string.IsNullOrWhiteSpace(value)) return result;
+            foreach (var declaration in value!.Split(';'))
+            {
+                var separator = declaration.IndexOf(':');
+                if (separator <= 0) continue;
+                result[declaration.Substring(0, separator).Trim()] =
+                    declaration.Substring(separator + 1).Trim();
+            }
+            return result;
+        }
+
+        private static FontStyle ResolveFontStyle(string weight, string style)
+        {
+            var result = FontStyle.Regular;
+            var normalizedWeight = weight.Trim();
+            if (string.Equals(normalizedWeight, "bold", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(normalizedWeight, "bolder", StringComparison.OrdinalIgnoreCase)
+                || (int.TryParse(normalizedWeight, NumberStyles.Integer, CultureInfo.InvariantCulture,
+                        out var numericWeight)
+                    && numericWeight >= 600))
+                result |= FontStyle.Bold;
+            var normalizedStyle = style.Trim();
+            if (string.Equals(normalizedStyle, "italic", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(normalizedStyle, "oblique", StringComparison.OrdinalIgnoreCase))
+                result |= FontStyle.Italic;
+            return result;
+        }
+
+        private static FontFamily ResolveFontFamily(
+            string requestedFamilies,
+            string text,
+            FontStyle requestedStyle,
+            out FontStyle resolvedStyle)
+        {
+            var installed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var family in FontFamily.Families)
+            {
+                try { installed.Add(family.Name); }
+                finally { family.Dispose(); }
+            }
+            var requested = requestedFamilies
+                .Split(',')
+                .Select(name => name.Trim().Trim('\'', '"'))
+                .Where(name => name.Length > 0)
+                .ToList();
+            var containsCjk = text.Any(IsCjkCharacter);
+            var genericSerif = requested.Any(name =>
+                string.Equals(name, "serif", StringComparison.OrdinalIgnoreCase));
+            var genericSans = requested.Any(name =>
+                string.Equals(name, "sans-serif", StringComparison.OrdinalIgnoreCase));
+
+            var candidates = new List<string>();
+            candidates.AddRange(requested.Where(name =>
+                !string.Equals(name, "serif", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(name, "sans-serif", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(name, "monospace", StringComparison.OrdinalIgnoreCase)));
+            if (containsCjk)
+            {
+                candidates.AddRange(genericSerif
+                    ? new[] { "SimSun", "NSimSun", "Microsoft YaHei", "Yu Mincho", "Meiryo", "Microsoft JhengHei", "Malgun Gothic" }
+                    : new[] { "Microsoft YaHei", "Microsoft JhengHei", "Yu Gothic", "Meiryo", "Malgun Gothic", "SimSun" });
+            }
+            candidates.AddRange(genericSans
+                ? new[] { "Arial", "Segoe UI" }
+                : new[] { "Times New Roman", "Cambria", "Segoe UI" });
+
+            foreach (var candidate in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                if (!installed.Contains(candidate)) continue;
+                var family = new FontFamily(candidate);
+                try
+                {
+                    resolvedStyle = ResolveSupportedFontStyle(family, requestedStyle);
+                    return new FontFamily(family.Name);
+                }
+                finally { family.Dispose(); }
+            }
+
+            var fallback = genericSans ? FontFamily.GenericSansSerif : FontFamily.GenericSerif;
+            resolvedStyle = ResolveSupportedFontStyle(fallback, requestedStyle);
+            return new FontFamily(fallback.Name);
+        }
+
+        private static FontStyle ResolveSupportedFontStyle(
+            FontFamily family,
+            FontStyle requestedStyle)
+        {
+            if (family.IsStyleAvailable(requestedStyle)) return requestedStyle;
+            if ((requestedStyle & FontStyle.Bold) != 0 && family.IsStyleAvailable(FontStyle.Bold))
+                return FontStyle.Bold;
+            if ((requestedStyle & FontStyle.Italic) != 0 && family.IsStyleAvailable(FontStyle.Italic))
+                return FontStyle.Italic;
+            if (family.IsStyleAvailable(FontStyle.Regular)) return FontStyle.Regular;
+            foreach (var candidate in new[]
+                     {
+                         FontStyle.Bold | FontStyle.Italic,
+                         FontStyle.Bold,
+                         FontStyle.Italic,
+                         FontStyle.Underline,
+                         FontStyle.Strikeout,
+                     })
+            {
+                if (family.IsStyleAvailable(candidate)) return candidate;
+            }
+            throw new InvalidDataException($"SVG text font '{family.Name}' has no usable style.");
+        }
+
+        private static bool IsCjkCharacter(char value) =>
+            value is >= '\u2E80' and <= '\u9FFF'
+            or >= '\uF900' and <= '\uFAFF'
+            or >= '\u3040' and <= '\u30FF'
+            or >= '\uAC00' and <= '\uD7AF';
+
+        private static double ReadFirstNumber(string? value, double fallback)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return fallback;
+            var reader = new SvgNumberReader(value!);
+            return reader.TryReadNumber(out var number) && IsFinite(number)
+                ? number
+                : throw new InvalidDataException($"Invalid SVG number list '{value}'.");
         }
 
         private static void PaintPath(

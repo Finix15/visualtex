@@ -42,6 +42,12 @@ public sealed class FormulaMetadata
     [JsonPropertyName("baseline")]
     public double? Baseline { get; set; }
 
+    [JsonPropertyName("fontSizePt")]
+    public double? FontSizePt { get; set; }
+
+    [JsonPropertyName("renderFontSizePt")]
+    public double? RenderFontSizePt { get; set; }
+
     [JsonPropertyName("nativeOmmlFingerprint")]
     public string? NativeOmmlFingerprint { get; set; }
 
@@ -77,6 +83,12 @@ public sealed class FormulaMetadata
                 || Baseline.Value < 0
                 || (RenderHeightPx.HasValue && Baseline.Value > RenderHeightPx.Value)))
             throw new InvalidOperationException("VisualTeX baseline must be within the rendered formula height.");
+        if (FontSizePt.HasValue
+            && FormulaFontSize.Normalize(FontSizePt.Value) != FontSizePt.Value)
+            throw new InvalidOperationException("VisualTeX fontSizePt must use a supported half-point value.");
+        if (RenderFontSizePt.HasValue
+            && FormulaFontSize.Normalize(RenderFontSizePt.Value) != RenderFontSizePt.Value)
+            throw new InvalidOperationException("VisualTeX renderFontSizePt must use a supported half-point value.");
     }
 }
 

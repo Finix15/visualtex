@@ -8,7 +8,45 @@ Var VisualTeXOfficeNativeRadio
 
 Page custom VisualTeXOfficePageCreate VisualTeXOfficePageLeave
 
+Function VisualTeXRepairMainUninstallRegistration
+  ; Older 1.2.3 builds could leave the remembered install directory while the
+  ; standard Add/Remove Programs key was missing. Reconstruct the key before
+  ; Tauri's maintenance page tries to launch uninstall.exe.
+  ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VisualTeX" "UninstallString"
+  ${If} $0 != ""
+    Return
+  ${EndIf}
+
+  ReadRegStr $1 HKCU "Software\visualtex\VisualTeX" ""
+  ${If} $1 == ""
+    IfFileExists "$LOCALAPPDATA\VisualTeX\uninstall.exe" 0 +2
+      StrCpy $1 "$LOCALAPPDATA\VisualTeX"
+  ${EndIf}
+  ${If} $1 == ""
+    IfFileExists "$PROFILE\AppData\VisualTeX\uninstall.exe" 0 +2
+      StrCpy $1 "$PROFILE\AppData\VisualTeX"
+  ${EndIf}
+  ${If} $1 == ""
+    Return
+  ${EndIf}
+  IfFileExists "$1\uninstall.exe" 0 visualtex_repair_uninstall_done
+
+  WriteRegStr HKCU "Software\visualtex\VisualTeX" "" "$1"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VisualTeX" "DisplayName" "VisualTeX"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VisualTeX" "DisplayIcon" '$\"$1\visualtex.exe$\"'
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VisualTeX" "DisplayVersion" "1.2.3"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VisualTeX" "Publisher" "visualtex"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VisualTeX" "InstallLocation" '$\"$1$\"'
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VisualTeX" "UninstallString" '$\"$1\uninstall.exe$\"'
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VisualTeX" "MainBinaryName" "visualtex.exe"
+  WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VisualTeX" "NoModify" 1
+  WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VisualTeX" "NoRepair" 1
+
+visualtex_repair_uninstall_done:
+FunctionEnd
+
 Function VisualTeXOfficePageCreate
+  Call VisualTeXRepairMainUninstallRegistration
   nsDialogs::Create 1018
   Pop $0
   ${If} $0 == error
@@ -79,6 +117,14 @@ FunctionEnd
 !macroend
 
 !macro NSIS_HOOK_PREINSTALL
+  ; Normalize the two legacy 1.2.3 install locations back to Tauri's canonical
+  ; current-user directory. Preserve genuinely custom directories.
+  ${If} $INSTDIR == "$PROFILE\AppData\VisualTeX"
+    StrCpy $INSTDIR "$LOCALAPPDATA\VisualTeX"
+  ${ElseIf} $INSTDIR == "$APPDATA\VisualTeX"
+    StrCpy $INSTDIR "$LOCALAPPDATA\VisualTeX"
+  ${EndIf}
+
   ; Custom pages are skipped by NSIS /S. Preserve an explicit interactive
   ; choice, but default unattended installs to the recommended Office mode.
   ${If} $VisualTeXOfficeChoice == ""
@@ -122,7 +168,7 @@ visualtex_python_check_done:
 !macro NSIS_HOOK_POSTINSTALL
   DetailPrint "Applying the selected VisualTeX Office integration mode: $VisualTeXOfficeChoice"
   ${If} $VisualTeXOfficeChoice == "native"
-    DetailPrint "Installing the per-user VisualTeX Ribbon add-ins and native Formula OLE LocalServer."
+    DetailPrint "Installing the machine-wide VisualTeX Ribbon add-ins and native Formula OLE LocalServer. A UAC prompt may appear."
     IfFileExists "$INSTDIR\VisualTeX.exe" 0 visualtex_office_missing
     IfFileExists "$INSTDIR\scripts\ensure_windows_office_certificate.ps1" 0 visualtex_office_missing
     IfFileExists "$INSTDIR\scripts\install_windows_vsto.ps1" 0 visualtex_office_missing
@@ -169,10 +215,22 @@ visualtex_vsto_runtime_ready:
 
     nsExec::ExecToLog `powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install_windows_vsto.ps1" -PackageDirectory "$INSTDIR\windows-office" -VisualTeXPath "$INSTDIR\VisualTeX.exe"`
     Pop $0
-    StrCmp $0 "0" visualtex_office_static_runtime_verified visualtex_office_failed
+    StrCmp $0 "0" visualtex_office_static_installed visualtex_office_failed
+
+visualtex_office_static_installed:
+    DetailPrint "Machine-wide Office files and registrations passed. Verifying the companion in the normal user session."
+    WriteRegDWORD HKCU "Software\VisualTeX\OfficeIntegration" "RuntimeVerificationPending" 1
+    nsExec::ExecToStack `powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\test_windows_office_runtime.ps1" -VisualTeXPath "$INSTDIR\VisualTeX.exe" -CompanionOnly`
+    Pop $0
+    Pop $1
+    ${If} $0 != "0"
+      DetailPrint "Companion runtime verification is not ready yet. The machine-wide Office installation remains valid. ExitCode=$0 Output=$1"
+      Goto visualtex_office_runtime_pending
+    ${EndIf}
+    WriteRegDWORD HKCU "Software\VisualTeX\OfficeIntegration" "RuntimeVerificationPending" 0
 
 visualtex_office_static_runtime_verified:
-    DetailPrint "VisualTeX native Office static installation and companion runtime verification passed."
+    DetailPrint "VisualTeX native Office static installation and non-elevated companion runtime verification passed."
     IfSilent visualtex_office_done 0
     MessageBox MB_ICONQUESTION|MB_YESNO "Office 插件和本地服务已经安装完成。要确认 Word 与 PowerPoint 的加载项是否真正连接成功，需要临时启动这两个 Office 应用进行验证。$\r$\n$\r$\n请先保存文档并关闭所有正在运行的 Word、PowerPoint 和其他 Office 窗口。是否现在开始验证？$\r$\n$\r$\n选择“否”不会影响 VisualTeX 主程序和插件安装，之后仍可在 VisualTeX 设置中点击“验证 Office 连接”。" IDYES visualtex_office_verify_connections IDNO visualtex_office_verification_deferred
 
@@ -196,11 +254,17 @@ visualtex_office_verification_deferred:
     DetailPrint "The user deferred Word and PowerPoint connection verification."
     Goto visualtex_office_done
 
+visualtex_office_runtime_pending:
+    DetailPrint "VisualTeX Office files, registry entries, COM classes and OLE server are installed. Companion runtime verification will be retried from VisualTeX settings."
+    IfSilent visualtex_office_done 0
+    MessageBox MB_ICONINFORMATION "Office 集成已经安装完成，但本地伴侣服务首次启动尚未在安装器等待时间内完成。$\r$\n$\r$\n这不代表插件安装失败。启动 VisualTeX 后会继续初始化，也可以稍后在“设置 → Office 集成”中点击“验证 Office 连接”重新检查。"
+    Goto visualtex_office_done
+
 visualtex_office_failed:
     SetDetailsView show
-    DetailPrint "VisualTeX main application installed, but native Office integration installation or verification failed. See the newest vsto-bootstrap and vsto-diagnostic reports under %LOCALAPPDATA%\VisualTeX\office\install-logs."
+    DetailPrint "VisualTeX main application installed, but the machine-wide Office files, registry entries, COM classes or OLE server failed static installation verification. See the newest vsto-bootstrap and vsto-diagnostic reports under %LOCALAPPDATA%\VisualTeX\office\install-logs."
     IfSilent visualtex_office_done 0
-    MessageBox MB_ICONEXCLAMATION "VisualTeX 主程序已安装，但原生 Office 集成安装或验证失败。请查看安装详情，以及 %LOCALAPPDATA%\VisualTeX\office\install-logs 中最新的 vsto-bootstrap 和 vsto-diagnostic 报告。"
+    MessageBox MB_ICONEXCLAMATION "VisualTeX 主程序已安装，但 Office 插件的文件、注册信息、COM 类或 OLE 服务未通过静态安装验证。请查看安装详情，以及 %LOCALAPPDATA%\VisualTeX\office\install-logs 中最新的 vsto-bootstrap 和 vsto-diagnostic 报告。"
     Goto visualtex_office_done
   ${Else}
     IfFileExists "$INSTDIR\scripts\uninstall_windows_vsto.ps1" 0 visualtex_office_done
@@ -216,14 +280,53 @@ visualtex_office_missing:
   Goto visualtex_office_done
 
 visualtex_office_done:
+  ; Remove only recognized legacy installation roots after the canonical
+  ; installation has completed. User data lives under the application bundle
+  ; directories, not these installer roots.
+  ${If} $INSTDIR != "$PROFILE\AppData\VisualTeX"
+    IfFileExists "$PROFILE\AppData\VisualTeX\uninstall.exe" visualtex_remove_direct_appdata 0
+    IfFileExists "$PROFILE\AppData\VisualTeX\visualtex.exe" visualtex_remove_direct_appdata visualtex_direct_appdata_done
+visualtex_remove_direct_appdata:
+    RMDir /r "$PROFILE\AppData\VisualTeX"
+visualtex_direct_appdata_done:
+  ${EndIf}
+  ${If} $INSTDIR != "$APPDATA\VisualTeX"
+    IfFileExists "$APPDATA\VisualTeX\uninstall.exe" visualtex_remove_roaming_legacy 0
+    IfFileExists "$APPDATA\VisualTeX\visualtex.exe" visualtex_remove_roaming_legacy visualtex_roaming_legacy_done
+visualtex_remove_roaming_legacy:
+    RMDir /r "$APPDATA\VisualTeX"
+visualtex_roaming_legacy_done:
+  ${EndIf}
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
-  IfFileExists "$INSTDIR\scripts\uninstall_windows_vsto.ps1" 0 +3
-  nsExec::ExecToLog `powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\uninstall_windows_vsto.ps1"`
+  IfFileExists "$INSTDIR\scripts\uninstall_windows_vsto.ps1" 0 visualtex_preuninstall_done
+  nsExec::ExecToStack `powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\uninstall_windows_vsto.ps1"`
   Pop $0
-  IfFileExists "$INSTDIR\scripts\remove_windows_office_certificate.ps1" 0 visualtex_preuninstall_done
-  nsExec::ExecToLog `powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\remove_windows_office_certificate.ps1"`
-  Pop $0
+  Pop $1
+  ${If} $0 != "0"
+    SetDetailsView show
+    DetailPrint "VisualTeX Office integration uninstall failed. ExitCode=$0 Output=$1"
+    MessageBox MB_ICONSTOP "无法卸载 VisualTeX Office 集成或 HTTPS 证书。主程序尚未删除，您可以关闭 Word 和 PowerPoint 后重试。$\r$\n$\r$\n请查看 %LOCALAPPDATA%\VisualTeX\office\install-logs 中最新的 vsto-uninstall-bootstrap 和 certificate-remove 日志。"
+    SetErrorLevel 1
+    Quit
+  ${EndIf}
 visualtex_preuninstall_done:
+!macroend
+
+!macro NSIS_HOOK_POSTUNINSTALL
+  ; The generated maintenance flow runs uninstall.exe directly from $INSTDIR
+  ; with _?=$INSTDIR. The running uninstaller therefore cannot delete itself.
+  ; Remove everything that is currently deletable, then launch a detached
+  ; cleanup process that waits for this uninstaller PID to exit before deleting
+  ; the final uninstall.exe and empty installation root.
+  ;
+  ; Preserve %APPDATA%\VisualTeX because it stores OfficeSessions user data,
+  ; and preserve %APPDATA%\com.visualtex.studio.
+  DeleteRegKey HKCU "Software\visualtex\VisualTeX"
+  RMDir /r "$PROFILE\AppData\VisualTeX"
+  RMDir /r "$INSTDIR"
+
+  System::Call 'kernel32::GetCurrentProcessId() i .r0'
+  Exec `"$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command "Wait-Process -Id $0 -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 300; Remove-Item -LiteralPath '$INSTDIR' -Recurse -Force -ErrorAction SilentlyContinue"`
 !macroend

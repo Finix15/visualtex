@@ -7,9 +7,9 @@ import {
 } from "./browser_test_runtime.mjs";
 
 const scenario = process.argv[2];
-if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "native-space-selection", "candidate-query-reset", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "accent-placeholder", "caret-probe", "scripts", "upright", "suggestions", "navigation", "geometry", "source-layout", "toolbar-compact", "formula-tiles", "cursor-placement", "settings", "layout", "delete", "export"]).has(scenario)) {
+if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "native-space-selection", "candidate-query-reset", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "accent-placeholder", "caret-probe", "scripts", "upright", "context-style", "suggestions", "navigation", "geometry", "source-layout", "toolbar-compact", "formula-tiles", "cursor-placement", "settings", "layout", "delete", "export"]).has(scenario)) {
   throw new Error(
-    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|native-space-selection|candidate-query-reset|raw-placeholder-visual|placeholder-selection|structural-placeholder|accent-placeholder|caret-probe|scripts|upright|suggestions|navigation|geometry|source-layout|toolbar-compact|formula-tiles|cursor-placement|settings|layout|delete|export>",
+    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|native-space-selection|candidate-query-reset|raw-placeholder-visual|placeholder-selection|structural-placeholder|accent-placeholder|caret-probe|scripts|upright|context-style|suggestions|navigation|geometry|source-layout|toolbar-compact|formula-tiles|cursor-placement|settings|layout|delete|export>",
   );
 }
 
@@ -4133,6 +4133,231 @@ async function main() {
 
       console.log(JSON.stringify({ cases }, null, 2));
       console.log("Targeted independent script auto-exit regression passed");
+      return;
+    }
+
+    if (scenario === "context-style") {
+      await focusField();
+      await clearField();
+      await typeText("abc");
+
+      const contextPoint = await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        field.selection = {
+          ranges: [[0, field.lastOffset]],
+          direction: "forward",
+        };
+        const bounds = field.shadowRoot
+          ?.querySelector('[part="content"]')
+          ?.getBoundingClientRect();
+        return bounds
+          ? { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }
+          : null;
+      })()`);
+      if (!contextPoint) throw new Error("Unable to resolve formula bounds");
+
+      const openContextMenu = async () => {
+        await client.send("Input.dispatchMouseEvent", {
+          type: "mousePressed",
+          x: contextPoint.x,
+          y: contextPoint.y,
+          button: "right",
+          buttons: 2,
+          clickCount: 1,
+        });
+        await client.send("Input.dispatchMouseEvent", {
+          type: "mouseReleased",
+          x: contextPoint.x,
+          y: contextPoint.y,
+          button: "right",
+          buttons: 0,
+          clickCount: 1,
+        });
+        await waitForEvaluation(`(() => {
+          const field = document.querySelector("math-field");
+          const menu = field?.shadowRoot?.querySelector("menu.ui-menu-container");
+          return { ready: Boolean(menu && getComputedStyle(menu).display !== "none") };
+        })()`, "MathLive context menu");
+      };
+
+      await openContextMenu();
+      const colorMenuPoint = await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        const root = field?.shadowRoot?.querySelector("menu.ui-menu-container");
+        const colorItem = [...(root?.querySelectorAll(":scope > li") ?? [])]
+          .find((item) => /^(颜色|Color)$/.test(item.textContent?.trim() ?? ""));
+        const bounds = colorItem?.getBoundingClientRect();
+        return bounds
+          ? { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }
+          : null;
+      })()`);
+      if (!colorMenuPoint) throw new Error("Unable to resolve foreground color menu item");
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: colorMenuPoint.x,
+        y: colorMenuPoint.y,
+        button: "none",
+        buttons: 0,
+      });
+      const redPoint = await waitForEvaluation(`(() => {
+        const field = document.querySelector("math-field");
+        const submenu = [...(field?.shadowRoot?.querySelectorAll("menu.swatches-submenu") ?? [])]
+          .find((menu) => getComputedStyle(menu).display !== "none");
+        const red = [...(submenu?.querySelectorAll(":scope > li") ?? [])]
+          .find((item) => item.getAttribute("aria-label") === "red");
+        const bounds = red?.getBoundingClientRect();
+        return bounds
+          ? { ready: true, x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }
+          : {
+              ready: false,
+              menuTexts: [...(field?.shadowRoot?.querySelectorAll("menu, menu li") ?? [])]
+                .map((node) => ({
+                  tag: node.tagName,
+                  className: node.className,
+                  display: getComputedStyle(node).display,
+                  text: node.textContent?.trim() ?? "",
+                  aria: node.getAttribute?.("aria-label") ?? "",
+                })),
+            };
+      })()`, "foreground color swatch");
+      const collapsedForegroundSelection = await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        field.position = field.lastOffset;
+        return {
+          collapsed: field.selectionIsCollapsed,
+          selection: field.selection,
+        };
+      })()`);
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: redPoint.x,
+        y: redPoint.y,
+        button: "left",
+        buttons: 1,
+        clickCount: 1,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: redPoint.x,
+        y: redPoint.y,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+      });
+      const foregroundState = await waitForEvaluation(`(() => {
+        const field = document.querySelector("math-field");
+        const persisted = JSON.parse(localStorage.getItem("visualtex-editor") || "{}");
+        const value = field?.value ?? "";
+        return {
+          ready:
+            field?.queryStyle({ color: "red" }) === "all" &&
+            persisted.state?.lines?.[0]?.latex === value,
+          value,
+          storeValue: persisted.state?.lines?.[0]?.latex ?? "",
+          queryStyle: field?.queryStyle({ color: "red" }) ?? "none",
+        };
+      })()`, "foreground color application");
+
+      await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        field.selection = {
+          ranges: [[0, field.lastOffset]],
+          direction: "forward",
+        };
+      })()`);
+      await openContextMenu();
+      const backgroundMenuPoint = await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        const root = field?.shadowRoot?.querySelector("menu.ui-menu-container");
+        const backgroundItem = [...(root?.querySelectorAll(":scope > li") ?? [])]
+          .find((item) => /^(背景|Background)$/.test(item.textContent?.trim() ?? ""));
+        const bounds = backgroundItem?.getBoundingClientRect();
+        return bounds
+          ? { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }
+          : null;
+      })()`);
+      if (!backgroundMenuPoint) throw new Error("Unable to resolve background color menu item");
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: backgroundMenuPoint.x,
+        y: backgroundMenuPoint.y,
+        button: "none",
+        buttons: 0,
+      });
+      const yellowPoint = await waitForEvaluation(`(() => {
+        const field = document.querySelector("math-field");
+        const submenu = [...(field?.shadowRoot?.querySelectorAll("menu.swatches-submenu") ?? [])]
+          .find((menu) => getComputedStyle(menu).display !== "none");
+        const yellow = [...(submenu?.querySelectorAll(":scope > li") ?? [])]
+          .find((item) => item.getAttribute("aria-label") === "yellow");
+        const bounds = yellow?.getBoundingClientRect();
+        return bounds
+          ? { ready: true, x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }
+          : { ready: false };
+      })()`, "background color swatch");
+      const collapsedBackgroundSelection = await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        field.position = field.lastOffset;
+        return {
+          collapsed: field.selectionIsCollapsed,
+          selection: field.selection,
+        };
+      })()`);
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: yellowPoint.x,
+        y: yellowPoint.y,
+        button: "left",
+        buttons: 1,
+        clickCount: 1,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: yellowPoint.x,
+        y: yellowPoint.y,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+      });
+      const backgroundState = await waitForEvaluation(`(() => {
+        const field = document.querySelector("math-field");
+        const persisted = JSON.parse(localStorage.getItem("visualtex-editor") || "{}");
+        const value = field?.value ?? "";
+        return {
+          ready:
+            field?.queryStyle({ backgroundColor: "yellow" }) === "all" &&
+            persisted.state?.lines?.[0]?.latex === value,
+          value,
+          storeValue: persisted.state?.lines?.[0]?.latex ?? "",
+          queryStyle: field?.queryStyle({ backgroundColor: "yellow" }) ?? "none",
+        };
+      })()`, "background color application");
+
+      if (
+        !collapsedForegroundSelection.collapsed ||
+        !foregroundState.value.includes("\\textcolor{red}") ||
+        !collapsedBackgroundSelection.collapsed ||
+        !backgroundState.value.includes("\\textcolor{red}") ||
+        !backgroundState.value.includes("\\colorbox{yellow}")
+      ) {
+        throw new Error(
+          `Context style selection restore failed: ${JSON.stringify({
+            collapsedForegroundSelection,
+            foregroundState,
+            collapsedBackgroundSelection,
+            backgroundState,
+          })}`,
+        );
+      }
+
+      console.log(
+        JSON.stringify(
+          { foregroundState, backgroundState },
+          null,
+          2,
+        ),
+      );
+      console.log("Targeted context style regression passed");
       return;
     }
 

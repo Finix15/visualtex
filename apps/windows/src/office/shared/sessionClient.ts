@@ -1,3 +1,4 @@
+import { readResponseErrorMessage } from "../../errors/readErrorMessage";
 import type { VisualTeXFormulaMetadata } from "./formulaMetadata";
 
 export type OfficeSessionMode = "create" | "edit";
@@ -59,6 +60,7 @@ export interface OfficeFormulaSession {
   displayMode: "inline" | "block";
   objectMode: OfficeObjectMode;
   numbered: boolean;
+  fontSizePt: number;
   exportWidth: number;
   exportHeight: number;
   exportResult: OfficeExportResult | null;
@@ -86,6 +88,7 @@ export interface CreateOfficeSessionInput {
   displayMode?: "inline" | "block";
   objectMode?: OfficeObjectMode;
   numbered?: boolean;
+  fontSizePt?: number;
   exportWidth?: number;
   exportHeight?: number;
   originalMetadata?: VisualTeXFormulaMetadata | null;
@@ -129,9 +132,12 @@ async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> 
     headers,
   });
   if (!response.ok) {
-    const detail = await response.text().catch(() => "");
+    const detail = await readResponseErrorMessage(
+      response,
+      "VisualTeX companion request failed.",
+    );
     throw new Error(
-      `VisualTeX companion request failed (${response.status})${detail ? `: ${detail}` : ""}`,
+      `VisualTeX companion request failed (${response.status}): ${detail}`,
     );
   }
   if (response.status === 204) return undefined as T;

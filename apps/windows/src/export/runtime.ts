@@ -8,6 +8,11 @@ import { STATE } from "mathjax-full/js/core/MathItem.js";
 import { SerializedMmlVisitor } from "mathjax-full/js/core/MmlTree/SerializedMmlVisitor.js";
 import type { MmlNode } from "mathjax-full/js/core/MmlTree/MmlNode.js";
 import { normalizeMathLiveCanonicalUprightCommands } from "../editor/normalizeChineseLatex.ts";
+import { readErrorMessage } from "../errors/readErrorMessage.ts";
+import {
+  EXTENDED_INTEGRAL_MATHML_MACROS,
+  EXTENDED_INTEGRAL_SVG_MACROS,
+} from "../math/extendedIntegralCompatibility.ts";
 import type {
   PngExportOptions,
   PngExportResult,
@@ -24,21 +29,38 @@ const DEFAULT_OPTIONS: SvgExportOptions = {
 
 const adaptor = liteAdaptor();
 RegisterHTMLHandler(adaptor);
-const texInput = new TeX({
-  packages: AllPackages,
-  formatError: (_jax: unknown, error: unknown) => {
-    throw error instanceof Error ? error : new Error(String(error));
-  },
+
+function createTexInput(macros: Record<string, string>) {
+  return new TeX({
+    packages: AllPackages,
+    macros,
+    formatError: (_jax: unknown, error: unknown) => {
+      const message = readErrorMessage(error, "MathJax 无法解析当前 LaTeX 公式。");
+      if (error instanceof Error && error.message.trim() === message) throw error;
+      throw new Error(message, { cause: error });
+    },
+  });
+}
+
+const mathMlTexInput = createTexInput(EXTENDED_INTEGRAL_MATHML_MACROS);
+const svgTexInput = createTexInput(EXTENDED_INTEGRAL_SVG_MACROS);
+const mathMlOutput = new SVG({
+  fontCache: "local",
+  internalSpeechTitles: false,
 });
 const svgOutput = new SVG({
   fontCache: "local",
   internalSpeechTitles: false,
 });
-const mathDocument = mathjax.document("", {
-  InputJax: texInput,
+const mathMlDocument = mathjax.document("", {
+  InputJax: mathMlTexInput,
+  OutputJax: mathMlOutput,
+});
+const svgDocument = mathjax.document("", {
+  InputJax: svgTexInput,
   OutputJax: svgOutput,
 });
-const serializedMmlVisitor = new SerializedMmlVisitor(mathDocument.mmlFactory);
+const serializedMmlVisitor = new SerializedMmlVisitor(mathMlDocument.mmlFactory);
 
 function positiveFinite(value: number, fallback: number) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
@@ -155,7 +177,7 @@ export function svgToBase64(svg: string) {
 
 export function latexToMathMl(latex: string, displayMode = true) {
   const source = prepareLatex(latex);
-  const root = mathDocument.convert(source, {
+  const root = mathMlDocument.convert(source, {
     display: displayMode,
     end: STATE.COMPILED,
   }) as unknown as MmlNode;
@@ -176,7 +198,7 @@ export function latexToSvg(
   const fontSizePx = fontSizePt * (96 / 72);
   const exPx = fontSizePx * 0.442;
 
-  const container = mathDocument.convert(source, {
+  const container = svgDocument.convert(source, {
     display: options.displayMode,
     em: fontSizePx,
     ex: exPx,

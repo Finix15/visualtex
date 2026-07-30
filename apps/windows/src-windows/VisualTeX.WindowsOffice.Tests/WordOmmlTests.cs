@@ -70,6 +70,48 @@ public sealed class WordOmmlTests
     }
 
     [Fact]
+    public void AlignedMathMlPreservesRightLeftAlignmentAroundAmpersandColumn()
+    {
+        const string mathMl =
+            "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">"
+            + "<mtable displaystyle=\"true\" columnalign=\"right left\" columnspacing=\"0em\">"
+            + "<mtr><mtd><msub><mi>R</mi><mi>o</mi></msub></mtd>"
+            + "<mtd><mi></mi><mo>=</mo><mfrac><mi>v</mi><mi>i</mi></mfrac></mtd></mtr>"
+            + "<mtr><mtd><msub><mi>A</mi><mi>v</mi></msub></mtd>"
+            + "<mtd><mi></mi><mo>=</mo><mi>g</mi></mtd></mtr>"
+            + "</mtable></math>";
+
+        var omml = WordOmmlConverter.TransformMathMlToOmml(mathMl);
+        var document = XDocument.Parse(omml);
+        XNamespace math = MathNamespace;
+        var matrix = document.Descendants(math + "m").Single();
+        var columns = matrix
+            .Element(math + "mPr")?
+            .Element(math + "mcs")?
+            .Elements(math + "mc")
+            .ToArray();
+
+        Assert.NotNull(columns);
+        Assert.Equal(2, columns!.Length);
+        Assert.Equal(
+            new[] { "right", "left" },
+            columns.Select(column =>
+                column.Element(math + "mcPr")?
+                    .Element(math + "mcJc")?
+                    .Attribute(math + "val")?
+                    .Value));
+        Assert.All(columns, column => Assert.Equal(
+            "1",
+            column.Element(math + "mcPr")?
+                .Element(math + "count")?
+                .Attribute(math + "val")?
+                .Value));
+        Assert.All(
+            matrix.Elements(math + "mr"),
+            row => Assert.Equal(2, row.Elements(math + "e").Count()));
+    }
+
+    [Fact]
     public void UprightMathMlIdentifiersUseExplicitNormalOmmlRuns()
     {
         const string mathMl =
@@ -100,6 +142,138 @@ public sealed class WordOmmlTests
             run =>
                 (run.Element(math + "t")?.Value.Contains("df", StringComparison.Ordinal) ?? false)
                 && !IsNormalRun(run, math));
+    }
+
+    [Theory]
+    [InlineData("^", "\u0302")]
+    [InlineData("~", "\u0303")]
+    [InlineData("→", "\u20D7")]
+    [InlineData("←", "\u20D6")]
+    [InlineData("˙", "\u0307")]
+    [InlineData("¨", "\u0308")]
+    [InlineData("ˇ", "\u030C")]
+    [InlineData("˘", "\u0306")]
+    [InlineData("´", "\u0301")]
+    [InlineData("`", "\u0300")]
+    [InlineData("˚", "\u030A")]
+    public void MathMlAccentsBecomeNativeOmmlAccentsWithoutPlaceholderGlyphs(
+        string sourceMark,
+        string expectedCombiningMark)
+    {
+        var mathMl =
+            "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">"
+            + "<mrow><mover><mi>x</mi><mo stretchy=\"false\">"
+            + sourceMark
+            + "</mo></mover></mrow></math>";
+
+        var normalized = WordOmmlConverter.NormalizeMathMlAccents(mathMl);
+        var normalizedDocument = XDocument.Parse(normalized);
+        XNamespace presentationMath = "http://www.w3.org/1998/Math/MathML";
+        var mover = normalizedDocument.Descendants(presentationMath + "mover").Single();
+        var mark = mover.Elements().Skip(1).Single();
+        Assert.Equal("true", mover.Attribute("accent")?.Value);
+        Assert.Equal("true", mark.Attribute("accent")?.Value);
+        Assert.Equal(expectedCombiningMark, mark.Value);
+
+        var omml = WordOmmlConverter.TransformMathMlToOmml(mathMl);
+        var ommlDocument = XDocument.Parse(omml);
+        XNamespace math = MathNamespace;
+        var accent = ommlDocument.Descendants(math + "acc").SingleOrDefault();
+        Assert.NotNull(accent);
+        Assert.Equal(
+            expectedCombiningMark,
+            accent!
+                .Element(math + "accPr")?
+                .Element(math + "chr")?
+                .Attribute(math + "val")?
+                .Value);
+        Assert.Equal("x", accent.Element(math + "e")?.Value);
+        Assert.DoesNotContain("\uFFFD", omml, StringComparison.Ordinal);
+        Assert.DoesNotContain("□", omml, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExplicitOversetIsNotMistakenForAnAccent()
+    {
+        const string mathMl =
+            "<math xmlns=\"http://www.w3.org/1998/Math/MathML\">"
+            + "<mover><mi>x</mi><mo accent=\"false\" stretchy=\"false\">→</mo></mover>"
+            + "</math>";
+
+        var normalized = WordOmmlConverter.NormalizeMathMlAccents(mathMl);
+        var document = XDocument.Parse(normalized);
+        XNamespace presentationMath = "http://www.w3.org/1998/Math/MathML";
+        var mover = document.Descendants(presentationMath + "mover").Single();
+
+        Assert.Null(mover.Attribute("accent"));
+        Assert.Equal("false", mover.Elements().Skip(1).Single().Attribute("accent")?.Value);
+        Assert.Equal("→", mover.Elements().Skip(1).Single().Value);
+    }
+
+    [Fact]
+    public void NestedEmptyBaseSubscriptsAreFlattenedBeforeOmmlConversion()
+    {
+        const string mathMl =
+            "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">"
+            + "<msub><mi>f</mi><mrow><msub><mi></mi><mrow><mi mathvariant=\"normal\">H</mi></mrow></msub></mrow></msub>"
+            + "<mo>=</mo><mfrac><mn>1</mn><mrow><mn>2</mn><mi>&#x3C0;</mi>"
+            + "<msub><mi>&#x3C4;</mi><mrow><msub><mi></mi><mrow><mi mathvariant=\"normal\">H</mi></mrow></msub></mrow></msub>"
+            + "</mrow></mfrac></math>";
+
+        var normalized = WordOmmlConverter.NormalizeNestedEmptyBaseScripts(mathMl);
+        var normalizedDocument = XDocument.Parse(normalized);
+        XNamespace presentationMath = "http://www.w3.org/1998/Math/MathML";
+        var normalizedScripts = normalizedDocument.Descendants(presentationMath + "msub").ToArray();
+
+        Assert.Equal(2, normalizedScripts.Length);
+        Assert.All(normalizedScripts, script =>
+        {
+            var elements = script.Elements().ToArray();
+            Assert.True(elements.Length >= 2);
+            Assert.False(string.IsNullOrWhiteSpace(elements[0].Value));
+            Assert.Equal("H", elements[1].Value.Trim());
+        });
+
+        var omml = WordOmmlConverter.TransformMathMlToOmml(mathMl);
+        var ommlDocument = XDocument.Parse(omml);
+        XNamespace math = MathNamespace;
+        var scripts = ommlDocument.Descendants(math + "sSub").ToArray();
+        Assert.Equal(2, scripts.Length);
+        Assert.All(scripts, script =>
+        {
+            Assert.True(HasVisibleMathText(script.Element(math + "e")));
+            Assert.True(HasVisibleMathText(script.Element(math + "sub")));
+        });
+        Assert.DoesNotContain(scripts, script =>
+            script.Element(math + "e")?.Descendants(math + "t").All(text =>
+                string.IsNullOrWhiteSpace(text.Value)) != false);
+    }
+
+    [Fact]
+    public void NestedEmptyBaseSuperscriptIsFlattenedButStandalonePrescriptIsPreserved()
+    {
+        const string nested =
+            "<math xmlns=\"http://www.w3.org/1998/Math/MathML\">"
+            + "<msup><mi>x</mi><mrow><msup><mi></mi><mn>2</mn></msup></mrow></msup>"
+            + "</math>";
+        const string standalone =
+            "<math xmlns=\"http://www.w3.org/1998/Math/MathML\">"
+            + "<msub><mi></mi><mi>i</mi></msub><mi>A</mi>"
+            + "</math>";
+        XNamespace presentationMath = "http://www.w3.org/1998/Math/MathML";
+
+        var nestedDocument = XDocument.Parse(
+            WordOmmlConverter.NormalizeNestedEmptyBaseScripts(nested));
+        var nestedScripts = nestedDocument.Descendants(presentationMath + "msup").ToArray();
+        Assert.Single(nestedScripts);
+        Assert.Equal("x", nestedScripts[0].Elements().First().Value);
+        Assert.Equal("2", nestedScripts[0].Elements().Skip(1).First().Value);
+
+        var standaloneDocument = XDocument.Parse(
+            WordOmmlConverter.NormalizeNestedEmptyBaseScripts(standalone));
+        var standaloneScript = standaloneDocument.Descendants(presentationMath + "msub").Single();
+        Assert.True(string.IsNullOrWhiteSpace(standaloneScript.Elements().First().Value));
+        Assert.Equal("i", standaloneScript.Elements().Skip(1).First().Value);
     }
 
     [Theory]
@@ -179,6 +353,69 @@ public sealed class WordOmmlTests
         Assert.Null(properties?.Element(math + "supHide"));
     }
 
+    [Theory]
+    [InlineData("∯")]
+    [InlineData("∰")]
+    [InlineData("∱")]
+    [InlineData("∲")]
+    [InlineData("∳")]
+    [InlineData("⨑")]
+    public void ExtendedIntegralOperatorsBecomeNativeOmmlNaries(string symbol)
+    {
+        var mathMl =
+            "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">"
+            + $"<msub><mo>{symbol}</mo><mi>S</mi></msub>"
+            + "<mrow><mi>f</mi><mi>d</mi><mi>S</mi></mrow></math>";
+
+        var omml = WordOmmlConverter.TransformMathMlToOmml(mathMl);
+        var document = XDocument.Parse(omml);
+        XNamespace math = MathNamespace;
+        var nary = document.Descendants(math + "nary").SingleOrDefault();
+
+        Assert.True(nary is not null, $"{symbol} did not become native OMML n-ary content: {omml}");
+        Assert.DoesNotContain(
+            nary!.Ancestors(),
+            ancestor =>
+                ancestor.Name == math + "sSub"
+                || ancestor.Name == math + "sSup"
+                || ancestor.Name == math + "sSubSup");
+        Assert.Equal(symbol, nary.Element(math + "naryPr")?.Element(math + "chr")?.Attribute(math + "val")?.Value);
+        Assert.Contains(
+            nary.Element(math + "sub")?.Descendants(math + "t") ?? Enumerable.Empty<XElement>(),
+            text => text.Value == "S");
+        Assert.Contains(
+            nary.Element(math + "e")?.Descendants(math + "t") ?? Enumerable.Empty<XElement>(),
+            text => text.Value.Contains("f", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void OmmlContentFingerprintIgnoresRunFontSize()
+    {
+        const string word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        var first =
+            $"<m:oMath xmlns:m=\"{MathNamespace}\" xmlns:w=\"{word}\">"
+            + "<m:r><m:rPr><w:rPr><w:sz w:val=\"28\"/><w:szCs w:val=\"28\"/></w:rPr></m:rPr><m:t>x</m:t></m:r>"
+            + "</m:oMath>";
+        var second = first.Replace("28", "36", StringComparison.Ordinal);
+
+        Assert.Equal(
+            WordOmmlConverter.ComputeOmmlFingerprint(first),
+            WordOmmlConverter.ComputeOmmlFingerprint(second));
+    }
+
+    [Fact]
+    public void OmmlContentFingerprintStillTracksFormulaStructure()
+    {
+        var first =
+            $"<m:oMath xmlns:m=\"{MathNamespace}\"><m:r><m:t>x</m:t></m:r></m:oMath>";
+        var second =
+            $"<m:oMath xmlns:m=\"{MathNamespace}\"><m:r><m:t>y</m:t></m:r></m:oMath>";
+
+        Assert.NotEqual(
+            WordOmmlConverter.ComputeOmmlFingerprint(first),
+            WordOmmlConverter.ComputeOmmlFingerprint(second));
+    }
+
     [Fact]
     public void OmmlBookmarkNameRoundTripsPersistentFormulaId()
     {
@@ -191,6 +428,15 @@ public sealed class WordOmmlTests
             "N",
             out var roundTrip));
         Assert.Equal(Guid.Parse(formulaId), roundTrip);
+    }
+
+    private static bool HasVisibleMathText(XElement? element)
+    {
+        if (element is null) return false;
+        XNamespace math = MathNamespace;
+        return element
+            .Descendants(math + "t")
+            .Any(text => !string.IsNullOrWhiteSpace(text.Value));
     }
 
     private static FormulaMetadata Metadata()

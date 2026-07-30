@@ -6,6 +6,7 @@ import "../../styles-macos-main.css";
 import { configureOcrTransport } from "../../ocr/ocrService";
 import { officeOcrTransport } from "../api/ocrHttpTransport";
 import { OfficeDialogApp } from "./OfficeDialogApp";
+import { DocumentImportApp } from "../documentImport/DocumentImportApp";
 import { applyDocumentTheme, readSynchronizedTheme } from "../../themeSync";
 
 configureOcrTransport(officeOcrTransport);
@@ -14,9 +15,10 @@ applyDocumentTheme(readSynchronizedTheme());
 function mount() {
   const root = document.getElementById("root");
   if (!root) throw new Error("Missing Office Dialog root element.");
+  const runtime = new URLSearchParams(window.location.search).get("runtime");
   createRoot(root).render(
     <StrictMode>
-      <OfficeDialogApp />
+      {runtime === "vsto-bulk-import" ? <DocumentImportApp /> : <OfficeDialogApp />}
     </StrictMode>,
   );
 }

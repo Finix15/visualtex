@@ -20,6 +20,23 @@ const cases = [
   ["long", Array.from({ length: 25 }, (_, index) => `x_{${index + 1}}`).join("+")],
 ];
 
+function assertNoUnknownMathCommand(mathMl, context) {
+  assert.doesNotMatch(
+    mathMl,
+    /<mtext\b[^>]*mathcolor="red"[^>]*>\s*\\/i,
+    `${context} contains a MathJax unknown-command error`,
+  );
+}
+
+const extendedIntegralCases = [
+  ["oiint", "222F"],
+  ["oiiint", "2230"],
+  ["intclockwise", "2231"],
+  ["varointclockwise", "2232"],
+  ["ointctrclockwise", "2233"],
+  ["intctrclockwise", "2A11"],
+];
+
 for (const [name, latex] of cases) {
   const result = await latexToSvg(latex, {
     displayMode: true,
@@ -49,6 +66,7 @@ for (const [name, latex] of cases) {
   const mathMl = latexToMathMl(latex, true);
   assert.match(mathMl, /^<math\b/);
   assert.match(mathMl, /xmlns="http:\/\/www\.w3\.org\/1998\/Math\/MathML"/);
+  assertNoUnknownMathCommand(mathMl, name);
   if (name === "fraction") assert.match(mathMl, /<mfrac>/);
   if (name === "root") assert.match(mathMl, /<mroot>/);
   if (name === "matrix") assert.match(mathMl, /<mtable(?:\s|>)/);
@@ -58,6 +76,33 @@ for (const [name, latex] of cases) {
   );
   assert.equal(decoded, result.svg, `${name} UTF-8 base64 round trip`);
 }
+
+for (const [command, codePoint] of extendedIntegralCases) {
+  const latex = `\\${command}_{\\Sigma} a\\,\\mathrm{d}S`;
+  const mathMl = latexToMathMl(latex, true);
+  const svg = latexToSvg(latex, {
+    displayMode: true,
+    fontSizePt: 14,
+    paddingPx: 0,
+    background: "transparent",
+  }).svg;
+
+  assert.match(mathMl, new RegExp(`&#x${codePoint};`, "i"), `${command} MathML symbol`);
+  assert.match(mathMl, /<msub>/, `${command} keeps its lower limit`);
+  assertNoUnknownMathCommand(mathMl, command);
+  assert.doesNotMatch(mathMl, new RegExp(`\\\\${command}(?:<|$)`), `${command} is not literal text`);
+  assert.doesNotMatch(svg, /mathcolor|fill="red"|#FF0000/i, `${command} SVG has no error glyph`);
+  assert.doesNotMatch(svg, new RegExp(`\\\\${command}`), `${command} SVG has no literal command`);
+}
+
+assert.throws(
+  () =>
+    assertNoUnknownMathCommand(
+      latexToMathMl(String.raw`\definitelyUnknownVisualTeXCommand`, true),
+      "unknown-command guard",
+    ),
+  /unknown-command error/,
+);
 
 assert.throws(
   () =>
@@ -70,4 +115,6 @@ assert.throws(
   /Cannot export an empty formula/,
 );
 
-console.log(`SVG export smoke test passed (${cases.length} formula classes)`);
+console.log(
+  `SVG export smoke test passed (${cases.length} formula classes, ${extendedIntegralCases.length} extended integral operators)`,
+);

@@ -18,6 +18,11 @@ public sealed class RibbonIconDataTests
         yield return new object[] { "convert to OLE", RibbonIconData.ConvertToOle };
     }
 
+    public static IEnumerable<object[]> VectorIcons() =>
+        RibbonVectorIconRenderer.Keys
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .Select(value => new object[] { value });
+
     [Theory]
     [MemberData(nameof(Icons))]
     public void EmbeddedRibbonIconIsAValidTransparentPng(string name, string encoded)
@@ -43,5 +48,36 @@ public sealed class RibbonIconDataTests
 
         Assert.True(transparent > 0, $"{name} icon lost its transparent background.");
         Assert.True(visible > 40, $"{name} icon contains too little visible artwork.");
+    }
+
+    [Theory]
+    [MemberData(nameof(VectorIcons))]
+    public void HighDpiRibbonIconUsesDoubleDensityVectorArtwork(string key)
+    {
+        using var bitmap = RibbonVectorIconRenderer.Create(key);
+        Assert.Equal(64, bitmap.Width);
+        Assert.Equal(64, bitmap.Height);
+        Assert.InRange(bitmap.HorizontalResolution, 191f, 193f);
+        Assert.InRange(bitmap.VerticalResolution, 191f, 193f);
+
+        var transparent = 0;
+        var visible = 0;
+        var edgeTransitions = 0;
+        for (var y = 0; y < bitmap.Height; y++)
+        for (var x = 0; x < bitmap.Width; x++)
+        {
+            var pixel = bitmap.GetPixel(x, y);
+            if (pixel.A == 0) transparent++;
+            if (pixel.A > 16) visible++;
+            if (x > 0)
+            {
+                var previous = bitmap.GetPixel(x - 1, y);
+                if (Math.Abs(pixel.A - previous.A) > 96) edgeTransitions++;
+            }
+        }
+
+        Assert.True(transparent > 400, $"{key} icon lost transparent padding.");
+        Assert.True(visible > 250, $"{key} icon contains too little artwork.");
+        Assert.True(edgeTransitions > 20, $"{key} icon contains too few crisp edges.");
     }
 }

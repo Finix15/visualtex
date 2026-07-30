@@ -69,16 +69,23 @@ for (const marker of preflightMarkers) {
 }
 for (const required of [
   "Static installation verification",
-  "Companion runtime verification",
-  "-CompanionOnly",
-  "installed and runtime-verified",
-  "Office add-ins installed successfully, but local companion runtime verification failed",
+  "Static Office integration installed and verified",
+  "deferred to the non-elevated installer stage",
   "$script:staticInstallVerified",
   "$script:runtimeVerified",
   "Write-DiagnosticReport $false $script:staticInstallVerified $script:runtimeVerified",
 ]) {
   assert.ok(installer.includes(required), `installer missing ${required}`);
 }
+assert.ok(!installer.includes("& $runtimeScript"));
+assert.ok(hooks.includes('test_windows_office_runtime.ps1" -VisualTeXPath "$INSTDIR\\VisualTeX.exe" -CompanionOnly'));
+assert.ok(hooks.includes("visualtex_office_static_installed"));
+assert.ok(hooks.includes("visualtex_office_runtime_pending"));
+assert.ok(hooks.includes("RuntimeVerificationPending"));
+assert.ok(hooks.includes("这不代表插件安装失败"));
+assert.ok(/Companion runtime verification is not ready yet[\s\S]*?Goto visualtex_office_runtime_pending/.test(hooks));
+assert.ok(!/Companion runtime verification is not ready yet[\s\S]*?Goto visualtex_office_failed/.test(hooks));
+assert.ok(hooks.includes("non-elevated companion runtime verification passed"));
 assert.ok(!/devenv|Visual Studio IDE/i.test(installer));
 assert.ok(!installer.includes("uninstall_windows_ole.ps1"));
 
@@ -99,6 +106,7 @@ for (const required of [
   "exceptionChain",
   "installJsonPath",
   "CompanionOnly",
+  "RuntimeVerificationPending",
   "ForceCloseOffice",
   "Stop-Process -Id $process.Id -Force",
   "OfficeConnectionVerificationAttempted",
@@ -203,6 +211,13 @@ for (const required of [
 }
 assert.ok(backend.includes("registered_addin_file_exists"));
 assert.ok(backend.includes("addin_registry_complete"));
+assert.ok(backend.includes('HKLM\\Software\\Microsoft\\Office\\Word\\Addins\\VisualTeX.WordVsto'));
+assert.ok(backend.includes('HKLM\\Software\\Microsoft\\Office\\PowerPoint\\Addins\\VisualTeX.PowerPointVsto'));
+assert.ok(backend.includes("resolve_office_registry_view"));
+assert.ok(backend.includes('Some("/reg:32")'));
+assert.ok(backend.includes('Some("/reg:64")'));
+assert.ok(!backend.includes('HKCU\\Software\\Microsoft\\Office\\Word\\Addins\\VisualTeX.WordVsto'));
+assert.ok(!backend.includes('HKCU\\Software\\Classes\\CLSID'));
 assert.ok(!backend.includes("OLE_CATALOG_KEY"));
 assert.ok(!backend.includes("register_ole_catalog"));
 assert.ok(!backend.includes("office_catalog_path"));

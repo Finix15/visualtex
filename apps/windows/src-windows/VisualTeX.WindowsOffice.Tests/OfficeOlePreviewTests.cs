@@ -66,11 +66,68 @@ public sealed class OfficeOlePreviewTests
             $"Full SVG frame recorded as only {bounds.Width}x{bounds.Height} pixels at {bounds.X},{bounds.Y}. {OfficeOlePreview.LastRecordingDiagnostics}");
     }
 
+    [Fact]
+    public void MathJaxChineseTextIsConvertedToVectorGlyphOutlines()
+    {
+        using var temp = new TemporaryDirectory();
+        var svgPath = Path.Combine(temp.Path, "mixed-chinese.svg");
+        File.WriteAllText(svgPath, MathJaxChineseTextSvg, new UTF8Encoding(false));
+
+        var emfPath = OfficeOlePreview.CreateVectorEmfFromSvg(svgPath, 240, 80);
+
+        Assert.True(File.Exists(emfPath));
+        OfficeOlePreview.ValidateVectorEmf(emfPath);
+        using var metafile = new Metafile(emfPath);
+        using var bitmap = new Bitmap(240, 80, PixelFormat.Format32bppArgb);
+        using (var graphics = Graphics.FromImage(bitmap))
+        {
+            graphics.Clear(Color.White);
+            graphics.DrawImage(metafile, new Rectangle(0, 0, bitmap.Width, bitmap.Height));
+        }
+
+        var bounds = FindDarkBounds(bitmap);
+        Assert.True(
+            bounds.Width >= 120 && bounds.Height >= 35,
+            $"Chinese text glyph outlines were not recorded correctly: {bounds}. {OfficeOlePreview.LastRecordingDiagnostics}");
+    }
+
+    [Fact]
+    public void MathJaxTallMatrixNestedSvgViewportKeepsBracketsContinuous()
+    {
+        using var temp = new TemporaryDirectory();
+        var svgPath = Path.Combine(temp.Path, "tall-matrix.svg");
+        File.WriteAllText(svgPath, MathJaxTallMatrixSvg, new UTF8Encoding(false));
+
+        var emfPath = OfficeOlePreview.CreateVectorEmfFromSvg(svgPath, 308, 270);
+        OfficeOlePreview.ValidateVectorEmf(emfPath);
+        using var metafile = new Metafile(emfPath);
+        using var bitmap = new Bitmap(308, 270, PixelFormat.Format32bppArgb);
+        using (var graphics = Graphics.FromImage(bitmap))
+        {
+            graphics.Clear(Color.White);
+            graphics.DrawImage(metafile, new Rectangle(0, 0, bitmap.Width, bitmap.Height));
+        }
+
+        var leftCoveredRows = 0;
+        var rightCoveredRows = 0;
+        for (var y = 42; y <= 228; y++)
+        {
+            if (RowContainsDarkPixel(bitmap, y, 8, 28)) leftCoveredRows++;
+            if (RowContainsDarkPixel(bitmap, y, 280, 302)) rightCoveredRows++;
+        }
+        Assert.True(
+            leftCoveredRows >= 175,
+            $"The left tall-matrix bracket is structurally broken: {leftCoveredRows}/187 covered rows. {OfficeOlePreview.LastRecordingDiagnostics}");
+        Assert.True(
+            rightCoveredRows >= 175,
+            $"The right tall-matrix bracket is structurally broken: {rightCoveredRows}/187 covered rows. {OfficeOlePreview.LastRecordingDiagnostics}");
+    }
+
     [Theory]
     [InlineData("<image href=\"data:image/png;base64,AA==\" width=\"1\" height=\"1\" />")]
     [InlineData("<foreignObject width=\"10\" height=\"10\"></foreignObject>")]
     [InlineData("<script>throw new Error()</script>")]
-    [InlineData("<text x=\"0\" y=\"10\">not converted to paths</text>")]
+    [InlineData("<text x=\"0\" y=\"10\"><tspan>nested text</tspan></text>")]
     public void UnsupportedOrRasterSvgFailsClosed(string forbiddenContent)
     {
         using var temp = new TemporaryDirectory();
@@ -99,6 +156,16 @@ public sealed class OfficeOlePreviewTests
             OfficeOlePreview.CreateVectorEmfFromSvg(svgPath, 20, 20));
     }
 
+    private static bool RowContainsDarkPixel(Bitmap bitmap, int y, int left, int right)
+    {
+        for (var x = left; x <= right; x++)
+        {
+            var pixel = bitmap.GetPixel(x, y);
+            if (pixel.R + pixel.G + pixel.B < 660) return true;
+        }
+        return false;
+    }
+
     private static Rectangle FindDarkBounds(Bitmap bitmap)
     {
         var left = bitmap.Width;
@@ -119,6 +186,54 @@ public sealed class OfficeOlePreviewTests
             ? Rectangle.Empty
             : Rectangle.FromLTRB(left, top, right + 1, bottom + 1);
     }
+
+    private const string MathJaxTallMatrixSvg = """
+        <svg xmlns="http://www.w3.org/2000/svg"
+             xmlns:xlink="http://www.w3.org/1999/xlink"
+             viewBox="-428.5714285714286 -7478.571428571428 16481.14285714286 14457.142857142857"
+             color="#111111">
+          <defs>
+            <path id="left-top" d="M319 -645V1154H666V1070H403V-645H319Z" />
+            <path id="left-middle" d="M319 0V602H403V0H319Z" />
+            <path id="left-bottom" d="M319 -644V1155H403V-560H666V-644H319Z" />
+            <path id="right-top" d="M0 1070V1154H347V-645H263V1070H0Z" />
+            <path id="right-middle" d="M263 0V602H347V0H263Z" />
+            <path id="right-bottom" d="M263 -560V1155H347V-644H0V-560H263Z" />
+          </defs>
+          <g stroke="currentColor" fill="currentColor" stroke-width="0" transform="scale(1,-1)">
+            <g>
+              <use href="#left-top" transform="translate(0,5896)" />
+              <use href="#left-bottom" transform="translate(0,-5906)" />
+              <svg width="667" height="10202" y="-4851" x="0" viewBox="0 2550.5 667 10202">
+                <use href="#left-middle" transform="scale(1,25.42)" />
+              </svg>
+            </g>
+            <g transform="translate(15000,0)">
+              <use href="#right-top" transform="translate(0,5896)" />
+              <use href="#right-bottom" transform="translate(0,-5906)" />
+              <svg width="667" height="10202" y="-4851" x="0" viewBox="0 2550.5 667 10202">
+                <use href="#right-middle" transform="scale(1,25.42)" />
+              </svg>
+            </g>
+          </g>
+        </svg>
+        """;
+
+    private const string MathJaxChineseTextSvg = """
+        <svg xmlns="http://www.w3.org/2000/svg"
+             viewBox="0 -1000 3000 1200"
+             color="#111111">
+          <g stroke="currentColor" fill="currentColor" stroke-width="0" transform="scale(1,-1)">
+            <path d="M100 0 L500 0 L500 700 L100 700 Z" />
+            <g transform="translate(700,0)">
+              <text data-variant="normal" transform="scale(1,-1)" font-size="1000px" font-family="serif">的</text>
+            </g>
+            <g transform="translate(1700,0)">
+              <text data-variant="normal" transform="scale(1,-1)" font-size="1000px" font-family="serif">地方</text>
+            </g>
+          </g>
+        </svg>
+        """;
 
     private const string MathJaxStyleSvg = """
         <svg xmlns="http://www.w3.org/2000/svg"

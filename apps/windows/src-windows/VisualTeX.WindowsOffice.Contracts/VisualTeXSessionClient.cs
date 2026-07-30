@@ -319,6 +319,20 @@ public sealed class VisualTeXSessionClient : IDisposable
         await EnsureSuccessAsync(response).ConfigureAwait(false);
     }
 
+    public async Task OpenBulkImportAsync(
+        string sessionId,
+        CancellationToken cancellationToken)
+    {
+        if (!Guid.TryParse(sessionId, out _))
+            throw new InvalidOperationException("VisualTeX Session id must be a UUID.");
+        EnsureAuthorizationHeader();
+        using var response = await _http.PostAsync(
+            $"/api/v1/app/sessions/{Uri.EscapeDataString(sessionId)}/bulk-import",
+            new StringContent("{}", Encoding.UTF8, "application/json"),
+            cancellationToken).ConfigureAwait(false);
+        await EnsureSuccessAsync(response).ConfigureAwait(false);
+    }
+
     public async Task CloseEditorAsync(
         string sessionId,
         CancellationToken cancellationToken)
@@ -1182,6 +1196,9 @@ public sealed class CreateVstoSessionRequest
     [JsonPropertyName("numbered")]
     public bool Numbered { get; set; }
 
+    [JsonPropertyName("fontSizePt")]
+    public double FontSizePt { get; set; } = FormulaFontSize.DefaultPt;
+
     [JsonPropertyName("originalMetadata")]
     public FormulaMetadata? OriginalMetadata { get; set; }
 
@@ -1227,6 +1244,9 @@ public sealed class OfficeSessionDocument
     [JsonPropertyName("numbered")]
     public bool Numbered { get; set; }
 
+    [JsonPropertyName("fontSizePt")]
+    public double FontSizePt { get; set; } = FormulaFontSize.DefaultPt;
+
     [JsonPropertyName("status")]
     public string Status { get; set; } = string.Empty;
 
@@ -1260,6 +1280,10 @@ public sealed class OfficeSessionDocument
             RenderWidthPx = ExportResult?.Width > 0 ? ExportResult.Width : OriginalMetadata?.RenderWidthPx,
             RenderHeightPx = ExportResult?.Height > 0 ? ExportResult.Height : OriginalMetadata?.RenderHeightPx,
             Baseline = ExportResult?.Baseline ?? OriginalMetadata?.Baseline,
+            FontSizePt = FormulaFontSize.Normalize(FontSizePt),
+            RenderFontSizePt = ExportResult is not null
+                ? FormulaFontSize.Normalize(FontSizePt)
+                : OriginalMetadata?.RenderFontSizePt ?? FormulaFontSize.Normalize(FontSizePt),
             CreatedWithVersion = OriginalMetadata?.CreatedWithVersion ?? "1.0.18",
             UpdatedWithVersion = "1.0.18",
             CreatedAt = OriginalMetadata?.CreatedAt ?? now,

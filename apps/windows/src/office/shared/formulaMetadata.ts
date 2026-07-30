@@ -17,6 +17,10 @@ export interface VisualTeXFormulaMetadata {
   renderHeightPx?: number;
   /** Mathematical baseline in natural render pixels. */
   baseline?: number;
+  /** Semantic Office math size in points. */
+  fontSizePt?: number;
+  /** Point size used to create the current cached SVG/EMF/PNG preview. */
+  renderFontSizePt?: number;
   createdWithVersion: string;
   updatedWithVersion: string;
   createdAt: string;
@@ -33,6 +37,8 @@ export interface CreateFormulaMetadataInput {
   renderWidthPx?: number;
   renderHeightPx?: number;
   baseline?: number;
+  fontSizePt?: number;
+  renderFontSizePt?: number;
   appVersion?: string;
   original?: VisualTeXFormulaMetadata | null;
 }
@@ -121,6 +127,18 @@ export function isVisualTeXFormulaMetadata(
         candidate.baseline >= 0 &&
         (candidate.renderHeightPx === undefined ||
           candidate.baseline <= candidate.renderHeightPx))) &&
+    (candidate.fontSizePt === undefined ||
+      (typeof candidate.fontSizePt === "number" &&
+        Number.isFinite(candidate.fontSizePt) &&
+        candidate.fontSizePt >= 5 &&
+        candidate.fontSizePt <= 200 &&
+        Math.abs(candidate.fontSizePt * 2 - Math.round(candidate.fontSizePt * 2)) < 1e-6)) &&
+    (candidate.renderFontSizePt === undefined ||
+      (typeof candidate.renderFontSizePt === "number" &&
+        Number.isFinite(candidate.renderFontSizePt) &&
+        candidate.renderFontSizePt >= 5 &&
+        candidate.renderFontSizePt <= 200 &&
+        Math.abs(candidate.renderFontSizePt * 2 - Math.round(candidate.renderFontSizePt * 2)) < 1e-6)) &&
     typeof candidate.createdWithVersion === "string" &&
     typeof candidate.updatedWithVersion === "string" &&
     typeof candidate.createdAt === "string" &&
@@ -138,6 +156,8 @@ export function createFormulaMetadata({
   renderWidthPx,
   renderHeightPx,
   baseline,
+  fontSizePt,
+  renderFontSizePt,
   appVersion = CURRENT_VISUALTEX_VERSION,
   original = null,
 }: CreateFormulaMetadataInput): VisualTeXFormulaMetadata {
@@ -163,6 +183,18 @@ export function createFormulaMetadata({
     (resolvedRenderHeight === undefined || baseline <= resolvedRenderHeight)
       ? baseline
       : original?.baseline;
+  const normalizeFontSize = (value: number | undefined, fallback: number) => {
+    const resolved = Number.isFinite(value) ? (value as number) : fallback;
+    return Math.round(Math.min(200, Math.max(5, resolved)) * 2) / 2;
+  };
+  const resolvedFontSize = normalizeFontSize(
+    fontSizePt,
+    original?.fontSizePt ?? original?.renderFontSizePt ?? 14,
+  );
+  const resolvedRenderFontSize = normalizeFontSize(
+    renderFontSizePt,
+    original?.renderFontSizePt ?? resolvedFontSize,
+  );
   return {
     schema: VISUALTEX_FORMULA_SCHEMA,
     schemaVersion: VISUALTEX_FORMULA_SCHEMA_VERSION,
@@ -176,6 +208,8 @@ export function createFormulaMetadata({
     ...(resolvedRenderWidth ? { renderWidthPx: resolvedRenderWidth } : {}),
     ...(resolvedRenderHeight ? { renderHeightPx: resolvedRenderHeight } : {}),
     ...(resolvedBaseline !== undefined ? { baseline: resolvedBaseline } : {}),
+    fontSizePt: resolvedFontSize,
+    renderFontSizePt: resolvedRenderFontSize,
     createdWithVersion: original?.createdWithVersion ?? appVersion,
     updatedWithVersion: appVersion,
     createdAt: original?.createdAt ?? now,

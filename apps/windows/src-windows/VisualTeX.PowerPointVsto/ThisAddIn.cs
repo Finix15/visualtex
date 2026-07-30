@@ -36,6 +36,21 @@ public interface IPowerPointRibbonCallbacks
 
     [DispId(8)]
     object? GetRibbonImage(Office.IRibbonControl control);
+
+    [DispId(9)]
+    string GetFormulaFontSizeText(Office.IRibbonControl control);
+
+    [DispId(10)]
+    bool GetFormulaFontSizeEnabled(Office.IRibbonControl control);
+
+    [DispId(11)]
+    void OnFormulaFontSizeChanged(Office.IRibbonControl control, string value);
+
+    [DispId(12)]
+    void OnDecreaseFormulaFontSize(Office.IRibbonControl control);
+
+    [DispId(13)]
+    void OnIncreaseFormulaFontSize(Office.IRibbonControl control);
 }
 
 [ComVisible(true)]
@@ -56,9 +71,46 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
           <button id="VisualTeX.PowerPointVsto.New" label="新建公式" size="large" tag="insertFormula" getImage="GetRibbonImage" onAction="OnNewFormula" />
           <button id="VisualTeX.PowerPointVsto.Edit" label="编辑所选公式" size="large" tag="editSelected" getImage="GetRibbonImage" onAction="OnEditSelected" />
           <button id="VisualTeX.PowerPointVsto.ConvertSelected" label="转为原生 OLE" screentip="转为可嵌入编辑的原生 OLE" supertip="转换后外观应保持不变，但对象会嵌入 PowerPoint 文件，并可通过 VisualTeX 双击重新编辑。" tag="convertToOle" getImage="GetRibbonImage" onAction="OnConvertSelected" />
-          <button id="VisualTeX.PowerPointVsto.ExportPicture" label="导出所选为图片" imageMso="PictureInsertFromFile" onAction="OnExportSelectedAsPicture" />
+          <button id="VisualTeX.PowerPointVsto.ExportPicture" label="转为 SVG 图片" imageMso="PictureInsertFromFile" onAction="OnExportSelectedAsPicture" />
           <button id="VisualTeX.PowerPointVsto.Delete" label="删除所选公式" imageMso="Delete" onAction="OnDeleteSelected" />
           <button id="VisualTeX.PowerPointVsto.OpenDesktop" label="打开 VisualTeX" imageMso="FileOpen" onAction="OnOpenDesktop" />
+        </group>
+        <group id="VisualTeX.PowerPointVsto.FontSizeGroup" label="公式字号">
+          <button id="VisualTeX.PowerPointVsto.FontSizeDecrease" label="减小" imageMso="FontSizeDecrease" getEnabled="GetFormulaFontSizeEnabled" onAction="OnDecreaseFormulaFontSize" />
+          <comboBox id="VisualTeX.PowerPointVsto.FontSize" label="字号" sizeString="初号（42 磅）" getText="GetFormulaFontSizeText" getEnabled="GetFormulaFontSizeEnabled" onChange="OnFormulaFontSizeChanged">
+            <item id="VisualTeX.PowerPointVsto.FontSizeChu" label="初号" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeXiaoChu" label="小初" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeYi" label="一号" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeXiaoYi" label="小一" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeEr" label="二号" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeXiaoEr" label="小二" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeSan" label="三号" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeXiaoSan" label="小三" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeSi" label="四号" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeXiaoSi" label="小四" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeWu" label="五号" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeXiaoWu" label="小五" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeLiu" label="六号" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeXiaoLiu" label="小六" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeQi" label="七号" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeBa" label="八号" />
+            <item id="VisualTeX.PowerPointVsto.FontSize8" label="8" />
+            <item id="VisualTeX.PowerPointVsto.FontSize9" label="9" />
+            <item id="VisualTeX.PowerPointVsto.FontSize10" label="10" />
+            <item id="VisualTeX.PowerPointVsto.FontSize10_5" label="10.5" />
+            <item id="VisualTeX.PowerPointVsto.FontSize11" label="11" />
+            <item id="VisualTeX.PowerPointVsto.FontSize12" label="12" />
+            <item id="VisualTeX.PowerPointVsto.FontSize14" label="14" />
+            <item id="VisualTeX.PowerPointVsto.FontSize16" label="16" />
+            <item id="VisualTeX.PowerPointVsto.FontSize18" label="18" />
+            <item id="VisualTeX.PowerPointVsto.FontSize20" label="20" />
+            <item id="VisualTeX.PowerPointVsto.FontSize24" label="24" />
+            <item id="VisualTeX.PowerPointVsto.FontSize28" label="28" />
+            <item id="VisualTeX.PowerPointVsto.FontSize36" label="36" />
+            <item id="VisualTeX.PowerPointVsto.FontSize48" label="48" />
+            <item id="VisualTeX.PowerPointVsto.FontSize72" label="72" />
+          </comboBox>
+          <button id="VisualTeX.PowerPointVsto.FontSizeIncrease" label="增大" imageMso="FontSizeIncrease" getEnabled="GetFormulaFontSizeEnabled" onAction="OnIncreaseFormulaFontSize" />
         </group>
       </tab>
     </tabs>
@@ -77,7 +129,9 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
     private DateTimeOffset _lastDoubleClickAt;
     private string? _activeSessionId;
     private OfficeSelection? _lastFormulaSelection;
+    private int _formulaFontInvalidationPending;
     private object? _ribbonUi;
+    private Office.COMAddIn? _comAddIn;
 
     public string DiagnosticLastError { get; private set; } = string.Empty;
 
@@ -90,6 +144,11 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         ref Array custom)
     {
         _application = (Application)application;
+        _comAddIn = addInInstance as Office.COMAddIn;
+        if (_comAddIn is not null)
+        {
+            try { _comAddIn.Object = this; } catch { }
+        }
         _formulaService = new PowerPointFormulaService(_application);
         _dispatcher = new OfficeUiDispatcher();
         _sessionClient = new VisualTeXSessionClient();
@@ -118,14 +177,57 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
     public void OnStartupComplete(ref Array custom) { }
     public void OnBeginShutdown(ref Array custom) => Dispose();
 
-    public void OnRibbonLoad(object ribbonUi) => _ribbonUi = ribbonUi;
+    public void OnRibbonLoad(object ribbonUi)
+    {
+        _ribbonUi = ribbonUi;
+        InvalidateFormulaFontControls();
+    }
     public object? GetRibbonImage(Office.IRibbonControl control) =>
         RibbonIconProvider.GetImage(control?.Tag);
+    public string GetFormulaFontSizeText(Office.IRibbonControl control)
+    {
+        try
+        {
+            var size = _formulaService?.GetSelectedFormulaFontSize();
+            return size.HasValue
+                ? FormulaFontSize.FormatDisplay(size.Value)
+                : string.Empty;
+        }
+        catch { return string.Empty; }
+    }
+    public bool GetFormulaFontSizeEnabled(Office.IRibbonControl control)
+    {
+        try { return _formulaService?.GetSelectedFormulaFontSize().HasValue == true; }
+        catch { return false; }
+    }
+    public void OnFormulaFontSizeChanged(Office.IRibbonControl control, string value) =>
+        ApplyFormulaFontSize(ParseFontSize(value));
+    public void OnDecreaseFormulaFontSize(Office.IRibbonControl control)
+    {
+        try
+        {
+            var current = _formulaService?.GetSelectedFormulaFontSize()
+                ?? throw new InvalidOperationException("请先选择一个公式。");
+            ApplyFormulaFontSize(FormulaFontSize.PreviousPreset(current));
+        }
+        catch (Exception error) { ReportError($"无法设置公式字号：{error.Message}"); }
+    }
+    public void OnIncreaseFormulaFontSize(Office.IRibbonControl control)
+    {
+        try
+        {
+            var current = _formulaService?.GetSelectedFormulaFontSize()
+                ?? throw new InvalidOperationException("请先选择一个公式。");
+            ApplyFormulaFontSize(FormulaFontSize.NextPreset(current));
+        }
+        catch (Exception error) { ReportError($"无法设置公式字号：{error.Message}"); }
+    }
     public void OnNewFormula(object control) => BeginSession("create", "crossPlatformPicture", null);
     public void OnEditSelected(object control) => BeginSelectedSession(null);
     public void OnConvertSelected(object control) =>
         BeginSelectedSession("nativeOle", conversionOnly: true);
-    public void OnExportSelectedAsPicture(object control) => _ = ExportSelectedAsPictureAsync();
+    public void OnExportSelectedAsPicture(object control) =>
+        BeginSelectedSession("crossPlatformPicture", conversionOnly: true);
     public void OnDeleteSelected(object control) => _ = DeleteSelectedAsync();
     public void OnOpenDesktop(object control)
     {
@@ -141,8 +243,54 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         }
     }
 
+    private static double ParseFontSize(string value) => FormulaFontSize.Parse(value);
+
+    private void ApplyFormulaFontSize(double value)
+    {
+        try
+        {
+            var applied = (_formulaService
+                    ?? throw new InvalidOperationException("PowerPoint formula service is unavailable."))
+                .SetSelectedFormulaFontSize(value);
+            SetStatus($"公式字号已设置为 {FormulaFontSize.Describe(applied)}。");
+        }
+        catch (Exception error)
+        {
+            ReportError($"无法设置公式字号：{error.Message}");
+        }
+        finally { InvalidateFormulaFontControls(); }
+    }
+
+    private void ScheduleFormulaFontControlsInvalidation()
+    {
+        var dispatcher = _dispatcher;
+        if (dispatcher is null
+            || Interlocked.Exchange(ref _formulaFontInvalidationPending, 1) != 0)
+            return;
+        dispatcher.Post(() =>
+        {
+            Interlocked.Exchange(ref _formulaFontInvalidationPending, 0);
+            InvalidateFormulaFontControls();
+        });
+    }
+
+    private void InvalidateFormulaFontControls()
+    {
+        var ribbon = _ribbonUi;
+        if (ribbon is null) return;
+        try
+        {
+            dynamic ui = ribbon;
+            ui.InvalidateControl("VisualTeX.PowerPointVsto.FontSize");
+            ui.InvalidateControl("VisualTeX.PowerPointVsto.FontSizeDecrease");
+            ui.InvalidateControl("VisualTeX.PowerPointVsto.FontSizeIncrease");
+        }
+        catch { }
+    }
+
     private void OnWindowSelectionChange(Selection selection)
     {
+        ScheduleFormulaFontControlsInvalidation();
         var service = _formulaService;
         if (service is null) return;
         try
@@ -295,6 +443,9 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             {
                 new() { Id = Guid.NewGuid().ToString(), Latex = string.Empty },
             };
+            var fontSizePt = metadata?.FontSizePt
+                ?? await dispatcher.InvokeAsync(service.ReadCurrentTypingFontSize)
+                    .ConfigureAwait(false);
             var request = new CreateVstoSessionRequest
             {
                 Mode = mode,
@@ -309,6 +460,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 DisplayMode = "block",
                 ObjectMode = targetObjectMode,
                 Numbered = false,
+                FontSizePt = FormulaFontSize.Normalize(fontSizePt, 18f),
                 OriginalMetadata = metadata,
                 AutoCommitOnClose = true,
             };
@@ -349,9 +501,9 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 return;
             }
 
-            imagePath = client.MaterializePng(session);
             if (session.ObjectMode == "nativeOle")
             {
+                imagePath = client.MaterializePng(session);
                 var export = session.ExportResult
                     ?? throw new InvalidOperationException("VisualTeX Session has no vector export result.");
                 svgPath = client.MaterializeSvg(session);
@@ -359,6 +511,10 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                     svgPath,
                     export.Width,
                     export.Height);
+            }
+            else
+            {
+                imagePath = client.MaterializeSvg(session);
             }
             var writeResult = await dispatcher.InvokeAsync(() =>
             {
@@ -393,7 +549,9 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             await client.CompleteAsync(session.Id, cancellationToken).ConfigureAwait(false);
             SetStatus(requiresObjectModeChange && session.ObjectMode == "nativeOle"
                 ? "已转换为原生 OLE：外观保持不变，可双击编辑，并嵌入 PowerPoint 文件。"
-                : session.Mode == "edit" ? "PowerPoint 公式已更新。" : "PowerPoint 公式已插入。");
+                : requiresObjectModeChange && session.ObjectMode == "crossPlatformPicture"
+                    ? "已转换为嵌入式 SVG 图片，可跨平台显示并保持矢量清晰度。"
+                    : session.Mode == "edit" ? "PowerPoint 公式已更新。" : "PowerPoint 公式已插入。");
         }
         catch (OperationCanceledException)
         {
@@ -433,23 +591,6 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                     StringComparison.Ordinal))
                 Volatile.Write(ref _activeSessionId, null);
             _operationGate.Release();
-        }
-    }
-
-    private async Task ExportSelectedAsPictureAsync()
-    {
-        var dispatcher = _dispatcher;
-        var service = _formulaService;
-        if (dispatcher is null || service is null) return;
-        try
-        {
-            await dispatcher.InvokeAsync(service.ExportSelectedOleAsPicture)
-                .ConfigureAwait(false);
-            SetStatus("PowerPoint OLE 公式已导出为跨平台图片。");
-        }
-        catch (Exception error)
-        {
-            ReportError($"导出 PowerPoint OLE 公式失败：{error.Message}");
         }
     }
 
@@ -534,6 +675,12 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         });
     }
 
+    private static void ReleaseComObject(object? value)
+    {
+        if (value is null || !Marshal.IsComObject(value)) return;
+        try { Marshal.ReleaseComObject(value); } catch { }
+    }
+
     private void Dispose()
     {
         _lifetime?.Cancel();
@@ -554,6 +701,12 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         Volatile.Write(ref _activeSessionId, null);
         _lifetime = null;
         _ribbonUi = null;
+        if (_comAddIn is not null)
+        {
+            try { _comAddIn.Object = null; } catch { }
+            ReleaseComObject(_comAddIn);
+            _comAddIn = null;
+        }
         _application = null;
     }
 }
