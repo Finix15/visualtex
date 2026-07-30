@@ -48,6 +48,7 @@ const formulaRegressionStatusPath = join(
   runtimeRoot,
   "document-import-regression-formula-status.txt",
 );
+const doubleClickTracePath = join(runtimeRoot, "word-double-click-trace.log");
 const officeScratchRoot = join(
   homedir(),
   "Library/Group Containers/UBF8T346G9.Office/VisualTeX/Scratch",
@@ -422,7 +423,7 @@ function runFormulaRegressionReport(testDocumentName, formulas) {
   const report = parseRegressionReport(
     readFileSync(formulaRegressionStatusPath, "utf8"),
   );
-if (report.revision !== "word-structured-document-import-20260730-r62") {
+if (report.revision !== "word-double-click-routing-20260730-r65") {
     throw new Error(`Word loaded the wrong VisualTeX source revision: ${report.revision}`);
   }
 
@@ -1625,6 +1626,8 @@ try {
         codeFormat: "align",
         expectedLines: formulas[5].metadataLines,
         updatedLines: ["1 = 22 + 333 + q", "44444 = 55 + r"],
+        macroName: "FormatPicture",
+        entryKind: "image-format-picture-command",
       },
       {
         formula: formulas[6],
@@ -1637,6 +1640,9 @@ try {
 
     for (const editCase of imageEditCases) {
       const sessionsBeforeEdit = currentSessionIds();
+      const traceBeforeEdit = existsSync(doubleClickTracePath)
+        ? readFileSync(doubleClickTracePath, "utf8")
+        : "";
       if (editCase.recovery) rmSync(imageEditStatusPath, { force: true });
       runAppleScript([
         'tell application "Microsoft Word"',
@@ -1647,7 +1653,7 @@ try {
         "select text object of formulaShape",
         editCase.recovery
           ? 'run VB macro macro name "VisualTeX_RunSelectedImageEditRecoveryRegression"'
-          : 'run VB macro macro name "VisualTeX_DoubleClickEditSelected"',
+          : `run VB macro macro name ${JSON.stringify(editCase.macroName ?? "VisualTeX_DoubleClickEditSelected")}`,
         "end tell",
       ], 60_000);
       const editSessionId = await waitForFormulaEditSession(
@@ -1661,6 +1667,22 @@ try {
         editCase.codeFormat,
         editCase.expectedLines,
       );
+      if (editCase.macroName === "FormatPicture") {
+        const traceAfterEdit = existsSync(doubleClickTracePath)
+          ? readFileSync(doubleClickTracePath, "utf8")
+          : "";
+        const commandTrace = traceAfterEdit.startsWith(traceBeforeEdit)
+          ? traceAfterEdit.slice(traceBeforeEdit.length)
+          : traceAfterEdit;
+        if (
+          !commandTrace.includes("event=format-picture-enter") ||
+          !commandTrace.includes("event=edit-inline-editor-launched")
+        ) {
+          throw new Error(
+            `Word FormatPicture override did not complete the VisualTeX image edit route:\n${commandTrace}`,
+          );
+        }
+      }
 
       let restoredReference;
       if (editCase.recovery) {
@@ -1689,7 +1711,7 @@ try {
       const regression = {
         kind: editCase.recovery
           ? "image-double-click-title-recovery"
-          : "image-batch-double-click",
+          : editCase.entryKind ?? "image-batch-double-click",
         sessionId: editSessionId,
         formulaId: editCase.formula.formulaId,
         codeFormat: editSession.normalized.codeFormat,
@@ -1800,6 +1822,9 @@ try {
     }
     const physicalFormula = formulas[1];
     const sessionsBeforePhysicalEdit = currentSessionIds();
+    const traceBeforePhysicalEdit = existsSync(doubleClickTracePath)
+      ? readFileSync(doubleClickTracePath, "utf8")
+      : "";
     runAppleScript([
       'tell application "Microsoft Word"',
       `set documentObject to document ${JSON.stringify(testDocumentName)}`,
@@ -1813,6 +1838,7 @@ try {
     console.log(
       `WORD_PHYSICAL_DOUBLE_CLICK_READY|${testDocumentName}|${physicalFormula.formulaId}`,
     );
+
     const physicalEditSessionId = await waitForFormulaEditSession(
       sessionsBeforePhysicalEdit,
       physicalFormula.formulaId,
@@ -1825,12 +1851,36 @@ try {
       physicalFormula.codeFormat,
       physicalFormula.metadataLines,
     );
+    const traceAfterPhysicalEdit = existsSync(doubleClickTracePath)
+      ? readFileSync(doubleClickTracePath, "utf8")
+      : "";
+    const physicalTrace = traceAfterPhysicalEdit.startsWith(traceBeforePhysicalEdit)
+      ? traceAfterPhysicalEdit.slice(traceBeforePhysicalEdit.length)
+      : traceAfterPhysicalEdit;
+    const doubleClickRoute = physicalTrace.includes(
+      "event=window-before-double-click-enter",
+    )
+      ? "window-before-double-click"
+      : physicalTrace.includes("event=format-picture-enter")
+        ? "format-picture"
+        : "unknown";
+    if (doubleClickRoute === "unknown") {
+      throw new Error(
+        `The physical double-click launched an edit session without logging a Word entry point:\n${physicalTrace}`,
+      );
+    }
+    if (!physicalTrace.includes("event=edit-inline-editor-launched")) {
+      throw new Error(
+        `The physical double-click did not reach the inline editor launch point:\n${physicalTrace}`,
+      );
+    }
     editRegressions.push({
       kind: "image-physical-double-click",
       sessionId: physicalEditSessionId,
       formulaId: physicalFormula.formulaId,
       codeFormat: physicalEditSession.normalized.codeFormat,
       lines: physicalEditSession.normalized.lines.map((line) => line.latex),
+      doubleClickRoute,
     });
   }
 

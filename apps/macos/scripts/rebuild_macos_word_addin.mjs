@@ -185,7 +185,36 @@ function closeWordWithoutSaving() {
   sleep(1_500);
 }
 
+function waitForWordUiReady() {
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const state = bestEffort("/usr/bin/osascript", [
+      "-e",
+      'tell application "System Events"',
+      "-e",
+      'if exists process "Microsoft Word" then',
+      "-e",
+      'tell process "Microsoft Word"',
+      "-e",
+      "set visible to true",
+      "-e",
+      "set frontmost to true",
+      "-e",
+      'if (count of menu bars) > 0 and (count of windows) > 0 then return "READY"',
+      "-e",
+      "end tell",
+      "-e",
+      "end if",
+      "-e",
+      "end tell",
+    ], { timeout: 5_000 }).trim();
+    if (state === "READY") return;
+    sleep(500);
+  }
+  throw new Error("Word did not expose a document window and menu bar for VBE automation.");
+}
+
 function openVbeWindow() {
+  waitForWordUiReady();
   const existingWindows = bestEffort("/usr/bin/osascript", [
     "-e",
     'tell application "System Events"',
@@ -505,6 +534,7 @@ function verifyBuiltVba(path) {
     "VTCommitWordDocumentImportDispatch",
     "VTWordEvents",
     "VTHandleWordBeforeDoubleClick",
+    "VTTraceWordDoubleClick",
     "App_WindowBeforeDoubleClick",
     "FormatPicture",
   ];

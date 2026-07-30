@@ -55,8 +55,9 @@ inspectAddin("VisualTeX.dotm", "word/vbaProject.bin", [
   "App_WindowBeforeDoubleClick",
   "App_WindowSelectionChange",
   "VisualTeX_StabilizeImageEquationNumberSelection",
-  "word-structured-document-import-20260730-r62",
+  "word-double-click-routing-20260730-r65",
   "FormatPicture",
+  "VTTraceWordDoubleClick",
   "VTWordRibbonApplyImageFontSizePreset",
 ]);
 inspectAddin("VisualTeX.ppam", "ppt/vbaProject.bin", [

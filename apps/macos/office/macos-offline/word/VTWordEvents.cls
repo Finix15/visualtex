@@ -22,11 +22,23 @@ End Sub
 
 Private Sub App_WindowBeforeDoubleClick(ByVal Sel As Word.Selection, Cancel As Boolean)
     On Error GoTo IgnoreDoubleClick
-    If Sel Is Nothing Then Exit Sub
+    VTTraceWordDoubleClick "window-before-double-click-enter", Sel, ""
+    If Sel Is Nothing Then
+        VTTraceWordDoubleClick _
+            "window-before-double-click-skip", Sel, _
+            "reason=no-selection"
+        Exit Sub
+    End If
     Cancel = VTHandleWordBeforeDoubleClick(Sel)
+    VTTraceWordDoubleClick _
+        "window-before-double-click-result", Sel, _
+        "cancel=" & CStr(Cancel)
     Exit Sub
 
 IgnoreDoubleClick:
+    VTTraceWordDoubleClick _
+        "window-before-double-click-error", Sel, _
+        "error=" & CStr(Err.Number) & ":" & Err.Description
     ' Ordinary Word double-click behavior must remain untouched when the
     ' clicked object is not a valid VisualTeX formula.
 End Sub

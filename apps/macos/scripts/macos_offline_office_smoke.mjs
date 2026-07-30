@@ -46,6 +46,7 @@ const requiredFiles = [
   "src-tauri/src/office/macos_offline_installer.rs",
   "src-tauri/Info.macos.plist",
   "scripts/package_macos_offline_addins.mjs",
+  "scripts/document_import_word_integration.mjs",
   "scripts/register_macos_dev_url_handler.mjs",
   "scripts/tauri_dev.mjs",
   "office-native-dialog.html",
@@ -78,6 +79,9 @@ const nativeInteraction = read("src-tauri/src/office/powerpoint_native.rs");
 const appRuntime = read("src-tauri/src/lib.rs");
 const installer = read("src-tauri/src/office/macos_offline_installer.rs");
 const packager = read("scripts/package_macos_offline_addins.mjs");
+const documentImportWordIntegration = read(
+  "scripts/document_import_word_integration.mjs",
+);
 const nativeHtml = read("office-native-dialog.html");
 const nativeMain = read("src/office/native-dialog-main.tsx");
 const dialogApp = read("src/office/dialog/OfficeDialogApp.tsx");
@@ -166,7 +170,7 @@ expectIncludes(powerpointAdapter, "VTPowerPointRibbonApplyFormulaFontSizePreset"
 expectIncludes(powerpointAdapter, "VTUnicodeText(28151, 21512, 23383, 21495)", "PowerPoint must report mixed selected SVG formula sizes without source-encoding corruption");
 
 expectIncludes(wordAdapter, "Public Sub AutoExec()", "Word template must publish AutoExec health");
-expectIncludes(wordAdapter, '"word-structured-document-import-20260730-r62"', "Word health must identify the clean multiline OMML, metadata-recovery, shared image-rendering, image-spacing, selected-image font-state, and physical picture double-click revision");
+expectIncludes(wordAdapter, '"word-double-click-routing-20260730-r65"', "Word health must identify the build that traces and validates both native double-click entry routes");
 expectIncludes(wordAdapter, "VTInitializeWordEvents", "Word AutoExec must initialize its persistent application event sink");
 expectIncludes(wordEvents, "App_WindowBeforeDoubleClick", "Word must use its native application event for double-click editing");
 expectIncludes(wordEvents, "App_WindowSelectionChange", "Word must repair a clicked legacy image-number REF through the native selection-change event");
@@ -176,12 +180,15 @@ expectIncludes(wordAdapter, "VTVisualTeXInlineShapeAtSelection", "Word double-cl
 expectIncludes(wordAdapter, "Public Function VTHandleWordBeforeDoubleClick", "Word image and native double-click events must share one regression-testable target handler");
 expectIncludes(wordAdapter, "VisualTeX_EditInlineShape selectedShape", "Word double-click editing must preserve the clicked InlineShape target");
 expectIncludes(wordAdapter, "Public Sub FormatPicture()", "Word must override the built-in picture double-click command because macOS Word does not raise WindowBeforeDoubleClick for InlineShape objects");
-expectIncludes(wordAdapter, "If VTHandleWordBeforeDoubleClick(Selection) Then Exit Sub", "The built-in picture command override must route VisualTeX images through the shared edit resolver");
+expectIncludes(documentImportWordIntegration, 'macroName: "FormatPicture"', "The Word image integration must execute the global FormatPicture override as a real command regression");
+expectIncludes(documentImportWordIntegration, '"window-before-double-click"', "The manual physical double-click regression must report the native event route when Word raises it");
+expectIncludes(documentImportWordIntegration, '"format-picture"', "The manual physical double-click regression must report the built-in FormatPicture route when Word bypasses the event");
+expectIncludes(wordAdapter, "handled = VTHandleWordBeforeDoubleClick(Selection)", "The built-in picture command override must route VisualTeX images through the shared edit resolver and record whether it handled the command");
 expectIncludes(wordAdapter, "WordBasic.FormatPicture", "Ordinary Word pictures must retain their native formatting command after the VisualTeX override declines them");
 expectIncludes(wordAdapter, "VisualTeX_ApplyPendingResult", "Word template must expose the native result callback");
 expectIncludes(wordAdapter, "VisualTeX_DoubleClickEditSelected", "Word must expose a non-modal native double-click macro entry point");
 expectIncludes(wordAdapter, "VTFindNativeFormulaBookmark(selected.Range, False)", "The shared Word double-click handler must probe native formulas without raising on ordinary text or blank space");
-expectIncludes(wordAdapter, "If nativeBookmark Is Nothing Then Exit Function", "A Word double-click without a VisualTeX target must be a strict no-op");
+expectIncludes(wordAdapter, '"handler-native-not-found"', "A Word double-click without a VisualTeX target must be logged and remain a strict no-op");
 expectIncludes(wordAdapter, "VisualTeX_CreateNativeInline", "Word must expose direct inline OMML insertion");
 expectIncludes(wordAdapter, "VisualTeX_CreateNativeDisplay", "Word must expose direct display OMML insertion");
 expectIncludes(wordAdapter, "Public Sub VTWordRibbonOnLoad", "The Word Ribbon onLoad callback must initialize the application event sink in an attached isolation template");
@@ -999,7 +1006,7 @@ expectIncludes(installer, "addin_installation_matches", "Installed status must r
 expectIncludes(installer, "powerpoint_script.clone()", "PowerPoint installed status must include its AppleScriptTask resource");
 expectIncludes(installer, 'health.plugin_version.as_deref() == Some(env!("CARGO_PKG_VERSION"))', "Installer must reject stale plug-in health versions");
 expect(!installer.includes("source_revision_matches"), "Runtime health must not reject a current-version add-in only because an optional sourceRevision field is absent");
-expectIncludes(packager, "word-structured-document-import-20260730-r62", "Packaging must reject a Word DOTM that lacks the clean multiline OMML, image-edit recovery, and physical picture double-click revision");
+expectIncludes(packager, "word-double-click-routing-20260730-r65", "Packaging must reject a Word DOTM that lacks the current double-click routing revision");
 expectIncludes(packager, "powerpoint-svg-font-size-dropdown-unicode-20260727-r3", "Packaging must reject a PowerPoint PPAM that predates Unicode-safe point-size labels");
 expectIncludes(installer, "POWERPOINT_VBA_SOURCE_REVISION", "Installer validation must reject a stale PowerPoint PPAM without SVG point-size support");
 expectIncludes(installer, "Library/Application Scripts/com.microsoft.Word", "Installer must use Word's AppleScriptTask directory");

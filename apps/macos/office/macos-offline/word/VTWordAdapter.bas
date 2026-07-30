@@ -4,7 +4,7 @@ Option Explicit
 Private Const VT_WORD_HOST As String = "word"
 Private Const VT_WORD_STATUS_FILE As String = "/OfficePluginStatus/word.json"
 Private Const VT_WORD_SOURCE_REVISION As String = _
-    "word-structured-document-import-20260730-r62"
+    "word-double-click-routing-20260730-r65"
 Private Const VT_WORD_EQUATION_NUMBER_FONT_NAME As String = "Cambria Math"
 Private Const VT_WORD_BOOKMARK_PREFIX As String = "VT_Pending_"
 Private Const VT_WORD_DOCUMENT_IMPORT_BOOKMARK_PREFIX As String = "VT_D_"
@@ -25,6 +25,9 @@ Private Const VT_WORD_IMAGE_FONT_CONTROL_ID As String = _
 Private Const VT_WORD_PAYLOAD_CHUNK_SIZE As Long = 20000
 Private Const VT_WORD_PAYLOAD_MAX_CHUNKS As Long = 128
 Private Const VT_WORD_TRACE_ENABLED As Boolean = False
+Private Const VT_WORD_DOUBLE_CLICK_TRACE_ENABLED As Boolean = True
+Private Const VT_WORD_DOUBLE_CLICK_TRACE_FILE As String = _
+    "/word-double-click-trace.log"
 Private Const VT_WORD_LATEX_CHUNK_SIZE As Long = VT_WORD_PAYLOAD_CHUNK_SIZE
 Private Const VT_WORD_LATEX_MAX_CHUNKS As Long = VT_WORD_PAYLOAD_MAX_CHUNKS
 Private Const VT_WORD_OMML_CHUNK_SIZE As Long = VT_WORD_PAYLOAD_CHUNK_SIZE
@@ -32,6 +35,7 @@ Private Const VT_WORD_OMML_MAX_CHUNKS As Long = VT_WORD_PAYLOAD_MAX_CHUNKS
 Private VT_WORD_EVENT_SINK As VTWordEvents
 Private VT_WORD_RIBBON As IRibbonUI
 Private VT_WORD_INTERNAL_MUTATION_DEPTH As Long
+Private VT_WORD_DOUBLE_CLICK_TRACE_CONTEXT_DEPTH As Long
 Private VT_WORD_IMAGE_SIZE_WATCH_SCHEDULED As Boolean
 Private VT_WORD_IMAGE_SIZE_WATCH_RUNNING As Boolean
 Private VT_WORD_ORPHAN_WATCH_SCHEDULED As Boolean
@@ -39,9 +43,12 @@ Private VT_WORD_ORPHAN_WATCH_RUNNING As Boolean
 
 Public Sub AutoExec()
     On Error Resume Next
+    VTTraceWordDoubleClick "autoexec-enter", Nothing, ""
     VTInitializeWordEvents
+    VTTraceWordDoubleClick "autoexec-events-initialized", Nothing, ""
     VTEnsureOrphanWatchScheduled
     VTWriteWordHealth
+    VTTraceWordDoubleClick "autoexec-complete", Nothing, ""
     On Error GoTo 0
 End Sub
 
@@ -3983,8 +3990,20 @@ Public Function VTWordInternalMutationActive() As Boolean
 End Function
 
 Public Sub VTInitializeWordEvents()
+    On Error GoTo InitializationFailed
+    VTTraceWordDoubleClick "events-initialize-enter", Nothing, ""
     Set VT_WORD_EVENT_SINK = New VTWordEvents
     Set VT_WORD_EVENT_SINK.App = Word.Application
+    VTTraceWordDoubleClick _
+        "events-initialize-complete", Nothing, _
+        "sinkReady=" & CStr(Not VT_WORD_EVENT_SINK Is Nothing)
+    Exit Sub
+
+InitializationFailed:
+    VTTraceWordDoubleClick _
+        "events-initialize-error", Nothing, _
+        "error=" & CStr(Err.Number) & ":" & Err.Description
+    Err.Raise Err.Number, Err.Source, Err.Description
 End Sub
 
 Public Sub VisualTeX_StabilizeImageEquationNumberSelection( _
@@ -5928,19 +5947,39 @@ Public Sub VisualTeX_DoubleClickEditSelected()
 End Sub
 
 Public Sub FormatPicture()
+    Dim handled As Boolean
+
     ' Word for Mac does not raise WindowBeforeDoubleClick for an InlineShape.
     ' Its physical picture double-click invokes the built-in FormatPicture
     ' command directly, so this global-template command override is the only
     ' reliable path into the same VisualTeX target resolver used by OMML.
     On Error GoTo OpenNativePictureFormatter
-    If VTHandleWordBeforeDoubleClick(Selection) Then Exit Sub
+    VTTraceWordDoubleClick "format-picture-enter", Selection, ""
+    handled = VTHandleWordBeforeDoubleClick(Selection)
+    VTTraceWordDoubleClick _
+        "format-picture-handler-result", Selection, _
+        "handled=" & CStr(handled)
+    If handled Then Exit Sub
 
 OpenNativePictureFormatter:
+    If Err.Number <> 0 Then
+        VTTraceWordDoubleClick _
+            "format-picture-handler-error", Selection, _
+            "error=" & CStr(Err.Number) & ":" & Err.Description
+        Err.Clear
+    End If
+    VTTraceWordDoubleClick "format-picture-native-fallback", Selection, ""
     ' WordBasic dispatches the original built-in command without resolving
     ' this same-name VBA override again. Ordinary pictures therefore retain
     ' Word's native formatting behavior.
     On Error Resume Next
     WordBasic.FormatPicture
+    If Err.Number <> 0 Then
+        VTTraceWordDoubleClick _
+            "format-picture-native-error", Selection, _
+            "error=" & CStr(Err.Number) & ":" & Err.Description
+        Err.Clear
+    End If
     On Error GoTo 0
 End Sub
 
@@ -5952,25 +5991,56 @@ Public Function VTHandleWordBeforeDoubleClick( _
 
     ' Both the real Application event and the regression macro use this one
     ' target resolver. It must remain a strict no-op for ordinary Word content.
+    VTBeginWordDoubleClickTraceContext
     On Error GoTo IgnoreDoubleClick
-    If Documents.Count = 0 Or selected Is Nothing Or _
-       VTWordInternalMutationActive() Then Exit Function
+    VTTraceWordDoubleClick "handler-enter", selected, ""
+    If Documents.Count = 0 Then
+        VTTraceWordDoubleClick "handler-skip", selected, "reason=no-document"
+        GoTo HandlerFinished
+    End If
+    If selected Is Nothing Then
+        VTTraceWordDoubleClick "handler-skip", selected, "reason=no-selection"
+        GoTo HandlerFinished
+    End If
+    If VTWordInternalMutationActive() Then
+        VTTraceWordDoubleClick "handler-skip", selected, "reason=internal-mutation"
+        GoTo HandlerFinished
+    End If
     Set selectedShape = VTVisualTeXInlineShapeAtSelection(selected)
     If Not selectedShape Is Nothing Then
+        VTTraceWordDoubleClick _
+            "handler-image-resolved", selected, _
+            VTInlineShapeTraceSummary(selectedShape)
         VTHandleWordBeforeDoubleClick = True
         VisualTeX_EditInlineShape selectedShape
-        Exit Function
+        VTTraceWordDoubleClick "handler-image-edit-dispatched", selected, ""
+        GoTo HandlerFinished
     End If
+    VTTraceWordDoubleClick "handler-image-not-found", selected, ""
     Set nativeBookmark = VTFindNativeFormulaBookmark(selected.Range, False)
-    If nativeBookmark Is Nothing Then Exit Function
+    If nativeBookmark Is Nothing Then
+        VTTraceWordDoubleClick "handler-native-not-found", selected, ""
+        GoTo HandlerFinished
+    End If
+    VTTraceWordDoubleClick _
+        "handler-native-resolved", selected, _
+        "bookmark=" & nativeBookmark.Name
     VTHandleWordBeforeDoubleClick = True
     VisualTeX_EditNativeSelection selected.Range
+    VTTraceWordDoubleClick "handler-native-edit-dispatched", selected, ""
+
+HandlerFinished:
+    VTEndWordDoubleClickTraceContext
     Exit Function
 
 IgnoreDoubleClick:
+    VTTraceWordDoubleClick _
+        "handler-error", selected, _
+        "error=" & CStr(Err.Number) & ":" & Err.Description
     ' Preserve Word's native double-click behavior for every non-VisualTeX
     ' target, including empty space and ordinary document text.
     VTHandleWordBeforeDoubleClick = False
+    Resume HandlerFinished
 End Function
 
 Public Sub VisualTeX_EditInlineShape(ByVal selectedShape As InlineShape)
@@ -6268,30 +6338,68 @@ Public Function VTVisualTeXInlineShapeAtSelection( _
     Dim candidate As InlineShape
     Dim match As InlineShape
     Dim matchCount As Long
+    Dim directCount As Long
+    Dim candidateCount As Long
 
-    If selected Is Nothing Then Exit Function
-    If selected.InlineShapes.Count = 1 Then
+    On Error GoTo InvalidSelection
+    If selected Is Nothing Then
+        VTTraceWordDoubleClick "resolver-skip", selected, "reason=no-selection"
+        Exit Function
+    End If
+    directCount = selected.InlineShapes.Count
+    VTTraceWordDoubleClick _
+        "resolver-enter", selected, _
+        "directInlineShapes=" & CStr(directCount)
+    If directCount = 1 Then
+        VTTraceWordDoubleClick _
+            "resolver-direct-candidate", selected, _
+            VTInlineShapeTraceSummary(selected.InlineShapes(1))
         If VTIsVisualTeXInlineShape(selected.InlineShapes(1)) Then
             Set VTVisualTeXInlineShapeAtSelection = selected.InlineShapes(1)
+            VTTraceWordDoubleClick _
+                "resolver-direct-match", selected, _
+                VTInlineShapeTraceSummary(VTVisualTeXInlineShapeAtSelection)
             Exit Function
         End If
+        VTTraceWordDoubleClick "resolver-direct-rejected", selected, ""
     End If
 
     Set probeRange = selected.Range.Duplicate
-    On Error Resume Next
     probeRange.MoveStart Unit:=wdCharacter, Count:=-1
     probeRange.MoveEnd Unit:=wdCharacter, Count:=1
-    On Error GoTo InvalidSelection
+    candidateCount = probeRange.InlineShapes.Count
+    VTTraceWordDoubleClick _
+        "resolver-adjacent-probe", selected, _
+        "probeStart=" & CStr(probeRange.Start) & _
+        " probeEnd=" & CStr(probeRange.End) & _
+        " candidates=" & CStr(candidateCount)
     For Each candidate In probeRange.InlineShapes
+        VTTraceWordDoubleClick _
+            "resolver-adjacent-candidate", selected, _
+            VTInlineShapeTraceSummary(candidate)
         If VTIsVisualTeXInlineShape(candidate) Then
             matchCount = matchCount + 1
             Set match = candidate
+            VTTraceWordDoubleClick _
+                "resolver-adjacent-match", selected, _
+                "matchCount=" & CStr(matchCount) & " " & _
+                VTInlineShapeTraceSummary(candidate)
         End If
     Next candidate
-    If matchCount = 1 Then Set VTVisualTeXInlineShapeAtSelection = match
+    If matchCount = 1 Then
+        Set VTVisualTeXInlineShapeAtSelection = match
+        VTTraceWordDoubleClick "resolver-complete", selected, "result=single-match"
+    Else
+        VTTraceWordDoubleClick _
+            "resolver-complete", selected, _
+            "result=no-unique-match matchCount=" & CStr(matchCount)
+    End If
     Exit Function
 
 InvalidSelection:
+    VTTraceWordDoubleClick _
+        "resolver-error", selected, _
+        "error=" & CStr(Err.Number) & ":" & Err.Description
     Set VTVisualTeXInlineShapeAtSelection = Nothing
 End Function
 
@@ -6311,11 +6419,20 @@ Private Sub VTWordEditInlineShape( _
     Dim referenceBaselinePt As Double
     Dim observedWordFontSizePt As Double
 
+    VTTraceWordDoubleClick _
+        "edit-inline-enter", Selection, _
+        "convertToNative=" & CStr(convertToNative) & " " & _
+        VTInlineShapeTraceSummary(selectedShape)
     If selectedShape Is Nothing Then
+        VTTraceWordDoubleClick "edit-inline-error", Selection, "reason=no-shape"
         Err.Raise vbObjectError + 7400, "VisualTeX", "Select exactly one VisualTeX inline formula."
     End If
     If Not VTTryResolveVisualTeXInlineShapeReference( _
        selectedShape, formulaId, displayMode, numbered) Then
+        VTTraceWordDoubleClick _
+            "edit-inline-error", Selection, _
+            "reason=metadata-unrecoverable " & _
+            VTInlineShapeTraceSummary(selectedShape)
         Err.Raise vbObjectError + 7400, "VisualTeX", _
             "The selected image does not contain recoverable VisualTeX edit metadata."
     End If
@@ -6347,8 +6464,19 @@ Private Sub VTWordEditInlineShape( _
         fontSizePt, _
         referenceWidthPt, _
         referenceHeightPt)
+    VTTraceWordDoubleClick _
+        "edit-inline-resolved", Selection, _
+        "formulaId=" & formulaId & _
+        " displayMode=" & displayMode & _
+        " numbered=" & CStr(numbered)
     VTWriteRequest sessionId, requestJson
+    VTTraceWordDoubleClick _
+        "edit-inline-request-written", Selection, _
+        "sessionId=" & sessionId
     VTLaunchSession VT_WORD_HOST, sessionId
+    VTTraceWordDoubleClick _
+        "edit-inline-editor-launched", Selection, _
+        "sessionId=" & sessionId
 End Sub
 
 Private Sub VTWordEditNativeBookmark(ByVal nativeBookmark As Bookmark)
@@ -17595,6 +17723,113 @@ Private Function VTWordDocumentIdentity() As String
     On Error GoTo 0
     VTWordDocumentIdentity = VTBoundedIdentity(VTWordDocumentIdentity)
 End Function
+
+Private Function VTDoubleClickTraceValue(ByVal value As String) As String
+    value = Replace$(Replace$(value, vbCr, " "), vbLf, " ")
+    value = Replace$(value, vbTab, " ")
+    If Len(value) > 240 Then value = Left$(value, 240)
+    VTDoubleClickTraceValue = value
+End Function
+
+Private Function VTInlineShapeTraceSummary( _
+    ByVal selectedShape As InlineShape) As String
+
+    Dim titleText As String
+    Dim alternativeText As String
+
+    On Error GoTo InvalidShape
+    If selectedShape Is Nothing Then
+        VTInlineShapeTraceSummary = "shape=nothing"
+        Exit Function
+    End If
+    titleText = selectedShape.Title
+    alternativeText = selectedShape.AlternativeText
+    VTInlineShapeTraceSummary = _
+        "shapeStart=" & CStr(selectedShape.Range.Start) & _
+        " shapeEnd=" & CStr(selectedShape.Range.End) & _
+        " shapeType=" & CStr(selectedShape.Type) & _
+        " titleLen=" & CStr(Len(titleText)) & _
+        " altLen=" & CStr(Len(alternativeText)) & _
+        " title=" & VTDoubleClickTraceValue(titleText) & _
+        " alt=" & VTDoubleClickTraceValue(alternativeText)
+    Exit Function
+
+InvalidShape:
+    VTInlineShapeTraceSummary = _
+        "shape=error error=" & CStr(Err.Number) & ":" & _
+        VTDoubleClickTraceValue(Err.Description)
+End Function
+
+Private Sub VTBeginWordDoubleClickTraceContext()
+    VT_WORD_DOUBLE_CLICK_TRACE_CONTEXT_DEPTH = _
+        VT_WORD_DOUBLE_CLICK_TRACE_CONTEXT_DEPTH + 1
+End Sub
+
+Private Sub VTEndWordDoubleClickTraceContext()
+    If VT_WORD_DOUBLE_CLICK_TRACE_CONTEXT_DEPTH > 0 Then
+        VT_WORD_DOUBLE_CLICK_TRACE_CONTEXT_DEPTH = _
+            VT_WORD_DOUBLE_CLICK_TRACE_CONTEXT_DEPTH - 1
+    End If
+End Sub
+
+Public Sub VTTraceWordDoubleClick( _
+    ByVal eventName As String, _
+    ByVal selected As Word.Selection, _
+    Optional ByVal detail As String = "")
+
+    Dim tracePath As String
+    Dim traceText As String
+    Dim eventSinkReady As Boolean
+
+    If Not VT_WORD_DOUBLE_CLICK_TRACE_ENABLED Then Exit Sub
+    If Left$(eventName, 9) = "resolver-" And _
+       VT_WORD_DOUBLE_CLICK_TRACE_CONTEXT_DEPTH = 0 Then Exit Sub
+
+    On Error Resume Next
+    tracePath = VTApplicationSupportRoot() & VT_WORD_DOUBLE_CLICK_TRACE_FILE
+    If VTPathFileExists(tracePath) Then
+        traceText = VTReadText(tracePath, 524288)
+        If Len(traceText) > 420000 Then traceText = Right$(traceText, 210000)
+    End If
+    eventSinkReady = Not VT_WORD_EVENT_SINK Is Nothing
+    traceText = traceText & _
+        "event=" & VTDoubleClickTraceValue(eventName) & _
+        " time=" & Format$(Now, "yyyy-mm-dd hh:nn:ss") & _
+        " revision=" & VT_WORD_SOURCE_REVISION & _
+        " wordVersion=" & Application.Version & _
+        " documents=" & CStr(Documents.Count) & _
+        " internalMutation=" & CStr(VTWordInternalMutationActive()) & _
+        " eventSinkReady=" & CStr(eventSinkReady) & _
+        " template=" & VTDoubleClickTraceValue(ThisDocument.FullName)
+    If selected Is Nothing Then
+        traceText = traceText & " selection=nothing"
+    Else
+        traceText = traceText & _
+            " selectionStart=" & CStr(selected.Range.Start) & _
+            " selectionEnd=" & CStr(selected.Range.End) & _
+            " selectionType=" & CStr(selected.Type) & _
+            " selectionInlineShapes=" & CStr(selected.InlineShapes.Count)
+    End If
+    If Len(detail) > 0 Then
+        traceText = traceText & _
+            " detail=" & VTDoubleClickTraceValue(detail)
+    End If
+    traceText = traceText & vbLf
+    VTWriteTextAtomic tracePath, traceText
+    Err.Clear
+    On Error GoTo 0
+End Sub
+
+Public Sub VisualTeX_WriteWordDoubleClickDiagnosticMarker()
+    On Error Resume Next
+    VTWriteWordHealth
+    VTTraceWordDoubleClick "manual-diagnostic-marker", Selection, ""
+    VTShowInformation _
+        "VisualTeX Word revision: " & VT_WORD_SOURCE_REVISION & vbCrLf & _
+        "Trace: " & VTApplicationSupportRoot() & _
+        VT_WORD_DOUBLE_CLICK_TRACE_FILE
+    On Error GoTo 0
+End Sub
 
 Private Sub VTTraceWordSession( _
     ByVal sessionId As String, _
