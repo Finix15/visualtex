@@ -69,6 +69,7 @@ export function renderOfficeFormulaArtifacts({
       paddingPx:
         displayMode === "inline" ? 1 : host === "word" ? 2 : 10,
       background: "transparent",
+      forceExplicitBlack: host === "word",
     });
   } catch (reason) {
     throw new Error(

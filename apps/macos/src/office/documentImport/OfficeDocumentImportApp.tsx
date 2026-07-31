@@ -149,18 +149,10 @@ async function prepareFormulaCommitItem(
 
   let metadata: VisualTeXFormulaMetadata;
   if (outputKind === "image") {
-    let pngBase64: string | undefined;
-    try {
-      const { svgToPng } = await import("../../export/svgToPng");
-      pngBase64 = (
-        await svgToPng(svg, { scale: 2, background: "transparent" })
-      ).base64;
-    } catch (reason) {
-      console.warn(
-        "VisualTeX document import could not create the optional PNG fallback",
-        reason,
-      );
-    }
+    const { svgToPng } = await import("../../export/svgToPng");
+    const pngBase64 = (
+      await svgToPng(svg, { scale: 2, background: "transparent" })
+    ).base64;
     const resolvedBaseline = svg.baseline ?? svg.height;
     const reference = calculateReferenceGeometry(
       svg.width,
@@ -191,7 +183,7 @@ async function prepareFormulaCommitItem(
       ommlBase64: omml.ommlBase64,
       ommlDocxBase64: omml.ommlDocxBase64,
       svgBase64: svg.base64,
-      ...(pngBase64 ? { pngBase64 } : {}),
+      pngBase64,
       width: svg.width,
       height: svg.height,
       baseline: resolvedBaseline,

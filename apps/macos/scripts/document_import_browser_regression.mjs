@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { rm } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import process from "node:process";
 import { boundaryValueDocumentSource } from "./fixtures/boundary_value_document_source.mjs";
 import { longPhysicsDocumentSource } from "./fixtures/long_physics_document_source.mjs";
@@ -10,6 +10,12 @@ const debugPort = 23600 + offset;
 const sessionId = "12345678-1234-4234-9234-123456789abc";
 const longPhysicsRegression = process.argv.includes("--long-physics");
 const boundaryValueRegression = process.argv.includes("--boundary-value");
+const artifactOutputArgument = process.argv.find((argument) =>
+  argument.startsWith("--artifact-output="),
+);
+const artifactOutputPath = artifactOutputArgument?.slice(
+  "--artifact-output=".length,
+) ?? "";
 if (longPhysicsRegression && boundaryValueRegression) {
   throw new Error("Choose only one document import fixture regression");
 }
@@ -18,6 +24,40 @@ const baseUrl = `http://127.0.0.1:${previewPort}/?view=office-document-import&se
 const chromeProfile = `/tmp/visualtex-document-import-${process.pid}`;
 const chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function assertWordCompatibleSvg(value, formulaId) {
+  const svg = Buffer.from(value, "base64").toString("utf8");
+  if (!/(?:fill|stroke)=["']#000000["']/i.test(svg)) {
+    throw new Error(`Formula ${formulaId} SVG has no explicit black formula paint`);
+  }
+  if (
+    /currentColor|var\(|(?:fill|stroke|color)\s*[:=]\s*["']?(?:inherit|white|#fff(?:fff)?)/i.test(
+      svg,
+    )
+  ) {
+    throw new Error(`Formula ${formulaId} SVG retains a deferred or white paint`);
+  }
+}
+
+function assertRenderedPngPreview(value, formulaId) {
+  if (typeof value !== "string" || !value) {
+    throw new Error(`Formula ${formulaId} is missing its PNG compatibility preview`);
+  }
+  const bytes = Buffer.from(value, "base64");
+  if (
+    bytes.length < 24 ||
+    !bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+  ) {
+    throw new Error(`Formula ${formulaId} has an invalid PNG compatibility preview`);
+  }
+  const width = bytes.readUInt32BE(16);
+  const height = bytes.readUInt32BE(20);
+  if (width <= 1 || height <= 1 || bytes.length <= 70) {
+    throw new Error(
+      `Formula ${formulaId} used a transparent placeholder PNG (${width}x${height}, ${bytes.length} bytes)`,
+    );
+  }
+}
 
 async function waitFor(url, timeoutMs = 15_000) {
   const started = Date.now();
@@ -375,13 +415,17 @@ y &= z
       const validOutput = longPhysicsRegression
         ? !formula.svgBase64 && !formula.pngBase64
         : formula.svgBase64 &&
-          !formula.pngBase64 &&
+          formula.pngBase64 &&
           formula.width > 0 &&
           formula.height > 0;
       if (!validCommon || !validOutput) {
         throw new Error(
           `Document formula regression payload is invalid: ${JSON.stringify(formula)}`,
         );
+      }
+      if (!longPhysicsRegression) {
+        assertWordCompatibleSvg(formula.svgBase64, formula.formulaId);
+        assertRenderedPngPreview(formula.pngBase64, formula.formulaId);
       }
     }
     if (new Set(formulas.map((formula) => formula.formulaId)).size !== formulas.length) {
@@ -449,6 +493,23 @@ y &= z
       }
     }
 
+    if (artifactOutputPath) {
+      await writeFile(
+        artifactOutputPath,
+        JSON.stringify(
+          {
+            schema: "visualtex-word-browser-artifacts-v1",
+            outputKind: input.outputKind,
+            formulas,
+            texts,
+          },
+          null,
+          2,
+        ),
+        { mode: 0o600 },
+      );
+    }
+
     const closed = await evaluate(
       `window.__VISUALTEX_DOCUMENT_IMPORT_CLOSED__ === true`,
     );
@@ -461,7 +522,7 @@ y &= z
       fontSizePt: formula.fontSizePt,
       hasOmml: Boolean(formula.ommlBase64),
       hasSvg: Boolean(formula.svgBase64),
-      usesBackendPngFallback: !formula.pngBase64,
+      hasPng: Boolean(formula.pngBase64),
     })) }, null, 2));
     console.log("Document import browser regression passed");
   } finally {

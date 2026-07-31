@@ -145,6 +145,74 @@ function assertSelfContained(svg: string) {
   }
 }
 
+const WORD_EXPLICIT_BLACK = "#000000";
+
+function wordCompatiblePaintValue(value: string) {
+  const trimmed = value.trim();
+  if (/^(?:none|transparent)$/i.test(trimmed)) {
+    return trimmed.toLowerCase();
+  }
+  return WORD_EXPLICIT_BLACK;
+}
+
+function removeCssCustomProperties(value: string) {
+  return value.replace(
+    /(^|[;{])\s*--[a-zA-Z0-9_-]+\s*:[^;}]*;?/g,
+    "$1",
+  );
+}
+
+function forceStylePaintBlack(value: string) {
+  return removeCssCustomProperties(value).replace(
+    /(^|[;{]\s*)(color|fill|stroke)\s*:\s*([^;}]+)/gi,
+    (_match, prefix: string, property: string, paint: string) =>
+      `${prefix}${property}:${wordCompatiblePaintValue(paint)}`,
+  );
+}
+
+/**
+ * Word 16.89 can initially paint an SVG formula as transparent when its first
+ * resolved colour comes from currentColor, a CSS variable, a white inherited
+ * paint, or another deferred style carrier. Normalize every SVG paint carrier
+ * before either the SVG or PNG is emitted so both compatibility representations
+ * are byte-for-byte derived from the same explicit-black artwork.
+ */
+function forceWordCompatibleBlack(svg: string) {
+  let output = svg.replace(/currentColor/gi, WORD_EXPLICIT_BLACK);
+  output = output.replace(
+    /\b(color|fill|stroke)=(['"])(.*?)\2/gi,
+    (_match, property: string, quote: string, paint: string) =>
+      `${property}=${quote}${wordCompatiblePaintValue(paint)}${quote}`,
+  );
+  output = output.replace(
+    /\bstyle=(['"])(.*?)\1/gi,
+    (_match, quote: string, style: string) =>
+      `style=${quote}${forceStylePaintBlack(style)}${quote}`,
+  );
+  output = output.replace(
+    /<style\b([^>]*)>([\s\S]*?)<\/style>/gi,
+    (_match, attributes: string, css: string) =>
+      `<style${attributes}>${forceStylePaintBlack(css)}</style>`,
+  );
+
+  const lower = output.toLowerCase();
+  if (
+    lower.includes("currentcolor") ||
+    lower.includes("var(") ||
+    /\b(?:color|fill|stroke)\s*[:=]\s*['"]?(?:inherit|white|#fff(?:fff)?)(?:['";\s>]|$)/i.test(
+      output,
+    )
+  ) {
+    throw new Error(
+      "Word SVG export still contains a deferred or white paint style.",
+    );
+  }
+  if (!/\b(?:fill|stroke)=["']#000000["']/i.test(output)) {
+    throw new Error("Word SVG export is missing explicit black formula paint.");
+  }
+  return output;
+}
+
 function encodeUtf8Base64(value: string) {
   const bytes = new TextEncoder().encode(value);
   let binary = "";
@@ -206,7 +274,10 @@ export function latexToSvg(
         attributes ? ` ${attributes}` : ""
       }>`;
     })
-    .replaceAll("currentColor", "#111111");
+    .replace(
+      /currentColor/gi,
+      options.forceExplicitBlack ? WORD_EXPLICIT_BLACK : "#111111",
+    );
 
   const openingEnd = svg.indexOf(">");
   if (options.background === "white") {
@@ -218,6 +289,10 @@ export function latexToSvg(
     // entire formula bounds selectable and double-clickable at normal zoom.
     const hitTarget = `<rect x="${padded.x}" y="${padded.y}" width="${padded.width}" height="${padded.height}" fill="#000000" fill-opacity="0.001"/>`;
     svg = `${svg.slice(0, openingEnd + 1)}${hitTarget}${svg.slice(openingEnd + 1)}`;
+  }
+
+  if (options.forceExplicitBlack) {
+    svg = forceWordCompatibleBlack(svg);
   }
 
   assertSelfContained(svg);
@@ -241,6 +316,45 @@ function blobToBase64(blob: Blob) {
     };
     reader.readAsDataURL(blob);
   });
+}
+
+function pngDataUrlToBlob(value: string) {
+  const prefix = "data:image/png;base64,";
+  if (!value.startsWith(prefix)) {
+    throw new Error("Canvas did not produce a PNG data URL.");
+  }
+  const binary = atob(value.slice(prefix.length));
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return new Blob([bytes], { type: "image/png" });
+}
+
+async function encodeCanvasPng(canvas: HTMLCanvasElement) {
+  if (typeof canvas.toBlob === "function") {
+    const blob = await new Promise<Blob | null>((resolve) => {
+      let settled = false;
+      const finish = (value: Blob | null) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        resolve(value);
+      };
+      const timeout = window.setTimeout(() => finish(null), 750);
+      try {
+        canvas.toBlob(finish, "image/png");
+      } catch {
+        finish(null);
+      }
+    });
+    if (blob) return blob;
+  }
+
+  // WKWebView can expose canvas.toBlob() but return null for SVG-backed
+  // canvases. toDataURL() uses a different WebKit encoding path and is stable
+  // on the same canvas, so use it as the required Word compatibility fallback.
+  return pngDataUrlToBlob(canvas.toDataURL("image/png"));
 }
 
 export async function svgToPng(
@@ -275,13 +389,23 @@ export async function svgToPng(
   }
   context.drawImage(image, 0, 0, width, height);
 
-  const blob = await new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob(
-      (value) =>
-        value ? resolve(value) : reject(new Error("Unable to encode PNG output.")),
-      "image/png",
-    );
-  });
+  const pixels = context.getImageData(0, 0, width, height).data;
+  let hasVisibleInk = false;
+  for (let index = 0; index < pixels.length; index += 4) {
+    const alpha = pixels[index + 3];
+    if (
+      alpha >= 16 &&
+      (pixels[index] < 245 || pixels[index + 1] < 245 || pixels[index + 2] < 245)
+    ) {
+      hasVisibleInk = true;
+      break;
+    }
+  }
+  if (!hasVisibleInk) {
+    throw new Error("PNG rasterization produced no visible formula ink.");
+  }
+
+  const blob = await encodeCanvasPng(canvas);
   return {
     blob,
     base64: await blobToBase64(blob),

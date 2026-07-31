@@ -217,6 +217,7 @@ for (const testCase of multilineCases) {
       fontSizePt: 14,
       paddingPx: 2,
       background: "transparent",
+      forceExplicitBlack: true,
     });
     assert.equal(
       rendered.canonicalLatex,
@@ -239,6 +240,16 @@ for (const testCase of multilineCases) {
     assert.equal(wordRendered.svg.width, firstWordImportSvg.width);
     assert.equal(wordRendered.svg.height, firstWordImportSvg.height);
     assert.equal(wordRendered.svg.baseline, firstWordImportSvg.baseline);
+    assert.ok(
+      /(?:fill|stroke)=["']#000000["']/i.test(wordRendered.svg.svg),
+      `${testCase.name} Word SVG must contain explicit black formula paint`,
+    );
+    assert.ok(
+      !/currentColor|var\(|(?:fill|stroke|color)\s*[:=]\s*["']?(?:inherit|white|#fff(?:fff)?)/i.test(
+        wordRendered.svg.svg,
+      ),
+      `${testCase.name} Word SVG must not defer or whiten formula paint`,
+    );
     assert.ok(
       wordRendered.svg.height < rendered.svg.height,
       `${testCase.name} Word bounds must be tighter than PowerPoint bounds`,

@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   copyFileSync,
   existsSync,
@@ -11,7 +12,8 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { zipSync, strToU8 } from "fflate";
+import { unzipSync, zipSync, strToU8 } from "fflate";
+import { inflateSync } from "node:zlib";
 import { latexToSvg } from "../src/export/latexToSvg.ts";
 import {
   createFormulaMetadata,
@@ -53,6 +55,10 @@ const physicalScreenBoundsPath = join(
   runtimeRoot,
   "physical-double-click-screen-bounds.txt",
 );
+const pictureRoutingPerformancePath = join(
+  runtimeRoot,
+  "picture-routing-performance.txt",
+);
 const workspaceVisualTeXBinary = join(
   repositoryRoot,
   "src-tauri/target/release/bundle/macos/VisualTeX.app/Contents/MacOS/visualtex",
@@ -78,13 +84,46 @@ const reopenedDocumentPath = join(
   officeScratchRoot,
   `document-import-reopen-${process.pid}.docx`,
 );
+const firstFrameDocumentPath = join(
+  officeScratchRoot,
+  `word-image-first-frame-${process.pid}.docx`,
+);
+const firstFramePdfPath = join(
+  officeScratchRoot,
+  `word-image-first-frame-${process.pid}.pdf`,
+);
+const firstFrameScrolledPdfPath = join(
+  officeScratchRoot,
+  `word-image-first-frame-scrolled-${process.pid}.pdf`,
+);
+const firstFrameReopenedPdfPath = join(
+  officeScratchRoot,
+  `word-image-first-frame-reopened-${process.pid}.pdf`,
+);
+const finalBinaryPhysicalStatusPath = join(
+  officeScratchRoot,
+  "final-binary-physical-double-click.json",
+);
+const pictureRoutingFixturePng = join(
+  officeScratchRoot,
+  "picture-routing-fixture.png",
+);
+const pictureRoutingBrowserArtifactsPath = join(
+  officeScratchRoot,
+  "word-first-frame-browser-artifacts.json",
+);
 const sessionsRoot = join(runtimeRoot, "OfficeSessions");
 const nativeRoot = join(runtimeRoot, "NativeDocuments");
 const physicalDoubleClick = process.argv.includes("--physical-double-click");
-const createImageRegression = process.argv.includes("--create-image");
+const createImagePhysicalRegression = process.argv.includes(
+  "--create-image-physical-double-click",
+);
+const createImageRegression =
+  process.argv.includes("--create-image") || createImagePhysicalRegression;
 const physicalTargets = new Set([
   "image-inline",
   "image-block",
+  "image-numbered",
   "image-align",
   "image-align-star",
   "omml-inline",
@@ -112,6 +151,34 @@ function commandLineOption(name) {
 }
 
 const physicalTarget = commandLineOption("--physical-target");
+const pictureRoutingTarget = commandLineOption("--picture-routing-target");
+const pictureRoutingPerformanceValue = commandLineOption(
+  "--picture-routing-performance",
+);
+const pictureRoutingPerformance = pictureRoutingPerformanceValue
+  ? Number.parseInt(pictureRoutingPerformanceValue, 10)
+  : 0;
+if (
+  pictureRoutingPerformanceValue &&
+  ![1, 100, 1000].includes(pictureRoutingPerformance)
+) {
+  throw new Error(
+    `--picture-routing-performance must be 1, 100 or 1000: ${pictureRoutingPerformanceValue}`,
+  );
+}
+const pictureRoutingTargets = new Set([
+  "ordinary-inline",
+  "ordinary-floating",
+  "forged-prefix",
+  "damaged-metadata",
+]);
+if (pictureRoutingTarget && !pictureRoutingTargets.has(pictureRoutingTarget)) {
+  throw new Error(`Unknown --picture-routing-target: ${pictureRoutingTarget}`);
+}
+const requestedWordAddinPath = commandLineOption("--word-addin");
+const activeTemplatePath = requestedWordAddinPath || templatePath;
+const firstFrameArtifactPath = commandLineOption("--first-frame-artifacts");
+const firstFrameImageRegression = Boolean(firstFrameArtifactPath);
 const itemLimitOption = commandLineOption("--item-limit");
 const diagnosticItemLimit = itemLimitOption ? Number(itemLimitOption) : 17;
 if (
@@ -133,8 +200,16 @@ if (!physicalDoubleClick && physicalTarget) {
 if (createImageRegression && physicalDoubleClick) {
   throw new Error("--create-image cannot be combined with --physical-double-click");
 }
+if (
+  firstFrameImageRegression &&
+  (createImageRegression || physicalDoubleClick || pictureRoutingTarget || pictureRoutingPerformance || process.argv.includes("--image"))
+) {
+  throw new Error(
+    "--first-frame-artifacts cannot be combined with --create-image, --image, --physical-double-click or --picture-routing-target",
+  );
+}
 const physicalOutputKind = physicalTarget.split("-", 1)[0];
-const outputKind = createImageRegression
+const outputKind = createImageRegression || firstFrameImageRegression
   ? "image"
   : physicalDoubleClick
     ? physicalOutputKind
@@ -163,6 +238,55 @@ const transparentPng = Buffer.from(
   "base64",
 );
 const sleep = (ms) => new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
+
+function wordPictureFormatUiSnapshot() {
+  const raw = runAppleScript([
+    'tell application "System Events"',
+    'if not (exists process "Microsoft Word") then return ""',
+    'tell process "Microsoft Word"',
+    'set output to ""',
+    'repeat with targetWindow in windows',
+    'try\nset output to output & "window:" & (name of targetWindow as text) & linefeed\nend try',
+    'try\nrepeat with targetSheet in sheets of targetWindow\nset output to output & "sheet:" & (name of targetSheet as text) & linefeed\nend repeat\nend try',
+    'end repeat',
+    'try\nset output to output & "ui:" & (entire contents of front window as text)\nend try',
+    'return output',
+    'end tell',
+    'end tell',
+  ], 30_000);
+  const normalized = raw.toLowerCase();
+  const pictureFormatMarkers = [
+    "设置图片格式",
+    "图片格式",
+    "format picture",
+    "picture format",
+  ];
+  return {
+    raw,
+    pictureFormatVisible: pictureFormatMarkers.some((marker) =>
+      normalized.includes(marker.toLowerCase()),
+    ),
+  };
+}
+
+async function invokeWordFormatPictureCommand(testDocumentName) {
+  const child = spawn(
+    "/usr/bin/osascript",
+    [
+      "-e",
+      'tell application "Microsoft Word"',
+      "-e",
+      `activate object document ${JSON.stringify(testDocumentName)}`,
+      "-e",
+      'run VB macro macro name "FormatPicture"',
+      "-e",
+      "end tell",
+    ],
+    { stdio: "ignore" },
+  );
+  await sleep(1_200);
+  return child;
+}
 
 async function stopVisualTeXForManualWordCallback() {
   spawnSync("/usr/bin/killall", ["visualtex"], {
@@ -434,6 +558,383 @@ function calculateImageGeometry(svg, fontSizePt) {
   };
 }
 
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function paethPredictor(left, above, upperLeft) {
+  const estimate = left + above - upperLeft;
+  const leftDistance = Math.abs(estimate - left);
+  const aboveDistance = Math.abs(estimate - above);
+  const upperLeftDistance = Math.abs(estimate - upperLeft);
+  if (leftDistance <= aboveDistance && leftDistance <= upperLeftDistance) return left;
+  return aboveDistance <= upperLeftDistance ? above : upperLeft;
+}
+
+function decodePngPixels(bytes, label) {
+  const png = Buffer.from(bytes);
+  if (
+    png.length < 33 ||
+    !png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+  ) {
+    throw new Error(`${label} is not a valid PNG`);
+  }
+  let offset = 8;
+  let width = 0;
+  let height = 0;
+  let bitDepth = 0;
+  let colorType = -1;
+  let interlace = -1;
+  let palette = null;
+  let paletteAlpha = null;
+  const compressed = [];
+  while (offset + 12 <= png.length) {
+    const length = png.readUInt32BE(offset);
+    const type = png.subarray(offset + 4, offset + 8).toString("ascii");
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + length;
+    if (dataEnd + 4 > png.length) throw new Error(`${label} has a truncated ${type} chunk`);
+    const data = png.subarray(dataStart, dataEnd);
+    if (type === "IHDR") {
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+      bitDepth = data[8];
+      colorType = data[9];
+      interlace = data[12];
+    } else if (type === "PLTE") {
+      palette = data;
+    } else if (type === "tRNS") {
+      paletteAlpha = data;
+    } else if (type === "IDAT") {
+      compressed.push(data);
+    } else if (type === "IEND") {
+      break;
+    }
+    offset = dataEnd + 4;
+  }
+  if (
+    width <= 1 ||
+    height <= 1 ||
+    bitDepth !== 8 ||
+    interlace !== 0 ||
+    ![0, 2, 3, 4, 6].includes(colorType) ||
+    compressed.length === 0
+  ) {
+    throw new Error(
+      `${label} uses an unsupported PNG layout: ${JSON.stringify({ width, height, bitDepth, colorType, interlace })}`,
+    );
+  }
+  const bytesPerPixel = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 }[colorType];
+  const stride = width * bytesPerPixel;
+  const inflated = inflateSync(Buffer.concat(compressed));
+  if (inflated.length !== (stride + 1) * height) {
+    throw new Error(`${label} PNG scanline size is inconsistent`);
+  }
+  const reconstructed = Buffer.alloc(stride * height);
+  let sourceOffset = 0;
+  for (let row = 0; row < height; row += 1) {
+    const filter = inflated[sourceOffset];
+    sourceOffset += 1;
+    const rowOffset = row * stride;
+    for (let column = 0; column < stride; column += 1) {
+      const raw = inflated[sourceOffset + column];
+      const left = column >= bytesPerPixel
+        ? reconstructed[rowOffset + column - bytesPerPixel]
+        : 0;
+      const above = row > 0 ? reconstructed[rowOffset - stride + column] : 0;
+      const upperLeft = row > 0 && column >= bytesPerPixel
+        ? reconstructed[rowOffset - stride + column - bytesPerPixel]
+        : 0;
+      let value;
+      if (filter === 0) value = raw;
+      else if (filter === 1) value = raw + left;
+      else if (filter === 2) value = raw + above;
+      else if (filter === 3) value = raw + Math.floor((left + above) / 2);
+      else if (filter === 4) value = raw + paethPredictor(left, above, upperLeft);
+      else throw new Error(`${label} uses unknown PNG filter ${filter}`);
+      reconstructed[rowOffset + column] = value & 0xff;
+    }
+    sourceOffset += stride;
+  }
+
+  const rgba = Buffer.alloc(width * height * 4);
+  let visiblePixels = 0;
+  let darkVisiblePixels = 0;
+  let minInkX = width;
+  let maxInkX = -1;
+  let minInkY = height;
+  let maxInkY = -1;
+  for (let pixel = 0; pixel < width * height; pixel += 1) {
+    const source = pixel * bytesPerPixel;
+    let red;
+    let green;
+    let blue;
+    let alpha;
+    if (colorType === 0) {
+      red = green = blue = reconstructed[source];
+      alpha = 255;
+    } else if (colorType === 2) {
+      red = reconstructed[source];
+      green = reconstructed[source + 1];
+      blue = reconstructed[source + 2];
+      alpha = 255;
+    } else if (colorType === 3) {
+      const paletteIndex = reconstructed[source];
+      if (!palette || paletteIndex * 3 + 2 >= palette.length) {
+        throw new Error(`${label} references an invalid PNG palette entry`);
+      }
+      red = palette[paletteIndex * 3];
+      green = palette[paletteIndex * 3 + 1];
+      blue = palette[paletteIndex * 3 + 2];
+      alpha = paletteAlpha?.[paletteIndex] ?? 255;
+    } else if (colorType === 4) {
+      red = green = blue = reconstructed[source];
+      alpha = reconstructed[source + 1];
+    } else {
+      red = reconstructed[source];
+      green = reconstructed[source + 1];
+      blue = reconstructed[source + 2];
+      alpha = reconstructed[source + 3];
+    }
+    const target = pixel * 4;
+    rgba[target] = red;
+    rgba[target + 1] = green;
+    rgba[target + 2] = blue;
+    rgba[target + 3] = alpha;
+    if (alpha >= 16) {
+      visiblePixels += 1;
+      const x = pixel % width;
+      const y = Math.floor(pixel / width);
+      minInkX = Math.min(minInkX, x);
+      maxInkX = Math.max(maxInkX, x);
+      minInkY = Math.min(minInkY, y);
+      maxInkY = Math.max(maxInkY, y);
+      if (red < 245 || green < 245 || blue < 245) darkVisiblePixels += 1;
+    }
+  }
+  if (darkVisiblePixels === 0) {
+    throw new Error(`${label} contains no dark non-transparent formula pixels`);
+  }
+  return {
+    width,
+    height,
+    visiblePixels,
+    darkVisiblePixels,
+    coverage: visiblePixels / (width * height),
+    inkBounds: {
+      minX: minInkX,
+      maxX: maxInkX,
+      minY: minInkY,
+      maxY: maxInkY,
+      width: maxInkX - minInkX + 1,
+      height: maxInkY - minInkY + 1,
+    },
+    pixelHash: sha256(rgba),
+  };
+}
+
+function assertEquivalentPngArtwork(frontend, final, label) {
+  if (frontend.pixelHash === final.pixelHash) return { mode: "exact-pixels" };
+  const widthScale = final.width / frontend.width;
+  const heightScale = final.height / frontend.height;
+  const frontendAspect = frontend.inkBounds.width / frontend.inkBounds.height;
+  const finalAspect = final.inkBounds.width / final.inkBounds.height;
+  const normalizedBounds = {
+    minX: Math.abs(frontend.inkBounds.minX / frontend.width - final.inkBounds.minX / final.width),
+    maxX: Math.abs(frontend.inkBounds.maxX / frontend.width - final.inkBounds.maxX / final.width),
+    minY: Math.abs(frontend.inkBounds.minY / frontend.height - final.inkBounds.minY / final.height),
+    maxY: Math.abs(frontend.inkBounds.maxY / frontend.height - final.inkBounds.maxY / final.height),
+  };
+  const coverageDifference = Math.abs(frontend.coverage - final.coverage);
+  const aspectDifference = Math.abs(frontendAspect - finalAspect) / frontendAspect;
+  if (
+    widthScale < 0.5 ||
+    widthScale > 4 ||
+    Math.abs(widthScale - heightScale) > 0.08 ||
+    Object.values(normalizedBounds).some((difference) => difference > 0.04) ||
+    coverageDifference > 0.08 ||
+    aspectDifference > 0.08
+  ) {
+    throw new Error(
+      `${label} PNG cache does not preserve the frontend artwork: ${JSON.stringify({ frontend, final, widthScale, heightScale, normalizedBounds, coverageDifference, aspectDifference })}`,
+    );
+  }
+  return {
+    mode: "word-regenerated-scaled-cache",
+    widthScale,
+    heightScale,
+    normalizedBounds,
+    coverageDifference,
+    aspectDifference,
+  };
+}
+
+function assertWordCompatibleSvgMarkup(svg, label) {
+  if (!/(?:fill|stroke)=["']#000000["']/i.test(svg)) {
+    throw new Error(`${label} has no explicit #000000 formula paint`);
+  }
+  if (
+    /currentColor|var\(|(?:fill|stroke|color)\s*[:=]\s*["']?(?:inherit|white|#fff(?:fff)?)/i.test(
+      svg,
+    )
+  ) {
+    throw new Error(`${label} retains currentColor, CSS variables, inheritance or white paint`);
+  }
+}
+
+function browserFormulaArtifact(formula, artifactDirectory, index) {
+  if (
+    !formula?.formulaId ||
+    !formula.svgBase64 ||
+    !formula.pngBase64 ||
+    !formula.ommlBase64 ||
+    !formula.ommlDocxBase64 ||
+    !formula.metadata ||
+    !Number.isFinite(formula.width) ||
+    !Number.isFinite(formula.height)
+  ) {
+    throw new Error(`Browser formula ${index + 1} is incomplete`);
+  }
+  const svgBytes = Buffer.from(formula.svgBase64, "base64");
+  const pngBytes = Buffer.from(formula.pngBase64, "base64");
+  const svgMarkup = svgBytes.toString("utf8");
+  assertWordCompatibleSvgMarkup(svgMarkup, `Browser formula ${index + 1} SVG`);
+  const frontendPng = decodePngPixels(pngBytes, `Browser formula ${index + 1} PNG`);
+  const geometry = calculateImageGeometry(
+    {
+      width: formula.width,
+      height: formula.height,
+      baseline: formula.baseline ?? formula.height,
+    },
+    formula.fontSizePt,
+  );
+  const stem = `first-frame-${index + 1}-${compactFormulaId(formula.formulaId)}`;
+  const imagePath = join(artifactDirectory, `${stem}.svg`);
+  const fallbackImagePath = join(artifactDirectory, `${stem}.png`);
+  const vectorDocumentPath = join(artifactDirectory, `${stem}-svg.docx`);
+  const nativePath = join(nativeRoot, `${formula.formulaId}.docx`);
+  writeFileSync(imagePath, svgBytes, { mode: 0o600 });
+  writeFileSync(fallbackImagePath, pngBytes, { mode: 0o600 });
+  writeFileSync(
+    vectorDocumentPath,
+    wordSvgDocxBytes(svgMarkup, pngBytes, geometry.widthPoints, geometry.heightPoints),
+    { mode: 0o600 },
+  );
+  writeFileSync(nativePath, Buffer.from(formula.ommlDocxBase64, "base64url"), {
+    mode: 0o600,
+  });
+  return {
+    formulaId: formula.formulaId,
+    latex: formula.latex,
+    metadata: encodeFormulaMetadata(formula.metadata),
+    metadataLines: formula.metadata.lines?.map((line) => line.latex) ?? [],
+    codeFormat: formula.metadata.codeFormat,
+    displayMode: formula.displayMode,
+    numbered: Boolean(formula.numbered),
+    fontSizePt: Number(formula.fontSizePt),
+    ommlBase64: formula.ommlBase64,
+    nativePath,
+    imagePath,
+    vectorDocumentPath,
+    fallbackImagePath,
+    widthPoints: geometry.widthPoints,
+    heightPoints: geometry.heightPoints,
+    baseline: geometry.baseline,
+    referenceWidthPt: geometry.referenceWidthPt,
+    referenceHeightPt: geometry.referenceHeightPt,
+    referenceBaselinePt: geometry.referenceBaselinePt,
+    frontendPngHash: sha256(pngBytes),
+    frontendPngPixelHash: frontendPng.pixelHash,
+    frontendSvgHash: sha256(svgBytes),
+    frontendPng,
+  };
+}
+
+function relationshipMap(xml) {
+  const relationships = new Map();
+  for (const match of xml.matchAll(
+    /<Relationship\b[^>]*\bId="([^"]+)"[^>]*\bTarget="([^"]+)"[^>]*\/?\s*>/g,
+  )) {
+    relationships.set(match[1], match[2]);
+  }
+  return relationships;
+}
+
+function inspectSavedWordImagePackage(docxPath, formulas, stage) {
+  const archive = unzipSync(readFileSync(docxPath));
+  const readEntry = (path) => {
+    const value = archive[path];
+    if (!value) throw new Error(`${stage} DOCX is missing ${path}`);
+    return Buffer.from(value);
+  };
+  const documentXml = readEntry("word/document.xml").toString("utf8");
+  const relationshipsXml = readEntry("word/_rels/document.xml.rels").toString("utf8");
+  const relationships = relationshipMap(relationshipsXml);
+  const pairs = [];
+  for (const block of documentXml.matchAll(/<a:blip\b[\s\S]*?<\/a:blip>/g)) {
+    const pngRelationship = block[0].match(/\br:embed="([^"]+)"/i)?.[1];
+    const svgRelationship = block[0].match(
+      /<asvg:svgBlip\b[^>]*\br:embed="([^"]+)"/i,
+    )?.[1];
+    if (pngRelationship && svgRelationship) {
+      pairs.push({ pngRelationship, svgRelationship });
+    }
+  }
+  if (pairs.length !== formulas.length) {
+    throw new Error(
+      `${stage} DOCX has ${pairs.length} SVG/PNG relationship pairs for ${formulas.length} formulas`,
+    );
+  }
+  const formulaReports = pairs.map((pair, index) => {
+    const formula = formulas[index];
+    const pngTarget = relationships.get(pair.pngRelationship);
+    const svgTarget = relationships.get(pair.svgRelationship);
+    if (!pngTarget || !svgTarget) {
+      throw new Error(`${stage} formula ${index + 1} has unresolved image relationships`);
+    }
+    const pngPath = `word/${pngTarget.replace(/^\.\//, "")}`;
+    const svgPath = `word/${svgTarget.replace(/^\.\//, "")}`;
+    const finalPngBytes = readEntry(pngPath);
+    const finalSvgBytes = readEntry(svgPath);
+    const finalPng = decodePngPixels(finalPngBytes, `${stage} formula ${index + 1} PNG`);
+    const finalSvg = finalSvgBytes.toString("utf8");
+    assertWordCompatibleSvgMarkup(finalSvg, `${stage} formula ${index + 1} SVG`);
+    const finalPngHash = sha256(finalPngBytes);
+    const finalSvgHash = sha256(finalSvgBytes);
+    const pngByteHashMatches = finalPngHash === formula.frontendPngHash;
+    const pngPixelHashMatches = finalPng.pixelHash === formula.frontendPngPixelHash;
+    const pngArtworkComparison = assertEquivalentPngArtwork(
+      formula.frontendPng,
+      finalPng,
+      `${stage} formula ${index + 1}`,
+    );
+    const svgByteHashMatches = finalSvgHash === formula.frontendSvgHash;
+    return {
+      formulaId: formula.formulaId,
+      pngPath,
+      svgPath,
+      pngRelationship: pair.pngRelationship,
+      svgRelationship: pair.svgRelationship,
+      frontendPngHash: formula.frontendPngHash,
+      pngHash: finalPngHash,
+      pngByteHashMatches,
+      pngPixelHashMatches,
+      pngArtworkComparison,
+      frontendSvgHash: formula.frontendSvgHash,
+      svgHash: finalSvgHash,
+      svgByteHashMatches,
+      png: finalPng,
+    };
+  });
+  return {
+    stage,
+    alternateContentCount: (documentXml.match(/<mc:AlternateContent\b/g) ?? []).length,
+    blipCount: (documentXml.match(/<a:blip\b/g) ?? []).length,
+    svgBlipCount: (documentXml.match(/<asvg:svgBlip\b/g) ?? []).length,
+    formulaReports,
+  };
+}
+
 function svgRelationshipPositions(svgMarkup) {
   const relationshipPattern =
     /<g data-mml-node="mtd" transform="translate\(([-+\d.]+),[-+\d.]+\)">(?:(?!<g data-mml-node="mtd")[\s\S])*?<g data-mml-node="mo" transform="translate\(([-+\d.]+),[-+\d.]+\)"><use data-c="3D"/g;
@@ -659,7 +1160,7 @@ function runFormulaRegressionReport(testDocumentName, formulas) {
   const report = parseRegressionReport(
     readFileSync(formulaRegressionStatusPath, "utf8"),
   );
-  if (report.revision !== "word-double-click-routing-20260730-r66") {
+  if (report.revision !== "word-double-click-routing-20260731-r67") {
     throw new Error(`Word loaded the wrong VisualTeX source revision: ${report.revision}`);
   }
 
@@ -1487,6 +1988,7 @@ function formulaItem({
       fontSizePt: referenceFontSizePt,
       paddingPx: displayMode === "inline" ? 1 : wordDisplayPaddingPx,
       background: "transparent",
+      forceExplicitBlack: true,
     });
     const geometry = calculateImageGeometry(svg, fontSizePt);
     ({
@@ -1760,6 +2262,149 @@ function appendFormula(entries, index, formula, paragraph) {
   appendParagraphMetadata(entries, index, paragraph);
 }
 
+function exportWordPdfWithoutSelectingFormula(
+  testDocumentName,
+  outputPath,
+  label,
+) {
+  rmSync(outputPath, { force: true });
+  rmSync(pdfExportStatusPath, { force: true });
+  writeFileSync(pdfExportRequestPath, outputPath, { mode: 0o600 });
+  runAppleScript([
+    'tell application "Microsoft Word"',
+    `activate object document ${JSON.stringify(testDocumentName)}`,
+    'run VB macro macro name "VisualTeX_ExportActiveDocumentPdfForRegression"',
+    "end tell",
+  ], 90_000);
+  const exportStatus = existsSync(pdfExportStatusPath)
+    ? readFileSync(pdfExportStatusPath, "utf8").trim()
+    : "missing-status";
+  if (!exportStatus.startsWith("ok|") || !existsSync(outputPath)) {
+    throw new Error(`${label} PDF export failed: ${exportStatus}`);
+  }
+}
+
+function pdfRasterSummary(pdfPath, label, minimumBands = 1) {
+  const result = spawnSync(
+    "/usr/bin/swift",
+    [
+      join(repositoryRoot, "scripts/pdf_formula_geometry.swift"),
+      pdfPath,
+      "--raster-only",
+    ],
+    {
+      encoding: "utf8",
+      timeout: 120_000,
+      maxBuffer: 8 * 1024 * 1024,
+    },
+  );
+  if (result.status !== 0) {
+    throw new Error(result.stderr.trim() || `${label} PDF raster extraction failed`);
+  }
+  const geometry = JSON.parse(result.stdout);
+  const bands = geometry.rasterBands ?? [];
+  const components = bands.flatMap((band) => band.components ?? []);
+  if (bands.length < minimumBands || components.length === 0) {
+    throw new Error(
+      `${label} PDF contains insufficient visible formula ink: ${JSON.stringify({ bands: bands.length, components: components.length })}`,
+    );
+  }
+  const minX = Math.min(...components.map((component) => component.minX));
+  const maxX = Math.max(...components.map((component) => component.maxX));
+  const minY = Math.min(...bands.map((band) => band.minY));
+  const maxY = Math.max(...bands.map((band) => band.maxY));
+  return {
+    pageWidth: geometry.pageWidth,
+    pageHeight: geometry.pageHeight,
+    bandCount: bands.length,
+    componentCount: components.length,
+    minX,
+    maxX,
+    minY,
+    maxY,
+    width: maxX - minX,
+    height: maxY - minY,
+  };
+}
+
+function assertEquivalentPdfInk(reference, candidate, label) {
+  const differences = {
+    bandCount: Math.abs(reference.bandCount - candidate.bandCount),
+    componentCount: Math.abs(reference.componentCount - candidate.componentCount),
+    minX: Math.abs(reference.minX - candidate.minX),
+    maxX: Math.abs(reference.maxX - candidate.maxX),
+    minY: Math.abs(reference.minY - candidate.minY),
+    maxY: Math.abs(reference.maxY - candidate.maxY),
+  };
+  if (
+    differences.bandCount !== 0 ||
+    differences.componentCount !== 0 ||
+    differences.minX > 1 ||
+    differences.maxX > 1 ||
+    differences.minY > 1 ||
+    differences.maxY > 1
+  ) {
+    throw new Error(
+      `${label} changed visible PDF ink: ${JSON.stringify({ reference, candidate, differences })}`,
+    );
+  }
+}
+
+function saveUntouchedWordDocument(testDocumentName, outputPath) {
+  rmSync(outputPath, { force: true });
+  try {
+    return runAppleScript([
+      'tell application "Microsoft Word"',
+      `set documentObject to document ${JSON.stringify(testDocumentName)}`,
+      `save as documentObject file name ${JSON.stringify(outputPath)}`,
+      "return name of active document",
+      "end tell",
+    ], 90_000);
+  } catch (error) {
+    if (!existsSync(outputPath)) throw error;
+    return runAppleScript([
+      'tell application "Microsoft Word"',
+      "return name of active document",
+      "end tell",
+    ], 30_000);
+  }
+}
+
+function scrollAwayAndBackWithoutSelectingFormula(testDocumentName) {
+  runAppleScript([
+    'tell application "Microsoft Word"',
+    `activate object document ${JSON.stringify(testDocumentName)}`,
+    "activate",
+    "end tell",
+    'tell application "System Events"',
+    'tell process "Microsoft Word"',
+    "key code 125 using {command down}",
+    "delay 0.7",
+    "key code 126 using {command down}",
+    "delay 0.7",
+    "end tell",
+    "end tell",
+  ], 30_000);
+}
+
+function coldReopenWordDocument(documentPath) {
+  runAppleScript(['tell application "Microsoft Word" to quit saving no'], 30_000);
+  spawnSync("/usr/bin/killall", ["Microsoft Word"], {
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  spawnSync("/bin/sleep", ["2"], { encoding: "utf8" });
+  return runAppleScript([
+    'tell application "Microsoft Word"',
+    `open file name ${JSON.stringify(documentPath)}`,
+    "set reopenedDocument to active document",
+    "activate object reopenedDocument",
+    "activate",
+    "return name of reopenedDocument",
+    "end tell",
+  ], 90_000);
+}
+
 function createdImagePdfInkBounds(testDocumentName, label) {
   rmSync(coordinatePdfPath, { force: true });
   rmSync(pdfExportStatusPath, { force: true });
@@ -1822,7 +2467,397 @@ function assertCreatedImageFormulaInk(bounds, formula, label) {
   }
 }
 
-async function runCreatedImageFormulaRegression(beforeSessions) {
+function writePictureRoutingFixture() {
+  if (!existsSync(pictureRoutingBrowserArtifactsPath)) {
+    throw new Error(
+      `The browser-rendered picture fixture bundle is missing: ${pictureRoutingBrowserArtifactsPath}`,
+    );
+  }
+  const fixtureBundle = JSON.parse(
+    readFileSync(pictureRoutingBrowserArtifactsPath, "utf8"),
+  );
+  const fixturePngBase64 = fixtureBundle.formulas?.[0]?.pngBase64;
+  if (!fixturePngBase64) {
+    throw new Error("The browser-rendered picture fixture has no PNG payload");
+  }
+  writeFileSync(pictureRoutingFixturePng, Buffer.from(fixturePngBase64, "base64"), {
+    mode: 0o600,
+  });
+}
+
+async function runPictureRoutingPerformanceRegression() {
+  writePictureRoutingFixture();
+  const macroName = {
+    1: "VisualTeX_RunPictureRoutingPerformance1",
+    100: "VisualTeX_RunPictureRoutingPerformance100",
+    1000: "VisualTeX_RunPictureRoutingPerformance1000",
+  }[pictureRoutingPerformance];
+  rmSync(pictureRoutingPerformancePath, { force: true });
+  runAppleScript([
+    'tell application "Microsoft Word"',
+    "activate",
+    `run VB macro macro name ${JSON.stringify(macroName)}`,
+    "end tell",
+  ], 300_000);
+  if (!existsSync(pictureRoutingPerformancePath)) {
+    throw new Error("Word did not write the picture-routing performance report");
+  }
+  const raw = readFileSync(pictureRoutingPerformancePath, "utf8").trim();
+  const fields = raw.split("|");
+  if (fields[0] !== "PASS" || fields.length !== 6) {
+    throw new Error(`Picture-routing performance regression failed: ${raw}`);
+  }
+  const report = {
+    requestedFormulaCount: Number(fields[1]),
+    actualFormulaCount: Number(fields[2]),
+    iterations: Number(fields[3]),
+    visualTeXPerCallMs: Number(fields[4]),
+    ordinaryPerCallMs: Number(fields[5]),
+  };
+  if (
+    report.requestedFormulaCount !== pictureRoutingPerformance ||
+    report.actualFormulaCount !== pictureRoutingPerformance ||
+    report.iterations !== 5000 ||
+    !Number.isFinite(report.visualTeXPerCallMs) ||
+    !Number.isFinite(report.ordinaryPerCallMs) ||
+    report.visualTeXPerCallMs > 10 ||
+    report.ordinaryPerCallMs > 10 ||
+    report.visualTeXPerCallMs > report.ordinaryPerCallMs + 1
+  ) {
+    throw new Error(
+      `Picture-routing O(1) benchmark missed its target: ${JSON.stringify(report)}`,
+    );
+  }
+  console.log(
+    JSON.stringify(
+      {
+        kind: "word-picture-routing-performance",
+        ...report,
+        visualTeXTargetMs: 10,
+        ordinaryOverheadToleranceMs: 1,
+      },
+      null,
+      2,
+    ),
+  );
+  console.log("Word picture routing performance regression passed");
+}
+
+async function runPictureRoutingNativeRegression(beforeSessions) {
+  if (!existsSync(pictureRoutingBrowserArtifactsPath)) {
+    throw new Error(
+      `The browser-rendered picture fixture bundle is missing: ${pictureRoutingBrowserArtifactsPath}`,
+    );
+  }
+  writePictureRoutingFixture();
+  const macroName = {
+    "ordinary-inline": "VisualTeX_CreateOrdinaryInlinePictureRegression",
+    "ordinary-floating": "VisualTeX_CreateOrdinaryFloatingPictureRegression",
+    "forged-prefix": "VisualTeX_CreateForgedPrefixPictureRegression",
+    "damaged-metadata": "VisualTeX_CreateDamagedMetadataPictureRegression",
+  }[pictureRoutingTarget];
+  const testDocumentName = runAppleScript([
+    'tell application "Microsoft Word"',
+    "make new document",
+    "set testDocument to active document",
+    "activate object testDocument",
+    "activate",
+    `run VB macro macro name ${JSON.stringify(macroName)}`,
+    "return name of testDocument",
+    "end tell",
+  ], 60_000);
+  const sessionsBeforeClick = currentSessionIds();
+  const physicalClick = physicallyDoubleClickSelectedWordFormula(testDocumentName);
+  await sleep(1_500);
+  const newSessions = [...currentSessionIds()].filter(
+    (sessionId) => !sessionsBeforeClick.has(sessionId),
+  );
+  if (newSessions.length > 0) {
+    throw new Error(
+      `${pictureRoutingTarget} incorrectly created VisualTeX Session(s): ${newSessions.join(",")}`,
+    );
+  }
+  const physicalDoubleClickUi = wordPictureFormatUiSnapshot();
+  const nativeCommandProcess = await invokeWordFormatPictureCommand(testDocumentName);
+  const nativeCommandUi = wordPictureFormatUiSnapshot();
+  const nativeCommandPending =
+    nativeCommandProcess.exitCode === null && nativeCommandProcess.signalCode === null;
+  const sessionsAfterNativeCommand = [...currentSessionIds()].filter(
+    (sessionId) => !sessionsBeforeClick.has(sessionId),
+  );
+  if (sessionsAfterNativeCommand.length > 0) {
+    nativeCommandProcess.kill("SIGTERM");
+    throw new Error(
+      `${pictureRoutingTarget} FormatPicture incorrectly created VisualTeX Session(s): ${sessionsAfterNativeCommand.join(",")}`,
+    );
+  }
+  runAppleScript([
+    'tell application "System Events"',
+    'tell process "Microsoft Word" to key code 53',
+    'end tell',
+  ], 15_000);
+  nativeCommandProcess.kill("SIGTERM");
+  console.log(
+    JSON.stringify(
+      {
+        kind: "word-native-picture-routing",
+        target: pictureRoutingTarget,
+        testDocumentName,
+        physicalClick,
+        physicalDoubleClickUi,
+        nativeCommandUi,
+        nativeCommandPending,
+        nativeCommandDispatchedWithoutVisualTeXSession: true,
+        visualTeXSessionsCreated: newSessions,
+        sessionsBeforeHarness: beforeSessions.size,
+      },
+      null,
+      2,
+    ),
+  );
+  console.log("Word native picture routing regression passed");
+}
+
+async function runFirstFrameImageRegression(beforeSessions) {
+  const browserBundle = JSON.parse(readFileSync(firstFrameArtifactPath, "utf8"));
+  if (
+    browserBundle.schema !== "visualtex-word-browser-artifacts-v1" ||
+    browserBundle.outputKind !== "image" ||
+    !Array.isArray(browserBundle.formulas) ||
+    browserBundle.formulas.length !== 4
+  ) {
+    throw new Error(
+      `Unexpected browser artifact bundle: ${JSON.stringify({ schema: browserBundle.schema, outputKind: browserBundle.outputKind, formulaCount: browserBundle.formulas?.length })}`,
+    );
+  }
+
+  runAppleScript([
+    'tell application "Microsoft Word"',
+    "activate",
+    "end tell",
+  ], 30_000);
+  await sleep(3_000);
+  let testDocumentName = runAppleScript([
+    'tell application "Microsoft Word"',
+    "make new document",
+    "set testDocument to active document",
+    "activate object testDocument",
+    "activate",
+    'run VB macro macro name "VisualTeX_InsertLatexMarkdownDocument"',
+    "return name of testDocument",
+    "end tell",
+  ], 60_000);
+  const sessionId = await waitForNewSession(beforeSessions);
+  sessionDirectory = join(sessionsRoot, sessionId);
+  const request = JSON.parse(
+    readFileSync(join(sessionDirectory, "request.json"), "utf8"),
+  );
+  if (
+    request.operation !== "documentImport" ||
+    request.host !== "word" ||
+    request.sessionId !== sessionId ||
+    !request.sourceDocumentId ||
+    !request.documentImport?.bookmarkName
+  ) {
+    throw new Error(
+      `Unexpected first-frame Word document import request: ${JSON.stringify(request)}`,
+    );
+  }
+  await stopVisualTeXForManualWordCallback();
+
+  const formulas = browserBundle.formulas.map((formula, index) =>
+    browserFormulaArtifact(formula, sessionDirectory, index),
+  );
+  nativeFiles.push(...formulas.map((formula) => formula.nativePath));
+  const inlineParagraphId = crypto.randomUUID();
+  const endingParagraphId = crypto.randomUUID();
+  const items = [];
+  appendText(items, 0, "首帧行内公式：", {
+    id: inlineParagraphId,
+    style: "normal",
+    alignment: "left",
+    listKind: "none",
+    listLevel: 0,
+    start: true,
+    end: false,
+  });
+  appendFormula(items, 1, formulas[0], {
+    id: inlineParagraphId,
+    style: "normal",
+    alignment: "left",
+    listKind: "none",
+    listLevel: 0,
+    start: false,
+    end: false,
+  });
+  appendText(items, 2, "，正文继续。", {
+    id: inlineParagraphId,
+    style: "normal",
+    alignment: "left",
+    listKind: "none",
+    listLevel: 0,
+    start: false,
+    end: true,
+  });
+  for (let index = 1; index < formulas.length; index += 1) {
+    // Display formulas already create and finalize their own Word paragraph.
+    // Supplying text-paragraph boundary metadata here double-finalizes it.
+    appendFormula(items, index + 2, formulas[index]);
+  }
+  appendText(items, 6, "首帧验证结束。", {
+    id: endingParagraphId,
+    style: "normal",
+    alignment: "left",
+    listKind: "none",
+    listLevel: 0,
+    start: true,
+    end: true,
+  });
+
+  const manifestPath = join(sessionDirectory, "document-import.txt");
+  writeFileSync(
+    manifestPath,
+    manifestText([
+      ["protocolVersion", "1"],
+      ["sessionId", sessionId],
+      ["outputKind", "image"],
+      ["sourceDocumentId", request.sourceDocumentId],
+      ["bookmarkName", request.documentImport.bookmarkName],
+      ["itemCount", "7"],
+      ...items,
+    ]),
+    { mode: 0o600 },
+  );
+  writeFileSync(
+    join(sessionDirectory, "dispatch.txt"),
+    manifestText([
+      ["protocolVersion", "1"],
+      ["sessionId", sessionId],
+      ["action", "documentCommit"],
+      ["host", "word"],
+      ["sourceDocumentId", request.sourceDocumentId],
+      ["bookmarkName", request.documentImport.bookmarkName],
+      ["documentImportPath", manifestPath],
+    ]),
+    { mode: 0o600 },
+  );
+  writeFileSync(join(sessionsRoot, "word-active-session.txt"), sessionId, {
+    mode: 0o600,
+  });
+
+  const callbackStatusPath = join(sessionDirectory, "word-callback-status.txt");
+  rmSync(callbackStatusPath, { force: true });
+  runAppleScript([
+    'tell application "Microsoft Word"',
+    `activate object document ${JSON.stringify(testDocumentName)}`,
+    'run VB macro macro name "VisualTeX_ApplyPendingResultForRegression"',
+    "end tell",
+  ], 90_000);
+  const callbackStatus = existsSync(callbackStatusPath)
+    ? readFileSync(callbackStatusPath, "utf8")
+    : "missing-status";
+  if (!callbackStatus.startsWith("PASS")) {
+    throw new Error(`First-frame Word callback failed:\n${callbackStatus}`);
+  }
+
+  // Critical ordering: do not inspect, select or click an InlineShape before
+  // the first PDF and DOCX are produced. These are the untouched Word frame.
+  exportWordPdfWithoutSelectingFormula(
+    testDocumentName,
+    firstFramePdfPath,
+    "Untouched first-frame",
+  );
+  const untouchedPdf = pdfRasterSummary(
+    firstFramePdfPath,
+    "Untouched first-frame",
+    formulas.length,
+  );
+  testDocumentName = saveUntouchedWordDocument(
+    testDocumentName,
+    firstFrameDocumentPath,
+  );
+  const untouchedPackage = inspectSavedWordImagePackage(
+    firstFrameDocumentPath,
+    formulas,
+    "untouched-first-frame",
+  );
+
+  scrollAwayAndBackWithoutSelectingFormula(testDocumentName);
+  exportWordPdfWithoutSelectingFormula(
+    testDocumentName,
+    firstFrameScrolledPdfPath,
+    "Scrolled-away-and-back first-frame",
+  );
+  const scrolledPdf = pdfRasterSummary(
+    firstFrameScrolledPdfPath,
+    "Scrolled-away-and-back first-frame",
+    formulas.length,
+  );
+  assertEquivalentPdfInk(
+    untouchedPdf,
+    scrolledPdf,
+    "Scrolling away and back",
+  );
+
+  testDocumentName = coldReopenWordDocument(firstFrameDocumentPath);
+  exportWordPdfWithoutSelectingFormula(
+    testDocumentName,
+    firstFrameReopenedPdfPath,
+    "Cold-reopened first-frame",
+  );
+  const reopenedPdf = pdfRasterSummary(
+    firstFrameReopenedPdfPath,
+    "Cold-reopened first-frame",
+    formulas.length,
+  );
+  assertEquivalentPdfInk(untouchedPdf, reopenedPdf, "Cold Word restart");
+  const reopenedPackage = inspectSavedWordImagePackage(
+    firstFrameDocumentPath,
+    formulas,
+    "cold-reopened",
+  );
+
+  // Only after every untouched-frame acceptance has passed may the regression
+  // read formula metadata and shape geometry through VBA.
+  const formulaReport = runFormulaRegressionReport(testDocumentName, formulas);
+  console.log(
+    JSON.stringify(
+      {
+        kind: "word-image-untouched-first-frame",
+        sessionId,
+        documentPath: firstFrameDocumentPath,
+        pdfPaths: {
+          untouched: firstFramePdfPath,
+          scrolled: firstFrameScrolledPdfPath,
+          coldReopened: firstFrameReopenedPdfPath,
+        },
+        formulas: formulas.map((formula) => ({
+          formulaId: formula.formulaId,
+          displayMode: formula.displayMode,
+          numbered: formula.numbered,
+          codeFormat: formula.codeFormat,
+          frontendPngHash: formula.frontendPngHash,
+          frontendPngPixelHash: formula.frontendPngPixelHash,
+          frontendSvgHash: formula.frontendSvgHash,
+        })),
+        pdf: { untouched: untouchedPdf, scrolled: scrolledPdf, reopened: reopenedPdf },
+        package: { untouched: untouchedPackage, reopened: reopenedPackage },
+        formulaReport,
+      },
+      null,
+      2,
+    ),
+  );
+  console.log("Word untouched image first-frame integration passed");
+}
+
+async function runCreatedImageFormulaRegression(
+  beforeSessions,
+  runPhysicalDoubleClickAfterReopen = false,
+) {
+  if (runPhysicalDoubleClickAfterReopen) {
+    rmSync(finalBinaryPhysicalStatusPath, { force: true });
+  }
   runAppleScript([
     'tell application "Microsoft Word"',
     "activate",
@@ -1930,49 +2965,143 @@ async function runCreatedImageFormulaRegression(beforeSessions) {
     throw new Error(`Word image-create callback failed:\n${callbackStatus}`);
   }
 
-  const afterCommit = runFormulaRegressionReport(testDocumentName, [formula]);
-  const afterCommitInk = createdImagePdfInkBounds(
-    testDocumentName,
-    "Created dfdfdf formula after commit",
-  );
-  assertCreatedImageFormulaInk(
-    afterCommitInk,
-    formula,
-    "Created dfdfdf formula after commit",
-  );
-  runAppleScript([
-    'tell application "Microsoft Word"',
-    `activate object document ${JSON.stringify(testDocumentName)}`,
-    'run VB macro macro name "VisualTeX_MigrateImageMacroButtons"',
-    "end tell",
-  ], 60_000);
-  const afterNativeNormalization = runFormulaRegressionReport(
-    testDocumentName,
-    [formula],
-  );
-  const afterNativeNormalizationInk = createdImagePdfInkBounds(
-    testDocumentName,
-    "Created dfdfdf formula after native normalization",
-  );
-  assertCreatedImageFormulaInk(
-    afterNativeNormalizationInk,
-    formula,
-    "Created dfdfdf formula after native normalization",
-  );
-  testDocumentName = saveAndReopenWordDocument(testDocumentName);
-  const afterSaveReopen = runFormulaRegressionReport(
-    testDocumentName,
-    [formula],
-  );
-  const afterSaveReopenInk = createdImagePdfInkBounds(
-    testDocumentName,
-    "Created dfdfdf formula after save and reopen",
-  );
-  assertCreatedImageFormulaInk(
-    afterSaveReopenInk,
-    formula,
-    "Created dfdfdf formula after save and reopen",
-  );
+  let afterCommit = { skipped: "final-binary-physical-focus" };
+  let afterCommitInk = { skipped: "final-binary-physical-focus" };
+  let afterNativeNormalization = afterCommit;
+  let afterNativeNormalizationInk = afterCommitInk;
+  let afterSaveReopen = afterCommit;
+  let afterSaveReopenInk = afterCommitInk;
+  if (!runPhysicalDoubleClickAfterReopen) {
+    afterCommit = runFormulaRegressionReport(testDocumentName, [formula]);
+    afterCommitInk = createdImagePdfInkBounds(
+      testDocumentName,
+      "Created dfdfdf formula after commit",
+    );
+    assertCreatedImageFormulaInk(
+      afterCommitInk,
+      formula,
+      "Created dfdfdf formula after commit",
+    );
+    runAppleScript([
+      'tell application "Microsoft Word"',
+      `activate object document ${JSON.stringify(testDocumentName)}`,
+      'run VB macro macro name "VisualTeX_MigrateImageMacroButtons"',
+      "end tell",
+    ], 60_000);
+    afterNativeNormalization = runFormulaRegressionReport(
+      testDocumentName,
+      [formula],
+    );
+    afterNativeNormalizationInk = createdImagePdfInkBounds(
+      testDocumentName,
+      "Created dfdfdf formula after native normalization",
+    );
+    assertCreatedImageFormulaInk(
+      afterNativeNormalizationInk,
+      formula,
+      "Created dfdfdf formula after native normalization",
+    );
+    afterSaveReopen = afterNativeNormalization;
+    afterSaveReopenInk = afterNativeNormalizationInk;
+    testDocumentName = saveAndReopenWordDocument(testDocumentName);
+    await sleep(2_500);
+    let afterSaveReopenError;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        afterSaveReopen = runFormulaRegressionReport(
+          testDocumentName,
+          [formula],
+        );
+        afterSaveReopenError = undefined;
+        break;
+      } catch (reason) {
+        afterSaveReopenError = reason;
+        await sleep(1_000);
+      }
+    }
+    if (!afterSaveReopen) throw afterSaveReopenError;
+    afterSaveReopenInk = createdImagePdfInkBounds(
+      testDocumentName,
+      "Created dfdfdf formula after save and reopen",
+    );
+    assertCreatedImageFormulaInk(
+      afterSaveReopenInk,
+      formula,
+      "Created dfdfdf formula after save and reopen",
+    );
+  }
+
+  let physicalDoubleClickResult = null;
+  if (runPhysicalDoubleClickAfterReopen) {
+    await startVisualTeXForPhysicalRegression();
+    const sessionsBeforePhysicalEdit = currentSessionIds();
+    const physicalSelection = runAppleScript([
+      'tell application "Microsoft Word"',
+      `set documentObject to document ${JSON.stringify(testDocumentName)}`,
+      "activate object documentObject",
+      "activate",
+      'run VB macro macro name "VisualTeX_AssertWordHostSelfTest"',
+      "set formulaShape to inline shape 1 of documentObject",
+      "set formulaRange to text object of formulaShape",
+      "select formulaRange",
+      'return "image" & (ASCII character 31) & (start of content of formulaRange as text) & (ASCII character 31) & (end of content of formulaRange as text) & (ASCII character 31) & (width of formulaShape as text) & (ASCII character 31) & (height of formulaShape as text)',
+      "end tell",
+    ]);
+    const physicalClick = physicallyDoubleClickSelectedWordFormula(
+      testDocumentName,
+    );
+    const physicalEditSessionId = await waitForFormulaEditSession(
+      sessionsBeforePhysicalEdit,
+      formula.formulaId,
+      120_000,
+    );
+    editSessionDirectories.push(join(sessionsRoot, physicalEditSessionId));
+    const physicalEditSession = validateFormulaEditSession(
+      physicalEditSessionId,
+      formula,
+      formula.codeFormat,
+      formula.metadataLines,
+    );
+    const editorReadiness = await waitForPhysicalEditorReadiness(
+      physicalEditSessionId,
+      formula.formulaId,
+    );
+    await assertSinglePhysicalEditSession(
+      sessionsBeforePhysicalEdit,
+      physicalEditSessionId,
+      formula.formulaId,
+    );
+    const pictureFormatUi = wordPictureFormatUiSnapshot();
+    if (pictureFormatUi.pictureFormatVisible) {
+      throw new Error(
+        `Word displayed its native picture-format UI for the final binary formula double-click: ${pictureFormatUi.raw}`,
+      );
+    }
+    physicalDoubleClickResult = {
+      sessionId: physicalEditSessionId,
+      formulaId: formula.formulaId,
+      selection: physicalSelection.split("\x1f"),
+      documentStage: "after-image-commit",
+      codeFormat: physicalEditSession.normalized.codeFormat,
+      lines: physicalEditSession.normalized.lines.map((line) => line.latex),
+      physicalClick,
+      editorReadiness,
+      pictureFormatUi,
+    };
+    writeFileSync(
+      finalBinaryPhysicalStatusPath,
+      JSON.stringify(
+        {
+          status: "PASS",
+          revision: "word-double-click-routing-20260731-r67",
+          ...physicalDoubleClickResult,
+        },
+        null,
+        2,
+      ),
+      { mode: 0o600 },
+    );
+  }
 
   console.log(
     JSON.stringify(
@@ -1990,12 +3119,19 @@ async function runCreatedImageFormulaRegression(beforeSessions) {
           afterNativeNormalization: afterNativeNormalizationInk,
           afterSaveReopen: afterSaveReopenInk,
         },
+        ...(physicalDoubleClickResult
+          ? { physicalDoubleClick: physicalDoubleClickResult }
+          : {}),
       },
       null,
       2,
     ),
   );
-  console.log("Word image formula creation integration passed");
+  console.log(
+    runPhysicalDoubleClickAfterReopen
+      ? "Word final binary image physical double-click integration passed"
+      : "Word image formula creation integration passed",
+  );
 }
 
 const before = currentSessionIds();
@@ -2030,9 +3166,21 @@ try {
   // run. This is required for Word's native double-click event sink and legacy
   // image-field migration to remain available after DOCX save/reopen; the
   // user's previous Startup add-in is restored in finally.
-  copyFileSync(templatePath, installedWordAddinPath);
-  if (createImageRegression) {
-    await runCreatedImageFormulaRegression(before);
+  if (!existsSync(activeTemplatePath)) {
+    throw new Error(`The requested Word add-in does not exist: ${activeTemplatePath}`);
+  }
+  copyFileSync(activeTemplatePath, installedWordAddinPath);
+  if (pictureRoutingPerformance) {
+    await runPictureRoutingPerformanceRegression();
+  } else if (pictureRoutingTarget) {
+    await runPictureRoutingNativeRegression(before);
+  } else if (firstFrameImageRegression) {
+    await runFirstFrameImageRegression(before);
+  } else if (createImageRegression) {
+    await runCreatedImageFormulaRegression(
+      before,
+      createImagePhysicalRegression,
+    );
   } else {
   let testDocumentName = runAppleScript([
     'tell application "Microsoft Word"',
@@ -3015,6 +4163,7 @@ try {
     const physicalFormulaIndex = {
       "image-inline": 0,
       "image-block": 1,
+      "image-numbered": 2,
       "image-align": 5,
       "image-align-star": 6,
       "omml-inline": 0,
@@ -3079,6 +4228,12 @@ try {
       physicalEditSessionId,
       physicalFormula.formulaId,
     );
+    const pictureFormatUi = wordPictureFormatUiSnapshot();
+    if (outputKind === "image" && pictureFormatUi.pictureFormatVisible) {
+      throw new Error(
+        `VisualTeX physical double-click also opened Word Picture Format UI: ${pictureFormatUi.raw}`,
+      );
+    }
     editRegressions.push({
       kind: `${physicalTarget}-physical-double-click`,
       target: physicalTarget,
@@ -3088,6 +4243,7 @@ try {
       lines: physicalEditSession.normalized.lines.map((line) => line.latex),
       physicalClick,
       editorReadiness,
+      pictureFormatUi,
     });
   }
 
@@ -3226,6 +4382,21 @@ try {
     } catch (stateError) {
       console.error(
         `Unable to inspect Word after callback failure: ${stateError instanceof Error ? stateError.message : String(stateError)}`,
+      );
+    }
+    if (createImagePhysicalRegression) {
+      writeFileSync(
+        finalBinaryPhysicalStatusPath,
+        JSON.stringify(
+          {
+            status: "FAIL",
+            revision: "word-double-click-routing-20260731-r67",
+            error: error instanceof Error ? error.message : String(error),
+          },
+          null,
+          2,
+        ),
+        { mode: 0o600 },
       );
     }
     if (sessionDirectory) {

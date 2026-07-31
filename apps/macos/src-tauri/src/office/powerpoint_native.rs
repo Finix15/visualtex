@@ -9,8 +9,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const POWERPOINT_BUNDLE_ID: &str = "com.microsoft.Powerpoint";
 const WORD_BUNDLE_ID: &str = "com.microsoft.Word";
 const SHAPE_PREFIX: &str = "VisualTeX_";
-const WORD_METADATA_PREFIX: &str = "visualtex:v1:deflate:";
+const WORD_FORMULA_REF_PREFIX: &str = "visualtex:formula-ref:v1:";
 const WORD_SELECTION_FIELD_SEPARATOR: &str = "<VISUALTEX_WORD_FIELD>";
+const WORD_DOUBLE_CLICK_DEDUP_WINDOW: Duration = Duration::from_millis(700);
 const POWERPOINT_SNAPSHOT_FIELD_SEPARATOR: &str = "<VISUALTEX_PPT_FIELD>";
 const POWERPOINT_SNAPSHOT_RECORD_SEPARATOR: &str = "<VISUALTEX_PPT_RECORD>";
 const MAX_EVENTS: usize = 64;
@@ -37,7 +38,8 @@ pub struct PowerPointNativeSelection {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct WordNativeFormulaSelection {
-    marker: String,
+    document_identity: String,
+    formula_id: String,
     width: f64,
     height: f64,
     macro_button_wrapped: bool,
@@ -873,6 +875,47 @@ fn valid_formula_id(value: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn word_formula_id_from_reference(value: &str) -> Option<String> {
+    let payload = value.strip_prefix(WORD_FORMULA_REF_PREFIX)?;
+    let mut fields = payload.split(':');
+    let formula_id = fields.next()?;
+    let display_mode = fields.next()?;
+    let numbered = fields.next()?;
+    if fields.next().is_some()
+        || !valid_formula_id(formula_id)
+        || !matches!(display_mode, "inline" | "block")
+        || !matches!(numbered, "0" | "1")
+        || (numbered == "1" && display_mode != "block")
+    {
+        return None;
+    }
+    Some(formula_id.to_string())
+}
+
+fn claim_word_double_click_fallback(
+    last_dispatch: &Mutex<Option<(String, String, Instant)>>,
+    selection: &WordNativeFormulaSelection,
+    now: Instant,
+) -> bool {
+    let Ok(mut last_dispatch) = last_dispatch.lock() else {
+        return false;
+    };
+    if let Some((document_identity, formula_id, dispatched_at)) = last_dispatch.as_ref() {
+        if document_identity == &selection.document_identity
+            && formula_id == &selection.formula_id
+            && now.saturating_duration_since(*dispatched_at) <= WORD_DOUBLE_CLICK_DEDUP_WINDOW
+        {
+            return false;
+        }
+    }
+    *last_dispatch = Some((
+        selection.document_identity.clone(),
+        selection.formula_id.clone(),
+        now,
+    ));
+    true
+}
+
 fn valid_shape_name(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
@@ -899,7 +942,8 @@ where
         let Ok(selection) = read_selection() else {
             continue;
         };
-        if selection.marker.starts_with(WORD_METADATA_PREFIX)
+        if !selection.document_identity.is_empty()
+            && valid_formula_id(&selection.formula_id)
             && selection.width.is_finite()
             && selection.height.is_finite()
             && selection.width > 0.0
@@ -952,6 +996,7 @@ pub fn start_double_click_monitor(
         return Ok(());
     }
 
+    let word_last_dispatch = Arc::new(Mutex::new(None));
     let handler = RcBlock::new(move |event: NonNull<NSEvent>| {
         let event = unsafe { event.as_ref() };
         if event.clickCount() != 2 {
@@ -960,6 +1005,7 @@ pub fn start_double_click_monitor(
         let frontmost = frontmost_bundle_id();
         let app = app.clone();
         let bus = bus.clone();
+        let word_last_dispatch = word_last_dispatch.clone();
         if frontmost.as_deref() == Some(POWERPOINT_BUNDLE_ID) {
             std::thread::spawn(move || {
                 if crate::office::macos_offline::focus_open_office_editor(&app) {
@@ -1005,16 +1051,21 @@ pub fn start_double_click_monitor(
                 else {
                     return;
                 };
-                if !selection.marker.starts_with(WORD_METADATA_PREFIX) {
-                    return;
-                }
-                // Current VisualTeX images live inside a wdFieldMacroButton
-                // result and are routed by Word itself. The native monitor is
-                // only a compatibility entry for older, bare InlineShapes.
+                // Legacy MacroButton images already own their double-click in
+                // VBA. The global monitor is only a delayed fallback for a bare
+                // InlineShape whose WindowBeforeDoubleClick/FormatPicture route
+                // did not create or focus an editor.
                 if selection.macro_button_wrapped {
                     return;
                 }
                 if crate::office::macos_offline::focus_open_office_editor(&app) {
+                    return;
+                }
+                if !claim_word_double_click_fallback(
+                    &word_last_dispatch,
+                    &selection,
+                    Instant::now(),
+                ) {
                     return;
                 }
                 if let Err(error) =
@@ -1074,33 +1125,28 @@ else
     set formulaPicture to inline shape 1 of probeRange
 end if
 set fieldSeparator to "<VISUALTEX_WORD_FIELD>"
-set alternativeMarker to ""
-set titleMarker to ""
+set documentIdentity to name of active document as text
 try
-    set alternativeMarker to alternative text of formulaPicture as text
+    set fullDocumentIdentity to full name of active document as text
+    if fullDocumentIdentity is not "" then set documentIdentity to fullDocumentIdentity
 end try
+set titleMarker to ""
 try
     set titleMarker to title of formulaPicture as text
 end try
-set formulaMarker to ""
-if alternativeMarker starts with "visualtex:v1:deflate:" then
-    set formulaMarker to alternativeMarker
-else if titleMarker starts with "visualtex:v1:deflate:" then
-    set formulaMarker to titleMarker
-end if
 set macroButtonWrapped to "0"
 try
     set formulaField to field of formulaPicture
     if field type of formulaField is field macro button then set macroButtonWrapped to "1"
 end try
-return formulaMarker & fieldSeparator & (width of formulaPicture as text) & fieldSeparator & (height of formulaPicture as text) & fieldSeparator & macroButtonWrapped
+return documentIdentity & fieldSeparator & titleMarker & fieldSeparator & (width of formulaPicture as text) & fieldSeparator & (height of formulaPicture as text) & fieldSeparator & macroButtonWrapped
 end tell"#,
         APPLESCRIPT_QUERY_TIMEOUT,
     )?;
     let fields = output
         .split(WORD_SELECTION_FIELD_SEPARATOR)
         .collect::<Vec<_>>();
-    if fields.len() != 4 {
+    if fields.len() != 5 {
         return Err(format!("Word returned an invalid formula selection payload: {output}"));
     }
     let parse_number = |value: &str, label: &str| {
@@ -1110,11 +1156,18 @@ end tell"#,
             .parse::<f64>()
             .map_err(|error| format!("Invalid Word formula {label}: {error}"))
     };
+    let document_identity = fields[0].trim();
+    if document_identity.is_empty() {
+        return Err("Word returned an empty document identity".to_string());
+    }
+    let formula_id = word_formula_id_from_reference(fields[1].trim())
+        .ok_or_else(|| "Word selected picture has no valid VisualTeX formula reference".to_string())?;
     Ok(WordNativeFormulaSelection {
-        marker: fields[0].to_string(),
-        width: parse_number(fields[1], "width")?,
-        height: parse_number(fields[2], "height")?,
-        macro_button_wrapped: match fields[3].trim() {
+        document_identity: document_identity.to_string(),
+        formula_id,
+        width: parse_number(fields[2], "width")?,
+        height: parse_number(fields[3], "height")?,
+        macro_button_wrapped: match fields[4].trim() {
             "0" => false,
             "1" => true,
             value => return Err(format!("Invalid Word MacroButton state: {value}")),
@@ -1240,8 +1293,8 @@ mod tests {
     }
 
     #[test]
-    fn word_double_click_retries_and_preserves_marker_and_geometry() {
-        let marker = "visualtex:v1:deflate:AbC_123-def";
+    fn word_double_click_retries_and_preserves_identity_and_geometry() {
+        let formula_id = "00000000-0000-4000-8000-000000000001";
         let mut attempts = 0;
         let mut waits = Vec::new();
         let resolved = word_formula_after_double_click(
@@ -1251,7 +1304,8 @@ mod tests {
                     return Err("Word selection is still a caret".to_string());
                 }
                 Ok(WordNativeFormulaSelection {
-                    marker: marker.to_string(),
+                    document_identity: "/tmp/formulas.docx".to_string(),
+                    formula_id: formula_id.to_string(),
                     width: 84.0,
                     height: 21.0,
                     macro_button_wrapped: true,
@@ -1266,7 +1320,8 @@ mod tests {
             waits,
             vec![Duration::from_millis(20), Duration::from_millis(35)]
         );
-        assert_eq!(resolved.marker, marker);
+        assert_eq!(resolved.document_identity, "/tmp/formulas.docx");
+        assert_eq!(resolved.formula_id, formula_id);
         assert_eq!(resolved.width, 84.0);
         assert_eq!(resolved.height, 21.0);
         assert!(resolved.macro_button_wrapped);
@@ -1278,7 +1333,8 @@ mod tests {
         let resolved = word_formula_after_double_click(
             || {
                 Ok(WordNativeFormulaSelection {
-                    marker: "visualtex:v1:deflate:legacy".to_string(),
+                    document_identity: "Untitled 1".to_string(),
+                    formula_id: "00000000-0000-4000-8000-000000000001".to_string(),
                     width: 72.0,
                     height: 18.0,
                     macro_button_wrapped: false,
@@ -1290,6 +1346,62 @@ mod tests {
 
         assert!(waits.is_empty());
         assert!(!resolved.macro_button_wrapped);
+    }
+
+    #[test]
+    fn word_formula_reference_requires_the_complete_compact_schema() {
+        let formula_id = "00000000-0000-4000-8000-000000000001";
+        assert_eq!(
+            word_formula_id_from_reference(&format!(
+                "{WORD_FORMULA_REF_PREFIX}{formula_id}:inline:0"
+            ))
+            .as_deref(),
+            Some(formula_id),
+        );
+        assert!(word_formula_id_from_reference(&format!(
+            "{WORD_FORMULA_REF_PREFIX}{formula_id}:inline:1"
+        ))
+        .is_none());
+        assert!(word_formula_id_from_reference(&format!(
+            "{WORD_FORMULA_REF_PREFIX}{formula_id}:block:2"
+        ))
+        .is_none());
+        assert!(word_formula_id_from_reference("Picture 1").is_none());
+    }
+
+    #[test]
+    fn word_native_fallback_deduplicates_document_formula_for_700_ms() {
+        let formula_id = "00000000-0000-4000-8000-000000000001";
+        let selection = WordNativeFormulaSelection {
+            document_identity: "/tmp/formulas.docx".to_string(),
+            formula_id: formula_id.to_string(),
+            width: 72.0,
+            height: 18.0,
+            macro_button_wrapped: false,
+        };
+        let state = Mutex::new(None);
+        let started = Instant::now();
+        assert!(claim_word_double_click_fallback(&state, &selection, started));
+        assert!(!claim_word_double_click_fallback(
+            &state,
+            &selection,
+            started + Duration::from_millis(650),
+        ));
+        assert!(claim_word_double_click_fallback(
+            &state,
+            &selection,
+            started + Duration::from_millis(701),
+        ));
+
+        let another_document = WordNativeFormulaSelection {
+            document_identity: "/tmp/other.docx".to_string(),
+            ..selection
+        };
+        assert!(claim_word_double_click_fallback(
+            &state,
+            &another_document,
+            started + Duration::from_millis(702),
+        ));
     }
 
     #[test]

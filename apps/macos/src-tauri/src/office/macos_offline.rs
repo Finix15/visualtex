@@ -43,8 +43,6 @@ const MAX_REQUEST_BYTES: u64 = 256 * 1024;
 const MAX_METADATA_BYTES: usize = 2 * 1024 * 1024;
 const MAX_OMML_BYTES: usize = 4 * 1024 * 1024;
 const MAX_DOCUMENT_IMPORT_MANIFEST_BYTES: usize = 16 * 1024 * 1024;
-const TRANSPARENT_PNG_BASE64: &str =
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAEAQH/8l0Z8QAAAABJRU5ErkJggg==";
 const MAX_IDENTITY_CHARS: usize = 2048;
 const MAX_SHAPE_NAME_CHARS: usize = 128;
 const MAX_WORD_WIDTH_PT: f64 = 500.0;
@@ -1468,6 +1466,34 @@ fn wake_resident_editor_for_hydration(window: &WebviewWindow) -> Result<(), Stri
     window.show().map_err(|error| error.to_string())
 }
 
+#[cfg(target_os = "macos")]
+fn present_resident_editor_window(window: &WebviewWindow) -> Result<(), String> {
+    window
+        .with_webview(move |webview| unsafe {
+            let native_window: &objc2_app_kit::NSWindow =
+                &*webview.ns_window().cast();
+            // Hydration deliberately makes the resident window mouse-inert.
+            // Restoring only Tauri focus is not sufficient on macOS: an
+            // NSWindow can remain visible with ignoresMouseEvents=true, causing
+            // every click to pass through to Word. Reset the native state and
+            // explicitly make it the key normal-level window.
+            native_window.setAlphaValue(1.0);
+            native_window.setIgnoresMouseEvents(false);
+            native_window.setLevel(objc2_app_kit::NSNormalWindowLevel);
+            native_window.orderFrontRegardless();
+            native_window.makeKeyAndOrderFront(None);
+        })
+        .map_err(|error| {
+            format!("Unable to present the resident Office editor window: {error}")
+        })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn present_resident_editor_window(window: &WebviewWindow) -> Result<(), String> {
+    window.show().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())
+}
+
 fn set_resident_editor_content_visible(
     window: &WebviewWindow,
     visible: bool,
@@ -1696,12 +1722,16 @@ pub fn report_macos_offline_office_editor_ready(
 
     crate::office::background::activate_foreground_app(&app)?;
     set_resident_editor_content_visible(&window, true)?;
-    set_resident_editor_parked(&window, false)?;
+    present_resident_editor_window(&window)?;
     window.center().map_err(|error| error.to_string())?;
     window.show().map_err(|error| error.to_string())?;
     window.unminimize().map_err(|error| error.to_string())?;
     crate::office::background::activate_foreground_app(&app)?;
     window.set_focus().map_err(|error| error.to_string())?;
+    // Apply the native key/mouse state once more after Tauri focus. This closes
+    // a race where a queued hydration callback could otherwise restore the
+    // earlier mouse-inert state after the window became visible.
+    present_resident_editor_window(&window)?;
     let show_focus_ms = active.received_at.elapsed().as_secs_f64() * 1000.0;
     drop(runtime);
     let ready_epoch_ms = epoch_ms();
@@ -1843,8 +1873,9 @@ pub(crate) fn focus_open_office_editor(app: &AppHandle) -> bool {
                 return true;
             }
             let _ = crate::office::background::activate_foreground_app(app);
-            let _ = crate::office::background::activate_foreground_app(app);
+            let _ = present_resident_editor_window(&window);
             let _ = window.set_focus();
+            let _ = present_resident_editor_window(&window);
             return true;
         }
     }
@@ -2901,14 +2932,24 @@ fn decode_document_native_docx(value: &str) -> Result<Vec<u8>, String> {
 }
 
 fn decode_document_image_fallback_png(value: Option<&str>) -> Result<Vec<u8>, String> {
-    if let Some(value) = value {
-        return decode_png(value);
+    let value = value.ok_or_else(|| {
+        "Image document formula is missing its PNG compatibility preview".to_string()
+    })?;
+    let bytes = decode_png(value)?;
+    if bytes.len() < 24 {
+        return Err("Image document formula PNG compatibility preview is truncated".to_string());
     }
-    let bytes = BASE64_STANDARD
-        .decode(TRANSPARENT_PNG_BASE64)
-        .map_err(|_| "Built-in SVG fallback PNG is invalid".to_string())?;
-    if bytes.len() < 8 || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-        return Err("Built-in SVG fallback PNG is invalid".to_string());
+    let width = u32::from_be_bytes(bytes[16..20].try_into().map_err(|_| {
+        "Image document formula PNG compatibility preview has an invalid IHDR".to_string()
+    })?);
+    let height = u32::from_be_bytes(bytes[20..24].try_into().map_err(|_| {
+        "Image document formula PNG compatibility preview has an invalid IHDR".to_string()
+    })?);
+    if width <= 1 || height <= 1 {
+        return Err(
+            "Image document formula PNG compatibility preview must contain rendered formula pixels"
+                .to_string(),
+        );
     }
     Ok(bytes)
 }
@@ -3780,19 +3821,26 @@ mod tests {
     }
 
     #[test]
-    fn document_image_fallback_png_is_available_when_webview_rasterization_fails() {
-        let fallback = decode_document_image_fallback_png(None)
-            .expect("built-in SVG compatibility PNG should decode");
-        assert!(fallback.starts_with(b"\x89PNG\r\n\x1a\n"));
+    fn document_image_requires_a_real_png_compatibility_preview() {
+        assert!(decode_document_image_fallback_png(None).is_err());
+
+        let transparent_placeholder = BASE64_STANDARD.encode(
+            BASE64_STANDARD
+                .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAEAQH/8l0Z8QAAAABJRU5ErkJggg==")
+                .expect("transparent PNG fixture should decode"),
+        );
+        assert!(decode_document_image_fallback_png(Some(&transparent_placeholder)).is_err());
 
         let supplied = BASE64_STANDARD.encode(
             BASE64_STANDARD
-                .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+                .decode("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGNkYGD4z8DAwMDEAAUADigBA0dwHFEAAAAASUVORK5CYII=")
                 .expect("PNG fixture should decode"),
         );
         let decoded = decode_document_image_fallback_png(Some(&supplied))
-            .expect("supplied PNG fallback should decode");
+            .expect("supplied PNG compatibility preview should decode");
         assert!(decoded.starts_with(b"\x89PNG\r\n\x1a\n"));
+        assert_eq!(u32::from_be_bytes(decoded[16..20].try_into().unwrap()), 2);
+        assert_eq!(u32::from_be_bytes(decoded[20..24].try_into().unwrap()), 2);
     }
 
     #[cfg(target_os = "macos")]
