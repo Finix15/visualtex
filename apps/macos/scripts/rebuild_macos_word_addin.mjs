@@ -863,7 +863,7 @@ function verifyBuiltVba(path) {
     "VisualTeX_EditImageField",
     "VisualTeX_EditSelectedImageFromNativeMonitor",
     "VTEnsureVisualTeXImageMacroButton",
-    "word-double-click-routing-20260801-r68",
+    "word-double-click-routing-20260730-r66",
   ];
   for (const value of required) {
     const utf8 = Buffer.from(value, "utf8");

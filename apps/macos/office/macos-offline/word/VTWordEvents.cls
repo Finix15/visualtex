@@ -34,53 +34,22 @@ Private Sub App_NewDocument(ByVal Doc As Word.Document)
 End Sub
 
 Private Sub App_WindowBeforeDoubleClick(ByVal Sel As Word.Selection, Cancel As Boolean)
-    Dim selectedShape As InlineShape
-    Dim editErrorNumber As Long
-    Dim editErrorDescription As String
-
-    ' Keep the direct-picture hot path free of tracing, metadata inflation and
-    ' document searches. Word can invoke FormatPicture after this event, so a
-    ' selected shape carrying either the compact reference or durable VisualTeX
-    ' metadata prefix must be cancelled before dispatching the edit.
-    On Error GoTo IgnoreDoubleClick
-    If Sel Is Nothing Then Exit Sub
-    If VTTryGetDirectVisualTeXImageCandidate(Sel, selectedShape) Then
-        Cancel = True
-        On Error GoTo VisualTeXEditFailed
-        If Not VTDispatchDirectVisualTeXImageEdit(selectedShape) Then
-            ' A forged prefix or damaged metadata is not a VisualTeX formula.
-            ' Release the event so Word can run its native picture command.
-            Cancel = False
-        End If
-        Exit Sub
-    End If
-    If Sel.InlineShapes.Count > 0 Then Exit Sub
-
     VTBeginWordDoubleClickTraceContext
-    On Error GoTo IgnoreTracedDoubleClick
+    On Error GoTo IgnoreDoubleClick
     VTTraceWordDoubleClick "window-before-double-click-enter", Sel, ""
+    If Sel Is Nothing Then
+        VTTraceWordDoubleClick _
+            "window-before-double-click-skip", Sel, _
+            "reason=no-selection"
+        GoTo DoubleClickFinished
+    End If
     Cancel = VTHandleWordBeforeDoubleClick(Sel)
     VTTraceWordDoubleClick _
         "window-before-double-click-result", Sel, _
         "cancel=" & CStr(Cancel)
     GoTo DoubleClickFinished
 
-VisualTeXEditFailed:
-    editErrorNumber = Err.Number
-    editErrorDescription = Err.Description
-    Cancel = True
-    On Error Resume Next
-    VTShowError "Word image formula edit", _
-        editErrorNumber, editErrorDescription
-    On Error GoTo 0
-    Exit Sub
-
 IgnoreDoubleClick:
-    ' Ordinary Word double-click behavior remains untouched before the trace
-    ' context is entered, including ordinary inline and floating pictures.
-    Exit Sub
-
-IgnoreTracedDoubleClick:
     VTTraceWordDoubleClick _
         "window-before-double-click-error", Sel, _
         "error=" & CStr(Err.Number) & ":" & Err.Description

@@ -170,7 +170,7 @@ expectIncludes(powerpointAdapter, "VTPowerPointRibbonApplyFormulaFontSizePreset"
 expectIncludes(powerpointAdapter, "VTUnicodeText(28151, 21512, 23383, 21495)", "PowerPoint must report mixed selected SVG formula sizes without source-encoding corruption");
 
 expectIncludes(wordAdapter, "Public Sub AutoExec()", "Word template must publish AutoExec health");
-expectIncludes(wordAdapter, '"word-double-click-routing-20260801-r68"', "Word health must identify the selected-shape picture routing and resident-editor build");
+expectIncludes(wordAdapter, '"word-double-click-routing-20260730-r66"', "Word health must identify the native double-click and resident-editor build");
 expectIncludes(wordAdapter, "VTInitializeWordEvents", "Word AutoExec must initialize its persistent application event sink");
 expectIncludes(wordEvents, "App_WindowBeforeDoubleClick", "Word must use its native application event for double-click editing");
 expectIncludes(wordEvents, "App_WindowSelectionChange", "Word must repair a clicked legacy image-number REF through the native selection-change event");
@@ -197,19 +197,8 @@ expectIncludes(documentImportWordIntegration, "macos_physical_double_click.swift
 expectIncludes(documentImportWordIntegration, '"image-inline"', "The physical Word regression must cover inline image formulas");
 expectIncludes(documentImportWordIntegration, '"omml-block"', "The physical Word regression must cover display OMML formulas");
 expectIncludes(documentImportWordIntegration, "editorReadyFileName", "The physical Word regression must wait for a visible, hydrated editor rather than only a request file");
-expectIncludes(wordAdapter, "Public Sub FormatPicture()", "Word must route the macOS picture-format command through the VisualTeX fast gate");
-expectIncludes(wordAdapter, "Public Function VTTryGetDirectVisualTeXImageCandidate", "Word must expose one shared O(1) direct-picture gate");
-expectIncludes(wordAdapter, "If selected.InlineShapes.Count <> 1 Then Exit Function", "The direct-picture gate must inspect exactly one current Selection InlineShape");
-expectIncludes(wordAdapter, "titleValue = selectedShape.Title", "The direct-picture gate must read only the compact Title carrier");
-expectIncludes(wordAdapter, "Left$(titleValue, Len(VT_FORMULA_REF_PREFIX))", "The direct-picture gate must compare the fixed VisualTeX formula-reference prefix");
-expectIncludes(wordAdapter, "Public Function VTDispatchDirectVisualTeXImageEdit", "Full metadata validation must be deferred until after the direct-picture prefix gate");
-expectIncludes(wordEvents, "If VTTryGetDirectVisualTeXImageCandidate(Sel, selectedShape) Then", "WindowBeforeDoubleClick must cancel a directly hit VisualTeX picture before Word opens Picture Format");
-expectIncludes(wordEvents, "Cancel = True", "A valid VisualTeX picture candidate must immediately suppress Word's native double-click command");
-expectIncludes(wordAdapter, "WordBasic.FormatPicture", "Ordinary or invalid Word pictures must retain their native formatting command");
-expectIncludes(nativeInteraction, "claim_word_double_click_fallback", "The native Word monitor must deduplicate its fallback in memory");
-expectIncludes(nativeInteraction, "WORD_DOUBLE_CLICK_DEDUP_WINDOW", "The native Word fallback must use a bounded 500–800 ms deduplication window");
-expectIncludes(nativeInteraction, "document_identity", "The native Word fallback deduplication key must include document identity");
-expectIncludes(nativeInteraction, "formula_id", "The native Word fallback deduplication key must include formula id");
+expectIncludes(wordAdapter, "Public Sub FormatPicture()", "Word must retain a compatibility FormatPicture command without using it as the VisualTeX image route");
+expectIncludes(wordAdapter, "WordBasic.FormatPicture", "Ordinary Word pictures must retain their native formatting command");
 expectIncludes(wordAdapter, "VisualTeX_ApplyPendingResult", "Word template must expose the native result callback");
 expectIncludes(wordAdapter, "VisualTeX_DoubleClickEditSelected", "Word must expose a non-modal native double-click macro entry point");
 expectIncludes(wordAdapter, "VTFindNativeFormulaBookmark(selected.Range, False)", "The shared Word double-click handler must probe native formulas without raising on ordinary text or blank space");
@@ -1045,7 +1034,7 @@ expectIncludes(installer, "addin_installation_matches", "Installed status must r
 expectIncludes(installer, "powerpoint_script.clone()", "PowerPoint installed status must include its AppleScriptTask resource");
 expectIncludes(installer, 'health.plugin_version.as_deref() == Some(env!("CARGO_PKG_VERSION"))', "Installer must reject stale plug-in health versions");
 expect(!installer.includes("source_revision_matches"), "Runtime health must not reject a current-version add-in only because an optional sourceRevision field is absent");
-expectIncludes(packager, "word-double-click-routing-20260801-r68", "Packaging must reject a Word DOTM that lacks the current selected-shape picture-routing and resident-editor revision");
+expectIncludes(packager, "word-double-click-routing-20260730-r66", "Packaging must reject a Word DOTM that lacks the current native-double-click and resident-editor revision");
 expectIncludes(packager, "powerpoint-svg-font-size-dropdown-unicode-20260727-r3", "Packaging must reject a PowerPoint PPAM that predates Unicode-safe point-size labels");
 expectIncludes(installer, "POWERPOINT_VBA_SOURCE_REVISION", "Installer validation must reject a stale PowerPoint PPAM without SVG point-size support");
 expectIncludes(installer, "Library/Application Scripts/com.microsoft.Word", "Installer must use Word's AppleScriptTask directory");

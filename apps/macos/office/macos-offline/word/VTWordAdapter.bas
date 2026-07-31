@@ -4,7 +4,7 @@ Option Explicit
 Private Const VT_WORD_HOST As String = "word"
 Private Const VT_WORD_STATUS_FILE As String = "/OfficePluginStatus/word.json"
 Private Const VT_WORD_SOURCE_REVISION As String = _
-    "word-double-click-routing-20260801-r68"
+    "word-double-click-routing-20260730-r66"
 Private Const VT_WORD_EQUATION_NUMBER_FONT_NAME As String = "Cambria Math"
 Private Const VT_WORD_BOOKMARK_PREFIX As String = "VT_Pending_"
 Private Const VT_WORD_DOCUMENT_IMPORT_BOOKMARK_PREFIX As String = "VT_D_"
@@ -290,22 +290,15 @@ Public Sub VisualTeX_RunSelectedImageEditRecoveryRegression()
             "Double-click recognition did not repair swapped image metadata."
     End If
 
-    ' Real Word SVG insertion can clear Title after the commit callback while
-    ' preserving AlternativeText. A physical double-click must still recognize
-    ' that durable metadata carrier, restore the compact reference and dispatch.
+    ' Metadata-only recovery: the unique Variables payload must restore Title.
     selectedShape.Title = ""
     If Len(selectedShape.Title) <> 0 Then
         Err.Raise vbObjectError + 7591, "VisualTeX", _
             "Word did not clear the image formula Title for the regression."
     End If
-    If Not VTTryGetDirectVisualTeXImageCandidate( _
-       Selection, selectedShape) Then
-        Err.Raise vbObjectError + 7591, "VisualTeX", _
-            "A metadata-only VisualTeX image was not recognized for double-click editing."
-    End If
     If Not VTHandleWordBeforeDoubleClick(Selection) Then
         Err.Raise vbObjectError + 7591, "VisualTeX", _
-            "A metadata-only VisualTeX image did not dispatch from double-click."
+            "The real double-click handler did not recognize the image formula."
     End If
 
     formulaReference = selectedShape.Title
@@ -6765,204 +6758,10 @@ Public Sub VisualTeX_RefreshImageMacroButtonsForRegression()
     End If
 End Sub
 
-Private Sub VTCreatePictureRoutingRegressionFixture( _
-    ByVal fixtureKind As String)
-
-    Const damagedFormulaId As String = _
-        "11111111-1111-4111-8111-111111111111"
-    Const fixturePath As String = _
-        "/Users/lpj/Library/Group Containers/UBF8T346G9.Office/" & _
-        "VisualTeX/Scratch/picture-routing-fixture.png"
-
-    Dim insertionRange As Range
-    Dim inlinePicture As InlineShape
-    Dim floatingPicture As Shape
-    If Documents.Count = 0 Then Documents.Add
-    Set insertionRange = ActiveDocument.Content
-    insertionRange.Collapse wdCollapseEnd
-    Set inlinePicture = ActiveDocument.InlineShapes.AddPicture( _
-        FileName:=fixturePath, _
-        LinkToFile:=False, SaveWithDocument:=True, _
-        Range:=insertionRange)
-    inlinePicture.LockAspectRatio = msoFalse
-    inlinePicture.Width = 72
-    inlinePicture.Height = 36
-    inlinePicture.LockAspectRatio = msoTrue
-
-    Select Case fixtureKind
-        Case "forged-prefix"
-            inlinePicture.Title = _
-                VT_FORMULA_REF_PREFIX & "not-a-uuid:inline:0"
-            inlinePicture.Range.Select
-        Case "damaged-metadata"
-            inlinePicture.Title = _
-                VTFormulaReference(damagedFormulaId, "inline", False)
-            inlinePicture.AlternativeText = ""
-            inlinePicture.Range.Select
-        Case "ordinary-floating"
-            Set floatingPicture = inlinePicture.ConvertToShape
-            floatingPicture.RelativeHorizontalPosition = _
-                wdRelativeHorizontalPositionPage
-            floatingPicture.RelativeVerticalPosition = _
-                wdRelativeVerticalPositionPage
-            floatingPicture.Left = 180
-            floatingPicture.Top = 180
-            floatingPicture.Width = 72
-            floatingPicture.Height = 36
-            floatingPicture.Select
-        Case Else
-            inlinePicture.Title = ""
-            inlinePicture.AlternativeText = ""
-            inlinePicture.Range.Select
-    End Select
-End Sub
-
-Public Sub VisualTeX_CreateOrdinaryInlinePictureRegression()
-    VTCreatePictureRoutingRegressionFixture "ordinary-inline"
-End Sub
-
-Public Sub VisualTeX_CreateOrdinaryFloatingPictureRegression()
-    VTCreatePictureRoutingRegressionFixture "ordinary-floating"
-End Sub
-
-Public Sub VisualTeX_CreateForgedPrefixPictureRegression()
-    VTCreatePictureRoutingRegressionFixture "forged-prefix"
-End Sub
-
-Public Sub VisualTeX_CreateDamagedMetadataPictureRegression()
-    VTCreatePictureRoutingRegressionFixture "damaged-metadata"
-End Sub
-
-Private Sub VTRunPictureRoutingPerformanceRegression( _
-    ByVal formulaCount As Long)
-
-    Const fixturePath As String = _
-        "/Users/lpj/Library/Group Containers/UBF8T346G9.Office/" & _
-        "VisualTeX/Scratch/picture-routing-fixture.png"
-    Const fixtureFormulaId As String = _
-        "22222222-2222-4222-8222-222222222222"
-    Const benchmarkIterations As Long = 5000
-
-    Dim benchmarkDocument As Document
-    Dim insertionRange As Range
-    Dim templateRange As Range
-    Dim targetPicture As InlineShape
-    Dim candidatePicture As InlineShape
-    Dim formulaIndex As Long
-    Dim iteration As Long
-    Dim startedAt As Single
-    Dim visualElapsed As Single
-    Dim ordinaryElapsed As Single
-    Dim visualPerCallMs As Double
-    Dim ordinaryPerCallMs As Double
-    Dim statusPath As String
-    Dim benchmarkErrorNumber As Long
-    Dim benchmarkErrorDescription As String
-
-    statusPath = VTApplicationSupportRoot() & _
-        "/picture-routing-performance.txt"
-    On Error GoTo Failed
-    If formulaCount < 1 Then
-        Err.Raise vbObjectError + 7594, "VisualTeX regression", _
-            "Picture-routing benchmark requires at least one formula."
-    End If
-    Set benchmarkDocument = Documents.Add
-    Set insertionRange = benchmarkDocument.Content
-    insertionRange.Collapse wdCollapseEnd
-    Set targetPicture = benchmarkDocument.InlineShapes.AddPicture( _
-        FileName:=fixturePath, LinkToFile:=False, _
-        SaveWithDocument:=True, Range:=insertionRange)
-    targetPicture.LockAspectRatio = msoFalse
-    targetPicture.Width = 4
-    targetPicture.Height = 4
-    targetPicture.LockAspectRatio = msoTrue
-    targetPicture.Title = _
-        VTFormulaReference(fixtureFormulaId, "inline", False)
-    Set templateRange = targetPicture.Range.Duplicate
-    targetPicture.Range.InsertAfter " "
-    For formulaIndex = 2 To formulaCount
-        Set insertionRange = benchmarkDocument.Content
-        insertionRange.Collapse wdCollapseEnd
-        insertionRange.FormattedText = templateRange.FormattedText
-        Set targetPicture = _
-            benchmarkDocument.InlineShapes( _
-                benchmarkDocument.InlineShapes.Count)
-        targetPicture.Range.InsertAfter " "
-    Next formulaIndex
-    targetPicture.Range.Select
-
-    startedAt = Timer
-    For iteration = 1 To benchmarkIterations
-        Set candidatePicture = Nothing
-        If Not VTTryGetDirectVisualTeXImageCandidate( _
-           Selection, candidatePicture) Then
-            Err.Raise vbObjectError + 7594, "VisualTeX regression", _
-                "The VisualTeX O(1) picture gate rejected its direct target."
-        End If
-    Next iteration
-    visualElapsed = Timer - startedAt
-    If visualElapsed < 0 Then visualElapsed = visualElapsed + 86400
-
-    targetPicture.Title = ""
-    startedAt = Timer
-    For iteration = 1 To benchmarkIterations
-        Set candidatePicture = Nothing
-        If VTTryGetDirectVisualTeXImageCandidate( _
-           Selection, candidatePicture) Then
-            Err.Raise vbObjectError + 7594, "VisualTeX regression", _
-                "The O(1) picture gate intercepted an ordinary picture."
-        End If
-    Next iteration
-    ordinaryElapsed = Timer - startedAt
-    If ordinaryElapsed < 0 Then ordinaryElapsed = ordinaryElapsed + 86400
-
-    visualPerCallMs = _
-        CDbl(visualElapsed) * 1000# / CDbl(benchmarkIterations)
-    ordinaryPerCallMs = _
-        CDbl(ordinaryElapsed) * 1000# / CDbl(benchmarkIterations)
-    VTWriteTextAtomic statusPath, _
-        "PASS|" & CStr(formulaCount) & "|" & _
-        CStr(benchmarkDocument.InlineShapes.Count) & "|" & _
-        CStr(benchmarkIterations) & "|" & _
-        Format$(visualPerCallMs, "0.000000") & "|" & _
-        Format$(ordinaryPerCallMs, "0.000000") & vbLf
-    benchmarkDocument.Close SaveChanges:=wdDoNotSaveChanges
-    Exit Sub
-
-Failed:
-    benchmarkErrorNumber = Err.Number
-    benchmarkErrorDescription = Err.Description
-    On Error Resume Next
-    VTWriteTextAtomic statusPath, _
-        "FAIL|" & CStr(benchmarkErrorNumber) & "|" & _
-        Replace$(Replace$(benchmarkErrorDescription, vbCr, " "), _
-            vbLf, " ") & vbLf
-    If Not benchmarkDocument Is Nothing Then
-        benchmarkDocument.Close SaveChanges:=wdDoNotSaveChanges
-    End If
-    On Error GoTo 0
-End Sub
-
-Public Sub VisualTeX_RunPictureRoutingPerformance1()
-    VTRunPictureRoutingPerformanceRegression 1
-End Sub
-
-Public Sub VisualTeX_RunPictureRoutingPerformance100()
-    VTRunPictureRoutingPerformanceRegression 100
-End Sub
-
-Public Sub VisualTeX_RunPictureRoutingPerformance1000()
-    VTRunPictureRoutingPerformanceRegression 1000
-End Sub
-
 Public Sub VisualTeX_WriteSelectedScreenBoundsForRegression()
     Dim formulaShape As InlineShape
-    Dim directPicture As InlineShape
-    Dim floatingPicture As Shape
     Dim nativeBookmark As Bookmark
     Dim targetRange As Range
-    Dim anchorHorizontal As Single
-    Dim anchorVertical As Single
     Dim screenLeft As Long
     Dim screenTop As Long
     Dim screenWidth As Long
@@ -6981,12 +6780,6 @@ Public Sub VisualTeX_WriteSelectedScreenBoundsForRegression()
     Set formulaShape = VTVisualTeXInlineShapeAtSelection(Selection)
     If Not formulaShape Is Nothing Then
         Set targetRange = formulaShape.Range.Duplicate
-    ElseIf Selection.InlineShapes.Count = 1 Then
-        Set directPicture = Selection.InlineShapes(1)
-        Set targetRange = directPicture.Range.Duplicate
-    ElseIf Selection.ShapeRange.Count = 1 Then
-        Set floatingPicture = Selection.ShapeRange(1)
-        Set targetRange = floatingPicture.Anchor.Duplicate
     Else
         Set nativeBookmark = _
             VTFindNativeFormulaBookmark(Selection.Range, False)
@@ -6996,22 +6789,10 @@ Public Sub VisualTeX_WriteSelectedScreenBoundsForRegression()
     End If
     If targetRange Is Nothing Then
         Err.Raise vbObjectError + 7593, "VisualTeX regression", _
-            "The selected physical double-click target has no screen range."
+            "The selected physical double-click target is not a VisualTeX formula."
     End If
     ActiveWindow.GetPoint _
         screenLeft, screenTop, screenWidth, screenHeight, targetRange
-    If Not floatingPicture Is Nothing Then
-        anchorHorizontal = _
-            targetRange.Information(wdHorizontalPositionRelativeToPage)
-        anchorVertical = _
-            targetRange.Information(wdVerticalPositionRelativeToPage)
-        screenLeft = screenLeft + _
-            CLng(floatingPicture.Left - anchorHorizontal)
-        screenTop = screenTop + _
-            CLng(floatingPicture.Top - anchorVertical)
-        screenWidth = CLng(floatingPicture.Width)
-        screenHeight = CLng(floatingPicture.Height)
-    End If
     If screenWidth <= 0 Or screenHeight <= 0 Then
         Err.Raise vbObjectError + 7593, "VisualTeX regression", _
             "Word returned invalid physical double-click screen bounds."
@@ -7206,37 +6987,11 @@ MonitorFailed:
 End Sub
 
 Public Sub FormatPicture()
-    Dim selectedShape As InlineShape
-    Dim visualTeXCandidate As Boolean
-    Dim editErrorNumber As Long
-    Dim editErrorDescription As String
-
-    ' Word routes an image double-click through this command on some macOS
-    ' builds even when WindowBeforeDoubleClick is also raised. Keep the ordinary
-    ' picture path indistinguishable from native Word: one direct Selection
-    ' count, one Title-prefix comparison, then immediate WordBasic fallback.
-    On Error GoTo NativePicture
-    visualTeXCandidate = _
-        VTTryGetDirectVisualTeXImageCandidate(Selection, selectedShape)
-    If Not visualTeXCandidate Then GoTo NativePicture
-    On Error GoTo VisualTeXFailed
-
-    ' The prefix gate has already swallowed Word's native command. Only now may
-    ' the slower metadata/document-variable validation run. A forged prefix or
-    ' damaged VisualTeX envelope falls back to the original Word command.
-    If VTDispatchDirectVisualTeXImageEdit(selectedShape) Then Exit Sub
-
-NativePicture:
+    ' Legacy binary-compatible override only. VisualTeX image editing is routed
+    ' by its per-image MACROBUTTON or the strict native-monitor entry point.
     On Error Resume Next
     WordBasic.FormatPicture
     On Error GoTo 0
-    Exit Sub
-
-VisualTeXFailed:
-    editErrorNumber = Err.Number
-    editErrorDescription = Err.Description
-    VTShowError "Word image formula edit", _
-        editErrorNumber, editErrorDescription
 End Sub
 
 Public Function VTHandleWordBeforeDoubleClick( _
@@ -7266,25 +7021,6 @@ Public Function VTHandleWordBeforeDoubleClick( _
     End If
     If VTWordInternalMutationActive() Then
         VTTraceWordDoubleClick "handler-skip", selected, "reason=internal-mutation"
-        GoTo HandlerFinished
-    End If
-    If VTTryGetDirectVisualTeXImageCandidate(selected, selectedShape) Then
-        If VTDispatchDirectVisualTeXImageEdit(selectedShape) Then
-            VTHandleWordBeforeDoubleClick = True
-            VTTraceWordDoubleClick _
-                "handler-image-fast-dispatched", selected, _
-                VTInlineShapeTraceSummary(selectedShape)
-        Else
-            VTTraceWordDoubleClick _
-                "handler-image-fast-rejected", selected, _
-                "reason=invalid-metadata"
-        End If
-        GoTo HandlerFinished
-    End If
-    If selected.InlineShapes.Count > 0 Then
-        VTTraceWordDoubleClick _
-            "handler-image-fast-skip", selected, _
-            "reason=ordinary-direct-image"
         GoTo HandlerFinished
     End If
     If VTTryResolveVisualTeXInlineShapeAtSelection( _
@@ -7632,67 +7368,6 @@ InvalidShape:
     VTIsVisualTeXInlineShape = False
 End Function
 
-Public Function VTTryGetDirectVisualTeXImageCandidate( _
-    ByVal selected As Selection, _
-    ByRef selectedShape As InlineShape) As Boolean
-
-    Dim titleValue As String
-    Dim alternativeValue As String
-
-    ' Keep ordinary-picture routing O(1): inspect only the current Selection and
-    ' its one directly selected InlineShape. Word for Mac can clear an SVG
-    ' InlineShape.Title after the commit callback returns, while preserving the
-    ' VisualTeX metadata in AlternativeText. Accept either durable carrier here;
-    ' full document-variable and metadata validation still happens only after a
-    ' VisualTeX prefix has been found.
-    On Error GoTo NotCandidate
-    Set selectedShape = Nothing
-    If selected Is Nothing Then Exit Function
-    If selected.InlineShapes.Count <> 1 Then Exit Function
-    Set selectedShape = selected.InlineShapes(1)
-
-    titleValue = selectedShape.Title
-    If Len(titleValue) > Len(VT_FORMULA_REF_PREFIX) Then
-        If StrComp( _
-           Left$(titleValue, Len(VT_FORMULA_REF_PREFIX)), _
-           VT_FORMULA_REF_PREFIX, vbBinaryCompare) = 0 Then
-            VTTryGetDirectVisualTeXImageCandidate = True
-            Exit Function
-        End If
-    End If
-    If Len(titleValue) > Len(VT_METADATA_PREFIX) Then
-        If StrComp( _
-           Left$(titleValue, Len(VT_METADATA_PREFIX)), _
-           VT_METADATA_PREFIX, vbBinaryCompare) = 0 Then
-            VTTryGetDirectVisualTeXImageCandidate = True
-            Exit Function
-        End If
-    End If
-
-    alternativeValue = selectedShape.AlternativeText
-    If Len(alternativeValue) > Len(VT_FORMULA_REF_PREFIX) Then
-        If StrComp( _
-           Left$(alternativeValue, Len(VT_FORMULA_REF_PREFIX)), _
-           VT_FORMULA_REF_PREFIX, vbBinaryCompare) = 0 Then
-            VTTryGetDirectVisualTeXImageCandidate = True
-            Exit Function
-        End If
-    End If
-    If Len(alternativeValue) > Len(VT_METADATA_PREFIX) Then
-        If StrComp( _
-           Left$(alternativeValue, Len(VT_METADATA_PREFIX)), _
-           VT_METADATA_PREFIX, vbBinaryCompare) = 0 Then
-            VTTryGetDirectVisualTeXImageCandidate = True
-            Exit Function
-        End If
-    End If
-    Exit Function
-
-NotCandidate:
-    Set selectedShape = Nothing
-    VTTryGetDirectVisualTeXImageCandidate = False
-End Function
-
 Private Function VTTryResolveVisualTeXInlineShapeAtSelection( _
     ByVal selected As Selection, _
     ByRef resolvedShape As InlineShape, _
@@ -8014,31 +7689,6 @@ OpenFailed:
     Err.Raise openErrorNumber, "VisualTeX Word image edit", _
         openErrorDescription
 End Sub
-
-Public Function VTDispatchDirectVisualTeXImageEdit( _
-    ByVal selectedShape As InlineShape) As Boolean
-
-    Dim formulaId As String
-    Dim displayMode As String
-    Dim numbered As Boolean
-    Dim encodedMetadata As String
-    Dim metadataNeedsWrite As Boolean
-    Dim formatNeedsWrite As Boolean
-
-    ' Called only after the O(1) selected-shape prefix gate has intercepted
-    ' Word's native picture command. Full metadata integrity checks are deferred
-    ' until this point so ordinary images never pay their cost.
-    If selectedShape Is Nothing Or _
-       Not VTTryResolveVisualTeXInlineShapeReference( _
-           selectedShape, formulaId, displayMode, numbered, _
-           encodedMetadata, metadataNeedsWrite, formatNeedsWrite) Then _
-        Exit Function
-    VTRequireWritableWordDocument
-    VTWordOpenResolvedInlineShape _
-        selectedShape, formulaId, displayMode, numbered, encodedMetadata, _
-        metadataNeedsWrite, formatNeedsWrite, False
-    VTDispatchDirectVisualTeXImageEdit = True
-End Function
 
 Private Function VTDispatchVisualTeXImageEditAtSelection( _
     ByVal selected As Selection) As Boolean

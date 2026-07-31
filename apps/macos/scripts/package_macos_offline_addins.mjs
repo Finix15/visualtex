@@ -131,7 +131,7 @@ function validateMacroContainer(path, kind, options = {}) {
       packageVersion,
       ...(kind === "Word"
         ? [
-            "word-double-click-routing-20260801-r68",
+            "word-double-click-routing-20260730-r66",
             "VTTraceWordDoubleClick",
             "App_WindowSelectionChange",
             "VisualTeX_StabilizeImageEquationNumberSelection",

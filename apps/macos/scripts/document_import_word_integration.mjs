@@ -1160,7 +1160,7 @@ function runFormulaRegressionReport(testDocumentName, formulas) {
   const report = parseRegressionReport(
     readFileSync(formulaRegressionStatusPath, "utf8"),
   );
-  if (report.revision !== "word-double-click-routing-20260801-r68") {
+  if (report.revision !== "word-double-click-routing-20260730-r66") {
     throw new Error(`Word loaded the wrong VisualTeX source revision: ${report.revision}`);
   }
 
@@ -3131,7 +3131,7 @@ async function runCreatedImageFormulaRegression(
       JSON.stringify(
         {
           status: "PASS",
-          revision: "word-double-click-routing-20260801-r68",
+          revision: "word-double-click-routing-20260730-r66",
           ...physicalDoubleClickResult,
         },
         null,
@@ -4428,7 +4428,7 @@ try {
         JSON.stringify(
           {
             status: "FAIL",
-            revision: "word-double-click-routing-20260801-r68",
+            revision: "word-double-click-routing-20260730-r66",
             error: error instanceof Error ? error.message : String(error),
           },
           null,
