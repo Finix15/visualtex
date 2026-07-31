@@ -194,13 +194,19 @@ export function splitLatexLines(latex: string): string[] {
   return lines.length ? lines : [""];
 }
 
-function filledFormulaLines(latex: string): string[] {
-  const lines = splitLatexLines(
-    normalizeMathLiveCanonicalUprightCommands(latex),
-  )
-    .map((line) => line.trim())
+function filledLogicalFormulaLines(lines: readonly string[]): string[] {
+  const normalized = lines
+    .map((line) =>
+      normalizeMathLiveCanonicalUprightCommands(
+        String(line ?? "").replace(/\r\n?/g, "\n"),
+      ).trim(),
+    )
     .filter(Boolean);
-  return lines.length ? lines : [""];
+  return normalized.length ? normalized : [""];
+}
+
+function filledFormulaLines(latex: string): string[] {
+  return filledLogicalFormulaLines(splitLatexLines(latex));
 }
 
 function escapeRegExp(value: string): string {
@@ -393,8 +399,11 @@ function formatRows(lines: string[], alignRelations: boolean): string {
     .join("\n");
 }
 
-export function formatLatex(latex: string, format: LatexCodeFormat): string {
-  const lines = filledFormulaLines(latex);
+export function formatLatexLines(
+  logicalLines: readonly string[],
+  format: LatexCodeFormat,
+): string {
+  const lines = filledLogicalFormulaLines(logicalLines);
 
   switch (format) {
     case "raw":
@@ -436,8 +445,17 @@ export function formatLatex(latex: string, format: LatexCodeFormat): string {
         wrapEnvironment("split", formatRows(lines, true)),
       );
     default:
-      return formatLatex(latex, DEFAULT_LATEX_CODE_FORMAT);
+      return formatLatexLines(lines, DEFAULT_LATEX_CODE_FORMAT);
   }
+}
+
+/**
+ * Formats a newline-delimited editor value. New code that already owns
+ * structured editor rows should call `formatLatexLines()` so source-formatting
+ * newlines inside one logical formula are not mistaken for separate formulas.
+ */
+export function formatLatex(latex: string, format: LatexCodeFormat): string {
+  return formatLatexLines(filledFormulaLines(latex), format);
 }
 
 function extractEnvironmentBodies(source: string, name: string): string[] {

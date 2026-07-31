@@ -1059,21 +1059,22 @@ fn format_document_formula_rows(lines: &[String], align_relations: bool) -> Stri
 fn canonical_document_formula_latex(
     metadata: &VisualTeXFormulaMetadata,
 ) -> Result<String, String> {
-    let source = normalize_mathlive_upright_commands(
-        &metadata
-            .lines
-            .iter()
-            .map(|line| line.latex.as_str())
-            .collect::<Vec<_>>()
-            .join("\n"),
-    )
-    .replace("\r\n", "\n")
-    .replace('\r', "\n");
-    let mut lines = source
-        .lines()
-        .map(str::trim)
+    // `metadata.lines` stores logical editor rows. A single logical formula may
+    // itself contain source-formatting newlines, especially inside equation or
+    // equation* environments. Keep those internal newlines inside the same row;
+    // splitting them here would rebuild one equation as several equations and
+    // make the Rust validator disagree with the TypeScript serializer.
+    let mut lines = metadata
+        .lines
+        .iter()
+        .map(|line| {
+            normalize_mathlive_upright_commands(
+                &line.latex.replace("\r\n", "\n").replace('\r', "\n"),
+            )
+            .trim()
+            .to_string()
+        })
         .filter(|line| !line.is_empty())
-        .map(str::to_string)
         .collect::<Vec<_>>();
     if lines.is_empty() {
         lines.push(String::new());
@@ -4214,6 +4215,55 @@ c &= d
                 "{code_format} metadata match"
             );
         }
+    }
+
+    #[test]
+    fn document_formula_metadata_preserves_internal_equation_newlines() {
+        let body = r"u(x,y)=\sum_{n=1}^{+\infty}\sum_{m=1}^{+\infty}c_{nm}\sin\frac{n\pi}{a}x\sin\frac{m\pi}{b}y,\qquad
+f(x,y)=\sum_{n=1}^{+\infty}\sum_{m=1}^{+\infty}d_{nm}\sin\frac{n\pi}{a}x\sin\frac{m\pi}{b}y.";
+        let canonical = r"\begin{equation*}
+u(x,y)=\sum_{n=1}^{+\infty}\sum_{m=1}^{+\infty}c_{nm}\sin\frac{n\pi}{a}x\sin\frac{m\pi}{b}y,\qquad
+f(x,y)=\sum_{n=1}^{+\infty}\sum_{m=1}^{+\infty}d_{nm}\sin\frac{n\pi}{a}x\sin\frac{m\pi}{b}y.
+\end{equation*}";
+        let metadata = document_formula_metadata(
+            "equation-star",
+            &[body],
+            canonical,
+            "block",
+            false,
+        );
+
+        assert_eq!(canonical_document_formula_latex(&metadata).unwrap(), canonical);
+        assert_eq!(
+            validate_document_formula_metadata_match(
+                &metadata,
+                &metadata.formula_id,
+                canonical,
+                "block",
+                false,
+            )
+            .unwrap(),
+            canonical,
+        );
+
+        let separate_rows = document_formula_metadata(
+            "equation-star",
+            &["a=b", "c=d"],
+            r"\begin{equation*}
+a=b
+\end{equation*}
+
+\begin{equation*}
+c=d
+\end{equation*}",
+            "block",
+            false,
+        );
+        assert_eq!(
+            canonical_document_formula_latex(&separate_rows).unwrap(),
+            separate_rows.latex,
+            "separate logical rows must remain separate equation environments",
+        );
     }
 
     #[test]

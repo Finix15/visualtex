@@ -1,5 +1,5 @@
 import {
-  formatLatex,
+  formatLatexLines,
   isLatexCodeFormat,
   parseLatexSource,
 } from "../../clipboard/LatexCopyService";
@@ -17,8 +17,8 @@ export interface FormulaEditorDocument {
 }
 
 export function serializeFormulaEditorDocument(document: FormulaEditorDocument) {
-  return formatLatex(
-    document.lines.map((line) => line.latex).join("\n"),
+  return formatLatexLines(
+    document.lines.map((line) => line.latex),
     document.codeFormat,
   );
 }

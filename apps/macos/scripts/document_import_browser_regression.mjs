@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { rm } from "node:fs/promises";
 import process from "node:process";
+import { boundaryValueDocumentSource } from "./fixtures/boundary_value_document_source.mjs";
 import { longPhysicsDocumentSource } from "./fixtures/long_physics_document_source.mjs";
 
 const offset = process.pid % 1000;
@@ -8,6 +9,11 @@ const previewPort = 18400 + offset;
 const debugPort = 23600 + offset;
 const sessionId = "12345678-1234-4234-9234-123456789abc";
 const longPhysicsRegression = process.argv.includes("--long-physics");
+const boundaryValueRegression = process.argv.includes("--boundary-value");
+if (longPhysicsRegression && boundaryValueRegression) {
+  throw new Error("Choose only one document import fixture regression");
+}
+const fixtureRegression = longPhysicsRegression || boundaryValueRegression;
 const baseUrl = `http://127.0.0.1:${previewPort}/?view=office-document-import&sessionId=${sessionId}&transport=tauri`;
 const chromeProfile = `/tmp/visualtex-document-import-${process.pid}`;
 const chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -235,7 +241,11 @@ y &= z
 \end{align*}
 
 结尾文字。`;
-    const regressionSource = longPhysicsRegression ? longPhysicsDocumentSource : source;
+    const regressionSource = boundaryValueRegression
+      ? boundaryValueDocumentSource
+      : longPhysicsRegression
+        ? longPhysicsDocumentSource
+        : source;
     await evaluate(`(() => {
       const textarea = document.querySelector(".document-import-source-pane textarea");
       if (!textarea) throw new Error("Missing document import source textarea");
@@ -247,7 +257,11 @@ y &= z
       textarea.dispatchEvent(new Event("input", { bubbles: true }));
     })()`);
 
-    const expectedFormulaCount = longPhysicsRegression ? 16 : 4;
+    const expectedFormulaCount = boundaryValueRegression
+      ? 22
+      : longPhysicsRegression
+        ? 16
+        : 4;
     const parseStarted = Date.now();
     while (Date.now() - parseStarted < 10_000) {
       if ((await evaluate(`document.querySelectorAll(".document-import-formula-card").length`)) === expectedFormulaCount) {
@@ -265,13 +279,13 @@ y &= z
         summary: document.querySelector(".document-import-summary")?.innerText ?? "",
       };
     })()`);
-    if (longPhysicsRegression) {
+    if (fixtureRegression) {
       if (
         parsed.count !== expectedFormulaCount ||
         parsed.modes.filter((mode) => mode === "inline").length !== 4 ||
         parsed.numbered.some(Boolean)
       ) {
-        throw new Error(`Unexpected long physics formula blocks: ${JSON.stringify(parsed)}`);
+        throw new Error(`Unexpected fixture formula blocks: ${JSON.stringify(parsed)}`);
       }
     } else if (
       parsed.count !== 4 ||
@@ -287,6 +301,8 @@ y &= z
           'input[name="document-formula-output"][type="radio"]:not(:checked)',
         );
         imageRadio?.click();
+      }
+      if (!${JSON.stringify(fixtureRegression)}) {
         const cards = [...document.querySelectorAll(".document-import-formula-card")];
         const sizes = [10.5, 18, 14, 16];
         cards.forEach((card, index) => {
@@ -331,7 +347,7 @@ y &= z
     ) {
       throw new Error(`Unexpected document import commit: ${JSON.stringify(commit)}`);
     }
-    if (!longPhysicsRegression && (
+    if (!fixtureRegression && (
       formulas[0].displayMode !== "inline" ||
       formulas[0].numbered !== false ||
       formulas[0].fontSizePt !== 10.5 ||
@@ -351,6 +367,9 @@ y &= z
       const validCommon =
         formula.formulaId &&
         formula.metadata &&
+        formula.latex === formula.metadata.latex &&
+        Array.isArray(formula.metadata.lines) &&
+        formula.metadata.lines.length > 0 &&
         formula.ommlBase64 &&
         formula.ommlDocxBase64;
       const validOutput = longPhysicsRegression
@@ -368,7 +387,34 @@ y &= z
     if (new Set(formulas.map((formula) => formula.formulaId)).size !== formulas.length) {
       throw new Error("Imported formulas did not receive independent identities");
     }
-    const multilineExpectations = longPhysicsRegression ? [] : [
+    if (boundaryValueRegression) {
+      const singleEquationFormulas = formulas.filter((formula) =>
+        ["equation", "equation-star"].includes(formula.metadata?.codeFormat),
+      );
+      if (singleEquationFormulas.length < 8) {
+        throw new Error(
+          `Boundary-value regression did not preserve its single-equation environments: ${JSON.stringify(singleEquationFormulas)}`,
+        );
+      }
+      for (const formula of singleEquationFormulas) {
+        const environment =
+          formula.metadata.codeFormat === "equation" ? "equation" : "equation*";
+        const opening = `\\begin{${environment}}`;
+        const closing = `\\end{${environment}}`;
+        if (
+          formula.metadata.lines.length !== 1 ||
+          formula.latex.split(opening).length !== 2 ||
+          formula.latex.split(closing).length !== 2 ||
+          formula.latex.includes("\\begin{aligned}") ||
+          formula.latex.includes("&")
+        ) {
+          throw new Error(
+            `Single-equation source newlines were converted into alignment rows: ${JSON.stringify(formula)}`,
+          );
+        }
+      }
+    }
+    const multilineExpectations = fixtureRegression ? [] : [
       {
         formula: formulas[2],
         codeFormat: "align",

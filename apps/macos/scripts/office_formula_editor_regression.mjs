@@ -252,6 +252,44 @@ assert.deepEqual(equation.lines, [
   { id: "original-line-id", latex: "E=mc^2" },
 ]);
 
+for (const [environment, expectedCodeFormat] of [
+  ["equation", "equation"],
+  ["equation*", "equation-star"],
+]) {
+  const formattedSource = String.raw`\begin{${environment}}
+u(x,y)=\sum_{n=1}^{+\infty}\sum_{m=1}^{+\infty}c_{nm}\sin\frac{n\pi}{a}x\sin\frac{m\pi}{b}y,\qquad
+f(x,y)=\sum_{n=1}^{+\infty}\sum_{m=1}^{+\infty}d_{nm}\sin\frac{n\pi}{a}x\sin\frac{m\pi}{b}y.
+\end{${environment}}`;
+  const normalized = normalize(formattedSource);
+  assert.equal(normalized.codeFormat, expectedCodeFormat);
+  assert.equal(
+    normalized.lines.length,
+    1,
+    `${environment} source-formatting newlines must remain one logical formula`,
+  );
+  assert.ok(normalized.lines[0].latex.includes("\n"));
+  const canonical = serializeFormulaEditorDocument(normalized);
+  assert.equal(
+    (canonical.match(new RegExp(`\\\\begin\\{${environment.replace("*", "\\*")}\\}`, "g")) ?? []).length,
+    1,
+    `${environment} serialization must create exactly one opening environment`,
+  );
+  assert.equal(
+    (canonical.match(new RegExp(`\\\\end\\{${environment.replace("*", "\\*")}\\}`, "g")) ?? []).length,
+    1,
+    `${environment} serialization must create exactly one closing environment`,
+  );
+  assert.ok(!canonical.includes("&"));
+  const rendered = renderOfficeFormulaArtifacts({
+    lines: normalized.lines,
+    codeFormat: normalized.codeFormat,
+    displayMode: "block",
+    includeWordOmml: false,
+  });
+  assert.equal(rendered.canonicalLatex, canonical);
+  assert.ok(rendered.svg.width > 0 && rendered.svg.height > 0);
+}
+
 const displayMath = normalize(
   String.raw`\begin{displaymath}x^2+y^2=z^2\end{displaymath}`,
 );
