@@ -120,6 +120,32 @@ export async function invoke<T>(
           headers: authenticatedHeaders(),
         }),
       );
+    case "get_ocr_install_status":
+      return readJson<T>(
+        await fetch("/api/v1/ocr/install/status", {
+          cache: "no-store",
+          credentials: "same-origin",
+          headers: authenticatedHeaders(),
+        }),
+      );
+    case "cancel_ocr_install":
+      return readJson<T>(
+        await fetch("/api/v1/ocr/install/cancel", {
+          method: "POST",
+          cache: "no-store",
+          credentials: "same-origin",
+          headers: authenticatedHeaders(),
+        }),
+      );
+    case "open_ocr_install_logs":
+      return readJson<T>(
+        await fetch("/api/v1/ocr/install/logs/open", {
+          method: "POST",
+          cache: "no-store",
+          credentials: "same-origin",
+          headers: authenticatedHeaders(),
+        }),
+      );
     case "recognize_formula_image": {
       const bytes = bytePayload(args);
       return readJson<T>(

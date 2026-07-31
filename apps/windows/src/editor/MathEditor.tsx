@@ -10,7 +10,6 @@ import {
 } from "react";
 import {
   MathfieldElement,
-  convertLatexToMarkup,
   type Style,
 } from "mathlive";
 import { flushSync } from "react-dom";
@@ -58,12 +57,25 @@ import {
   resolveVisualTexInlineShortcuts,
   type VisualTexInlineShortcutDefinitions,
 } from "./normalizeChineseLatex";
+import {
+  convertVisualTexLatexToMarkup,
+  installMathLiveContourIntegralShadowStyle,
+} from "./mathLiveIntegralCompatibility";
 import { ImeCompositionGuard } from "./imeCompositionGuard";
+import {
+  nativeSuggestionPreviewHasVisibleInk,
+  resolveNativeSuggestionPreview,
+} from "./nativeSuggestionPreviews";
 
 export interface MathEditorInsertionTarget {
   lineId: string;
   ranges: Array<[number, number]>;
   direction: "forward" | "backward" | "none";
+}
+
+export interface MathEditorFocusOptions {
+  target?: "active" | "first" | "last";
+  moveToEnd?: boolean;
 }
 
 export interface MathEditorHandle {
@@ -75,7 +87,7 @@ export interface MathEditorHandle {
     source?: FormulaEditSource,
   ) => boolean;
   appendLatex: (latex: string, source?: FormulaEditSource) => void;
-  focus: () => void;
+  focus: (options?: MathEditorFocusOptions) => void;
   addLine: () => void;
   commitPendingTransaction: () => void;
   getSelectionMap: () => Record<string, MathSelectionSnapshot>;
@@ -91,6 +103,8 @@ interface Props {
   activeLineId: string | null;
   formulaAlignment: FormulaAlignment;
   zoom: number;
+  readOnly?: boolean;
+  draftError?: string;
   onPasteImage?: (file: File, target: MathEditorInsertionTarget) => void;
   onHistoryBusyChange?: (busy: boolean) => void;
   overlay?: ReactNode;
@@ -152,6 +166,7 @@ interface FormulaFieldProps {
   index: number;
   latex: string;
   zoom: number;
+  readOnly: boolean;
   language: "cn" | "en";
   autoPairDelimiters: boolean;
   inputBehavior: InputBehaviorSettings;
@@ -1001,35 +1016,6 @@ const wrapperCommandPreviews = new Map<string, string>([
   ["\\boldsymbol", "\\boldsymbol{\\alpha A}"],
   ["\\mathnormal", "\\mathnormal{ABC}"],
 ]);
-const nativeCommandPreviews = new Map<string, string>([
-  ...wrapperCommandPreviews,
-  ["\\overset", "\\overset{▢}{▢}"],
-  ["\\underset", "\\underset{▢}{▢}"],
-  ["\\overunderset", "\\overunderset{▢}{▢}{▢}"],
-  ["\\stackrel", "\\stackrel{▢}{▢}"],
-  ["\\stackbin", "\\stackbin{▢}{▢}"],
-  ["\\overarc", "\\overarc{▢}"],
-  ["\\overline", "\\overline{▢}"],
-  ["\\overbrace", "\\overbrace{▢}"],
-  ["\\overgroup", "\\overgroup{▢}"],
-  ["\\overparen", "\\overparen{▢}"],
-  ["\\overleftarrow", "\\overleftarrow{▢}"],
-  ["\\overrightarrow", "\\overrightarrow{▢}"],
-  ["\\overleftrightarrow", "\\overleftrightarrow{▢}"],
-  ["\\overleftharpoon", "\\overleftharpoon{▢}"],
-  ["\\overrightharpoon", "\\overrightharpoon{▢}"],
-  ["\\overlinesegment", "\\overlinesegment{▢}"],
-  ["\\underarc", "\\underarc{▢}"],
-  ["\\underline", "\\underline{▢}"],
-  ["\\underbrace", "\\underbrace{▢}"],
-  ["\\undergroup", "\\undergroup{▢}"],
-  ["\\underparen", "\\underparen{▢}"],
-  ["\\underleftarrow", "\\underleftarrow{▢}"],
-  ["\\underrightarrow", "\\underrightarrow{▢}"],
-  ["\\underleftrightarrow", "\\underleftrightarrow{▢}"],
-  ["\\underlinesegment", "\\underlinesegment{▢}"],
-]);
-
 function visibleCommandSuggestions(
   rawQuery: string,
   usage: Record<string, CommandUsage>,
@@ -1148,20 +1134,49 @@ function decorateNativeSuggestionPreviews() {
 
   panel.querySelectorAll<HTMLElement>("li[data-command]").forEach((item) => {
     const command = item.dataset.command ?? "";
-    const previewLatex = nativeCommandPreviews.get(command);
     const preview = item.querySelector<HTMLElement>(".ML__popover__command");
-    if (!previewLatex || !preview) return;
-    if (preview.dataset.visualtexPreview === previewLatex) return;
+    if (!preview) return;
+    const decoratedCommand = preview.dataset.visualtexPreviewCommand;
+    if (
+      preview.dataset.visualtexPreview &&
+      decoratedCommand === command
+    ) {
+      return;
+    }
+    if (preview.dataset.visualtexPreview) {
+      preview.innerHTML = convertVisualTexLatexToMarkup(command, {
+        defaultMode: "math",
+      });
+      delete preview.dataset.visualtexPreview;
+      delete preview.dataset.visualtexPreviewKind;
+      delete preview.dataset.visualtexPreviewCommand;
+      delete item.dataset.visualtexPreviewKind;
+      item.classList.remove("has-visualtex-command-preview");
+    }
+    const resolved = resolveNativeSuggestionPreview(command, preview);
+    if (!resolved) return;
+    let previewLatex = resolved.latex;
+    let previewKind = resolved.kind;
 
-    preview.innerHTML = convertLatexToMarkup(previewLatex, {
+    preview.innerHTML = convertVisualTexLatexToMarkup(previewLatex, {
       defaultMode: "math",
     });
+    if (!nativeSuggestionPreviewHasVisibleInk(preview)) {
+      preview.innerHTML = convertVisualTexLatexToMarkup("\\boxed{?}", {
+        defaultMode: "math",
+      });
+      previewLatex = "\\boxed{?}";
+      previewKind = "fallback";
+    }
     preview.querySelectorAll<HTMLElement>(".ML__cmr").forEach((node) => {
       if (node.textContent?.trim() !== "▢") return;
       node.classList.add("visualtex-native-preview-placeholder");
     });
     preview.dataset.visualtexPreview = previewLatex;
+    preview.dataset.visualtexPreviewKind = previewKind;
+    preview.dataset.visualtexPreviewCommand = command;
     preview.setAttribute("aria-label", command);
+    item.dataset.visualtexPreviewKind = previewKind;
     item.classList.add("has-visualtex-command-preview");
   });
   scheduleStableNativeInputPopoverSync();
@@ -1174,6 +1189,96 @@ let stableNativeInputPopoverHideTimer = 0;
 let nativeInputPopoverBodyObserver: MutationObserver | null = null;
 let nativeInputPopoverSourceObserver: MutationObserver | null = null;
 let observedNativeInputPopoverSource: HTMLElement | null = null;
+let nativeSuggestionUsageSnapshot: Record<string, CommandUsage> = {};
+let nativeSuggestionPersonalizeSnapshot = true;
+let nativeInputPopoverManualCommand = "";
+
+function nativeSuggestionUsageId(command: string) {
+  const normalized = command.trim();
+  return (
+    commandRegistry.find(
+      (candidate) =>
+        candidate.command === normalized ||
+        candidate.insertTemplate === normalized,
+    )?.id ?? `mathlive-native:${normalized}`
+  );
+}
+
+function nativeSuggestionFrequency(command: string) {
+  const usage = nativeSuggestionUsageSnapshot[nativeSuggestionUsageId(command)];
+  return {
+    // Records created before source-aware frequency tracking did not contain
+    // contextCounts. Preserve that lifetime history during upgrade, while new
+    // records rank the native popup strictly by native candidate acceptance.
+    count: usage?.contextCounts
+      ? usage.contextCounts.candidate ?? 0
+      : usage?.useCount ?? 0,
+    lastUsedAt: usage?.lastUsedAt ?? 0,
+  };
+}
+
+function rankNativeSuggestionItems(panel: HTMLElement) {
+  const items = Array.from(
+    panel.querySelectorAll<HTMLElement>("li[data-command]"),
+  );
+  if (!items.length) return;
+  const parent = items[0]?.parentElement;
+  if (!parent || items.some((item) => item.parentElement !== parent)) return;
+
+  const ranked = nativeSuggestionPersonalizeSnapshot
+    ? items
+        .map((item, index) => ({ item, index }))
+        .sort((left, right) => {
+          const rightUsage = nativeSuggestionFrequency(
+            right.item.dataset.command ?? "",
+          );
+          const leftUsage = nativeSuggestionFrequency(
+            left.item.dataset.command ?? "",
+          );
+          if (rightUsage.count !== leftUsage.count) {
+            return rightUsage.count - leftUsage.count;
+          }
+          if (rightUsage.lastUsedAt !== leftUsage.lastUsedAt) {
+            return rightUsage.lastUsedAt - leftUsage.lastUsedAt;
+          }
+          return left.index - right.index;
+        })
+        .map(({ item }) => item)
+    : items;
+
+  if (ranked.some((item, index) => item !== items[index])) {
+    const fragment = document.createDocumentFragment();
+    ranked.forEach((item) => fragment.append(item));
+    parent.append(fragment);
+  }
+
+  const availableCommands = new Set(
+    ranked.map((item) => item.dataset.command ?? ""),
+  );
+  if (
+    nativeInputPopoverManualCommand &&
+    !availableCommands.has(nativeInputPopoverManualCommand)
+  ) {
+    nativeInputPopoverManualCommand = "";
+  }
+  const selectedCommand =
+    nativeInputPopoverManualCommand || ranked[0]?.dataset.command || "";
+  for (const item of ranked) {
+    item.classList.toggle(
+      "ML__popover__current",
+      item.dataset.command === selectedCommand,
+    );
+  }
+}
+
+function recordNativeSuggestionUsage(command: string, prefix = command) {
+  if (!command) return;
+  useEditorStore
+    .getState()
+    .recordCommand(nativeSuggestionUsageId(command), prefix, "candidate");
+  nativeSuggestionUsageSnapshot = useEditorStore.getState().usage;
+  scheduleStableNativeInputPopoverSync();
+}
 
 function getNativeInputPopoverSource() {
   return document.getElementById("mathlive-suggestion-popover");
@@ -1193,6 +1298,7 @@ function ensureStableNativeInputPopover() {
     const item = target.closest<HTMLElement>("li[data-command]");
     const command = item?.dataset.command ?? "";
     if (!command) return;
+    recordNativeSuggestionUsage(command);
     const sourceItem = Array.from(
       getNativeInputPopoverSource()?.querySelectorAll<HTMLElement>(
         "li[data-command]",
@@ -1286,8 +1392,10 @@ function syncStableNativeInputPopover() {
 
   window.clearTimeout(stableNativeInputPopoverHideTimer);
   source.dataset.visualtexInputPopoverSource = "true";
+  rankNativeSuggestionItems(source);
   const nextHtml = source.innerHTML;
   if (stable.innerHTML !== nextHtml) stable.innerHTML = nextHtml;
+  rankNativeSuggestionItems(stable);
   stable.classList.toggle("top-tip", source.classList.contains("top-tip"));
   stable.classList.toggle(
     "bottom-tip",
@@ -1352,7 +1460,7 @@ function predictedFormulaRowHeight(
     probe.style.pointerEvents = "none";
     probe.style.fontSize = metrics.fontSize + "px";
     probe.style.lineHeight = "normal";
-    probe.innerHTML = convertLatexToMarkup(latex, {
+    probe.innerHTML = convertVisualTexLatexToMarkup(latex, {
       defaultMode: "math",
     });
     measurementHost.append(probe);
@@ -2681,19 +2789,42 @@ function findTrailingCommandRange(
   return null;
 }
 
-function getVisibleNativeSuggestionItems(): HTMLElement[] {
-  const panel = document.getElementById("mathlive-suggestion-popover");
-  if (!panel?.classList.contains("is-visible")) return [];
-  return Array.from(
-    panel.querySelectorAll<HTMLElement>("li[data-command]"),
+function getVisibleNativeSuggestionItems(
+  field?: MathfieldElement,
+): HTMLElement[] {
+  const source = getNativeInputPopoverSource();
+  const stable = document.getElementById(STABLE_NATIVE_INPUT_POPOVER_ID);
+  const sourceItems = Array.from(
+    source?.querySelectorAll<HTMLElement>("li[data-command]") ?? [],
   );
+  const stableItems = Array.from(
+    stable?.querySelectorAll<HTMLElement>("li[data-command]") ?? [],
+  );
+  const sourceVisible = Boolean(
+    source?.classList.contains("is-visible") && sourceItems.length,
+  );
+  const stableVisible = Boolean(
+    stable?.classList.contains("is-visible") && stableItems.length,
+  );
+
+  if (!sourceVisible && !stableVisible) return [];
+  if (sourceVisible) return sourceItems;
+  if (!field || !rawLatexInput(field).trim()) return [];
+
+  // The user-facing panel is a persistent clone of MathLive's source panel.
+  // MathLive can briefly remove `is-visible` from the hidden source while it
+  // rebuilds or remounts it, even though the stable panel is still displayed.
+  // Keep keyboard navigation bound to the displayed candidate list during that
+  // hand-off instead of allowing ArrowUp/ArrowDown to fall through to row
+  // navigation.
+  return sourceItems.length ? sourceItems : stableItems;
 }
 
 function moveNativeSuggestionSelection(
-  _field: MathfieldElement,
+  field: MathfieldElement,
   direction: 1 | -1,
 ): string | null {
-  const items = getVisibleNativeSuggestionItems();
+  const items = getVisibleNativeSuggestionItems(field);
   if (!items.length) return null;
   const currentIndex = items.findIndex((item) =>
     item.classList.contains("ML__popover__current"),
@@ -2711,6 +2842,7 @@ function moveNativeSuggestionSelection(
   // nextSuggestion/previousSuggestion commands run. VisualTeX commits the
   // remembered command itself, so moving only the current-row marker preserves
   // the same popover node and avoids a visible flash on every arrow key.
+  nativeInputPopoverManualCommand = command;
   syncStableNativeInputPopoverSelection(command);
   return command;
 }
@@ -2793,7 +2925,7 @@ function commitNativeSuggestion(
 ): boolean {
   const selectedCommand =
     rememberedCommand ||
-    getVisibleNativeSuggestionItems().find((item) =>
+    getVisibleNativeSuggestionItems(field).find((item) =>
       item.classList.contains("ML__popover__current"),
     )?.dataset.command ||
     "";
@@ -2818,6 +2950,10 @@ function commitNativeSuggestion(
       clearVisualTexPlaceholderRestoreState(field);
       const accepted = field.executeCommand(["complete", "accept-all"]);
       if (accepted) {
+        recordNativeSuggestionUsage(
+          selectedCommand,
+          rawInput || selectedCommand,
+        );
         applyCompletedRawCommandAutoExit(
           field,
           settings,
@@ -2853,6 +2989,10 @@ function commitNativeSuggestion(
       scrollIntoView: false,
     });
     if (inserted) {
+      recordNativeSuggestionUsage(
+        selectedCommand,
+        rawInput || selectedCommand,
+      );
       selectFirstLatexPlaceholder(field, selectedCommand);
       applyCompletedRawCommandAutoExit(
         field,
@@ -2866,7 +3006,7 @@ function commitNativeSuggestion(
     return inserted;
   }
 
-  if (!getVisibleNativeSuggestionItems().length && field.mode !== "latex") {
+  if (!getVisibleNativeSuggestionItems(field).length && field.mode !== "latex") {
     return false;
   }
   const anchor = rawCommandAnchors.get(field);
@@ -2880,6 +3020,7 @@ function commitNativeSuggestion(
 }
 
 function dismissNativeSuggestionPopover(field: MathfieldElement) {
+  nativeInputPopoverManualCommand = "";
   const panel = document.getElementById("mathlive-suggestion-popover");
   const stablePanel = document.getElementById(STABLE_NATIVE_INPUT_POPOVER_ID);
   window.clearTimeout(stableNativeInputPopoverHideTimer);
@@ -3393,6 +3534,114 @@ function moveWithinCustomVerticalStructure(
   return false;
 }
 
+const previousTargetToolbarCommandIds = new Set([
+  "scripts",
+  "lower-script",
+  "upper-script",
+  "power",
+  "subscript",
+  "degree",
+  "overline",
+  "underline",
+  "hat",
+  "widehat",
+  "tilde",
+  "widetilde",
+  "dotaccent",
+  "ddotaccent",
+  "checkaccent",
+  "breveaccent",
+  "acuteaccent",
+  "graveaccent",
+  "ringaccent",
+  "overrightarrow",
+  "overleftarrow",
+  "overleftrightarrow",
+  "overleftharpoon",
+  "overrightharpoon",
+  "overarc",
+  "overgroup",
+  "overparen",
+  "overlinesegment",
+  "underarc",
+  "undergroup",
+  "underparen",
+  "underleftarrow",
+  "underrightarrow",
+  "underleftrightarrow",
+  "underlinesegment",
+  "overbrace",
+  "underbrace",
+  "overset",
+  "underset",
+  "overunderset",
+  "stackrel",
+  "stackbin",
+  "vector",
+  "unitvector",
+  "timederivative",
+  "timesecond",
+  "boxed",
+  "evalbar",
+  "boldsymbol",
+  "blackboard-bold",
+  "math-italic",
+  "math-roman",
+  "math-sans",
+  "math-typewriter",
+  "math-calligraphic",
+  "math-script",
+  "math-fraktur",
+  "bold-symbol",
+  "math-normal",
+]);
+
+const previousTargetToolbarCommandPattern =
+  /^\\(?:acute|grave|dot|ddot|dddot|ddddot|tilde|widetilde|bar|breve|check|hat|widehat|vec|overline|underline|overrightarrow|overleftarrow|overleftrightarrow|overleftharpoon|overrightharpoon|overarc|overgroup|overparen|overlinesegment|underarc|undergroup|underparen|underleftarrow|underrightarrow|underleftrightarrow|underlinesegment|mathring|boxed|mathbf|boldsymbol|mathbb|mathit|mathrm|mathsf|mathtt|mathcal|mathscr|mathfrak|mathnormal)$/;
+
+const nonTargetablePreviousLatex =
+  /^(?:[+\-*/=<>:,;.!?]+|\\(?:pm|mp|times|div|cdot|ast|star|circ|bullet|cap|cup|land|lor|leq?|geq?|neq?|approx|equiv|sim|simeq|cong|propto|in|notin|subseteq?|supseteq?|parallel|perp|mid|nmid|to|leftarrow|rightarrow|leftrightarrow|Rightarrow|Leftarrow|Leftrightarrow))$/;
+
+function commandTargetsPreviousExpression(command: LatexCommand) {
+  return (
+    previousTargetToolbarCommandIds.has(command.id) ||
+    previousTargetToolbarCommandPattern.test(command.command.trim())
+  );
+}
+
+function previousExpressionSelection(field: MathfieldElement) {
+  if (
+    field.mode !== "math" ||
+    !field.selectionIsCollapsed ||
+    field.position <= 0 ||
+    hasRawLatexInput(field)
+  ) {
+    return null;
+  }
+
+  const originalSelection = captureSelection(field);
+  const extended = field.executeCommand("extendSelectionBackward");
+  if (!extended || field.selectionIsCollapsed) {
+    field.selection = originalSelection;
+    return null;
+  }
+
+  const selectedLatex = field.getValue(field.selection).trim();
+  if (
+    !selectedLatex ||
+    selectedLatex === "\\placeholder{}" ||
+    nonTargetablePreviousLatex.test(selectedLatex)
+  ) {
+    field.selection = originalSelection;
+    return null;
+  }
+
+  return {
+    latex: selectedLatex,
+    selection: captureSelection(field),
+  };
+}
+
 function templateForSelection(
   command: LatexCommand,
   selectedLatex: string,
@@ -3403,9 +3652,26 @@ function templateForSelection(
     case "scripts":
       return selectedLatex + "_{\\placeholder{}}^{\\placeholder{}}";
     case "lower-script":
+    case "subscript":
       return selectedLatex + "_{\\placeholder{}}";
     case "upper-script":
+    case "power":
       return selectedLatex + "^{\\placeholder{}}";
+    case "degree":
+      return selectedLatex + "^{\\circ}";
+    case "overset":
+    case "underset":
+    case "stackrel":
+    case "stackbin":
+      return (
+        replaceTextualPlaceholder(command.insertTemplate, 1, selectedLatex) ??
+        command.insertTemplate
+      );
+    case "overunderset":
+      return (
+        replaceTextualPlaceholder(command.insertTemplate, 2, selectedLatex) ??
+        command.insertTemplate
+      );
     case "sum":
     case "series":
       return "\\sum_{\\placeholder{}}^{\\placeholder{}} " + selectedLatex;
@@ -3467,6 +3733,7 @@ function FormulaField(props: FormulaFieldProps) {
     field.value = propsRef.current.latex;
     field.className = "visual-mathfield";
     field.smartMode = false;
+    field.readOnly = propsRef.current.readOnly;
     field.smartFence = propsRef.current.autoPairDelimiters;
     // VisualTeX handles superscript and subscript auto-exit independently.
     // Keep MathLive's built-in superscript heuristic disabled so it cannot
@@ -3504,6 +3771,7 @@ function FormulaField(props: FormulaFieldProps) {
       "--formula-row-height",
       initialRowHeight + "px",
     );
+    installMathLiveContourIntegralShadowStyle(field);
     installVisualTexStructuralPlaceholderStyle(field);
 
     let pointerPlaceholderFrame = 0;
@@ -3659,7 +3927,7 @@ function FormulaField(props: FormulaFieldProps) {
       let renderedWidth = 0;
       if (content) {
         wrapperMeasure.style.fontSize = field.style.fontSize;
-        wrapperMeasure.innerHTML = convertLatexToMarkup(
+        wrapperMeasure.innerHTML = convertVisualTexLatexToMarkup(
           pendingWrapperInput.command + "{" + content + "}",
           { defaultMode: "math" },
         );
@@ -4338,7 +4606,7 @@ function FormulaField(props: FormulaFieldProps) {
       const rawQuery = rawCommandQuery(field) || trailingCommandQuery(field);
       const selectedNativeCommand =
         field.dataset.pendingNativeSuggestion ||
-        getVisibleNativeSuggestionItems().find((item) =>
+        getVisibleNativeSuggestionItems(field).find((item) =>
           item.classList.contains("ML__popover__current"),
         )?.dataset.command ||
         "";
@@ -4489,7 +4757,7 @@ function FormulaField(props: FormulaFieldProps) {
       const wrapperQuery = rawCommandQuery(field) || trailingCommandQuery(field);
       const selectedNativeCommand =
         field.dataset.pendingNativeSuggestion ||
-        getVisibleNativeSuggestionItems().find((item) =>
+        getVisibleNativeSuggestionItems(field).find((item) =>
           item.classList.contains("ML__popover__current"),
         )?.dataset.command ||
         "";
@@ -4624,7 +4892,7 @@ function FormulaField(props: FormulaFieldProps) {
       if (!rawQuery) return false;
       const selectedNativeCommand =
         field.dataset.pendingNativeSuggestion ||
-        getVisibleNativeSuggestionItems().find((item) =>
+        getVisibleNativeSuggestionItems(field).find((item) =>
           item.classList.contains("ML__popover__current"),
         )?.dataset.command ||
         "";
@@ -5032,6 +5300,7 @@ function FormulaField(props: FormulaFieldProps) {
     };
     host.replaceChildren(field);
     field.menuItems = overrideContextStyleMenuItems(field.menuItems);
+    installMathLiveContourIntegralShadowStyle(field);
     installVisualTexStructuralPlaceholderStyle(field);
     defaultInlineShortcutsRef.current = { ...field.inlineShortcuts };
     field.inlineShortcuts = resolveVisualTexInlineShortcuts(
@@ -5222,6 +5491,10 @@ function FormulaField(props: FormulaFieldProps) {
   }, [props.autoPairDelimiters]);
 
   useEffect(() => {
+    if (fieldRef.current) fieldRef.current.readOnly = props.readOnly;
+  }, [props.readOnly]);
+
+  useEffect(() => {
     const field = fieldRef.current;
     const defaults = defaultInlineShortcutsRef.current;
     if (!field || !defaults) return;
@@ -5255,6 +5528,8 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       activeLineId,
       formulaAlignment,
       zoom,
+      readOnly = false,
+      draftError,
       onPasteImage,
       onHistoryBusyChange,
       overlay,
@@ -5398,6 +5673,12 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       queueMicrotask(apply);
       window.requestAnimationFrame(apply);
     };
+
+    useEffect(() => {
+      nativeSuggestionUsageSnapshot = usage;
+      nativeSuggestionPersonalizeSnapshot = personalize;
+      scheduleStableNativeInputPopoverSync();
+    }, [usage, personalize]);
 
     const suggestions = useMemo(
       () =>
@@ -5957,6 +6238,19 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         ? rawCommandAnchors.get(field) ?? null
         : null;
       const originalSelection = rawAnchor?.selection ?? captureSelection(field);
+      let insertionSelection = originalSelection;
+      let implicitPreviousLatex = "";
+      if (
+        !activeQuery &&
+        field.selectionIsCollapsed &&
+        commandTargetsPreviousExpression(command)
+      ) {
+        const previousTarget = previousExpressionSelection(field);
+        if (previousTarget) {
+          insertionSelection = previousTarget.selection;
+          implicitPreviousLatex = previousTarget.latex;
+        }
+      }
       const queryRange = activeQuery
         ? findTrailingCommandRange(field, activeQuery)
         : null;
@@ -5969,9 +6263,13 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         return;
       }
 
-      const selectedLatex = activeQuery || field.selectionIsCollapsed
+      const selectedLatex = activeQuery
         ? ""
-        : field.getValue(field.selection);
+        : implicitPreviousLatex ||
+          (insertionSelection.ranges[0]?.[0] ===
+          insertionSelection.ranges[0]?.[1]
+            ? ""
+            : field.getValue(insertionSelection));
       const insertionTemplate = activeQuery
         ? command.insertTemplate
         : templateForSelection(command, selectedLatex);
@@ -6010,7 +6308,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
 
       const tryInsert = () => {
         if (rawAnchor) restoreRawCommandInsertionAnchor(field, rawAnchor);
-        else field.selection = originalSelection;
+        else field.selection = insertionSelection;
         const inserted = applyDiscreteFormulaMutation(
           targetLineId,
           field,
@@ -6713,13 +7011,10 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       }
 
       const nativeRecommendationVisible =
-        document
-          .getElementById("mathlive-suggestion-popover")
-          ?.classList.contains("is-visible") ?? false;
+        getVisibleNativeSuggestionItems(field).length > 0;
       const pendingNativeSuggestion =
         field.dataset.pendingNativeSuggestion ?? "";
       if (
-        !suppressesCurrentTrailingCommand &&
         !liveSuggestions.length &&
         (nativeRecommendationVisible || Boolean(pendingNativeSuggestion))
       ) {
@@ -6728,7 +7023,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
           (event.key === "ArrowDown" || event.key === "ArrowUp")
         ) {
           event.preventDefault();
-          event.stopPropagation();
+          event.stopImmediatePropagation();
           const selectedNativeCommand = moveNativeSuggestionSelection(
             field,
             event.key === "ArrowDown" ? 1 : -1,
@@ -7225,9 +7520,19 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       insertLatex,
       insertLatexAt,
       appendLatex,
-      focus: () => {
-        const lineId = activeLineIdRef.current ?? linesRef.current[0]?.id;
-        if (lineId) focusLine(lineId);
+      focus: (options = {}) => {
+        const target = options.target ?? "active";
+        const lineId =
+          target === "first"
+            ? linesRef.current[0]?.id
+            : target === "last"
+              ? linesRef.current.at(-1)?.id
+              : activeLineIdRef.current ?? linesRef.current[0]?.id;
+        if (lineId) {
+          focusLine(lineId, {
+            moveToEnd: options.moveToEnd ?? false,
+          });
+        }
       },
       addLine: () => addLineAfter(linesRef.current.length - 1),
       commitPendingTransaction: () => historyManager.commitPendingTransaction(),
@@ -7395,8 +7700,12 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
     return (
       <div
         ref={surfaceRef}
-        className="editor-surface multi-line-editor"
+        className={
+          "editor-surface multi-line-editor" +
+          (readOnly ? " is-read-only-preview" : "")
+        }
         data-command-query={query}
+        data-source-draft-error={draftError}
         data-active-line-id={activeLineIdRef.current ?? ""}
         data-formula-alignment={formulaAlignment}
       >
@@ -7418,6 +7727,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
                   index={index}
                   latex={line.latex}
                   zoom={zoom}
+                  readOnly={readOnly}
                   language={language}
                   autoPairDelimiters={autoPairDelimiters}
                   inputBehavior={inputBehavior}

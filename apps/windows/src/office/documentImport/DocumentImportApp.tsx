@@ -1,5 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FileText, FolderOpen, LoaderCircle, TriangleAlert, X } from "lucide-react";
+import {
+  Braces,
+  CheckCircle2,
+  Eye,
+  FileText,
+  FolderOpen,
+  LoaderCircle,
+  TriangleAlert,
+  X,
+} from "lucide-react";
 import { readErrorMessage } from "../../errors/readErrorMessage";
 import { latexToSvg } from "../../export/latexToSvg";
 import {
@@ -48,8 +57,8 @@ function FormulaPreview({ latex, display }: { latex: string; display: boolean })
       return {
         svg: latexToSvg(latex, {
           displayMode: display,
-          fontSizePt: display ? 16 : 14,
-          paddingPx: display ? 8 : 1,
+          fontSizePt: display ? 9 : 8,
+          paddingPx: display ? 4 : 1,
           background: "transparent",
         }).svg,
         error: "",
@@ -161,8 +170,33 @@ function PreviewBlock({ block }: { block: DocumentImportBlock }) {
 
 function PreviewPane({ parsed }: { parsed: ParsedDocumentImport }) {
   return (
-    <div className="doc-import-preview-document">
-      {parsed.blocks.map((block) => <PreviewBlock key={block.id} block={block} />)}
+    <div className="doc-import-preview-stage">
+      <div className="doc-import-preview-caption" aria-hidden="true">
+        <span>
+          <Eye size={14} />
+          Word 页面预览
+        </span>
+        <span>A4 · 实时结构</span>
+      </div>
+      <div className="doc-import-preview-document" role="document">
+        <div className="doc-import-paper-content">
+          {parsed.blocks.length > 0 ? (
+            parsed.blocks.map((block) => (
+              <PreviewBlock key={block.id} block={block} />
+            ))
+          ) : (
+            <div className="doc-import-paper-empty">
+              <FileText size={28} />
+              <strong>等待文档内容</strong>
+              <span>在左侧输入或粘贴 LaTeX、Markdown 后，这里会实时生成 Word 结构预览。</span>
+            </div>
+          )}
+        </div>
+        <div className="doc-import-page-footer" aria-hidden="true">
+          <span>VisualTeX 文档预览</span>
+          <span>1</span>
+        </div>
+      </div>
     </div>
   );
 }
@@ -363,8 +397,18 @@ export function DocumentImportApp() {
       <section className="doc-import-workspace">
         <article className="doc-import-pane source-pane">
           <div className="doc-import-pane-header">
-            <strong>LaTeX / Markdown 源码</strong>
-            <span>{source.length.toLocaleString()} 字符</span>
+            <div className="doc-import-pane-heading">
+              <span className="doc-import-pane-icon" aria-hidden="true">
+                <Braces size={16} />
+              </span>
+              <div>
+                <strong>LaTeX / Markdown 源码</strong>
+                <small>支持正文、标题、列表、引用、代码块和混合公式</small>
+              </div>
+            </div>
+            <span className="doc-import-pane-stat">
+              {source.length.toLocaleString()} 字符
+            </span>
           </div>
           <textarea
             value={source}
@@ -388,12 +432,24 @@ export function DocumentImportApp() {
 
         <article className="doc-import-pane preview-pane">
           <div className="doc-import-pane-header">
-            <strong>实时预览</strong>
-            {preview.parsed ? (
-              <span>
-                {preview.parsed.blocks.length} 块 · {preview.parsed.inlineFormulaCount} 行内公式 · {preview.parsed.displayFormulaCount} 行间公式
+            <div className="doc-import-pane-heading">
+              <span className="doc-import-pane-icon is-preview" aria-hidden="true">
+                <Eye size={16} />
               </span>
-            ) : <span>等待有效内容</span>}
+              <div>
+                <strong>Word 结构预览</strong>
+                <small>按最终导入层级模拟正文、公式与段落间距</small>
+              </div>
+            </div>
+            {preview.parsed ? (
+              <div className="doc-import-preview-counts" aria-label="预览统计">
+                <span>{preview.parsed.blocks.length} 块</span>
+                <span>{preview.parsed.inlineFormulaCount} 行内</span>
+                <span>{preview.parsed.displayFormulaCount} 行间</span>
+              </div>
+            ) : (
+              <span className="doc-import-pane-stat">等待有效内容</span>
+            )}
           </div>
           <div className="doc-import-preview-scroll">
             {preview.parsed ? <PreviewPane parsed={preview.parsed} /> : (
@@ -413,7 +469,10 @@ export function DocumentImportApp() {
             <span className="warning" key={index}><TriangleAlert size={15} />{warning}</span>
           ))}
           {!loadError && preview.parsed && preview.parsed.warnings.length === 0 ? (
-            <span className="ok">预览解析正常；插入时会再次由 Word 插件严格解析。</span>
+            <span className="ok">
+              <CheckCircle2 size={15} />
+              预览解析正常；插入时会再次由 Word 插件严格解析。
+            </span>
           ) : null}
         </div>
         <div className="doc-import-actions">

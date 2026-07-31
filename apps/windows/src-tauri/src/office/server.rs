@@ -52,8 +52,16 @@ struct HealthResponse {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ThemeResponse {
     theme: String,
+    editor_layout: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OfficePreferencesResponse {
+    powerpoint_default_font_size_pt: f64,
 }
 
 #[derive(Serialize)]
@@ -104,6 +112,7 @@ fn inject_install_token(
     html: &str,
     token: &str,
     theme: &str,
+    editor_layout: &str,
 ) -> Result<String, StatusCode> {
     let marker = "</head>";
     let index = html.find(marker).ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -113,7 +122,7 @@ fn inject_install_token(
         "false"
     };
     let meta = format!(
-        "<meta name=\"visualtex-install-token\" content=\"{token}\" />\n<meta name=\"visualtex-native-powerpoint-commit\" content=\"{native_powerpoint_commit}\" />\n<meta name=\"visualtex-theme\" content=\"{theme}\" />\n"
+        "<meta name=\"visualtex-install-token\" content=\"{token}\" />\n<meta name=\"visualtex-native-powerpoint-commit\" content=\"{native_powerpoint_commit}\" />\n<meta name=\"visualtex-theme\" content=\"{theme}\" />\n<meta name=\"visualtex-editor-layout\" content=\"{editor_layout}\" />\n"
     );
     Ok(format!("{}{}{}", &html[..index], meta, &html[index..]))
 }
@@ -123,12 +132,13 @@ async fn read_office_html(
     relative: &str,
     token: &str,
     theme: &str,
+    editor_layout: &str,
 ) -> Result<Html<String>, StatusCode> {
     let path = ui_root.join(relative);
     let html = tokio::fs::read_to_string(&path)
         .await
         .map_err(|_| StatusCode::NOT_FOUND)?;
-    inject_install_token(&html, token, theme).map(Html)
+    inject_install_token(&html, token, theme, editor_layout).map(Html)
 }
 
 async fn health(State(context): State<ServerContext>) -> Json<HealthResponse> {
@@ -161,11 +171,28 @@ async fn dialog(
         .map_err(|_| StatusCode::NOT_FOUND)?;
     let _ = query.runtime;
     let theme = context.companion.current_theme();
+    let editor_layout = context.companion.current_editor_layout();
     read_office_html(
         &context.companion.paths.ui_root,
         "dialog/index.html",
         &context.companion.install_token,
         &theme,
+        &editor_layout,
+    )
+    .await
+}
+
+async fn dialog_shell(
+    State(context): State<ServerContext>,
+) -> Result<Html<String>, StatusCode> {
+    let theme = context.companion.current_theme();
+    let editor_layout = context.companion.current_editor_layout();
+    read_office_html(
+        &context.companion.paths.ui_root,
+        "dialog/index.html",
+        &context.companion.install_token,
+        &theme,
+        &editor_layout,
     )
     .await
 }
@@ -173,6 +200,17 @@ async fn dialog(
 async fn api_theme(State(context): State<ServerContext>) -> Json<ThemeResponse> {
     Json(ThemeResponse {
         theme: context.companion.current_theme(),
+        editor_layout: context.companion.current_editor_layout(),
+    })
+}
+
+async fn api_preferences(
+    State(context): State<ServerContext>,
+) -> Json<OfficePreferencesResponse> {
+    Json(OfficePreferencesResponse {
+        powerpoint_default_font_size_pt: context
+            .companion
+            .powerpoint_default_font_size_pt(),
     })
 }
 
@@ -204,6 +242,9 @@ async fn reveal_desktop_app(State(context): State<ServerContext>) -> Response {
 }
 
 #[cfg(target_os = "windows")]
+const OFFICE_EDITOR_WINDOW_LABEL: &str = "office-session-editor";
+
+#[cfg(target_os = "windows")]
 fn bring_session_window_to_front(window: &WebviewWindow) -> Result<(), String> {
     window
         .show()
@@ -227,18 +268,23 @@ fn open_desktop_session_window(
     app: tauri::AppHandle,
     session_id: String,
 ) -> Result<(), String> {
-    let label = format!("office-session-{}", session_id.replace('-', ""));
+    let label = OFFICE_EDITOR_WINDOW_LABEL.to_string();
     let url = tauri::Url::parse(&format!(
-        "https://127.0.0.1:{}/dialog/{}?runtime=vsto-desktop",
+        "https://127.0.0.1:{}/dialog?runtime=vsto-desktop&sessionId={}",
         crate::office::state::OFFICE_PORT,
         session_id
     ))
     .map_err(|error| format!("Unable to construct the VisualTeX Session URL: {error}"))?;
 
     if let Some(window) = app.get_webview_window(&label) {
+        let encoded = serde_json::to_string(&session_id)
+            .map_err(|error| format!("Unable to encode the Office Session id: {error}"))?;
+        let script = format!(
+            "window.__VISUALTEX_OFFICE_SESSION_ID__={encoded};history.replaceState(null,'','/dialog?runtime=vsto-desktop&sessionId='+encodeURIComponent({encoded}));window.dispatchEvent(new CustomEvent('visualtex-office-session',{{detail:{{sessionId:{encoded}}}}}));"
+        );
         window
-            .navigate(url)
-            .map_err(|error| format!("Unable to navigate the VisualTeX Session window: {error}"))?;
+            .eval(&script)
+            .map_err(|error| format!("Unable to switch the VisualTeX Session window: {error}"))?;
         return bring_session_window_to_front(&window);
     }
 
@@ -319,6 +365,35 @@ fn open_desktop_conversion_window(
         .map_err(|error| format!("Unable to create the hidden VisualTeX conversion window: {error}"))
 }
 
+#[cfg(target_os = "windows")]
+pub(crate) fn prewarm_desktop_session_window(
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    if app.get_webview_window(OFFICE_EDITOR_WINDOW_LABEL).is_some() {
+        return Ok(());
+    }
+    let url = tauri::Url::parse(&format!(
+        "https://127.0.0.1:{}/dialog?runtime=vsto-desktop",
+        crate::office::state::OFFICE_PORT
+    ))
+    .map_err(|error| format!("Unable to construct the Office editor warmup URL: {error}"))?;
+    WebviewWindowBuilder::new(
+        &app,
+        OFFICE_EDITOR_WINDOW_LABEL,
+        WebviewUrl::External(url),
+    )
+    .title("VisualTeX · Office 公式编辑器")
+    .inner_size(1240.0, 820.0)
+    .min_inner_size(640.0, 480.0)
+    .resizable(true)
+    .center()
+    .focused(false)
+    .visible(false)
+    .build()
+    .map(|_| ())
+    .map_err(|error| format!("Unable to prewarm the VisualTeX Office editor: {error}"))
+}
+
 async fn close_desktop_session(
     AxumPath(session_id): AxumPath<String>,
     State(context): State<ServerContext>,
@@ -334,12 +409,40 @@ async fn close_desktop_session(
 
     #[cfg(target_os = "windows")]
     {
+        // The desktop Office editor is a reusable WebView. Hiding it does not
+        // fire pagehide/beforeunload, so an unchanged edit would otherwise stay
+        // in `editing` forever and keep the host add-in locked. Dirty edits and
+        // create sessions still rely on the editor's normal save/commit path;
+        // only a pristine edit can safely transition without an export payload.
+        let store = context.companion.session_store.clone();
+        let closing_session_id = session_id.clone();
+        if let Err(error) = run_session_operation(move || {
+            let session = store.get(&closing_session_id)?;
+            if session.mode == OfficeSessionMode::Edit
+                && !session.dirty
+                && session.auto_commit_on_close
+                && matches!(
+                    session.status,
+                    OfficeSessionStatus::Created | OfficeSessionStatus::Editing
+                )
+            {
+                store.patch(
+                    &closing_session_id,
+                    serde_json::json!({ "status": "committing" }),
+                )?;
+            }
+            Ok(())
+        })
+        .await
+        {
+            return session_error_response(error);
+        }
+
         let Some(app) = context.companion.app.clone() else {
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         };
         let suffix = session_id.replace('-', "");
-        let labels = [
-            format!("office-session-{suffix}"),
+        let disposable_labels = [
             format!("office-convert-{suffix}"),
             format!("office-import-{suffix}"),
         ];
@@ -348,7 +451,13 @@ async fn close_desktop_session(
             // the request; otherwise WebView2 can cancel the fetch and leave a
             // blank native window behind.
             tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-            for label in labels {
+            if let Some(window) = app.get_webview_window(OFFICE_EDITOR_WINDOW_LABEL) {
+                let _ = window.hide();
+                let _ = window.eval(
+                    "window.__VISUALTEX_OFFICE_SESSION_ID__=undefined;history.replaceState(null,'','/dialog?runtime=vsto-desktop');window.dispatchEvent(new CustomEvent('visualtex-office-session',{detail:{sessionId:''}}));",
+                );
+            }
+            for label in disposable_labels {
                 if let Some(window) = app.get_webview_window(&label) {
                     let _ = window.close();
                 }
@@ -592,6 +701,35 @@ async fn install_ocr(State(context): State<ServerContext>) -> Response {
     };
     match context.companion.ocr.install_runtime(app).await {
         Ok(status) => Json(status).into_response(),
+        Err(error) => ocr_error_response(error),
+    }
+}
+
+async fn get_ocr_install_status(State(context): State<ServerContext>) -> Response {
+    let app = match ocr_app(&context) {
+        Ok(app) => app,
+        Err(response) => return *response,
+    };
+    match context.companion.ocr.install_status(app).await {
+        Ok(status) => Json(status).into_response(),
+        Err(error) => ocr_error_response(error),
+    }
+}
+
+async fn cancel_ocr_install(State(context): State<ServerContext>) -> Response {
+    match context.companion.ocr.cancel_install() {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => ocr_error_response(error),
+    }
+}
+
+async fn open_ocr_install_logs(State(context): State<ServerContext>) -> Response {
+    let app = match ocr_app(&context) {
+        Ok(app) => app,
+        Err(response) => return *response,
+    };
+    match crate::open_ocr_install_logs(app) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => ocr_error_response(error),
     }
 }
@@ -925,6 +1063,11 @@ fn metadata_from_session(session: &OfficeFormulaSession) -> VisualTeXFormulaMeta
         code_format: session.code_format.clone(),
         display_mode: session.display_mode.clone(),
         numbered: session.numbered,
+        equation_tag: if session.display_mode == "block" {
+            original.and_then(|metadata| metadata.equation_tag.clone())
+        } else {
+            None
+        },
         render_width_px: session
             .export_result
             .as_ref()
@@ -946,6 +1089,8 @@ fn metadata_from_session(session: &OfficeFormulaSession) -> VisualTeXFormulaMeta
             .as_ref()
             .map(|_| session.font_size_pt)
             .or_else(|| original.and_then(|value| value.render_font_size_pt)),
+        native_omml_fingerprint: original
+            .and_then(|value| value.native_omml_fingerprint.clone()),
         created_with_version: original
             .map(|value| value.created_with_version.clone())
             .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string()),
@@ -1542,6 +1687,7 @@ pub(crate) fn build_router(companion: OfficeCompanionState) -> Router {
     let api = Router::new()
         .route("/status", get(api_status))
         .route("/theme", get(api_theme))
+        .route("/preferences", get(api_preferences))
         .route("/platform/status", get(get_office_platform_status))
         .route("/app/reveal", post(reveal_desktop_app))
         .route(
@@ -1611,6 +1757,9 @@ pub(crate) fn build_router(companion: OfficeCompanionState) -> Router {
         )
         .route("/ocr/status", get(get_ocr_status))
         .route("/ocr/install", post(install_ocr))
+        .route("/ocr/install/status", get(get_ocr_install_status))
+        .route("/ocr/install/cancel", post(cancel_ocr_install))
+        .route("/ocr/install/logs/open", post(open_ocr_install_logs))
         .route("/ocr/recognize", post(recognize_ocr))
         .route("/ocr/cancel", post(cancel_ocr))
         .route("/ocr/restart", post(restart_ocr))
@@ -1621,6 +1770,7 @@ pub(crate) fn build_router(companion: OfficeCompanionState) -> Router {
 
     Router::new()
         .route("/health", get(health))
+        .route("/dialog", get(dialog_shell))
         .route("/dialog/{session_id}", get(dialog))
         .nest("/api/v1", api)
         .nest_service("/assets", ServeDir::new(ui_root.join("assets")))

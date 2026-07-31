@@ -30,7 +30,25 @@ internal static class Program
             ("intclockwise", "∱", "2231"),
             ("varointclockwise", "∲", "2232"),
             ("ointctrclockwise", "∳", "2233"),
+            ("sumint", "⨋", "2A0B"),
+            ("iiiint", "⨌", "2A0C"),
+            ("intbar", "⨍", "2A0D"),
+            ("intBar", "⨎", "2A0E"),
+            ("fint", "⨏", "2A0F"),
+            ("cirfnint", "⨐", "2A10"),
+            ("awint", "⨑", "2A11"),
             ("intctrclockwise", "⨑", "2A11"),
+            ("rppolint", "⨒", "2A12"),
+            ("scpolint", "⨓", "2A13"),
+            ("npolint", "⨔", "2A14"),
+            ("pointint", "⨕", "2A15"),
+            ("quatint", "⨖", "2A16"),
+            ("intlarhk", "⨗", "2A17"),
+            ("intx", "⨘", "2A18"),
+            ("intcap", "⨙", "2A19"),
+            ("intcup", "⨚", "2A1A"),
+            ("upint", "⨛", "2A1B"),
+            ("lowint", "⨜", "2A1C"),
         };
     private static readonly (string Command, string Accent)[] NativeAccentOperators =
         {
@@ -1478,6 +1496,11 @@ internal static class Program
             AssertBulkLayout(reopened, reopenedMetadata, objectMode);
             AssertBulkDisplaySpacing(reopened, parsed, objectMode);
             AssertBulkExtendedIntegralOperators(reopened, parsed, reopenedMetadata, objectMode);
+            AssertReopenedExtendedIntegralEditSource(
+                application,
+                reopened,
+                reopenedMetadata,
+                objectMode);
             AssertBulkNativeAccents(reopened, parsed, reopenedMetadata, objectMode);
 
             Console.WriteLine(
@@ -1581,6 +1604,7 @@ internal static class Program
                 throw new InvalidDataException(
                     $"Bulk formula has no MathML result: {run.Latex}");
             AssertNoUnknownCommandMathMl(run.Latex, export.MathMl!);
+            AssertLatexCompatibilityMathMl(run.Latex, export.MathMl!);
             AssertExtendedIntegralMathMl(run.Latex, export.MathMl!);
 
             string? pngPath = null;
@@ -1595,6 +1619,7 @@ internal static class Program
                 temporaryPreviewPaths.Add(pngPath);
                 svgPath = client.MaterializeSvg(session);
                 temporaryPreviewPaths.Add(svgPath);
+                AssertNoUnknownCommandSvg(run.Latex, svgPath);
                 AssertExtendedIntegralSvg(run.Latex, svgPath);
                 emfPath = OfficeOlePreview.CreateVectorEmfFromSvg(
                     svgPath,
@@ -1657,17 +1682,56 @@ internal static class Program
         var errors = document
             .Descendants(presentationMath + "mtext")
             .Where(element =>
-                string.Equals(
+                element.Value.IndexOf('\\') >= 0
+                || string.Equals(
                     element.Attribute("mathcolor")?.Value,
                     "red",
-                    StringComparison.OrdinalIgnoreCase)
-                && element.Value.TrimStart().StartsWith("\\", StringComparison.Ordinal))
+                    StringComparison.OrdinalIgnoreCase))
             .Select(element => element.Value.Trim())
             .ToArray();
         Assert(
             errors.Length == 0,
             "MathJax emitted unknown-command error text during bulk formula conversion. "
             + $"Latex='{latex}', Errors=[{string.Join(", ", errors)}].");
+    }
+
+    private static void AssertLatexCompatibilityMathMl(string latex, string mathMl)
+    {
+        if (latex.IndexOf("\\bm", StringComparison.Ordinal) >= 0
+            || latex.IndexOf("\\boldsymbol", StringComparison.Ordinal) >= 0)
+        {
+            Assert(
+                mathMl.IndexOf("mathvariant=\"bold-italic\"", StringComparison.OrdinalIgnoreCase) >= 0,
+                "Bold mathematical symbols did not retain bold-italic semantics in MathML. "
+                + $"Latex='{latex}', MathML='{mathMl}'.");
+            Assert(
+                mathMl.IndexOf("\\bm", StringComparison.Ordinal) < 0
+                && mathMl.IndexOf("\\boldsymbol", StringComparison.Ordinal) < 0,
+                "Bold-symbol commands leaked into MathML as literal text.");
+        }
+        if (latex.IndexOf("\\begin{vmatrix}", StringComparison.Ordinal) >= 0
+            || latex.IndexOf("\\begin{Vmatrix}", StringComparison.Ordinal) >= 0)
+        {
+            var document = XDocument.Parse(mathMl, LoadOptions.PreserveWhitespace);
+            XNamespace presentationMath = "http://www.w3.org/1998/Math/MathML";
+            var table = document.Descendants(presentationMath + "mtable").SingleOrDefault();
+            Assert(table is not null, "vmatrix MathML does not contain a real mtable.");
+            var rows = table!.Elements(presentationMath + "mtr").ToArray();
+            Assert(rows.Length > 0, "vmatrix MathML contains no matrix rows.");
+            Assert(
+                rows.All(row => row.Elements(presentationMath + "mtd").Any()),
+                "vmatrix MathML contains an empty matrix row.");
+        }
+    }
+
+    private static void AssertNoUnknownCommandSvg(string latex, string svgPath)
+    {
+        var svg = File.ReadAllText(svgPath, Encoding.UTF8);
+        Assert(
+            svg.IndexOf("data-mml-node=\"mtext\" fill=\"red\"", StringComparison.OrdinalIgnoreCase) < 0
+            && svg.IndexOf("data-mml-node=\"merror\"", StringComparison.OrdinalIgnoreCase) < 0,
+            "MathJax emitted a red command/error glyph in the OLE vector preview. "
+            + $"Latex='{latex}', Svg='{svgPath}'.");
     }
 
     private static void AssertExtendedIntegralMathMl(string latex, string mathMl)
@@ -1712,6 +1776,20 @@ internal static class Program
             Assert(
                 svg.IndexOf("\\" + item.Command, StringComparison.Ordinal) < 0,
                 $"\\{item.Command} leaked into SVG as literal text: {svgPath}");
+            var renderedCommand = string.Equals(
+                item.Command,
+                "intctrclockwise",
+                StringComparison.Ordinal)
+                ? "awint"
+                : item.Command;
+            Assert(
+                svg.IndexOf(
+                    $"data-visualtex-integral=\"{renderedCommand}\"",
+                    StringComparison.Ordinal) >= 0,
+                $"\\{item.Command} did not use the VisualTeX large vector glyph in OLE SVG: {svgPath}");
+            Assert(
+                svg.IndexOf($">{item.Symbol}</text>", StringComparison.Ordinal) < 0,
+                $"\\{item.Command} fell back to a small system-font character in OLE SVG: {svgPath}");
         }
     }
 
@@ -1767,6 +1845,39 @@ internal static class Program
                 $"Bulk OMML did not preserve \\{item.Command} as native n-ary operator {item.Symbol}. "
                 + $"Actual n-ary symbols=[{string.Join(",", narySymbols.Select(symbol => $"{symbol}:U+{char.ConvertToUtf32(symbol, 0):X4}"))}].");
         }
+    }
+
+    private static void AssertReopenedExtendedIntegralEditSource(
+        Word.Application application,
+        Word.Document document,
+        IReadOnlyList<FormulaMetadata> metadata,
+        string objectMode)
+    {
+        if (!string.Equals(objectMode, "ole", StringComparison.OrdinalIgnoreCase))
+            return;
+        var contour = metadata.FirstOrDefault(item =>
+            (item.Latex ?? string.Empty).IndexOf("\\oiint", StringComparison.Ordinal) >= 0);
+        if (contour is null) return;
+
+        SelectFormula(document, contour, objectMode);
+        var reopened = new WordFormulaService(application).ReadSelection();
+        Assert(
+            string.Equals(
+                reopened.ObjectMode,
+                FormulaOleContract.NativeOleMode,
+                StringComparison.Ordinal),
+            "Save/reopen changed the \\oiint OLE object mode.");
+        Assert(
+            string.Equals(reopened.FormulaId, contour.FormulaId, StringComparison.OrdinalIgnoreCase),
+            "Save/reopen routed the \\oiint OLE object to a different formulaId.");
+        var reopenedLatex = reopened.Metadata?.Latex ?? string.Empty;
+        Assert(
+            reopenedLatex.IndexOf("\\oiint", StringComparison.Ordinal) >= 0,
+            "Save/reopen lost the editable \\oiint command from OLE metadata. "
+            + $"ActualLatex='{reopenedLatex}'.");
+        Assert(
+            reopenedLatex.IndexOf('∯') < 0,
+            "Save/reopen serialized \\oiint as a raw Unicode glyph instead of canonical LaTeX.");
     }
 
     private static void AssertBulkNativeAccents(
@@ -2240,7 +2351,9 @@ internal static class Program
             Assert(source.Metadata is not null, $"Formula {item.FormulaId} cannot be routed to the editor.");
             Assert(
                 string.Equals(source.FormulaId, item.FormulaId, StringComparison.OrdinalIgnoreCase),
-                $"Formula {item.FormulaId} routed to a different formula ID.");
+                $"Formula {item.FormulaId} routed to a different formula ID "
+                + $"{source.FormulaId ?? "<null>"}. "
+                + $"ExpectedLatex='{item.Latex}', ActualLatex='{source.Metadata?.Latex}'.");
             AssertClose(
                 FormulaFontSize.ResolveSemanticFontSize(item),
                 FormulaFontSize.ResolveSemanticFontSize(source.Metadata!),
@@ -2263,6 +2376,16 @@ internal static class Program
                         "Bulk inline OLE disappeared before the edit acceptance.");
                 var beforeWidth = beforeShape.Width;
                 var beforeHeight = beforeShape.Height;
+                var baselineSize = FormulaFontSize.OleSizeAt(
+                    item,
+                    FormulaFontSize.ResolveSemanticFontSize(item));
+                Console.WriteLine(
+                    "  [OLE inline 11 pt baseline] "
+                    + $"latex='{item.Latex}'; actual={beforeWidth:0.###}x{beforeHeight:0.###} pt; "
+                    + $"semantic-svg={baselineSize.Width:0.###}x{baselineSize.Height:0.###} pt; "
+                    + $"error={Math.Abs(beforeWidth - baselineSize.Width) / Math.Max(1f, baselineSize.Width):P1}/"
+                    + $"{Math.Abs(beforeHeight - baselineSize.Height) / Math.Max(1f, baselineSize.Height):P1}; "
+                    + $"render={item.RenderWidthPx:0.###}x{item.RenderHeightPx:0.###} px.");
                 var renderWidth = Math.Max(2, (int)Math.Ceiling((item.RenderWidthPx ?? 24d) * 1.9d));
                 var renderHeight = Math.Max(2, (int)Math.Ceiling(item.RenderHeightPx ?? 11d));
                 var previewRoot = Path.Combine(
@@ -2390,7 +2513,14 @@ internal static class Program
                     bookmark = WordOmmlFormulaStore.FindByFormulaId(document, item.FormulaId);
                     Assert(bookmark is not null, $"OMML bookmark disappeared: {item.FormulaId}");
                     equation = WordOmmlFormulaStore.GetEquationRange(bookmark!);
-                    AssertNoEmptyOmmlScriptSlots(equation.WordOpenXML, item.FormulaId);
+                    var equationOpenXml = equation.WordOpenXML;
+                    AssertNoLiteralLatexCommandsInOmml(
+                        equationOpenXml,
+                        item.FormulaId);
+                    AssertNoEmptyOmmlScriptSlots(equationOpenXml, item.FormulaId);
+                    if (item.Latex.IndexOf("\\begin{vmatrix}", StringComparison.Ordinal) >= 0
+                        || item.Latex.IndexOf("\\begin{Vmatrix}", StringComparison.Ordinal) >= 0)
+                        AssertNativeOmmlVmatrix(equationOpenXml, item.FormulaId);
                     if (item.Latex.IndexOf("\\begin{align", StringComparison.Ordinal) >= 0
                         || item.Latex.IndexOf("\\begin{aligned", StringComparison.Ordinal) >= 0)
                     {
@@ -2424,6 +2554,28 @@ internal static class Program
                         shape = shapes[index];
                         var candidate = WordFormulaMetadataReader.TryRead(shape);
                         if (candidate?.FormulaId != item.FormulaId) continue;
+                        var expectedSize = FormulaFontSize.OleSizeAt(
+                            item,
+                            FormulaFontSize.ResolveSemanticFontSize(item));
+                        var widthError = Math.Abs(shape.Width - expectedSize.Width)
+                            / Math.Max(1f, expectedSize.Width);
+                        var heightError = Math.Abs(shape.Height - expectedSize.Height)
+                            / Math.Max(1f, expectedSize.Height);
+                        Assert(
+                            widthError <= 0.10f && heightError <= 0.10f,
+                            "Bulk OLE physical size does not match the SVG's 96 dpi to Word 72 dpi semantic size. "
+                            + $"FormulaId={item.FormulaId}; Actual={shape.Width:0.###}x{shape.Height:0.###} pt; "
+                            + $"Expected={expectedSize.Width:0.###}x{expectedSize.Height:0.###} pt; "
+                            + $"Error={widthError:P1}/{heightError:P1}.");
+                        if (string.Equals(item.Latex.Trim(), "x", StringComparison.Ordinal))
+                        {
+                            Console.WriteLine(
+                                "  [OLE 11 pt x] "
+                                + $"actual={shape.Width:0.###}x{shape.Height:0.###} pt; "
+                                + $"semantic-svg={expectedSize.Width:0.###}x{expectedSize.Height:0.###} pt; "
+                                + $"error={widthError:P1}/{heightError:P1}; "
+                                + $"render={item.RenderWidthPx:0.###}x{item.RenderHeightPx:0.###} px.");
+                        }
                         if (item.DisplayMode == "inline")
                         {
                             var objectModelPosition = shape.Range.Font.Position;
@@ -2454,6 +2606,63 @@ internal static class Program
                 }
             }
             finally { Release(shapes); }
+        }
+    }
+
+    private static void AssertNoLiteralLatexCommandsInOmml(
+        string wordOpenXml,
+        string formulaId)
+    {
+        var document = XDocument.Parse(wordOpenXml, LoadOptions.PreserveWhitespace);
+        XNamespace math = "http://schemas.openxmlformats.org/officeDocument/2006/math";
+        var literals = document
+            .Descendants(math + "t")
+            .Select(text => text.Value)
+            .Where(value => value.IndexOf('\\') >= 0)
+            .ToArray();
+        Assert(
+            literals.Length == 0,
+            "OMML contains literal LaTeX command text. "
+            + $"FormulaId={formulaId}; Values=[{string.Join(", ", literals)}].");
+    }
+
+    private static void AssertNativeOmmlVmatrix(
+        string wordOpenXml,
+        string formulaId)
+    {
+        var document = XDocument.Parse(wordOpenXml, LoadOptions.PreserveWhitespace);
+        XNamespace math = "http://schemas.openxmlformats.org/officeDocument/2006/math";
+        var delimiter = document.Descendants(math + "d").SingleOrDefault(element =>
+            element.Element(math + "dPr")?
+                .Element(math + "begChr")?
+                .Attribute(math + "val")?
+                .Value is "|" or "‖");
+        Assert(
+            delimiter is not null,
+            "vmatrix did not become one native OMML delimiter. "
+            + $"FormulaId={formulaId}.");
+        var matrix = delimiter!.Descendants(math + "m").SingleOrDefault();
+        Assert(matrix is not null,
+            "vmatrix native delimiter does not contain an OMML matrix. "
+            + $"FormulaId={formulaId}.");
+        var rows = matrix!.Elements(math + "mr").ToArray();
+        Assert(rows.Length > 0,
+            "vmatrix OMML matrix contains no rows. "
+            + $"FormulaId={formulaId}.");
+        foreach (var row in rows)
+        {
+            var cells = row.Elements(math + "e").ToArray();
+            Assert(cells.Length > 0,
+                "vmatrix OMML matrix contains an empty row. "
+                + $"FormulaId={formulaId}.");
+            foreach (var cell in cells)
+            {
+                Assert(
+                    cell.Descendants(math + "t").Any(text =>
+                        !string.IsNullOrWhiteSpace(text.Value)),
+                    "vmatrix OMML matrix contains a dotted empty slot. "
+                    + $"FormulaId={formulaId}; Cell={cell.ToString(SaveOptions.DisableFormatting)}.");
+            }
         }
     }
 
@@ -2869,10 +3078,37 @@ internal static class Program
             + "<mtr><mtd><msub><mi>R</mi><mi>i</mi></msub></mtd>"
             + "<mtd><mi></mi><mo>=</mo><msub><mi>R</mi><mrow><mi>g</mi><mn>1</mn></mrow></msub><mo>&#x2225;</mo><msub><mi>R</mi><mrow><mi>g</mi><mn>2</mn></mrow></msub></mtd></mtr>"
             + "</mtable></math>";
+        const string compatibilityLatex =
+            @"\nabla\times\bm F=\begin{vmatrix}\bm e_x&\bm e_y&\bm e_z\\\partial_x&\partial_y&\partial_z\\F_x&F_y&F_z\end{vmatrix}.";
+        const string compatibilityMathMl =
+            "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">"
+            + "<mi mathvariant=\"normal\">&#x2207;</mi><mo>&#xD7;</mo>"
+            + "<mi mathvariant=\"bold-italic\">F</mi><mo>=</mo>"
+            + "<mrow data-mjx-texclass=\"INNER\"><mo data-mjx-texclass=\"OPEN\">|</mo>"
+            + "<mtable><mtr>"
+            + "<mtd><msub><mi mathvariant=\"bold-italic\">e</mi><mi>x</mi></msub></mtd>"
+            + "<mtd><msub><mi mathvariant=\"bold-italic\">e</mi><mi>y</mi></msub></mtd>"
+            + "<mtd><msub><mi mathvariant=\"bold-italic\">e</mi><mi>z</mi></msub></mtd></mtr>"
+            + "<mtr><mtd><msub><mi>&#x2202;</mi><mi>x</mi></msub></mtd>"
+            + "<mtd><msub><mi>&#x2202;</mi><mi>y</mi></msub></mtd>"
+            + "<mtd><msub><mi>&#x2202;</mi><mi>z</mi></msub></mtd></mtr>"
+            + "<mtr><mtd><msub><mi>F</mi><mi>x</mi></msub></mtd>"
+            + "<mtd><msub><mi>F</mi><mi>y</mi></msub></mtd>"
+            + "<mtd><msub><mi>F</mi><mi>z</mi></msub></mtd></mtr></mtable>"
+            + "<mo data-mjx-texclass=\"CLOSE\">|</mo></mrow><mo>.</mo></math>";
+        const string compatibilityEditedMathMl =
+            "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">"
+            + "<mi mathvariant=\"normal\">&#x2207;</mi><mo>&#xD7;</mo>"
+            + "<mi mathvariant=\"bold-italic\">F</mi><mo>=</mo>"
+            + "<mrow data-mjx-texclass=\"INNER\"><mo data-mjx-texclass=\"OPEN\">|</mo>"
+            + "<mtable><mtr><mtd><mi>a</mi></mtd><mtd><mi>b</mi></mtd></mtr>"
+            + "<mtr><mtd><mi>c</mi></mtd><mtd><mi>d</mi></mtd></mtr></mtable>"
+            + "<mo data-mjx-texclass=\"CLOSE\">|</mo></mrow><mo>+</mo><mn>1</mn></math>";
         var oleFormulaId = Guid.NewGuid().ToString();
         var legacyOleFormulaId = Guid.NewGuid().ToString();
         var inlineEditOleFormulaId = Guid.NewGuid().ToString();
         var alignedOmmlFormulaId = Guid.NewGuid().ToString();
+        var compatibilityOmmlFormulaId = Guid.NewGuid().ToString();
         var blockOmmlFormulaId = Guid.NewGuid().ToString();
         var blockOleFormulaId = Guid.NewGuid().ToString();
         var verifyInlineEditExpansion =
@@ -3119,6 +3355,61 @@ internal static class Program
 
             selection.EndKey(Word.WdUnits.wdStory);
             selection.TypeParagraph();
+            selection.TypeText("直接 OMML 兼容链：");
+            var compatibilitySession = CreateWordSession(
+                compatibilityOmmlFormulaId,
+                "create",
+                FormulaOleContract.WordOmmlMode,
+                compatibilityLatex,
+                compatibilityMathMl,
+                preview,
+                numbered: false,
+                originalMetadata: null,
+                fontSizePt: 11);
+            compatibilitySession.DisplayMode = "block";
+            service.InsertOmml(compatibilitySession, compatibilityMathMl);
+            Release(bookmark);
+            bookmark = WordOmmlFormulaStore.FindByFormulaId(document, compatibilityOmmlFormulaId)
+                ?? throw new InvalidOperationException("Direct compatibility OMML bookmark was not created.");
+            Release(range);
+            range = WordOmmlFormulaStore.GetEquationRange(bookmark);
+            AssertNoLiteralLatexCommandsInOmml(range.WordOpenXML, compatibilityOmmlFormulaId);
+            AssertNativeOmmlVmatrix(range.WordOpenXML, compatibilityOmmlFormulaId);
+            var compatibilityInitialPath = Path.Combine(
+                Path.GetDirectoryName(path)!,
+                "VisualTeX-Word-Compatibility-OMML-Initial.docx");
+            document.SaveAs2(
+                compatibilityInitialPath,
+                Word.WdSaveFormat.wdFormatXMLDocument);
+
+            // Follow the same selection/read/edit/write-back sequence used by a
+            // real double-click edit, rather than only testing initial insert.
+            range.Select();
+            var compatibilitySource = service.ReadSelection();
+            var compatibilityMetadata = compatibilitySource.Metadata
+                ?? throw new InvalidOperationException("Direct compatibility OMML edit metadata is missing.");
+            var compatibilityEditSession = CreateWordSession(
+                compatibilityOmmlFormulaId,
+                "edit",
+                FormulaOleContract.WordOmmlMode,
+                compatibilityLatex + "+1",
+                compatibilityEditedMathMl,
+                preview,
+                numbered: false,
+                originalMetadata: compatibilityMetadata,
+                fontSizePt: FormulaFontSize.ResolveSemanticFontSize(compatibilityMetadata));
+            compatibilityEditSession.DisplayMode = "block";
+            service.ReplaceOmml(compatibilityEditSession, compatibilityEditedMathMl);
+            Release(bookmark);
+            bookmark = WordOmmlFormulaStore.FindByFormulaId(document, compatibilityOmmlFormulaId)
+                ?? throw new InvalidOperationException("Direct compatibility OMML disappeared after edit/write-back.");
+            Release(range);
+            range = WordOmmlFormulaStore.GetEquationRange(bookmark);
+            AssertNoLiteralLatexCommandsInOmml(range.WordOpenXML, compatibilityOmmlFormulaId);
+            AssertNativeOmmlVmatrix(range.WordOpenXML, compatibilityOmmlFormulaId);
+
+            selection.EndKey(Word.WdUnits.wdStory);
+            selection.TypeParagraph();
             var blockOmmlLeadStart = selection.Start;
             selection.TypeText("编号 OMML 行间公式前文");
             selection.ParagraphFormat.SpaceAfter = 8f;
@@ -3268,6 +3559,20 @@ internal static class Program
                 new[] { "right", "left" },
                 expectedRows: 3,
                 "Saved Word aligned OMML lost the ampersand alignment columns.");
+
+            Release(bookmark);
+            bookmark = WordOmmlFormulaStore.FindByFormulaId(document, compatibilityOmmlFormulaId)
+                ?? throw new InvalidOperationException("Saved direct compatibility OMML bookmark is missing.");
+            Release(range);
+            range = WordOmmlFormulaStore.GetEquationRange(bookmark);
+            AssertNoLiteralLatexCommandsInOmml(range.WordOpenXML, compatibilityOmmlFormulaId);
+            AssertNativeOmmlVmatrix(range.WordOpenXML, compatibilityOmmlFormulaId);
+            range.Select();
+            var reopenedCompatibilitySource = reopenedService.ReadSelection();
+            Assert(
+                reopenedCompatibilitySource.Metadata is not null
+                && reopenedCompatibilitySource.Metadata.Latex.EndsWith("+1", StringComparison.Ordinal),
+                "Saved direct compatibility OMML did not preserve edited LaTeX metadata.");
 
             AssertEquationNumberFontSize(document, blockOmmlFormulaId, 24f,
                 "Saved Word display OMML equation number did not preserve its formula font size.");

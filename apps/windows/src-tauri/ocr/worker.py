@@ -139,16 +139,23 @@ def _watch_parent_process() -> None:
             os._exit(0)
 
 
-def _model_is_cached(model_name: str) -> bool:
+def _cached_model_dir(model_name: str) -> Optional[Path]:
     candidates = [Path.home() / ".paddlex" / "official_models" / model_name]
     cache_home = os.environ.get("PADDLE_PDX_CACHE_HOME", "").strip()
     if cache_home:
         candidates.insert(0, Path(cache_home) / "official_models" / model_name)
-    return any(
-        (directory / "inference.json").exists()
-        and (directory / "inference.pdiparams").exists()
-        for directory in candidates
-    )
+    for directory in candidates:
+        if (
+            (directory / "inference.json").is_file()
+            and (directory / "inference.pdiparams").is_file()
+            and (directory / "inference.yml").is_file()
+        ):
+            return directory
+    return None
+
+
+def _model_is_cached(model_name: str) -> bool:
+    return _cached_model_dir(model_name) is not None
 
 
 def _strip_outer_delimiters(value: str) -> str:
@@ -335,11 +342,29 @@ def _load_model(model_name: str, device: str) -> Any:
         _CURRENT_DEVICE = None
         gc.collect()
 
-    _log(f"Loading {model_name} on {device}")
+    cached_model_dir = _cached_model_dir(model_name)
+    if cached_model_dir is not None:
+        _log(
+            f"Loading {model_name} directly from local model_dir "
+            f"{cached_model_dir} on {device}"
+        )
+    else:
+        _log(f"Loading {model_name} through the PaddleX model registry on {device}")
     with contextlib.redirect_stdout(sys.stderr):
         from paddleocr import FormulaRecognition
 
-        model = FormulaRecognition(model_name=model_name, device=device)
+        if cached_model_dir is not None:
+            # Passing model_dir bypasses PaddleX host connectivity checks and
+            # repository metadata downloads. The three inference artifacts are
+            # sufficient for local prediction and reduce a cached Windows M
+            # model startup from roughly one minute to a few seconds.
+            model = FormulaRecognition(
+                model_name=model_name,
+                model_dir=str(cached_model_dir),
+                device=device,
+            )
+        else:
+            model = FormulaRecognition(model_name=model_name, device=device)
 
     _CURRENT_MODEL = model
     _CURRENT_MODEL_NAME = model_name
@@ -353,13 +378,15 @@ def _warmup(request: Dict[str, Any]) -> Dict[str, Any]:
     model_name = str(request.get("model") or "PP-FormulaNet_plus-M")
     device = str(request.get("device") or "cpu")
     _load_model(model_name, device)
+    elapsed_ms = round((time.perf_counter() - started) * 1000)
+    _log(f"Warmed {model_name} on {device} in {elapsed_ms} ms")
     return {
         "id": request_id,
         "ok": True,
         "event": "warmed",
         "model": model_name,
         "device": device,
-        "elapsed_ms": round((time.perf_counter() - started) * 1000),
+        "elapsed_ms": elapsed_ms,
     }
 
 

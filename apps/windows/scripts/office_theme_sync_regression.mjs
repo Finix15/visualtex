@@ -19,6 +19,7 @@ const distRoot = join(process.cwd(), "dist-office-windows-native");
 const chromeProfile = createBrowserProfilePath("visualtex-windows-office-theme");
 const chromePath = resolveChromiumExecutable();
 let currentTheme = "purple";
+let currentEditorLayout = "classic";
 
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
@@ -42,7 +43,10 @@ const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", baseUrl);
   try {
     if (url.pathname === "/api/v1/theme") {
-      writeJson(response, 200, { theme: currentTheme });
+      writeJson(response, 200, {
+        theme: currentTheme,
+        editorLayout: currentEditorLayout,
+      });
       return;
     }
     if (url.pathname.startsWith("/api/v1/sessions/")) {
@@ -54,6 +58,7 @@ const server = createServer(async (request, response) => {
       const meta = [
         '<meta name="visualtex-install-token" content="theme-regression" />',
         `<meta name="visualtex-theme" content="${currentTheme}" />`,
+        `<meta name="visualtex-editor-layout" content="${currentEditorLayout}" />`,
       ].join("\n");
       const html = source.replace("</head>", `${meta}\n</head>`);
       response.writeHead(200, {
@@ -166,14 +171,21 @@ async function waitForPage() {
   throw new Error("Timed out waiting for the Office theme regression page");
 }
 
-async function readTheme(client) {
-  return client.evaluate(`({
-    theme: document.documentElement.dataset.theme,
-    background: getComputedStyle(document.documentElement).getPropertyValue('--bg').trim().toLowerCase(),
-    surface: getComputedStyle(document.documentElement).getPropertyValue('--surface').trim().toLowerCase(),
-    formulaSurface: getComputedStyle(document.documentElement).getPropertyValue('--formula-surface').trim().toLowerCase(),
-    caret: getComputedStyle(document.documentElement).getPropertyValue('--formula-caret').trim().toLowerCase(),
-  })`);
+async function readAppearance(client) {
+  return client.evaluate(`(() => {
+    let editorLayout = null;
+    try {
+      editorLayout = JSON.parse(localStorage.getItem('visualtex-editor') || '{}')?.state?.editorLayout ?? null;
+    } catch {}
+    return {
+      theme: document.documentElement.dataset.theme,
+      editorLayout,
+      background: getComputedStyle(document.documentElement).getPropertyValue('--bg').trim().toLowerCase(),
+      surface: getComputedStyle(document.documentElement).getPropertyValue('--surface').trim().toLowerCase(),
+      formulaSurface: getComputedStyle(document.documentElement).getPropertyValue('--formula-surface').trim().toLowerCase(),
+      caret: getComputedStyle(document.documentElement).getPropertyValue('--formula-caret').trim().toLowerCase(),
+    };
+  })()`);
 }
 
 async function main() {
@@ -206,8 +218,9 @@ async function main() {
     await client.send("Page.enable");
     await sleep(500);
 
-    assert.deepEqual(await readTheme(client), {
+    assert.deepEqual(await readAppearance(client), {
       theme: "purple",
+      editorLayout: "classic",
       background: "#120e16",
       surface: "#362842",
       formulaSurface: "#433252",
@@ -215,14 +228,19 @@ async function main() {
     });
 
     currentTheme = "green";
+    currentEditorLayout = "standard";
     let synchronized;
     for (let attempt = 0; attempt < 20; attempt += 1) {
       await sleep(100);
-      synchronized = await readTheme(client);
-      if (synchronized.theme === "green") break;
+      synchronized = await readAppearance(client);
+      if (
+        synchronized.theme === "green" &&
+        synchronized.editorLayout === "standard"
+      ) break;
     }
     assert.deepEqual(synchronized, {
       theme: "green",
+      editorLayout: "standard",
       background: "#0d120f",
       surface: "#25352d",
       formulaSurface: "#2a3b32",
@@ -230,7 +248,7 @@ async function main() {
     });
 
     process.stdout.write(
-      "Windows Office theme inheritance and live synchronization regression passed\n",
+      "Windows Office theme and editor-layout inheritance regression passed\n",
     );
   } finally {
     client?.close();

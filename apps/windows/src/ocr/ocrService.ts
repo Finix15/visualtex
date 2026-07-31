@@ -109,11 +109,37 @@ export function resolveAvailableOcrModel(
   return fallback?.id ?? requested;
 }
 
+export type OcrInstallState =
+  | "notInstalled"
+  | "installing"
+  | "installFailed"
+  | "dependenciesInstalled"
+  | "verifying"
+  | "verificationFailed"
+  | "complete"
+  | "cancelled";
+
 export interface OcrInstallProgress {
   stage: string;
+  state: OcrInstallState;
   percent: number;
   message: string;
   detail: string | null;
+  error: string | null;
+  logPath: string | null;
+}
+
+export interface OcrInstallStatus {
+  schemaVersion: number;
+  state: OcrInstallState;
+  currentStep: string | null;
+  completedSteps: string[];
+  percent: number;
+  message: string;
+  detail: string | null;
+  error: string | null;
+  logPath: string;
+  updatedAtMs: number;
 }
 
 export interface OcrFormulaResult {
@@ -237,6 +263,21 @@ export async function getOcrRuntimeStatus(
 export async function installOcrRuntime(): Promise<OcrRuntimeStatus> {
   requireOcrEnvironment();
   return invoke<OcrRuntimeStatus>("install_ocr_runtime");
+}
+
+export async function getOcrInstallStatus(): Promise<OcrInstallStatus> {
+  requireOcrEnvironment();
+  return invoke<OcrInstallStatus>("get_ocr_install_status");
+}
+
+export async function cancelOcrInstall(): Promise<void> {
+  requireOcrEnvironment();
+  return invoke("cancel_ocr_install");
+}
+
+export async function openOcrInstallLogs(): Promise<void> {
+  requireOcrEnvironment();
+  return invoke("open_ocr_install_logs");
 }
 
 export async function recognizeFormulaImage(

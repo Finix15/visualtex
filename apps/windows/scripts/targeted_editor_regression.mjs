@@ -7,9 +7,9 @@ import {
 } from "./browser_test_runtime.mjs";
 
 const scenario = process.argv[2];
-if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "native-space-selection", "candidate-query-reset", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "accent-placeholder", "caret-probe", "scripts", "upright", "context-style", "suggestions", "navigation", "geometry", "source-layout", "toolbar-compact", "formula-tiles", "cursor-placement", "settings", "layout", "delete", "export"]).has(scenario)) {
+if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "usage-ranking", "native-space-selection", "candidate-query-reset", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "accent-placeholder", "caret-probe", "scripts", "upright", "context-style", "suggestions", "navigation", "geometry", "source-layout", "toolbar-compact", "toolbar-postfix", "formula-tiles", "cursor-placement", "settings", "layout", "delete", "export"]).has(scenario)) {
   throw new Error(
-    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|native-space-selection|candidate-query-reset|raw-placeholder-visual|placeholder-selection|structural-placeholder|accent-placeholder|caret-probe|scripts|upright|context-style|suggestions|navigation|geometry|source-layout|toolbar-compact|formula-tiles|cursor-placement|settings|layout|delete|export>",
+    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|usage-ranking|native-space-selection|candidate-query-reset|raw-placeholder-visual|placeholder-selection|structural-placeholder|accent-placeholder|caret-probe|scripts|upright|context-style|suggestions|navigation|geometry|source-layout|toolbar-compact|toolbar-postfix|formula-tiles|cursor-placement|settings|layout|delete|export>",
   );
 }
 
@@ -222,10 +222,56 @@ async function main() {
         ...(persisted.state || {}),
         lines: [{ id: crypto.randomUUID(), latex: "" }],
         activeLineId: null,
-        ${scenario === "formula-tiles" ? 'editorLayout: "standard",\r\n        sidebarOpen: true,' : ""}
+        ${scenario === "formula-tiles" || scenario === "usage-ranking" ? 'editorLayout: "standard",\r\n        sidebarOpen: true,' : ""}
+        ${scenario === "toolbar-postfix" ? 'editorLayout: "classic",' : ""}
+        ${scenario === "usage-ranking" ? `personalize: true,
+        usage: {
+          sqrt: {
+            commandId: "sqrt",
+            useCount: 18,
+            lastUsedAt: 1800,
+            recentUses: [],
+            acceptedPrefixes: {},
+            contextCounts: { toolbar: 18 },
+            pinned: false,
+          },
+          "formula-tile-gaussian-integral": {
+            commandId: "formula-tile-gaussian-integral",
+            useCount: 12,
+            lastUsedAt: 1700,
+            recentUses: [],
+            acceptedPrefixes: {},
+            contextCounts: { toolbar: 12 },
+            pinned: false,
+          },
+          "mathlive-native:\\\\beth": {
+            commandId: "mathlive-native:\\\\beth",
+            useCount: 25,
+            lastUsedAt: 1900,
+            recentUses: [],
+            acceptedPrefixes: { be: 25 },
+            contextCounts: { candidate: 25 },
+            pinned: false,
+          },
+        },` : ""}
       };
       persisted.state.activeLineId = persisted.state.lines[0].id;
-      delete persisted.state.inputBehavior;
+      if (
+        ${JSON.stringify(scenario)} === "native-input-popover" ||
+        ${JSON.stringify(scenario)} === "usage-ranking"
+      ) {
+        persisted.state.inputBehavior = {
+          autoEscapeShortcuts: true,
+          autoExitSuperscript: true,
+          autoExitSubscript: true,
+          autoExitAccent: true,
+          autoExitWrapperCommand: true,
+          showStructuredCommandSuggestions: false,
+          showOtherCommandSuggestions: false,
+        };
+      } else {
+        delete persisted.state.inputBehavior;
+      }
       localStorage.setItem(storageKey, JSON.stringify(persisted));
     })()`);
     await client.send("Page.reload", { ignoreCache: true });
@@ -268,6 +314,214 @@ async function main() {
       await sleep(100);
       await focusField();
     };
+
+    if (scenario === "toolbar-postfix") {
+      await evaluate(`(() => {
+        const storageKey = "visualtex-editor";
+        const persisted = JSON.parse(localStorage.getItem(storageKey) || "{}");
+        const first = { id: crypto.randomUUID(), latex: "a" };
+        const second = { id: crypto.randomUUID(), latex: "b+c" };
+        persisted.state = {
+          ...(persisted.state || {}),
+          lines: [first, second],
+          activeLineId: first.id,
+          editorLayout: "classic",
+        };
+        localStorage.setItem(storageKey, JSON.stringify(persisted));
+      })()`);
+      await client.send("Page.reload", { ignoreCache: true });
+      const startupFocusState = await waitForEvaluation(`(() => {
+        const fields = [...document.querySelectorAll("math-field")];
+        const field = fields.at(-1);
+        const activeLineId = document.querySelector(".multi-line-editor")?.dataset.activeLineId ?? "";
+        const lastLineId = document.querySelector(".formula-line:last-child")?.dataset.lineId ?? "";
+        return {
+          ready:
+            fields.length === 2 &&
+            Boolean(field?.hasFocus?.()) &&
+            field?.position === field?.lastOffset &&
+            activeLineId === lastLineId,
+          fieldCount: fields.length,
+          focused: field?.hasFocus?.() ?? false,
+          position: field?.position ?? -1,
+          lastOffset: field?.lastOffset ?? -1,
+          activeLineId,
+          lastLineId,
+        };
+      })()`, "startup focus on the end of the last formula line");
+
+      await waitForEvaluation(`(() => ({
+        ready: Boolean(
+          document.querySelector(".classic-bottom-toolbar.is-horizontal") &&
+          document.querySelector(".classic-bottom-toolbar .template-strip"),
+        ),
+      }))()`, "classic horizontal formula toolbar");
+
+      const setActiveField = async (latex) => {
+        await waitForEvaluation(`(() => {
+          const fields = [...document.querySelectorAll("math-field")];
+          const field = fields.at(-1);
+          if (!field?.isConnected) return { ready: false };
+          field.setValue(${JSON.stringify(latex)}, {
+            mode: "math",
+            format: "latex",
+            insertionMode: "replaceAll",
+            selectionMode: "after",
+            silenceNotifications: true,
+          });
+          field.selection = {
+            ranges: [[field.lastOffset, field.lastOffset]],
+            direction: "none",
+          };
+          field.position = field.lastOffset;
+          field.focus();
+          field.shadowRoot?.querySelector('[part="keyboard-sink"]')?.focus({ preventScroll: true });
+          field.dispatchEvent(new InputEvent("input", {
+            bubbles: true,
+            composed: true,
+            inputType: "insertText",
+          }));
+          return {
+            ready: field.value === ${JSON.stringify(latex)} && field.hasFocus(),
+          };
+        })()`, `set active formula to ${latex}`);
+        await sleep(80);
+      };
+
+      const clickToolbarCommand = async (category, commandId) => {
+        await evaluate(`document.querySelector(
+          '.classic-bottom-toolbar .toolbar-tab[data-category="${category}"]',
+        )?.click()`);
+        await waitForEvaluation(`(() => ({
+          ready: Boolean(document.querySelector(
+            '.classic-bottom-toolbar [data-command-id="${commandId}"]',
+          )),
+        }))()`, `toolbar command ${commandId}`);
+        await evaluate(`document.querySelector(
+          '.classic-bottom-toolbar [data-command-id="${commandId}"]',
+        ).click()`);
+        await sleep(120);
+      };
+
+      await setActiveField("x");
+      await clickToolbarCommand("structure", "upper-script");
+      const upperScriptState = await waitForEvaluation(`(() => {
+        const field = [...document.querySelectorAll("math-field")].at(-1);
+        return {
+          ready: field?.value === "x^{\\\\placeholder{}}",
+          value: field?.value ?? "",
+          selection: field?.selection ?? null,
+        };
+      })()`, "upper-script targets the preceding character");
+
+      await setActiveField("x");
+      await clickToolbarCommand("structure", "scripts");
+      const scriptsState = await waitForEvaluation(`(() => {
+        const field = [...document.querySelectorAll("math-field")].at(-1);
+        return {
+          ready:
+            field?.value ===
+              "x_{\\\\placeholder{}}^{\\\\placeholder{}}",
+          value: field?.value ?? "",
+          selection: field?.selection ?? null,
+        };
+      })()`, "combined upper/lower scripts target the preceding character");
+
+      await setActiveField("y");
+      await clickToolbarCommand("structure", "lower-script");
+      const lowerScriptState = await waitForEvaluation(`(() => {
+        const field = [...document.querySelectorAll("math-field")].at(-1);
+        return {
+          ready: field?.value === "y_{\\\\placeholder{}}",
+          value: field?.value ?? "",
+          selection: field?.selection ?? null,
+        };
+      })()`, "lower-script targets the preceding character");
+
+      await setActiveField("a+b");
+      await clickToolbarCommand("structure", "dotaccent");
+      const dotAccentState = await waitForEvaluation(`(() => {
+        const field = [...document.querySelectorAll("math-field")].at(-1);
+        return {
+          ready: field?.value === "a+\\\\dot{b}",
+          value: field?.value ?? "",
+        };
+      })()`, "dot accent wraps the preceding character");
+
+      await setActiveField("\\alpha");
+      await clickToolbarCommand("matrix", "boldsymbol");
+      const fontWrapperState = await waitForEvaluation(`(() => {
+        const field = [...document.querySelectorAll("math-field")].at(-1);
+        return {
+          ready: field?.value === "\\\\mathbf{\\\\alpha}",
+          value: field?.value ?? "",
+        };
+      })()`, "font wrapper targets the preceding symbol");
+
+      await setActiveField("x");
+      await clickToolbarCommand("structure", "overset");
+      const oversetState = await waitForEvaluation(`(() => {
+        const field = [...document.querySelectorAll("math-field")].at(-1);
+        return {
+          ready: field?.value === "\\\\overset{\\\\placeholder{}}{x}",
+          value: field?.value ?? "",
+        };
+      })()`, "overset keeps the preceding character as its base");
+
+      await setActiveField("+");
+      await clickToolbarCommand("structure", "dotaccent");
+      const operatorFallbackState = await waitForEvaluation(`(() => {
+        const field = [...document.querySelectorAll("math-field")].at(-1);
+        return {
+          ready: field?.value === "+\\\\dot{\\\\placeholder{}}",
+          value: field?.value ?? "",
+        };
+      })()`, "decorator does not consume a preceding operator");
+
+      await evaluate(`document.querySelector(
+        '.classic-bottom-toolbar .toolbar-tab[data-category="relation"]',
+      )?.click()`);
+      const horizontalWheelState = await waitForEvaluation(`(() => {
+        const strip = document.querySelector(
+          ".classic-bottom-toolbar .template-strip",
+        );
+        if (!strip) return { ready: false };
+        strip.style.width = "320px";
+        strip.style.maxWidth = "320px";
+        strip.scrollLeft = 0;
+        const before = strip.scrollLeft;
+        const event = new WheelEvent("wheel", {
+          deltaY: 180,
+          deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+          bubbles: true,
+          cancelable: true,
+        });
+        const dispatchResult = strip.dispatchEvent(event);
+        return {
+          ready: strip.scrollWidth > strip.clientWidth && strip.scrollLeft > before,
+          before,
+          after: strip.scrollLeft,
+          scrollWidth: strip.scrollWidth,
+          clientWidth: strip.clientWidth,
+          defaultPrevented: event.defaultPrevented,
+          dispatchResult,
+        };
+      })()`, "mouse wheel scrolls the classic toolbar horizontally");
+
+      console.log(JSON.stringify({
+        startupFocusState,
+        upperScriptState,
+        scriptsState,
+        lowerScriptState,
+        dotAccentState,
+        fontWrapperState,
+        oversetState,
+        operatorFallbackState,
+        horizontalWheelState,
+      }, null, 2));
+      console.log("Targeted postfix toolbar and startup focus regression passed");
+      return;
+    }
 
     if (scenario === "toolbar-compact") {
       await evaluate(`(() => {
@@ -3021,22 +3275,200 @@ async function main() {
       return;
     }
 
+    if (scenario === "usage-ranking") {
+      await evaluate(`(() => {
+        if (!document.querySelector(".formula-toolbar")) {
+          document.querySelector(".sidebar-toggle")?.click();
+        }
+        return true;
+      })()`);
+      const commonCommandState = await waitForEvaluation(`(() => {
+        const buttons = [...document.querySelectorAll(
+          '.template-strip > [data-command-id]',
+        )];
+        const persisted = JSON.parse(
+          localStorage.getItem("visualtex-editor") || "{}",
+        );
+        return {
+          ready:
+            buttons.length > 1 &&
+            buttons[0]?.dataset.commandId === "sqrt" &&
+            persisted.state?.usage?.sqrt?.contextCounts?.toolbar === 18,
+          firstCommandId: buttons[0]?.dataset.commandId ?? "",
+          usage: persisted.state?.usage?.sqrt ?? null,
+        };
+      })()`, "toolbar common commands sorted by toolbar frequency");
+
+      await evaluate(`document.querySelector('[data-toolbar-view="tiles"]').click()`);
+      const commonTileState = await waitForEvaluation(`(() => {
+        const tiles = [...document.querySelectorAll(
+          '.formula-tile-list > .formula-tile-button',
+        )];
+        return {
+          ready:
+            tiles.length === 10 &&
+            tiles[0]?.dataset.formulaTileId === "gaussian-integral",
+          firstTileId: tiles[0]?.dataset.formulaTileId ?? "",
+        };
+      })()`, "common formula tiles sorted by toolbar frequency");
+      await evaluate(`document.querySelector(
+        '[data-formula-tile-id="gaussian-integral"]',
+      ).click()`);
+      const tileUsageState = await waitForEvaluation(`(() => {
+        const persisted = JSON.parse(
+          localStorage.getItem("visualtex-editor") || "{}",
+        );
+        const usage = persisted.state?.usage?.["formula-tile-gaussian-integral"];
+        return {
+          ready:
+            usage?.useCount === 13 &&
+            usage?.contextCounts?.toolbar === 13,
+          usage,
+        };
+      })()`, "formula tile click frequency persistence");
+
+      await clearField();
+      await typeText("\\be");
+      const nativeRankState = await waitForEvaluation(`(() => {
+        const source = document.getElementById("mathlive-suggestion-popover");
+        const stable = document.getElementById(
+          "visualtex-native-input-suggestion-popover",
+        );
+        const sourceCommands = [...(source?.querySelectorAll(
+          "li[data-command]",
+        ) ?? [])].map((item) => item.dataset.command ?? "");
+        const stableCommands = [...(stable?.querySelectorAll(
+          "li[data-command]",
+        ) ?? [])].map((item) => item.dataset.command ?? "");
+        return {
+          ready:
+            source?.classList.contains("is-visible") &&
+            sourceCommands[0] === "\\\\beth" &&
+            stableCommands[0] === "\\\\beth" &&
+            source?.querySelector("li.ML__popover__current")?.dataset.command ===
+              "\\\\beth",
+          sourceCommands,
+          stableCommands,
+          selected:
+            source?.querySelector("li.ML__popover__current")?.dataset.command ??
+            "",
+        };
+      })()`, "MathLive native candidates sorted by lifetime frequency");
+      await key("Enter", "Enter", 13);
+      const nativeUsageState = await waitForEvaluation(`(() => {
+        const persisted = JSON.parse(
+          localStorage.getItem("visualtex-editor") || "{}",
+        );
+        const usage = persisted.state?.usage?.["mathlive-native:\\\\beth"];
+        const field = document.querySelector("math-field");
+        return {
+          ready:
+            usage?.useCount === 26 &&
+            usage?.contextCounts?.candidate === 26 &&
+            field?.value === "\\\\beth",
+          usage,
+          value: field?.value ?? "",
+        };
+      })()`, "native candidate usage persisted after commit");
+
+      await client.send("Page.reload", { ignoreCache: true });
+      await waitForEvaluation(
+        `(() => ({ ready: Boolean(document.querySelector("math-field")) }))()`,
+        "reloaded field for persistent ranking",
+      );
+      await clearField();
+      await typeText("\\be");
+      const reloadedNativeRankState = await waitForEvaluation(`(() => {
+        const source = document.getElementById("mathlive-suggestion-popover");
+        const first = source?.querySelector("li[data-command]");
+        const persisted = JSON.parse(
+          localStorage.getItem("visualtex-editor") || "{}",
+        );
+        return {
+          ready:
+            source?.classList.contains("is-visible") &&
+            first?.dataset.command === "\\\\beth" &&
+            persisted.state?.usage?.["mathlive-native:\\\\beth"]?.useCount ===
+              26,
+          firstCommand: first?.dataset.command ?? "",
+          useCount:
+            persisted.state?.usage?.["mathlive-native:\\\\beth"]?.useCount ??
+            0,
+        };
+      })()`, "native frequency ranking survives reload");
+
+      console.log(
+        JSON.stringify(
+          {
+            commonCommandState,
+            commonTileState,
+            tileUsageState,
+            nativeRankState,
+            nativeUsageState,
+            reloadedNativeRankState,
+          },
+          null,
+          2,
+        ),
+      );
+      console.log("Targeted persistent usage ranking regression passed");
+      return;
+    }
+
     if (scenario === "native-input-popover") {
       await clearField();
-      await typeText("\\f");
+      await key("Enter", "Enter", 13);
+      await waitForEvaluation(`(() => {
+        const fields = [...document.querySelectorAll("math-field")];
+        return {
+          ready: fields.length === 2 && fields[1]?.hasFocus?.(),
+          lineCount: fields.length,
+          focusedIndex: fields.findIndex((field) => field.hasFocus?.()),
+        };
+      })()`, "second formula line before native suggestion navigation");
+      await key("ArrowUp", "ArrowUp", 38);
+      await waitForEvaluation(`(() => {
+        const fields = [...document.querySelectorAll("math-field")];
+        return {
+          ready: fields.length === 2 && fields[0]?.hasFocus?.(),
+          focusedIndex: fields.findIndex((field) => field.hasFocus?.()),
+        };
+      })()`, "first formula line before native suggestion navigation");
+      // Row navigation reapplies focus and selection at 0 ms and 80 ms. Wait
+      // until those callbacks settle, otherwise the test can type `\\` first,
+      // have the caret reset in front of it, and accidentally produce `be\\`.
+      await sleep(140);
+      await typeText("\\be");
       const initial = await waitForEvaluation(`(() => {
         const stable = document.getElementById("visualtex-native-input-suggestion-popover");
         const source = document.getElementById("mathlive-suggestion-popover");
+        const field = document.querySelectorAll("math-field")[0];
         const bounds = stable?.getBoundingClientRect();
         const commands = [...(stable?.querySelectorAll("li[data-command]") ?? [])]
           .map((item) => item.dataset.command ?? "");
+        const sourceCommands = [...(source?.querySelectorAll("li[data-command]") ?? [])]
+          .map((item) => item.dataset.command ?? "");
+        const rawLatex = [...(field?.shadowRoot?.querySelectorAll(".ML__raw-latex") ?? [])]
+          .filter((node) => !node.classList.contains("ML__suggestion"))
+          .map((node) => node.textContent ?? "")
+          .join("");
         return {
           ready:
             Boolean(stable?.classList.contains("is-visible")) &&
             commands.length >= 2 &&
             source?.dataset.visualtexInputPopoverSource === "true" &&
+            document.querySelectorAll("math-field").length === 2 &&
+            document.querySelectorAll("math-field")[0]?.hasFocus?.() &&
             !document.querySelector(".suggestion-popup"),
           commands,
+          sourceCommands,
+          rawLatex,
+          fieldMode: field?.mode ?? "",
+          fieldValue: field?.value ?? "",
+          sourceExists: Boolean(source),
+          sourceVisible: source?.classList.contains("is-visible") ?? false,
+          focusedIndex: [...document.querySelectorAll("math-field")]
+            .findIndex((field) => field.hasFocus?.()),
           selected: stable?.querySelector("li.ML__popover__current")?.dataset.command ?? "",
           bounds: bounds
             ? { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height }
@@ -3044,7 +3476,70 @@ async function main() {
           sourceOpacity: source ? getComputedStyle(source).opacity : "",
           customCandidateVisible: Boolean(document.querySelector(".suggestion-popup")),
         };
-      })()`, "stable native input-selection popover for \\f");
+      })()`, "stable native input-selection popover for \\be");
+
+      await evaluate(`(() => {
+        const source = document.getElementById("mathlive-suggestion-popover");
+        const stable = document.getElementById("visualtex-native-input-suggestion-popover");
+        const field = document.querySelectorAll("math-field")[0];
+        const beforeSelected = stable?.querySelector("li.ML__popover__current")?.dataset.command ?? "";
+        const sourceItems = [...(source?.querySelectorAll("li[data-command]") ?? [])];
+        const sourceIndex = sourceItems.findIndex((item) =>
+          item.classList.contains("ML__popover__current"),
+        );
+        const downCommand = sourceItems[
+          sourceIndex < 0 ? 0 : (sourceIndex + 1) % sourceItems.length
+        ]?.dataset.command ?? "";
+        const key = downCommand && downCommand !== beforeSelected ? "ArrowDown" : "ArrowUp";
+        const direction = key === "ArrowDown" ? 1 : -1;
+        const expectedCommand = sourceItems[
+          sourceIndex < 0
+            ? direction > 0 ? 0 : sourceItems.length - 1
+            : (sourceIndex + direction + sourceItems.length) % sourceItems.length
+        ]?.dataset.command ?? "";
+        source?.classList.remove("is-visible");
+        source?.setAttribute("aria-hidden", "true");
+        stable?.classList.add("is-visible");
+        stable?.setAttribute("aria-hidden", "false");
+        field?.dispatchEvent(new KeyboardEvent("keydown", {
+          key,
+          code: key,
+          bubbles: true,
+          composed: true,
+          cancelable: true,
+        }));
+        const selected = stable?.querySelector("li.ML__popover__current")?.dataset.command ?? "";
+        const latestSource = document.getElementById("mathlive-suggestion-popover");
+        latestSource?.classList.add("is-visible");
+        latestSource?.setAttribute("aria-hidden", "false");
+        window.__visualtexNativePriorityState = {
+          beforeSelected,
+          selected,
+          expectedCommand,
+          key,
+        };
+      })()`);
+      const priorityState = await waitForEvaluation(`(() => {
+        const state = window.__visualtexNativePriorityState;
+        const lines = [...document.querySelectorAll(".formula-line")];
+        const activeIndex = lines.findIndex((line) => line.classList.contains("is-active"));
+        const source = document.getElementById("mathlive-suggestion-popover");
+        const stable = document.getElementById("visualtex-native-input-suggestion-popover");
+        return {
+          ready: Boolean(
+            state?.selected &&
+            state.selected === state.expectedCommand &&
+            activeIndex === 0
+          ),
+          beforeSelected: state?.beforeSelected ?? "",
+          selected: state?.selected ?? "",
+          expectedCommand: state?.expectedCommand ?? "",
+          key: state?.key ?? "",
+          activeIndex,
+          sourceVisible: source?.classList.contains("is-visible") ?? false,
+          stableVisible: stable?.classList.contains("is-visible") ?? false,
+        };
+      })()`, "native suggestion priority while source visibility is transient");
 
       await evaluate(`(() => {
         const node = document.getElementById("visualtex-native-input-suggestion-popover");
@@ -3096,12 +3591,15 @@ async function main() {
         const stable = document.getElementById("visualtex-native-input-suggestion-popover");
         const bounds = stable?.getBoundingClientRect();
         const selected = stable?.querySelector("li.ML__popover__current")?.dataset.command ?? "";
+        const fields = [...document.querySelectorAll("math-field")];
         return {
           ready:
             stable === monitor?.node &&
             stable?.classList.contains("is-visible") &&
             selected &&
-            selected !== ${JSON.stringify(initial.selected)} &&
+            selected !== ${JSON.stringify(priorityState.selected)} &&
+            fields.length === 2 &&
+            fields[0]?.hasFocus?.() &&
             monitor.removed === 0 &&
             monitor.hiddenTransitions === 0 &&
             monitor.ariaHiddenTransitions === 0 &&
@@ -3111,6 +3609,7 @@ async function main() {
             Math.abs((bounds?.height ?? 0) - ${initial.bounds.height}) <= 1,
           sameNode: stable === monitor?.node,
           selected,
+          focusedIndex: fields.findIndex((field) => field.hasFocus?.()),
           bounds: bounds
             ? { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height }
             : null,
@@ -3121,7 +3620,7 @@ async function main() {
         };
       })()`, "arrow key moves only the native input-selection highlight");
 
-      await typeText("r");
+      await typeText("t");
       const refinedState = await waitForEvaluation(`(() => {
         const monitor = window.__visualtexNativeInputMonitor;
         const stable = document.getElementById("visualtex-native-input-suggestion-popover");
@@ -3131,8 +3630,8 @@ async function main() {
           ready:
             stable === monitor?.node &&
             stable?.classList.contains("is-visible") &&
-            commands.some((command) => command === "\\\\frac") &&
-            commands.every((command) => command.startsWith("\\\\fr")) &&
+            commands.some((command) => command === "\\\\beta") &&
+            commands.every((command) => command.startsWith("\\\\bet")) &&
             monitor.removed === 0 &&
             monitor.hiddenTransitions === 0 &&
             monitor.ariaHiddenTransitions === 0 &&
@@ -3145,7 +3644,7 @@ async function main() {
           ariaHiddenTransitions: monitor?.ariaHiddenTransitions ?? -1,
           customCandidateVisible: Boolean(document.querySelector(".suggestion-popup")),
         };
-      })()`, "\\f to \\fr updates inside one persistent input-selection frame");
+      })()`, "\\be to \\bet updates inside one persistent input-selection frame");
 
       await key("Backspace", "Backspace", 8);
       const restoredState = await waitForEvaluation(`(() => {
@@ -3167,10 +3666,10 @@ async function main() {
           hiddenTransitions: monitor?.hiddenTransitions ?? -1,
           ariaHiddenTransitions: monitor?.ariaHiddenTransitions ?? -1,
         };
-      })()`, "Backspace restores \\f suggestions without remounting the input-selection frame");
+      })()`, "Backspace restores \\be suggestions without remounting the input-selection frame");
 
       await evaluate(`window.__visualtexNativeInputObserver?.disconnect()`);
-      console.log(JSON.stringify({ initial, arrowState, refinedState, restoredState }, null, 2));
+      console.log(JSON.stringify({ initial, priorityState, arrowState, refinedState, restoredState }, null, 2));
       console.log("Targeted native input-selection popover regression passed");
       return;
     }
@@ -4720,6 +5219,62 @@ async function main() {
     }
 
     if (scenario === "settings") {
+      const powerPointDefaultInitial = await waitForEvaluation(`(() => {
+        let input = document.querySelector(
+          '[data-powerpoint-default-font-size]',
+        );
+        if (!input && !document.querySelector('.settings-dialog')) {
+          document.querySelector('.settings-toggle')?.click();
+          input = document.querySelector(
+            '[data-powerpoint-default-font-size]',
+          );
+        }
+        return {
+          ready: input?.value === '20',
+          value: input?.value ?? '',
+          settingsDialog: Boolean(document.querySelector('.settings-dialog')),
+          modalText: document.querySelector('.modal-card')?.textContent?.slice(0, 240) ?? '',
+          headerButtons: [...document.querySelectorAll('header button')].map((button) => ({
+            className: button.className,
+            ariaLabel: button.getAttribute('aria-label') ?? '',
+            title: button.getAttribute('title') ?? '',
+          })),
+        };
+      })()`, "PowerPoint default formula font-size setting");
+      await evaluate(`(() => {
+        const input = document.querySelector(
+          '[data-powerpoint-default-font-size]',
+        );
+        const setter = Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          'value',
+        ).set;
+        setter.call(input, '27.5');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      })()`);
+      const powerPointDefaultSaved = await waitForEvaluation(`(() => {
+        const input = document.querySelector(
+          '[data-powerpoint-default-font-size]',
+        );
+        const persisted = JSON.parse(
+          localStorage.getItem('visualtex-editor') || '{}',
+        );
+        return {
+          ready:
+            input?.value === '27.5' &&
+            persisted.state?.powerPointDefaultFontSizePt === 27.5,
+          value: input?.value ?? '',
+          persisted: persisted.state?.powerPointDefaultFontSizePt ?? null,
+        };
+      })()`, "persisted PowerPoint default formula font size");
+      await evaluate(`document.querySelector(
+        'button[aria-label="关闭设置"], button[aria-label="Close settings"]',
+      ).click()`);
+      await waitForEvaluation(`(() => ({
+        ready: !document.querySelector('.settings-dialog'),
+      }))()`, "closed main settings dialog");
+
       await waitForEvaluation(`(() => ({
         ready: Boolean(document.querySelector(".canvas-input-behavior-trigger")),
       }))()`, "input behavior trigger");
@@ -4752,6 +5307,71 @@ async function main() {
       if (!defaults.structured.checked || defaults.other.checked) {
         throw new Error(`Unexpected candidate defaults: ${JSON.stringify(defaults)}`);
       }
+
+      await evaluate(`document.querySelector("[data-open-auto-escape-map]")?.click()`);
+      const autoEscapeMapState = await waitForEvaluation(`(() => {
+        const read = (shortcut) => {
+          const row = document.querySelector(
+            '[data-auto-escape-shortcut="' + CSS.escape(shortcut) + '"]',
+          );
+          return row
+            ? {
+                shortcut: row.dataset.autoEscapeShortcut ?? '',
+                output: row.dataset.autoEscapeOutput ?? '',
+                after: row.dataset.autoEscapeAfter ?? '',
+                rendered: Boolean(row.querySelector('.auto-escape-map-output-formula .ML__latex')),
+              }
+            : null;
+        };
+        const pp = read('pp');
+        const relation = read('>=');
+        const alpha = read('alpha');
+        const hat = read('hat');
+        const dx = read('dx');
+        const firstInput = document.querySelector('.auto-escape-map-input');
+        const firstOutput = document.querySelector('.auto-escape-map-output');
+        const firstRow = document.querySelector('.auto-escape-map-row');
+        const inputFontSize = Number.parseFloat(
+          firstInput ? getComputedStyle(firstInput).fontSize : '0',
+        );
+        const outputFontSize = Number.parseFloat(
+          firstOutput ? getComputedStyle(firstOutput).fontSize : '0',
+        );
+        const rowHeight = firstRow?.getBoundingClientRect().height ?? 0;
+        return {
+          ready:
+            Boolean(document.querySelector('.input-behavior-popover.is-mapping-view')) &&
+            pp?.output === '+' &&
+            relation?.output === '\\\\ge' &&
+            alpha?.output === '\\\\alpha' &&
+            hat?.output === '\\\\hat{#?}' &&
+            dx?.output === '\\\\mathrm{d}x' &&
+            dx.after.includes('nothing') &&
+            [pp, relation, alpha, hat, dx].every((entry) => entry?.rendered) &&
+            inputFontSize >= 13 &&
+            outputFontSize >= 20 &&
+            rowHeight >= 42,
+          pp,
+          relation,
+          alpha,
+          hat,
+          dx,
+          inputFontSize,
+          outputFontSize,
+          rowHeight,
+          count: document.querySelectorAll('[data-auto-escape-shortcut]').length,
+        };
+      })()`, "source-driven auto-escape mapping list");
+      if (autoEscapeMapState.pp.output !== '+') {
+        throw new Error(`pp mapping is not the real shortcut value: ${JSON.stringify(autoEscapeMapState)}`);
+      }
+      await evaluate(`document.querySelector('button[aria-label="返回操作逻辑"], button[aria-label="Back to input behavior"]')?.click()`);
+      await waitForEvaluation(`(() => ({
+        ready:
+          Boolean(document.querySelector('.input-behavior-popover')) &&
+          !document.querySelector('.input-behavior-popover.is-mapping-view'),
+      }))()`, "return from auto-escape mappings");
+
       await evaluate(`document.querySelector(".canvas-input-behavior-trigger").click()`);
       await waitForEvaluation(`(() => ({
         ready: !document.querySelector(".input-behavior-popover"),
@@ -4799,7 +5419,7 @@ async function main() {
         `(() => ({ ready: Boolean(document.querySelector("math-field")) }))()`,
         "fresh formula field for other-command test",
       );
-      await focusField();
+      await clearField();
       await typeText("\\theta");
       const otherState = await waitForEvaluation(`(() => {
         const nativePanel = document.getElementById("mathlive-suggestion-popover");
@@ -4816,7 +5436,25 @@ async function main() {
         };
       })()`, "other command uses only native panel");
 
-      console.log(JSON.stringify({ defaults, structuredState, otherState }, null, 2));
+      const powerPointDefaultReloaded = await waitForEvaluation(`(() => {
+        const persisted = JSON.parse(
+          localStorage.getItem('visualtex-editor') || '{}',
+        );
+        return {
+          ready: persisted.state?.powerPointDefaultFontSizePt === 27.5,
+          persisted: persisted.state?.powerPointDefaultFontSizePt ?? null,
+        };
+      })()`, "PowerPoint default font size survives reload");
+
+      console.log(JSON.stringify({
+        powerPointDefaultInitial,
+        powerPointDefaultSaved,
+        powerPointDefaultReloaded,
+        defaults,
+        autoEscapeMapState,
+        structuredState,
+        otherState,
+      }, null, 2));
       console.log("Targeted suggestion settings regression passed");
       return;
     }

@@ -32,6 +32,7 @@ export interface EditorWorkspaceProps {
   onOpenExport?: () => void;
 
   editorRef: RefObject<MathEditorHandle | null>;
+  editorInstanceKey?: string;
   sidebarOpen: boolean;
   onSidebarOpenChange: (open: boolean) => void;
   onHistoryBusyChange: (busy: boolean) => void;

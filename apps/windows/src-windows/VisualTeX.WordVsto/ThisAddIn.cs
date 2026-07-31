@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Office.Interop.Word;
@@ -166,6 +167,8 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
     private int _nativeOleTargetRight;
     private int _nativeOleTargetBottom;
     private int _formulaFontInvalidationPending;
+    private int _normalizingTypingCaret;
+    private int _typingCaretNormalizationPending;
     private object? _ribbonUi;
     private Office.COMAddIn? _comAddIn;
 
@@ -177,6 +180,22 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         object addInInstance,
         ref Array custom)
     {
+        // Real VSTO-flow acceptances host the current source assembly manually
+        // while Word may also auto-load the installed COM add-in into the same
+        // application. Keep that installed instance inert only in acceptance so
+        // one physical double-click cannot be handled by two event subscribers.
+        // Production Word startup never sets this environment variable.
+        if (addInInstance is Office.COMAddIn
+            && string.Equals(
+                Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE"),
+                "1",
+                StringComparison.Ordinal))
+        {
+            WordDoubleClickHook.TraceMessage(
+                "installed-addin-suppressed-for-manual-acceptance");
+            return;
+        }
+
         _application = (Application)application;
         _comAddIn = addInInstance as Office.COMAddIn;
         if (_comAddIn is not null)
@@ -187,6 +206,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         _dispatcher = new OfficeUiDispatcher();
         _sessionClient = new VisualTeXSessionClient();
         _lifetime = new CancellationTokenSource();
+        _ = PrewarmCompanionAsync(_sessionClient, _lifetime.Token);
         _application.WindowBeforeDoubleClick += OnWindowBeforeDoubleClick;
         _application.WindowSelectionChange += OnWindowSelectionChange;
         string? doubleClickError = null;
@@ -343,6 +363,32 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         catch { }
     }
 
+    private void ScheduleTypingCaretNormalization()
+    {
+        var dispatcher = _dispatcher;
+        if (dispatcher is null
+            || Interlocked.Exchange(ref _typingCaretNormalizationPending, 1) != 0)
+            return;
+        dispatcher.Post(() =>
+        {
+            Interlocked.Exchange(ref _typingCaretNormalizationPending, 0);
+            var service = _formulaService;
+            var application = _application;
+            if (service is null || application is null) return;
+            Selection? currentSelection = null;
+            try
+            {
+                currentSelection = application.Selection;
+                if (Interlocked.CompareExchange(ref _normalizingTypingCaret, 1, 0) != 0)
+                    return;
+                try { service.NormalizeTypingCaretAfterInlineFormula(currentSelection); }
+                finally { Interlocked.Exchange(ref _normalizingTypingCaret, 0); }
+            }
+            catch { }
+            finally { ReleaseComObject(currentSelection); }
+        });
+    }
+
     private void OnWindowSelectionChange(Selection selection)
     {
         // Defer Ribbon callbacks until Word finishes entering/leaving a native
@@ -360,6 +406,17 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         Window? window = null;
         try
         {
+            if (Interlocked.CompareExchange(ref _normalizingTypingCaret, 1, 0) == 0)
+            {
+                try { service.NormalizeTypingCaretAfterInlineFormula(selection); }
+                finally { Interlocked.Exchange(ref _normalizingTypingCaret, 0); }
+            }
+            // During a mouse click Word can raise SelectionChange while the OLE
+            // object is still selected, then collapse the caret at the object
+            // tail without raising a second event. Re-check on the Office UI
+            // queue after Word finishes that transition.
+            ScheduleTypingCaretNormalization();
+
             // Do not inspect OMML metadata here. Word fires SelectionChange while
             // entering its native equation editor, and touching the OMath at that
             // point can disturb the caret state. Only perform the heavier metadata
@@ -424,7 +481,12 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             if (selected?.Metadata is null || string.IsNullOrWhiteSpace(selected.FormulaId))
                 return;
 
-            if (!WordDoubleClickRouting.ShouldOpenVisualTeX(selected)) return;
+            var shouldOpenVisualTeX = WordDoubleClickRouting.ShouldOpenVisualTeX(selected);
+            WordDoubleClickHook.TraceMessage(
+                $"window-before-double-click formulaId={selected.FormulaId} "
+                + $"objectMode={selected.ObjectMode ?? "<null>"} "
+                + $"shouldOpenVisualTeX={shouldOpenVisualTeX}");
+            if (!shouldOpenVisualTeX) return;
 
             cancel = true;
             ClearNativeOleTarget();
@@ -507,6 +569,21 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         }
     }
 
+    private static async Task PrewarmCompanionAsync(
+        VisualTeXSessionClient client,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await client.EnsureHealthyAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Startup must remain non-blocking. The first explicit Office action
+            // retries the full diagnostic/startup path and reports any failure.
+        }
+    }
+
     private void BeginSession(
         string mode,
         string? displayMode,
@@ -558,6 +635,22 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             return;
         }
 
+        var openPerformance = string.Equals(
+            Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE"),
+            "1",
+            StringComparison.Ordinal)
+            ? Stopwatch.StartNew()
+            : null;
+        long openPerformanceCheckpoint = 0;
+        void TraceOpenPerformance(string stage)
+        {
+            if (openPerformance is null) return;
+            var elapsed = openPerformance.ElapsedMilliseconds;
+            Console.WriteLine(
+                $"    [perf] OpenSession.{stage}: +{elapsed - openPerformanceCheckpoint}ms ({elapsed}ms total)");
+            openPerformanceCheckpoint = elapsed;
+        }
+
         string? sessionId = null;
         string? imagePath = null;
         string? svgPath = null;
@@ -570,9 +663,11 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             var client = _sessionClient ?? throw new InvalidOperationException("VisualTeX Session client is unavailable.");
             SetStatus("正在连接 VisualTeX 本地服务…");
             await client.EnsureHealthyAsync(cancellationToken).ConfigureAwait(false);
+            TraceOpenPerformance("health");
             var selection = capturedSelection?.Metadata is not null
                 ? capturedSelection
                 : await dispatcher.InvokeAsync(service.ReadSelection).ConfigureAwait(false);
+            TraceOpenPerformance("read-selection");
             if (selection.ReadOnly)
                 throw new UnauthorizedAccessException("当前 Word 文档为只读状态。");
             if (mode == "edit" && selection.Metadata is null)
@@ -581,7 +676,9 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             // A create command may be invoked while the previous formula is
             // still selected. Only edit commands are allowed to seed the new
             // Session from that selection; every create Session starts blank.
-            var metadata = mode == "edit" ? selection.Metadata : null;
+            var metadata = mode == "edit"
+                ? NormalizeEditableMetadata(selection.Metadata)
+                : null;
             var targetObjectMode = requestedObjectMode
                 ?? (mode == "create" ? FormulaOleContract.NativeOleMode : selection.ObjectMode)
                 ?? FormulaOleContract.NativeOleMode;
@@ -616,7 +713,9 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 OriginalMetadata = metadata,
                 AutoCommitOnClose = true,
             };
+            TraceOpenPerformance("build-request");
             var session = await client.CreateSessionAsync(request, cancellationToken).ConfigureAwait(false);
+            TraceOpenPerformance("create-session");
             sessionId = session.Id;
             Volatile.Write(ref _activeSessionId, session.Id);
             if (conversionOnly)
@@ -629,6 +728,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             {
                 await client.OpenEditorAsync(session.Id, cancellationToken)
                     .ConfigureAwait(false);
+                TraceOpenPerformance("open-editor-window");
                 SetStatus("VisualTeX 编辑器已打开。");
             }
             session = await client.WaitForCommitAsync(
@@ -684,9 +784,9 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             }
             await dispatcher.InvokeAsync(() =>
             {
-                var current = service.ReadSelection();
+                var activeDocumentId = service.ReadActiveDocumentId();
                 if (!string.Equals(
-                        current.DocumentId,
+                        activeDocumentId,
                         session.SourceDocumentId,
                         StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("活动 Word 文档已切换，未写入公式。");
@@ -778,6 +878,25 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         }
     }
 
+    private static FormulaMetadata? NormalizeEditableMetadata(FormulaMetadata? source)
+    {
+        if (source is null) return null;
+        var metadata = FormulaMetadataCodec.Decode(FormulaMetadataCodec.Encode(source))
+            ?? throw new InvalidDataException("Unable to clone VisualTeX formula metadata.");
+        if (metadata.Lines.Count == 0) return metadata;
+
+        var last = metadata.Lines[metadata.Lines.Count - 1];
+        var split = FormulaEquationTag.Extract(last.Latex);
+        if (!string.Equals(last.Latex, split.Latex, StringComparison.Ordinal))
+            last.Latex = split.Latex;
+        metadata.EquationTag ??= split.EquationTag;
+        metadata.Latex = string.Join("\n", metadata.Lines.Select(line => line.Latex));
+        if (!string.Equals(metadata.DisplayMode, "block", StringComparison.Ordinal))
+            metadata.EquationTag = null;
+        metadata.Validate();
+        return metadata;
+    }
+
     private async Task BulkImportAsync()
     {
         WriteBulkAcceptanceLog("bulk-import-start");
@@ -857,7 +976,8 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                     objectMode,
                     run.DisplayMode,
                     fontSizePt.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                    run.Latex);
+                    run.Latex,
+                    run.EquationTag ?? string.Empty);
                 if (!rendered.TryGetValue(key, out var template))
                 {
                     WriteBulkAcceptanceLog(
@@ -1101,11 +1221,17 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         double fontSizePt,
         CancellationToken cancellationToken)
     {
+        var formulaId = Guid.NewGuid().ToString("D");
         var line = new FormulaLine
         {
             Id = Guid.NewGuid().ToString("D"),
             Latex = run.Latex,
         };
+        var originalMetadata = CreateBulkFormulaMetadata(
+            formulaId,
+            line,
+            run,
+            fontSizePt);
         WriteBulkAcceptanceLog(
             $"converter-create display={run.DisplayMode} mode={objectMode} latex={run.Latex}");
         var session = await client.CreateSessionAsync(
@@ -1113,6 +1239,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             {
                 Mode = "create",
                 Host = "word",
+                FormulaId = formulaId,
                 SourceDocumentId = sourceDocumentId,
                 Title = "Bulk imported Word formula",
                 Lines = new List<FormulaLine> { line },
@@ -1122,6 +1249,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 ObjectMode = objectMode,
                 Numbered = false,
                 FontSizePt = fontSizePt,
+                OriginalMetadata = originalMetadata,
                 AutoCommitOnClose = false,
             },
             cancellationToken).ConfigureAwait(false);
@@ -1178,6 +1306,32 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         return template;
     }
 
+    private static FormulaMetadata CreateBulkFormulaMetadata(
+        string formulaId,
+        FormulaLine line,
+        WordBulkRun run,
+        double fontSizePt)
+    {
+        var now = DateTimeOffset.UtcNow.ToString("O");
+        return new FormulaMetadata
+        {
+            FormulaId = formulaId,
+            Title = "Bulk imported Word formula",
+            Latex = line.Latex,
+            Lines = new List<FormulaLine> { line },
+            CodeFormat = "latex",
+            DisplayMode = run.DisplayMode,
+            Numbered = false,
+            EquationTag = run.DisplayMode == "block" ? run.EquationTag : null,
+            FontSizePt = FormulaFontSize.Normalize(fontSizePt),
+            RenderFontSizePt = FormulaFontSize.Normalize(fontSizePt),
+            CreatedWithVersion = "1.2.3",
+            UpdatedWithVersion = "1.2.3",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+    }
+
     private static OfficeSessionDocument CloneBulkFormulaSession(
         OfficeSessionDocument template,
         WordBulkRun run,
@@ -1185,22 +1339,21 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         double fontSizePt,
         string objectMode)
     {
+        var formulaId = Guid.NewGuid().ToString("D");
+        var line = new FormulaLine
+        {
+            Id = Guid.NewGuid().ToString("D"),
+            Latex = run.Latex,
+        };
         return new OfficeSessionDocument
         {
             Id = Guid.NewGuid().ToString("D"),
             Mode = "create",
             Host = "word",
-            FormulaId = Guid.NewGuid().ToString("D"),
+            FormulaId = formulaId,
             SourceDocumentId = sourceDocumentId,
             Title = "Bulk imported Word formula",
-            Lines = new List<FormulaLine>
-            {
-                new()
-                {
-                    Id = Guid.NewGuid().ToString("D"),
-                    Latex = run.Latex,
-                },
-            },
+            Lines = new List<FormulaLine> { line },
             CodeFormat = "latex",
             DisplayMode = run.DisplayMode,
             ObjectMode = objectMode,
@@ -1208,6 +1361,11 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             FontSizePt = fontSizePt,
             Status = "committing",
             Dirty = true,
+            OriginalMetadata = CreateBulkFormulaMetadata(
+                formulaId,
+                line,
+                run,
+                fontSizePt),
             ExportResult = template.ExportResult,
         };
     }

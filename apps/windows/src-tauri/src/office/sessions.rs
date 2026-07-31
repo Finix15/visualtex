@@ -109,6 +109,8 @@ pub struct VisualTeXFormulaMetadata {
     #[serde(default)]
     pub numbered: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equation_tag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub render_width_px: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub render_height_px: Option<f64>,
@@ -118,6 +120,8 @@ pub struct VisualTeXFormulaMetadata {
     pub font_size_pt: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub render_font_size_pt: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_omml_fingerprint: Option<String>,
     pub created_with_version: String,
     pub updated_with_version: String,
     pub created_at: String,
@@ -821,11 +825,13 @@ mod tests {
                 code_format: "latex".to_string(),
                 display_mode: "inline".to_string(),
                 numbered: false,
+                equation_tag: None,
                 render_width_px: Some(100.0),
                 render_height_px: Some(20.0),
                 baseline: Some(15.0),
                 font_size_pt: Some(14.0),
                 render_font_size_pt: Some(14.0),
+                native_omml_fingerprint: None,
                 created_with_version: "1.1.4".to_string(),
                 updated_with_version: "1.1.4".to_string(),
                 created_at: "2026-07-16T00:00:00Z".to_string(),
@@ -958,11 +964,13 @@ mod tests {
             code_format: "raw".to_string(),
             display_mode: "block".to_string(),
             numbered: false,
+            equation_tag: None,
             render_width_px: None,
             render_height_px: None,
             baseline: None,
             font_size_pt: None,
             render_font_size_pt: None,
+            native_omml_fingerprint: None,
             created_with_version: "1.0.6".to_string(),
             updated_with_version: "1.0.6".to_string(),
             created_at: "2026-07-12T00:00:00Z".to_string(),

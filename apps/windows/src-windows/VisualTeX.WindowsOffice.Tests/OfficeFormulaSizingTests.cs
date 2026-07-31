@@ -14,6 +14,16 @@ public sealed class OfficeFormulaSizingTests
     }
 
     [Fact]
+    public void NaturalSizeDoesNotEnlargeNarrowInlineFormulaToTwelvePointBox()
+    {
+        var size = OfficeFormulaSizing.NaturalSize(5.8f, 9f);
+
+        Assert.Equal(4.35f, size.Width, 2);
+        Assert.Equal(6.75f, size.Height, 2);
+        Assert.InRange(size.Width / size.Height, 0.64f, 0.65f);
+    }
+
+    [Fact]
     public void EditedSizeAdoptsNewNaturalAspectRatio()
     {
         var size = OfficeFormulaSizing.EditedSize(

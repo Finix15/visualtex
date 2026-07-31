@@ -6,7 +6,7 @@ use crate::office::powerpoint_native::{
 use crate::office::sessions::SessionStore;
 use crate::OcrState;
 use axum_server::Handle;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -21,6 +21,52 @@ pub const OFFICE_PORT: u16 = 43_127;
 pub const OFFICE_PROTOCOL_VERSION: u32 = 1;
 pub const OFFICE_UI_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MAX_OFFICE_REQUEST_BYTES: usize = 22 * 1024 * 1024;
+pub const DEFAULT_POWERPOINT_FORMULA_FONT_SIZE_PT: f64 = 20.0;
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OfficePreferencesFile {
+    powerpoint_default_font_size_pt: f64,
+}
+
+fn normalize_formula_font_size_pt(value: f64) -> f64 {
+    if !value.is_finite() {
+        return DEFAULT_POWERPOINT_FORMULA_FONT_SIZE_PT;
+    }
+    (value.clamp(5.0, 200.0) * 2.0).round() / 2.0
+}
+
+fn office_preferences_path(paths: &OfficePaths) -> PathBuf {
+    paths.root.join("office-preferences.json")
+}
+
+fn load_powerpoint_default_font_size_pt(paths: &OfficePaths) -> f64 {
+    fs::read_to_string(office_preferences_path(paths))
+        .ok()
+        .and_then(|source| serde_json::from_str::<OfficePreferencesFile>(&source).ok())
+        .map(|preferences| {
+            normalize_formula_font_size_pt(preferences.powerpoint_default_font_size_pt)
+        })
+        .unwrap_or(DEFAULT_POWERPOINT_FORMULA_FONT_SIZE_PT)
+}
+
+fn persist_powerpoint_default_font_size_pt(
+    paths: &OfficePaths,
+    font_size_pt: f64,
+) -> Result<(), String> {
+    fs::create_dir_all(&paths.root).map_err(|error| error.to_string())?;
+    let target = office_preferences_path(paths);
+    let temporary = target.with_extension("json.tmp");
+    let payload = serde_json::to_vec_pretty(&OfficePreferencesFile {
+        powerpoint_default_font_size_pt: normalize_formula_font_size_pt(font_size_pt),
+    })
+    .map_err(|error| error.to_string())?;
+    fs::write(&temporary, payload).map_err(|error| error.to_string())?;
+    if target.exists() {
+        fs::remove_file(&target).map_err(|error| error.to_string())?;
+    }
+    fs::rename(&temporary, &target).map_err(|error| error.to_string())
+}
 
 pub fn normalize_app_theme(theme: &str) -> &'static str {
     match theme.trim() {
@@ -29,6 +75,13 @@ pub fn normalize_app_theme(theme: &str) -> &'static str {
         "purple" => "purple",
         "green" => "green",
         _ => "light",
+    }
+}
+
+pub fn normalize_app_editor_layout(layout: &str) -> &'static str {
+    match layout.trim() {
+        "standard" => "standard",
+        _ => "classic",
     }
 }
 
@@ -105,6 +158,8 @@ pub struct OfficeCompanionState {
     pub install_token: Arc<String>,
     pub status: Arc<RwLock<OfficeCompanionStatus>>,
     pub app_theme: Arc<RwLock<String>>,
+    pub app_editor_layout: Arc<RwLock<String>>,
+    pub powerpoint_default_font_size_pt: Arc<RwLock<f64>>,
     pub server_handle: Arc<Mutex<Option<Handle<SocketAddr>>>>,
     pub session_store: SessionStore,
     pub formula_cache: FormulaMetadataCache,
@@ -129,6 +184,8 @@ impl OfficeCompanionState {
         ocr_available: bool,
     ) -> Self {
         let status = OfficeCompanionStatus::stopped(&paths);
+        let powerpoint_default_font_size_pt =
+            load_powerpoint_default_font_size_pt(&paths);
         let platform_backend = platform::create_backend(app.as_ref(), &paths);
         Self {
             app,
@@ -137,6 +194,10 @@ impl OfficeCompanionState {
             install_token: Arc::new(install_token),
             status: Arc::new(RwLock::new(status)),
             app_theme: Arc::new(RwLock::new("light".to_string())),
+            app_editor_layout: Arc::new(RwLock::new("classic".to_string())),
+            powerpoint_default_font_size_pt: Arc::new(RwLock::new(
+                powerpoint_default_font_size_pt,
+            )),
             server_handle: Arc::new(Mutex::new(None)),
             session_store,
             formula_cache,
@@ -177,5 +238,39 @@ impl OfficeCompanionState {
             *current = normalized.clone();
         }
         normalized
+    }
+
+    pub fn current_editor_layout(&self) -> String {
+        self.app_editor_layout
+            .read()
+            .map(|layout| layout.clone())
+            .unwrap_or_else(|_| "classic".to_string())
+    }
+
+    pub fn set_current_editor_layout(&self, layout: &str) -> String {
+        let normalized = normalize_app_editor_layout(layout).to_string();
+        if let Ok(mut current) = self.app_editor_layout.write() {
+            *current = normalized.clone();
+        }
+        normalized
+    }
+
+    pub fn powerpoint_default_font_size_pt(&self) -> f64 {
+        self.powerpoint_default_font_size_pt
+            .read()
+            .map(|value| *value)
+            .unwrap_or(DEFAULT_POWERPOINT_FORMULA_FONT_SIZE_PT)
+    }
+
+    pub fn set_powerpoint_default_font_size_pt(
+        &self,
+        font_size_pt: f64,
+    ) -> Result<f64, String> {
+        let normalized = normalize_formula_font_size_pt(font_size_pt);
+        persist_powerpoint_default_font_size_pt(&self.paths, normalized)?;
+        if let Ok(mut current) = self.powerpoint_default_font_size_pt.write() {
+            *current = normalized;
+        }
+        Ok(normalized)
     }
 }

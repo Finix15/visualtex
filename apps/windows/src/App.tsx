@@ -160,6 +160,7 @@ function App() {
   const inlineOcrRunIdRef = useRef(0);
   const inlineOcrClearTimerRef = useRef<number | null>(null);
   const automaticUpdateCheckRef = useRef(false);
+  const initialEditorFocusDoneRef = useRef(false);
 
   const title = useEditorStore((state) => state.title);
   const setTitle = useEditorStore((state) => state.setTitle);
@@ -186,6 +187,9 @@ function App() {
   );
   const setCheckUpdatesOnStartup = useEditorStore(
     (state) => state.setCheckUpdatesOnStartup,
+  );
+  const powerPointDefaultFontSizePt = useEditorStore(
+    (state) => state.powerPointDefaultFontSizePt,
   );
   const historyState = useHistorySnapshot();
   const isEn = language === "en";
@@ -237,7 +241,7 @@ function App() {
     after: DocumentSnapshot,
     source: ReplaceDocumentEntry["source"],
   ) => {
-    historyManager.commitPendingTransaction();
+    if (source !== "source-apply") historyManager.commitPendingTransaction();
     const before = captureDocumentSnapshot();
     if (documentSnapshotsEquivalent(before, after)) return false;
     useEditorStore.getState().replaceDocumentState(after);
@@ -248,10 +252,30 @@ function App() {
       source,
       timestamp: Date.now(),
     };
-    historyManager.push(entry);
-    window.requestAnimationFrame(() => restoreSnapshotFocus(after));
+    if (source === "source-apply") {
+      historyManager.recordSourceDocumentEdit(entry);
+    } else {
+      historyManager.push(entry);
+      window.requestAnimationFrame(() => restoreSnapshotFocus(after));
+    }
     return true;
   };
+
+  useEffect(() => {
+    if (onboardingOpen || initialEditorFocusDoneRef.current) return;
+    initialEditorFocusDoneRef.current = true;
+    let repairTimer = 0;
+    const frame = window.requestAnimationFrame(() => {
+      editorRef.current?.focus({ target: "last", moveToEnd: true });
+      repairTimer = window.setTimeout(() => {
+        editorRef.current?.focus({ target: "last", moveToEnd: true });
+      }, 80);
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(repairTimer);
+    };
+  }, [onboardingOpen]);
 
   useEffect(() => {
     historyManager.configure({
@@ -299,6 +323,20 @@ function App() {
   }, [theme]);
 
   useEffect(() => {
+    if (!isTauriEnvironment()) return;
+    void invoke<string>("set_app_editor_layout", { editorLayout }).catch(
+      () => undefined,
+    );
+  }, [editorLayout]);
+
+  useEffect(() => {
+    if (!isTauriEnvironment()) return;
+    void invoke<number>("set_powerpoint_default_font_size", {
+      fontSizePt: powerPointDefaultFontSizePt,
+    }).catch(() => undefined);
+  }, [powerPointDefaultFontSizePt]);
+
+  useEffect(() => {
     document.documentElement.lang = isEn ? "en" : "zh-CN";
   }, [isEn]);
 
@@ -327,7 +365,7 @@ function App() {
     if (!isTauriEnvironment()) return;
     const timer = window.setTimeout(() => {
       void warmupOcrModel(startupOcrModelRef.current).catch(() => undefined);
-    }, 1200);
+    }, 50);
     return () => window.clearTimeout(timer);
   }, []);
 
@@ -683,7 +721,9 @@ function App() {
   const finishOnboarding = useCallback(() => {
     window.localStorage.setItem(ONBOARDING_STORAGE_KEY, "true");
     setOnboardingOpen(false);
-    window.requestAnimationFrame(() => editorRef.current?.focus());
+    window.requestAnimationFrame(() =>
+      editorRef.current?.focus({ target: "last", moveToEnd: true }),
+    );
   }, []);
 
   const runUpdateCheck = useCallback(async (manual = true) => {
@@ -838,7 +878,11 @@ function App() {
         onChange={openDocument}
       />
 
-      <header className="app-header">
+      <header
+        className={
+          "app-header" + (menuOpen || copyMenuOpen ? " has-open-menu" : "")
+        }
+      >
         <div className="brand-area">
           <button
             ref={menuButtonRef}

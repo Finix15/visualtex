@@ -460,7 +460,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 DisplayMode = "block",
                 ObjectMode = targetObjectMode,
                 Numbered = false,
-                FontSizePt = FormulaFontSize.Normalize(fontSizePt, 18f),
+                FontSizePt = FormulaFontSize.Normalize(fontSizePt, 20f),
                 OriginalMetadata = metadata,
                 AutoCommitOnClose = true,
             };

@@ -1,3 +1,5 @@
+import { splitFormulaEquationTag } from "../shared/formulaEquationTag";
+
 export type DocumentSourceFormat = "auto" | "markdown" | "latex";
 export type ResolvedDocumentSourceFormat = Exclude<DocumentSourceFormat, "auto">;
 export type DocumentObjectMode = "wordOmml" | "nativeOle";
@@ -14,6 +16,7 @@ export type DocumentImportRun =
       kind: "formula";
       latex: string;
       display: boolean;
+      equationTag?: string;
     };
 
 export type DocumentImportBlockKind =
@@ -291,6 +294,11 @@ function appendMixedBlocks(
     const end = findUnescaped(text, start.endToken, contentStart);
     if (end < 0) {
       const body = text.slice(contentStart);
+      const split = splitFormulaEquationTag(
+        start.environment
+          ? normalizeDisplayEnvironment(start.environment, body)
+          : normalizeDelimitedDisplay(body),
+      );
       blocks.push({
         id: id(),
         kind: "display",
@@ -298,10 +306,9 @@ function appendMixedBlocks(
         runs: [
           {
             kind: "formula",
-            latex: start.environment
-              ? normalizeDisplayEnvironment(start.environment, body)
-              : normalizeDelimitedDisplay(body),
+            latex: split.latex,
             display: true,
+            ...(split.equationTag ? { equationTag: split.equationTag } : {}),
           },
         ],
       });
@@ -313,6 +320,11 @@ function appendMixedBlocks(
       return;
     }
     const body = text.slice(contentStart, end);
+    const split = splitFormulaEquationTag(
+      start.environment
+        ? normalizeDisplayEnvironment(start.environment, body)
+        : normalizeDelimitedDisplay(body),
+    );
     blocks.push({
       id: id(),
       kind: "display",
@@ -320,10 +332,9 @@ function appendMixedBlocks(
       runs: [
         {
           kind: "formula",
-          latex: start.environment
-            ? normalizeDisplayEnvironment(start.environment, body)
-            : normalizeDelimitedDisplay(body),
+          latex: split.latex,
           display: true,
+          ...(split.equationTag ? { equationTag: split.equationTag } : {}),
         },
       ],
     });

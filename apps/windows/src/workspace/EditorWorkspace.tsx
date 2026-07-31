@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlignCenter,
   AlignLeft,
@@ -25,11 +25,11 @@ import {
 } from "../stores/editorStore";
 import {
   formatLatex,
-  parseLatexSource,
+  parseLatexSourceDraft,
 } from "../clipboard/LatexCopyService";
 import { normalizeChineseLatex } from "../editor/normalizeChineseLatex";
 import { reconcileFormulaLines } from "../history/documentHistory";
-import type { FormulaAlignment } from "../types/formula";
+import type { FormulaAlignment, FormulaLine } from "../types/formula";
 import type { EditorWorkspaceProps } from "./workspaceTypes";
 
 export function EditorWorkspace({
@@ -42,6 +42,7 @@ export function EditorWorkspace({
   onCancel,
   onOpenExport,
   editorRef,
+  editorInstanceKey,
   sidebarOpen,
   onSidebarOpenChange,
   onHistoryBusyChange,
@@ -56,6 +57,11 @@ export function EditorWorkspace({
 }: EditorWorkspaceProps) {
   const [primaryBusy, setPrimaryBusy] = useState(false);
   const [classicDockOpen, setClassicDockOpen] = useState(true);
+  const [sourceDraftFallback, setSourceDraftFallback] = useState<{
+    source: string;
+    error: string;
+    previewLines: FormulaLine[] | null;
+  } | null>(null);
   const title = useEditorStore((state) => state.title);
   const lines = useEditorStore((state) => state.lines);
   const activeLineId = useEditorStore((state) => state.activeLineId);
@@ -75,15 +81,35 @@ export function EditorWorkspace({
   const latex = joinFormulaLines(lines);
   const sourceLatex = formatLatex(latex, latexCodeFormat);
 
+  useEffect(() => {
+    if (!sourceOpen) setSourceDraftFallback(null);
+  }, [sourceOpen]);
+
+  useEffect(() => {
+    setSourceDraftFallback(null);
+  }, [latexCodeFormat]);
+
   const applyFormulaAlignment = (alignment: FormulaAlignment) => {
     setFormulaAlignment(alignment);
     editorRef.current?.focus();
   };
 
   const applySource = (source: string, sourceFormat: typeof latexCodeFormat) => {
-    const values = parseLatexSource(source, sourceFormat).map(
-      normalizeChineseLatex,
-    );
+    const parsed = parseLatexSourceDraft(source, sourceFormat);
+    if (!parsed.valid) {
+      const previewValues = parsed.values.map(normalizeChineseLatex);
+      setSourceDraftFallback({
+        source,
+        error: parsed.error ?? "invalid-latex",
+        previewLines: previewValues.length
+          ? reconcileFormulaLines(previewValues, lines)
+          : null,
+      });
+      return parsed;
+    }
+
+    setSourceDraftFallback(null);
+    const values = parsed.values.map(normalizeChineseLatex);
     const nextLines = reconcileFormulaLines(values, lines);
     const nextActiveLineId = nextLines.some(
       (line) => line.id === activeLineId,
@@ -100,6 +126,7 @@ export function EditorWorkspace({
       },
       "source-apply",
     );
+    return parsed;
   };
 
   const renderSourceEditor = ({
@@ -119,10 +146,64 @@ export function EditorWorkspace({
       showCollapseAction={showCollapseAction}
       showCopyAction={showCopyAction}
       compact={compact}
-      onApply={applySource}
+      onLiveChange={applySource}
       onCopy={() => void onCopy()}
     />
   );
+
+  const renderVisualEditor = () => {
+    const previewLines = sourceDraftFallback?.previewLines;
+    if (sourceDraftFallback && !previewLines) {
+      return (
+        <section
+          className="editor-surface source-draft-fallback"
+          data-source-draft-error={sourceDraftFallback.error}
+          aria-live="polite"
+          aria-label={
+            isEn
+              ? "Incomplete LaTeX source preview"
+              : "未完成 LaTeX 源码预览"
+          }
+        >
+          <div className="source-draft-fallback-heading">
+            <Code2 size={16} />
+            <span>
+              {isEn
+                ? "The formula wrapper is incomplete. Complete it to resume the formula preview."
+                : "公式环境包裹尚未完成，补全后恢复公式预览。"}
+            </span>
+          </div>
+          <pre className="source-draft-fallback-code">
+            {sourceDraftFallback.source || " "}
+          </pre>
+        </section>
+      );
+    }
+
+    const visualLines = previewLines ?? lines;
+    const visualActiveLineId = visualLines.some(
+      (line) => line.id === activeLineId,
+    )
+      ? activeLineId
+      : visualLines[0]?.id ?? null;
+    return (
+      <MathEditor
+        key={editorInstanceKey}
+        ref={editorRef}
+        lines={visualLines}
+        activeLineId={visualActiveLineId}
+        formulaAlignment={formulaAlignment}
+        zoom={zoom}
+        readOnly={Boolean(previewLines)}
+        draftError={sourceDraftFallback?.error}
+        onPasteImage={
+          previewLines ? undefined : showOcrActions ? onPasteImage : undefined
+        }
+        onHistoryBusyChange={onHistoryBusyChange}
+        overlay={previewLines ? undefined : ocrOverlay}
+      />
+    );
+  };
 
   const runPrimaryAction = async () => {
     if (!onPrimaryAction || primaryBusy) return;
@@ -332,16 +413,7 @@ export function EditorWorkspace({
               }
             >
               <div className="editor-pane-scroll">
-                <MathEditor
-                  ref={editorRef}
-                  lines={lines}
-                  activeLineId={activeLineId}
-                  formulaAlignment={formulaAlignment}
-                  zoom={zoom}
-                  onPasteImage={showOcrActions ? onPasteImage : undefined}
-                  onHistoryBusyChange={onHistoryBusyChange}
-                  overlay={ocrOverlay}
-                />
+                {renderVisualEditor()}
               </div>
 
               <section
@@ -466,16 +538,7 @@ export function EditorWorkspace({
           ) : (
             <div className={`editor-pane-body${sourceOpen ? " has-source" : ""}`}>
               <div className="editor-pane-scroll">
-                <MathEditor
-                  ref={editorRef}
-                  lines={lines}
-                  activeLineId={activeLineId}
-                  formulaAlignment={formulaAlignment}
-                  zoom={zoom}
-                  onPasteImage={showOcrActions ? onPasteImage : undefined}
-                  onHistoryBusyChange={onHistoryBusyChange}
-                  overlay={ocrOverlay}
-                />
+                {renderVisualEditor()}
               </div>
 
               {sourceOpen ? (

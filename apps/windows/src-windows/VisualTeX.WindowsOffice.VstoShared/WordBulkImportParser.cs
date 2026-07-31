@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using VisualTeX.WindowsOffice.Contracts;
 
 namespace VisualTeX.WindowsOffice.VstoShared;
 
@@ -37,6 +38,7 @@ internal sealed class WordBulkRun
     internal bool Italic { get; set; }
     internal bool Code { get; set; }
     internal string DisplayMode { get; set; } = "inline";
+    internal string? EquationTag { get; set; }
 }
 
 internal sealed class WordBulkBlock
@@ -313,6 +315,7 @@ internal static class WordBulkImportParser
                 if (!string.IsNullOrWhiteSpace(warning)) warnings.Add(warning!);
                 if (!string.IsNullOrWhiteSpace(displayLatex))
                 {
+                    var split = FormulaEquationTag.Extract(displayLatex);
                     blocks.Add(new WordBulkBlock
                     {
                         Kind = WordBulkBlockKind.DisplayFormula,
@@ -321,7 +324,8 @@ internal static class WordBulkImportParser
                             new()
                             {
                                 IsFormula = true,
-                                Latex = displayLatex.Trim(),
+                                Latex = split.Latex,
+                                EquationTag = split.EquationTag,
                                 DisplayMode = "block",
                             },
                         },
@@ -339,6 +343,7 @@ internal static class WordBulkImportParser
                 if (!string.IsNullOrWhiteSpace(warning)) warnings.Add(warning!);
                 if (!string.IsNullOrWhiteSpace(displayLatex))
                 {
+                    var split = FormulaEquationTag.Extract(displayLatex);
                     blocks.Add(new WordBulkBlock
                     {
                         Kind = WordBulkBlockKind.DisplayFormula,
@@ -347,7 +352,8 @@ internal static class WordBulkImportParser
                             new()
                             {
                                 IsFormula = true,
-                                Latex = displayLatex.Trim(),
+                                Latex = split.Latex,
+                                EquationTag = split.EquationTag,
                                 DisplayMode = "block",
                             },
                         },

@@ -405,6 +405,25 @@ public sealed class WordBulkImportParserTests
         Assert.Empty(document.Warnings);
     }
 
+    [Theory]
+    [InlineData("\\[x+y\\tag{4.8.4}\\]", "4.8.4")]
+    [InlineData("\\[x+y\\tag 4.8.4\\]", "4.8.4")]
+    public void SeparatesTrailingEquationTagsFromEditableLatex(
+        string source,
+        string expectedTag)
+    {
+        var document = WordBulkImportParser.Parse(
+            source,
+            WordBulkSourceFormat.Latex,
+            WordBulkFormulaObjectMode.Omml);
+
+        var formula = Assert.Single(
+            document.Blocks.SelectMany(block => block.Runs).Where(run => run.IsFormula));
+        Assert.Equal("x+y", formula.Latex);
+        Assert.Equal(expectedTag, formula.EquationTag);
+        Assert.DoesNotContain("\\tag", formula.Latex, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void RejectsEmptyOrExcessivelyLargeInput()
     {

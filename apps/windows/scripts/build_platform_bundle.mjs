@@ -26,6 +26,13 @@ if (process.platform === "win32") {
     "-ExecutionPolicy",
     "Bypass",
     "-File",
+    "scripts/prepare_windows_ocr_python.ps1",
+  ]);
+  run("powershell.exe", [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
     "scripts/prepare_windows_vsto_runtime.ps1",
   ]);
   run(npm, ["run", "build:office:windows-native"]);

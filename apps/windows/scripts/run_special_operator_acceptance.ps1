@@ -18,6 +18,7 @@ if ([string]::IsNullOrWhiteSpace($ArtifactRoot)) {
 $fixtures = @(
     Join-Path $PSScriptRoot "fixtures\windows-office-special-operators.md"
     Join-Path $PSScriptRoot "fixtures\windows-office-special-operators.tex"
+    Join-Path $PSScriptRoot "fixtures\windows-office-latex-compatibility.md"
 )
 
 foreach ($path in @($AcceptanceExePath) + $fixtures) {

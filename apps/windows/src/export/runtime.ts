@@ -8,11 +8,16 @@ import { STATE } from "mathjax-full/js/core/MathItem.js";
 import { SerializedMmlVisitor } from "mathjax-full/js/core/MmlTree/SerializedMmlVisitor.js";
 import type { MmlNode } from "mathjax-full/js/core/MmlTree/MmlNode.js";
 import { normalizeMathLiveCanonicalUprightCommands } from "../editor/normalizeChineseLatex.ts";
+import { normalizeExtendedIntegralLatexCommands } from "../math/extendedIntegralCompatibility.ts";
+import { applyVisualTexIntegralSvgGlyphs } from "../math/integralSvgExportCompatibility.ts";
 import { readErrorMessage } from "../errors/readErrorMessage.ts";
 import {
-  EXTENDED_INTEGRAL_MATHML_MACROS,
-  EXTENDED_INTEGRAL_SVG_MACROS,
-} from "../math/extendedIntegralCompatibility.ts";
+  assertResolvedMathJaxSvg,
+  assertResolvedPresentationMathMl,
+  VISUALTEX_MATHML_MACROS,
+  VISUALTEX_SVG_MACROS,
+  type VisualTexMathJaxMacro,
+} from "../math/latexCompatibility.ts";
 import type {
   PngExportOptions,
   PngExportResult,
@@ -30,7 +35,7 @@ const DEFAULT_OPTIONS: SvgExportOptions = {
 const adaptor = liteAdaptor();
 RegisterHTMLHandler(adaptor);
 
-function createTexInput(macros: Record<string, string>) {
+function createTexInput(macros: Record<string, VisualTexMathJaxMacro>) {
   return new TeX({
     packages: AllPackages,
     macros,
@@ -42,8 +47,8 @@ function createTexInput(macros: Record<string, string>) {
   });
 }
 
-const mathMlTexInput = createTexInput(EXTENDED_INTEGRAL_MATHML_MACROS);
-const svgTexInput = createTexInput(EXTENDED_INTEGRAL_SVG_MACROS);
+const mathMlTexInput = createTexInput(VISUALTEX_MATHML_MACROS);
+const svgTexInput = createTexInput(VISUALTEX_SVG_MACROS);
 const mathMlOutput = new SVG({
   fontCache: "local",
   internalSpeechTitles: false,
@@ -98,7 +103,7 @@ function isSingleCompleteEnvironment(source: string) {
 
 function prepareLatex(latex: string) {
   const normalized = normalizeMathLiveCanonicalUprightCommands(
-    latex.replace(/\r\n?/g, "\n"),
+    normalizeExtendedIntegralLatexCommands(latex.replace(/\r\n?/g, "\n")),
   ).trim();
   if (!normalized) throw new Error("Cannot export an empty formula.");
 
@@ -185,6 +190,7 @@ export function latexToMathMl(latex: string, displayMode = true) {
   if (!mathMl.startsWith("<math") || !mathMl.includes("MathML")) {
     throw new Error("MathJax did not produce valid Presentation MathML.");
   }
+  assertResolvedPresentationMathMl(mathMl);
   return mathMl;
 }
 
@@ -205,6 +211,7 @@ export function latexToSvg(
     containerWidth: 100_000,
   });
   let svg = extractSvg(adaptor.outerHTML(container));
+  svg = applyVisualTexIntegralSvgGlyphs(svg, options.displayMode);
   const viewBox = parseViewBox(svg);
 
   const unitsPerPx = 1000 / fontSizePx;
@@ -249,6 +256,7 @@ export function latexToSvg(
     svg = `${svg.slice(0, openingEnd + 1)}${hitTarget}${svg.slice(openingEnd + 1)}`;
   }
 
+  assertResolvedMathJaxSvg(svg);
   assertSelfContained(svg);
   return {
     svg,

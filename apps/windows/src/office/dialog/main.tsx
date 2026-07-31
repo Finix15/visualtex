@@ -8,9 +8,20 @@ import { officeOcrTransport } from "../api/ocrHttpTransport";
 import { OfficeDialogApp } from "./OfficeDialogApp";
 import { DocumentImportApp } from "../documentImport/DocumentImportApp";
 import { applyDocumentTheme, readSynchronizedTheme } from "../../themeSync";
+import {
+  normalizeEditorLayout,
+  useEditorStore,
+} from "../../stores/editorStore";
 
 configureOcrTransport(officeOcrTransport);
 applyDocumentTheme(readSynchronizedTheme());
+useEditorStore.getState().setEditorLayout(
+  normalizeEditorLayout(
+    document
+      .querySelector<HTMLMetaElement>('meta[name="visualtex-editor-layout"]')
+      ?.content,
+  ),
+);
 
 function mount() {
   const root = document.getElementById("root");

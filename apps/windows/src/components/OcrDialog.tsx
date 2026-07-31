@@ -26,10 +26,21 @@ import {
 } from "react";
 import { MathPreview } from "./MathPreview";
 import {
+  beginOcrInstallGuard,
+  endOcrInstallGuard,
+  isOcrInstallActive,
+  ocrInstallStatusToProgress,
+  shouldDisplayRuntimeError,
+} from "../ocr/ocrInstallState";
+import {
   DEFAULT_OCR_MODEL,
   OCR_MODELS,
+  cancelOcrInstall,
   cancelOcrRecognition,
+  getOcrInstallStatus,
+  openOcrInstallLogs,
   type OcrInstallProgress,
+  type OcrInstallStatus,
   type OcrModelName,
   type OcrRecognitionProgress,
   type OcrRecognitionResult,
@@ -100,12 +111,14 @@ export function OcrDialog({
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const recognizingRef = useRef(false);
   const cancellingRef = useRef(false);
+  const installingRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const objectUrlRef = useRef<string | null>(null);
   const [runtime, setRuntime] = useState<OcrRuntimeStatus | null>(null);
   const [checkingRuntime, setCheckingRuntime] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [installProgress, setInstallProgress] = useState<OcrInstallProgress | null>(null);
+  const [installStatus, setInstallStatus] = useState<OcrInstallStatus | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState("");
   const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
@@ -119,6 +132,12 @@ export function OcrDialog({
   const [latex, setLatex] = useState("");
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
+
+  const isWindows = /Windows/i.test(navigator.userAgent);
+  const installFailed =
+    installStatus?.state === "installFailed" ||
+    installStatus?.state === "verificationFailed" ||
+    installStatus?.state === "cancelled";
 
   const selectedModel = useMemo(
     () =>
@@ -141,6 +160,23 @@ export function OcrDialog({
       objectUrlRef.current = null;
     }
   }, []);
+
+  const applyInstallStatus = useCallback((status: OcrInstallStatus) => {
+    const active = isOcrInstallActive(status.state);
+    setInstallStatus(status);
+    setInstallProgress(ocrInstallStatusToProgress(status));
+    installingRef.current = active;
+    setInstalling(active);
+  }, []);
+
+  const refreshInstallStatus = useCallback(async () => {
+    if (!isTauriEnvironment() && !isOfficeCompanionEnvironment()) return;
+    try {
+      applyInstallStatus(await getOcrInstallStatus());
+    } catch (statusError) {
+      setError(readError(statusError));
+    }
+  }, [applyInstallStatus]);
 
   const refreshRuntime = useCallback(async (forceRefresh = false) => {
     if (!isTauriEnvironment() && !isOfficeCompanionEnvironment()) {
@@ -180,17 +216,54 @@ export function OcrDialog({
   useEffect(() => {
     if (!open) return;
     setError("");
-    if (runtime) return;
 
     let cancelled = false;
     const frame = window.requestAnimationFrame(() => {
-      if (!cancelled) void refreshRuntime();
+      if (cancelled) return;
+      if (!runtime) void refreshRuntime();
+      void refreshInstallStatus();
     });
     return () => {
       cancelled = true;
       window.cancelAnimationFrame(frame);
     };
-  }, [open, runtime, refreshRuntime]);
+  }, [open, runtime, refreshInstallStatus, refreshRuntime]);
+
+  useEffect(() => {
+    if (!open) return;
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void listenOcrInstallProgress((progress) => {
+      if (cancelled) return;
+      const active = isOcrInstallActive(progress.state);
+      setInstallProgress(progress);
+      installingRef.current = active;
+      setInstalling(active);
+      setInstallStatus((current) => ({
+        schemaVersion: current?.schemaVersion ?? 1,
+        state: progress.state,
+        currentStep: progress.stage,
+        completedSteps: current?.completedSteps ?? [],
+        percent: progress.percent,
+        message: progress.message,
+        detail: progress.detail,
+        error: progress.error,
+        logPath: progress.logPath ?? current?.logPath ?? "",
+        updatedAtMs: Date.now(),
+      }));
+      if (progress.state === "complete") {
+        setError("");
+        void refreshRuntime(false);
+      }
+    }).then((dispose) => {
+      if (cancelled) dispose();
+      else unlisten = dispose;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [open, refreshRuntime]);
 
   useEffect(() => {
     if (!open) return;
@@ -284,28 +357,63 @@ export function OcrDialog({
   };
 
   const handleInstall = async () => {
+    if (!beginOcrInstallGuard(installingRef)) return;
     setInstalling(true);
     setError("");
-    setInstallProgress({
-      stage: "start",
-      percent: 1,
-      message: isEn ? "Starting OCR installation" : "正在启动 OCR 安装",
-      detail: null,
-    });
+    const startingProgress: OcrInstallProgress = {
+      stage: installFailed ? installStatus?.currentStep ?? "resume" : "start",
+      state: "installing",
+      percent: installFailed ? installStatus?.percent ?? 1 : 1,
+      message: installFailed
+        ? isEn
+          ? "Resuming from the failed OCR installation step"
+          : "正在从失败步骤继续安装 OCR"
+        : isEn
+          ? "Starting OCR installation"
+          : "正在启动 OCR 安装",
+      detail: isWindows
+        ? isEn
+          ? "Python 3.12 is preferred. Python 3.13 is incompatible with tokenizers 0.19.1 and will not be selected."
+          : "优先使用 Python 3.12；Python 3.13 与 tokenizers 0.19.1 不兼容，不会被选择。"
+        : null,
+      error: null,
+      logPath: installStatus?.logPath ?? null,
+    };
+    setInstallProgress(startingProgress);
 
-    let unlisten: (() => void) | undefined;
     try {
-      unlisten = await listenOcrInstallProgress(setInstallProgress);
       const nextRuntime = await installOcrRuntime();
       setRuntime(nextRuntime);
+      setError("");
+      await refreshInstallStatus();
       void warmupOcrModel(model).catch(() => undefined);
       onNotify(isEn ? "OCR runtime installed" : "OCR 运行环境安装完成");
     } catch (installError) {
-      setError(readError(installError));
-      await refreshRuntime(true);
+      const message = readError(installError);
+      setError(message);
+      await refreshInstallStatus();
     } finally {
-      unlisten?.();
+      endOcrInstallGuard(installingRef);
       setInstalling(false);
+    }
+  };
+
+  const handleCancelInstall = async () => {
+    if (!installing) return;
+    try {
+      await cancelOcrInstall();
+      onNotify(isEn ? "OCR installation cancellation requested" : "已请求取消 OCR 安装");
+      await refreshInstallStatus();
+    } catch (cancelError) {
+      setError(readError(cancelError));
+    }
+  };
+
+  const handleOpenInstallLogs = async () => {
+    try {
+      await openOcrInstallLogs();
+    } catch (logError) {
+      setError(readError(logError));
     }
   };
 
@@ -477,6 +585,7 @@ export function OcrDialog({
     setError("");
     try {
       setRuntime(await resetOcrRuntime());
+      await refreshInstallStatus();
       setResult(null);
       setLatex("");
     } catch (resetError) {
@@ -666,11 +775,27 @@ export function OcrDialog({
                       ? isEn
                         ? "Local OCR runtime ready"
                         : "本地 OCR 环境已就绪"
-                      : isEn
-                        ? "OCR runtime is not installed"
-                        : "尚未安装 OCR 运行环境"}
+                      : installing
+                        ? isEn
+                          ? "OCR runtime is being installed"
+                          : "正在安装 OCR 运行环境"
+                        : installStatus?.state === "verificationFailed"
+                          ? isEn
+                            ? "OCR runtime verification failed"
+                            : "OCR 运行时验证失败"
+                          : installFailed
+                            ? isEn
+                              ? "OCR installation failed"
+                              : "OCR 安装失败"
+                            : isEn
+                              ? "OCR runtime is not installed"
+                              : "尚未安装 OCR 运行环境"}
                   </strong>
-                  <span>{runtime?.message ?? (isEn ? "Checking runtime…" : "正在检查运行环境…")}</span>
+                  <span>
+                    {installing || installFailed
+                      ? installStatus?.message ?? installProgress?.message
+                      : runtime?.message ?? (isEn ? "Checking runtime…" : "正在检查运行环境…")}
+                  </span>
                 </div>
               </div>
 
@@ -700,27 +825,93 @@ export function OcrDialog({
                         <span style={{ width: installProgress.percent + "%" }} />
                       </div>
                       {installProgress.detail && <small>{installProgress.detail}</small>}
+                      <div className="ocr-install-actions">
+                        <button type="button" onClick={() => void handleCancelInstall()}>
+                          <X size={14} />
+                          {isEn ? "Cancel installation" : "取消安装"}
+                        </button>
+                        <button type="button" onClick={() => void handleOpenInstallLogs()}>
+                          <ScanLine size={14} />
+                          {isEn ? "View log" : "查看日志"}
+                        </button>
+                      </div>
+                    </>
+                  ) : installFailed ? (
+                    <>
+                      <div className="ocr-progress-label is-failed">
+                        <span>{installStatus?.message ?? (isEn ? "Installation failed" : "安装失败")}</span>
+                        <strong>{installStatus?.percent ?? installProgress?.percent ?? 0}%</strong>
+                      </div>
+                      <div className="ocr-progress-track is-failed">
+                        <span
+                          style={{
+                            width:
+                              (installStatus?.percent ?? installProgress?.percent ?? 0) + "%",
+                          }}
+                        />
+                      </div>
+                      {(installStatus?.detail ?? installProgress?.detail) && (
+                        <small>{installStatus?.detail ?? installProgress?.detail}</small>
+                      )}
+                      {(installStatus?.error ?? installProgress?.error) && (
+                        <pre className="ocr-install-error">
+                          {installStatus?.error ?? installProgress?.error}
+                        </pre>
+                      )}
+                      <div className="ocr-install-actions">
+                        <button
+                          type="button"
+                          className="primary-button"
+                          onClick={() => void handleInstall()}
+                        >
+                          <RefreshCw size={14} />
+                          {isEn ? "Retry current step" : "重试当前步骤"}
+                        </button>
+                        <button type="button" onClick={() => void handleOpenInstallLogs()}>
+                          <ScanLine size={14} />
+                          {isEn ? "View log" : "查看日志"}
+                        </button>
+                        <button
+                          type="button"
+                          className="is-danger"
+                          onClick={() => void handleResetRuntime()}
+                        >
+                          <Trash2 size={14} />
+                          {isEn ? "Reset environment" : "重置环境"}
+                        </button>
+                      </div>
                     </>
                   ) : (
                     <>
                       <p>
-                        {isEn
-                          ? "VisualTeX will verify and extract the bundled Python 3.10, PaddlePaddle 3.3.1, PaddleOCR 3.7.0, and the default M model entirely on this Mac. No network or pip installation is used."
-                          : "VisualTeX 会在本机校验并解压应用内置的 Python 3.10、PaddlePaddle 3.3.1、PaddleOCR 3.7.0 与默认 M 模型；全程不联网，也不会运行 pip 安装。"}
+                        {isWindows
+                          ? isEn
+                            ? "VisualTeX uses an isolated Python 3.12/3.11/3.10 environment and resumes completed steps. Python 3.13 is not selected because tokenizers 0.19.1 has no compatible Windows wheel; source compilation is disabled."
+                            : "VisualTeX 会使用独立的 Python 3.12/3.11/3.10 环境并支持断点续装。Python 3.13 没有兼容的 tokenizers 0.19.1 Windows wheel，因此不会被选择，也不会回退源码编译。"
+                          : isEn
+                            ? "VisualTeX verifies and extracts the bundled offline Python, PaddleOCR, and default model without pip installation."
+                            : "VisualTeX 会校验并解压应用内置的离线 Python、PaddleOCR 与默认模型，不会运行 pip 安装。"}
                       </p>
-                      <button
-                        type="button"
-                        className="primary-button"
-                        onClick={handleInstall}
-                        disabled={
-                          (!isTauriEnvironment() &&
-                            !isOfficeCompanionEnvironment()) ||
-                          checkingRuntime
-                        }
-                      >
-                        <Download size={15} />
-                        {isEn ? "Install OCR runtime" : "安装 OCR 运行环境"}
-                      </button>
+                      <div className="ocr-install-actions">
+                        <button
+                          type="button"
+                          className="primary-button"
+                          onClick={() => void handleInstall()}
+                          disabled={
+                            (!isTauriEnvironment() &&
+                              !isOfficeCompanionEnvironment()) ||
+                            checkingRuntime ||
+                            installing
+                          }
+                        >
+                          <Download size={15} />
+                          {isEn ? "Install OCR runtime" : "安装 OCR 运行环境"}
+                        </button>
+                        <button type="button" onClick={() => void handleOpenInstallLogs()}>
+                          <ScanLine size={14} />
+                          {isEn ? "View log" : "查看日志"}
+                        </button>
+                      </div>
                     </>
                   )}
                 </div>
@@ -785,7 +976,7 @@ export function OcrDialog({
               )}
             </section>
 
-            {error && (
+            {shouldDisplayRuntimeError(error, installStatus?.state) && (
               <div className="ocr-error-box" role="alert">
                 <AlertCircle size={16} />
                 <pre>{error}</pre>

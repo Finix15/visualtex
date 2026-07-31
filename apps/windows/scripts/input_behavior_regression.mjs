@@ -7,11 +7,27 @@ import {
   resolveChromiumExecutable,
 } from "./browser_test_runtime.mjs";
 
+const scenario = process.argv[2] ?? "all";
+const supportedScenarios = new Set([
+  "all",
+  "navigation",
+  "structures",
+  "accents",
+  "settings-history",
+]);
+if (!supportedScenarios.has(scenario)) {
+  throw new Error(
+    "Usage: node scripts/input_behavior_regression.mjs <all|navigation|structures|accents|settings-history>",
+  );
+}
+
 const portOffset = process.pid % 1000;
 const previewPort = 6400 + portOffset;
 const debugPort = 11400 + portOffset;
 const baseUrl = `http://127.0.0.1:${previewPort}`;
-const chromeProfile = createBrowserProfilePath("visualtex-input-behavior");
+const chromeProfile = createBrowserProfilePath(
+  `visualtex-input-behavior-${scenario}`,
+);
 const chromePath = resolveChromiumExecutable();
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -372,8 +388,9 @@ async function main() {
         };
       })()`);
 
-    await configure();
-    await preparePlaceholder("x^{\\placeholder{}}");
+    if (scenario === "all" || scenario === "navigation") {
+      await configure();
+      await preparePlaceholder("x^{\\placeholder{}}");
     await typeCharacter("a", "KeyA", 65);
     const superscript = await readState();
     assert.equal(superscript.value, "x^{a}");
@@ -456,11 +473,12 @@ async function main() {
     );
     await pressArrow("ArrowDown");
     const fractionDenominatorNavigation = await readState();
-    assert.equal(
-      fractionDenominatorNavigation.inFraction,
-      true,
-      JSON.stringify(fractionDenominatorNavigation),
-    );
+      assert.equal(
+        fractionDenominatorNavigation.inFraction,
+        true,
+        JSON.stringify(fractionDenominatorNavigation),
+      );
+    }
 
     const rawStructuralCommandCases = [
       ["sqrt", /^\\sqrt\{ab\}$/],
@@ -493,8 +511,10 @@ async function main() {
       ["underleftrightarrow", /^\\underleftrightarrow\{ab\}$/],
       ["underlinesegment", /^\\underlinesegment\{ab\}$/],
     ];
-    for (const [command, expectedValue] of rawStructuralCommandCases) {
-      await prepareEmptyField();
+    if (scenario === "all" || scenario === "structures") {
+      await configure();
+      for (const [command, expectedValue] of rawStructuralCommandCases) {
+        await prepareEmptyField();
       await typeRawCommand(command);
       const pendingStructure = await readState();
       assert.notEqual(
@@ -519,11 +539,12 @@ async function main() {
         /ab/,
         `\\${command} did not keep typed content inside any argument`,
       );
-      assert.notEqual(
-        typedStructure.position,
-        typedStructure.lastOffset,
-        `\\${command} unexpectedly jumped out of its argument`,
-      );
+        assert.notEqual(
+          typedStructure.position,
+          typedStructure.lastOffset,
+          `\\${command} unexpectedly jumped out of its argument`,
+        );
+      }
     }
 
     const rawAccentAuditCommands = [
@@ -547,8 +568,10 @@ async function main() {
       "overleftrightarrow",
       "mathring",
     ];
-    for (const command of rawAccentAuditCommands) {
-      await prepareEmptyField();
+    if (scenario === "all" || scenario === "accents") {
+      await configure();
+      for (const command of rawAccentAuditCommands) {
+        await prepareEmptyField();
       await typeRawCommand(command);
       await typeCharacter("a", "KeyA", 65);
       const typedAccentCommand = await readState();
@@ -674,14 +697,16 @@ async function main() {
     assert.equal(disabledRawAccent.value, "t\\ddot{ab}");
     assert.equal(disabledRawAccent.pendingWrapperCommand, "");
     assert.equal(disabledRawAccent.hasPendingWrapperFrame, false);
-    assert.notEqual(
-      disabledRawAccent.position,
-      disabledRawAccent.lastOffset,
-      JSON.stringify(disabledRawAccent),
-    );
+      assert.notEqual(
+        disabledRawAccent.position,
+        disabledRawAccent.lastOffset,
+        JSON.stringify(disabledRawAccent),
+      );
+    }
 
-    await configure({ autoExitSuperscript: false, autoExitSubscript: false });
-    await reload();
+    if (scenario === "all" || scenario === "settings-history") {
+      await configure({ autoExitSuperscript: false, autoExitSubscript: false });
+      await reload();
     await prepareEmptyField();
     await typeCharacter("x", "KeyX", 88);
     await typeCharacter("^", "Digit6", 54);
@@ -751,7 +776,7 @@ async function main() {
       }), 50);
     })`);
     assert.match(menu.triggerText, /操作逻辑|Input behavior/);
-    assert.equal(menu.optionCount, 6);
+    assert.equal(menu.optionCount, 7);
     await evaluate(`document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))`);
 
     const loadSingleFormulaLine = async (latex) => {
@@ -866,13 +891,14 @@ async function main() {
 
     await loadSingleFormulaLine("abcdef");
     const selectedEnter = await pressEnterAtPrefix("a", "abc");
-    assert.deepEqual(selectedEnter.values, ["abcdef", ""]);
+    assert.deepEqual(selectedEnter.values, ["a", "def"]);
 
     await loadSingleFormulaLine("x\\frac{a}{b}");
-    const structuredBoundarySplit = await pressEnterAtPrefix("x");
-    assert.deepEqual(structuredBoundarySplit.values, ["x", "\\frac{a}{b}"]);
+      const structuredBoundarySplit = await pressEnterAtPrefix("x");
+      assert.deepEqual(structuredBoundarySplit.values, ["x", "\\frac{a}{b}"]);
+    }
 
-    console.log("Input behavior regression passed");
+    console.log(`Input behavior regression passed: ${scenario}`);
   } finally {
     client?.close();
     chrome?.kill("SIGTERM");

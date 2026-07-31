@@ -5,6 +5,21 @@ description = "A visual LaTeX formula editor"
 authors = ["Liao Pojian (paulhe666)"]
 license = "MIT"
 edition = "2021"
+default-run = "visualtex"
+
+[features]
+ocr-install-acceptance = []
+ocr-python-bundle-acceptance = []
+
+[[bin]]
+name = "ocr_install_acceptance"
+path = "src/bin/ocr_install_acceptance.rs"
+required-features = ["ocr-install-acceptance"]
+
+[[bin]]
+name = "ocr_python_bundle_acceptance"
+path = "src/bin/ocr_python_bundle_acceptance.rs"
+required-features = ["ocr-python-bundle-acceptance"]
 
 [lib]
 name = "visualtex_lib"
@@ -30,6 +45,7 @@ getrandom = "0.3"
 hex = "0.4"
 flate2 = "1.1"
 tar = "0.4"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
 sha1 = "0.10"
 uuid = { version = "1", features = ["v4", "serde"] }

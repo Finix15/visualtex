@@ -1,0 +1,347 @@
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::fs::{self, File};
+use std::io::{self, Read};
+use std::path::{Path, PathBuf};
+use tauri::path::BaseDirectory;
+use tauri::{AppHandle, Manager};
+use uuid::Uuid;
+use zip::ZipArchive;
+
+const WINDOWS_PYTHON_RESOURCE: &str = "ocr-python/windows-x64";
+const EXPECTED_PYTHON_VERSION: &str = "3.12.10";
+const MAX_ARCHIVE_ENTRIES: usize = 20_000;
+const MAX_UNPACKED_BYTES: u64 = 256 * 1024 * 1024;
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BundleFileRecord {
+    pub name: String,
+    pub size: u64,
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowsPythonBundleManifest {
+    pub schema_version: u32,
+    pub platform: String,
+    pub architecture: String,
+    pub python_version: String,
+    pub pip_version: String,
+    pub archive: BundleFileRecord,
+}
+
+#[derive(Debug, Clone)]
+pub struct WindowsPythonBundle {
+    root: PathBuf,
+    pub manifest: WindowsPythonBundleManifest,
+}
+
+#[cfg(debug_assertions)]
+fn development_bundle_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("resources")
+        .join("ocr-python")
+        .join("windows-x64")
+}
+
+fn parse_manifest(path: &Path) -> Result<WindowsPythonBundleManifest, String> {
+    let content = fs::read(path).map_err(|error| {
+        format!(
+            "Unable to read bundled Python manifest {}: {error}",
+            path.display()
+        )
+    })?;
+    let manifest: WindowsPythonBundleManifest = serde_json::from_slice(&content)
+        .map_err(|error| format!("Bundled Python manifest is invalid: {error}"))?;
+    if manifest.schema_version != 1 {
+        return Err(format!(
+            "Unsupported bundled Python manifest schema: {}",
+            manifest.schema_version
+        ));
+    }
+    if manifest.platform != "windows" || manifest.architecture != "x64" {
+        return Err(format!(
+            "Bundled Python target mismatch: {}/{}",
+            manifest.platform, manifest.architecture
+        ));
+    }
+    if manifest.python_version != EXPECTED_PYTHON_VERSION {
+        return Err(format!(
+            "Bundled Python version mismatch: {} (expected {EXPECTED_PYTHON_VERSION})",
+            manifest.python_version
+        ));
+    }
+    if manifest.archive.name.is_empty()
+        || manifest.archive.name.contains('/')
+        || manifest.archive.name.contains('\\')
+    {
+        return Err(format!(
+            "Unsafe bundled Python archive name: {}",
+            manifest.archive.name
+        ));
+    }
+    Ok(manifest)
+}
+
+pub fn locate_bundle(app: &AppHandle) -> Result<WindowsPythonBundle, String> {
+    if let Ok(root) = app
+        .path()
+        .resolve(WINDOWS_PYTHON_RESOURCE, BaseDirectory::Resource)
+    {
+        let manifest_path = root.join("manifest.json");
+        if manifest_path.is_file() {
+            return Ok(WindowsPythonBundle {
+                manifest: parse_manifest(&manifest_path)?,
+                root,
+            });
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    {
+        let root = development_bundle_root();
+        let manifest_path = root.join("manifest.json");
+        if manifest_path.is_file() {
+            return Ok(WindowsPythonBundle {
+                manifest: parse_manifest(&manifest_path)?,
+                root,
+            });
+        }
+    }
+
+    Err("The bundled Windows x64 Python 3.12 runtime is missing. Reinstall VisualTeX using the complete installer.".to_string())
+}
+
+fn sha256_file(path: &Path) -> Result<String, String> {
+    let mut file = File::open(path)
+        .map_err(|error| format!("Unable to open {} for verification: {error}", path.display()))?;
+    let mut digest = Sha256::new();
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    loop {
+        let count = file
+            .read(&mut buffer)
+            .map_err(|error| format!("Unable to verify {}: {error}", path.display()))?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    Ok(hex::encode_upper(digest.finalize()))
+}
+
+fn verify_archive(bundle: &WindowsPythonBundle) -> Result<PathBuf, String> {
+    let archive = bundle.root.join(&bundle.manifest.archive.name);
+    let metadata = fs::metadata(&archive).map_err(|error| {
+        format!(
+            "Bundled Python archive is missing {}: {error}",
+            archive.display()
+        )
+    })?;
+    if !metadata.is_file() || metadata.len() != bundle.manifest.archive.size {
+        return Err(format!(
+            "Bundled Python archive size mismatch: {}",
+            archive.display()
+        ));
+    }
+    let actual = sha256_file(&archive)?;
+    if !actual.eq_ignore_ascii_case(&bundle.manifest.archive.sha256) {
+        return Err(format!(
+            "Bundled Python archive checksum mismatch for {}. Expected {}, actual {}",
+            archive.display(),
+            bundle.manifest.archive.sha256,
+            actual
+        ));
+    }
+    Ok(archive)
+}
+
+fn extract_archive(archive_path: &Path, destination: &Path) -> Result<(), String> {
+    fs::create_dir_all(destination).map_err(|error| {
+        format!(
+            "Unable to create bundled Python staging directory {}: {error}",
+            destination.display()
+        )
+    })?;
+    let file = File::open(archive_path)
+        .map_err(|error| format!("Unable to open {}: {error}", archive_path.display()))?;
+    let mut archive = ZipArchive::new(file)
+        .map_err(|error| format!("Bundled Python ZIP is invalid: {error}"))?;
+    if archive.len() > MAX_ARCHIVE_ENTRIES {
+        return Err(format!(
+            "Bundled Python ZIP contains too many entries: {}",
+            archive.len()
+        ));
+    }
+
+    let mut unpacked_bytes = 0_u64;
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|error| format!("Unable to read bundled Python ZIP entry: {error}"))?;
+        let relative = entry
+            .enclosed_name()
+            .ok_or_else(|| format!("Unsafe bundled Python ZIP path: {}", entry.name()))?
+            .to_path_buf();
+        unpacked_bytes = unpacked_bytes
+            .checked_add(entry.size())
+            .ok_or_else(|| "Bundled Python unpacked size overflow".to_string())?;
+        if unpacked_bytes > MAX_UNPACKED_BYTES {
+            return Err(format!(
+                "Bundled Python expands beyond the {} MiB safety limit",
+                MAX_UNPACKED_BYTES / 1024 / 1024
+            ));
+        }
+        if entry.unix_mode().is_some_and(|mode| mode & 0o170000 == 0o120000) {
+            return Err(format!(
+                "Symbolic links are not allowed in bundled Python: {}",
+                entry.name()
+            ));
+        }
+        let output = destination.join(relative);
+        if entry.is_dir() {
+            fs::create_dir_all(&output)
+                .map_err(|error| format!("Unable to create {}: {error}", output.display()))?;
+            continue;
+        }
+        if let Some(parent) = output.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("Unable to create {}: {error}", parent.display()))?;
+        }
+        let mut target = File::create(&output)
+            .map_err(|error| format!("Unable to create {}: {error}", output.display()))?;
+        io::copy(&mut entry, &mut target)
+            .map_err(|error| format!("Unable to extract {}: {error}", output.display()))?;
+    }
+    Ok(())
+}
+
+fn verify_extracted_tree(root: &Path, manifest: &WindowsPythonBundleManifest) -> Result<(), String> {
+    for required in [
+        "python.exe",
+        "python312.dll",
+        "python312.zip",
+        "python312._pth",
+        "visualtex-python.json",
+        "Lib/site-packages/pip/__init__.py",
+        "Lib/site-packages/sitecustomize.py",
+    ] {
+        let path = root.join(required);
+        if !path.is_file() {
+            return Err(format!(
+                "Bundled Python extraction is incomplete; missing {}",
+                path.display()
+            ));
+        }
+    }
+    let metadata: serde_json::Value = serde_json::from_slice(
+        &fs::read(root.join("visualtex-python.json"))
+            .map_err(|error| format!("Unable to read bundled Python metadata: {error}"))?,
+    )
+    .map_err(|error| format!("Bundled Python metadata is invalid: {error}"))?;
+    if metadata
+        .get("pythonVersion")
+        .and_then(serde_json::Value::as_str)
+        != Some(manifest.python_version.as_str())
+        || metadata
+            .get("architecture")
+            .and_then(serde_json::Value::as_str)
+            != Some("x64")
+    {
+        return Err("Bundled Python metadata does not match the manifest".to_string());
+    }
+    Ok(())
+}
+
+fn install_resolved_bundle(
+    bundle: WindowsPythonBundle,
+    destination: &Path,
+) -> Result<WindowsPythonBundleManifest, String> {
+    let archive = verify_archive(&bundle)?;
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "Bundled Python destination has no parent directory".to_string())?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("Unable to create OCR runtime directory: {error}"))?;
+
+    let suffix = Uuid::new_v4();
+    let staging = parent.join(format!(".python-installing-{suffix}"));
+    let backup = parent.join(format!(".python-backup-{suffix}"));
+    fs::remove_dir_all(&staging).ok();
+    fs::remove_dir_all(&backup).ok();
+
+    let result = (|| {
+        extract_archive(&archive, &staging)?;
+        verify_extracted_tree(&staging, &bundle.manifest)?;
+        if destination.exists() {
+            fs::rename(destination, &backup).map_err(|error| {
+                format!("Unable to back up the existing private Python runtime: {error}")
+            })?;
+        }
+        if let Err(error) = fs::rename(&staging, destination) {
+            if backup.exists() {
+                let _ = fs::rename(&backup, destination);
+            }
+            return Err(format!(
+                "Unable to activate the bundled private Python runtime: {error}"
+            ));
+        }
+        fs::remove_dir_all(&backup).ok();
+        Ok(())
+    })();
+
+    if result.is_err() {
+        fs::remove_dir_all(&staging).ok();
+        if backup.exists() && !destination.exists() {
+            let _ = fs::rename(&backup, destination);
+        }
+    }
+    result?;
+    Ok(bundle.manifest)
+}
+
+pub fn install_bundle(
+    app: &AppHandle,
+    destination: &Path,
+) -> Result<WindowsPythonBundleManifest, String> {
+    install_resolved_bundle(locate_bundle(app)?, destination)
+}
+
+pub fn install_bundle_from_root(
+    bundle_root: &Path,
+    destination: &Path,
+) -> Result<WindowsPythonBundleManifest, String> {
+    let manifest = parse_manifest(&bundle_root.join("manifest.json"))?;
+    install_resolved_bundle(
+        WindowsPythonBundle {
+            root: bundle_root.to_path_buf(),
+            manifest,
+        },
+        destination,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+
+    #[test]
+    fn rejects_zip_path_traversal() {
+        let root = tempfile::tempdir().unwrap();
+        let archive_path = root.path().join("unsafe.zip");
+        let file = File::create(&archive_path).unwrap();
+        let mut writer = zip::ZipWriter::new(file);
+        writer
+            .start_file("../escape.txt", SimpleFileOptions::default())
+            .unwrap();
+        writer.write_all(b"unsafe").unwrap();
+        writer.finish().unwrap();
+        let destination = root.path().join("out");
+        let error = extract_archive(&archive_path, &destination).unwrap_err();
+        assert!(error.contains("Unsafe bundled Python ZIP path"));
+        assert!(!root.path().join("escape.txt").exists());
+    }
+}

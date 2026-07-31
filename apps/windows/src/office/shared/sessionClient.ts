@@ -44,6 +44,11 @@ export interface PreparedPowerPointCommit {
 
 export interface OfficeThemeStatus {
   theme: string;
+  editorLayout: "standard" | "classic";
+}
+
+export interface OfficePreferences {
+  powerpointDefaultFontSizePt: number;
 }
 
 export interface OfficeFormulaSession {
@@ -159,6 +164,10 @@ export function getOfficeSession(sessionId: string) {
 
 export function getOfficeTheme() {
   return requestJson<OfficeThemeStatus>("/api/v1/theme");
+}
+
+export function getOfficePreferences() {
+  return requestJson<OfficePreferences>("/api/v1/preferences");
 }
 
 export function updateOfficeSession(

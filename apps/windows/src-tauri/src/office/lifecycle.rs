@@ -239,6 +239,13 @@ pub fn start(state: OfficeCompanionState) {
         "companion.log",
         &format!("companion task requested by pid={}", std::process::id()),
     );
+    #[cfg(target_os = "windows")]
+    if let Some(app) = state.app.clone() {
+        tauri::async_runtime::spawn_blocking(move || {
+            let _ = server::prewarm_desktop_session_window(app);
+        });
+    }
+
     let service = state.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(error) = server::run(service.clone()).await {
@@ -261,6 +268,29 @@ pub fn set_app_theme(
     state: tauri::State<'_, OfficeCompanionState>,
 ) -> String {
     state.set_current_theme(&theme)
+}
+
+#[tauri::command]
+pub fn set_app_editor_layout(
+    editor_layout: String,
+    state: tauri::State<'_, OfficeCompanionState>,
+) -> String {
+    state.set_current_editor_layout(&editor_layout)
+}
+
+#[tauri::command]
+pub fn set_powerpoint_default_font_size(
+    font_size_pt: f64,
+    state: tauri::State<'_, OfficeCompanionState>,
+) -> Result<f64, String> {
+    state.set_powerpoint_default_font_size_pt(font_size_pt)
+}
+
+#[tauri::command]
+pub fn get_powerpoint_default_font_size(
+    state: tauri::State<'_, OfficeCompanionState>,
+) -> f64 {
+    state.powerpoint_default_font_size_pt()
 }
 
 #[tauri::command]

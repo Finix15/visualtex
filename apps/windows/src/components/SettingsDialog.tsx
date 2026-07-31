@@ -3,6 +3,7 @@ import {
   BrainCircuit,
   Keyboard,
   Languages,
+  Presentation,
   RefreshCw,
   RotateCcw,
   SlidersHorizontal,
@@ -45,6 +46,12 @@ export function SettingsDialog({
   const suggestionCount = useEditorStore((state) => state.suggestionCount);
   const setSuggestionCount = useEditorStore((state) => state.setSuggestionCount);
   const resetUsage = useEditorStore((state) => state.resetUsage);
+  const powerPointDefaultFontSizePt = useEditorStore(
+    (state) => state.powerPointDefaultFontSizePt,
+  );
+  const setPowerPointDefaultFontSizePt = useEditorStore(
+    (state) => state.setPowerPointDefaultFontSizePt,
+  );
   const checkUpdatesOnStartup = useEditorStore(
     (state) => state.checkUpdatesOnStartup,
   );
@@ -343,6 +350,73 @@ export function SettingsDialog({
               >
                 English
               </button>
+            </div>
+          </div>
+
+          <div className="settings-section">
+            <div className="settings-section-title">
+              <Presentation size={18} />
+              <div>
+                <h3>
+                  {isEn
+                    ? "PowerPoint formula defaults"
+                    : "PowerPoint 公式默认值"}
+                </h3>
+                <p>
+                  {isEn
+                    ? "New PowerPoint formulas use this size. The insert window can still override it each time."
+                    : "新建 PowerPoint 公式时默认使用此字号，插入弹窗中仍可逐次调整。"}
+                </p>
+              </div>
+            </div>
+            <label className="number-setting office-default-font-size-setting">
+              <span>
+                <strong>
+                  {isEn ? "Default formula font size" : "默认公式字号"}
+                </strong>
+                <small>
+                  {powerPointDefaultFontSizePt} {isEn ? "pt" : "磅"}
+                </small>
+              </span>
+              <input
+                type="number"
+                min="5"
+                max="200"
+                step="0.5"
+                value={powerPointDefaultFontSizePt}
+                data-powerpoint-default-font-size
+                onChange={(event) => {
+                  const value = Number(event.target.value);
+                  if (Number.isFinite(value)) {
+                    setPowerPointDefaultFontSizePt(value);
+                  }
+                }}
+              />
+            </label>
+            <div
+              className="theme-segment office-font-size-presets"
+              role="group"
+              aria-label={
+                isEn
+                  ? "PowerPoint formula size presets"
+                  : "PowerPoint 公式字号预设"
+              }
+            >
+              {[14, 16, 18, 20, 24, 28, 32, 36].map((fontSizePt) => (
+                <button
+                  key={fontSizePt}
+                  type="button"
+                  className={
+                    powerPointDefaultFontSizePt === fontSizePt
+                      ? "is-active"
+                      : ""
+                  }
+                  aria-pressed={powerPointDefaultFontSizePt === fontSizePt}
+                  onClick={() => setPowerPointDefaultFontSizePt(fontSizePt)}
+                >
+                  {fontSizePt}
+                </button>
+              ))}
             </div>
           </div>
 

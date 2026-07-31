@@ -1,3 +1,5 @@
+import { normalizeExtendedIntegralLatexCommands } from "../math/extendedIntegralCompatibility.ts";
+
 const chineseChar = /[\u3400-\u9fff\uf900-\ufaff，。；：！？、（）【】《》“”‘’]/;
 
 const protectedTypographyCommands = new Set([
@@ -124,7 +126,7 @@ export const visualTexUprightInlineShortcuts: VisualTexInlineShortcutDefinitions
     ),
   ]);
 
-const GREEK_INLINE_SHORTCUTS: VisualTexInlineShortcutDefinitions = {
+export const GREEK_INLINE_SHORTCUTS: VisualTexInlineShortcutDefinitions = {
   alpha: "\\alpha",
   beta: "\\beta",
   gamma: "\\gamma",
@@ -167,7 +169,7 @@ const GREEK_INLINE_SHORTCUTS: VisualTexInlineShortcutDefinitions = {
   Omega: "\\Omega",
 };
 
-const BASIC_OPERATOR_INLINE_SHORTCUTS: VisualTexInlineShortcutDefinitions = {
+export const BASIC_OPERATOR_INLINE_SHORTCUTS: VisualTexInlineShortcutDefinitions = {
   pp: "+",
   plus: "+",
   add: "+",
@@ -194,7 +196,7 @@ const BASIC_OPERATOR_INLINE_SHORTCUTS: VisualTexInlineShortcutDefinitions = {
   bullet: "\\bullet",
 };
 
-const RELATION_INLINE_SHORTCUTS: VisualTexInlineShortcutDefinitions = {
+export const RELATION_INLINE_SHORTCUTS: VisualTexInlineShortcutDefinitions = {
   ">=": "\\ge",
   "<=": "\\le",
   "!=": "\\ne",
@@ -236,7 +238,7 @@ const RELATION_INLINE_SHORTCUTS: VisualTexInlineShortcutDefinitions = {
   nmid: "\\nmid",
 };
 
-const ARROW_INLINE_SHORTCUTS: VisualTexInlineShortcutDefinitions = {
+export const ARROW_INLINE_SHORTCUTS: VisualTexInlineShortcutDefinitions = {
   "->": "\\to",
   "<-": "\\leftarrow",
   "<->": "\\leftrightarrow",
@@ -249,7 +251,7 @@ const ARROW_INLINE_SHORTCUTS: VisualTexInlineShortcutDefinitions = {
   downarrow: "\\downarrow",
 };
 
-const ACCENT_INLINE_SHORTCUTS: VisualTexInlineShortcutDefinitions = {
+export const ACCENT_INLINE_SHORTCUTS: VisualTexInlineShortcutDefinitions = {
   acute: "\\acute{#?}",
   grave: "\\grave{#?}",
   hat: "\\hat{#?}",
@@ -267,7 +269,7 @@ const ACCENT_INLINE_SHORTCUTS: VisualTexInlineShortcutDefinitions = {
   mathring: "\\mathring{#?}",
 };
 
-const COMMON_COMMAND_INLINE_SHORTCUTS: VisualTexInlineShortcutDefinitions = {
+export const COMMON_COMMAND_INLINE_SHORTCUTS: VisualTexInlineShortcutDefinitions = {
   frac: "\\frac{#?}{#?}",
   dfrac: "\\dfrac{#?}{#?}",
   tfrac: "\\tfrac{#?}{#?}",
@@ -334,6 +336,58 @@ const COMMON_COMMAND_INLINE_SHORTCUTS: VisualTexInlineShortcutDefinitions = {
   vdots: "\\vdots",
   ddots: "\\ddots",
 };
+
+export interface VisualTexAutoEscapeShortcutGroup {
+  id: string;
+  titleZh: string;
+  titleEn: string;
+  shortcuts: VisualTexInlineShortcutDefinitions;
+}
+
+export const visualTexAutoEscapeShortcutGroups: readonly VisualTexAutoEscapeShortcutGroup[] = [
+  {
+    id: "greek",
+    titleZh: "希腊字母",
+    titleEn: "Greek letters",
+    shortcuts: GREEK_INLINE_SHORTCUTS,
+  },
+  {
+    id: "operators",
+    titleZh: "基本运算",
+    titleEn: "Basic operators",
+    shortcuts: BASIC_OPERATOR_INLINE_SHORTCUTS,
+  },
+  {
+    id: "relations",
+    titleZh: "关系与集合",
+    titleEn: "Relations and sets",
+    shortcuts: RELATION_INLINE_SHORTCUTS,
+  },
+  {
+    id: "arrows",
+    titleZh: "箭头",
+    titleEn: "Arrows",
+    shortcuts: ARROW_INLINE_SHORTCUTS,
+  },
+  {
+    id: "accents",
+    titleZh: "重音结构",
+    titleEn: "Accents",
+    shortcuts: ACCENT_INLINE_SHORTCUTS,
+  },
+  {
+    id: "commands",
+    titleZh: "常用命令",
+    titleEn: "Common commands",
+    shortcuts: COMMON_COMMAND_INLINE_SHORTCUTS,
+  },
+  {
+    id: "differentials",
+    titleZh: "微分变量",
+    titleEn: "Differentials",
+    shortcuts: visualTexUprightInlineShortcuts,
+  },
+];
 
 export const visualTexAutoEscapeInlineShortcuts: VisualTexInlineShortcutDefinitions = {
   ...GREEK_INLINE_SHORTCUTS,
@@ -1063,7 +1117,9 @@ function readBracedCommand(source: string, start: number): number {
 
 export function normalizeChineseLatex(source: string): string {
   const normalizedTextCommands = normalizeContextualUprightSymbols(
-    normalizeMathLiveCanonicalUprightCommands(source),
+    normalizeMathLiveCanonicalUprightCommands(
+      normalizeExtendedIntegralLatexCommands(source),
+    ),
   ).replace(
     /\\(?:mathrm|textrm)\{([\u3400-\u9fff\uf900-\ufaff，。；：！？、（）【】《》“”‘’\s]+)\}/g,
     "\\text{$1}",

@@ -5,15 +5,19 @@ namespace VisualTeX.WindowsOffice.Contracts;
 public static class OfficeFormulaSizing
 {
     private const float PointsPerPixel = 0.75f;
-    private const float MinimumPoints = 12f;
+    private const float MinimumDimensionPoints = 1f;
 
     public static (float Width, float Height) NaturalSize(
         float renderWidth,
         float renderHeight)
     {
+        // Render dimensions are CSS pixels at 96 dpi; Word stores object sizes
+        // in 72 dpi points. Do not impose a 12 pt selection-box floor here:
+        // scaling a narrow inline formula such as x up to 12 pt width enlarges
+        // its glyph by two to three times even though metadata still says 11 pt.
         return (
-            Math.Max(MinimumPoints, Math.Max(1f, renderWidth) * PointsPerPixel),
-            Math.Max(MinimumPoints, Math.Max(1f, renderHeight) * PointsPerPixel));
+            Math.Max(MinimumDimensionPoints, Math.Max(1f, renderWidth) * PointsPerPixel),
+            Math.Max(MinimumDimensionPoints, Math.Max(1f, renderHeight) * PointsPerPixel));
     }
 
     public static (float Width, float Height) EditedSize(

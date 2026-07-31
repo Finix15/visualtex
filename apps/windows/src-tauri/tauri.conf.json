@@ -40,7 +40,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "ocr/worker.py": "ocr/worker.py"
+      "ocr/worker.py": "ocr/worker.py",
+      "resources/ocr-python/windows-x64": "ocr-python/windows-x64"
     },
     "macOS": {
       "signingIdentity": "-"

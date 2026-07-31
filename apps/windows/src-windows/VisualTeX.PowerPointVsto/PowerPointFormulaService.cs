@@ -102,11 +102,11 @@ internal sealed class PowerPointFormulaService
                 dynamic range = mathRange!;
                 font = range.Font;
                 var size = Convert.ToDouble(((dynamic)font).Size);
-                return FormulaFontSize.Normalize(size, 18f);
+                return FormulaFontSize.Normalize(size, 20f);
             }
 
             var window = _application.ActiveWindow;
-            if (window is null) return 18f;
+            if (window is null) return 20f;
             Selection? selection = null;
             try
             {
@@ -119,15 +119,15 @@ internal sealed class PowerPointFormulaService
                     {
                         font = ((dynamic)textRange).Font;
                         var size = Convert.ToDouble(((dynamic)font).Size);
-                        return FormulaFontSize.Normalize(size, 18f);
+                        return FormulaFontSize.Normalize(size, 20f);
                     }
                     finally { Release(textRange); }
                 }
             }
             finally { Release(selection); Release(window); }
-            return 18f;
+            return 20f;
         }
-        catch { return 18f; }
+        catch { return 20f; }
         finally
         {
             Release(font);

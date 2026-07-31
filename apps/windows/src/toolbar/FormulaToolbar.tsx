@@ -702,6 +702,7 @@ export function FormulaToolbar({
   const language = useEditorStore((state) => state.language);
   const lines = useEditorStore((state) => state.lines);
   const activeLineId = useEditorStore((state) => state.activeLineId);
+  const usage = useEditorStore((state) => state.usage);
   const hotkeyBindings = useFormulaHotkeyStore((state) => state.bindings);
   const removeBindingsForTarget = useFormulaHotkeyStore(
     (state) => state.removeBindingsForTarget,
@@ -816,6 +817,43 @@ export function FormulaToolbar({
   ]);
 
   useEffect(() => {
+    if (layout !== "horizontal") return;
+    const root = toolbarRef.current;
+    if (!root) return;
+
+    const handleHorizontalWheel = (event: WheelEvent) => {
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      const target = event.target instanceof Element
+        ? event.target.closest<HTMLElement>(".template-strip, .toolbar-tabs")
+        : null;
+      if (!target || !root.contains(target)) return;
+      const overflow = target.scrollWidth - target.clientWidth;
+      if (overflow <= 1) return;
+
+      const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+        ? 24
+        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+          ? Math.max(120, target.clientWidth * 0.82)
+          : 1;
+      const rawDelta = Math.abs(event.deltaY) >= Math.abs(event.deltaX)
+        ? event.deltaY
+        : event.deltaX;
+      if (!rawDelta) return;
+      const previous = target.scrollLeft;
+      target.scrollLeft = Math.max(
+        0,
+        Math.min(overflow, previous + rawDelta * unit),
+      );
+      if (Math.abs(target.scrollLeft - previous) > 0.5) {
+        event.preventDefault();
+      }
+    };
+
+    root.addEventListener("wheel", handleHorizontalWheel, { passive: false });
+    return () => root.removeEventListener("wheel", handleHorizontalWheel);
+  }, [layout, activeCategory, activeView]);
+
+  useEffect(() => {
     if (!contextMenu) return;
 
     const closeFromPointer = (event: PointerEvent) => {
@@ -864,12 +902,31 @@ export function FormulaToolbar({
             !hiddenToolbarCommandIds.has(command.id),
         );
     const seenCommandIds = new Set<string>();
-    return candidates.filter((command) => {
+    const uniqueCandidates = candidates.filter((command) => {
       if (seenCommandIds.has(command.id)) return false;
       seenCommandIds.add(command.id);
       return true;
     });
-  }, [activeCategory]);
+    if (activeCategory !== "common") return uniqueCandidates;
+    return uniqueCandidates
+      .map((command, index) => ({ command, index }))
+      .sort((left, right) => {
+        const rightUsage = usage[right.command.id];
+        const leftUsage = usage[left.command.id];
+        const rightCount = rightUsage?.contextCounts
+          ? rightUsage.contextCounts.toolbar ?? 0
+          : rightUsage?.useCount ?? 0;
+        const leftCount = leftUsage?.contextCounts
+          ? leftUsage.contextCounts.toolbar ?? 0
+          : leftUsage?.useCount ?? 0;
+        if (rightCount !== leftCount) return rightCount - leftCount;
+        const rightLastUsed = usage[right.command.id]?.lastUsedAt ?? 0;
+        const leftLastUsed = usage[left.command.id]?.lastUsedAt ?? 0;
+        if (rightLastUsed !== leftLastUsed) return rightLastUsed - leftLastUsed;
+        return left.index - right.index;
+      })
+      .map(({ command }) => command);
+  }, [activeCategory, usage]);
 
   const customTileDefinitions = useMemo<FormulaTileDefinition[]>(
     () =>
@@ -883,10 +940,34 @@ export function FormulaToolbar({
       })),
     [customTileLibrary.tiles],
   );
-  const visibleFormulaTiles =
-    activeTileCategory === "common"
-      ? commonFormulaTiles
-      : customTileDefinitions;
+  const visibleFormulaTiles = useMemo(
+    () =>
+      activeTileCategory === "common"
+        ? commonFormulaTiles
+            .map((tile, index) => ({ tile, index }))
+            .sort((left, right) => {
+              const rightId = createTileCommand(right.tile).id;
+              const leftId = createTileCommand(left.tile).id;
+              const rightUsage = usage[rightId];
+              const leftUsage = usage[leftId];
+              const rightCount = rightUsage?.contextCounts
+                ? rightUsage.contextCounts.toolbar ?? 0
+                : rightUsage?.useCount ?? 0;
+              const leftCount = leftUsage?.contextCounts
+                ? leftUsage.contextCounts.toolbar ?? 0
+                : leftUsage?.useCount ?? 0;
+              if (rightCount !== leftCount) return rightCount - leftCount;
+              const rightLastUsed = usage[rightId]?.lastUsedAt ?? 0;
+              const leftLastUsed = usage[leftId]?.lastUsedAt ?? 0;
+              if (rightLastUsed !== leftLastUsed) {
+                return rightLastUsed - leftLastUsed;
+              }
+              return left.index - right.index;
+            })
+            .map(({ tile }) => tile)
+        : customTileDefinitions,
+    [activeTileCategory, customTileDefinitions, usage],
+  );
 
   const recordCustomTileNaturalWidth = (tileId: string, width: number) => {
     const stableWidth = Math.max(1, Math.round(width));

@@ -87,8 +87,12 @@ internal static class WordEquationNumbering
         float formulaHeightPoints,
         FormulaMetadata metadata)
     {
+        var hadNumberingArtifacts = HasFormulaNumberingArtifacts(
+            document,
+            metadata.FormulaId);
         if (metadata.DisplayMode != "block")
         {
+            if (!hadNumberingArtifacts) return;
             RemoveFormulaNumberingArtifacts(document, metadata.FormulaId);
             UpdateMainStoryFields(document);
             UpdateNativeCrossReferences(document);
@@ -104,6 +108,15 @@ internal static class WordEquationNumbering
                 formulaHeightPoints,
                 formulaFontSizePoints,
                 metadata.FormulaId);
+        }
+        else if (!hadNumberingArtifacts)
+        {
+            // Ordinary unnumbered display formulas have no numbering artifacts
+            // to remove. Configure only the local paragraph; scanning bookmarks,
+            // fields and cross-references here made an unrelated 100-formula
+            // document pay a document-wide cost for every single edit.
+            ConfigureEquationParagraph(formulaRange, numbered: false);
+            return;
         }
         else
         {
@@ -135,6 +148,22 @@ internal static class WordEquationNumbering
         // results during that update, so always restore visible references at
         // the end of the same reconciliation transaction.
         UpdateNativeCrossReferences(document);
+    }
+
+    private static bool HasFormulaNumberingArtifacts(
+        Document document,
+        string formulaId)
+    {
+        Bookmarks? bookmarks = null;
+        try
+        {
+            bookmarks = document.Bookmarks;
+            return bookmarks.Exists(EquationBookmarkName(formulaId))
+                || bookmarks.Exists(NativeCaptionBookmarkName(formulaId))
+                || bookmarks.Exists(NativeNumberBookmarkName(formulaId));
+        }
+        catch { return false; }
+        finally { Release(bookmarks); }
     }
 
     private static void UpdateMainStoryFields(Document document)
