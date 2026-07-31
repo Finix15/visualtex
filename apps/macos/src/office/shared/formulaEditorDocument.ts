@@ -52,7 +52,10 @@ function replaceEnvironment(
 }
 
 function detectFormulaEnvironment(source: string): DetectedFormulaEnvironment | null {
-  const normalized = source.replace(/\r\n?/g, "\n").trim();
+  const normalized = source
+    .replace(/\r\n?/g, "\n")
+    .replace(/\\(begin|end)\s*\{\s*([^{}]+?)\s*\}/g, "\\$1{$2}")
+    .trim();
   if (!normalized) return null;
 
   const equation = normalized.match(
@@ -72,14 +75,20 @@ function detectFormulaEnvironment(source: string): DetectedFormulaEnvironment | 
   }
 
   const alignedDisplay = normalized.match(
-    /^\\\[\s*(\\begin\s*\{aligned\}[\s\S]*\\end\s*\{aligned\})\s*\\\]$/,
+    /^\\\[\s*(\\begin\s*\{(aligned|alignedat)\}(?:\s*\{[^{}]*\})?[\s\S]*\\end\s*\{\2\})\s*\\\]$/,
   );
   if (alignedDisplay) {
-    return { codeFormat: "aligned", source: alignedDisplay[1] };
+    return {
+      codeFormat: "aligned",
+      source:
+        alignedDisplay[2] === "alignedat"
+          ? replaceEnvironment(alignedDisplay[1], "alignedat", "aligned")
+          : alignedDisplay[1],
+    };
   }
 
   const environment = normalized.match(
-    /^\\begin\s*\{(align\*?|alignat\*?|aligned|gather\*?|multline\*?|equation\*?|displaymath)\}(?:\s*\{[^{}]*\})?[\s\S]*\\end\s*\{\1\}$/,
+    /^\\begin\s*\{(align\*?|alignat\*?|flalign\*?|eqnarray\*?|aligned|alignedat|gather\*?|multline\*?|equation\*?|displaymath)\}(?:\s*\{[^{}]*\})?[\s\S]*\\end\s*\{\1\}$/,
   )?.[1];
   if (!environment) return null;
 
@@ -98,8 +107,25 @@ function detectFormulaEnvironment(source: string): DetectedFormulaEnvironment | 
         codeFormat: "align-star",
         source: replaceEnvironment(normalized, "alignat*", "align*"),
       };
+    case "flalign":
+    case "eqnarray":
+      return {
+        codeFormat: "align",
+        source: replaceEnvironment(normalized, environment, "align"),
+      };
+    case "flalign*":
+    case "eqnarray*":
+      return {
+        codeFormat: "align-star",
+        source: replaceEnvironment(normalized, environment, "align*"),
+      };
     case "aligned":
       return { codeFormat: "aligned", source: normalized };
+    case "alignedat":
+      return {
+        codeFormat: "aligned",
+        source: replaceEnvironment(normalized, "alignedat", "aligned"),
+      };
     case "gather":
       return { codeFormat: "gather", source: normalized };
     case "gather*":

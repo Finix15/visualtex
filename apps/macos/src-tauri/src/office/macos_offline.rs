@@ -1187,16 +1187,21 @@ fn validate_document_formula_metadata_match(
     {
         return Err("Document formula metadata identity does not match its formula block".to_string());
     }
-    let canonical_latex = canonical_document_formula_latex(metadata)?;
-    if normalized_serialized_latex(&metadata.latex) != canonical_latex
-        || normalized_serialized_latex(latex) != canonical_latex
-    {
-        return Err(
-            "Document formula metadata canonical LaTeX does not match its formula block"
-                .to_string(),
-        );
+    // The document-import frontend builds metadata, SVG, PNG and OMML from one
+    // normalized editor document. Treat that submitted serialization as the
+    // source of truth instead of rebuilding it again in Rust. Re-serializing
+    // here creates false mismatches for harmless differences such as CRLF/LF,
+    // environment whitespace, alignat arguments and internal equation
+    // newlines, even though every rendered artifact belongs to the same
+    // formula. Rust still validates the full metadata schema and identity above
+    // and requires the formula block and metadata to carry the same non-empty
+    // normalized source.
+    let formula_latex = normalized_serialized_latex(latex);
+    let metadata_latex = normalized_serialized_latex(&metadata.latex);
+    if formula_latex.is_empty() || metadata_latex != formula_latex {
+        return Err("Document formula metadata LaTeX does not match its formula block".to_string());
     }
-    Ok(canonical_latex)
+    Ok(formula_latex)
 }
 
 fn encode_metadata(metadata: &VisualTeXFormulaMetadata) -> Result<String, String> {
@@ -4311,6 +4316,38 @@ c=d
             canonical_document_formula_latex(&separate_rows).unwrap(),
             separate_rows.latex,
             "separate logical rows must remain separate equation environments",
+        );
+    }
+
+    #[test]
+    fn document_formula_metadata_accepts_frontend_environment_spacing() {
+        let frontend_source = r"\begin {equation}
+E=mc^2
+\end {equation}";
+        let metadata = document_formula_metadata(
+            "equation",
+            &["E=mc^2"],
+            frontend_source,
+            "block",
+            true,
+        );
+
+        assert_ne!(
+            canonical_document_formula_latex(&metadata).unwrap(),
+            frontend_source,
+            "the Rust formatter intentionally normalizes environment spacing",
+        );
+        assert_eq!(
+            validate_document_formula_metadata_match(
+                &metadata,
+                &metadata.formula_id,
+                frontend_source,
+                "block",
+                true,
+            )
+            .unwrap(),
+            frontend_source,
+            "a valid frontend serialization must not be rejected because Rust formats it differently",
         );
     }
 
