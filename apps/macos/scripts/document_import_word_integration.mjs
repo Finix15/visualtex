@@ -1160,7 +1160,7 @@ function runFormulaRegressionReport(testDocumentName, formulas) {
   const report = parseRegressionReport(
     readFileSync(formulaRegressionStatusPath, "utf8"),
   );
-  if (report.revision !== "word-double-click-routing-20260731-r67") {
+  if (report.revision !== "word-double-click-routing-20260801-r68") {
     throw new Error(`Word loaded the wrong VisualTeX source revision: ${report.revision}`);
   }
 
@@ -2868,13 +2868,14 @@ async function runCreatedImageFormulaRegression(
     'tell application "Microsoft Word"',
     "make new document",
     "set testDocument to active document",
+    "set testDocumentName to name of testDocument",
     "repeat 3 times",
     "activate object testDocument",
     "delay 0.2",
     "end repeat",
     "activate",
     'run VB macro macro name "VisualTeX_CreateInline"',
-    "return name of testDocument",
+    "return testDocumentName",
     "end tell",
   ], 60_000);
 
@@ -3033,7 +3034,33 @@ async function runCreatedImageFormulaRegression(
 
   let physicalDoubleClickResult = null;
   if (runPhysicalDoubleClickAfterReopen) {
+    // Do not click immediately after the callback. Real Word can asynchronously
+    // clear an SVG InlineShape.Title after commit, which was the exact state the
+    // previous fixture missed. Wait for that host work to drain, then force the
+    // observed metadata-only state and require a physical double-click to repair
+    // and edit it through AlternativeText.
+    await sleep(3_000);
+    const documentBeforeAppRestart = runAppleScript([
+      'tell application "Microsoft Word"',
+      'if not (exists active document) then return "no-active-document"',
+      'return name of active document as text',
+      'end tell',
+    ]);
     await startVisualTeXForPhysicalRegression();
+    const documentAfterAppRestart = runAppleScript([
+      'tell application "Microsoft Word"',
+      'if not (exists active document) then return "no-active-document"',
+      'return name of active document as text',
+      'end tell',
+    ]);
+    if (
+      documentBeforeAppRestart !== testDocumentName ||
+      documentAfterAppRestart !== testDocumentName
+    ) {
+      throw new Error(
+        `Word lost the physical-regression document around the VisualTeX restart: before=${documentBeforeAppRestart} after=${documentAfterAppRestart}`,
+      );
+    }
     const sessionsBeforePhysicalEdit = currentSessionIds();
     const physicalSelection = runAppleScript([
       'tell application "Microsoft Word"',
@@ -3042,11 +3069,22 @@ async function runCreatedImageFormulaRegression(
       "activate",
       'run VB macro macro name "VisualTeX_AssertWordHostSelfTest"',
       "set formulaShape to inline shape 1 of documentObject",
+      'set title of formulaShape to ""',
       "set formulaRange to text object of formulaShape",
       "select formulaRange",
-      'return "image" & (ASCII character 31) & (start of content of formulaRange as text) & (ASCII character 31) & (end of content of formulaRange as text) & (ASCII character 31) & (width of formulaShape as text) & (ASCII character 31) & (height of formulaShape as text)',
+      'return "image-metadata-only" & (ASCII character 31) & (start of content of formulaRange as text) & (ASCII character 31) & (end of content of formulaRange as text) & (ASCII character 31) & (width of formulaShape as text) & (ASCII character 31) & (height of formulaShape as text) & (ASCII character 31) & (length of (title of formulaShape as text) as text) & (ASCII character 31) & (length of (alternative text of formulaShape as text) as text)',
       "end tell",
     ]);
+    const physicalSelectionFields = physicalSelection.split("\x1f");
+    if (
+      physicalSelectionFields[0] !== "image-metadata-only" ||
+      physicalSelectionFields[5] !== "0" ||
+      !(Number(physicalSelectionFields[6]) > 0)
+    ) {
+      throw new Error(
+        `Word did not expose the required metadata-only image fixture: ${physicalSelection}`,
+      );
+    }
     const physicalClick = physicallyDoubleClickSelectedWordFormula(
       testDocumentName,
     );
@@ -3080,8 +3118,8 @@ async function runCreatedImageFormulaRegression(
     physicalDoubleClickResult = {
       sessionId: physicalEditSessionId,
       formulaId: formula.formulaId,
-      selection: physicalSelection.split("\x1f"),
-      documentStage: "after-image-commit",
+      selection: physicalSelectionFields,
+      documentStage: "after-image-commit-metadata-only",
       codeFormat: physicalEditSession.normalized.codeFormat,
       lines: physicalEditSession.normalized.lines.map((line) => line.latex),
       physicalClick,
@@ -3093,7 +3131,7 @@ async function runCreatedImageFormulaRegression(
       JSON.stringify(
         {
           status: "PASS",
-          revision: "word-double-click-routing-20260731-r67",
+          revision: "word-double-click-routing-20260801-r68",
           ...physicalDoubleClickResult,
         },
         null,
@@ -4390,7 +4428,7 @@ try {
         JSON.stringify(
           {
             status: "FAIL",
-            revision: "word-double-click-routing-20260731-r67",
+            revision: "word-double-click-routing-20260801-r68",
             error: error instanceof Error ? error.message : String(error),
           },
           null,

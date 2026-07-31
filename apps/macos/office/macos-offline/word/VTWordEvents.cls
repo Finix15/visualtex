@@ -40,7 +40,8 @@ Private Sub App_WindowBeforeDoubleClick(ByVal Sel As Word.Selection, Cancel As B
 
     ' Keep the direct-picture hot path free of tracing, metadata inflation and
     ' document searches. Word can invoke FormatPicture after this event, so a
-    ' valid compact Title prefix must be cancelled before dispatching the edit.
+    ' selected shape carrying either the compact reference or durable VisualTeX
+    ' metadata prefix must be cancelled before dispatching the edit.
     On Error GoTo IgnoreDoubleClick
     If Sel Is Nothing Then Exit Sub
     If VTTryGetDirectVisualTeXImageCandidate(Sel, selectedShape) Then

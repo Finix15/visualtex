@@ -55,7 +55,7 @@ inspectAddin("VisualTeX.dotm", "word/vbaProject.bin", [
   "App_WindowBeforeDoubleClick",
   "App_WindowSelectionChange",
   "VisualTeX_StabilizeImageEquationNumberSelection",
-  "word-double-click-routing-20260731-r67",
+  "word-double-click-routing-20260801-r68",
   "VTTraceWordDoubleClick",
   "VTWordRibbonApplyImageFontSizePreset",
   "VisualTeX_EditImageField",

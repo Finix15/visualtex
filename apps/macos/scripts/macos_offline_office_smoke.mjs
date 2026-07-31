@@ -170,7 +170,7 @@ expectIncludes(powerpointAdapter, "VTPowerPointRibbonApplyFormulaFontSizePreset"
 expectIncludes(powerpointAdapter, "VTUnicodeText(28151, 21512, 23383, 21495)", "PowerPoint must report mixed selected SVG formula sizes without source-encoding corruption");
 
 expectIncludes(wordAdapter, "Public Sub AutoExec()", "Word template must publish AutoExec health");
-expectIncludes(wordAdapter, '"word-double-click-routing-20260731-r67"', "Word health must identify the O(1) picture routing and resident-editor build");
+expectIncludes(wordAdapter, '"word-double-click-routing-20260801-r68"', "Word health must identify the selected-shape picture routing and resident-editor build");
 expectIncludes(wordAdapter, "VTInitializeWordEvents", "Word AutoExec must initialize its persistent application event sink");
 expectIncludes(wordEvents, "App_WindowBeforeDoubleClick", "Word must use its native application event for double-click editing");
 expectIncludes(wordEvents, "App_WindowSelectionChange", "Word must repair a clicked legacy image-number REF through the native selection-change event");
@@ -1045,7 +1045,7 @@ expectIncludes(installer, "addin_installation_matches", "Installed status must r
 expectIncludes(installer, "powerpoint_script.clone()", "PowerPoint installed status must include its AppleScriptTask resource");
 expectIncludes(installer, 'health.plugin_version.as_deref() == Some(env!("CARGO_PKG_VERSION"))', "Installer must reject stale plug-in health versions");
 expect(!installer.includes("source_revision_matches"), "Runtime health must not reject a current-version add-in only because an optional sourceRevision field is absent");
-expectIncludes(packager, "word-double-click-routing-20260731-r67", "Packaging must reject a Word DOTM that lacks the current O(1) picture-routing and resident-editor revision");
+expectIncludes(packager, "word-double-click-routing-20260801-r68", "Packaging must reject a Word DOTM that lacks the current selected-shape picture-routing and resident-editor revision");
 expectIncludes(packager, "powerpoint-svg-font-size-dropdown-unicode-20260727-r3", "Packaging must reject a PowerPoint PPAM that predates Unicode-safe point-size labels");
 expectIncludes(installer, "POWERPOINT_VBA_SOURCE_REVISION", "Installer validation must reject a stale PowerPoint PPAM without SVG point-size support");
 expectIncludes(installer, "Library/Application Scripts/com.microsoft.Word", "Installer must use Word's AppleScriptTask directory");

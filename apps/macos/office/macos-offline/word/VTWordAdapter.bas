@@ -4,7 +4,7 @@ Option Explicit
 Private Const VT_WORD_HOST As String = "word"
 Private Const VT_WORD_STATUS_FILE As String = "/OfficePluginStatus/word.json"
 Private Const VT_WORD_SOURCE_REVISION As String = _
-    "word-double-click-routing-20260731-r67"
+    "word-double-click-routing-20260801-r68"
 Private Const VT_WORD_EQUATION_NUMBER_FONT_NAME As String = "Cambria Math"
 Private Const VT_WORD_BOOKMARK_PREFIX As String = "VT_Pending_"
 Private Const VT_WORD_DOCUMENT_IMPORT_BOOKMARK_PREFIX As String = "VT_D_"
@@ -290,25 +290,22 @@ Public Sub VisualTeX_RunSelectedImageEditRecoveryRegression()
             "Double-click recognition did not repair swapped image metadata."
     End If
 
-    ' Metadata-only recovery remains available to explicit maintenance/edit
-    ' paths, but a direct double-click with no compact Title must not intercept
-    ' Word's native picture command or pay for document-wide recovery work.
+    ' Real Word SVG insertion can clear Title after the commit callback while
+    ' preserving AlternativeText. A physical double-click must still recognize
+    ' that durable metadata carrier, restore the compact reference and dispatch.
     selectedShape.Title = ""
     If Len(selectedShape.Title) <> 0 Then
         Err.Raise vbObjectError + 7591, "VisualTeX", _
             "Word did not clear the image formula Title for the regression."
     End If
-    If VTHandleWordBeforeDoubleClick(Selection) Then
+    If Not VTTryGetDirectVisualTeXImageCandidate( _
+       Selection, selectedShape) Then
         Err.Raise vbObjectError + 7591, "VisualTeX", _
-            "A metadata-only damaged image was incorrectly intercepted."
+            "A metadata-only VisualTeX image was not recognized for double-click editing."
     End If
-    If Not VTIsVisualTeXInlineShape(selectedShape) Then
+    If Not VTHandleWordBeforeDoubleClick(Selection) Then
         Err.Raise vbObjectError + 7591, "VisualTeX", _
-            "The explicit recovery path could not restore the image Title."
-    End If
-    If Not VTDispatchDirectVisualTeXImageEdit(selectedShape) Then
-        Err.Raise vbObjectError + 7591, "VisualTeX", _
-            "The explicit recovery path did not dispatch the restored image."
+            "A metadata-only VisualTeX image did not dispatch from double-click."
     End If
 
     formulaReference = selectedShape.Title
@@ -7640,22 +7637,55 @@ Public Function VTTryGetDirectVisualTeXImageCandidate( _
     ByRef selectedShape As InlineShape) As Boolean
 
     Dim titleValue As String
+    Dim alternativeValue As String
 
-    ' This is the FormatPicture and WindowBeforeDoubleClick hot-path gate.
-    ' It must remain O(1): inspect only the current Selection, its one directly
-    ' selected InlineShape and that shape's compact Title prefix. Do not read
-    ' AlternativeText, document Variables, fields, bookmarks or nearby ranges.
+    ' Keep ordinary-picture routing O(1): inspect only the current Selection and
+    ' its one directly selected InlineShape. Word for Mac can clear an SVG
+    ' InlineShape.Title after the commit callback returns, while preserving the
+    ' VisualTeX metadata in AlternativeText. Accept either durable carrier here;
+    ' full document-variable and metadata validation still happens only after a
+    ' VisualTeX prefix has been found.
     On Error GoTo NotCandidate
     Set selectedShape = Nothing
     If selected Is Nothing Then Exit Function
     If selected.InlineShapes.Count <> 1 Then Exit Function
     Set selectedShape = selected.InlineShapes(1)
+
     titleValue = selectedShape.Title
-    If Len(titleValue) <= Len(VT_FORMULA_REF_PREFIX) Then Exit Function
-    If StrComp( _
-       Left$(titleValue, Len(VT_FORMULA_REF_PREFIX)), _
-       VT_FORMULA_REF_PREFIX, vbBinaryCompare) <> 0 Then Exit Function
-    VTTryGetDirectVisualTeXImageCandidate = True
+    If Len(titleValue) > Len(VT_FORMULA_REF_PREFIX) Then
+        If StrComp( _
+           Left$(titleValue, Len(VT_FORMULA_REF_PREFIX)), _
+           VT_FORMULA_REF_PREFIX, vbBinaryCompare) = 0 Then
+            VTTryGetDirectVisualTeXImageCandidate = True
+            Exit Function
+        End If
+    End If
+    If Len(titleValue) > Len(VT_METADATA_PREFIX) Then
+        If StrComp( _
+           Left$(titleValue, Len(VT_METADATA_PREFIX)), _
+           VT_METADATA_PREFIX, vbBinaryCompare) = 0 Then
+            VTTryGetDirectVisualTeXImageCandidate = True
+            Exit Function
+        End If
+    End If
+
+    alternativeValue = selectedShape.AlternativeText
+    If Len(alternativeValue) > Len(VT_FORMULA_REF_PREFIX) Then
+        If StrComp( _
+           Left$(alternativeValue, Len(VT_FORMULA_REF_PREFIX)), _
+           VT_FORMULA_REF_PREFIX, vbBinaryCompare) = 0 Then
+            VTTryGetDirectVisualTeXImageCandidate = True
+            Exit Function
+        End If
+    End If
+    If Len(alternativeValue) > Len(VT_METADATA_PREFIX) Then
+        If StrComp( _
+           Left$(alternativeValue, Len(VT_METADATA_PREFIX)), _
+           VT_METADATA_PREFIX, vbBinaryCompare) = 0 Then
+            VTTryGetDirectVisualTeXImageCandidate = True
+            Exit Function
+        End If
+    End If
     Exit Function
 
 NotCandidate:
@@ -7995,8 +8025,8 @@ Public Function VTDispatchDirectVisualTeXImageEdit( _
     Dim metadataNeedsWrite As Boolean
     Dim formatNeedsWrite As Boolean
 
-    ' Called only after the O(1) Title-prefix gate has intercepted Word's native
-    ' picture command. Full metadata integrity checks are intentionally deferred
+    ' Called only after the O(1) selected-shape prefix gate has intercepted
+    ' Word's native picture command. Full metadata integrity checks are deferred
     ' until this point so ordinary images never pay their cost.
     If selectedShape Is Nothing Or _
        Not VTTryResolveVisualTeXInlineShapeReference( _

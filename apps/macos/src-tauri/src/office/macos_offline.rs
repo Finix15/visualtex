@@ -1187,13 +1187,20 @@ fn validate_document_formula_metadata_match(
     {
         return Err("Document formula metadata identity does not match its formula block".to_string());
     }
-    let canonical_latex = canonical_document_formula_latex(metadata)?;
-    if normalized_serialized_latex(&metadata.latex) != canonical_latex
-        || normalized_serialized_latex(latex) != canonical_latex
+    // The document-import frontend owns the canonical serializer and sends the
+    // same serialized source in both the formula block and its metadata. Do not
+    // gate a real import on a second Rust reimplementation of every LaTeX
+    // environment formatting rule: even a harmless serializer drift otherwise
+    // rejects formulas that already rendered correctly in the preview. Rust
+    // still validates the complete metadata schema and identity above, then
+    // requires the two submitted canonical sources to match byte-for-byte after
+    // newline normalization.
+    let canonical_latex = normalized_serialized_latex(latex);
+    if canonical_latex.is_empty()
+        || normalized_serialized_latex(&metadata.latex) != canonical_latex
     {
         return Err(
-            "Document formula metadata canonical LaTeX does not match its formula block"
-                .to_string(),
+            "Document formula metadata LaTeX does not match its formula block".to_string(),
         );
     }
     Ok(canonical_latex)
@@ -4311,6 +4318,36 @@ c=d
             canonical_document_formula_latex(&separate_rows).unwrap(),
             separate_rows.latex,
             "separate logical rows must remain separate equation environments",
+        );
+    }
+
+    #[test]
+    fn document_formula_metadata_accepts_frontend_canonical_source_when_rust_formatter_differs() {
+        let frontend_canonical = r"\begin{equation}
+\mathbb{E}[t\mid\mathbf{x}]
+=\int t\,p(t\mid\mathbf{x})\,\mathrm{d}t
+=y(\mathbf{x},\mathbf{w})
+\end{equation}";
+        let metadata = document_formula_metadata(
+            "equation",
+            &[r"\mathbb{E}[t\mid\mathbf{x}]
+=\int t\,p(t\mid\mathbf{x})\,\mathrm{d}t
+=y(\mathbf{x},\mathbf{w})"],
+            frontend_canonical,
+            "block",
+            true,
+        );
+
+        assert_eq!(
+            validate_document_formula_metadata_match(
+                &metadata,
+                &metadata.formula_id,
+                frontend_canonical,
+                "block",
+                true,
+            )
+            .unwrap(),
+            frontend_canonical,
         );
     }
 
