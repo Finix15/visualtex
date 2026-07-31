@@ -547,6 +547,158 @@ $$c=3$$
       { mode: "block", contains: "b=2" },
     ],
   },
+  {
+    name: "latex-preamble-and-custom-command-fallback",
+    kind: "auto",
+    source: String.raw`\documentclass[12pt]{article}
+\usepackage{amsmath,physics}
+\newcommand{\vect}[1]{\mathbf{#1}}
+\begin{document}
+正文中的标准公式
+\[
+E=mc^2
+\]
+\end{document}`,
+    lineEndings: allLineEndings,
+    expected: [{ mode: "block", contains: "E=mc^2" }],
+    textIncludes: [
+      String.raw`\documentclass[12pt]{article}`,
+      String.raw`\usepackage{amsmath,physics}`,
+      String.raw`\newcommand{\vect}[1]{\mathbf{#1}}`,
+    ],
+    codeTextIncludes: [String.raw`\usepackage{amsmath,physics}`],
+  },
+  {
+    name: "latex-multiline-newcommand-protects-inner-math",
+    kind: "latex",
+    source: String.raw`\newcommand{\custombox}[1]{
+  原样内容 $not_a_document_formula$：#1
+}
+正文 $x=1$。`,
+    expected: [{ mode: "inline", contains: "x=1" }],
+    forbiddenFormulaText: ["not_a_document_formula"],
+    textIncludes: [
+      String.raw`\newcommand{\custombox}[1]{`,
+      String.raw`原样内容 $not_a_document_formula$：#1`,
+    ],
+  },
+  {
+    name: "latex-custom-environment-preserved-literally",
+    kind: "auto",
+    source: String.raw`\begin{mytheorem}[自定义标题]
+这里的 $not_parsed$ 和 \begin{equation}z=9\end{equation} 都属于自定义内容。
+\end{mytheorem}
+正文 \(y=2\)。`,
+    expected: [{ mode: "inline", contains: "y=2" }],
+    forbiddenFormulaText: ["not_parsed", "z=9"],
+    textIncludes: [
+      String.raw`\begin{mytheorem}[自定义标题]`,
+      String.raw`\end{mytheorem}`,
+      String.raw`$not_parsed$`,
+    ],
+    codeTextIncludes: [String.raw`\begin{mytheorem}[自定义标题]`],
+  },
+  {
+    name: "latex-newenvironment-definition-preserved",
+    kind: "latex",
+    source: String.raw`\newenvironment{warningbox}
+  {\begin{quote}\bfseries}
+  {\end{quote}}
+正文 $a=b$。`,
+    expected: [{ mode: "inline", contains: "a=b" }],
+    textIncludes: [
+      String.raw`\newenvironment{warningbox}`,
+      String.raw`{\begin{quote}\bfseries}`,
+      String.raw`{\end{quote}}`,
+    ],
+  },
+  {
+    name: "latex-makeatletter-block-preserved",
+    kind: "latex",
+    source: String.raw`\makeatletter
+\def\custom@name#1{value-$not_math$-#1}
+\makeatother
+\[q=3\]`,
+    expected: [{ mode: "block", contains: "q=3" }],
+    forbiddenFormulaText: ["not_math"],
+    textIncludes: [
+      String.raw`\makeatletter`,
+      String.raw`\def\custom@name#1{value-$not_math$-#1}`,
+      String.raw`\makeatother`,
+    ],
+  },
+  {
+    name: "latex-expl3-block-preserved",
+    kind: "latex",
+    source: String.raw`\ExplSyntaxOn
+\cs_new:Npn \my_macro:n #1 { raw_$not_math$_#1 }
+\ExplSyntaxOff
+正文 $r=4$。`,
+    expected: [{ mode: "inline", contains: "r=4" }],
+    forbiddenFormulaText: ["not_math"],
+    textIncludes: [
+      String.raw`\ExplSyntaxOn`,
+      String.raw`\cs_new:Npn \my_macro:n #1 { raw_$not_math$_#1 }`,
+      String.raw`\ExplSyntaxOff`,
+    ],
+  },
+  {
+    name: "latex-inline-unknown-command-preserved",
+    kind: "latex",
+    source: String.raw`正文保留 \myterm[opt]{alpha_beta}，公式为 $k=5$。`,
+    expected: [{ mode: "inline", contains: "k=5" }],
+    textIncludes: [String.raw`\myterm[opt]{alpha_beta}`],
+  },
+  {
+    name: "latex-package-options-and-declarations-preserved",
+    kind: "latex",
+    source: String.raw`\RequirePackage{xcolor}
+\PassOptionsToPackage{unicode}{hyperref}
+\DeclareMathOperator*{\argmax}{arg\,max}
+\definecolor{brand}{RGB}{10,20,30}
+正文 $s=6$。`,
+    expected: [{ mode: "inline", contains: "s=6" }],
+    textIncludes: [
+      String.raw`\RequirePackage{xcolor}`,
+      String.raw`\PassOptionsToPackage{unicode}{hyperref}`,
+      String.raw`\DeclareMathOperator*{\argmax}{arg\,max}`,
+      String.raw`\definecolor{brand}{RGB}{10,20,30}`,
+    ],
+  },
+  {
+    name: "latex-unknown-figure-environment-preserved",
+    kind: "latex",
+    source: String.raw`\begin{figure}[htbp]
+\centering
+\includegraphics{custom.pdf}
+\caption{图中写有 $not_formula$}
+\end{figure}
+正文 $t=7$。`,
+    expected: [{ mode: "inline", contains: "t=7" }],
+    forbiddenFormulaText: ["not_formula"],
+    textIncludes: [
+      String.raw`\begin{figure}[htbp]`,
+      String.raw`\includegraphics{custom.pdf}`,
+      String.raw`\caption{图中写有 $not_formula$}`,
+      String.raw`\end{figure}`,
+    ],
+  },
+  {
+    name: "latex-custom-content-mixed-with-known-structure",
+    kind: "auto",
+    source: String.raw`\usepackage{custompkg}
+\section{可识别标题}
+\customnote{这一行原样保留}
+\begin{itemize}
+\item 列表公式 $u=8$
+\end{itemize}`,
+    expected: [{ mode: "inline", contains: "u=8" }],
+    textIncludes: [
+      String.raw`\usepackage{custompkg}`,
+      String.raw`\customnote{这一行原样保留}`,
+      "可识别标题",
+    ],
+  },
 ];
 
 function withLineEnding(source, lineEnding) {
@@ -644,6 +796,15 @@ for (const fixture of fixtures) {
     }
     for (const text of fixture.textExcludes ?? []) {
       assert.ok(!prose.includes(text), `${label} prose must remove ${text}`);
+    }
+    for (const text of fixture.codeTextIncludes ?? []) {
+      const literalBlock = blocks.find(
+        (block) =>
+          block.kind === "text" &&
+          block.paragraphStyle === "code" &&
+          block.text.includes(text),
+      );
+      assert.ok(literalBlock, `${label} literal fallback must preserve ${text}`);
     }
   }
 }

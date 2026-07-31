@@ -98,6 +98,23 @@ function textCharacterCount(blocks: DocumentImportBlock[]) {
   );
 }
 
+function decodeUrlSafeBase64Utf8(value: string) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+  const binary = atob(padded);
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+function ommlRetainsLiteralLatexCommand(ommlBase64: string, latex: string) {
+  const commands = [...latex.matchAll(/\\([A-Za-z@]+)\b/g)]
+    .map((match) => match[1])
+    .filter((command, index, values) => values.indexOf(command) === index);
+  if (!commands.length) return false;
+  const omml = decodeUrlSafeBase64Utf8(ommlBase64);
+  return commands.some((command) => omml.includes(`\\${command}`));
+}
+
 function calculateReferenceGeometry(widthPx: number, heightPx: number, baselinePx: number) {
   const naturalWidthPt = widthPx * 0.75 * WORD_IMAGE_VISUAL_SCALE;
   const naturalHeightPt = heightPx * 0.75 * WORD_IMAGE_VISUAL_SCALE;
@@ -117,7 +134,7 @@ function calculateReferenceGeometry(widthPx: number, heightPx: number, baselineP
   return { referenceWidthPt, referenceHeightPt, referenceBaselinePt };
 }
 
-async function prepareFormulaCommitItem(
+async function prepareFormulaArtifactCommitItem(
   block: DocumentFormulaBlock,
   outputKind: DocumentFormulaOutputKind,
 ): Promise<DocumentImportCommitItem> {
@@ -136,6 +153,9 @@ async function prepareFormulaCommitItem(
     throw new Error("无法生成 Word OMML 公式制品。");
   }
   const omml = artifacts.omml;
+  if (ommlRetainsLiteralLatexCommand(omml.ommlBase64, canonicalLatex)) {
+    throw new Error("公式包含未被 Word 公式转换器识别的自定义命令。");
+  }
 
   const paragraphMetadata = {
     paragraphId: block.paragraphId,
@@ -215,6 +235,54 @@ async function prepareFormulaCommitItem(
   };
 }
 
+function formulaLiteralFallbackText(block: DocumentFormulaBlock) {
+  const original = block.sourceText?.trim();
+  if (original) return original;
+  const latex = block.latex.trim();
+  if (block.displayMode === "inline") return `\\(${latex}\\)`;
+  if (/^\\begin\s*\{[^{}]+\}/.test(latex)) return latex;
+  return `\\[\n${latex}\n\\]`;
+}
+
+async function prepareFormulaCommitItem(
+  block: DocumentFormulaBlock,
+  outputKind: DocumentFormulaOutputKind,
+): Promise<DocumentImportCommitItem> {
+  try {
+    return await prepareFormulaArtifactCommitItem(block, outputKind);
+  } catch (reason) {
+    console.warn(
+      "VisualTeX preserved an unsupported document formula as literal text",
+      reason,
+      block.latex,
+    );
+    const paragraphMetadata = block.paragraphId
+      ? {
+          paragraphId: block.paragraphId,
+          paragraphStyle: block.paragraphStyle,
+          paragraphAlignment: block.paragraphAlignment,
+          listKind: block.listKind,
+          listLevel: block.listLevel,
+          paragraphStart: block.paragraphStart,
+          paragraphEnd: block.paragraphEnd,
+        }
+      : {
+          paragraphId: createUuid(),
+          paragraphStyle: "code" as const,
+          paragraphAlignment: "left" as const,
+          listKind: "none" as const,
+          listLevel: 0,
+          paragraphStart: true,
+          paragraphEnd: true,
+        };
+    return {
+      kind: "text",
+      text: formulaLiteralFallbackText(block),
+      ...paragraphMetadata,
+    };
+  }
+}
+
 export function OfficeDocumentImportApp() {
   const sessionId = useMemo(
     () => new URLSearchParams(window.location.search).get("sessionId") ?? "",
@@ -268,9 +336,17 @@ export function OfficeDocumentImportApp() {
   const updateFormula = useCallback(
     (id: string, update: Partial<Omit<DocumentFormulaBlock, "id" | "kind">>) => {
       setBlocks((current) =>
-        current.map((block) =>
-          block.kind === "formula" && block.id === id ? { ...block, ...update } : block,
-        ),
+        current.map((block) => {
+          if (block.kind !== "formula" || block.id !== id) return block;
+          const updated = { ...block, ...update };
+          if (
+            ("latex" in update && update.latex !== block.latex) ||
+            ("displayMode" in update && update.displayMode !== block.displayMode)
+          ) {
+            delete updated.sourceText;
+          }
+          return updated;
+        }),
       );
     },
     [],
@@ -363,7 +439,14 @@ export function OfficeDocumentImportApp() {
         formulaIndex += 1;
         return prepared;
       });
-      setToast("正在写入 Word…");
+      const literalFallbackCount = preparedFormulas.filter(
+        (item) => item.kind === "text",
+      ).length;
+      setToast(
+        literalFallbackCount > 0
+          ? `正在写入 Word（${literalFallbackCount} 个不支持片段按原文保留）…`
+          : "正在写入 Word…",
+      );
       await commitMacosDocumentImport(sessionId, { outputKind, items });
       allowNativeCloseRef.current = true;
       await closeMacosDocumentImportWindow();

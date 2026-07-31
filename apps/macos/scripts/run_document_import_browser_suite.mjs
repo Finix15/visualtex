@@ -14,6 +14,7 @@ const lockPath = "/tmp/visualtex-document-import-browser-suite.lock";
 const logRoot = join(process.cwd(), "build-logs", "document-import");
 const stages = [
   { name: "default", args: [] },
+  { name: "literal-fallback", args: ["--literal-fallback"] },
   { name: "long-physics", args: ["--long-physics"] },
   { name: "boundary-value", args: ["--boundary-value"] },
 ];

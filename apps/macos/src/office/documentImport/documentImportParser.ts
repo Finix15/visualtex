@@ -34,6 +34,7 @@ export interface DocumentFormulaBlock extends DocumentParagraphMetadata {
   id: string;
   kind: "formula";
   latex: string;
+  sourceText?: string;
   displayMode: DocumentFormulaDisplayMode;
   numbered: boolean;
   fontSizePt: number;
@@ -44,6 +45,11 @@ export type DocumentImportBlock = DocumentTextBlock | DocumentFormulaBlock;
 interface ExtractedFormula {
   token: string;
   block: DocumentFormulaBlock;
+}
+
+interface ExtractedLiteral {
+  token: string;
+  text: string;
 }
 
 interface ParagraphContext {
@@ -78,9 +84,24 @@ const protectedLatexEnvironmentNames = new Set([
   "minted",
   "comment",
 ]);
+const structuredLatexEnvironmentNames = new Set([
+  "document",
+  "itemize",
+  "enumerate",
+  "quote",
+  "quotation",
+  "center",
+  "flushleft",
+  "flushright",
+  "abstract",
+  "description",
+]);
+const literalLatexCommandPattern = /\\(?:documentclass|usepackage|RequirePackage|PassOptionsToPackage|newcommand|renewcommand|providecommand|DeclareRobustCommand|DeclareMathOperator\*?|newenvironment|renewenvironment|provideenvironment|newtheorem|def|gdef|edef|xdef|let|newlength|setlength|addtolength|definecolor|colorlet|newcolumntype|DeclarePairedDelimiter\*?|DeclareDocumentCommand|NewDocumentCommand|RenewDocumentCommand|ProvideDocumentCommand)\b/g;
 const formulaTokenPrefix = "\uE000VT_FORMULA_";
 const formulaTokenSuffix = "\uE001";
 const formulaTokenPattern = /\uE000VT_FORMULA_(\d+)\uE001/g;
+const literalTokenPrefix = "\uE200VT_LITERAL_";
+const literalTokenSuffix = "\uE201";
 const markerPrefix = "\uE100VT_";
 const markerSuffix = "\uE101";
 
@@ -132,23 +153,141 @@ function mergeProtectedRanges(ranges: ProtectedSourceRange[]) {
   return merged;
 }
 
-function latexProtectedRanges(source: string) {
+function sourceIndexInsideRanges(ranges: ProtectedSourceRange[], index: number) {
+  return ranges.some((range) => index >= range.start && index < range.end);
+}
+
+function findLatexCommandEnd(source: string, start: number) {
+  let braceDepth = 0;
+  let bracketDepth = 0;
+  for (let cursor = start; cursor < source.length; cursor += 1) {
+    const character = source[cursor];
+    if (character === "\\" && cursor + 1 < source.length) {
+      cursor += 1;
+      continue;
+    }
+    if (character === "{") braceDepth += 1;
+    else if (character === "}" && braceDepth > 0) braceDepth -= 1;
+    else if (character === "[") bracketDepth += 1;
+    else if (character === "]" && bracketDepth > 0) bracketDepth -= 1;
+    else if (character === "\n" && braceDepth === 0 && bracketDepth === 0) {
+      let continuation = cursor + 1;
+      while (
+        continuation < source.length &&
+        /[ \t\n]/.test(source[continuation])
+      ) {
+        continuation += 1;
+      }
+      if (source[continuation] === "{" || source[continuation] === "[") {
+        continue;
+      }
+      return cursor;
+    }
+  }
+  return source.length;
+}
+
+function findLatexEnvironmentEnd(source: string, start: number, environment: string) {
+  const tokenPattern = new RegExp(
+    `\\\\(begin|end)\\s*\\{${escapeRegExp(environment)}\\}`,
+    "g",
+  );
+  tokenPattern.lastIndex = start;
+  let depth = 0;
+  for (let match = tokenPattern.exec(source); match; match = tokenPattern.exec(source)) {
+    if (match[1] === "begin") depth += 1;
+    else depth -= 1;
+    if (depth === 0) return tokenPattern.lastIndex;
+  }
+  return source.length;
+}
+
+function latexMathSourceRanges(source: string) {
   const ranges: ProtectedSourceRange[] = [];
+  let cursor = 0;
+  while (cursor < source.length) {
+    const delimiter = delimiterAt(source, cursor);
+    if (!delimiter) {
+      cursor += 1;
+      continue;
+    }
+    const closing = findClosingDelimiter(source, delimiter);
+    if (!closing) {
+      cursor += Math.max(1, delimiter.opening.length);
+      continue;
+    }
+    ranges.push({ start: cursor, end: closing.end });
+    cursor = closing.end;
+  }
+  return mergeProtectedRanges(ranges);
+}
+
+function latexLiteralFallbackRanges(source: string) {
+  const ranges: ProtectedSourceRange[] = [];
+  const mathRanges = latexMathSourceRanges(source);
+
+  literalLatexCommandPattern.lastIndex = 0;
+  for (
+    let match = literalLatexCommandPattern.exec(source);
+    match;
+    match = literalLatexCommandPattern.exec(source)
+  ) {
+    const end = findLatexCommandEnd(source, match.index);
+    ranges.push({ start: match.index, end });
+    literalLatexCommandPattern.lastIndex = Math.max(
+      literalLatexCommandPattern.lastIndex,
+      end,
+    );
+  }
+
+  for (const [opening, closing] of [
+    ["\\makeatletter", "\\makeatother"],
+    ["\\ExplSyntaxOn", "\\ExplSyntaxOff"],
+  ] as const) {
+    let start = source.indexOf(opening);
+    while (start >= 0) {
+      const closingIndex = source.indexOf(closing, start + opening.length);
+      const end = closingIndex < 0 ? source.length : closingIndex + closing.length;
+      ranges.push({ start, end });
+      start = source.indexOf(opening, end);
+    }
+  }
+
   const beginPattern = /\\begin\s*\{([^{}]+)\}/g;
   for (let match = beginPattern.exec(source); match; match = beginPattern.exec(source)) {
     const environment = match[1].trim();
-    if (!protectedLatexEnvironmentNames.has(environment)) continue;
-    const endPattern = new RegExp(
-      `\\\\end\\s*\\{${escapeRegExp(environment)}\\}`,
-      "g",
-    );
-    endPattern.lastIndex = beginPattern.lastIndex;
-    const closing = endPattern.exec(source);
-    const end = closing ? endPattern.lastIndex : source.length;
+    const supported =
+      blockEnvironmentNames.has(environment) ||
+      inlineEnvironmentNames.has(environment) ||
+      structuredLatexEnvironmentNames.has(environment);
+    const literalEnvironment =
+      protectedLatexEnvironmentNames.has(environment) || !supported;
+    if (!literalEnvironment || sourceIndexInsideRanges(mathRanges, match.index)) continue;
+    const end = findLatexEnvironmentEnd(source, match.index, environment);
     ranges.push({ start: match.index, end });
     beginPattern.lastIndex = end;
   }
+  return mergeProtectedRanges(ranges);
+}
 
+function extractLatexLiteralFallbacks(source: string) {
+  const literals: ExtractedLiteral[] = [];
+  const ranges = latexLiteralFallbackRanges(source);
+  let output = "";
+  let cursor = 0;
+  for (const range of ranges) {
+    output += source.slice(cursor, range.start);
+    const token = `${literalTokenPrefix}${literals.length}${literalTokenSuffix}`;
+    literals.push({ token, text: source.slice(range.start, range.end) });
+    output += `\n${token}\n`;
+    cursor = range.end;
+  }
+  output += source.slice(cursor);
+  return { text: output, literals };
+}
+
+function latexProtectedRanges(source: string) {
+  const ranges = latexLiteralFallbackRanges(source);
   const verbPattern = /\\verb\*?([^\sA-Za-z0-9])[^\n]*?\1/g;
   for (let match = verbPattern.exec(source); match; match = verbPattern.exec(source)) {
     ranges.push({ start: match.index, end: verbPattern.lastIndex });
@@ -288,8 +427,7 @@ function cleanInlineMarkup(raw: string, sourceKind: DocumentImportSourceKind) {
       .replace(/\\\$/g, "$")
       .replace(/\\\{/g, "{")
       .replace(/\\\}/g, "}")
-      .replace(/~/g, " ")
-      .replace(/\\[a-zA-Z@]+\*?(?:\[[^\]]*\])?/g, "");
+      .replace(/~/g, " ");
   } else {
     value = value
       .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
@@ -465,8 +603,9 @@ function extractFormulas(
     }
 
     output += source.slice(textStart, cursor);
+    const sourceText = source.slice(cursor, closing.end);
     const latex = (delimiter.environment && delimiter.displayMode === "block"
-      ? source.slice(cursor, closing.end)
+      ? sourceText
       : source.slice(delimiter.contentStart, closing.start)
     )
       .trim()
@@ -483,6 +622,7 @@ function extractFormulas(
           id: createUuid(),
           kind: "formula",
           latex,
+          sourceText,
           displayMode: delimiter.displayMode,
           numbered: delimiter.displayMode === "block" && delimiter.numbered,
           fontSizePt: Math.min(512, Math.max(1, defaultFontSizePt)),
@@ -505,6 +645,12 @@ function formulaFromToken(token: string, formulas: ExtractedFormula[]) {
   return Number.isInteger(index) ? formulas[index]?.block : undefined;
 }
 
+function literalFromToken(token: string, literals: ExtractedLiteral[]) {
+  const match = token.match(/^\uE200VT_LITERAL_(\d+)\uE201$/);
+  const index = match ? Number(match[1]) : -1;
+  return Number.isInteger(index) ? literals[index] : undefined;
+}
+
 function defaultContext(): ParagraphContext {
   return { style: "normal", alignment: "left", listKind: "none", listLevel: 0 };
 }
@@ -518,8 +664,6 @@ function headingStyle(level: number): DocumentParagraphStyle {
 
 function normalizeLatexStructure(source: string) {
   return source
-    .replace(/\\documentclass(?:\[[^\]]*\])?\s*\{[^{}]*\}/g, "")
-    .replace(/\\usepackage(?:\[[^\]]*\])?\s*\{[^{}]*\}/g, "")
     .replace(/\\begin\s*\{document\}|\\end\s*\{document\}/g, "")
     .replace(/\\maketitle\b/g, "")
     .replace(/\\title\s*\{([^{}]*)\}/g, `\n${marker("HEADING:1")}$1\n`)
@@ -601,9 +745,33 @@ function emitDisplayFormula(
   if (formula) blocks.push({ ...formula });
 }
 
+function emitLiteralFallback(
+  blocks: DocumentImportBlock[],
+  literal: ExtractedLiteral,
+) {
+  const lines = literal.text.replace(/\r\n?/g, "\n").split("\n");
+  for (const line of lines) {
+    if (!line.length) continue;
+    const paragraphId = createUuid();
+    blocks.push({
+      id: createUuid(),
+      kind: "text",
+      text: line,
+      paragraphId,
+      paragraphStyle: "code",
+      paragraphAlignment: "left",
+      listKind: "none",
+      listLevel: 0,
+      paragraphStart: true,
+      paragraphEnd: true,
+    });
+  }
+}
+
 function parseStructuredLines(
   source: string,
   formulas: ExtractedFormula[],
+  literals: ExtractedLiteral[],
   sourceKind: DocumentImportSourceKind,
 ) {
   const blocks: DocumentImportBlock[] = [];
@@ -683,6 +851,13 @@ function parseStructuredLines(
         );
         flush();
       }
+      continue;
+    }
+
+    const literal = literalFromToken(trimmed, literals);
+    if (literal) {
+      flush();
+      emitLiteralFallback(blocks, literal);
       continue;
     }
 
@@ -771,6 +946,12 @@ function parseStructuredLines(
 
 function resolvedSourceKind(source: string, requested: DocumentImportSourceKind) {
   if (requested !== "auto") return requested;
+  literalLatexCommandPattern.lastIndex = 0;
+  if (literalLatexCommandPattern.test(source)) return "latex";
+  const hasLiteralEnvironmentOutsideMath = latexLiteralFallbackRanges(source).some(
+    (range) => /^\\begin\s*\{/.test(source.slice(range.start, range.end).trim()),
+  );
+  if (hasLiteralEnvironmentOutsideMath) return "latex";
   // LaTeX fragments pasted from notes often omit both \documentclass and the
   // document environment. Structural commands and environments must still
   // select the LaTeX parser. Do not end this pattern with \b: environment
@@ -790,11 +971,21 @@ export function parseLatexMarkdownDocument(
 ): DocumentImportBlock[] {
   let normalized = source.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
   const sourceKind = resolvedSourceKind(normalized, requestedKind);
-  if (sourceKind === "latex") normalized = stripLatexComments(normalized);
+  let literals: ExtractedLiteral[] = [];
+  if (sourceKind === "latex") {
+    const literalized = extractLatexLiteralFallbacks(normalized);
+    normalized = stripLatexComments(literalized.text);
+    literals = literalized.literals;
+  }
   const extracted = extractFormulas(normalized, defaultFontSizePt, sourceKind);
   const structured =
     sourceKind === "latex" ? normalizeLatexStructure(extracted.text) : extracted.text;
-  return parseStructuredLines(structured, extracted.formulas, sourceKind);
+  return parseStructuredLines(
+    structured,
+    extracted.formulas,
+    literals,
+    sourceKind,
+  );
 }
 
 export function mergeDocumentImportBlocks(

@@ -10,16 +10,21 @@ const debugPort = 23600 + offset;
 const sessionId = "12345678-1234-4234-9234-123456789abc";
 const longPhysicsRegression = process.argv.includes("--long-physics");
 const boundaryValueRegression = process.argv.includes("--boundary-value");
+const literalFallbackRegression = process.argv.includes("--literal-fallback");
 const artifactOutputArgument = process.argv.find((argument) =>
   argument.startsWith("--artifact-output="),
 );
 const artifactOutputPath = artifactOutputArgument?.slice(
   "--artifact-output=".length,
 ) ?? "";
-if (longPhysicsRegression && boundaryValueRegression) {
+if (
+  [longPhysicsRegression, boundaryValueRegression, literalFallbackRegression].filter(Boolean)
+    .length > 1
+) {
   throw new Error("Choose only one document import fixture regression");
 }
 const fixtureRegression = longPhysicsRegression || boundaryValueRegression;
+const customSettingsRegression = !fixtureRegression && !literalFallbackRegression;
 const baseUrl = `http://127.0.0.1:${previewPort}/?view=office-document-import&sessionId=${sessionId}&transport=tauri`;
 const chromeProfile = `/tmp/visualtex-document-import-${process.pid}`;
 const chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -281,11 +286,22 @@ y &= z
 \end{align*}
 
 结尾文字。`;
-    const regressionSource = boundaryValueRegression
-      ? boundaryValueDocumentSource
-      : longPhysicsRegression
-        ? longPhysicsDocumentSource
-        : source;
+    const literalFallbackSource = String.raw`\documentclass{article}
+\usepackage{custompkg}
+\newcommand{\customsymbol}[1]{\mathbf{#1}}
+\begin{document}
+标准公式 $x=1$。
+\[
+\customsymbol{q}
+\]
+\end{document}`;
+    const regressionSource = literalFallbackRegression
+      ? literalFallbackSource
+      : boundaryValueRegression
+        ? boundaryValueDocumentSource
+        : longPhysicsRegression
+          ? longPhysicsDocumentSource
+          : source;
     await evaluate(`(() => {
       const textarea = document.querySelector(".document-import-source-pane textarea");
       if (!textarea) throw new Error("Missing document import source textarea");
@@ -297,11 +313,13 @@ y &= z
       textarea.dispatchEvent(new Event("input", { bubbles: true }));
     })()`);
 
-    const expectedFormulaCount = boundaryValueRegression
-      ? 22
-      : longPhysicsRegression
-        ? 16
-        : 4;
+    const expectedFormulaCount = literalFallbackRegression
+      ? 2
+      : boundaryValueRegression
+        ? 22
+        : longPhysicsRegression
+          ? 16
+          : 4;
     const parseStarted = Date.now();
     while (Date.now() - parseStarted < 10_000) {
       if ((await evaluate(`document.querySelectorAll(".document-import-formula-card").length`)) === expectedFormulaCount) {
@@ -319,7 +337,15 @@ y &= z
         summary: document.querySelector(".document-import-summary")?.innerText ?? "",
       };
     })()`);
-    if (fixtureRegression) {
+    if (literalFallbackRegression) {
+      if (
+        parsed.count !== 2 ||
+        parsed.modes.join(",") !== "inline,block" ||
+        parsed.numbered.some(Boolean)
+      ) {
+        throw new Error(`Unexpected literal fallback blocks: ${JSON.stringify(parsed)}`);
+      }
+    } else if (fixtureRegression) {
       if (
         parsed.count !== expectedFormulaCount ||
         parsed.modes.filter((mode) => mode === "inline").length !== 4 ||
@@ -342,7 +368,7 @@ y &= z
         );
         imageRadio?.click();
       }
-      if (!${JSON.stringify(fixtureRegression)}) {
+      if (${JSON.stringify(customSettingsRegression)}) {
         const cards = [...document.querySelectorAll(".document-import-formula-card")];
         const sizes = [10.5, 18, 14, 16];
         cards.forEach((card, index) => {
@@ -380,14 +406,17 @@ y &= z
     const formulas = input?.items?.filter((item) => item.kind === "formula") ?? [];
     const texts = input?.items?.filter((item) => item.kind === "text") ?? [];
     const expectedOutputKind = longPhysicsRegression ? "omml" : "image";
+    const expectedCommittedFormulaCount = literalFallbackRegression
+      ? 1
+      : expectedFormulaCount;
     if (
       input?.outputKind !== expectedOutputKind ||
-      formulas.length !== expectedFormulaCount ||
+      formulas.length !== expectedCommittedFormulaCount ||
       texts.length < 2
     ) {
       throw new Error(`Unexpected document import commit: ${JSON.stringify(commit)}`);
     }
-    if (!fixtureRegression && (
+    if (customSettingsRegression && (
       formulas[0].displayMode !== "inline" ||
       formulas[0].numbered !== false ||
       formulas[0].fontSizePt !== 10.5 ||
@@ -431,6 +460,28 @@ y &= z
     if (new Set(formulas.map((formula) => formula.formulaId)).size !== formulas.length) {
       throw new Error("Imported formulas did not receive independent identities");
     }
+    if (literalFallbackRegression) {
+      const literalText = texts.map((item) => item.text).join("\n");
+      for (const expected of [
+        String.raw`\documentclass{article}`,
+        String.raw`\usepackage{custompkg}`,
+        String.raw`\newcommand{\customsymbol}[1]{\mathbf{#1}}`,
+        String.raw`\[
+\customsymbol{q}
+\]`,
+      ]) {
+        if (!literalText.includes(expected)) {
+          throw new Error(
+            `Literal fallback commit lost unsupported source ${expected}: ${JSON.stringify(texts)}`,
+          );
+        }
+      }
+      if (formulas[0]?.latex !== "x=1") {
+        throw new Error(
+          `A supported formula beside literal fallback was not converted: ${JSON.stringify(formulas)}`,
+        );
+      }
+    }
     if (boundaryValueRegression) {
       const singleEquationFormulas = formulas.filter((formula) =>
         ["equation", "equation-star"].includes(formula.metadata?.codeFormat),
@@ -458,7 +509,7 @@ y &= z
         }
       }
     }
-    const multilineExpectations = fixtureRegression ? [] : [
+    const multilineExpectations = customSettingsRegression ? [
       {
         formula: formulas[2],
         codeFormat: "align",
@@ -471,7 +522,7 @@ y &= z
         lines: ["x = y", "y = z"],
         environment: "align*",
       },
-    ];
+    ] : [];
     for (const expectation of multilineExpectations) {
       const metadataLines = expectation.formula.metadata.lines.map(
         (line) => line.latex,
