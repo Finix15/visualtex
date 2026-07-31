@@ -175,6 +175,8 @@ async function main() {
       String.raw`\binom{n}{k}`,
       String.raw`\begin{cases}x,&x>0\\-x,&x<0\end{cases}`,
       String.raw`\overline{x}+\hat{y}`,
+      String.raw`\vec{r}+\hat{L}_z+x\hat{p}_y-y\hat{p}_x`,
+      String.raw`\overrightarrow{e_{\varphi}}+\overrightarrow{e_{\theta}}`,
     ];
     const expression = `
       (async () => {
@@ -224,6 +226,8 @@ async function main() {
       binomial,
       cases,
       accents,
+      shortVectorAndHats,
+      longVectorArrows,
     ] = results;
     expectIncludes(fraction, "<m:f>", "Fraction must use a structural OMML fraction node.");
     expectIncludes(fraction, "<m:num>", "Fraction must preserve its numerator.");
@@ -356,6 +360,60 @@ async function main() {
     expectIncludes(cases, "<m:m>", "Cases must retain their row and column structure.");
     expectIncludes(accents, "<m:bar>", "Overline must use an OMML bar node.");
     expectIncludes(accents, "<m:acc>", "Hat accents must use an OMML accent node.");
+    expectIncludes(
+      accents,
+      '<m:chr m:val="ˆ"/>',
+      "Hat accents must use Word's distinct modifier circumflex.",
+    );
+    expect(
+      !accents.includes('<m:chr m:val="^"/>'),
+      "Hat accents must not use a caret that touches the base glyph.",
+    );
+    expectIncludes(
+      shortVectorAndHats,
+      "<m:groupChr>",
+      "Short vector arrows must use a separated OMML group character.",
+    );
+    expectIncludes(
+      shortVectorAndHats,
+      '<m:chr m:val="→"/>',
+      "Short vectors must preserve the right-arrow group character.",
+    );
+    expectIncludes(
+      shortVectorAndHats,
+      '<m:chr m:val="ˆ"/>',
+      "Operator hats must remain distinct after subscript conversion.",
+    );
+    expect(
+      (shortVectorAndHats.match(/<m:acc>/g) ?? []).length === 3,
+      "The three hatted operators must each retain one accent node.",
+    );
+    expect(
+      (shortVectorAndHats.match(/<m:groupChr>/g) ?? []).length === 1,
+      "The short vector must produce exactly one arrow group character.",
+    );
+    expect(
+      (shortVectorAndHats.match(/<m:sSub>/g) ?? []).length >= 3,
+      "Hatted L/p operators must keep their subscripts outside the accent base.",
+    );
+    expectIncludes(
+      longVectorArrows,
+      "<m:groupChr>",
+      "Overrightarrow must use a stretchable OMML group character.",
+    );
+    expectIncludes(
+      longVectorArrows,
+      '<m:chr m:val="→"/>',
+      "Overrightarrow must preserve its right-arrow group character.",
+    );
+    expect(
+      (longVectorArrows.match(/<m:groupChr>/g) ?? []).length === 2,
+      "Both spherical-basis vectors must receive independent stretched arrows.",
+    );
+    expect(
+      !longVectorArrows.includes("<m:acc>"),
+      "Stretchable overrightarrow arrows must not degrade to short accent nodes.",
+    );
 
     const multiLineExpression = `
       (async () => {

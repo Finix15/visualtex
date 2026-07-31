@@ -1,10 +1,15 @@
 use crate::office::background;
+use crate::office::certificate::ensure_companion_tls;
+#[cfg(target_os = "macos")]
+use crate::office::certificate::ensure_companion_data_runtime;
+#[cfg(not(target_os = "macos"))]
 use crate::office::certificate::ensure_companion_runtime;
 use crate::office::formula_cache::FormulaMetadataCache;
 use crate::office::server;
 use crate::office::sessions::SessionStore;
 use crate::office::state::{OfficeCompanionState, OfficeCompanionStatus, OfficePaths};
 use crate::OcrState;
+#[cfg(debug_assertions)]
 use std::path::PathBuf;
 use std::process::Command;
 use tauri::path::BaseDirectory;
@@ -43,8 +48,21 @@ pub fn initialize(app: &AppHandle, ocr: OcrState) -> Result<OfficeCompanionState
         formula_cache: root.join("formulas"),
         root,
     };
+    #[cfg(target_os = "macos")]
+    let install_token = ensure_companion_data_runtime(&paths)?;
+    #[cfg(not(target_os = "macos"))]
     let install_token = ensure_companion_runtime(&paths)?;
     let session_store = SessionStore::new(&paths).map_err(|error| error.to_string())?;
+    let maintenance_store = session_store.clone();
+    std::thread::spawn(move || {
+        // Give an initial URL activation priority over maintenance I/O. The
+        // SessionStore lock would otherwise let a large expiry scan delay the
+        // first formula import even though the scan itself was moved off setup.
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        if let Err(error) = maintenance_store.cleanup_expired_now() {
+            eprintln!("Unable to clean expired Office Sessions: {error}");
+        }
+    });
     let formula_cache = FormulaMetadataCache::new(&paths).map_err(|error| error.to_string())?;
     Ok(OfficeCompanionState::new(
         Some(app.clone()),
@@ -63,6 +81,13 @@ pub fn start(state: OfficeCompanionState) {
     }
     let service = state.clone();
     tauri::async_runtime::spawn(async move {
+        if let Err(error) = ensure_companion_tls(&service.paths) {
+            service.update_status(|status| {
+                status.running = false;
+                status.last_error = Some(error);
+            });
+            return;
+        }
         if let Err(error) = server::run(service.clone()).await {
             service.update_status(|status| {
                 status.running = false;

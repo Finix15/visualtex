@@ -18,9 +18,7 @@ const insertion = adapter.slice(start, end);
 for (const required of [
   "VTPrepareWordCreateInsertionRange",
   "VTInsertNativeEquationAtRange",
-  "VTFinalizeInlineNativeEquation",
   "VTPlaceCaretAfterInlineNativeEquation",
-  "VTPromoteNativeEquationToDisplay",
   "VTEnsureNativeEquationNumber",
   "VTAddWordFormulaPicture",
   "VTNormalizeUnnumberedDisplayParagraph",
@@ -39,6 +37,36 @@ for (const required of [
   );
 }
 
+const nativeInsertionStart = adapter.indexOf(
+  "Private Function VTInsertNativeEquationAtRange",
+);
+const nativeInsertionEnd = adapter.indexOf(
+  "Private Function VTFinalizeInlineNativeEquation",
+  nativeInsertionStart,
+);
+assert.ok(
+  nativeInsertionStart >= 0 && nativeInsertionEnd > nativeInsertionStart,
+  "The shared native-equation insertion routine is missing",
+);
+const nativeInsertion = adapter.slice(
+  nativeInsertionStart,
+  nativeInsertionEnd,
+);
+assert.ok(
+  nativeInsertion.includes("VTFinalizeInlineNativeEquation"),
+  "The shared native-equation insertion routine must finalize inline OMML",
+);
+for (const required of [
+  "nativeEquation.Type = wdOMathDisplay",
+  "nativeEquation.Justification = wdOMathJcCenter",
+  "VTNormalizeUnnumberedDisplayParagraph",
+]) {
+  assert.ok(
+    nativeInsertion.includes(required),
+    `The shared native-equation insertion routine is missing display behavior ${required}`,
+  );
+}
+
 assert.match(
   insertion,
   /If displayMode = "inline" Then[\s\S]*candidate\.Range\.Font\.Position = CLng\(baselinePoints\)/,
@@ -46,7 +74,7 @@ assert.match(
 );
 assert.match(
   insertion,
-  /If numbered Then[\s\S]*VTEnsureNativeEquationNumber/,
+  /If displayMode = "block" And numbered Then[\s\S]*VTEnsureNativeEquationNumber/,
   "Numbered native formulas must use the normal true-centering number layout",
 );
 assert.match(

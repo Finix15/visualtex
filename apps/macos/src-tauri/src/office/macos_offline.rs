@@ -15,8 +15,9 @@ use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use std::sync::{mpsc, Mutex, OnceLock};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use uuid::Uuid;
 
 const OFFLINE_PROTOCOL_VERSION: u32 = 1;
@@ -26,6 +27,10 @@ const RESULT_PNG_FILE: &str = "formula.png";
 const RESULT_SVG_FILE: &str = "formula.svg";
 const RESULT_WORD_SVG_DOCX_FILE: &str = "formula-svg.docx";
 const DOCUMENT_IMPORT_MANIFEST_FILE: &str = "document-import.txt";
+const EDITOR_READY_FILE: &str = "editor-ready.json";
+const EDITOR_PERFORMANCE_FILE: &str = "editor-performance.jsonl";
+const OFFICE_EDITOR_ACTIVATE_EVENT: &str = "visualtex-office-editor-activate";
+const OFFICE_EDITOR_CLEAR_EVENT: &str = "visualtex-office-editor-clear";
 const WORD_POINTER_FILE: &str = "word-active-session.txt";
 const POWERPOINT_POINTER_FILE: &str = "powerpoint-active-session.txt";
 const WORD_RUNTIME_SUFFIX: &str =
@@ -44,6 +49,10 @@ const MAX_IDENTITY_CHARS: usize = 2048;
 const MAX_SHAPE_NAME_CHARS: usize = 128;
 const MAX_WORD_WIDTH_PT: f64 = 500.0;
 const WORD_REFERENCE_FONT_SIZE_PT: f64 = 14.0;
+// MathJax's TeX glyphs render about 9.5% narrower than Word's Cambria Math at
+// the same nominal point size. Scale only Word image formulas so 14 pt means a
+// comparable painted formula size; PowerPoint keeps its existing geometry.
+const WORD_IMAGE_VISUAL_SCALE: f64 = 1.1;
 const MIN_WORD_FONT_SIZE_PT: f64 = 1.0;
 const MAX_WORD_FONT_SIZE_PT: f64 = 512.0;
 const POWERPOINT_REFERENCE_FONT_SIZE_PT: f64 = 14.0;
@@ -227,6 +236,148 @@ pub struct MacOfflinePluginHealth {
     host: String,
     timestamp: Option<String>,
     status_path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MacOfflineOfficeEditorActivation {
+    session_id: String,
+    host: OfficeHost,
+    generation: u64,
+    received_epoch_ms: u64,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveOfficeEditorSession {
+    activation: MacOfflineOfficeEditorActivation,
+    received_at: Instant,
+    ready: bool,
+}
+
+#[derive(Debug, Default)]
+struct OfficeEditorRuntime {
+    next_generation: u64,
+    word: Option<ActiveOfficeEditorSession>,
+    powerpoint: Option<ActiveOfficeEditorSession>,
+}
+
+impl OfficeEditorRuntime {
+    fn active(&self, host: OfficeHost) -> Option<&ActiveOfficeEditorSession> {
+        match host {
+            OfficeHost::Word => self.word.as_ref(),
+            OfficeHost::Powerpoint => self.powerpoint.as_ref(),
+        }
+    }
+
+    fn active_mut(&mut self, host: OfficeHost) -> &mut Option<ActiveOfficeEditorSession> {
+        match host {
+            OfficeHost::Word => &mut self.word,
+            OfficeHost::Powerpoint => &mut self.powerpoint,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OfficeEditorPerformanceRecord {
+    schema: &'static str,
+    session_id: String,
+    host: OfficeHost,
+    stage: String,
+    epoch_ms: u64,
+    elapsed_ms: f64,
+    generation: Option<u64>,
+    details: Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MacOfflineOfficeEditorReadyInput {
+    session_id: String,
+    generation: u64,
+    frontend_epoch_ms: u64,
+    hydrate_ms: f64,
+    editor_mounted_ms: f64,
+    content_ready_ms: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MacOfflineOfficeEditorReadyMarker {
+    schema: &'static str,
+    session_id: String,
+    host: OfficeHost,
+    generation: u64,
+    epoch_ms: u64,
+    url_received_epoch_ms: u64,
+    frontend_epoch_ms: u64,
+    hydrate_ms: f64,
+    editor_mounted_ms: f64,
+    content_ready_ms: f64,
+    show_focus_ms: f64,
+}
+
+fn office_editor_runtime() -> &'static Mutex<OfficeEditorRuntime> {
+    static RUNTIME: OnceLock<Mutex<OfficeEditorRuntime>> = OnceLock::new();
+    RUNTIME.get_or_init(|| Mutex::new(OfficeEditorRuntime::default()))
+}
+
+fn epoch_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or_default()
+}
+
+fn performance_logger() -> &'static mpsc::Sender<OfficeEditorPerformanceRecord> {
+    static LOGGER: OnceLock<mpsc::Sender<OfficeEditorPerformanceRecord>> = OnceLock::new();
+    LOGGER.get_or_init(|| {
+        let (sender, receiver) = mpsc::channel::<OfficeEditorPerformanceRecord>();
+        std::thread::Builder::new()
+            .name("visualtex-office-performance".to_string())
+            .spawn(move || {
+                while let Ok(record) = receiver.recv() {
+                    let Ok(directory) = session_directory(record.host, &record.session_id) else {
+                        continue;
+                    };
+                    if fs::create_dir_all(&directory).is_err() {
+                        continue;
+                    }
+                    let path = directory.join(EDITOR_PERFORMANCE_FILE);
+                    let Ok(mut line) = serde_json::to_vec(&record) else {
+                        continue;
+                    };
+                    line.push(b'\n');
+                    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
+                        if file.write_all(&line).is_ok() {
+                            let _ = set_mode(&path, 0o600);
+                        }
+                    }
+                }
+            })
+            .expect("VisualTeX Office performance logger thread must start");
+        sender
+    })
+}
+
+fn queue_editor_performance(
+    host: OfficeHost,
+    session_id: &str,
+    stage: impl Into<String>,
+    elapsed_ms: f64,
+    generation: Option<u64>,
+    details: Value,
+) {
+    let _ = performance_logger().send(OfficeEditorPerformanceRecord {
+        schema: "visualtex-office-editor-performance-v1",
+        session_id: session_id.to_string(),
+        host,
+        stage: stage.into(),
+        epoch_ms: epoch_ms(),
+        elapsed_ms,
+        generation,
+        details,
+    });
 }
 
 fn user_home() -> Result<PathBuf, String> {
@@ -1204,71 +1355,236 @@ pub(crate) fn parse_office_url(value: &str) -> Result<String, String> {
     Ok(session_id.to_string())
 }
 
-fn editor_window_label(session_id: &str) -> String {
-    format!("office-native-{}", session_id.replace('-', ""))
+fn office_host_name(host: OfficeHost) -> &'static str {
+    match host {
+        OfficeHost::Word => "word",
+        OfficeHost::Powerpoint => "powerpoint",
+    }
+}
+
+fn editor_window_label(host: OfficeHost) -> &'static str {
+    match host {
+        OfficeHost::Word => "office-native-word-editor",
+        OfficeHost::Powerpoint => "office-native-powerpoint-editor",
+    }
+}
+
+fn editor_window_host(label: &str) -> Option<OfficeHost> {
+    match label {
+        "office-native-word-editor" => Some(OfficeHost::Word),
+        "office-native-powerpoint-editor" => Some(OfficeHost::Powerpoint),
+        _ => None,
+    }
 }
 
 fn document_import_window_label(session_id: &str) -> String {
     format!("office-native-document-{}", session_id.replace('-', ""))
 }
 
-fn editor_window_session_id(window: &WebviewWindow) -> Option<String> {
-    let url = window.url().ok()?;
-    url.query_pairs()
-        .find_map(|(key, value)| (key == "sessionId").then(|| value.into_owned()))
-        .filter(|value| valid_uuid(value))
+fn active_editor_session(host: OfficeHost) -> Option<ActiveOfficeEditorSession> {
+    office_editor_runtime()
+        .lock()
+        .ok()
+        .and_then(|runtime| runtime.active(host).cloned())
 }
 
-fn close_other_editor_windows_for_host(
-    app: &AppHandle,
-    state: &OfficeCompanionState,
+fn clear_editor_session(
     host: OfficeHost,
-    current_session_id: &str,
-) {
-    let current_label = editor_window_label(current_session_id);
-    for (label, window) in app.webview_windows() {
-        if !label.starts_with("office-native-") || label == current_label {
-            continue;
-        }
-        let Some(session_id) = editor_window_session_id(&window) else {
-            continue;
-        };
-        let Ok(session) = state.session_store.get(&session_id) else {
-            continue;
-        };
-        if session.host == host {
-            // A failed Word transaction may deliberately leave its editor open
-            // for inspection. Once Word requests another formula, that stale
-            // window must not receive focus or auto-apply over the new target.
-            let _ = window.destroy();
-        }
+    session_id: &str,
+    generation: u64,
+) -> Result<(), String> {
+    let mut runtime = office_editor_runtime()
+        .lock()
+        .map_err(|_| "VisualTeX Office editor state is unavailable".to_string())?;
+    let matches = runtime.active(host).is_some_and(|active| {
+        active.activation.session_id == session_id
+            && active.activation.generation == generation
+    });
+    if !matches {
+        return Err("The Office editor Session is no longer active".to_string());
     }
+    *runtime.active_mut(host) = None;
+    Ok(())
 }
 
-fn open_editor_window(app: &AppHandle, session_id: &str) -> Result<(), String> {
-    crate::office::background::activate_foreground_app(app)?;
-    crate::office::background::install_application_icon(app)?;
+fn clear_any_editor_session(host: OfficeHost) -> Option<MacOfflineOfficeEditorActivation> {
+    let mut runtime = office_editor_runtime().lock().ok()?;
+    runtime
+        .active_mut(host)
+        .take()
+        .map(|active| active.activation)
+}
 
-    let label = editor_window_label(session_id);
-    if let Some(window) = app.get_webview_window(&label) {
-        window.show().map_err(|error| error.to_string())?;
-        window.set_focus().map_err(|error| error.to_string())?;
-        return Ok(());
+#[cfg(target_os = "macos")]
+fn set_resident_editor_parked(
+    window: &WebviewWindow,
+    parked: bool,
+) -> Result<(), String> {
+    window
+        .with_webview(move |webview| unsafe {
+            let native_window: &objc2_app_kit::NSWindow =
+                &*webview.ns_window().cast();
+            // Alpha 0 is treated as fully occluded by WebKit and suspends the
+            // resident page exactly like hide(). A tiny non-zero alpha keeps
+            // JavaScript/rendering active while remaining visually imperceptible.
+            native_window.setAlphaValue(if parked { 0.01 } else { 1.0 });
+            native_window.setIgnoresMouseEvents(parked);
+        })
+        .map_err(|error| {
+            format!("Unable to update the resident Office editor window: {error}")
+        })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_resident_editor_parked(
+    window: &WebviewWindow,
+    parked: bool,
+) -> Result<(), String> {
+    if parked {
+        window.hide()
+    } else {
+        window.show()
     }
+    .map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn wake_resident_editor_for_hydration(window: &WebviewWindow) -> Result<(), String> {
+    window
+        .with_webview(move |webview| unsafe {
+            let native_window: &objc2_app_kit::NSWindow =
+                &*webview.ns_window().cast();
+            native_window.setAlphaValue(1.0);
+            native_window.setIgnoresMouseEvents(true);
+        })
+        .map_err(|error| {
+            format!("Unable to wake the resident Office editor window: {error}")
+        })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn wake_resident_editor_for_hydration(window: &WebviewWindow) -> Result<(), String> {
+    window.show().map_err(|error| error.to_string())
+}
+
+fn set_resident_editor_content_visible(
+    window: &WebviewWindow,
+    visible: bool,
+) -> Result<(), String> {
+    let opacity = if visible { "1" } else { "0" };
+    window
+        .eval(format!(
+            "if (document.body) {{ document.body.style.opacity = '{opacity}'; }}"
+        ))
+        .map_err(|error| {
+            format!("Unable to update resident Office editor content: {error}")
+        })
+}
+
+fn create_editor_window(app: &AppHandle, host: OfficeHost) -> Result<WebviewWindow, String> {
+    let label = editor_window_label(host);
+    if let Some(window) = app.get_webview_window(label) {
+        return Ok(window);
+    }
+
     let theme = crate::persisted_app_theme(app);
     let path = format!(
-        "index.html?view=office-formula&sessionId={session_id}&transport=tauri&theme={theme}"
+        "office-native-dialog.html?transport=tauri&officeHost={}&theme={theme}",
+        office_host_name(host),
     );
     let window = WebviewWindowBuilder::new(app, label, WebviewUrl::App(path.into()))
         .title("VisualTeX Office Formula")
         .inner_size(1180.0, 820.0)
         .min_inner_size(720.0, 560.0)
         .center()
+        .focused(false)
+        .skip_taskbar(true)
+        .visible(false)
         .build()
-        .map_err(|error| format!("Unable to open the VisualTeX Office editor: {error}"))?;
-    window.show().map_err(|error| error.to_string())?;
+        .map_err(|error| format!("Unable to initialize the VisualTeX Office editor: {error}"))?;
+    // A truly hidden WKWebView is suspended by WebKit before React can mount,
+    // which deadlocks the readiness handshake. Keep the resident editor
+    // ordered on-screen at an imperceptible alpha and mouse-inert while parked.
+    set_resident_editor_parked(&window, true)?;
+    window
+        .show()
+        .map_err(|error| format!("Unable to prewarm the VisualTeX Office editor: {error}"))?;
+    Ok(window)
+}
+
+pub(crate) fn prewarm_office_editor_windows(app: &AppHandle) -> Result<(), String> {
+    // Icon decoding and both WebKit process creations happen once while the
+    // resident app is starting. Formula double-clicks only switch a Session in
+    // an already initialized, hidden WebView.
+    crate::office::background::install_application_icon(app)?;
+    for host in [OfficeHost::Word, OfficeHost::Powerpoint] {
+        create_editor_window(app, host)?;
+    }
+    Ok(())
+}
+
+fn open_editor_window(
+    app: &AppHandle,
+    host: OfficeHost,
+    session_id: &str,
+    received_epoch_ms: u64,
+    received_at: Instant,
+) -> Result<(), String> {
+    let label = editor_window_label(host);
+    let reused = app.get_webview_window(label).is_some();
+    let window = create_editor_window(app, host)?;
+    set_resident_editor_content_visible(&window, false)?;
+    let activation = {
+        let mut runtime = office_editor_runtime()
+            .lock()
+            .map_err(|_| "VisualTeX Office editor state is unavailable".to_string())?;
+        // Never expose the previous formula while the new Session hydrates.
+        // Keep the resident WebView alive but transparent and mouse-inert so
+        // WebKit cannot suspend React before the readiness handshake.
+        set_resident_editor_parked(&window, true)?;
+        runtime.next_generation = runtime.next_generation.saturating_add(1).max(1);
+        let activation = MacOfflineOfficeEditorActivation {
+            session_id: session_id.to_string(),
+            host,
+            generation: runtime.next_generation,
+            received_epoch_ms,
+        };
+        *runtime.active_mut(host) = Some(ActiveOfficeEditorSession {
+            activation: activation.clone(),
+            received_at,
+            ready: false,
+        });
+        activation
+    };
+    let elapsed_ms = received_at.elapsed().as_secs_f64() * 1000.0;
+    queue_editor_performance(
+        host,
+        session_id,
+        if reused { "window-reused" } else { "window-created" },
+        elapsed_ms,
+        Some(activation.generation),
+        json!({ "windowLabel": label }),
+    );
+    if let Err(error) = window.emit(OFFICE_EDITOR_ACTIVATE_EVENT, activation.clone()) {
+        let _ = clear_editor_session(host, session_id, activation.generation);
+        return Err(format!("Unable to activate the VisualTeX Office editor: {error}"));
+    }
+    queue_editor_performance(
+        host,
+        session_id,
+        "activation-event-sent",
+        received_at.elapsed().as_secs_f64() * 1000.0,
+        Some(activation.generation),
+        json!({}),
+    );
+    // requestAnimationFrame is suspended while the native window remains
+    // effectively invisible. Reveal only the blanked document and keep it
+    // mouse-inert so React/MathLive can hydrate without flashing stale content.
     crate::office::background::activate_foreground_app(app)?;
-    window.set_focus().map_err(|error| error.to_string())?;
+    wake_resident_editor_for_hydration(&window)?;
+    window.center().map_err(|error| error.to_string())?;
+    window.show().map_err(|error| error.to_string())?;
+    window.unminimize().map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -1300,26 +1616,200 @@ fn open_document_import_window(app: &AppHandle, session_id: &str) -> Result<(), 
 }
 
 #[tauri::command]
-pub fn close_macos_offline_office_editor_window(window: WebviewWindow) -> Result<(), String> {
-    if !window.label().starts_with("office-native-") {
-        return Err("Only a VisualTeX Office formula editor can close itself".to_string());
+pub fn get_macos_offline_office_editor_activation(
+    window: WebviewWindow,
+) -> Result<Option<MacOfflineOfficeEditorActivation>, String> {
+    let host = editor_window_host(window.label())
+        .ok_or_else(|| "Only a VisualTeX Office formula editor can query activation".to_string())?;
+    Ok(active_editor_session(host).map(|active| active.activation))
+}
+
+#[tauri::command]
+pub fn report_macos_offline_office_editor_ready(
+    app: AppHandle,
+    window: WebviewWindow,
+    input: MacOfflineOfficeEditorReadyInput,
+) -> Result<(), String> {
+    validate_uuid(&input.session_id, "Office editor Session id")?;
+    for (value, label) in [
+        (input.hydrate_ms, "hydrateMs"),
+        (input.editor_mounted_ms, "editorMountedMs"),
+        (input.content_ready_ms, "contentReadyMs"),
+    ] {
+        if !value.is_finite() || !(0.0..=120_000.0).contains(&value) {
+            return Err(format!("Office editor {label} is invalid"));
+        }
     }
+    if input.hydrate_ms > input.editor_mounted_ms
+        || input.editor_mounted_ms > input.content_ready_ms
+    {
+        return Err("Office editor readiness stages are out of order".to_string());
+    }
+
+    let host = editor_window_host(window.label())
+        .ok_or_else(|| "Only a VisualTeX Office formula editor can report readiness".to_string())?;
+    let mut runtime = office_editor_runtime()
+        .lock()
+        .map_err(|_| "VisualTeX Office editor state is unavailable".to_string())?;
+    let active = runtime
+        .active_mut(host)
+        .as_mut()
+        .ok_or_else(|| "The Office editor has no active Session".to_string())?;
+    if active.activation.session_id != input.session_id
+        || active.activation.generation != input.generation
+    {
+        return Err("Ignoring stale Office editor readiness".to_string());
+    }
+    active.ready = true;
+    let active = active.clone();
+    let report_received_ms = active.received_at.elapsed().as_secs_f64() * 1000.0;
+    let frontend_origin_ms = (report_received_ms - input.content_ready_ms).max(0.0);
+
+    queue_editor_performance(
+        host,
+        &input.session_id,
+        "frontend-hydrated",
+        frontend_origin_ms + input.hydrate_ms,
+        Some(input.generation),
+        json!({ "durationMs": input.hydrate_ms }),
+    );
+    queue_editor_performance(
+        host,
+        &input.session_id,
+        "frontend-editor-mounted",
+        frontend_origin_ms + input.editor_mounted_ms,
+        Some(input.generation),
+        json!({ "durationMs": input.editor_mounted_ms }),
+    );
+    queue_editor_performance(
+        host,
+        &input.session_id,
+        "frontend-content-ready",
+        frontend_origin_ms + input.content_ready_ms,
+        Some(input.generation),
+        json!({
+            "durationMs": input.content_ready_ms,
+            "frontendEpochMs": input.frontend_epoch_ms,
+        }),
+    );
+
+    crate::office::background::activate_foreground_app(&app)?;
+    set_resident_editor_content_visible(&window, true)?;
+    set_resident_editor_parked(&window, false)?;
+    window.center().map_err(|error| error.to_string())?;
+    window.show().map_err(|error| error.to_string())?;
+    window.unminimize().map_err(|error| error.to_string())?;
+    crate::office::background::activate_foreground_app(&app)?;
+    window.set_focus().map_err(|error| error.to_string())?;
+    let show_focus_ms = active.received_at.elapsed().as_secs_f64() * 1000.0;
+    drop(runtime);
+    let ready_epoch_ms = epoch_ms();
+    queue_editor_performance(
+        host,
+        &input.session_id,
+        "window-show-focus",
+        show_focus_ms,
+        Some(input.generation),
+        json!({}),
+    );
+
+    let marker = MacOfflineOfficeEditorReadyMarker {
+        schema: "visualtex-office-editor-ready-v1",
+        session_id: input.session_id.clone(),
+        host,
+        generation: input.generation,
+        epoch_ms: ready_epoch_ms,
+        url_received_epoch_ms: active.activation.received_epoch_ms,
+        frontend_epoch_ms: input.frontend_epoch_ms,
+        hydrate_ms: input.hydrate_ms,
+        editor_mounted_ms: input.editor_mounted_ms,
+        content_ready_ms: input.content_ready_ms,
+        show_focus_ms,
+    };
+    std::thread::spawn(move || {
+        let Ok(path) = session_directory(host, &input.session_id)
+            .map(|directory| directory.join(EDITOR_READY_FILE))
+        else {
+            return;
+        };
+        let Ok(bytes) = serde_json::to_vec_pretty(&marker) else {
+            return;
+        };
+        let _ = atomic_write(&path, &bytes, 0o600);
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn close_macos_offline_office_editor_window(
+    window: WebviewWindow,
+    session_id: Option<String>,
+    generation: Option<u64>,
+) -> Result<(), String> {
     let app = window.app_handle().clone();
-    window
-        .destroy()
-        .map_err(|error| format!("Unable to close the VisualTeX Office editor: {error}"))?;
+    let Some(host) = editor_window_host(window.label()) else {
+        if window.label().starts_with("office-native-document-") {
+            window.destroy().map_err(|error| {
+                format!("Unable to close the VisualTeX document importer: {error}")
+            })?;
+            #[cfg(target_os = "macos")]
+            {
+                let main_visible = app
+                    .get_webview_window("main")
+                    .and_then(|main| main.is_visible().ok())
+                    .unwrap_or(false);
+                if !has_open_office_editor(&app)
+                    && !main_visible
+                    && crate::office::background::is_background_mode()
+                {
+                    app.set_activation_policy(tauri::ActivationPolicy::Accessory)
+                        .map_err(|error| {
+                            format!(
+                                "Unable to return VisualTeX to Office background mode: {error}"
+                            )
+                        })?;
+                }
+            }
+            return Ok(());
+        }
+        return Err("Only a VisualTeX Office formula editor can close itself".to_string());
+    };
+    let session_id = session_id
+        .ok_or_else(|| "The Office formula editor close request is missing sessionId".to_string())?;
+    let generation = generation
+        .ok_or_else(|| "The Office formula editor close request is missing generation".to_string())?;
+    {
+        // Keep activation validation and hiding atomic with respect to a new
+        // URL activation. A late close from generation N must never hide the
+        // already-hydrating generation N+1.
+        let mut runtime = office_editor_runtime()
+            .lock()
+            .map_err(|_| "VisualTeX Office editor state is unavailable".to_string())?;
+        let matches = runtime.active(host).is_some_and(|active| {
+            active.activation.session_id == session_id
+                && active.activation.generation == generation
+        });
+        if !matches {
+            return Err("The Office editor Session is no longer active".to_string());
+        }
+        set_resident_editor_content_visible(&window, false)?;
+        set_resident_editor_parked(&window, true).map_err(|error| {
+            format!("Unable to close the VisualTeX Office editor: {error}")
+        })?;
+        *runtime.active_mut(host) = None;
+    }
+    let _ = window.emit(
+        OFFICE_EDITOR_CLEAR_EVENT,
+        json!({ "sessionId": session_id, "generation": generation }),
+    );
 
     #[cfg(target_os = "macos")]
     {
-        let has_other_editor = app
-            .webview_windows()
-            .keys()
-            .any(|label| label.starts_with("office-native-"));
         let main_visible = app
             .get_webview_window("main")
             .and_then(|main| main.is_visible().ok())
             .unwrap_or(false);
-        if !has_other_editor
+        if !has_open_office_editor(&app)
             && !main_visible
             && crate::office::background::is_background_mode()
         {
@@ -1331,16 +1821,27 @@ pub fn close_macos_offline_office_editor_window(window: WebviewWindow) -> Result
 }
 
 pub(crate) fn has_open_office_editor(app: &AppHandle) -> bool {
-    app.webview_windows()
-        .keys()
-        .any(|label| label.starts_with("office-native-"))
+    [OfficeHost::Word, OfficeHost::Powerpoint]
+        .into_iter()
+        .any(|host| {
+            active_editor_session(host).is_some()
+                && app.get_webview_window(editor_window_label(host)).is_some()
+        })
 }
 
 pub(crate) fn focus_open_office_editor(app: &AppHandle) -> bool {
-    for (label, window) in app.webview_windows() {
-        if label.starts_with("office-native-") {
+    for host in [OfficeHost::Word, OfficeHost::Powerpoint] {
+        if let Some(active) = active_editor_session(host) {
+            let Some(window) = app.get_webview_window(editor_window_label(host)) else {
+                continue;
+            };
+            // A parked active window is still hydrating. Treat it as owned so
+            // a second native double-click route cannot launch a duplicate,
+            // but never focus transparent stale content before readiness.
+            if !active.ready {
+                return true;
+            }
             let _ = crate::office::background::activate_foreground_app(app);
-            let _ = window.show();
             let _ = crate::office::background::activate_foreground_app(app);
             let _ = window.set_focus();
             return true;
@@ -1350,18 +1851,53 @@ pub(crate) fn focus_open_office_editor(app: &AppHandle) -> bool {
 }
 
 pub(crate) fn handle_open_url(app: &AppHandle, value: &str) -> Result<(), String> {
+    let received_at = Instant::now();
+    let received_epoch_ms = epoch_ms();
     let session_id = parse_office_url(value)?;
     let state = app
         .try_state::<OfficeCompanionState>()
         .ok_or_else(|| "VisualTeX Office state is not initialized".to_string())?;
+    // The host is not trusted until request validation completes, so queue the
+    // first stage immediately after read_request resolves it below.
     let request = read_request(&session_id)?;
     let host = host_from_request_name(&request.host)?;
+    queue_editor_performance(
+        host,
+        &session_id,
+        "url-received",
+        0.0,
+        None,
+        json!({ "receivedEpochMs": received_epoch_ms }),
+    );
+    queue_editor_performance(
+        host,
+        &session_id,
+        "request-read",
+        received_at.elapsed().as_secs_f64() * 1000.0,
+        None,
+        json!({}),
+    );
     ensure_runtime_root(host)?;
 
     crate::office::background::hide_main_window(app)?;
     if request.operation.as_deref() == Some("documentImport") {
+        for host in [OfficeHost::Word, OfficeHost::Powerpoint] {
+            if let Some(window) = app.get_webview_window(editor_window_label(host)) {
+                let _ = set_resident_editor_content_visible(&window, false);
+                let _ = set_resident_editor_parked(&window, true);
+                if let Some(active) = clear_any_editor_session(host) {
+                    let _ = window.emit(
+                        OFFICE_EDITOR_CLEAR_EVENT,
+                        json!({
+                            "sessionId": active.session_id,
+                            "generation": active.generation,
+                        }),
+                    );
+                }
+            }
+        }
         for (label, window) in app.webview_windows() {
-            if label.starts_with("office-native-")
+            if label.starts_with("office-native-document-")
                 && label != document_import_window_label(&session_id)
             {
                 let _ = window.destroy();
@@ -1371,8 +1907,15 @@ pub(crate) fn handle_open_url(app: &AppHandle, value: &str) -> Result<(), String
     }
 
     import_request(state.inner(), request)?;
-    close_other_editor_windows_for_host(app, state.inner(), host, &session_id);
-    open_editor_window(app, &session_id)
+    queue_editor_performance(
+        host,
+        &session_id,
+        "request-imported",
+        received_at.elapsed().as_secs_f64() * 1000.0,
+        None,
+        json!({}),
+    );
+    open_editor_window(app, host, &session_id, received_epoch_ms, received_at)
 }
 
 fn decode_png(value: &str) -> Result<Vec<u8>, String> {
@@ -1492,6 +2035,16 @@ end tell"#,
     run_office_vba_script(script, "Office double-click edit macro")
 }
 
+pub(crate) fn run_word_image_double_click_edit_macro() -> Result<(), String> {
+    run_office_vba_script(
+        r#"tell application "Microsoft Word"
+if not (exists active document) then error "Microsoft Word has no active document"
+run VB macro macro name "VisualTeX_EditSelectedImageFromNativeMonitor"
+end tell"#,
+        "Word image double-click edit macro",
+    )
+}
+
 fn run_office_vba_script(script: &str, label: &str) -> Result<(), String> {
     let output = Command::new("/usr/bin/osascript")
         .arg("-e")
@@ -1586,15 +2139,19 @@ fn calculate_word_svg_geometry(
     {
         return Err("Word formula SVG geometry is invalid".to_string());
     }
-    let natural_width = width * 0.75;
-    let natural_height = height * 0.75;
+    let natural_width = width * 0.75 * WORD_IMAGE_VISUAL_SCALE;
+    let natural_height = height * 0.75 * WORD_IMAGE_VISUAL_SCALE;
     let reference_scale = f64::min(1.0, MAX_WORD_WIDTH_PT / natural_width);
     let reference_width_pt = natural_width * reference_scale;
     let reference_height_pt = natural_height * reference_scale;
     let reference_baseline_pt = baseline
         .map(|value| {
             let descent_ratio = (height - value) / height;
-            -(reference_height_pt * descent_ratio).round().max(0.0)
+            // Preserve the fractional descent at the canonical 14 pt size.
+            // Word's Font.Position is integral, so rounding this reference and
+            // rounding again after point-size scaling visibly under-corrects
+            // short subscript formulas such as L_z beside L^2.
+            -(reference_height_pt * descent_ratio).max(0.0)
         })
         .unwrap_or(0.0)
         .clamp(-256.0, 0.0);
@@ -3124,6 +3681,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn office_formula_editors_have_one_stable_window_label_per_host() {
+        assert_eq!(editor_window_label(OfficeHost::Word), "office-native-word-editor");
+        assert_eq!(
+            editor_window_label(OfficeHost::Powerpoint),
+            "office-native-powerpoint-editor"
+        );
+        assert_eq!(
+            editor_window_host("office-native-word-editor"),
+            Some(OfficeHost::Word)
+        );
+        assert_eq!(
+            editor_window_host("office-native-powerpoint-editor"),
+            Some(OfficeHost::Powerpoint)
+        );
+        assert_eq!(editor_window_host("office-native-document-session"), None);
+    }
+
+    #[test]
+    fn editor_ready_marker_exposes_machine_readable_frontend_stages() {
+        let marker = MacOfflineOfficeEditorReadyMarker {
+            schema: "visualtex-office-editor-ready-v1",
+            session_id: "12345678-1234-4234-9234-123456789abc".to_string(),
+            host: OfficeHost::Word,
+            generation: 4,
+            epoch_ms: 900,
+            url_received_epoch_ms: 100,
+            frontend_epoch_ms: 850,
+            hydrate_ms: 120.5,
+            editor_mounted_ms: 150.25,
+            content_ready_ms: 166.75,
+            show_focus_ms: 171.0,
+        };
+        let value = serde_json::to_value(marker).expect("ready marker should serialize");
+        assert_eq!(value["sessionId"], "12345678-1234-4234-9234-123456789abc");
+        assert_eq!(value["host"], "word");
+        assert_eq!(value["hydrateMs"], 120.5);
+        assert_eq!(value["contentReadyMs"], 166.75);
+        assert_eq!(value["showFocusMs"], 171.0);
+    }
+
+    #[test]
     fn runtime_roots_use_each_office_hosts_application_scripts_directory() {
         let word = runtime_root(OfficeHost::Word).expect("Word runtime root should resolve");
         let powerpoint =
@@ -3151,6 +3749,33 @@ mod tests {
         assert!((large.height - 36.0).abs() < 0.001);
         assert_eq!(large.baseline, -5);
         assert!((large.width / small.width - 18.0 / 10.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn word_inline_baseline_rounds_only_after_font_size_scaling() {
+        // Real MathJax geometry from the reported L^2 / L_z regression at the
+        // canonical 14 pt export size. Their fractional descents are about
+        // 0.825 pt and 3.25512 pt respectively.
+        let superscript = calculate_word_svg_geometry(
+            22.86186666666666,
+            17.56613333333333,
+            Some(16.56613333333333),
+            11.0,
+        )
+        .expect("L^2 geometry should resolve");
+        let subscript = calculate_word_svg_geometry(
+            22.39893333333333,
+            17.69493333333333,
+            Some(13.749333333333333),
+            11.0,
+        )
+        .expect("L_z geometry should resolve");
+
+        assert!((superscript.reference_baseline_pt + 0.825).abs() < 0.001);
+        assert!((subscript.reference_baseline_pt + 3.25512).abs() < 0.001);
+        assert_eq!(superscript.baseline, -1);
+        assert_eq!(subscript.baseline, -3);
+        assert_eq!(subscript.baseline - superscript.baseline, -2);
     }
 
     #[test]
@@ -3671,7 +4296,15 @@ c &= e
     }
 
     #[test]
-    fn powerpoint_geometry_preserves_center_and_visual_height_ratio() {
+    fn office_geometry_preserves_visual_point_size_and_powerpoint_center() {
+        let word_geometry = calculate_word_svg_geometry(100.0, 20.0, Some(15.0), 14.0)
+            .expect("Word image geometry should apply its visual calibration");
+        assert!((word_geometry.width - 82.5).abs() < 0.001);
+        assert!((word_geometry.height - 16.5).abs() < 0.001);
+        assert_eq!(word_geometry.baseline, -4);
+        assert!((word_geometry.reference_width_pt - 82.5).abs() < 0.001);
+        assert!((word_geometry.reference_height_pt - 16.5).abs() < 0.001);
+
         let request = MacOfflinePowerPointRequest {
             presentation_identity: "Deck".to_string(),
             slide_index: 1,

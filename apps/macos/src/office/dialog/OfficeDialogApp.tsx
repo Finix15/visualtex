@@ -145,6 +145,8 @@ export function OfficeDialogApp() {
   const allowNativeCloseRef = useRef(false);
   const nativeCloseRequestInFlightRef = useRef(false);
   const exportRunIdRef = useRef(0);
+  const activeSessionKeyRef = useRef("");
+  const readyReportedSessionKeyRef = useRef("");
   const latestCompleteExportRef = useRef<{
     fingerprint: string;
     exportResult: OfficeExportResult;
@@ -163,15 +165,68 @@ export function OfficeDialogApp() {
       : DEFAULT_OCR_MODEL;
   });
   const [inlineOcr, setInlineOcr] = useState<InlineOcrState | null>(null);
+  const [hydratedSessionKey, setHydratedSessionKey] = useState("");
+  const [hydratedPerformanceMs, setHydratedPerformanceMs] = useState(0);
   const inlineOcrBusyRef = useRef(false);
   const inlineOcrCancelRequestedRef = useRef(false);
   const inlineOcrRunIdRef = useRef(0);
   const inlineOcrClearTimerRef = useRef<number | null>(null);
   const ocrPrewarmStartedRef = useRef(false);
-  const { sessionId, session, loading, error, save } = useOfficeSession();
+  const {
+    sessionId,
+    generation,
+    session,
+    loading,
+    error,
+    save,
+    activationPerformanceMs,
+    sessionLoadedPerformanceMs,
+  } = useOfficeSession();
+  const sessionKey = sessionId ? `${generation}:${sessionId}` : "";
+  const sessionHydrated = Boolean(
+    session && sessionKey && hydratedSessionKey === sessionKey,
+  );
+  activeSessionKeyRef.current = sessionKey;
 
   useEffect(() => {
-    if (loading) {
+    loadedSessionIdRef.current = "";
+    skipAutosaveForSessionRef.current = "";
+    lastSavedFingerprintRef.current = "";
+    readyMessageSentRef.current = false;
+    readyReportedSessionKeyRef.current = "";
+    finalizingRef.current = false;
+    allowNativeCloseRef.current = false;
+    nativeCloseRequestInFlightRef.current = false;
+    exportRunIdRef.current += 1;
+    latestCompleteExportRef.current = null;
+    historyManager.clear();
+    setHydratedSessionKey("");
+    setHydratedPerformanceMs(0);
+    setToast("");
+    setOcrOpen(false);
+    setInlineOcr(null);
+    inlineOcrBusyRef.current = false;
+    inlineOcrCancelRequestedRef.current = false;
+    inlineOcrRunIdRef.current += 1;
+    useEditorStore.getState().replaceDocumentState({
+      title: "",
+      lines: [{ id: createUuid(), latex: "" }],
+      activeLineId: null,
+      formulaAlignment: useEditorStore.getState().formulaAlignment,
+      selectionByLineId: {},
+    });
+    useEditorStore.getState().setLatexCodeFormat("raw");
+    setAutoCommitOnClose(true);
+    setDisplayMode("inline");
+    setNumbered(false);
+  }, [sessionKey]);
+
+  useEffect(() => {
+    if (!sessionId && isMacosOfflineTauriTransport()) {
+      document.title = "VisualTeX Office Formula — 待命";
+      return;
+    }
+    if (loading || (session && !sessionHydrated)) {
       document.title = "VisualTeX Office Formula — 正在加载";
       return;
     }
@@ -180,7 +235,7 @@ export function OfficeDialogApp() {
       return;
     }
     document.title = `VisualTeX Office Formula — ${session.host === "word" ? "Word" : "PowerPoint"} 已就绪`;
-  }, [loading, error, session?.id, session?.host]);
+  }, [loading, error, session?.id, session?.host, sessionHydrated, sessionId]);
 
   const title = useEditorStore((state) => state.title);
   const lines = useEditorStore((state) => state.lines);
@@ -269,11 +324,11 @@ export function OfficeDialogApp() {
     if (
       !session ||
       !editableSessionDocument ||
-      loadedSessionIdRef.current === session.id
+      loadedSessionIdRef.current === sessionKey
     ) {
       return;
     }
-    loadedSessionIdRef.current = session.id;
+    loadedSessionIdRef.current = sessionKey;
     skipAutosaveForSessionRef.current = session.id;
     const nextLines = editableSessionDocument.lines.length
       ? editableSessionDocument.lines
@@ -308,7 +363,107 @@ export function OfficeDialogApp() {
     latestCompleteExportRef.current = session.exportResult?.pngBase64
       ? { fingerprint: loadedFingerprint, exportResult: session.exportResult }
       : null;
-  }, [editableSessionDocument, session?.id, isEn]);
+    const hydratedAt =
+      typeof performance === "undefined" ? Date.now() : performance.now();
+    setHydratedPerformanceMs(hydratedAt);
+    setHydratedSessionKey(sessionKey);
+  }, [editableSessionDocument, session?.id, sessionKey, isEn]);
+
+  useEffect(() => {
+    if (
+      !isMacosOfflineTauriTransport() ||
+      !session ||
+      !sessionHydrated ||
+      !sessionKey ||
+      generation <= 0 ||
+      readyReportedSessionKeyRef.current === sessionKey
+    ) {
+      return;
+    }
+
+    let disposed = false;
+    let frame = 0;
+    let frameRequest = 0;
+    let editorMountedMs = 0;
+    const origin =
+      activationPerformanceMs ||
+      sessionLoadedPerformanceMs ||
+      hydratedPerformanceMs;
+    const hydrateMs = Math.max(0, hydratedPerformanceMs - origin);
+    const expectedLineIds = session.lines.map((line) => line.id);
+
+    const inspectContent = () => {
+      if (disposed || activeSessionKeyRef.current !== sessionKey) return;
+      frame += 1;
+      const now =
+        typeof performance === "undefined" ? Date.now() : performance.now();
+      if (frame === 1) editorMountedMs = Math.max(hydrateMs, now - origin);
+      const mountedLineIds = new Set(
+        Array.from(
+          document.querySelectorAll<HTMLElement>(
+            ".formula-line[data-line-id]",
+          ),
+        ).map((element) => element.dataset.lineId ?? ""),
+      );
+      const mathfieldHosts = document.querySelectorAll(
+        ".formula-line .mathfield-host",
+      ).length;
+      const contentMounted =
+        Boolean(editorRef.current) &&
+        expectedLineIds.every((lineId) => mountedLineIds.has(lineId)) &&
+        mathfieldHosts >= expectedLineIds.length;
+      // Two animation frames guarantee React committed the hydrated store and
+      // MathLive mounted its hosts. Allow a few more frames on a cold WebKit
+      // process without ever showing stale or empty formula content.
+      if (frame < 2 || (!contentMounted && frame < 12)) {
+        frameRequest = window.requestAnimationFrame(inspectContent);
+        return;
+      }
+      if (!contentMounted) return;
+
+      const contentReadyMs = Math.max(editorMountedMs, now - origin);
+      readyReportedSessionKeyRef.current = sessionKey;
+      void invokeTauri<void>(
+        "report_macos_offline_office_editor_ready",
+        {
+          input: {
+            sessionId: session.id,
+            generation,
+            frontendEpochMs: Date.now(),
+            hydrateMs,
+            editorMountedMs,
+            contentReadyMs,
+          },
+        },
+      ).catch((reason) => {
+        if (activeSessionKeyRef.current !== sessionKey) return;
+        readyReportedSessionKeyRef.current = "";
+        setToast(
+          errorMessage(
+            reason,
+            isEn
+              ? "Unable to reveal the Office formula editor"
+              : "无法显示 Office 公式编辑器",
+          ),
+        );
+      });
+    };
+
+    frameRequest = window.requestAnimationFrame(inspectContent);
+    return () => {
+      disposed = true;
+      window.cancelAnimationFrame(frameRequest);
+    };
+  }, [
+    activationPerformanceMs,
+    generation,
+    hydratedPerformanceMs,
+    isEn,
+    session,
+    sessionHydrated,
+    sessionKey,
+    sessionLoadedPerformanceMs,
+  ]);
 
   const captureSnapshot = useCallback(
     (): DocumentSnapshot =>
@@ -373,6 +528,7 @@ export function OfficeDialogApp() {
       lines,
       codeFormat: latexCodeFormat,
       displayMode,
+      host: session?.host,
       includeWordOmml: session?.host === "word",
     });
     const { svg } = artifacts;
@@ -417,7 +573,9 @@ export function OfficeDialogApp() {
   }, [generateSvgExportResult]);
 
   useEffect(() => {
-    if (!session || !sessionId || finalizingRef.current) return;
+    if (!session || !sessionId || !sessionHydrated || finalizingRef.current) {
+      return;
+    }
     if (skipAutosaveForSessionRef.current === sessionId) {
       skipAutosaveForSessionRef.current = "";
       return;
@@ -512,6 +670,7 @@ export function OfficeDialogApp() {
     }
   }, [
     sessionId,
+    sessionHydrated,
     session?.id,
     session?.autoCommitOnClose,
     currentFingerprint,
@@ -530,7 +689,7 @@ export function OfficeDialogApp() {
   ]);
 
   useEffect(() => {
-    if (!sessionId) return;
+    if (!sessionId || !sessionHydrated) return;
     const finalDraftUpdate = (status: "editing" | "committing") => {
       const cached = latestCompleteExportRef.current;
       const exportResult =
@@ -607,6 +766,7 @@ export function OfficeDialogApp() {
     };
   }, [
     sessionId,
+    sessionHydrated,
     session?.host,
     title,
     lines,
@@ -624,6 +784,7 @@ export function OfficeDialogApp() {
   useEffect(() => {
     if (
       !session ||
+      !sessionHydrated ||
       readyMessageSentRef.current ||
       isMacosOfflineTauriTransport()
     ) {
@@ -631,7 +792,7 @@ export function OfficeDialogApp() {
     }
     readyMessageSentRef.current = true;
     messageOfficeParent({ type: "visualtex-ready", sessionId: session.id });
-  }, [session?.id]);
+  }, [session?.id, sessionHydrated]);
 
   useEffect(() => {
     if (!toast) return;
@@ -675,6 +836,7 @@ export function OfficeDialogApp() {
   };
 
   useEffect(() => {
+    if (!sessionHydrated) return;
     let cancelled = false;
     const delay = ocrPrewarmStartedRef.current ? 250 : 500;
     const timer = window.setTimeout(() => {
@@ -696,7 +858,7 @@ export function OfficeDialogApp() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [ocrModel]);
+  }, [ocrModel, sessionHydrated]);
 
   const handleOcrModelChange = (nextModel: OcrModelName) => {
     if (inlineOcrBusyRef.current || nextModel === ocrModel) return;
@@ -919,12 +1081,15 @@ export function OfficeDialogApp() {
 
     allowNativeCloseRef.current = true;
     try {
-      await invokeTauri<void>("close_macos_offline_office_editor_window");
+      await invokeTauri<void>("close_macos_offline_office_editor_window", {
+        sessionId,
+        generation,
+      });
     } catch (error) {
       allowNativeCloseRef.current = false;
       throw error;
     }
-  }, []);
+  }, [generation, sessionId]);
 
   const handleCommit = useCallback(async () => {
     // React state updates do not disable the button until the next render.
@@ -936,15 +1101,18 @@ export function OfficeDialogApp() {
       setToast(isEn ? "Enter a formula before inserting" : "请输入公式后再插入");
       return;
     }
+    const targetSessionKey = sessionKey;
     finalizingRef.current = true;
     try {
       const next = await saveCurrentSession("committing");
 
       if (isMacosOfflineTauriTransport()) {
         await commitMacosOfflineOfficeSession(next.id);
+        if (activeSessionKeyRef.current !== targetSessionKey) return;
         try {
           await closeOfficeEditorWindow();
         } catch (closeError) {
+          if (activeSessionKeyRef.current !== targetSessionKey) return;
           finalizingRef.current = false;
           const detail = errorMessage(
             closeError,
@@ -967,6 +1135,7 @@ export function OfficeDialogApp() {
       await waitForOfficeCommitResult(next.id, next.host);
       window.close();
     } catch (error) {
+      if (activeSessionKeyRef.current !== targetSessionKey) return;
       finalizingRef.current = false;
       setToast(
         errorMessage(
@@ -975,15 +1144,17 @@ export function OfficeDialogApp() {
         ),
       );
     }
-  }, [closeOfficeEditorWindow, isEn, latex, saveCurrentSession]);
+  }, [closeOfficeEditorWindow, isEn, latex, saveCurrentSession, sessionKey]);
 
   const handleCancel = useCallback(async () => {
     if (finalizingRef.current) return;
+    const targetSessionKey = sessionKey;
     finalizingRef.current = true;
     try {
       const next = await saveCurrentSession("cancelled");
       if (isMacosOfflineTauriTransport()) {
         await cancelMacosOfflineOfficeSession(next.id);
+        if (activeSessionKeyRef.current !== targetSessionKey) return;
         await closeOfficeEditorWindow();
         return;
       }
@@ -993,6 +1164,7 @@ export function OfficeDialogApp() {
       }
       messageOfficeParent({ type: "visualtex-cancel", sessionId: next.id });
     } catch (error) {
+      if (activeSessionKeyRef.current !== targetSessionKey) return;
       finalizingRef.current = false;
       setToast(
         errorMessage(
@@ -1001,7 +1173,7 @@ export function OfficeDialogApp() {
         ),
       );
     }
-  }, [closeOfficeEditorWindow, isEn, saveCurrentSession]);
+  }, [closeOfficeEditorWindow, isEn, saveCurrentSession, sessionKey]);
 
   useEffect(() => {
     if (!isMacosOfflineTauriTransport() || !sessionId) return;
@@ -1052,7 +1224,7 @@ export function OfficeDialogApp() {
     setToast(isEn ? "LaTeX copied" : "LaTeX 已复制");
   };
 
-  if (loading) {
+  if (loading || (session && !sessionHydrated)) {
     return (
       <div className="office-dialog-state">
         <LoaderCircle className="is-spinning" size={28} />

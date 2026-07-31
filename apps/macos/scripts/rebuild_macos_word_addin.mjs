@@ -8,6 +8,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -38,42 +39,57 @@ const outputPath = resolve(
   argument("--output") ?? join(scratchRoot, "VisualTeXWordBuild.dotm"),
 );
 const outputDocumentName = basename(outputPath);
-const protocolPath = join(
-  repositoryRoot,
-  "office",
-  "macos-offline",
-  "shared",
-  "VTProtocol.bas",
+const keepWordOpenOnError = process.argv.includes("--keep-word-open-on-error");
+const buildLockRoot = join(scratchRoot, "VisualTeXWordBuild.lock");
+const buildLockOwnerPath = join(buildLockRoot, "pid");
+const offlineOfficeRoot = join(repositoryRoot, "office", "macos-offline");
+const wordModuleSources = [
+  ["VTProtocol", join(offlineOfficeRoot, "shared", "VTProtocol.bas")],
+  ["VTOfficePaths", join(offlineOfficeRoot, "shared", "VTOfficePaths.bas")],
+  ["VTMetadata", join(offlineOfficeRoot, "shared", "VTMetadata.bas")],
+  ["VTLauncher", join(offlineOfficeRoot, "shared", "VTLauncher.bas")],
+  ["VTErrorHandling", join(offlineOfficeRoot, "shared", "VTErrorHandling.bas")],
+  ["VTWordAdapter", join(offlineOfficeRoot, "word", "VTWordAdapter.bas")],
+  ["VTWordEvents", join(offlineOfficeRoot, "word", "VTWordEvents.cls")],
+  ["VTRibbonCallbacks", join(offlineOfficeRoot, "word", "VTRibbonCallbacks.bas")],
+];
+const requestedModuleNames = new Set(
+  (argument("--modules") ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean),
 );
-const adapterPath = join(
-  repositoryRoot,
-  "office",
-  "macos-offline",
-  "word",
-  "VTWordAdapter.bas",
-);
-const ribbonCallbacksPath = join(
-  repositoryRoot,
-  "office",
-  "macos-offline",
-  "word",
-  "VTRibbonCallbacks.bas",
-);
-const wordEventsPath = join(
-  repositoryRoot,
-  "office",
-  "macos-offline",
-  "word",
-  "VTWordEvents.cls",
-);
-const startupRoot = join(
+const knownModuleNames = new Set(wordModuleSources.map(([moduleName]) => moduleName));
+for (const moduleName of requestedModuleNames) {
+  if (!knownModuleNames.has(moduleName)) {
+    throw new Error(`Unknown Word VBA module requested by --modules: ${moduleName}`);
+  }
+}
+const incrementalBuild = requestedModuleNames.size > 0;
+const selectedWordModuleSources = incrementalBuild
+  ? wordModuleSources.filter(([moduleName]) => requestedModuleNames.has(moduleName))
+  : wordModuleSources;
+const officeGroupRoot = join(
   homedir(),
   "Library",
   "Group Containers",
   "UBF8T346G9.Office",
+);
+const startupRoot = join(
+  officeGroupRoot,
   "User Content.localized",
   "Startup.localized",
   "Word",
+);
+const normalTemplatePath = join(
+  officeGroupRoot,
+  "User Content.localized",
+  "Templates.localized",
+  "Normal.dotm",
+);
+const normalTemplateBackupPath = join(
+  scratchRoot,
+  "VbeBuildNormalBackup.dotm",
 );
 const backupRoot = join(scratchRoot, `VbeBuildStartupBackup-${process.pid}`);
 const documentName = basename(outputPath).replace(/\.dotm$/i, "");
@@ -96,6 +112,49 @@ function bestEffort(program, args, options = {}) {
     return run(program, args, options);
   } catch {
     return "";
+  }
+}
+
+function processIsAlive(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function acquireBuildLock() {
+  mkdirSync(scratchRoot, { recursive: true });
+  try {
+    mkdirSync(buildLockRoot);
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) {
+      throw error;
+    }
+    const ownerPid = Number.parseInt(
+      bestEffort("/bin/cat", [buildLockOwnerPath]).trim(),
+      10,
+    );
+    if (processIsAlive(ownerPid)) {
+      throw new Error(
+        `Another Word VBE build is already running (pid ${ownerPid}).`,
+      );
+    }
+    rmSync(buildLockRoot, { recursive: true, force: true });
+    mkdirSync(buildLockRoot);
+  }
+  writeFileSync(buildLockOwnerPath, `${process.pid}\n`, "utf8");
+}
+
+function releaseBuildLock() {
+  const ownerPid = Number.parseInt(
+    bestEffort("/bin/cat", [buildLockOwnerPath]).trim(),
+    10,
+  );
+  if (ownerPid === process.pid) {
+    rmSync(buildLockRoot, { recursive: true, force: true });
   }
 }
 
@@ -152,12 +211,42 @@ function restoreVbaTrust(state) {
   }
 }
 
+function recoverInterruptedNormalTemplate() {
+  if (!existsSync(normalTemplateBackupPath)) return;
+  if (existsSync(normalTemplatePath)) {
+    throw new Error(
+      `A previous Word VBE build left both the real and backup Normal.dotm in place. Inspect ${normalTemplateBackupPath} before continuing.`,
+    );
+  }
+  mkdirSync(dirname(normalTemplatePath), { recursive: true });
+  renameSync(normalTemplateBackupPath, normalTemplatePath);
+}
+
+function moveNormalTemplateOut() {
+  recoverInterruptedNormalTemplate();
+  if (!existsSync(normalTemplatePath)) return;
+  mkdirSync(dirname(normalTemplateBackupPath), { recursive: true });
+  renameSync(normalTemplatePath, normalTemplateBackupPath);
+}
+
+function restoreNormalTemplate() {
+  if (!existsSync(normalTemplateBackupPath)) return;
+  rmSync(normalTemplatePath, { force: true });
+  mkdirSync(dirname(normalTemplatePath), { recursive: true });
+  renameSync(normalTemplateBackupPath, normalTemplatePath);
+}
+
 function moveStartupTemplatesOut() {
   mkdirSync(startupRoot, { recursive: true });
   mkdirSync(backupRoot, { recursive: true });
   for (const name of readdirSync(startupRoot)) {
-    if (!/^VisualTeX\.dotm/i.test(name)) continue;
-    renameSync(join(startupRoot, name), join(backupRoot, name));
+    if (/^VisualTeX\.dotm/i.test(name)) {
+      renameSync(join(startupRoot, name), join(backupRoot, name));
+      continue;
+    }
+    if (/^~\$.*sualTeX.*\.dotm$/i.test(name)) {
+      rmSync(join(startupRoot, name), { force: true });
+    }
   }
 }
 
@@ -213,6 +302,73 @@ function waitForWordUiReady() {
   throw new Error("Word did not expose a document window and menu bar for VBE automation.");
 }
 
+function stopRunningVbaIfNeeded() {
+  const state = bestEffort("/usr/bin/osascript", [
+    "-e",
+    'tell application "System Events"',
+    "-e",
+    'if not (exists process "Microsoft Word") then return "NO_WORD"',
+    "-e",
+    'tell process "Microsoft Word"',
+    "-e",
+    'set vbeWindow to first window whose name contains "Microsoft Visual Basic"',
+    "-e",
+    'set vbeName to name of vbeWindow as text',
+    "-e",
+    'if vbeName does not contain "[运行中]" and vbeName does not contain "[running]" then return "READY"',
+    "-e",
+    'perform action "AXRaise" of vbeWindow',
+    "-e",
+    'set frontmost to true',
+    "-e",
+    'key code 47 using {command down}',
+    "-e",
+    'delay 1',
+    "-e",
+    'repeat with candidateWindow in windows',
+    "-e",
+    'repeat with endName in {"结束", "End"}',
+    "-e",
+    'try',
+    "-e",
+    'if exists button (endName as text) of candidateWindow then',
+    "-e",
+    'click button (endName as text) of candidateWindow',
+    "-e",
+    'delay 1',
+    "-e",
+    'exit repeat',
+    "-e",
+    'end if',
+    "-e",
+    'end try',
+    "-e",
+    'end repeat',
+    "-e",
+    'end repeat',
+    "-e",
+    'return name of vbeWindow as text',
+    "-e",
+    'end tell',
+    "-e",
+    'end tell',
+  ], { timeout: 15_000 }).trim();
+  if (state === "READY" || state === "NO_WORD") return;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    sleep(250);
+    const current = bestEffort("/usr/bin/osascript", [
+      "-e",
+      'tell application "System Events"',
+      "-e",
+      'tell process "Microsoft Word" to return name of first window whose name contains "Microsoft Visual Basic"',
+      "-e",
+      'end tell',
+    ], { timeout: 5_000 }).trim();
+    if (!current.includes("[运行中]") && !current.toLowerCase().includes("[running]")) return;
+  }
+  throw new Error("Word VBA remained in running state after an explicit stop request.");
+}
+
 function openVbeWindow() {
   waitForWordUiReady();
   const existingWindows = bestEffort("/usr/bin/osascript", [
@@ -227,14 +383,39 @@ function openVbeWindow() {
     "-e",
     "end tell",
   ], { timeout: 5_000 });
-  if (existingWindows.includes("Microsoft Visual Basic")) return;
+  if (existingWindows.includes("Microsoft Visual Basic")) {
+    stopRunningVbaIfNeeded();
+    return;
+  }
 
   osascript([
     'tell application "Microsoft Word" to activate',
     'tell application "System Events"',
     'tell process "Microsoft Word"',
     "set frontmost to true",
-    'click menu item "Visual Basic 编辑器" of menu 1 of menu item "宏" of menu 1 of menu bar item "工具" of menu bar 1',
+    "set openedEditor to false",
+    'repeat with toolsName in {"工具", "Tools"}',
+    "if openedEditor is false then",
+    "try",
+    "set toolsMenu to menu 1 of menu bar item (toolsName as text) of menu bar 1",
+    'repeat with macroName in {"宏", "Macro"}',
+    "if openedEditor is false then",
+    "try",
+    "set macroMenu to menu 1 of menu item (macroName as text) of toolsMenu",
+    'repeat with editorName in {"Visual Basic 编辑器", "Visual Basic Editor"}',
+    "try",
+    "click menu item (editorName as text) of macroMenu",
+    "set openedEditor to true",
+    "exit repeat",
+    "end try",
+    "end repeat",
+    "end try",
+    "end if",
+    "end repeat",
+    "end try",
+    "end if",
+    "end repeat",
+    'if openedEditor is false then error "Unable to find Tools > Macro > Visual Basic Editor in either Chinese or English."',
     "end tell",
     "end tell",
   ]);
@@ -253,19 +434,39 @@ function openVbeWindow() {
       "-e",
       "end tell",
     ], { timeout: 5_000 });
-    if (windowNames.includes("Microsoft Visual Basic")) return;
+    if (windowNames.includes("Microsoft Visual Basic")) {
+      stopRunningVbaIfNeeded();
+      return;
+    }
   }
   throw new Error("Word did not open its Visual Basic Editor window.");
 }
 
+function runTransientVbeAutomation(lines, timeout = 60_000) {
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      openVbeWindow();
+      return osascript(lines, timeout);
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) sleep(800);
+    }
+  }
+  throw lastError;
+}
+
 function openModuleCodeWindow(moduleName) {
-  openVbeWindow();
-  osascript([
+  runTransientVbeAutomation([
     'tell application "System Events"',
     'tell process "Microsoft Word"',
     "set frontmost to true",
     'set vbeWindow to first window whose name contains "Microsoft Visual Basic"',
     'perform action "AXRaise" of vbeWindow',
+    'if (count of (every UI element of vbeWindow whose role is "AXOutline")) is 0 then',
+    'keystroke "r" using {command down}',
+    'delay 1',
+    'end if',
     'set projectOutline to first UI element of vbeWindow whose role is "AXOutline"',
     "set rowIndex to 1",
     "repeat while rowIndex is less than or equal to count of rows of projectOutline",
@@ -288,7 +489,22 @@ function openModuleCodeWindow(moduleName) {
     "end repeat",
     `if moduleRow is 0 then error ${JSON.stringify(`${moduleName} was not found in the Word VBA project`)}`,
     "select row moduleRow of projectOutline",
-    'click menu item "代码" of menu 1 of menu bar item "查看" of menu bar 1',
+    "set openedCode to false",
+    'repeat with viewName in {"查看", "View"}',
+    "if openedCode is false then",
+    "try",
+    "set viewMenu to menu 1 of menu bar item (viewName as text) of menu bar 1",
+    'repeat with codeName in {"代码", "Code"}',
+    "try",
+    "click menu item (codeName as text) of viewMenu",
+    "set openedCode to true",
+    "exit repeat",
+    "end try",
+    "end repeat",
+    "end try",
+    "end if",
+    "end repeat",
+    'if openedCode is false then error "Unable to find View > Code in either Chinese or English."',
     "delay 0.7",
     "end tell",
     "end tell",
@@ -303,11 +519,40 @@ function removeVbaModule(moduleName) {
     "set frontmost to true",
     'set vbeWindow to first window whose name contains "Microsoft Visual Basic"',
     'perform action "AXRaise" of vbeWindow',
-    `click menu item ${JSON.stringify(`删除 ${moduleName}...`)} of menu 1 of menu bar item "文件" of menu bar 1`,
+    "set removedModule to false",
+    'repeat with fileName in {"文件", "File"}',
+    "if removedModule is false then",
+    "try",
+    "set fileMenu to menu 1 of menu bar item (fileName as text) of menu bar 1",
+    "repeat with candidateItem in menu items of fileMenu",
+    "set candidateName to name of candidateItem as text",
+    `if candidateName starts with ${JSON.stringify(`删除 ${moduleName}`)} or candidateName starts with ${JSON.stringify(`Remove ${moduleName}`)} then`,
+    "click candidateItem",
+    "set removedModule to true",
+    "exit repeat",
+    "end if",
+    "end repeat",
+    "end try",
+    "end if",
+    "end repeat",
+    `if removedModule is false then error ${JSON.stringify(`Unable to find the Remove ${moduleName} command in either Chinese or English.`)}`,
     "delay 0.8",
-    'set alertWindow to first window whose description is "警告"',
-    'perform action "AXRaise" of alertWindow',
-    'click button "否" of alertWindow',
+    "set dismissedExport to false",
+    "repeat with candidateWindow in windows",
+    "if dismissedExport is false then",
+    "try",
+    "repeat with candidateButton in buttons of candidateWindow",
+    "set candidateButtonName to name of candidateButton as text",
+    'if candidateButtonName starts with "否" or candidateButtonName starts with "No" then',
+    "perform action \"AXRaise\" of candidateWindow",
+    "click candidateButton",
+    "set dismissedExport to true",
+    "exit repeat",
+    "end if",
+    "end repeat",
+    "end try",
+    "end if",
+    "end repeat",
     "delay 0.9",
     "end tell",
     "end tell",
@@ -315,17 +560,31 @@ function removeVbaModule(moduleName) {
 }
 
 function importVbaModule(modulePath) {
+  openVbeWindow();
   osascript([
     'tell application "System Events"',
     'tell process "Microsoft Word"',
     "set frontmost to true",
     'set vbeWindow to first window whose name contains "Microsoft Visual Basic"',
     'perform action "AXRaise" of vbeWindow',
-    'click menu item "导入文件..." of menu 1 of menu bar item "文件" of menu bar 1',
+    "set openedImport to false",
+    'repeat with fileName in {"文件", "File"}',
+    "if openedImport is false then",
+    "try",
+    "set fileMenu to menu 1 of menu bar item (fileName as text) of menu bar 1",
+    "repeat with candidateItem in menu items of fileMenu",
+    "set candidateName to name of candidateItem as text",
+    'if candidateName starts with "导入文件" or candidateName starts with "Import File" then',
+    "click candidateItem",
+    "set openedImport to true",
+    "exit repeat",
+    "end if",
+    "end repeat",
+    "end try",
+    "end if",
+    "end repeat",
+    'if openedImport is false then error "Unable to find File > Import File in either Chinese or English."',
     "delay 0.9",
-    'set importWindow to first window whose name is "导入文件"',
-    'perform action "AXRaise" of importWindow',
-    'click at {730, 360}',
     'keystroke "g" using {command down, shift down}',
     "delay 0.6",
     'set pathField to value of attribute "AXFocusedUIElement"',
@@ -346,11 +605,27 @@ function compileVbaProject() {
     "set frontmost to true",
     'set vbeWindow to first window whose name contains "Microsoft Visual Basic"',
     'perform action "AXRaise" of vbeWindow',
-    'click menu item "编译 Project" of menu 1 of menu bar item "调试" of menu bar 1',
+    "set startedCompile to false",
+    'repeat with debugName in {"调试", "Debug"}',
+    "if startedCompile is false then",
+    "try",
+    "set debugMenu to menu 1 of menu bar item (debugName as text) of menu bar 1",
+    "repeat with candidateItem in menu items of debugMenu",
+    "set candidateName to name of candidateItem as text",
+    'if candidateName starts with "编译 " or candidateName starts with "Compile " then',
+    "click candidateItem",
+    "set startedCompile to true",
+    "exit repeat",
+    "end if",
+    "end repeat",
+    "end try",
+    "end if",
+    "end repeat",
+    'if startedCompile is false then error "Unable to find Debug > Compile Project in either Chinese or English."',
     "delay 2",
     "set failureText to \"\"",
     "repeat with candidateWindow in windows",
-    'if description of candidateWindow is "警告" then',
+    'if description of candidateWindow is "警告" or description of candidateWindow is "Warning" then',
     "try",
     "set failureText to value of every static text of candidateWindow as text",
     "end try",
@@ -374,39 +649,88 @@ function compileVbaProject() {
     "-e",
     "delay 0.7",
     "-e",
-    'set focusedElement to value of attribute "AXFocusedUIElement"',
+    'set vbeWindow to first window whose name contains "Microsoft Visual Basic"',
     "-e",
     'set selectedValue to ""',
     "-e",
     "try",
     "-e",
+    'set focusedElement to value of attribute "AXFocusedUIElement"',
+    "-e",
     'set selectedValue to value of attribute "AXSelectedText" of focusedElement as text',
     "-e",
     "end try",
     "-e",
-    "return selectedValue",
+    'if selectedValue is "" then',
+    "-e",
+    "repeat with candidateElement in entire contents of vbeWindow",
+    "-e",
+    "try",
+    "-e",
+    'if role of candidateElement is "AXTextArea" then',
+    "-e",
+    'set candidateSelection to value of attribute "AXSelectedText" of candidateElement as text',
+    "-e",
+    'if candidateSelection is not "" then',
+    "-e",
+    'set selectedValue to candidateSelection',
+    "-e",
+    "exit repeat",
+    "-e",
+    "end if",
+    "-e",
+    "end if",
+    "-e",
+    "end try",
+    "-e",
+    "end repeat",
+    "-e",
+    "end if",
+    "-e",
+    'return (name of vbeWindow as text) & "|" & selectedValue',
     "-e",
     "end tell",
     "-e",
     "end tell",
-  ], { timeout: 10_000 }).trim();
+  ], { timeout: 20_000 }).trim();
+  let copiedSelection = "";
+  if (!highlighted.split("|").at(-1)?.trim()) {
+    const clipboardBefore = bestEffort("/usr/bin/pbpaste", []);
+    bestEffort("/usr/bin/osascript", [
+      "-e",
+      'tell application "System Events"',
+      "-e",
+      'tell process "Microsoft Word"',
+      "-e",
+      "set frontmost to true",
+      "-e",
+      'keystroke "c" using {command down}',
+      "-e",
+      "delay 0.4",
+      "-e",
+      "end tell",
+      "-e",
+      "end tell",
+    ], { timeout: 10_000 });
+    copiedSelection = bestEffort("/usr/bin/pbpaste", []).trim();
+    bestEffort("/usr/bin/pbcopy", [], { input: clipboardBefore });
+  }
   throw new Error(
     `Word VBE compile failed: ${compileState.trim()}${
       highlighted ? `\nHighlighted statement: ${highlighted}` : ""
-    }`,
+    }${copiedSelection ? `\nCopied identifier: ${copiedSelection}` : ""}`,
   );
 }
 
 function replaceAndCompileAdapter() {
-  removeVbaModule("VTProtocol");
-  importVbaModule(protocolPath);
-  removeVbaModule("VTWordAdapter");
-  importVbaModule(adapterPath);
-  removeVbaModule("VTRibbonCallbacks");
-  importVbaModule(ribbonCallbacksPath);
-  removeVbaModule("VTWordEvents");
-  importVbaModule(wordEventsPath);
-  openModuleCodeWindow("VTWordAdapter");
+  for (const [moduleName, modulePath] of selectedWordModuleSources) {
+    if (incrementalBuild) removeVbaModule(moduleName);
+    importVbaModule(modulePath);
+  }
+  const compileAnchor = requestedModuleNames.has("VTWordAdapter")
+    ? "VTWordAdapter"
+    : selectedWordModuleSources.at(-1)?.[0] ?? "VTWordAdapter";
+  openModuleCodeWindow(compileAnchor);
   compileVbaProject();
 }
 
@@ -485,18 +809,13 @@ def normalize_vba(value: str) -> str:
     flush_non_string()
     return "".join(output)
 
-base_path, protocol_path, adapter_path, callbacks_path, events_path = sys.argv[1:6]
+base_path, *source_paths = sys.argv[1:]
 parser = VBA_Parser(base_path)
 try:
     macros = {name: code for _, _, name, code in parser.extract_macros()}
 finally:
     parser.close()
-checks = [
-    ("VTProtocol.bas", protocol_path),
-    ("VTWordAdapter.bas", adapter_path),
-    ("VTRibbonCallbacks.bas", callbacks_path),
-    ("VTWordEvents.cls", events_path),
-]
+checks = [(Path(source_path).name, source_path) for source_path in source_paths]
 matched = all(
     macros.get(module_name) is not None
     and normalize_vba(macros[module_name])
@@ -509,10 +828,7 @@ print("MATCH" if matched else "MISMATCH")
     "-c",
     checker,
     basePath,
-    protocolPath,
-    adapterPath,
-    ribbonCallbacksPath,
-    wordEventsPath,
+    ...wordModuleSources.map(([, modulePath]) => modulePath),
   ], { timeout: 90_000 });
   return result.trim() === "MATCH";
 }
@@ -526,6 +842,14 @@ function verifyBuiltVba(path) {
   );
   const required = [
     "VTFileBridgeCall",
+    "VTOfficePaths",
+    "VTMetadata",
+    "VTLauncher",
+    "VTErrorHandling",
+    "VTRibbonCallbacks",
+    "VTAppendText",
+    "VTWriteAndLaunchSession",
+    "VTPrewarmApplication",
     "VTFinalizeInlineNativeEquation",
     "VTInsertRegisteredEquationCaption",
     "VTWriteWordFailureTrace",
@@ -536,7 +860,10 @@ function verifyBuiltVba(path) {
     "VTHandleWordBeforeDoubleClick",
     "VTTraceWordDoubleClick",
     "App_WindowBeforeDoubleClick",
-    "FormatPicture",
+    "VisualTeX_EditImageField",
+    "VisualTeX_EditSelectedImageFromNativeMonitor",
+    "VTEnsureVisualTeXImageMacroButton",
+    "word-double-click-routing-20260730-r66",
   ];
   for (const value of required) {
     const utf8 = Buffer.from(value, "utf8");
@@ -547,33 +874,40 @@ function verifyBuiltVba(path) {
   }
 }
 
+acquireBuildLock();
+process.on("exit", releaseBuildLock);
 mkdirSync(dirname(outputPath), { recursive: true });
 if (!existsSync(basePath)) throw new Error(`Base Word template is missing: ${basePath}`);
 
-if (baseContainsCurrentVbaSources()) {
-  copyFileSync(basePath, outputPath);
-  verifyBuiltVba(outputPath);
-  process.stdout.write(
-    `The compiled base already contains the current Word VBA sources; copied and verified ${outputPath}.\n`,
-  );
-  process.exit(0);
-}
-
 const originalTrust = readVbaTrust();
+let buildSucceeded = false;
 try {
   closeWordWithoutSaving();
   moveStartupTemplatesOut();
+  if (!incrementalBuild) moveNormalTemplateOut();
   setVbaTrust(true);
-  copyFileSync(basePath, outputPath);
+  rmSync(outputPath, { force: true });
 
-  osascript([
-    'tell application "Microsoft Word"',
-    `open file name ${JSON.stringify(outputPath)}`,
-    "make new document",
-    "activate",
-    "end tell",
-  ]);
-  sleep(3_500);
+  run("/usr/bin/open", ["-gj", "-a", "Microsoft Word"]);
+  waitForWordUiReady();
+  if (incrementalBuild) {
+    copyFileSync(basePath, outputPath);
+    osascript([
+      'tell application "Microsoft Word"',
+      `open file name ${JSON.stringify(outputPath)}`,
+      "activate",
+      "end tell",
+    ], 120_000);
+  } else {
+    osascript([
+      'tell application "Microsoft Word"',
+      "set buildDocument to make new document",
+      `save as buildDocument file name ${JSON.stringify(outputPath)} file format format templateME add to recent files false`,
+      "activate",
+      "end tell",
+    ], 120_000);
+  }
+  waitForWordUiReady();
   replaceAndCompileAdapter();
   osascript([
     'tell application "Microsoft Word"',
@@ -589,8 +923,11 @@ try {
     throw new Error(`Rebuilt Word template is unexpectedly small: ${size} bytes`);
   }
   process.stdout.write(`Rebuilt and VBE-compiled ${outputPath} (${size} bytes).\n`);
+  buildSucceeded = true;
 } finally {
-  closeWordWithoutSaving();
+  if (buildSucceeded || !keepWordOpenOnError) closeWordWithoutSaving();
+  if (!incrementalBuild) restoreNormalTemplate();
   restoreStartupTemplates();
   restoreVbaTrust(originalTrust);
+  releaseBuildLock();
 }

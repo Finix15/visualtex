@@ -341,7 +341,7 @@ InvalidBase64Url:
     Err.Raise vbObjectError + 7124, "VisualTeX", "VisualTeX Word LaTeX payload is not valid unpadded base64url."
 End Function
 
-Private Function VTBase64UrlEncodeUtf8(ByVal value As String) As String
+Public Function VTBase64UrlEncodeUtf8(ByVal value As String) As String
     Dim bytes() As Byte
     If Len(value) = 0 Then Exit Function
     bytes = VTUtf8Encode(value)
@@ -548,16 +548,21 @@ End Function
 
 Public Sub VTWriteRequest(ByVal sessionId As String, ByVal json As String)
     Dim requestPath As String
+
+    VTValidateRequestPayload sessionId, json
+    ' WriteVisualTeXFile creates the Session parent directory atomically.
+    ' Avoid a separate AppleScriptTask round trip solely for mkdir.
+    requestPath = VTRequestPath(sessionId)
+    VTWriteTextAtomic requestPath, json
+End Sub
+
+Public Sub VTValidateRequestPayload(ByVal sessionId As String, ByVal json As String)
     If Not VTIsCanonicalUuid(sessionId) Then
         Err.Raise vbObjectError + 7107, "VisualTeX", "Invalid VisualTeX session id."
     End If
     If VTUtf8ByteLength(json) > VT_MAX_REQUEST_BYTES Then
         Err.Raise vbObjectError + 7108, "VisualTeX", "VisualTeX request exceeds 256 KiB."
     End If
-    ' WriteVisualTeXFile creates the Session parent directory atomically.
-    ' Avoid a separate AppleScriptTask round trip solely for mkdir.
-    requestPath = VTRequestPath(sessionId)
-    VTWriteTextAtomic requestPath, json
 End Sub
 
 Public Sub VTWriteTextAtomic(ByVal destination As String, ByVal contents As String)
@@ -568,6 +573,20 @@ Public Sub VTWriteTextAtomic(ByVal destination As String, ByVal contents As Stri
     relativePath = VTRuntimeRelativePath(destination)
     encodedContents = VTBase64UrlEncodeUtf8(contents)
     Call VTFileBridgeCall("WriteVisualTeXFile", relativePath & "|" & encodedContents)
+End Sub
+
+Public Sub VTAppendText(ByVal destination As String, ByVal contents As String)
+    Dim relativePath As String
+    Dim encodedContents As String
+
+    VTValidateAbsoluteVisualTeXPath destination
+    If Len(contents) = 0 Then Exit Sub
+    If VTUtf8ByteLength(contents) > VT_MAX_REQUEST_BYTES Then
+        Err.Raise vbObjectError + 7128, "VisualTeX", "VisualTeX append payload exceeds 256 KiB."
+    End If
+    relativePath = VTRuntimeRelativePath(destination)
+    encodedContents = VTBase64UrlEncodeUtf8(contents)
+    Call VTFileBridgeCall("AppendVisualTeXFile", relativePath & "|" & encodedContents)
 End Sub
 
 Public Function VTReadText(ByVal sourcePath As String, Optional ByVal maximumCharacters As Long = 262144) As String

@@ -8,18 +8,42 @@ const ERROR_DETAIL_KEYS = [
 ] as const;
 
 function nestedErrorMessage(reason: unknown, seen: Set<object>): string {
-  if (typeof reason === "string") return reason.trim();
+  if (typeof reason === "string") {
+    const value = reason.trim();
+    if (!value || /^\[object (?:Object|Error)\]$/i.test(value)) return "";
+    if ((value.startsWith("{") && value.endsWith("}")) ||
+        (value.startsWith("[") && value.endsWith("]"))) {
+      try {
+        const parsed = JSON.parse(value) as unknown;
+        const parsedMessage = nestedErrorMessage(parsed, seen);
+        if (parsedMessage) return parsedMessage;
+      } catch {
+        // Preserve ordinary non-JSON strings below.
+      }
+    }
+    return value;
+  }
   if (reason === null || reason === undefined) return "";
   if (typeof reason !== "object") return String(reason).trim();
   if (seen.has(reason)) return "";
   seen.add(reason);
 
   if (reason instanceof Error) {
-    if (reason.message.trim()) return reason.message.trim();
+    const directMessage = nestedErrorMessage(reason.message, seen);
+    if (directMessage) return directMessage;
     const cause = (reason as Error & { cause?: unknown }).cause;
     const causeMessage = nestedErrorMessage(cause, seen);
     if (causeMessage) return causeMessage;
-    if (reason.name.trim()) return reason.name.trim();
+    for (const key of Object.getOwnPropertyNames(reason)) {
+      if (["name", "message", "stack", "cause"].includes(key)) continue;
+      const propertyMessage = nestedErrorMessage(
+        (reason as unknown as Record<string, unknown>)[key],
+        seen,
+      );
+      if (propertyMessage) return propertyMessage;
+    }
+    const name = reason.name.trim();
+    if (name && name.toLowerCase() !== "error") return name;
   }
 
   const record = reason as Record<string, unknown>;

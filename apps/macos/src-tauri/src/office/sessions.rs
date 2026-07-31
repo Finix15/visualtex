@@ -284,8 +284,15 @@ impl SessionStore {
             recovery_root: paths.recovery.clone(),
             lock: Arc::new(Mutex::new(())),
         };
-        store.cleanup_expired(now_ms())?;
         Ok(store)
+    }
+
+    /// Expired-session recovery scans every persisted Session directory and is
+    /// maintenance, not a prerequisite for opening the current Office formula.
+    /// Callers run it after startup so a large recovery history cannot delay a
+    /// cold Word double-click.
+    pub fn cleanup_expired_now(&self) -> Result<(), SessionError> {
+        self.cleanup_expired(now_ms())
     }
 
     fn session_directory(&self, id: &str) -> Result<PathBuf, SessionError> {

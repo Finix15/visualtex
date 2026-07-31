@@ -1,11 +1,13 @@
 import { spawn } from "node:child_process";
 import { rm } from "node:fs/promises";
 import process from "node:process";
+import { longPhysicsDocumentSource } from "./fixtures/long_physics_document_source.mjs";
 
 const offset = process.pid % 1000;
 const previewPort = 18400 + offset;
 const debugPort = 23600 + offset;
 const sessionId = "12345678-1234-4234-9234-123456789abc";
+const longPhysicsRegression = process.argv.includes("--long-physics");
 const baseUrl = `http://127.0.0.1:${previewPort}/?view=office-document-import&sessionId=${sessionId}&transport=tauri`;
 const chromeProfile = `/tmp/visualtex-document-import-${process.pid}`;
 const chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -233,6 +235,7 @@ y &= z
 \end{align*}
 
 结尾文字。`;
+    const regressionSource = longPhysicsRegression ? longPhysicsDocumentSource : source;
     await evaluate(`(() => {
       const textarea = document.querySelector(".document-import-source-pane textarea");
       if (!textarea) throw new Error("Missing document import source textarea");
@@ -240,13 +243,14 @@ y &= z
         HTMLTextAreaElement.prototype,
         "value",
       ).set;
-      setter.call(textarea, ${JSON.stringify(source)});
+      setter.call(textarea, ${JSON.stringify(regressionSource)});
       textarea.dispatchEvent(new Event("input", { bubbles: true }));
     })()`);
 
+    const expectedFormulaCount = longPhysicsRegression ? 16 : 4;
     const parseStarted = Date.now();
     while (Date.now() - parseStarted < 10_000) {
-      if ((await evaluate(`document.querySelectorAll(".document-import-formula-card").length`)) === 4) {
+      if ((await evaluate(`document.querySelectorAll(".document-import-formula-card").length`)) === expectedFormulaCount) {
         break;
       }
       await sleep(80);
@@ -261,7 +265,15 @@ y &= z
         summary: document.querySelector(".document-import-summary")?.innerText ?? "",
       };
     })()`);
-    if (
+    if (longPhysicsRegression) {
+      if (
+        parsed.count !== expectedFormulaCount ||
+        parsed.modes.filter((mode) => mode === "inline").length !== 4 ||
+        parsed.numbered.some(Boolean)
+      ) {
+        throw new Error(`Unexpected long physics formula blocks: ${JSON.stringify(parsed)}`);
+      }
+    } else if (
       parsed.count !== 4 ||
       parsed.modes.join(",") !== "inline,block,block,block" ||
       parsed.numbered.join(",") !== "false,true,true,false"
@@ -270,22 +282,24 @@ y &= z
     }
 
     await evaluate(`(() => {
-      const imageRadio = document.querySelector(
-        'input[name="document-formula-output"][type="radio"]:not(:checked)',
-      );
-      imageRadio?.click();
-      const cards = [...document.querySelectorAll(".document-import-formula-card")];
-      const sizes = [10.5, 18, 14, 16];
-      cards.forEach((card, index) => {
-        const input = card.querySelector('input[type="number"]');
-        const setter = Object.getOwnPropertyDescriptor(
-          HTMLInputElement.prototype,
-          "value",
-        ).set;
-        setter.call(input, String(sizes[index]));
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-        input.dispatchEvent(new Event("change", { bubbles: true }));
-      });
+      if (!${JSON.stringify(longPhysicsRegression)}) {
+        const imageRadio = document.querySelector(
+          'input[name="document-formula-output"][type="radio"]:not(:checked)',
+        );
+        imageRadio?.click();
+        const cards = [...document.querySelectorAll(".document-import-formula-card")];
+        const sizes = [10.5, 18, 14, 16];
+        cards.forEach((card, index) => {
+          const input = card.querySelector('input[type="number"]');
+          const setter = Object.getOwnPropertyDescriptor(
+            HTMLInputElement.prototype,
+            "value",
+          ).set;
+          setter.call(input, String(sizes[index]));
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+      }
       const insertButton = [...document.querySelectorAll("button")].find(
         (button) => button.textContent?.includes("插入 Word"),
       );
@@ -309,10 +323,15 @@ y &= z
     const input = commit.input;
     const formulas = input?.items?.filter((item) => item.kind === "formula") ?? [];
     const texts = input?.items?.filter((item) => item.kind === "text") ?? [];
-    if (input?.outputKind !== "image" || formulas.length !== 4 || texts.length < 2) {
+    const expectedOutputKind = longPhysicsRegression ? "omml" : "image";
+    if (
+      input?.outputKind !== expectedOutputKind ||
+      formulas.length !== expectedFormulaCount ||
+      texts.length < 2
+    ) {
       throw new Error(`Unexpected document import commit: ${JSON.stringify(commit)}`);
     }
-    if (
+    if (!longPhysicsRegression && (
       formulas[0].displayMode !== "inline" ||
       formulas[0].numbered !== false ||
       formulas[0].fontSizePt !== 10.5 ||
@@ -325,29 +344,31 @@ y &= z
       formulas[3].displayMode !== "block" ||
       formulas[3].numbered !== false ||
       formulas[3].fontSizePt !== 16
-    ) {
+    )) {
       throw new Error(`Independent formula settings were lost: ${JSON.stringify(formulas)}`);
     }
     for (const formula of formulas) {
-      if (
-        !formula.formulaId ||
-        !formula.metadata ||
-        !formula.ommlBase64 ||
-        !formula.ommlDocxBase64 ||
-        !formula.svgBase64 ||
-        formula.pngBase64 ||
-        !(formula.width > 0) ||
-        !(formula.height > 0)
-      ) {
+      const validCommon =
+        formula.formulaId &&
+        formula.metadata &&
+        formula.ommlBase64 &&
+        formula.ommlDocxBase64;
+      const validOutput = longPhysicsRegression
+        ? !formula.svgBase64 && !formula.pngBase64
+        : formula.svgBase64 &&
+          !formula.pngBase64 &&
+          formula.width > 0 &&
+          formula.height > 0;
+      if (!validCommon || !validOutput) {
         throw new Error(
-          `SVG fallback regression payload is invalid: ${JSON.stringify(formula)}`,
+          `Document formula regression payload is invalid: ${JSON.stringify(formula)}`,
         );
       }
     }
     if (new Set(formulas.map((formula) => formula.formulaId)).size !== formulas.length) {
       throw new Error("Imported formulas did not receive independent identities");
     }
-    const multilineExpectations = [
+    const multilineExpectations = longPhysicsRegression ? [] : [
       {
         formula: formulas[2],
         codeFormat: "align",

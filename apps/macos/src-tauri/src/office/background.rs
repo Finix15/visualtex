@@ -15,12 +15,16 @@ use objc2_app_kit::{
 };
 #[cfg(target_os = "macos")]
 use objc2_foundation::NSString;
+#[cfg(target_os = "macos")]
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const BACKGROUND_ARGUMENT: &str = "--office-background";
 pub const LAUNCH_AGENT_LABEL: &str = "com.visualtex.studio.office";
 const LAUNCH_AGENT_FILE: &str = "com.visualtex.studio.office.plist";
 const BACKGROUND_MARKER_FILE: &str = "office-background.enabled";
 const DOCK_ICON_MIGRATION_MARKER_FILE: &str = "dock-icon-v2.refreshed";
+#[cfg(target_os = "macos")]
+static APPLICATION_ICON_INSTALLED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -427,8 +431,20 @@ pub(crate) fn activate_foreground_app(app: &AppHandle) -> Result<(), String> {
     app.set_activation_policy(tauri::ActivationPolicy::Regular)
         .map_err(|error| format!("Unable to activate VisualTeX: {error}"))?;
     let running = NSRunningApplication::currentApplication();
-    if !running.activateWithOptions(NSApplicationActivationOptions::ActivateAllWindows) {
-        return Err("macOS did not activate VisualTeX as a foreground application".to_string());
+    let options = NSApplicationActivationOptions::ActivateAllWindows;
+    // macOS can return false briefly after switching an accessory/background
+    // application back to Regular, especially before its hidden resident
+    // WebView is shown. Do not abort the request on that advisory result: the
+    // caller immediately shows the target window and validates set_focus().
+    // A few short attempts still avoid an unnecessary focus delay when the
+    // activation policy transition settles synchronously.
+    for attempt in 0..4 {
+        if running.activateWithOptions(options) {
+            break;
+        }
+        if attempt < 3 {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
     }
     Ok(())
 }
@@ -440,6 +456,9 @@ pub(crate) fn activate_foreground_app(_app: &AppHandle) -> Result<(), String> {
 
 #[cfg(target_os = "macos")]
 pub(crate) fn install_application_icon(app: &AppHandle) -> Result<(), String> {
+    if APPLICATION_ICON_INSTALLED.load(Ordering::Acquire) {
+        return Ok(());
+    }
     let icon_path = app
         .path()
         .resource_dir()
@@ -460,6 +479,7 @@ pub(crate) fn install_application_icon(app: &AppHandle) -> Result<(), String> {
     unsafe {
         application.setApplicationIconImage(Some(&image));
     }
+    APPLICATION_ICON_INSTALLED.store(true, Ordering::Release);
     Ok(())
 }
 

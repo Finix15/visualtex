@@ -208,10 +208,7 @@ fn ensure_certificate(paths: &OfficePaths) -> Result<(), String> {
     atomic_write(&paths.certificate_metadata, &metadata_json, 0o644)
 }
 
-/// Prepare the private local companion runtime. This creates a loopback TLS
-/// certificate and an API token, but does not trust the certificate in the
-/// system keychain and does not install any Office.js manifest.
-pub fn ensure_companion_runtime(paths: &OfficePaths) -> Result<String, String> {
+fn ensure_companion_directories(paths: &OfficePaths) -> Result<(), String> {
     fs::create_dir_all(&paths.root)
         .map_err(|error| format!("Unable to create companion data directory: {error}"))?;
     set_mode(&paths.root, 0o700)?;
@@ -220,8 +217,31 @@ pub fn ensure_companion_runtime(paths: &OfficePaths) -> Result<String, String> {
             .map_err(|error| format!("Unable to create {}: {error}", directory.display()))?;
         set_mode(directory, 0o700)?;
     }
-    ensure_certificate(paths)?;
+    Ok(())
+}
+
+/// Prepare only the files required by the native macOS Tauri transport. TLS is
+/// not on the Word double-click path and is initialized lazily if the optional
+/// loopback Office.js companion is started.
+pub fn ensure_companion_data_runtime(paths: &OfficePaths) -> Result<String, String> {
+    ensure_companion_directories(paths)?;
     ensure_install_config(paths)
+}
+
+pub fn ensure_companion_tls(paths: &OfficePaths) -> Result<(), String> {
+    ensure_companion_directories(paths)?;
+    ensure_certificate(paths)?;
+    Ok(())
+}
+
+/// Prepare the private local companion runtime. This creates a loopback TLS
+/// certificate and an API token, but does not trust the certificate in the
+/// system keychain and does not install any Office.js manifest.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub fn ensure_companion_runtime(paths: &OfficePaths) -> Result<String, String> {
+    let install_token = ensure_companion_data_runtime(paths)?;
+    ensure_companion_tls(paths)?;
+    Ok(install_token)
 }
 
 #[cfg(test)]

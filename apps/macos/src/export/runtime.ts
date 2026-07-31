@@ -15,6 +15,7 @@ import type {
   SvgExportOptions,
   SvgExportResult,
 } from "./exportTypes";
+import { errorMessage } from "../runtime/errorMessage";
 
 const DEFAULT_OPTIONS: SvgExportOptions = {
   displayMode: true,
@@ -28,7 +29,9 @@ RegisterHTMLHandler(adaptor);
 const texInput = new TeX({
   packages: AllPackages,
   formatError: (_jax: unknown, error: unknown) => {
-    throw error instanceof Error ? error : new Error(String(error));
+    throw new Error(errorMessage(error, "MathJax could not parse this formula."), {
+      cause: error,
+    });
   },
 });
 const svgOutput = new SVG({

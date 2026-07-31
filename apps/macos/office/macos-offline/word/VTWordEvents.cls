@@ -15,25 +15,39 @@ Attribute App.VB_VarHelpID = -1
 Private Sub App_WindowSelectionChange(ByVal Sel As Word.Selection)
     On Error Resume Next
     If Sel Is Nothing Or VTWordInternalMutationActive() Then Exit Sub
+    VTCleanupEmptyVisualTeXImageMacroButtons Sel.Range
     VisualTeX_StabilizeImageEquationNumberSelection Sel.Range
     VisualTeX_SynchronizeSelectedImageFormulaSize Sel
     VTInvalidateWordImageFontSizeControl
 End Sub
 
+Private Sub App_DocumentOpen(ByVal Doc As Word.Document)
+    On Error Resume Next
+    VTEnsureImageMacroMigrationScheduled
+    On Error GoTo 0
+End Sub
+
+Private Sub App_NewDocument(ByVal Doc As Word.Document)
+    On Error Resume Next
+    VTEnsureImageMacroMigrationScheduled
+    On Error GoTo 0
+End Sub
+
 Private Sub App_WindowBeforeDoubleClick(ByVal Sel As Word.Selection, Cancel As Boolean)
+    VTBeginWordDoubleClickTraceContext
     On Error GoTo IgnoreDoubleClick
     VTTraceWordDoubleClick "window-before-double-click-enter", Sel, ""
     If Sel Is Nothing Then
         VTTraceWordDoubleClick _
             "window-before-double-click-skip", Sel, _
             "reason=no-selection"
-        Exit Sub
+        GoTo DoubleClickFinished
     End If
     Cancel = VTHandleWordBeforeDoubleClick(Sel)
     VTTraceWordDoubleClick _
         "window-before-double-click-result", Sel, _
         "cancel=" & CStr(Cancel)
-    Exit Sub
+    GoTo DoubleClickFinished
 
 IgnoreDoubleClick:
     VTTraceWordDoubleClick _
@@ -41,4 +55,6 @@ IgnoreDoubleClick:
         "error=" & CStr(Err.Number) & ":" & Err.Description
     ' Ordinary Word double-click behavior must remain untouched when the
     ' clicked object is not a valid VisualTeX formula.
+DoubleClickFinished:
+    VTEndWordDoubleClickTraceContext
 End Sub

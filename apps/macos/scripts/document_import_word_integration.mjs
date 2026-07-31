@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   copyFileSync,
   existsSync,
@@ -6,6 +6,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -48,7 +49,14 @@ const formulaRegressionStatusPath = join(
   runtimeRoot,
   "document-import-regression-formula-status.txt",
 );
-const doubleClickTracePath = join(runtimeRoot, "word-double-click-trace.log");
+const physicalScreenBoundsPath = join(
+  runtimeRoot,
+  "physical-double-click-screen-bounds.txt",
+);
+const workspaceVisualTeXBinary = join(
+  repositoryRoot,
+  "src-tauri/target/release/bundle/macos/VisualTeX.app/Contents/MacOS/visualtex",
+);
 const officeScratchRoot = join(
   homedir(),
   "Library/Group Containers/UBF8T346G9.Office/VisualTeX/Scratch",
@@ -66,16 +74,171 @@ const coordinatePdfPath = join(
   officeScratchRoot,
   `document-import-geometry-${process.pid}.pdf`,
 );
+const reopenedDocumentPath = join(
+  officeScratchRoot,
+  `document-import-reopen-${process.pid}.docx`,
+);
 const sessionsRoot = join(runtimeRoot, "OfficeSessions");
 const nativeRoot = join(runtimeRoot, "NativeDocuments");
-const outputKind = process.argv.includes("--image") ? "image" : "omml";
 const physicalDoubleClick = process.argv.includes("--physical-double-click");
+const createImageRegression = process.argv.includes("--create-image");
+const physicalTargets = new Set([
+  "image-inline",
+  "image-block",
+  "image-align",
+  "image-align-star",
+  "omml-inline",
+  "omml-block",
+  "omml-align",
+  "omml-align-star",
+]);
+
+function commandLineOption(name) {
+  const exactIndex = process.argv.indexOf(name);
+  const assigned = process.argv.find((argument) =>
+    argument.startsWith(`${name}=`),
+  );
+  if (exactIndex >= 0 && assigned) {
+    throw new Error(`Specify ${name} only once`);
+  }
+  if (exactIndex >= 0) {
+    const value = process.argv[exactIndex + 1];
+    if (!value || value.startsWith("--")) {
+      throw new Error(`${name} requires a value`);
+    }
+    return value;
+  }
+  return assigned?.slice(name.length + 1) ?? "";
+}
+
+const physicalTarget = commandLineOption("--physical-target");
+const itemLimitOption = commandLineOption("--item-limit");
+const diagnosticItemLimit = itemLimitOption ? Number(itemLimitOption) : 17;
+if (
+  !Number.isInteger(diagnosticItemLimit) ||
+  diagnosticItemLimit < 1 ||
+  diagnosticItemLimit > 17
+) {
+  throw new Error("--item-limit must be an integer from 1 through 17");
+}
+if (physicalDoubleClick && !physicalTargets.has(physicalTarget)) {
+  throw new Error(
+    "--physical-double-click requires --physical-target " +
+      [...physicalTargets].join("|"),
+  );
+}
+if (!physicalDoubleClick && physicalTarget) {
+  throw new Error("--physical-target requires --physical-double-click");
+}
+if (createImageRegression && physicalDoubleClick) {
+  throw new Error("--create-image cannot be combined with --physical-double-click");
+}
+const physicalOutputKind = physicalTarget.split("-", 1)[0];
+const outputKind = createImageRegression
+  ? "image"
+  : physicalDoubleClick
+    ? physicalOutputKind
+    : process.argv.includes("--image")
+      ? "image"
+      : "omml";
+if (
+  physicalDoubleClick &&
+  process.argv.includes("--image") &&
+  outputKind !== "image"
+) {
+  throw new Error("--image conflicts with the selected OMML physical target");
+}
 const referenceFontSizePt = 14;
+const wordImageVisualScale = 1.1;
+const wordDisplayPaddingPx = 2;
+const nativeCalibrationWidthPt = 95.71632;
+const editorReadyFileName = "editor-ready.json";
+const editorPerformanceFileName = "editor-performance.jsonl";
+const editorReadySchema = "visualtex-office-editor-ready-v1";
+const editorPerformanceSchema = "visualtex-office-editor-performance-v1";
+const warmEditorReadyLimitMs = 500;
+const diagnosticSuccessPrefix = "VISUALTEX_DOCUMENT_IMPORT_DIAGNOSTIC_PASS:";
 const transparentPng = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAEAQH/8l0Z8QAAAABJRU5ErkJggg==",
   "base64",
 );
 const sleep = (ms) => new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
+
+async function stopVisualTeXForManualWordCallback() {
+  spawnSync("/usr/bin/killall", ["visualtex"], {
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  await sleep(1_000);
+}
+
+async function startVisualTeXForPhysicalRegression() {
+  await stopVisualTeXForManualWordCallback();
+  if (!existsSync(workspaceVisualTeXBinary)) {
+    throw new Error(
+      `The workspace VisualTeX validation app is missing: ${workspaceVisualTeXBinary}`,
+    );
+  }
+  const child = spawn(workspaceVisualTeXBinary, ["--office-background"], {
+    detached: true,
+    stdio: "ignore",
+  });
+  child.unref();
+  await sleep(2_000);
+}
+
+function physicallyDoubleClickSelectedWordFormula(testDocumentName) {
+  rmSync(physicalScreenBoundsPath, { force: true });
+  runAppleScript([
+    'tell application "Microsoft Word"',
+    `activate object document ${JSON.stringify(testDocumentName)}`,
+    "activate",
+    'run VB macro macro name "VisualTeX_WriteSelectedScreenBoundsForRegression"',
+    "end tell",
+  ], 30_000);
+  if (!existsSync(physicalScreenBoundsPath)) {
+    throw new Error("Word did not write physical double-click screen bounds");
+  }
+  const status = readFileSync(physicalScreenBoundsPath, "utf8").trim();
+  const [result, leftText, topText, widthText, heightText] = status.split("|");
+  const values = [leftText, topText, widthText, heightText].map(Number);
+  if (
+    result !== "PASS" ||
+    values.some((value) => !Number.isFinite(value)) ||
+    values[2] <= 0 ||
+    values[3] <= 0
+  ) {
+    throw new Error(`Word returned invalid physical screen bounds: ${status}`);
+  }
+  const clickX = values[0] + values[2] / 2;
+  const clickY = values[1] + values[3] / 2;
+  const click = spawnSync(
+    "/usr/bin/swift",
+    [
+      join(repositoryRoot, "scripts/macos_physical_double_click.swift"),
+      clickX.toFixed(3),
+      clickY.toFixed(3),
+      "--appkit-y",
+    ],
+    {
+      encoding: "utf8",
+      timeout: 30_000,
+      maxBuffer: 2 * 1024 * 1024,
+    },
+  );
+  if (click.status !== 0) {
+    throw new Error(
+      click.stderr.trim() || click.stdout.trim() || "Quartz physical double-click failed",
+    );
+  }
+  const clickResult = click.stdout.trim();
+  return {
+    wordScreenCenterX: clickX,
+    wordScreenCenterY: clickY,
+    screenBounds: values,
+    quartzResult: clickResult,
+  };
+}
 const legacyAlignLatex = String.raw`\begin{align}
 1 &= 22 + 333 \\
 44444 &= 55
@@ -219,7 +382,7 @@ function wordSvgDocxBytes(svg, png, widthPoints, heightPoints) {
 </Relationships>`;
   const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:asvg="http://schemas.microsoft.com/office/drawing/2016/SVG/main">
-  <w:body><w:p><w:fldSimple w:instr=" MACROBUTTON VisualTeX_DoubleClickEditSelected "><w:r><w:drawing>
+  <w:body><w:p><w:r><w:drawing>
     <wp:inline distT="0" distB="0" distL="0" distR="0">
       <wp:extent cx="${widthEmu}" cy="${heightEmu}"/>
       <wp:effectExtent l="0" t="0" r="0" b="0"/>
@@ -233,7 +396,7 @@ function wordSvgDocxBytes(svg, png, widthPoints, heightPoints) {
         </pic:pic>
       </a:graphicData></a:graphic>
     </wp:inline>
-  </w:drawing></w:r></w:fldSimple></w:p><w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:body>
+  </w:drawing></w:r></w:p><w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:body>
 </w:document>`;
   return zipSync(
     {
@@ -249,8 +412,8 @@ function wordSvgDocxBytes(svg, png, widthPoints, heightPoints) {
 }
 
 function calculateImageGeometry(svg, fontSizePt) {
-  const naturalWidthPt = svg.width * 0.75;
-  const naturalHeightPt = svg.height * 0.75;
+  const naturalWidthPt = svg.width * 0.75 * wordImageVisualScale;
+  const naturalHeightPt = svg.height * 0.75 * wordImageVisualScale;
   const referenceScale = Math.min(1, 500 / naturalWidthPt);
   const referenceWidthPt = naturalWidthPt * referenceScale;
   const referenceHeightPt = naturalHeightPt * referenceScale;
@@ -258,7 +421,7 @@ function calculateImageGeometry(svg, fontSizePt) {
   const descentRatio = Math.max(0, Math.min(1, (svg.height - baselinePx) / svg.height));
   const referenceBaselinePt = Math.max(
     -256,
-    Math.min(0, -Math.max(0, Math.round(referenceHeightPt * descentRatio))),
+    Math.min(0, -Math.max(0, referenceHeightPt * descentRatio)),
   );
   const pointScale = fontSizePt / referenceFontSizePt;
   return {
@@ -314,49 +477,122 @@ function rasterBounds(band, components) {
   };
 }
 
-function resolveImageRasterGeometry(rasterBands, textBoundaryCenter) {
-  const numberedBand = rasterBands.find((band) =>
-    band.components.some(
-      (component) => component.minX > textBoundaryCenter + 100,
-    ),
-  );
-  if (!numberedBand) {
-    throw new Error(`Unable to locate numbered image formula raster band: ${JSON.stringify(rasterBands)}`);
-  }
-  const numberComponent = numberedBand.components.reduce((best, component) =>
-    component.centerX > best.centerX ? component : best,
-  );
-  const numberedFormulaComponents = numberedBand.components.filter(
-    (component) => component !== numberComponent,
-  );
-  if (!numberedFormulaComponents.length) {
-    throw new Error("Numbered image formula raster band contains no formula ink");
-  }
-  const unnumberedCandidates = rasterBands
-    .filter((band) => band !== numberedBand)
-    .map((band) => ({
-      band,
-      bounds: rasterBounds(band, band.components),
-    }))
-    .filter(({ bounds }) => bounds.width >= 30)
-    .sort(
-      (left, right) =>
-        Math.abs(left.bounds.centerX - textBoundaryCenter) -
-        Math.abs(right.bounds.centerX - textBoundaryCenter),
+function rasterEntryBounds(entries) {
+  if (!entries.length) return null;
+  const components = entries.map(({ component }) => component);
+  const minX = Math.min(...components.map((component) => component.minX));
+  const maxX = Math.max(...components.map((component) => component.maxX));
+  const minY = Math.min(...entries.map(({ band }) => band.minY));
+  const maxY = Math.max(...entries.map(({ band }) => band.maxY));
+  return {
+    minX,
+    maxX,
+    width: maxX - minX,
+    centerX: (minX + maxX) / 2,
+    minY,
+    maxY,
+    height: maxY - minY,
+    centerY: (minY + maxY) / 2,
+    components,
+  };
+}
+
+function resolveImageRasterGeometry(
+  rasterBands,
+  textBoundaryCenter,
+  wordGeometry = {},
+) {
+  const requiredGeometry = [
+    "displayTop",
+    "displayHeight",
+    "numberedTop",
+    "numberedHeight",
+  ];
+  if (
+    requiredGeometry.some(
+      (key) => !Number.isFinite(wordGeometry[key]) || wordGeometry[key] < 0,
+    )
+  ) {
+    throw new Error(
+      `Image raster geometry is missing Word formula bounds: ${JSON.stringify(wordGeometry)}`,
     );
-  const unnumbered = unnumberedCandidates[0]?.bounds;
-  if (!unnumbered) {
-    throw new Error(`Unable to locate unnumbered image formula raster band: ${JSON.stringify(rasterBands)}`);
   }
+
+  const componentsInVerticalBox = (top, height) => {
+    const bottom = top + height;
+    const tolerance = 1.5;
+    return rasterBands.flatMap((band) =>
+      band.maxY >= top - tolerance && band.minY <= bottom + tolerance
+        ? band.components.map((component) => ({ band, component }))
+        : [],
+    );
+  };
+  const centeredMarker = (entries, label, excludedComponent = null) => {
+    const candidates = entries
+      .filter(({ component }) => component !== excludedComponent)
+      .map((entry) => ({
+        ...entry,
+        centerError: Math.abs(entry.component.centerX - textBoundaryCenter),
+      }))
+      .filter(({ centerError }) => centerError <= 8)
+      .sort(
+        (left, right) =>
+          left.centerError - right.centerError ||
+          right.component.width - left.component.width,
+      );
+    const best = candidates[0];
+    if (!best) {
+      throw new Error(
+        `Unable to locate ${label} image formula center marker: ${JSON.stringify({ rasterBands, wordGeometry, textBoundaryCenter })}`,
+      );
+    }
+    return rasterBounds(best.band, [best.component]);
+  };
+
+  const numberedEntries = componentsInVerticalBox(
+    wordGeometry.numberedTop,
+    wordGeometry.numberedHeight,
+  );
+  const numberCandidates = numberedEntries
+    .filter(
+      ({ component }) => component.minX > textBoundaryCenter + 100,
+    )
+    .sort(
+      (left, right) => right.component.centerX - left.component.centerX,
+    );
+  const numberEntry = numberCandidates[0];
+  if (!numberEntry) {
+    throw new Error(
+      `Unable to locate numbered image formula raster number: ${JSON.stringify({ rasterBands, wordGeometry, textBoundaryCenter })}`,
+    );
+  }
+
+  const unnumberedEntries = componentsInVerticalBox(
+    wordGeometry.displayTop,
+    wordGeometry.displayHeight,
+  );
+  const numberedFormulaEntries = numberedEntries.filter(
+    ({ component }) => component !== numberEntry.component,
+  );
+  const unnumbered = centeredMarker(
+    unnumberedEntries,
+    "unnumbered",
+  );
+  const numbered = centeredMarker(
+    numberedFormulaEntries,
+    "numbered",
+  );
   return {
     unnumbered,
-    numbered: rasterBounds(numberedBand, numberedFormulaComponents),
+    numbered,
+    unnumberedInk: rasterEntryBounds(unnumberedEntries),
+    numberedInk: rasterEntryBounds(numberedFormulaEntries),
     equationNumber: {
-      ...numberComponent,
-      minY: numberedBand.minY,
-      maxY: numberedBand.maxY,
-      height: numberedBand.height,
-      centerY: numberedBand.centerY,
+      ...numberEntry.component,
+      minY: numberEntry.band.minY,
+      maxY: numberEntry.band.maxY,
+      height: numberEntry.band.height,
+      centerY: numberEntry.band.centerY,
     },
   };
 }
@@ -423,7 +659,7 @@ function runFormulaRegressionReport(testDocumentName, formulas) {
   const report = parseRegressionReport(
     readFileSync(formulaRegressionStatusPath, "utf8"),
   );
-if (report.revision !== "word-double-click-routing-20260730-r65") {
+  if (report.revision !== "word-double-click-routing-20260730-r66") {
     throw new Error(`Word loaded the wrong VisualTeX source revision: ${report.revision}`);
   }
 
@@ -438,6 +674,17 @@ if (report.revision !== "word-double-click-routing-20260730-r65") {
   const alignedFormulaCount = numericReportValue(report, "alignedFormulaCount");
   const imageFormulaCount = numericReportValue(report, "imageFormulaCount");
   const imageDisplayCount = numericReportValue(report, "imageDisplayCount");
+  const imageMacroButtonCount = numericReportValue(
+    report,
+    "imageMacroButtonCount",
+  );
+  const invalidImageMacroButtonCount = numericReportValue(
+    report,
+    "invalidImageMacroButtonCount",
+  );
+  const imageFormulaIds = (report.imageFormulaIds ?? "")
+    .split(",")
+    .filter(Boolean);
   const maximumImageSpaceBefore = numericReportValue(
     report,
     "maximumImageSpaceBefore",
@@ -455,7 +702,9 @@ if (report.revision !== "word-double-click-routing-20260730-r65") {
       invalidNativeRangeCount !== 0 ||
       emptyMathCount !== 0 ||
       alignedFormulaCount !== alignedFormulaCountExpected ||
-      imageFormulaCount !== 0
+      imageFormulaCount !== 0 ||
+      imageMacroButtonCount !== 0 ||
+      invalidImageMacroButtonCount !== 0
     ) {
       throw new Error(
         `Word OMML formula structure regression failed: ${JSON.stringify(report)}`,
@@ -485,6 +734,10 @@ if (report.revision !== "word-double-click-routing-20260730-r65") {
     alignedFormulaCount !== 0 ||
     imageFormulaCount !== formulaCount ||
     imageDisplayCount !== displayFormulaCount ||
+    imageMacroButtonCount !== 0 ||
+    invalidImageMacroButtonCount !== 0 ||
+    JSON.stringify(imageFormulaIds) !==
+      JSON.stringify(formulas.map((formula) => formula.formulaId)) ||
     maximumImageSpaceBefore > 0.01 ||
     maximumImageSpaceAfter > 0.01
   ) {
@@ -511,6 +764,237 @@ function currentSessionIds() {
           .map((entry) => entry.name)
       : [],
   );
+}
+
+function inspectWordFormulaContainers(testDocumentName, formulas, stage) {
+  const report = runFormulaRegressionReport(testDocumentName, formulas);
+  if (outputKind === "omml") {
+    return {
+      stage,
+      inlineShapeCount: 0,
+      macroButtonCount: 0,
+      shapes: [],
+    };
+  }
+  const inspection = runAppleScript([
+    'tell application "Microsoft Word"',
+    `set documentObject to document ${JSON.stringify(testDocumentName)}`,
+    "set unitSeparator to ASCII character 31",
+    "set recordSeparator to ASCII character 30",
+    "set macroButtonCount to 0",
+    "set documentFieldCount to count fields of documentObject",
+    "repeat with fieldIndex from 1 to documentFieldCount",
+    "set candidateField to field fieldIndex of documentObject",
+    "if field type of candidateField is field macro button then set macroButtonCount to macroButtonCount + 1",
+    "end repeat",
+    "set reportText to (macroButtonCount as text) & unitSeparator & ((count of inline shapes of documentObject) as text)",
+    "repeat with shapeIndex from 1 to count of inline shapes of documentObject",
+    "set formulaShape to inline shape shapeIndex of documentObject",
+    "set shapeRange to text object of formulaShape",
+    "set shapeStart to start of content of shapeRange",
+    "set shapeEnd to end of content of shapeRange",
+    "set formulaParagraph to paragraph 1 of (create range documentObject start shapeStart end shapeStart)",
+    "set paragraphRange to text object of formulaParagraph",
+    "set paragraphStart to start of content of paragraphRange",
+    "set paragraphEnd to end of content of paragraphRange",
+    "set paragraphText to content of paragraphRange",
+    "set paragraphFieldCount to count of fields of paragraphRange",
+    "set metadataText to alternative text of formulaShape",
+    "set reportText to reportText & recordSeparator & (shapeIndex as text) & unitSeparator & (shapeStart as text) & unitSeparator & (shapeEnd as text) & unitSeparator & (paragraphStart as text) & unitSeparator & (paragraphEnd as text) & unitSeparator & paragraphText & unitSeparator & (paragraphFieldCount as text) & unitSeparator & metadataText",
+    "end repeat",
+    "return reportText",
+    "end tell",
+  ]);
+  const [summary, ...recordTexts] = inspection.split("\x1e");
+  const [macroButtonCount, inlineShapeCount] = summary
+    .split("\x1f")
+    .map(Number);
+  if (
+    !Number.isInteger(macroButtonCount) ||
+    macroButtonCount < 0 ||
+    !Number.isInteger(inlineShapeCount) ||
+    inlineShapeCount < 0
+  ) {
+    throw new Error(
+      `${stage} returned an invalid Word field summary: ${JSON.stringify(inspection)}`,
+    );
+  }
+
+  if (outputKind === "omml") {
+    if (inlineShapeCount !== 0 || macroButtonCount !== 0 || recordTexts.length) {
+      throw new Error(
+        `${stage} OMML document contains image/MacroButton objects: ${JSON.stringify({
+          inlineShapeCount,
+          macroButtonCount,
+          recordTexts,
+        })}`,
+      );
+    }
+    return { stage, inlineShapeCount, macroButtonCount, shapes: [] };
+  }
+
+  if (
+    inlineShapeCount !== formulas.length ||
+    macroButtonCount !== 0 ||
+    recordTexts.length !== formulas.length
+  ) {
+    throw new Error(
+      `${stage} did not retain plain field-free VisualTeX images: ${JSON.stringify({
+        expected: formulas.length,
+        inlineShapeCount,
+        macroButtonCount,
+        recordCount: recordTexts.length,
+      })}`,
+    );
+  }
+  const shapes = recordTexts.map((recordText, index) => {
+    const [
+      shapeIndexText,
+      shapeStartText,
+      shapeEndText,
+      paragraphStartText,
+      paragraphEndText,
+      paragraphText,
+      paragraphFieldCountText,
+      encodedMetadata,
+    ] = recordText.split("\x1f");
+    const record = {
+      shapeIndex: Number(shapeIndexText),
+      shapeStart: Number(shapeStartText),
+      shapeEnd: Number(shapeEndText),
+      paragraphStart: Number(paragraphStartText),
+      paragraphEnd: Number(paragraphEndText),
+      paragraphText,
+      paragraphFieldCount: Number(paragraphFieldCountText),
+    };
+    const expected = formulas[index];
+    const metadata = decodeFormulaMetadata(encodedMetadata ?? "");
+    if (
+      record.shapeIndex !== index + 1 ||
+      !Number.isInteger(record.shapeStart) ||
+      !Number.isInteger(record.shapeEnd) ||
+      !Number.isInteger(record.paragraphStart) ||
+      !Number.isInteger(record.paragraphEnd) ||
+      record.shapeStart >= record.shapeEnd ||
+      record.paragraphStart > record.shapeStart ||
+      record.paragraphEnd < record.shapeEnd ||
+      record.paragraphFieldCount !== 0 ||
+      metadata?.formulaId !== expected.formulaId
+    ) {
+      throw new Error(
+        `${stage} image ${index + 1} is not one plain field-free ` +
+          `VisualTeX InlineShape: ${JSON.stringify({ record, metadata })}`,
+      );
+    }
+    return { ...record, formulaId: metadata.formulaId };
+  });
+
+  const paragraphGroups = new Map();
+  for (const shape of shapes) {
+    const key = `${shape.paragraphStart}:${shape.paragraphEnd}`;
+    const group = paragraphGroups.get(key) ?? [];
+    group.push(shape);
+    paragraphGroups.set(key, group);
+  }
+  const normalizedParagraphText = (value, imageCount) => {
+    let text = String(value ?? "").replace(
+      /[\u0001\u0007\u0015\t\r\n\u00a0\u200b\u2060 ]/g,
+      "",
+    );
+    // Word AppleScript exposes each plain InlineShape as one slash in Range.Text.
+    // Remove exactly the known image-object placeholders, never arbitrary X/text.
+    for (let index = 0; index < imageCount; index += 1) {
+      text = text.replace("/", "");
+    }
+    return text;
+  };
+
+  const structuredShapes = shapes.map((shape, index) => {
+    const formula = formulas[index];
+    const key = `${shape.paragraphStart}:${shape.paragraphEnd}`;
+    const paragraphShapes = paragraphGroups.get(key) ?? [];
+    const visibleText = normalizedParagraphText(
+      shape.paragraphText,
+      paragraphShapes.length,
+    );
+    const paragraphModes = paragraphShapes.map(
+      (paragraphShape) => formulas[paragraphShape.shapeIndex - 1]?.displayMode,
+    );
+
+    if (formula.displayMode === "block") {
+      const validNumberText = /^\([^()]+\)$/.test(visibleText);
+      const validDisplayStructure =
+        paragraphShapes.length === 1 &&
+        paragraphModes.every((mode) => mode === "block") &&
+        (formula.numbered
+          ? validNumberText
+          : visibleText === "");
+      if (!validDisplayStructure) {
+        throw new Error(
+          `${stage} display image ${index + 1} is not isolated in its own ` +
+            `Word paragraph: ${JSON.stringify({ shape, paragraphShapes, visibleText })}`,
+        );
+      }
+      return {
+        ...shape,
+        layoutStructure: formula.numbered
+          ? "numbered-display-paragraph"
+          : "dedicated-display-paragraph",
+        paragraphFormulaCount: paragraphShapes.length,
+        visibleParagraphText: visibleText,
+      };
+    }
+
+    const validInlineStructure =
+      visibleText.length > 0 &&
+      paragraphModes.every((mode) => mode === "inline");
+    if (!validInlineStructure) {
+      throw new Error(
+        `${stage} inline image ${index + 1} is not embedded in a body-text ` +
+          `paragraph: ${JSON.stringify({ shape, paragraphShapes, visibleText })}`,
+      );
+    }
+    return {
+      ...shape,
+      layoutStructure: "inline-text-flow",
+      paragraphFormulaCount: paragraphShapes.length,
+      visibleParagraphText: visibleText,
+    };
+  });
+  return {
+    stage,
+    inlineShapeCount,
+    macroButtonCount,
+    shapes: structuredShapes,
+  };
+}
+
+function saveAndReopenWordDocument(testDocumentName) {
+  rmSync(reopenedDocumentPath, { force: true });
+  try {
+    runAppleScript([
+      'tell application "Microsoft Word"',
+      `set documentObject to document ${JSON.stringify(testDocumentName)}`,
+      `save as documentObject file name ${JSON.stringify(reopenedDocumentPath)}`,
+      "end tell",
+    ], 90_000);
+  } catch (error) {
+    // Word for Mac can successfully complete SaveAs and then return -128 after
+    // the old AppleScript document wrapper becomes invalid. The on-disk DOCX
+    // is the source of truth; never retry SaveAs or keep using that wrapper.
+    if (!existsSync(reopenedDocumentPath)) throw error;
+  }
+  runAppleScript(['tell application "Microsoft Word" to quit saving no'], 30_000);
+  spawnSync("/bin/sleep", ["2"], { encoding: "utf8" });
+  return runAppleScript([
+    'tell application "Microsoft Word"',
+    `open file name ${JSON.stringify(reopenedDocumentPath)}`,
+    "set reopenedDocument to active document",
+    "activate object reopenedDocument",
+    "activate",
+    "return name of reopenedDocument",
+    "end tell",
+  ], 90_000);
 }
 
 function validateFormulaEditSession(
@@ -569,22 +1053,61 @@ async function waitForNewSession(before, timeoutMs = 12_000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     if (existsSync(sessionsRoot)) {
-      const next = readdirSync(sessionsRoot, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory() && !before.has(entry.name))
-        .map((entry) => entry.name);
-      if (next.length === 1) return next[0];
-      if (next.length > 1) {
-        next.sort((a, b) => {
-          const aTime = readFileSync(join(sessionsRoot, a, "request.json"), "utf8");
-          const bTime = readFileSync(join(sessionsRoot, b, "request.json"), "utf8");
-          return bTime.length - aTime.length;
-        });
-        return next[0];
+      const ready = [];
+      for (const entry of readdirSync(sessionsRoot, { withFileTypes: true })) {
+        if (!entry.isDirectory() || before.has(entry.name)) continue;
+        const requestPath = join(sessionsRoot, entry.name, "request.json");
+        if (!existsSync(requestPath)) continue;
+        try {
+          const request = JSON.parse(readFileSync(requestPath, "utf8"));
+          if (
+            request.operation === "documentImport" &&
+            request.sessionId === entry.name &&
+            request.host === "word"
+          ) {
+            ready.push({
+              sessionId: entry.name,
+              modifiedAt: statSync(requestPath).mtimeMs,
+            });
+          }
+        } catch {
+          // The Session directory can become visible before its atomic
+          // request.json rename. Wait for a complete, validated request.
+        }
+      }
+      if (ready.length > 0) {
+        ready.sort((left, right) => right.modifiedAt - left.modifiedAt);
+        return ready[0].sessionId;
       }
     }
     await sleep(100);
   }
   throw new Error("Word did not create a VisualTeX document import Session");
+}
+
+async function waitForWordCreateSession(before, timeoutMs = 12_000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    for (const sessionId of currentSessionIds()) {
+      if (before.has(sessionId)) continue;
+      const requestPath = join(sessionsRoot, sessionId, "request.json");
+      if (!existsSync(requestPath)) continue;
+      try {
+        const request = JSON.parse(readFileSync(requestPath, "utf8"));
+        if (
+          request.mode === "create" &&
+          request.host === "word" &&
+          request.sessionId === sessionId
+        ) {
+          return sessionId;
+        }
+      } catch {
+        // The request may still be completing its atomic rename.
+      }
+    }
+    await sleep(100);
+  }
+  throw new Error("Word did not create a VisualTeX formula creation Session");
 }
 
 async function waitForFormulaEditSession(before, formulaId, timeoutMs = 12_000) {
@@ -606,6 +1129,307 @@ async function waitForFormulaEditSession(before, formulaId, timeoutMs = 12_000) 
     await sleep(100);
   }
   throw new Error(`Word did not create an edit Session for ${formulaId}`);
+}
+
+function editorPerformanceRecords(sessionId) {
+  const performancePath = join(
+    sessionsRoot,
+    sessionId,
+    editorPerformanceFileName,
+  );
+  if (!existsSync(performancePath)) return [];
+  return readFileSync(performancePath, "utf8")
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line, index) => {
+      try {
+        return JSON.parse(line);
+      } catch (error) {
+        throw new Error(
+          `Invalid editor performance record ${index + 1} for ${sessionId}: ${error}`,
+        );
+      }
+    });
+}
+
+function validatedPhysicalEditorReadiness(sessionId, formulaId, marker, records) {
+  if (
+    marker.schema !== editorReadySchema ||
+    marker.sessionId !== sessionId ||
+    marker.host !== "word" ||
+    !Number.isSafeInteger(marker.generation) ||
+    marker.generation <= 0
+  ) {
+    throw new Error(
+      `The physical edit wrote an invalid editor-ready marker: ${JSON.stringify(marker)}`,
+    );
+  }
+  for (const key of [
+    "epochMs",
+    "urlReceivedEpochMs",
+    "frontendEpochMs",
+  ]) {
+    if (!Number.isSafeInteger(marker[key]) || marker[key] <= 0) {
+      throw new Error(`The editor-ready marker has an invalid ${key}`);
+    }
+  }
+  for (const key of [
+    "hydrateMs",
+    "editorMountedMs",
+    "contentReadyMs",
+    "showFocusMs",
+  ]) {
+    if (!Number.isFinite(marker[key]) || marker[key] < 0) {
+      throw new Error(`The editor-ready marker has an invalid ${key}`);
+    }
+  }
+  if (
+    marker.hydrateMs > marker.editorMountedMs ||
+    marker.editorMountedMs > marker.contentReadyMs ||
+    marker.contentReadyMs > marker.showFocusMs + 10
+  ) {
+    throw new Error(
+      `The physical editor readiness stages are out of order: ${JSON.stringify(marker)}`,
+    );
+  }
+  if (
+    marker.urlReceivedEpochMs > marker.frontendEpochMs + 100 ||
+    marker.frontendEpochMs > marker.epochMs + 100
+  ) {
+    throw new Error(
+      `The physical editor readiness epochs are out of order: ${JSON.stringify(marker)}`,
+    );
+  }
+  if (
+    marker.contentReadyMs > warmEditorReadyLimitMs ||
+    marker.showFocusMs > warmEditorReadyLimitMs
+  ) {
+    throw new Error(
+      `The resident Word editor missed the ${warmEditorReadyLimitMs} ms warm target: ` +
+        JSON.stringify(marker),
+    );
+  }
+
+  const requiredStages = [
+    "url-received",
+    "request-read",
+    "request-imported",
+    "window-reused",
+    "activation-event-sent",
+    "frontend-hydrated",
+    "frontend-editor-mounted",
+    "frontend-content-ready",
+    "window-show-focus",
+  ];
+  for (const record of records) {
+    if (
+      record.schema !== editorPerformanceSchema ||
+      record.sessionId !== sessionId ||
+      record.host !== "word" ||
+      !Number.isFinite(record.elapsedMs) ||
+      record.elapsedMs < 0
+    ) {
+      throw new Error(
+        `The physical edit wrote an invalid performance record: ${JSON.stringify(record)}`,
+      );
+    }
+  }
+  const byStage = Object.fromEntries(
+    requiredStages.map((stage) => [
+      stage,
+      records.filter((record) => record.stage === stage),
+    ]),
+  );
+  for (const stage of requiredStages) {
+    if (byStage[stage].length !== 1) {
+      throw new Error(
+        `The physical edit did not record exactly one ${stage} stage: ${JSON.stringify(records)}`,
+      );
+    }
+  }
+  if (records.some((record) => record.stage === "window-created")) {
+    throw new Error(
+      "The physical Word edit created a new WebView instead of reusing the resident editor",
+    );
+  }
+  for (const stage of [
+    "window-reused",
+    "activation-event-sent",
+    "frontend-hydrated",
+    "frontend-editor-mounted",
+    "frontend-content-ready",
+    "window-show-focus",
+  ]) {
+    if (byStage[stage][0].generation !== marker.generation) {
+      throw new Error(
+        `The ${stage} performance record belongs to a stale editor generation`,
+      );
+    }
+  }
+  const stageElapsed = Object.fromEntries(
+    requiredStages.map((stage) => [stage, byStage[stage][0].elapsedMs]),
+  );
+  const frontendOriginMs =
+    stageElapsed["frontend-content-ready"] - marker.contentReadyMs;
+  if (!Number.isFinite(frontendOriginMs) || frontendOriginMs < -1) {
+    throw new Error(
+      `The physical editor frontend timing origin is invalid: ${JSON.stringify({ frontendOriginMs, stageElapsed, marker })}`,
+    );
+  }
+  for (const [stage, markerKey] of [
+    ["frontend-hydrated", "hydrateMs"],
+    ["frontend-editor-mounted", "editorMountedMs"],
+    ["frontend-content-ready", "contentReadyMs"],
+  ]) {
+    const frontendRelativeMs = stageElapsed[stage] - frontendOriginMs;
+    if (Math.abs(frontendRelativeMs - marker[markerKey]) > 1) {
+      throw new Error(
+        `The ${stage} timing disagrees with editor-ready.${markerKey}: ${JSON.stringify({ frontendRelativeMs, stageElapsed: stageElapsed[stage], frontendOriginMs, markerValue: marker[markerKey] })}`,
+      );
+    }
+  }
+  if (Math.abs(stageElapsed["window-show-focus"] - marker.showFocusMs) > 1) {
+    throw new Error(
+      "The window-show-focus timing disagrees with editor-ready.showFocusMs",
+    );
+  }
+  const backendOrder = [
+    "url-received",
+    "request-read",
+    "request-imported",
+    "window-reused",
+    "activation-event-sent",
+    "window-show-focus",
+  ];
+  for (let index = 1; index < backendOrder.length; index += 1) {
+    const previous = backendOrder[index - 1];
+    const current = backendOrder[index];
+    if (stageElapsed[current] + 1 < stageElapsed[previous]) {
+      throw new Error(
+        `The physical editor backend stages are out of order: ${JSON.stringify(stageElapsed)}`,
+      );
+    }
+  }
+
+  const requestPath = join(sessionsRoot, sessionId, "request.json");
+  const requestWrittenEpochMs = statSync(requestPath).mtimeMs;
+  const requestToUrlMs = marker.urlReceivedEpochMs - requestWrittenEpochMs;
+  const requestToReadyMs = marker.epochMs - requestWrittenEpochMs;
+  const urlToReadyEpochMs = marker.epochMs - marker.urlReceivedEpochMs;
+  if (
+    requestToUrlMs < -250 ||
+    requestToUrlMs > 2_000 ||
+    requestToReadyMs < -250 ||
+    requestToReadyMs > 1_500 ||
+    Math.abs(urlToReadyEpochMs - marker.showFocusMs) > 250
+  ) {
+    throw new Error(
+      `The physical editor request/URL/readiness timing is invalid: ${JSON.stringify({
+        requestWrittenEpochMs,
+        requestToUrlMs,
+        requestToReadyMs,
+        urlToReadyEpochMs,
+        marker,
+      })}`,
+    );
+  }
+  return {
+    schema: editorReadySchema,
+    sessionId,
+    formulaId,
+    generation: marker.generation,
+    requestWrittenEpochMs,
+    requestToUrlMs,
+    requestToReadyMs,
+    urlToReadyEpochMs,
+    ...Object.fromEntries(
+      [
+        "urlReceivedEpochMs",
+        "frontendEpochMs",
+        "epochMs",
+        "hydrateMs",
+        "editorMountedMs",
+        "contentReadyMs",
+        "showFocusMs",
+      ].map((key) => [key, marker[key]]),
+    ),
+    stages: stageElapsed,
+  };
+}
+
+async function waitForPhysicalEditorReadiness(
+  sessionId,
+  formulaId,
+  timeoutMs = 30_000,
+) {
+  const readyPath = join(sessionsRoot, sessionId, editorReadyFileName);
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (existsSync(readyPath)) {
+      const marker = JSON.parse(readFileSync(readyPath, "utf8"));
+      const records = editorPerformanceRecords(sessionId);
+      const requiredStageNames = new Set(records.map((record) => record.stage));
+      if (
+        [
+          "url-received",
+          "request-read",
+          "request-imported",
+          "window-reused",
+          "activation-event-sent",
+          "frontend-hydrated",
+          "frontend-editor-mounted",
+          "frontend-content-ready",
+          "window-show-focus",
+        ].every((stage) => requiredStageNames.has(stage))
+      ) {
+        await sleep(100);
+        return validatedPhysicalEditorReadiness(
+          sessionId,
+          formulaId,
+          marker,
+          editorPerformanceRecords(sessionId),
+        );
+      }
+    }
+    await sleep(50);
+  }
+  throw new Error(
+    `VisualTeX did not write ${editorReadyFileName} and complete performance stages for ${formulaId}`,
+  );
+}
+
+async function assertSinglePhysicalEditSession(before, sessionId, formulaId) {
+  await sleep(300);
+  const matchingSessionIds = [];
+  for (const candidateSessionId of currentSessionIds()) {
+    if (before.has(candidateSessionId)) continue;
+    const requestPath = join(
+      sessionsRoot,
+      candidateSessionId,
+      "request.json",
+    );
+    if (!existsSync(requestPath)) continue;
+    try {
+      const request = JSON.parse(readFileSync(requestPath, "utf8"));
+      if (request.mode === "edit" && request.formulaId === formulaId) {
+        matchingSessionIds.push(candidateSessionId);
+      }
+    } catch {
+      // A different Session may still be finishing an atomic write.
+    }
+  }
+  if (
+    matchingSessionIds.length !== 1 ||
+    matchingSessionIds[0] !== sessionId
+  ) {
+    throw new Error(
+      `One physical double-click must create exactly one edit Session: ${JSON.stringify({
+        sessionId,
+        formulaId,
+        matchingSessionIds,
+      })}`,
+    );
+  }
 }
 
 function formulaItem({
@@ -661,7 +1485,7 @@ function formulaItem({
     const svg = latexToSvg(canonicalLatex, {
       displayMode: displayMode === "block",
       fontSizePt: referenceFontSizePt,
-      paddingPx: displayMode === "inline" ? 1 : 10,
+      paddingPx: displayMode === "inline" ? 1 : wordDisplayPaddingPx,
       background: "transparent",
     });
     const geometry = calculateImageGeometry(svg, fontSizePt);
@@ -756,6 +1580,7 @@ function editedImageFormulaArtifacts(
     lines: updatedLines,
     codeFormat: editSession.normalized.codeFormat,
     displayMode: formula.displayMode,
+    host: "word",
     includeWordOmml: false,
   });
   const svgAlignment = assertAlignedSvg(
@@ -935,6 +1760,244 @@ function appendFormula(entries, index, formula, paragraph) {
   appendParagraphMetadata(entries, index, paragraph);
 }
 
+function createdImagePdfInkBounds(testDocumentName, label) {
+  rmSync(coordinatePdfPath, { force: true });
+  rmSync(pdfExportStatusPath, { force: true });
+  writeFileSync(pdfExportRequestPath, coordinatePdfPath, { mode: 0o600 });
+  runAppleScript([
+    'tell application "Microsoft Word"',
+    `activate object document ${JSON.stringify(testDocumentName)}`,
+    'run VB macro macro name "VisualTeX_ExportActiveDocumentPdfForRegression"',
+    "end tell",
+  ], 90_000);
+  const exportStatus = existsSync(pdfExportStatusPath)
+    ? readFileSync(pdfExportStatusPath, "utf8").trim()
+    : "missing-status";
+  if (!exportStatus.startsWith("ok|") || !existsSync(coordinatePdfPath)) {
+    throw new Error(`${label} PDF export failed: ${exportStatus}`);
+  }
+  const swiftGeometry = spawnSync(
+    "/usr/bin/swift",
+    [
+      join(repositoryRoot, "scripts/pdf_formula_geometry.swift"),
+      coordinatePdfPath,
+      "--raster-only",
+    ],
+    {
+      encoding: "utf8",
+      timeout: 120_000,
+      maxBuffer: 8 * 1024 * 1024,
+    },
+  );
+  if (swiftGeometry.status !== 0) {
+    throw new Error(
+      swiftGeometry.stderr.trim() || `${label} PDF raster extraction failed`,
+    );
+  }
+  const geometry = JSON.parse(swiftGeometry.stdout);
+  const components = (geometry.rasterBands ?? []).flatMap(
+    (band) => band.components ?? [],
+  );
+  if (components.length === 0) {
+    throw new Error(`${label} PDF contains no visible formula ink`);
+  }
+  const minX = Math.min(...components.map((component) => component.minX));
+  const maxX = Math.max(...components.map((component) => component.maxX));
+  return {
+    minX,
+    maxX,
+    width: maxX - minX,
+    componentCount: components.length,
+    rasterBands: geometry.rasterBands,
+  };
+}
+
+function assertCreatedImageFormulaInk(bounds, formula, label) {
+  const minimumVisibleWidth = Math.max(18, formula.widthPoints * 0.5);
+  if (!Number.isFinite(bounds.width) || bounds.width < minimumVisibleWidth) {
+    throw new Error(
+      `${label} rendered as a fallback glyph instead of ${formula.latex}: ` +
+        JSON.stringify({ bounds, expectedWidthPoints: formula.widthPoints }),
+    );
+  }
+}
+
+async function runCreatedImageFormulaRegression(beforeSessions) {
+  runAppleScript([
+    'tell application "Microsoft Word"',
+    "activate",
+    "end tell",
+  ], 30_000);
+  await sleep(3_000);
+  let testDocumentName = runAppleScript([
+    'tell application "Microsoft Word"',
+    "make new document",
+    "set testDocument to active document",
+    "repeat 3 times",
+    "activate object testDocument",
+    "delay 0.2",
+    "end repeat",
+    "activate",
+    'run VB macro macro name "VisualTeX_CreateInline"',
+    "return name of testDocument",
+    "end tell",
+  ], 60_000);
+
+  const sessionId = await waitForWordCreateSession(beforeSessions, 30_000);
+  sessionDirectory = join(sessionsRoot, sessionId);
+  const request = JSON.parse(
+    readFileSync(join(sessionDirectory, "request.json"), "utf8"),
+  );
+  await stopVisualTeXForManualWordCallback();
+  const pendingMarker = request.pendingMarker ?? request.sourceObjectId ?? "";
+  const fontSizePt = Number(request.fontSizePt ?? 11);
+  if (
+    request.mode !== "create" ||
+    request.host !== "word" ||
+    request.sessionId !== sessionId ||
+    request.displayMode !== "inline" ||
+    request.numbered ||
+    !request.formulaId ||
+    !request.sourceDocumentId ||
+    !pendingMarker ||
+    !Number.isFinite(fontSizePt)
+  ) {
+    throw new Error(
+      `Unexpected Word image creation request: ${JSON.stringify(request)}`,
+    );
+  }
+
+  const formula = formulaItem({
+    formulaId: request.formulaId,
+    latex: "dfdfdf",
+    displayMode: "inline",
+    numbered: false,
+    fontSizePt,
+    artifactDirectory: sessionDirectory,
+  });
+  nativeFiles.push(formula.nativePath);
+  const dispatch = manifestText([
+    ["protocolVersion", "1"],
+    ["sessionId", sessionId],
+    ["action", "commit"],
+    ["host", "word"],
+    ["mode", "create"],
+    ["formulaId", formula.formulaId],
+    ["displayMode", formula.displayMode],
+    ["numbered", "0"],
+    ["nativeEquation", "0"],
+    ["imagePath", formula.imagePath],
+    ["vectorDocumentPath", formula.vectorDocumentPath],
+    ["fallbackImagePath", formula.fallbackImagePath],
+    ["metadata", formula.metadata],
+    ["latexBase64", base64Url(formula.latex)],
+    ["ommlBase64", formula.ommlBase64],
+    ["nativeDocumentPath", formula.nativePath],
+    ["pendingMarker", pendingMarker],
+    ["sourceMarker", request.sourceObjectId ?? pendingMarker],
+    ["sourceDocumentId", request.sourceDocumentId],
+    ["widthPoints", formula.widthPoints.toFixed(6)],
+    ["heightPoints", formula.heightPoints.toFixed(6)],
+    ["baseline", formula.baseline.toFixed(6)],
+    ["fontSizePt", formula.fontSizePt.toFixed(6)],
+    ["referenceWidthPt", formula.referenceWidthPt.toFixed(6)],
+    ["referenceHeightPt", formula.referenceHeightPt.toFixed(6)],
+    ["referenceBaselinePt", formula.referenceBaselinePt.toFixed(6)],
+  ]);
+  writeFileSync(join(sessionDirectory, "dispatch.txt"), dispatch, {
+    mode: 0o600,
+  });
+  writeFileSync(join(sessionsRoot, "word-active-session.txt"), sessionId, {
+    mode: 0o600,
+  });
+
+  const callbackStatusPath = join(
+    sessionDirectory,
+    "word-callback-status.txt",
+  );
+  rmSync(callbackStatusPath, { force: true });
+  runAppleScript([
+    'tell application "Microsoft Word"',
+    `activate object document ${JSON.stringify(testDocumentName)}`,
+    'run VB macro macro name "VisualTeX_ApplyPendingResultForRegression"',
+    "end tell",
+  ], 90_000);
+  if (!existsSync(callbackStatusPath)) {
+    throw new Error("Word did not write the image-create callback status file");
+  }
+  const callbackStatus = readFileSync(callbackStatusPath, "utf8");
+  if (!callbackStatus.startsWith("PASS")) {
+    throw new Error(`Word image-create callback failed:\n${callbackStatus}`);
+  }
+
+  const afterCommit = runFormulaRegressionReport(testDocumentName, [formula]);
+  const afterCommitInk = createdImagePdfInkBounds(
+    testDocumentName,
+    "Created dfdfdf formula after commit",
+  );
+  assertCreatedImageFormulaInk(
+    afterCommitInk,
+    formula,
+    "Created dfdfdf formula after commit",
+  );
+  runAppleScript([
+    'tell application "Microsoft Word"',
+    `activate object document ${JSON.stringify(testDocumentName)}`,
+    'run VB macro macro name "VisualTeX_MigrateImageMacroButtons"',
+    "end tell",
+  ], 60_000);
+  const afterNativeNormalization = runFormulaRegressionReport(
+    testDocumentName,
+    [formula],
+  );
+  const afterNativeNormalizationInk = createdImagePdfInkBounds(
+    testDocumentName,
+    "Created dfdfdf formula after native normalization",
+  );
+  assertCreatedImageFormulaInk(
+    afterNativeNormalizationInk,
+    formula,
+    "Created dfdfdf formula after native normalization",
+  );
+  testDocumentName = saveAndReopenWordDocument(testDocumentName);
+  const afterSaveReopen = runFormulaRegressionReport(
+    testDocumentName,
+    [formula],
+  );
+  const afterSaveReopenInk = createdImagePdfInkBounds(
+    testDocumentName,
+    "Created dfdfdf formula after save and reopen",
+  );
+  assertCreatedImageFormulaInk(
+    afterSaveReopenInk,
+    formula,
+    "Created dfdfdf formula after save and reopen",
+  );
+
+  console.log(
+    JSON.stringify(
+      {
+        sessionId,
+        formulaId: formula.formulaId,
+        latex: formula.latex,
+        reports: {
+          afterCommit,
+          afterNativeNormalization,
+          afterSaveReopen,
+        },
+        visibleInk: {
+          afterCommit: afterCommitInk,
+          afterNativeNormalization: afterNativeNormalizationInk,
+          afterSaveReopen: afterSaveReopenInk,
+        },
+      },
+      null,
+      2,
+    ),
+  );
+  console.log("Word image formula creation integration passed");
+}
+
 const before = currentSessionIds();
 let sessionDirectory = "";
 let installedWordAddinBackedUp = false;
@@ -963,19 +2026,17 @@ try {
     rmSync(installedWordAddinPath, { force: true });
     installedWordAddinBackedUp = true;
   }
-  if (physicalDoubleClick) {
-    // Word only applies same-name built-in command overrides from a loaded
-    // global template. A DOTM opened as a document is sufficient for normal
-    // macro integration, but it cannot validate a physical picture double
-    // click. Install the reviewed resource into Startup for this one run and
-    // restore the user's previous add-in in finally.
-    copyFileSync(templatePath, installedWordAddinPath);
-  }
-  const testDocumentName = runAppleScript([
+  // Use the reviewed DOTM as a real global template for every integration
+  // run. This is required for Word's native double-click event sink and legacy
+  // image-field migration to remain available after DOCX save/reopen; the
+  // user's previous Startup add-in is restored in finally.
+  copyFileSync(templatePath, installedWordAddinPath);
+  if (createImageRegression) {
+    await runCreatedImageFormulaRegression(before);
+  } else {
+  let testDocumentName = runAppleScript([
     'tell application "Microsoft Word"',
-    ...(physicalDoubleClick
-      ? ["make new document"]
-      : [`open file name ${JSON.stringify(templatePath)}`]),
+    "make new document",
     "set testDocument to active document",
     "activate",
     'run VB macro macro name "VisualTeX_InsertLatexMarkdownDocument"',
@@ -995,6 +2056,7 @@ try {
   ) {
     throw new Error(`Unexpected Word document import request: ${JSON.stringify(request)}`);
   }
+  await stopVisualTeXForManualWordCallback();
 
   const formulas = [
     formulaItem({
@@ -1196,7 +2258,7 @@ try {
     ["outputKind", outputKind],
     ["sourceDocumentId", request.sourceDocumentId],
     ["bookmarkName", request.documentImport.bookmarkName],
-    ["itemCount", "17"],
+    ["itemCount", String(diagnosticItemLimit)],
     ...items,
   ];
   writeFileSync(manifestPath, manifestText(entries), { mode: 0o600 });
@@ -1213,16 +2275,51 @@ try {
   writeFileSync(join(sessionDirectory, "dispatch.txt"), dispatch, { mode: 0o600 });
   writeFileSync(join(sessionsRoot, "word-active-session.txt"), sessionId, { mode: 0o600 });
 
+  const bookmarkPreflight = runAppleScript([
+    'tell application "Microsoft Word"',
+    `set documentObject to document ${JSON.stringify(testDocumentName)}`,
+    "activate object documentObject",
+    `set targetExists to exists bookmark ${JSON.stringify(request.documentImport.bookmarkName)} of documentObject`,
+    "set bookmarkNames to name of every bookmark of documentObject",
+    'return (targetExists as text) & (ASCII character 31) & (bookmarkNames as text)',
+    "end tell",
+  ]);
+  if (!bookmarkPreflight.startsWith("true\x1f")) {
+    throw new Error(
+      `The Word document-import bookmark disappeared before callback: ${bookmarkPreflight}`,
+    );
+  }
+
+  const callbackStatusPath = join(
+    sessionDirectory,
+    "word-callback-status.txt",
+  );
+  rmSync(callbackStatusPath, { force: true });
   runAppleScript([
     'tell application "Microsoft Word"',
     `activate object document ${JSON.stringify(testDocumentName)}`,
     'run VB macro macro name "VisualTeX_ConfigureDocumentImportParagraphSpacingRegression"',
-    'run VB macro macro name "VisualTeX_ApplyPendingResult"',
+    'run VB macro macro name "VisualTeX_ApplyPendingResultForRegression"',
     "end tell",
   ], 90_000);
+  if (!existsSync(callbackStatusPath)) {
+    throw new Error("Word did not write the regression callback status file");
+  }
+  const callbackStatus = readFileSync(callbackStatusPath, "utf8");
+  if (!callbackStatus.startsWith("PASS")) {
+    throw new Error(`Word document-import callback failed:\n${callbackStatus}`);
+  }
+  if (diagnosticItemLimit < 17) {
+    throw new Error(`${diagnosticSuccessPrefix}${diagnosticItemLimit}`);
+  }
   let formulaRegressionReport = runFormulaRegressionReport(
     testDocumentName,
     formulas,
+  );
+  const initialFormulaContainerReport = inspectWordFormulaContainers(
+    testDocumentName,
+    formulas,
+    "after-import",
   );
 
   const pdfPath = coordinatePdfPath;
@@ -1504,6 +2601,14 @@ try {
       ? resolveImageRasterGeometry(
           renderedGeometry.rasterBands ?? [],
           textBoundaryCenter,
+          {
+            pageHeight,
+            displayTop,
+            displayHeight,
+            numberedTop,
+            numberedHeight,
+            numberTop,
+          },
         )
       : null;
   const measuredUnnumberedCenter =
@@ -1523,6 +2628,7 @@ try {
   const renderedFormulaCenterDifference = Math.abs(
     measuredUnnumberedCenter - measuredNumberedCenter,
   );
+  let imageVisualCalibration = null;
 
   const sizes = [inlineSize, displaySize, numberedSize];
   const expectedSizes = [11, 14, 18];
@@ -1553,6 +2659,51 @@ try {
         );
       }
     });
+    for (const [label, inkBounds, wordShapeWidth] of [
+      [
+        "unnumbered display",
+        imageRasterGeometry.unnumberedInk,
+        displayRight - displayLeft,
+      ],
+      [
+        "numbered display",
+        imageRasterGeometry.numberedInk,
+        numberedRight - numberedLeft,
+      ],
+    ]) {
+      const minimumInkWidth = Math.max(20, wordShapeWidth * 0.3);
+      if (!inkBounds || inkBounds.width < minimumInkWidth) {
+        throw new Error(
+          `${label} formula rendered as a narrow fallback glyph instead of ` +
+            `its complete SVG: ${JSON.stringify({ inkBounds, wordShapeWidth, minimumInkWidth })}`,
+        );
+      }
+    }
+    const calibrationInk = imageRasterGeometry.unnumberedInk;
+    const nativeWidthRatio = calibrationInk.width / nativeCalibrationWidthPt;
+    const boxToInkHeightRatio = displayHeight / calibrationInk.height;
+    if (nativeWidthRatio < 0.95 || nativeWidthRatio > 1.05) {
+      throw new Error(
+        `The 14 pt Word image formula does not visually match the native ` +
+          `Cambria Math calibration: ${JSON.stringify({ calibrationInk, nativeCalibrationWidthPt, nativeWidthRatio })}`,
+      );
+    }
+    if (boxToInkHeightRatio > 1.8) {
+      throw new Error(
+        `The Word image formula retains excessive transparent vertical padding: ` +
+          `${JSON.stringify({ displayHeight, calibrationInk, boxToInkHeightRatio })}`,
+      );
+    }
+    imageVisualCalibration = {
+      nativeCalibrationWidthPt,
+      imageInkWidthPt: calibrationInk.width,
+      nativeWidthRatio,
+      wordShapeHeightPt: displayHeight,
+      imageInkHeightPt: calibrationInk.height,
+      boxToInkHeightRatio,
+      visualScale: wordImageVisualScale,
+      displayPaddingPx: wordDisplayPaddingPx,
+    };
   }
 
   const centerTolerancePt = outputKind === "image" ? 0.5 : 0.25;
@@ -1561,19 +2712,40 @@ try {
       `Word/PDF page width mismatch: Word=${pageWidth}, PDF=${renderedGeometry.pageWidth}`,
     );
   }
-  if (renderedUnnumberedCenterError > centerTolerancePt) {
-    throw new Error(
-      `Unnumbered display formula is not centered: error=${renderedUnnumberedCenterError} pt`,
-    );
-  }
-  if (renderedNumberedCenterError > centerTolerancePt) {
-    throw new Error(
-      `Numbered display formula is not centered: error=${renderedNumberedCenterError} pt`,
-    );
+  if (outputKind === "omml") {
+    if (renderedUnnumberedCenterError > centerTolerancePt) {
+      throw new Error(
+        `Unnumbered display formula is not centered: error=${renderedUnnumberedCenterError} pt`,
+      );
+    }
+    if (renderedNumberedCenterError > centerTolerancePt) {
+      throw new Error(
+        `Numbered display formula is not centered: error=${renderedNumberedCenterError} pt`,
+      );
+    }
+  } else {
+    // Word's horizontal position for an InlineShape Range is a paragraph/text
+    // anchor, not the centered visual image edge. The symmetric fixture places
+    // its relationship sign at the image center, so the PDF raster marker must
+    // cross the text-area center. Its glyph ink center can be a few points off
+    // because the '=' outline and SVG padding are not geometrically symmetric.
+    for (const [label, geometry] of [
+      ["unnumbered", imageRasterGeometry.unnumbered],
+      ["numbered", imageRasterGeometry.numbered],
+    ]) {
+      if (
+        textBoundaryCenter < geometry.minX - centerTolerancePt ||
+        textBoundaryCenter > geometry.maxX + centerTolerancePt
+      ) {
+        throw new Error(
+          `${label} image formula center marker does not cross the text-area center: ${JSON.stringify({ geometry, textBoundaryCenter, centerTolerancePt })}`,
+        );
+      }
+    }
   }
   if (renderedFormulaCenterDifference > centerTolerancePt) {
     throw new Error(
-      `Numbering shifted the formula center: difference=${renderedFormulaCenterDifference} pt`,
+      `Numbering shifted the formula center marker: difference=${renderedFormulaCenterDifference} pt`,
     );
   }
   const equationNumberGeometry =
@@ -1584,18 +2756,46 @@ try {
     outputKind === "omml"
       ? renderedGeometry.numbered.centerY
       : imageRasterGeometry.numbered.centerY;
-  const equationNumberVerticalError = Math.abs(
+  const equationNumberInkCenterDifference = Math.abs(
     equationNumberGeometry.centerY - numberedFormulaPdfCenterY,
   );
-  if (equationNumberVerticalError > 0.25) {
-    throw new Error(
-      `Equation number is not vertically centered with its formula: error=${equationNumberVerticalError} pt`,
-    );
+  const equationNumberVerticalError =
+    outputKind === "omml"
+      ? equationNumberInkCenterDifference
+      : Math.abs(numberTop - numberedTop);
+  if (outputKind === "omml") {
+    if (equationNumberVerticalError > 0.25) {
+      throw new Error(
+        `Equation number is not vertically centered with its formula: error=${equationNumberVerticalError} pt`,
+      );
+    }
+  } else {
+    const rasterTolerancePt = 1.5;
+    if (equationNumberVerticalError > 0.25) {
+      throw new Error(
+        `Image equation number and formula outer boxes do not share a top edge: ${JSON.stringify({ numberedTop, numberTop, equationNumberVerticalError })}`,
+      );
+    }
+    for (const [label, geometry] of [
+      ["formula ink", imageRasterGeometry.numberedInk],
+      ["equation number", equationNumberGeometry],
+    ]) {
+      if (!geometry || geometry.height > numberedHeight + rasterTolerancePt) {
+        throw new Error(
+          `Numbered image ${label} is taller than the Word image outer box: ${JSON.stringify({ geometry, numberedHeight, rasterTolerancePt })}`,
+        );
+      }
+    }
+    if (equationNumberInkCenterDifference > 0.5) {
+      throw new Error(
+        `Image equation number is not vertically centered with the formula ink: ${JSON.stringify({ equationNumberInkCenterDifference, numberedFormula: imageRasterGeometry.numberedInk, equationNumber: equationNumberGeometry })}`,
+      );
+    }
   }
   const measuredNumberedRight =
     outputKind === "omml"
       ? renderedGeometry.numbered.maxX
-      : imageRasterGeometry.numbered.maxX;
+      : textBoundaryCenter + (numberedRight - numberedLeft) / 2;
   if (
     equationNumberGeometry.minX <= measuredNumberedRight + 4 ||
     equationNumberGeometry.maxX > textBoundaryRight + 0.5
@@ -1615,23 +2815,21 @@ try {
     const imageEditCases = [
       {
         formula: formulas[0],
-        inlineShapeIndex: 1,
+        shapeIndex: 1,
         codeFormat: "raw",
         expectedLines: formulas[0].metadataLines,
         recovery: true,
       },
       {
         formula: formulas[5],
-        inlineShapeIndex: 6,
+        shapeIndex: 6,
         codeFormat: "align",
         expectedLines: formulas[5].metadataLines,
         updatedLines: ["1 = 22 + 333 + q", "44444 = 55 + r"],
-        macroName: "FormatPicture",
-        entryKind: "image-format-picture-command",
       },
       {
         formula: formulas[6],
-        inlineShapeIndex: 7,
+        shapeIndex: 7,
         codeFormat: "align-star",
         expectedLines: formulas[6].metadataLines,
         updatedLines: ["666 = 777 + 8 + s", "999999 = 0 + t"],
@@ -1640,20 +2838,17 @@ try {
 
     for (const editCase of imageEditCases) {
       const sessionsBeforeEdit = currentSessionIds();
-      const traceBeforeEdit = existsSync(doubleClickTracePath)
-        ? readFileSync(doubleClickTracePath, "utf8")
-        : "";
       if (editCase.recovery) rmSync(imageEditStatusPath, { force: true });
       runAppleScript([
         'tell application "Microsoft Word"',
         `set documentObject to document ${JSON.stringify(testDocumentName)}`,
         "activate object documentObject",
         "activate",
-        `set formulaShape to inline shape ${editCase.inlineShapeIndex} of documentObject`,
+        `set formulaShape to inline shape ${editCase.shapeIndex} of documentObject`,
         "select text object of formulaShape",
         editCase.recovery
           ? 'run VB macro macro name "VisualTeX_RunSelectedImageEditRecoveryRegression"'
-          : `run VB macro macro name ${JSON.stringify(editCase.macroName ?? "VisualTeX_DoubleClickEditSelected")}`,
+          : 'run VB macro macro name "VisualTeX_DoubleClickEditSelected"',
         "end tell",
       ], 60_000);
       const editSessionId = await waitForFormulaEditSession(
@@ -1667,22 +2862,6 @@ try {
         editCase.codeFormat,
         editCase.expectedLines,
       );
-      if (editCase.macroName === "FormatPicture") {
-        const traceAfterEdit = existsSync(doubleClickTracePath)
-          ? readFileSync(doubleClickTracePath, "utf8")
-          : "";
-        const commandTrace = traceAfterEdit.startsWith(traceBeforeEdit)
-          ? traceAfterEdit.slice(traceBeforeEdit.length)
-          : traceAfterEdit;
-        if (
-          !commandTrace.includes("event=format-picture-enter") ||
-          !commandTrace.includes("event=edit-inline-editor-launched")
-        ) {
-          throw new Error(
-            `Word FormatPicture override did not complete the VisualTeX image edit route:\n${commandTrace}`,
-          );
-        }
-      }
 
       let restoredReference;
       if (editCase.recovery) {
@@ -1710,8 +2889,8 @@ try {
 
       const regression = {
         kind: editCase.recovery
-          ? "image-double-click-title-recovery"
-          : editCase.entryKind ?? "image-batch-double-click",
+          ? "image-metadata-title-recovery"
+          : "image-batch-edit-session",
         sessionId: editSessionId,
         formulaId: editCase.formula.formulaId,
         codeFormat: editSession.normalized.codeFormat,
@@ -1733,7 +2912,7 @@ try {
           `set documentObject to document ${JSON.stringify(testDocumentName)}`,
           "activate object documentObject",
           "activate",
-          `set formulaShape to inline shape ${editCase.inlineShapeIndex} of documentObject`,
+          `set formulaShape to inline shape ${editCase.shapeIndex} of documentObject`,
           "select text object of formulaShape",
           'run VB macro macro name "VisualTeX_DoubleClickEditSelected"',
           "end tell",
@@ -1816,27 +2995,67 @@ try {
     }
   }
 
+  const postEditFormulaContainerReport = inspectWordFormulaContainers(
+    testDocumentName,
+    formulas,
+    "after-edit",
+  );
+  testDocumentName = saveAndReopenWordDocument(testDocumentName);
+  const reopenedFormulaContainerReport = inspectWordFormulaContainers(
+    testDocumentName,
+    formulas,
+    "after-save-reopen",
+  );
+  formulaRegressionReport = runFormulaRegressionReport(
+    testDocumentName,
+    formulas,
+  );
+
   if (physicalDoubleClick) {
-    if (outputKind !== "image") {
-      throw new Error("Physical double-click regression requires --image");
-    }
-    const physicalFormula = formulas[1];
+    const physicalFormulaIndex = {
+      "image-inline": 0,
+      "image-block": 1,
+      "image-align": 5,
+      "image-align-star": 6,
+      "omml-inline": 0,
+      "omml-block": 1,
+      "omml-align": 5,
+      "omml-align-star": 6,
+    }[physicalTarget];
+    const physicalFormula = formulas[physicalFormulaIndex];
+    await startVisualTeXForPhysicalRegression();
     const sessionsBeforePhysicalEdit = currentSessionIds();
-    const traceBeforePhysicalEdit = existsSync(doubleClickTracePath)
-      ? readFileSync(doubleClickTracePath, "utf8")
-      : "";
-    runAppleScript([
+    const physicalSelection = runAppleScript([
       'tell application "Microsoft Word"',
       `set documentObject to document ${JSON.stringify(testDocumentName)}`,
       "activate object documentObject",
       "activate",
       'run VB macro macro name "VisualTeX_AssertWordHostSelfTest"',
-      "set formulaShape to inline shape 2 of documentObject",
-      "select text object of formulaShape",
+      ...(outputKind === "image"
+        ? [
+            `set formulaShape to inline shape ${physicalFormulaIndex + 1} of documentObject`,
+            "set formulaRange to text object of formulaShape",
+            "select formulaRange",
+            'return "image" & (ASCII character 31) & (start of content of formulaRange as text) & (ASCII character 31) & (end of content of formulaRange as text) & (ASCII character 31) & (width of formulaShape as text) & (ASCII character 31) & (height of formulaShape as text)',
+          ]
+        : [
+            `set formulaRange to text object of bookmark ${JSON.stringify(nativeBookmark(physicalFormula.formulaId))} of documentObject`,
+            "select formulaRange",
+            'return "omml" & (ASCII character 31) & (start of content of formulaRange as text) & (ASCII character 31) & (end of content of formulaRange as text)',
+          ]),
       "end tell",
     ]);
     console.log(
-      `WORD_PHYSICAL_DOUBLE_CLICK_READY|${testDocumentName}|${physicalFormula.formulaId}`,
+      `WORD_PHYSICAL_DOUBLE_CLICK_READY|${JSON.stringify({
+        documentName: testDocumentName,
+        target: physicalTarget,
+        outputKind,
+        formulaId: physicalFormula.formulaId,
+        selection: physicalSelection.split("\x1f"),
+      })}`,
+    );
+    const physicalClick = physicallyDoubleClickSelectedWordFormula(
+      testDocumentName,
     );
 
     const physicalEditSessionId = await waitForFormulaEditSession(
@@ -1851,36 +3070,24 @@ try {
       physicalFormula.codeFormat,
       physicalFormula.metadataLines,
     );
-    const traceAfterPhysicalEdit = existsSync(doubleClickTracePath)
-      ? readFileSync(doubleClickTracePath, "utf8")
-      : "";
-    const physicalTrace = traceAfterPhysicalEdit.startsWith(traceBeforePhysicalEdit)
-      ? traceAfterPhysicalEdit.slice(traceBeforePhysicalEdit.length)
-      : traceAfterPhysicalEdit;
-    const doubleClickRoute = physicalTrace.includes(
-      "event=window-before-double-click-enter",
-    )
-      ? "window-before-double-click"
-      : physicalTrace.includes("event=format-picture-enter")
-        ? "format-picture"
-        : "unknown";
-    if (doubleClickRoute === "unknown") {
-      throw new Error(
-        `The physical double-click launched an edit session without logging a Word entry point:\n${physicalTrace}`,
-      );
-    }
-    if (!physicalTrace.includes("event=edit-inline-editor-launched")) {
-      throw new Error(
-        `The physical double-click did not reach the inline editor launch point:\n${physicalTrace}`,
-      );
-    }
+    const editorReadiness = await waitForPhysicalEditorReadiness(
+      physicalEditSessionId,
+      physicalFormula.formulaId,
+    );
+    await assertSinglePhysicalEditSession(
+      sessionsBeforePhysicalEdit,
+      physicalEditSessionId,
+      physicalFormula.formulaId,
+    );
     editRegressions.push({
-      kind: "image-physical-double-click",
+      kind: `${physicalTarget}-physical-double-click`,
+      target: physicalTarget,
       sessionId: physicalEditSessionId,
       formulaId: physicalFormula.formulaId,
       codeFormat: physicalEditSession.normalized.codeFormat,
       lines: physicalEditSession.normalized.lines.map((line) => line.latex),
-      doubleClickRoute,
+      physicalClick,
+      editorReadiness,
     });
   }
 
@@ -1901,7 +3108,16 @@ try {
             : {}),
           ...(outputKind === "omml"
             ? { bookmark: nativeBookmark(formula.formulaId) }
-            : { inlineShapeIndex: index + 1 }),
+            : {
+                shapeIndex: index + 1,
+                wordObjectType: "InlineShape",
+                layoutStructure:
+                  formula.displayMode === "block"
+                    ? formula.numbered
+                      ? "numbered-display-paragraph"
+                      : "dedicated-display-paragraph"
+                    : "inline-text-flow",
+              }),
         })),
         shapeCount,
         tableCount,
@@ -1942,6 +3158,7 @@ try {
                     ...imageRasterGeometry.unnumbered,
                     wordShapeWidth: displayRight - displayLeft,
                     wordShapeHeight: displayHeight,
+                    inkBounds: imageRasterGeometry.unnumberedInk,
                     centerError: renderedUnnumberedCenterError,
                   },
             numberedDisplay:
@@ -1954,20 +3171,28 @@ try {
                     ...imageRasterGeometry.numbered,
                     wordShapeWidth: numberedRight - numberedLeft,
                     wordShapeHeight: numberedHeight,
+                    inkBounds: imageRasterGeometry.numberedInk,
                     centerError: renderedNumberedCenterError,
                   },
             equationNumber: {
               ...equationNumberGeometry,
               verticalCenterError: equationNumberVerticalError,
+              inkCenterDifference: equationNumberInkCenterDifference,
               rightBoundaryInset: textBoundaryRight - equationNumberGeometry.maxX,
             },
             formulaCenterDifference: renderedFormulaCenterDifference,
             centerTolerancePt,
+            imageVisualCalibration,
             ommlAlignmentGeometry,
           },
         },
         documentText,
         formulaRegressionReport,
+        formulaContainerReports: {
+          afterImport: initialFormulaContainerReport,
+          afterEdit: postEditFormulaContainerReport,
+          afterSaveReopen: reopenedFormulaContainerReport,
+        },
         editRegressions,
       },
       null,
@@ -1975,8 +3200,35 @@ try {
     ),
   );
   console.log("Word document import integration passed");
+  }
 } catch (error) {
-  if (sessionDirectory) {
+  if (
+    error instanceof Error &&
+    error.message.startsWith(diagnosticSuccessPrefix)
+  ) {
+    console.log(
+      `Word document-import diagnostic passed ${error.message.slice(diagnosticSuccessPrefix.length)} items`,
+    );
+  } else {
+    try {
+      const wordState = runAppleScript([
+        'tell application "Microsoft Word"',
+        'if not (exists active document) then return "no-active-document"',
+        "set documentObject to active document",
+        "set unitSeparator to ASCII character 31",
+        "set bookmarkNames to name of every bookmark of documentObject",
+        "set documentText to content of text object of documentObject",
+        "set paragraphCount to count paragraphs of documentObject",
+        'return (name of documentObject as text) & unitSeparator & (paragraphCount as text) & unitSeparator & (bookmarkNames as text) & unitSeparator & documentText',
+        "end tell",
+      ], 15_000);
+      console.error(`Word state after callback failure:\n${wordState}`);
+    } catch (stateError) {
+      console.error(
+        `Unable to inspect Word after callback failure: ${stateError instanceof Error ? stateError.message : String(stateError)}`,
+      );
+    }
+    if (sessionDirectory) {
     const stagePath = join(sessionDirectory, "document-import-stage.txt");
     if (existsSync(stagePath)) {
       console.error(`Last Word document-import stage:\n${readFileSync(stagePath, "utf8")}`);
@@ -1985,8 +3237,9 @@ try {
     if (existsSync(failurePath)) {
       console.error(`Word document-import failure:\n${readFileSync(failurePath, "utf8")}`);
     }
+    }
+    throw error;
   }
-  throw error;
 } finally {
   try {
     runAppleScript(['tell application "Microsoft Word" to quit saving no'], 20_000);
@@ -2001,6 +3254,7 @@ try {
   rmSync(pdfExportStatusPath, { force: true });
   rmSync(imageEditStatusPath, { force: true });
   rmSync(formulaRegressionStatusPath, { force: true });
+  rmSync(physicalScreenBoundsPath, { force: true });
   rmSync(coordinatePdfPath, { force: true });
   rmSync(installedWordAddinPath, { force: true });
   if (installedWordAddinBackedUp && existsSync(installedWordAddinBackupPath)) {

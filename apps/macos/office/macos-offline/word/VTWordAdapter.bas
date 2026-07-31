@@ -4,7 +4,7 @@ Option Explicit
 Private Const VT_WORD_HOST As String = "word"
 Private Const VT_WORD_STATUS_FILE As String = "/OfficePluginStatus/word.json"
 Private Const VT_WORD_SOURCE_REVISION As String = _
-    "word-double-click-routing-20260730-r65"
+    "word-double-click-routing-20260730-r66"
 Private Const VT_WORD_EQUATION_NUMBER_FONT_NAME As String = "Cambria Math"
 Private Const VT_WORD_BOOKMARK_PREFIX As String = "VT_Pending_"
 Private Const VT_WORD_DOCUMENT_IMPORT_BOOKMARK_PREFIX As String = "VT_D_"
@@ -22,12 +22,20 @@ Private Const VT_WORD_MIN_FORMULA_FONT_SIZE_PT As Double = 1#
 Private Const VT_WORD_MAX_FORMULA_FONT_SIZE_PT As Double = 512#
 Private Const VT_WORD_IMAGE_FONT_CONTROL_ID As String = _
     "VisualTeX.Mac.Word.ImageFontSize"
+Private Const VT_WORD_IMAGE_EDIT_MACRO As String = _
+    "VisualTeX_EditImageField"
+Private Const VT_WORD_IMAGE_MACRO_SCHEMA_VARIABLE As String = _
+    "VT_ImageMacroButtonSchema"
+Private Const VT_WORD_IMAGE_MACRO_SCHEMA_VERSION As String = "2"
+Private Const VT_WORD_IMAGE_EDIT_DEBOUNCE_SECONDS As Double = 0.75
 Private Const VT_WORD_PAYLOAD_CHUNK_SIZE As Long = 20000
 Private Const VT_WORD_PAYLOAD_MAX_CHUNKS As Long = 128
 Private Const VT_WORD_TRACE_ENABLED As Boolean = False
-Private Const VT_WORD_DOUBLE_CLICK_TRACE_ENABLED As Boolean = True
+Private Const VT_WORD_DOUBLE_CLICK_TRACE_ENABLED As Boolean = False
 Private Const VT_WORD_DOUBLE_CLICK_TRACE_FILE As String = _
     "/word-double-click-trace.log"
+Private Const VT_WORD_DOUBLE_CLICK_TRACE_SENTINEL As String = _
+    "/word-double-click-trace.enabled"
 Private Const VT_WORD_LATEX_CHUNK_SIZE As Long = VT_WORD_PAYLOAD_CHUNK_SIZE
 Private Const VT_WORD_LATEX_MAX_CHUNKS As Long = VT_WORD_PAYLOAD_MAX_CHUNKS
 Private Const VT_WORD_OMML_CHUNK_SIZE As Long = VT_WORD_PAYLOAD_CHUNK_SIZE
@@ -36,19 +44,49 @@ Private VT_WORD_EVENT_SINK As VTWordEvents
 Private VT_WORD_RIBBON As IRibbonUI
 Private VT_WORD_INTERNAL_MUTATION_DEPTH As Long
 Private VT_WORD_DOUBLE_CLICK_TRACE_CONTEXT_DEPTH As Long
+Private VT_WORD_DOUBLE_CLICK_TRACE_BUFFER As String
+Private VT_WORD_DOUBLE_CLICK_TRACE_STARTED_AT As Single
+Private VT_WORD_DOUBLE_CLICK_TRACE_ACTIVE As Boolean
+Private VT_WORD_DOUBLE_CLICK_TRACE_INITIALIZED As Boolean
+Private VT_WORD_LAST_IMAGE_EDIT_FORMULA_ID As String
+Private VT_WORD_LAST_IMAGE_EDIT_AT As Single
+Private VT_WORD_IMAGE_MACRO_MIGRATION_SCHEDULED As Boolean
+Private VT_WORD_IMAGE_MACRO_MIGRATION_RUNNING As Boolean
 Private VT_WORD_IMAGE_SIZE_WATCH_SCHEDULED As Boolean
 Private VT_WORD_IMAGE_SIZE_WATCH_RUNNING As Boolean
 Private VT_WORD_ORPHAN_WATCH_SCHEDULED As Boolean
 Private VT_WORD_ORPHAN_WATCH_RUNNING As Boolean
 
-Public Sub AutoExec()
+Private Function VTWordVbeBuildTemplateActive() As Boolean
+    Dim projectDocumentName As String
+    Dim projectDocumentPath As String
+
     On Error Resume Next
-    VTTraceWordDoubleClick "autoexec-enter", Nothing, ""
+    projectDocumentName = ThisDocument.Name
+    projectDocumentPath = ThisDocument.FullName
+    On Error GoTo 0
+    VTWordVbeBuildTemplateActive = _
+        InStr(1, projectDocumentName, "VisualTeXWordBuild", vbTextCompare) > 0 Or _
+        InStr(1, projectDocumentPath, "/VisualTeX/Scratch/VisualTeXWordBuild", _
+            vbTextCompare) > 0
+End Function
+
+Public Sub AutoExec()
+    If VTWordVbeBuildTemplateActive() Then Exit Sub
+    On Error Resume Next
+    VTInitializeWordDoubleClickTrace
     VTInitializeWordEvents
-    VTTraceWordDoubleClick "autoexec-events-initialized", Nothing, ""
+    VTPrewarmApplication VT_WORD_HOST
+    VTEnsureImageMacroMigrationScheduled
     VTEnsureOrphanWatchScheduled
     VTWriteWordHealth
-    VTTraceWordDoubleClick "autoexec-complete", Nothing, ""
+    On Error GoTo 0
+End Sub
+
+Public Sub AutoOpen()
+    If VTWordVbeBuildTemplateActive() Then Exit Sub
+    On Error Resume Next
+    VTEnsureImageMacroMigrationScheduled
     On Error GoTo 0
 End Sub
 
@@ -292,6 +330,147 @@ Failed:
     On Error GoTo 0
 End Sub
 
+Private Sub VTAssertWordImageMacroButtonFixture( _
+    ByVal documentObject As Document, _
+    ByVal expectedTitle As String, _
+    ByVal expectedMetadata As String, _
+    ByVal expectedWidth As Single, _
+    ByVal expectedHeight As Single, _
+    ByVal expectedBaseline As Long, _
+    ByVal stageName As String)
+
+    Dim formulaShape As InlineShape
+    Dim macroField As Field
+
+    If documentObject Is Nothing Or _
+       documentObject.InlineShapes.Count <> 1 Or _
+       documentObject.Fields.Count <> 1 Then
+        Err.Raise vbObjectError + 7594, "VisualTeX regression", _
+            stageName & ": the document does not contain one image field."
+    End If
+    Set formulaShape = documentObject.InlineShapes(1)
+    Set macroField = _
+        VTVisualTeXImageMacroButtonFieldForShape(formulaShape)
+    If macroField Is Nothing Or macroField.Type <> 51 Or _
+       Not VTMacroButtonResultHasOnlyImage(macroField) Then
+        Err.Raise vbObjectError + 7594, "VisualTeX regression", _
+            stageName & ": the field is not one clean type-51 MacroButton."
+    End If
+    If StrComp(formulaShape.Title, expectedTitle, vbBinaryCompare) <> 0 Or _
+       StrComp(formulaShape.AlternativeText, expectedMetadata, _
+           vbBinaryCompare) <> 0 Or _
+       Abs(formulaShape.Width - expectedWidth) > 0.1 Or _
+       Abs(formulaShape.Height - expectedHeight) > 0.1 Or _
+       formulaShape.Range.Font.Position <> expectedBaseline Then
+        Err.Raise vbObjectError + 7594, "VisualTeX regression", _
+            stageName & ": MacroButton persistence changed image state."
+    End If
+End Sub
+
+Public Sub VisualTeX_RunWordImageMacroButtonRegression()
+    Const formulaId As String = _
+        "66666666-6666-4666-8666-666666666666"
+
+    Dim sourceDocument As Document
+    Dim testDocument As Document
+    Dim formulaShape As InlineShape
+    Dim insertionRange As Range
+    Dim encodedMetadata As String
+    Dim formulaReference As String
+    Dim fixturePath As String
+    Dim resultPath As String
+    Dim regressionStage As String
+    Dim regressionErrorNumber As Long
+    Dim regressionErrorDescription As String
+
+    On Error GoTo RegressionFailed
+    If Documents.Count > 0 Then Set sourceDocument = ActiveDocument
+    fixturePath = VTApplicationSupportRoot() & _
+        "/Tests/word-image-macrobutton-regression.docx"
+    resultPath = VTApplicationSupportRoot() & _
+        "/Tests/word-image-macrobutton-regression-result.txt"
+    encodedMetadata = VT_METADATA_PREFIX & "e30"
+    formulaReference = VTFormulaReference(formulaId, "inline", False)
+    On Error Resume Next
+    Kill fixturePath
+    Err.Clear
+    On Error GoTo RegressionFailed
+
+    regressionStage = "create"
+    Set testDocument = Documents.Add(Visible:=False)
+    Set insertionRange = testDocument.Range(Start:=0, End:=0)
+    Set formulaShape = testDocument.InlineShapes.AddPicture( _
+        FileName:=VTPlaceholderImagePath(), _
+        LinkToFile:=False, SaveWithDocument:=True, _
+        Range:=insertionRange)
+    formulaShape.LockAspectRatio = msoFalse
+    formulaShape.Width = 73.5!
+    formulaShape.Height = 26.25!
+    formulaShape.LockAspectRatio = msoTrue
+    formulaShape.Range.Font.Position = -2
+    formulaShape.Title = formulaReference
+    formulaShape.AlternativeText = encodedMetadata
+    VTSetWordMetadataPayload testDocument, formulaId, encodedMetadata
+    VTSetWordFormulaFormat testDocument, formulaId, "inline", False
+
+    regressionStage = "wrap"
+    Set formulaShape = VTEnsureVisualTeXImageMacroButton(formulaShape)
+    VTAssertWordImageMacroButtonFixture _
+        testDocument, formulaReference, encodedMetadata, _
+        73.5!, 26.25!, -2, "initial wrap"
+
+    regressionStage = "idempotent-wrap"
+    Set formulaShape = VTEnsureVisualTeXImageMacroButton(formulaShape)
+    VTAssertWordImageMacroButtonFixture _
+        testDocument, formulaReference, encodedMetadata, _
+        73.5!, 26.25!, -2, "idempotent wrap"
+
+    regressionStage = "save"
+    testDocument.SaveAs2 _
+        FileName:=fixturePath, FileFormat:=wdFormatXMLDocument, _
+        AddToRecentFiles:=False
+    testDocument.Close SaveChanges:=wdDoNotSaveChanges
+    Set testDocument = Nothing
+
+    regressionStage = "reopen"
+    Set testDocument = Documents.Open( _
+        FileName:=fixturePath, ConfirmConversions:=False, _
+        ReadOnly:=False, AddToRecentFiles:=False, Visible:=False)
+    VTAssertWordImageMacroButtonFixture _
+        testDocument, formulaReference, encodedMetadata, _
+        73.5!, 26.25!, -2, "save/reopen"
+    VTWriteTextAtomic _
+        resultPath, _
+        "PASS" & vbLf & _
+        "revision=" & VT_WORD_SOURCE_REVISION & vbLf & _
+        "fieldType=" & CStr(testDocument.Fields(1).Type) & vbLf & _
+        "inlineShapes=" & _
+            CStr(testDocument.Fields(1).Result.InlineShapes.Count) & vbLf
+    testDocument.Close SaveChanges:=wdDoNotSaveChanges
+    If Not sourceDocument Is Nothing Then sourceDocument.Activate
+    Exit Sub
+
+RegressionFailed:
+    regressionErrorNumber = Err.Number
+    regressionErrorDescription = Err.Description
+    On Error Resume Next
+    VTWriteTextAtomic _
+        resultPath, _
+        "FAIL" & vbLf & _
+        "stage=" & regressionStage & vbLf & _
+        "errorNumber=" & CStr(regressionErrorNumber) & vbLf & _
+        "errorDescription=" & _
+            Replace$(Replace$(regressionErrorDescription, vbCr, " "), _
+                vbLf, " ") & vbLf
+    If Not testDocument Is Nothing Then
+        testDocument.Close SaveChanges:=wdDoNotSaveChanges
+    End If
+    If Not sourceDocument Is Nothing Then sourceDocument.Activate
+    On Error GoTo 0
+    Err.Raise regressionErrorNumber, "VisualTeX MacroButton regression", _
+        regressionStage & ": " & regressionErrorDescription
+End Sub
+
 Public Sub VisualTeX_RunDocumentImportFormulaRegression()
     Dim statusPath As String
     Dim documentObject As Document
@@ -314,6 +493,10 @@ Public Sub VisualTeX_RunDocumentImportFormulaRegression()
     Dim relationIndex As Long
     Dim imageFormulaCount As Long
     Dim imageDisplayCount As Long
+    Dim imageMacroButtonCount As Long
+    Dim invalidImageMacroButtonCount As Long
+    Dim imageFormulaIds As String
+    Dim imageMacroField As Field
     Dim relationPosition As Double
     Dim minimumRelationPosition As Double
     Dim maximumRelationPosition As Double
@@ -422,8 +605,21 @@ Public Sub VisualTeX_RunDocumentImportFormulaRegression()
     For Each candidateShape In documentObject.InlineShapes
         If VTIsVisualTeXInlineShape(candidateShape) Then
             imageFormulaCount = imageFormulaCount + 1
+            Set imageMacroField = _
+                VTVisualTeXImageMacroButtonFieldForShape(candidateShape)
+            If Not imageMacroField Is Nothing Then
+                imageMacroButtonCount = imageMacroButtonCount + 1
+                If Not VTMacroButtonResultHasOnlyImage(imageMacroField) Then
+                    invalidImageMacroButtonCount = _
+                        invalidImageMacroButtonCount + 1
+                End If
+            End If
             If VTTryParseFormulaReference( _
                candidateShape.Title, formulaId, displayMode, numbered) Then
+                If Len(imageFormulaIds) > 0 Then
+                    imageFormulaIds = imageFormulaIds & ","
+                End If
+                imageFormulaIds = imageFormulaIds & formulaId
                 If displayMode = "block" Then
                     imageDisplayCount = imageDisplayCount + 1
                     Set paragraphRange = _
@@ -475,6 +671,11 @@ Public Sub VisualTeX_RunDocumentImportFormulaRegression()
         CStr(imageFormulaCount) & vbLf
     report = report & "imageDisplayCount=" & _
         CStr(imageDisplayCount) & vbLf
+    report = report & "imageMacroButtonCount=" & _
+        CStr(imageMacroButtonCount) & vbLf
+    report = report & "invalidImageMacroButtonCount=" & _
+        CStr(invalidImageMacroButtonCount) & vbLf
+    report = report & "imageFormulaIds=" & imageFormulaIds & vbLf
     report = report & "maximumImageSpaceBefore=" & _
         CStr(maximumImageSpaceBefore) & vbLf
     report = report & "maximumImageSpaceAfter=" & _
@@ -533,6 +734,7 @@ Private Sub VTRegressionAssertImageNumberVerticalAlignment( _
     Dim paragraphRange As Range
     Dim helperParagraph As Range
     Dim formulaShape As InlineShape
+    Dim formulaContainerRange As Range
     Dim sequenceField As Field
     Dim numberRange As Range
     Dim prefixRange As Range
@@ -567,6 +769,8 @@ Private Sub VTRegressionAssertImageNumberVerticalAlignment( _
             stageName & ": the regression formula is not one image."
     End If
     Set formulaShape = formulaRange.InlineShapes(1)
+    Set formulaContainerRange = _
+        VTVisualTeXImageContainerRange(formulaShape)
     Set paragraphRange = formulaRange.Paragraphs(1).Range.Duplicate
 
     assertionStage = "resolve-number"
@@ -589,12 +793,13 @@ Private Sub VTRegressionAssertImageNumberVerticalAlignment( _
 
     assertionStage = "verify-structure"
     Set prefixRange = documentObject.Range( _
-        Start:=paragraphRange.Start, End:=formulaRange.Start)
+        Start:=paragraphRange.Start, End:=formulaContainerRange.Start)
     Set separatorRange = documentObject.Range( _
-        Start:=formulaRange.End, End:=numberRange.Start)
+        Start:=formulaContainerRange.End, End:=numberRange.Start)
     Set suffixRange = documentObject.Range( _
         Start:=numberRange.End, End:=paragraphRange.End)
-    If paragraphRange.Fields.Count <> 0 Or _
+    If Not VTParagraphHasSingleVisualTeXImageMacroButton( _
+           paragraphRange) Or _
        prefixRange.Text <> vbTab Or _
        separatorRange.Text <> vbTab Or _
        suffixRange.Text <> vbCr Or _
@@ -913,7 +1118,8 @@ Public Sub VisualTeX_RunWordImageNumberVerticalAlignmentRegression()
     Set numberRange = VTStaticImageEquationNumberRange( _
         formulaRange, formulaId)
     If numberRange Is Nothing Or _
-       formulaRange.Paragraphs(1).Range.Fields.Count <> 0 Then
+       Not VTParagraphHasSingleVisualTeXImageMacroButton( _
+           formulaRange.Paragraphs(1).Range) Then
         Err.Raise vbObjectError + 7568, "VisualTeX", _
             "The refreshed image Equation number is not static."
     End If
@@ -5807,14 +6013,20 @@ Public Sub VisualTeX_InsertLatexMarkdownDocument()
     Dim insertionRange As Range
     Dim defaultFontSizePt As Double
     Dim requestJson As String
+    Dim launchTiming As String
+    Dim operationStage As String
     Dim errorNumber As Long
     Dim errorDescription As String
 
     On Error GoTo Failed
+    operationStage = "require-document"
     VTRequireWritableWordDocument
+    operationStage = "refresh-health"
     VTRefreshWordHealthQuietly
+    operationStage = "cleanup-selection"
     VTCleanupOrphanedNumberedDisplaySelection Selection.Range
 
+    operationStage = "create-identities"
     sessionId = VTNewUuidV4()
     bookmarkName = VTDocumentImportBookmarkName(sessionId)
     sourceDocumentId = VTWordDocumentIdentity()
@@ -5827,10 +6039,13 @@ Public Sub VisualTeX_InsertLatexMarkdownDocument()
     End If
     ActiveDocument.Bookmarks.Add Name:=bookmarkName, Range:=insertionRange
 
+    operationStage = "serialize-request"
     requestJson = VTDocumentImportRequestJson( _
         sessionId, sourceDocumentId, bookmarkName, defaultFontSizePt)
-    VTWriteRequest sessionId, requestJson
-    VTLaunchSession VT_WORD_HOST, sessionId
+    operationStage = "write-and-launch"
+    launchTiming = _
+        VTWriteAndLaunchSession(VT_WORD_HOST, sessionId, requestJson)
+    operationStage = "complete"
     Exit Sub
 
 Failed:
@@ -5844,7 +6059,9 @@ Failed:
     End If
     If Len(sessionId) > 0 Then VTDeleteSessionFiles sessionId
     On Error GoTo 0
-    VTShowError "Word LaTeX/Markdown import", errorNumber, errorDescription
+    VTShowError _
+        "Word LaTeX/Markdown import (" & operationStage & ")", _
+        errorNumber, errorDescription
 End Sub
 
 Public Sub VisualTeX_CreateInline()
@@ -5874,7 +6091,12 @@ End Sub
 ' application event sink when the isolated template is attached to a test file.
 Public Sub VTWordRibbonOnLoad(ByVal ribbon As IRibbonUI)
     Set VT_WORD_RIBBON = ribbon
+    VTInitializeWordDoubleClickTrace
     VTInitializeWordEvents
+    On Error Resume Next
+    VTPrewarmApplication VT_WORD_HOST
+    On Error GoTo 0
+    VTEnsureImageMacroMigrationScheduled
     VTEnsureOrphanWatchScheduled
     VTEnsureImageSizeWatchScheduled
     VTInvalidateWordImageFontSizeControl
@@ -5925,12 +6147,788 @@ Public Sub VTWordRibbonConvertImage(ByVal control As IRibbonControl)
     VisualTeX_ConvertSelectedToImageFormula
 End Sub
 
+Private Function VTNormalizedWordFieldCode(ByVal fieldCode As String) As String
+    fieldCode = Replace$(fieldCode, vbTab, " ")
+    fieldCode = Replace$(fieldCode, ChrW(160), " ")
+    fieldCode = Trim$(fieldCode)
+    Do While InStr(1, fieldCode, "  ", vbBinaryCompare) > 0
+        fieldCode = Replace$(fieldCode, "  ", " ")
+    Loop
+    VTNormalizedWordFieldCode = fieldCode
+End Function
+
+Private Function VTIsVisualTeXImageMacroButtonField( _
+    ByVal candidateField As Field) As Boolean
+
+    Dim fieldCode As String
+    Dim expectedPrefix As String
+
+    If candidateField Is Nothing Then Exit Function
+    If candidateField.Type <> wdFieldMacroButton Then Exit Function
+    fieldCode = UCase$(VTNormalizedWordFieldCode(candidateField.Code.Text))
+    expectedPrefix = UCase$("MACROBUTTON " & VT_WORD_IMAGE_EDIT_MACRO)
+    If Left$(fieldCode, Len(expectedPrefix)) <> expectedPrefix Then Exit Function
+    If Len(fieldCode) > Len(expectedPrefix) Then
+        If Mid$(fieldCode, Len(expectedPrefix) + 1, 1) <> " " Then Exit Function
+    End If
+    VTIsVisualTeXImageMacroButtonField = True
+End Function
+
+Private Function VTContainingFieldForInlineShape( _
+    ByVal formulaShape As InlineShape) As Field
+
+    Dim paragraphRange As Range
+    Dim candidateField As Field
+    Dim match As Field
+    Dim matchCount As Long
+
+    If formulaShape Is Nothing Then Exit Function
+    Set paragraphRange = formulaShape.Range.Paragraphs(1).Range.Duplicate
+    For Each candidateField In paragraphRange.Fields
+        On Error Resume Next
+        Err.Clear
+        If candidateField.Result.Start <= formulaShape.Range.Start And _
+           candidateField.Result.End >= formulaShape.Range.End Then
+            If Err.Number = 0 Then
+                matchCount = matchCount + 1
+                Set match = candidateField
+            End If
+        End If
+        Err.Clear
+        On Error GoTo 0
+    Next candidateField
+    If matchCount > 1 Then
+        Err.Raise vbObjectError + 7593, "VisualTeX", _
+            "The VisualTeX image is nested in multiple Word fields."
+    End If
+    If matchCount = 1 Then Set VTContainingFieldForInlineShape = match
+End Function
+
+Private Function VTVisualTeXImageMacroButtonFieldForShape( _
+    ByVal formulaShape As InlineShape) As Field
+
+    Dim containingField As Field
+
+    Set containingField = VTContainingFieldForInlineShape(formulaShape)
+    If Not containingField Is Nothing Then
+        If VTIsVisualTeXImageMacroButtonField(containingField) Then
+            Set VTVisualTeXImageMacroButtonFieldForShape = containingField
+        End If
+    End If
+End Function
+
+Private Function VTVisualTeXImageMacroButtonFieldNearPosition( _
+    ByVal documentObject As Document, _
+    ByVal expectedStart As Long, _
+    Optional ByVal maximumDistance As Long = 12) As Field
+
+    Dim candidateField As Field
+    Dim match As Field
+    Dim candidateStart As Long
+    Dim candidateDistance As Long
+    Dim bestDistance As Long
+    Dim matchCount As Long
+
+    If documentObject Is Nothing Or expectedStart < 0 Or _
+       maximumDistance < 0 Then Exit Function
+    bestDistance = 2147483647
+    For Each candidateField In documentObject.Fields
+        On Error Resume Next
+        Err.Clear
+        If VTIsVisualTeXImageMacroButtonField(candidateField) Then
+            candidateStart = candidateField.Code.Start - 1
+            candidateDistance = Abs(candidateStart - expectedStart)
+            If Err.Number = 0 And candidateDistance <= maximumDistance Then
+                If candidateDistance < bestDistance Then
+                    bestDistance = candidateDistance
+                    matchCount = 1
+                    Set match = candidateField
+                ElseIf candidateDistance = bestDistance Then
+                    matchCount = matchCount + 1
+                End If
+            End If
+        End If
+        Err.Clear
+        On Error GoTo 0
+    Next candidateField
+    If matchCount = 1 Then
+        Set VTVisualTeXImageMacroButtonFieldNearPosition = match
+    End If
+End Function
+
+Private Function VTVisualTeXImageContainerRange( _
+    ByVal formulaShape As InlineShape) As Range
+
+    Dim macroField As Field
+
+    If formulaShape Is Nothing Then Exit Function
+    Set macroField = VTVisualTeXImageMacroButtonFieldForShape(formulaShape)
+    If macroField Is Nothing Then
+        Set VTVisualTeXImageContainerRange = formulaShape.Range.Duplicate
+    Else
+        Set VTVisualTeXImageContainerRange = macroField.Result.Duplicate
+        VTVisualTeXImageContainerRange.Start = macroField.Code.Start - 1
+        VTVisualTeXImageContainerRange.End = macroField.Result.End + 1
+    End If
+End Function
+
+Private Function VTMacroButtonResultHasOnlyImage( _
+    ByVal macroField As Field) As Boolean
+
+    Dim resultShape As InlineShape
+
+    If macroField Is Nothing Or _
+       Not VTIsVisualTeXImageMacroButtonField(macroField) Then Exit Function
+    If macroField.Result.InlineShapes.Count <> 1 Or _
+       macroField.Result.OMaths.Count <> 0 Then Exit Function
+    Set resultShape = macroField.Result.InlineShapes(1)
+    If macroField.Result.Start <> resultShape.Range.Start Or _
+       macroField.Result.End <> resultShape.Range.End Then Exit Function
+    VTMacroButtonResultHasOnlyImage = True
+End Function
+
+Private Function VTMacroButtonResultDiagnostic( _
+    ByVal macroField As Field) As String
+
+    Dim resultText As String
+    Dim firstCode As Long
+    Dim secondCode As Long
+
+    On Error Resume Next
+    If macroField Is Nothing Then
+        VTMacroButtonResultDiagnostic = "field=nothing"
+        Exit Function
+    End If
+    resultText = macroField.Result.Text
+    If Len(resultText) >= 1 Then firstCode = AscW(Left$(resultText, 1))
+    If Len(resultText) >= 2 Then secondCode = AscW(Mid$(resultText, 2, 1))
+    VTMacroButtonResultDiagnostic = _
+        "type=" & CStr(macroField.Type) & _
+        " shapes=" & CStr(macroField.Result.InlineShapes.Count) & _
+        " omaths=" & CStr(macroField.Result.OMaths.Count) & _
+        " textLen=" & CStr(Len(resultText)) & _
+        " firstCode=" & CStr(firstCode) & _
+        " secondCode=" & CStr(secondCode)
+    On Error GoTo 0
+End Function
+
+Private Function VTParagraphHasSingleVisualTeXImageMacroButton( _
+    ByVal paragraphRange As Range) As Boolean
+
+    ' Compatibility name retained for existing call sites. The current image
+    ' structure is one plain InlineShape with no enclosing Word field; block
+    ' versus inline layout remains determined by displayMode and the paragraph.
+    If paragraphRange Is Nothing Then Exit Function
+    If paragraphRange.Fields.Count <> 0 Or _
+       paragraphRange.InlineShapes.Count <> 1 Or _
+       paragraphRange.OMaths.Count <> 0 Then Exit Function
+    VTParagraphHasSingleVisualTeXImageMacroButton = _
+        VTIsVisualTeXInlineShape(paragraphRange.InlineShapes(1))
+End Function
+
+Public Function VTEnsureVisualTeXImageMacroButton( _
+    ByVal formulaShape As InlineShape) As InlineShape
+
+    Dim documentObject As Document
+    Dim containingField As Field
+    Dim backupDocument As Document
+    Dim backupRange As Range
+    Dim insertionRange As Range
+    Dim restoredShape As InlineShape
+    Dim candidateShape As InlineShape
+    Dim imageIndex As Long
+    Dim sourceStart As Long
+    Dim sourceTitle As String
+    Dim sourceAlternativeText As String
+    Dim sourceWidth As Single
+    Dim sourceHeight As Single
+    Dim sourceBaseline As Long
+    Dim sourceLockAspectRatio As Long
+    Dim sourceRemoved As Boolean
+    Dim matchCount As Long
+    Dim normalizeErrorNumber As Long
+    Dim normalizeErrorDescription As String
+
+    ' Word's InlineShape object type is used for both inline formulas and
+    ' display formulas placed in their own centred paragraph. The displayMode
+    ' metadata and paragraph layout remain authoritative; this routine only
+    ' removes the legacy MACROBUTTON field wrapper that can refresh to a visible
+    ' fallback glyph and replace the actual formula artwork.
+    If formulaShape Is Nothing Then
+        Err.Raise vbObjectError + 7593, "VisualTeX", _
+            "The VisualTeX image target is missing."
+    End If
+    Set containingField = VTContainingFieldForInlineShape(formulaShape)
+    If containingField Is Nothing Then
+        Set VTEnsureVisualTeXImageMacroButton = formulaShape
+        Exit Function
+    End If
+    If Not VTIsVisualTeXImageMacroButtonField(containingField) Or _
+       Not VTMacroButtonResultHasOnlyImage(containingField) Then
+        Err.Raise vbObjectError + 7593, "VisualTeX", _
+            "The VisualTeX image is contained by an incompatible Word field."
+    End If
+
+    Set documentObject = formulaShape.Range.Document
+    sourceStart = containingField.Code.Start - 1
+    sourceTitle = formulaShape.Title
+    sourceAlternativeText = formulaShape.AlternativeText
+    sourceWidth = formulaShape.Width
+    sourceHeight = formulaShape.Height
+    sourceBaseline = formulaShape.Range.Font.Position
+    sourceLockAspectRatio = formulaShape.LockAspectRatio
+    On Error GoTo NormalizeFailed
+
+    Set backupDocument = Documents.Add(Visible:=False)
+    Set backupRange = backupDocument.Content.Duplicate
+    backupRange.Collapse wdCollapseStart
+    backupRange.FormattedText = formulaShape.Range.FormattedText
+    If backupDocument.InlineShapes.Count <> 1 Then
+        Err.Raise vbObjectError + 7593, "VisualTeX", _
+            "Word could not back up the legacy VisualTeX image field result."
+    End If
+    Set backupRange = backupDocument.InlineShapes(1).Range.Duplicate
+
+    containingField.Locked = False
+    containingField.Delete
+    sourceRemoved = True
+    Set containingField = Nothing
+    Set formulaShape = Nothing
+    Set insertionRange = documentObject.Range( _
+        Start:=sourceStart, End:=sourceStart)
+    insertionRange.FormattedText = backupRange.FormattedText
+    documentObject.Activate
+
+    For Each candidateShape In documentObject.InlineShapes
+        If candidateShape.Range.Start = sourceStart Then
+            matchCount = matchCount + 1
+            Set restoredShape = candidateShape
+        End If
+    Next candidateShape
+    If matchCount <> 1 Or restoredShape Is Nothing Then
+        Err.Raise vbObjectError + 7593, "VisualTeX", _
+            "Word did not restore exactly one plain VisualTeX image after removing its legacy field."
+    End If
+
+    restoredShape.LockAspectRatio = msoFalse
+    restoredShape.Width = sourceWidth
+    restoredShape.Height = sourceHeight
+    restoredShape.LockAspectRatio = sourceLockAspectRatio
+    restoredShape.Range.Font.Position = sourceBaseline
+    restoredShape.Title = sourceTitle
+    restoredShape.AlternativeText = sourceAlternativeText
+    Set containingField = VTContainingFieldForInlineShape(restoredShape)
+    If Abs(restoredShape.Width - sourceWidth) > 0.1 Or _
+       Abs(restoredShape.Height - sourceHeight) > 0.1 Or _
+       restoredShape.Range.Font.Position <> sourceBaseline Or _
+       StrComp(restoredShape.Title, sourceTitle, vbBinaryCompare) <> 0 Or _
+       StrComp(restoredShape.AlternativeText, sourceAlternativeText, _
+           vbBinaryCompare) <> 0 Or _
+       Not containingField Is Nothing Then
+        Err.Raise vbObjectError + 7593, "VisualTeX", _
+            "Word changed the VisualTeX image while removing its legacy field wrapper."
+    End If
+
+    Set VTEnsureVisualTeXImageMacroButton = restoredShape
+    backupDocument.Close SaveChanges:=wdDoNotSaveChanges
+    Exit Function
+
+NormalizeFailed:
+    normalizeErrorNumber = Err.Number
+    normalizeErrorDescription = Err.Description
+    On Error Resume Next
+    If sourceRemoved And Not documentObject Is Nothing Then
+        For imageIndex = documentObject.InlineShapes.Count To 1 Step -1
+            If documentObject.InlineShapes(imageIndex).Range.Start = _
+               sourceStart Then
+                documentObject.InlineShapes(imageIndex).Delete
+            End If
+        Next imageIndex
+        If Not backupRange Is Nothing Then
+            Set insertionRange = documentObject.Range( _
+                Start:=sourceStart, End:=sourceStart)
+            insertionRange.FormattedText = backupRange.FormattedText
+        End If
+    End If
+    If Not backupDocument Is Nothing Then
+        backupDocument.Close SaveChanges:=wdDoNotSaveChanges
+    End If
+    On Error GoTo 0
+    Err.Raise normalizeErrorNumber, "VisualTeX image field migration", _
+        normalizeErrorDescription
+End Function
+
+Private Function VTWrapVisualTeXImageMacroButtonLegacy( _
+    ByVal formulaShape As InlineShape) As InlineShape
+
+    Dim documentObject As Document
+    Dim backupDocument As Document
+    Dim backupRange As Range
+    Dim insertionRange As Range
+    Dim restoreRange As Range
+    Dim containingField As Field
+    Dim macroField As Field
+    Dim wrappedShape As InlineShape
+    Dim candidateShape As InlineShape
+    Dim rollbackField As Field
+    Dim candidateStart As Long
+    Dim wrappedMatchCount As Long
+    Dim sourceStart As Long
+    Dim sourceTitle As String
+    Dim sourceAlternativeText As String
+    Dim sourceWidth As Single
+    Dim sourceHeight As Single
+    Dim sourceBaseline As Long
+    Dim sourceLockAspectRatio As Long
+    Dim sourceDeleted As Boolean
+    Dim wrapErrorNumber As Long
+    Dim wrapErrorDescription As String
+
+    If formulaShape Is Nothing Then
+        Err.Raise vbObjectError + 7593, "VisualTeX", _
+            "The VisualTeX image MacroButton target is missing."
+    End If
+    Set containingField = VTContainingFieldForInlineShape(formulaShape)
+    If Not containingField Is Nothing Then
+        If Not VTIsVisualTeXImageMacroButtonField(containingField) Or _
+           Not VTMacroButtonResultHasOnlyImage(containingField) Then
+            Err.Raise vbObjectError + 7593, "VisualTeX", _
+                "The VisualTeX image is already contained by an incompatible Word field."
+        End If
+        containingField.Locked = True
+        Set VTWrapVisualTeXImageMacroButtonLegacy = formulaShape
+        Exit Function
+    End If
+
+    Set documentObject = formulaShape.Range.Document
+    sourceStart = formulaShape.Range.Start
+    sourceTitle = formulaShape.Title
+    sourceAlternativeText = formulaShape.AlternativeText
+    sourceWidth = formulaShape.Width
+    sourceHeight = formulaShape.Height
+    sourceBaseline = formulaShape.Range.Font.Position
+    sourceLockAspectRatio = formulaShape.LockAspectRatio
+    On Error GoTo WrapFailed
+
+    ' Keep a clipboard-free FormattedText backup. Fields.Add replaces its Range
+    ' on some Mac Word builds, so the source image is not used as the only copy.
+    Set backupDocument = Documents.Add(Visible:=False)
+    Set backupRange = backupDocument.Content.Duplicate
+    backupRange.Collapse wdCollapseStart
+    backupRange.FormattedText = formulaShape.Range.FormattedText
+    If backupDocument.InlineShapes.Count <> 1 Then
+        Err.Raise vbObjectError + 7593, "VisualTeX", _
+            "Word could not back up the VisualTeX image before field wrapping."
+    End If
+    Set backupRange = backupDocument.InlineShapes(1).Range.Duplicate
+    documentObject.Activate
+
+    ' Remove the original before creating the field. Inserting a field at the
+    ' same position can cause Word for Mac to rebind the original InlineShape
+    ' COM object to the newly copied field result; deleting it afterwards then
+    ' deletes the replacement and leaves an empty MacroButton.
+    formulaShape.Delete
+    sourceDeleted = True
+    Set insertionRange = documentObject.Range( _
+        Start:=sourceStart, End:=sourceStart)
+    ' Word can only keep an image inside a field result reliably when Word
+    ' itself creates that result. Build an INCLUDEPICTURE field from the bundled
+    ' placeholder, then change only its field code to MACROBUTTON without an
+    ' update. The existing image result remains inside the field container.
+    Set macroField = documentObject.Fields.Add( _
+        Range:=insertionRange, Type:=wdFieldIncludePicture, _
+        Text:="""" & VTPlaceholderImagePath() & """", _
+        PreserveFormatting:=False)
+    macroField.Locked = False
+    macroField.Update
+    If macroField.Result.InlineShapes.Count <> 1 Then
+        Err.Raise vbObjectError + 7593, "VisualTeX", _
+            "Word did not create the MacroButton placeholder picture result."
+    End If
+    macroField.Code.Text = _
+        " MACROBUTTON " & VT_WORD_IMAGE_EDIT_MACRO & " "
+    ' Keep the field unlocked while Word transfers and normalizes the image
+    ' Result. Locking at this point makes Word lay out a display MacroButton as
+    ' its fallback text instead of as the picture, which shifts it left. The
+    ' ordinary display token preserves Word's native image-field layout; the
+    ' final event-drain validation below rejects any refresh that exposes it.
+    Set macroField = Nothing
+    DoEvents
+    Set macroField = VTVisualTeXImageMacroButtonFieldNearPosition( _
+        documentObject, sourceStart)
+    If macroField Is Nothing Or macroField.Result.InlineShapes.Count <> 1 Then
+        Err.Raise vbObjectError + 7593, "VisualTeX", _
+            "Word did not preserve the picture result after changing the field code" & _
+            " [documentFields=" & CStr(documentObject.Fields.Count) & _
+            "; documentShapes=" & CStr(documentObject.InlineShapes.Count) & _
+            "; nearField=" & VTMacroButtonResultDiagnostic(macroField) & "]."
+    End If
+
+    ' Replace only the placeholder InlineShape character. Replacing the whole
+    ' Field.Result pushes the picture outside the field on Word for Mac 16.89.
+    Set wrappedShape = macroField.Result.InlineShapes(1)
+    Set insertionRange = wrappedShape.Range.Duplicate
+    insertionRange.FormattedText = backupRange.FormattedText
+    Set macroField = Nothing
+    Set wrappedShape = Nothing
+    DoEvents
+    Set macroField = VTVisualTeXImageMacroButtonFieldNearPosition( _
+        documentObject, sourceStart)
+    If macroField Is Nothing Or macroField.Result.InlineShapes.Count <> 1 Then
+        Err.Raise vbObjectError + 7593, "VisualTeX", _
+            "Word lost the MacroButton picture result while replacing the placeholder" & _
+            " [documentFields=" & CStr(documentObject.Fields.Count) & _
+            "; documentShapes=" & CStr(documentObject.InlineShapes.Count) & _
+            "; nearField=" & VTMacroButtonResultDiagnostic(macroField) & "]."
+    End If
+    Set wrappedShape = macroField.Result.InlineShapes(1)
+
+    ' INCLUDEPICTURE can leave one path character in the preserved Result after
+    ' its field code is changed to MACROBUTTON. Remove any text around the sole
+    ' image, reacquiring the Field and InlineShape after every mutation.
+    If macroField.Result.Start < wrappedShape.Range.Start Then
+        Set restoreRange = documentObject.Range( _
+            Start:=macroField.Result.Start, End:=wrappedShape.Range.Start)
+        restoreRange.Delete
+        Set macroField = VTVisualTeXImageMacroButtonFieldNearPosition( _
+            documentObject, sourceStart)
+        If macroField Is Nothing Or _
+           macroField.Result.InlineShapes.Count <> 1 Then
+            Err.Raise vbObjectError + 7593, "VisualTeX", _
+                "Word lost the MacroButton image while removing result prefix."
+        End If
+        Set wrappedShape = macroField.Result.InlineShapes(1)
+    End If
+    If wrappedShape.Range.End < macroField.Result.End Then
+        Set restoreRange = documentObject.Range( _
+            Start:=wrappedShape.Range.End, End:=macroField.Result.End)
+        restoreRange.Delete
+        Set macroField = VTVisualTeXImageMacroButtonFieldNearPosition( _
+            documentObject, sourceStart)
+        If macroField Is Nothing Or _
+           macroField.Result.InlineShapes.Count <> 1 Then
+            Err.Raise vbObjectError + 7593, "VisualTeX", _
+                "Word lost the MacroButton image while removing result suffix."
+        End If
+        Set wrappedShape = macroField.Result.InlineShapes(1)
+    End If
+
+    Set macroField = VTVisualTeXImageMacroButtonFieldForShape(wrappedShape)
+    If macroField Is Nothing Or _
+       Not VTMacroButtonResultHasOnlyImage(macroField) Then
+        Err.Raise vbObjectError + 7593, "VisualTeX", _
+            "Word did not create one clean VisualTeX image MacroButton result: " & _
+            VTMacroButtonResultDiagnostic(macroField)
+    End If
+    wrappedShape.LockAspectRatio = msoFalse
+    wrappedShape.Width = sourceWidth
+    wrappedShape.Height = sourceHeight
+    wrappedShape.LockAspectRatio = sourceLockAspectRatio
+    wrappedShape.Range.Font.Position = sourceBaseline
+    wrappedShape.Title = sourceTitle
+    wrappedShape.AlternativeText = sourceAlternativeText
+    If Abs(wrappedShape.Width - sourceWidth) > 0.1 Or _
+       Abs(wrappedShape.Height - sourceHeight) > 0.1 Or _
+       wrappedShape.Range.Font.Position <> sourceBaseline Or _
+       StrComp(wrappedShape.Title, sourceTitle, vbBinaryCompare) <> 0 Or _
+       StrComp(wrappedShape.AlternativeText, sourceAlternativeText, _
+           vbBinaryCompare) <> 0 Then
+        Err.Raise vbObjectError + 7593, "VisualTeX", _
+            "Word changed VisualTeX image metadata or geometry while field wrapping."
+    End If
+
+    Set macroField = VTVisualTeXImageMacroButtonFieldForShape(wrappedShape)
+    If macroField Is Nothing Or _
+       Not VTMacroButtonResultHasOnlyImage(macroField) Then
+        Err.Raise vbObjectError + 7593, "VisualTeX", _
+            "The VisualTeX image MacroButton became invalid after metadata restoration."
+    End If
+    macroField.Locked = True
+    Set macroField = Nothing
+    Set wrappedShape = Nothing
+    ' Drain any field refresh queued while the MacroButton was unlocked, then
+    ' resolve from document position instead of trusting stale COM wrappers.
+    ' The transaction succeeds only if the pure formula picture survives.
+    DoEvents
+    Set macroField = VTVisualTeXImageMacroButtonFieldNearPosition( _
+        documentObject, sourceStart, 16)
+    If macroField Is Nothing Or _
+       Not macroField.Locked Or _
+       Not VTMacroButtonResultHasOnlyImage(macroField) Then
+        Err.Raise vbObjectError + 7593, "VisualTeX", _
+            "Word refreshed the committed MacroButton away from its formula picture: " & _
+            VTMacroButtonResultDiagnostic(macroField)
+    End If
+    Set wrappedShape = macroField.Result.InlineShapes(1)
+    Set VTWrapVisualTeXImageMacroButtonLegacy = wrappedShape
+    backupDocument.Close SaveChanges:=wdDoNotSaveChanges
+    Exit Function
+
+WrapFailed:
+    wrapErrorNumber = Err.Number
+    wrapErrorDescription = Err.Description
+    On Error Resume Next
+    If Not macroField Is Nothing Then macroField.Delete
+    Set macroField = Nothing
+    ' A structural mutation can invalidate the original Field COM wrapper
+    ' before rollback. Resolve and remove any half-created MacroButton by its
+    ' durable document position so a visible fallback glyph can never remain.
+    Set rollbackField = VTVisualTeXImageMacroButtonFieldNearPosition( _
+        documentObject, sourceStart, 16)
+    If Not rollbackField Is Nothing Then rollbackField.Delete
+    If sourceDeleted And Not backupRange Is Nothing Then
+        Set restoreRange = documentObject.Range( _
+            Start:=sourceStart, End:=sourceStart)
+        restoreRange.FormattedText = backupRange.FormattedText
+    End If
+    If Not backupDocument Is Nothing Then
+        backupDocument.Close SaveChanges:=wdDoNotSaveChanges
+    End If
+    On Error GoTo 0
+    Err.Raise wrapErrorNumber, "VisualTeX image MacroButton", _
+        wrapErrorDescription
+End Function
+
+Private Sub VTDeleteVisualTeXImageContainer( _
+    ByVal formulaShape As InlineShape)
+
+    Dim macroField As Field
+
+    If formulaShape Is Nothing Then Exit Sub
+    Set macroField = VTVisualTeXImageMacroButtonFieldForShape(formulaShape)
+    If macroField Is Nothing Then
+        formulaShape.Delete
+    Else
+        macroField.Delete
+    End If
+End Sub
+
+Public Sub VTCleanupEmptyVisualTeXImageMacroButtons( _
+    ByVal selectedRange As Range)
+
+    Dim paragraphRange As Range
+    Dim candidateField As Field
+    Dim fieldIndex As Long
+
+    If selectedRange Is Nothing Or VTWordInternalMutationActive() Then Exit Sub
+    Set paragraphRange = selectedRange.Paragraphs(1).Range.Duplicate
+    For fieldIndex = paragraphRange.Fields.Count To 1 Step -1
+        Set candidateField = paragraphRange.Fields(fieldIndex)
+        If VTIsVisualTeXImageMacroButtonField(candidateField) Then
+            If candidateField.Result.InlineShapes.Count = 0 Then
+                candidateField.Delete
+            End If
+        End If
+    Next fieldIndex
+End Sub
+
+Public Sub VisualTeX_RefreshImageMacroButtonsForRegression()
+    Dim candidateField As Field
+    Dim macroButtonCount As Long
+
+    If Documents.Count = 0 Then
+        Err.Raise vbObjectError + 7593, "VisualTeX regression", _
+            "There is no active Word document for MacroButton verification."
+    End If
+    For Each candidateField In ActiveDocument.Fields
+        If VTIsVisualTeXImageMacroButtonField(candidateField) Then
+            macroButtonCount = macroButtonCount + 1
+            If Not candidateField.Locked Then
+                Err.Raise vbObjectError + 7593, "VisualTeX regression", _
+                    "A committed VisualTeX image MacroButton is not locked."
+            End If
+            ' Exercise Word's normal field-refresh request while the field is
+            ' locked. Some builds return error 4605 and others report a no-op;
+            ' either result is acceptable only if the pure picture survives.
+            On Error Resume Next
+            Err.Clear
+            candidateField.Update
+            Err.Clear
+            On Error GoTo 0
+            If Not VTMacroButtonResultHasOnlyImage(candidateField) Then
+                Err.Raise vbObjectError + 7593, "VisualTeX regression", _
+                    "A Word field refresh replaced the VisualTeX formula picture: " & _
+                    VTMacroButtonResultDiagnostic(candidateField)
+            End If
+        End If
+    Next candidateField
+    If macroButtonCount = 0 Then
+        Err.Raise vbObjectError + 7593, "VisualTeX regression", _
+            "The test document contains no VisualTeX image MacroButton."
+    End If
+End Sub
+
+Public Sub VisualTeX_WriteSelectedScreenBoundsForRegression()
+    Dim formulaShape As InlineShape
+    Dim nativeBookmark As Bookmark
+    Dim targetRange As Range
+    Dim screenLeft As Long
+    Dim screenTop As Long
+    Dim screenWidth As Long
+    Dim screenHeight As Long
+    Dim statusPath As String
+    Dim regressionErrorNumber As Long
+    Dim regressionErrorDescription As String
+
+    statusPath = VTApplicationSupportRoot() & _
+        "/physical-double-click-screen-bounds.txt"
+    On Error GoTo Failed
+    If Documents.Count = 0 Then
+        Err.Raise vbObjectError + 7593, "VisualTeX regression", _
+            "There is no active Word document for physical double-click bounds."
+    End If
+    Set formulaShape = VTVisualTeXInlineShapeAtSelection(Selection)
+    If Not formulaShape Is Nothing Then
+        Set targetRange = formulaShape.Range.Duplicate
+    Else
+        Set nativeBookmark = _
+            VTFindNativeFormulaBookmark(Selection.Range, False)
+        If Not nativeBookmark Is Nothing Then
+            Set targetRange = nativeBookmark.Range.Duplicate
+        End If
+    End If
+    If targetRange Is Nothing Then
+        Err.Raise vbObjectError + 7593, "VisualTeX regression", _
+            "The selected physical double-click target is not a VisualTeX formula."
+    End If
+    ActiveWindow.GetPoint _
+        screenLeft, screenTop, screenWidth, screenHeight, targetRange
+    If screenWidth <= 0 Or screenHeight <= 0 Then
+        Err.Raise vbObjectError + 7593, "VisualTeX regression", _
+            "Word returned invalid physical double-click screen bounds."
+    End If
+    VTWriteTextAtomic statusPath, _
+        "PASS|" & CStr(screenLeft) & "|" & CStr(screenTop) & "|" & _
+        CStr(screenWidth) & "|" & CStr(screenHeight) & vbLf
+    Exit Sub
+
+Failed:
+    regressionErrorNumber = Err.Number
+    regressionErrorDescription = Err.Description
+    On Error Resume Next
+    VTWriteTextAtomic statusPath, _
+        "FAIL|" & CStr(regressionErrorNumber) & "|" & _
+        Replace$(Replace$(regressionErrorDescription, vbCr, " "), _
+            vbLf, " ") & vbLf
+    On Error GoTo 0
+End Sub
+
+Private Sub VTCleanupDocumentEmptyVisualTeXImageMacroButtons( _
+    ByVal documentObject As Document)
+
+    Dim candidateField As Field
+    Dim fieldIndex As Long
+
+    If documentObject Is Nothing Then Exit Sub
+    For fieldIndex = documentObject.Fields.Count To 1 Step -1
+        Set candidateField = documentObject.Fields(fieldIndex)
+        If VTIsVisualTeXImageMacroButtonField(candidateField) Then
+            If candidateField.Result.InlineShapes.Count = 0 Then
+                candidateField.Delete
+            End If
+        End If
+    Next fieldIndex
+End Sub
+
+Private Function VTDocumentImageMacroSchemaCurrent( _
+    ByVal documentObject As Document) As Boolean
+
+    Dim schemaValue As String
+
+    If documentObject Is Nothing Then Exit Function
+    If VTTryGetDocumentVariable( _
+       documentObject, VT_WORD_IMAGE_MACRO_SCHEMA_VARIABLE, _
+       schemaValue) Then
+        VTDocumentImageMacroSchemaCurrent = _
+            (schemaValue = VT_WORD_IMAGE_MACRO_SCHEMA_VERSION)
+    End If
+End Function
+
+Private Sub VTMigrateDocumentImageMacroButtons( _
+    ByVal documentObject As Document)
+
+    Dim formulaShape As InlineShape
+    Dim imageIndex As Long
+    Dim wasSaved As Boolean
+    Dim internalMutationStarted As Boolean
+    Dim migrationErrorNumber As Long
+    Dim migrationErrorDescription As String
+
+    If documentObject Is Nothing Then Exit Sub
+    If documentObject.ReadOnly Or _
+       documentObject.ProtectionType <> wdNoProtection Then Exit Sub
+    If VTDocumentImageMacroSchemaCurrent(documentObject) Then Exit Sub
+
+    On Error GoTo MigrationFailed
+    wasSaved = documentObject.Saved
+    VTBeginWordInternalMutation
+    internalMutationStarted = True
+    VTCleanupDocumentEmptyVisualTeXImageMacroButtons documentObject
+    For imageIndex = documentObject.InlineShapes.Count To 1 Step -1
+        Set formulaShape = documentObject.InlineShapes(imageIndex)
+        If VTIsVisualTeXInlineShape(formulaShape) Then
+            Set formulaShape = _
+                VTEnsureVisualTeXImageMacroButton(formulaShape)
+        End If
+    Next imageIndex
+    VTSetDocumentVariable _
+        documentObject, VT_WORD_IMAGE_MACRO_SCHEMA_VARIABLE, _
+        VT_WORD_IMAGE_MACRO_SCHEMA_VERSION
+    If wasSaved Then documentObject.Saved = True
+    VTEndWordInternalMutation
+    Exit Sub
+
+MigrationFailed:
+    migrationErrorNumber = Err.Number
+    migrationErrorDescription = Err.Description
+    If internalMutationStarted Then VTEndWordInternalMutation
+    On Error Resume Next
+    If wasSaved Then documentObject.Saved = True
+    On Error GoTo 0
+    Err.Raise migrationErrorNumber, "VisualTeX image migration", _
+        migrationErrorDescription
+End Sub
+
+Public Sub VTEnsureImageMacroMigrationScheduled()
+    If VTWordVbeBuildTemplateActive() Then Exit Sub
+    On Error GoTo ScheduleFailed
+    If VT_WORD_IMAGE_MACRO_MIGRATION_SCHEDULED Or _
+       VT_WORD_IMAGE_MACRO_MIGRATION_RUNNING Or _
+       Documents.Count = 0 Then Exit Sub
+    VT_WORD_IMAGE_MACRO_MIGRATION_SCHEDULED = True
+    Application.OnTime _
+        When:=Now + TimeSerial(0, 0, 1), _
+        name:="VisualTeX_MigrateImageMacroButtons"
+    Exit Sub
+
+ScheduleFailed:
+    VT_WORD_IMAGE_MACRO_MIGRATION_SCHEDULED = False
+End Sub
+
+Public Sub VisualTeX_MigrateImageMacroButtons()
+    Dim documentObject As Document
+
+    VT_WORD_IMAGE_MACRO_MIGRATION_SCHEDULED = False
+    If VT_WORD_IMAGE_MACRO_MIGRATION_RUNNING Then Exit Sub
+    VT_WORD_IMAGE_MACRO_MIGRATION_RUNNING = True
+    On Error Resume Next
+    For Each documentObject In Documents
+        VTMigrateDocumentImageMacroButtons documentObject
+        Err.Clear
+    Next documentObject
+    On Error GoTo 0
+    VT_WORD_IMAGE_MACRO_MIGRATION_RUNNING = False
+End Sub
+
 Public Sub VisualTeX_EditSelected()
+    Dim selectedShape As InlineShape
+
     On Error GoTo Failed
 
     VTRequireWritableWordDocument
-    If Selection.InlineShapes.Count = 1 And VTIsVisualTeXInlineShape(Selection.InlineShapes(1)) Then
-        VTWordEditInlineShape Selection.InlineShapes(1)
+    Set selectedShape = VTVisualTeXInlineShapeAtSelection(Selection)
+    If Not selectedShape Is Nothing Then
+        VTWordEditInlineShape selectedShape
     Else
         VTWordEditNativeBookmark VTFindSelectedNativeFormulaBookmark(Selection)
     End If
@@ -5946,40 +6944,53 @@ Public Sub VisualTeX_DoubleClickEditSelected()
     On Error GoTo 0
 End Sub
 
-Public Sub FormatPicture()
-    Dim handled As Boolean
+Public Sub VisualTeX_EditImageField()
+    Dim editErrorNumber As Long
+    Dim editErrorDescription As String
 
-    ' Word for Mac does not raise WindowBeforeDoubleClick for an InlineShape.
-    ' Its physical picture double-click invokes the built-in FormatPicture
-    ' command directly, so this global-template command override is the only
-    ' reliable path into the same VisualTeX target resolver used by OMML.
-    On Error GoTo OpenNativePictureFormatter
-    VTTraceWordDoubleClick "format-picture-enter", Selection, ""
-    handled = VTHandleWordBeforeDoubleClick(Selection)
-    VTTraceWordDoubleClick _
-        "format-picture-handler-result", Selection, _
-        "handled=" & CStr(handled)
-    If handled Then Exit Sub
-
-OpenNativePictureFormatter:
-    If Err.Number <> 0 Then
-        VTTraceWordDoubleClick _
-            "format-picture-handler-error", Selection, _
-            "error=" & CStr(Err.Number) & ":" & Err.Description
-        Err.Clear
+    On Error GoTo Failed
+    VTBeginWordDoubleClickTraceContext
+    VTTraceWordDoubleClick "macrobutton-enter", Selection, ""
+    If Not VTDispatchVisualTeXImageEditAtSelection(Selection) Then
+        VTTraceWordDoubleClick "macrobutton-skip", Selection, _
+            "reason=no-visualtex-image"
     End If
-    VTTraceWordDoubleClick "format-picture-native-fallback", Selection, ""
-    ' WordBasic dispatches the original built-in command without resolving
-    ' this same-name VBA override again. Ordinary pictures therefore retain
-    ' Word's native formatting behavior.
+    VTEndWordDoubleClickTraceContext
+    Exit Sub
+
+Failed:
+    editErrorNumber = Err.Number
+    editErrorDescription = Err.Description
+    VTTraceWordDoubleClick _
+        "macrobutton-error", Selection, _
+        "error=" & CStr(editErrorNumber) & ":" & editErrorDescription
+    VTEndWordDoubleClickTraceContext
+    VTShowError _
+        "Word image formula edit", editErrorNumber, editErrorDescription
+End Sub
+
+Public Sub VisualTeX_EditSelectedImageFromNativeMonitor()
+    On Error GoTo MonitorFailed
+    VTBeginWordDoubleClickTraceContext
+    VTTraceWordDoubleClick "native-monitor-enter", Selection, ""
+    Call VTDispatchVisualTeXImageEditAtSelection(Selection)
+    VTEndWordDoubleClickTraceContext
+    Exit Sub
+
+MonitorFailed:
+    VTTraceWordDoubleClick _
+        "native-monitor-error", Selection, _
+        "error=" & CStr(Err.Number) & ":" & Err.Description
+    VTEndWordDoubleClickTraceContext
+    ' The native monitor observes ordinary pictures too. It is deliberately a
+    ' silent, image-only route and never falls through to OMML or Word commands.
+End Sub
+
+Public Sub FormatPicture()
+    ' Legacy binary-compatible override only. VisualTeX image editing is routed
+    ' by its per-image MACROBUTTON or the strict native-monitor entry point.
     On Error Resume Next
     WordBasic.FormatPicture
-    If Err.Number <> 0 Then
-        VTTraceWordDoubleClick _
-            "format-picture-native-error", Selection, _
-            "error=" & CStr(Err.Number) & ":" & Err.Description
-        Err.Clear
-    End If
     On Error GoTo 0
 End Sub
 
@@ -5988,6 +6999,12 @@ Public Function VTHandleWordBeforeDoubleClick( _
 
     Dim selectedShape As InlineShape
     Dim nativeBookmark As Bookmark
+    Dim formulaId As String
+    Dim displayMode As String
+    Dim numbered As Boolean
+    Dim encodedMetadata As String
+    Dim metadataNeedsWrite As Boolean
+    Dim formatNeedsWrite As Boolean
 
     ' Both the real Application event and the regression macro use this one
     ' target resolver. It must remain a strict no-op for ordinary Word content.
@@ -6006,13 +7023,16 @@ Public Function VTHandleWordBeforeDoubleClick( _
         VTTraceWordDoubleClick "handler-skip", selected, "reason=internal-mutation"
         GoTo HandlerFinished
     End If
-    Set selectedShape = VTVisualTeXInlineShapeAtSelection(selected)
-    If Not selectedShape Is Nothing Then
+    If VTTryResolveVisualTeXInlineShapeAtSelection( _
+       selected, selectedShape, formulaId, displayMode, numbered, _
+       encodedMetadata, metadataNeedsWrite, formatNeedsWrite) Then
         VTTraceWordDoubleClick _
             "handler-image-resolved", selected, _
             VTInlineShapeTraceSummary(selectedShape)
         VTHandleWordBeforeDoubleClick = True
-        VisualTeX_EditInlineShape selectedShape
+        VTWordOpenResolvedInlineShape _
+            selectedShape, formulaId, displayMode, numbered, _
+            encodedMetadata, metadataNeedsWrite, formatNeedsWrite, False
         VTTraceWordDoubleClick "handler-image-edit-dispatched", selected, ""
         GoTo HandlerFinished
     End If
@@ -6026,7 +7046,8 @@ Public Function VTHandleWordBeforeDoubleClick( _
         "handler-native-resolved", selected, _
         "bookmark=" & nativeBookmark.Name
     VTHandleWordBeforeDoubleClick = True
-    VisualTeX_EditNativeSelection selected.Range
+    VTRequireWritableWordDocument
+    VTWordEditNativeBookmark nativeBookmark
     VTTraceWordDoubleClick "handler-native-edit-dispatched", selected, ""
 
 HandlerFinished:
@@ -6224,10 +7245,12 @@ Private Function VTTryResolveVisualTeXInlineShapeReference( _
     ByVal selectedShape As InlineShape, _
     ByRef formulaId As String, _
     ByRef displayMode As String, _
-    ByRef numbered As Boolean) As Boolean
+    ByRef numbered As Boolean, _
+    ByRef encodedMetadata As String, _
+    ByRef metadataNeedsWrite As Boolean, _
+    ByRef formatNeedsWrite As Boolean) As Boolean
 
     Dim documentObject As Document
-    Dim encodedMetadata As String
     Dim storedMetadata As String
     Dim storedDisplayMode As String
     Dim storedNumbered As Boolean
@@ -6241,6 +7264,9 @@ Private Function VTTryResolveVisualTeXInlineShapeReference( _
     formulaId = ""
     displayMode = ""
     numbered = False
+    encodedMetadata = ""
+    metadataNeedsWrite = False
+    formatNeedsWrite = False
     If selectedShape Is Nothing Then Exit Function
     Set documentObject = selectedShape.Range.Document
     titleValue = selectedShape.Title
@@ -6277,6 +7303,7 @@ Private Function VTTryResolveVisualTeXInlineShapeReference( _
         Else
             ' Legacy image formulas can have a valid compact reference before
             ' their document Variables are populated by the first edit.
+            metadataNeedsWrite = True
         End If
 
         On Error Resume Next
@@ -6288,6 +7315,8 @@ Private Function VTTryResolveVisualTeXInlineShapeReference( _
         If formatReadable Then
             displayMode = storedDisplayMode
             numbered = storedNumbered
+        Else
+            formatNeedsWrite = True
         End If
         selectedShape.AlternativeText = encodedMetadata
         selectedShape.Title = _
@@ -6307,6 +7336,7 @@ Private Function VTTryResolveVisualTeXInlineShapeReference( _
        selectedShape) Then Exit Function
     If Not VTTryParseFormulaReference( _
        selectedShape.Title, formulaId, displayMode, numbered) Then Exit Function
+    encodedMetadata = selectedShape.AlternativeText
     VTTryResolveVisualTeXInlineShapeReference = True
     Exit Function
 
@@ -6314,6 +7344,9 @@ InvalidShape:
     formulaId = ""
     displayMode = ""
     numbered = False
+    encodedMetadata = ""
+    metadataNeedsWrite = False
+    formatNeedsWrite = False
     VTTryResolveVisualTeXInlineShapeReference = False
 End Function
 
@@ -6321,27 +7354,60 @@ Public Function VTIsVisualTeXInlineShape(ByVal selectedShape As InlineShape) As 
     Dim formulaId As String
     Dim displayMode As String
     Dim numbered As Boolean
+    Dim encodedMetadata As String
+    Dim metadataNeedsWrite As Boolean
+    Dim formatNeedsWrite As Boolean
 
     On Error GoTo InvalidShape
     VTIsVisualTeXInlineShape = _
         VTTryResolveVisualTeXInlineShapeReference( _
-            selectedShape, formulaId, displayMode, numbered)
+            selectedShape, formulaId, displayMode, numbered, _
+            encodedMetadata, metadataNeedsWrite, formatNeedsWrite)
     Exit Function
 InvalidShape:
     VTIsVisualTeXInlineShape = False
 End Function
 
-Public Function VTVisualTeXInlineShapeAtSelection( _
-    ByVal selected As Selection) As InlineShape
+Private Function VTTryResolveVisualTeXInlineShapeAtSelection( _
+    ByVal selected As Selection, _
+    ByRef resolvedShape As InlineShape, _
+    ByRef formulaId As String, _
+    ByRef displayMode As String, _
+    ByRef numbered As Boolean, _
+    ByRef encodedMetadata As String, _
+    ByRef metadataNeedsWrite As Boolean, _
+    ByRef formatNeedsWrite As Boolean) As Boolean
 
     Dim probeRange As Range
     Dim candidate As InlineShape
+    Dim candidateField As Field
     Dim match As InlineShape
+    Dim candidateFormulaId As String
+    Dim candidateDisplayMode As String
+    Dim candidateNumbered As Boolean
+    Dim candidateMetadata As String
+    Dim candidateMetadataNeedsWrite As Boolean
+    Dim candidateFormatNeedsWrite As Boolean
+    Dim matchFormulaId As String
+    Dim matchDisplayMode As String
+    Dim matchNumbered As Boolean
+    Dim matchMetadata As String
+    Dim matchMetadataNeedsWrite As Boolean
+    Dim matchFormatNeedsWrite As Boolean
     Dim matchCount As Long
     Dim directCount As Long
     Dim candidateCount As Long
+    Dim fieldStart As Long
+    Dim fieldEnd As Long
 
     On Error GoTo InvalidSelection
+    Set resolvedShape = Nothing
+    formulaId = ""
+    displayMode = ""
+    numbered = False
+    encodedMetadata = ""
+    metadataNeedsWrite = False
+    formatNeedsWrite = False
     If selected Is Nothing Then
         VTTraceWordDoubleClick "resolver-skip", selected, "reason=no-selection"
         Exit Function
@@ -6354,15 +7420,64 @@ Public Function VTVisualTeXInlineShapeAtSelection( _
         VTTraceWordDoubleClick _
             "resolver-direct-candidate", selected, _
             VTInlineShapeTraceSummary(selected.InlineShapes(1))
-        If VTIsVisualTeXInlineShape(selected.InlineShapes(1)) Then
-            Set VTVisualTeXInlineShapeAtSelection = selected.InlineShapes(1)
+        If VTTryResolveVisualTeXInlineShapeReference( _
+           selected.InlineShapes(1), formulaId, displayMode, numbered, _
+           encodedMetadata, metadataNeedsWrite, formatNeedsWrite) Then
+            Set resolvedShape = selected.InlineShapes(1)
             VTTraceWordDoubleClick _
                 "resolver-direct-match", selected, _
-                VTInlineShapeTraceSummary(VTVisualTeXInlineShapeAtSelection)
+                VTInlineShapeTraceSummary(resolvedShape)
+            VTTryResolveVisualTeXInlineShapeAtSelection = True
             Exit Function
         End If
         VTTraceWordDoubleClick "resolver-direct-rejected", selected, ""
     End If
+
+    ' A MACROBUTTON can invoke its macro with the caret on a field boundary
+    ' rather than with its result selected. Resolve that exact field before the
+    ' generic adjacent-character fallback, without scanning the document.
+    For Each candidateField In selected.Range.Paragraphs(1).Range.Fields
+        If VTIsVisualTeXImageMacroButtonField(candidateField) And _
+           VTMacroButtonResultHasOnlyImage(candidateField) Then
+            fieldStart = candidateField.Code.Start - 1
+            fieldEnd = candidateField.Result.End + 1
+            If selected.Range.Start <= fieldEnd + 1 And _
+               selected.Range.End >= fieldStart - 1 Then
+                Set candidate = candidateField.Result.InlineShapes(1)
+                If VTTryResolveVisualTeXInlineShapeReference( _
+                   candidate, candidateFormulaId, candidateDisplayMode, _
+                   candidateNumbered, candidateMetadata, _
+                   candidateMetadataNeedsWrite, _
+                   candidateFormatNeedsWrite) Then
+                    matchCount = matchCount + 1
+                    Set match = candidate
+                    matchFormulaId = candidateFormulaId
+                    matchDisplayMode = candidateDisplayMode
+                    matchNumbered = candidateNumbered
+                    matchMetadata = candidateMetadata
+                    matchMetadataNeedsWrite = _
+                        candidateMetadataNeedsWrite
+                    matchFormatNeedsWrite = candidateFormatNeedsWrite
+                End If
+            End If
+        End If
+    Next candidateField
+    If matchCount = 1 Then
+        Set resolvedShape = match
+        formulaId = matchFormulaId
+        displayMode = matchDisplayMode
+        numbered = matchNumbered
+        encodedMetadata = matchMetadata
+        metadataNeedsWrite = matchMetadataNeedsWrite
+        formatNeedsWrite = matchFormatNeedsWrite
+        VTTryResolveVisualTeXInlineShapeAtSelection = True
+        VTTraceWordDoubleClick _
+            "resolver-field-match", selected, _
+            VTInlineShapeTraceSummary(match)
+        Exit Function
+    End If
+    matchCount = 0
+    Set match = Nothing
 
     Set probeRange = selected.Range.Duplicate
     probeRange.MoveStart Unit:=wdCharacter, Count:=-1
@@ -6377,9 +7492,18 @@ Public Function VTVisualTeXInlineShapeAtSelection( _
         VTTraceWordDoubleClick _
             "resolver-adjacent-candidate", selected, _
             VTInlineShapeTraceSummary(candidate)
-        If VTIsVisualTeXInlineShape(candidate) Then
+        If VTTryResolveVisualTeXInlineShapeReference( _
+           candidate, candidateFormulaId, candidateDisplayMode, _
+           candidateNumbered, candidateMetadata, _
+           candidateMetadataNeedsWrite, candidateFormatNeedsWrite) Then
             matchCount = matchCount + 1
             Set match = candidate
+            matchFormulaId = candidateFormulaId
+            matchDisplayMode = candidateDisplayMode
+            matchNumbered = candidateNumbered
+            matchMetadata = candidateMetadata
+            matchMetadataNeedsWrite = candidateMetadataNeedsWrite
+            matchFormatNeedsWrite = candidateFormatNeedsWrite
             VTTraceWordDoubleClick _
                 "resolver-adjacent-match", selected, _
                 "matchCount=" & CStr(matchCount) & " " & _
@@ -6387,7 +7511,14 @@ Public Function VTVisualTeXInlineShapeAtSelection( _
         End If
     Next candidate
     If matchCount = 1 Then
-        Set VTVisualTeXInlineShapeAtSelection = match
+        Set resolvedShape = match
+        formulaId = matchFormulaId
+        displayMode = matchDisplayMode
+        numbered = matchNumbered
+        encodedMetadata = matchMetadata
+        metadataNeedsWrite = matchMetadataNeedsWrite
+        formatNeedsWrite = matchFormatNeedsWrite
+        VTTryResolveVisualTeXInlineShapeAtSelection = True
         VTTraceWordDoubleClick "resolver-complete", selected, "result=single-match"
     Else
         VTTraceWordDoubleClick _
@@ -6400,17 +7531,67 @@ InvalidSelection:
     VTTraceWordDoubleClick _
         "resolver-error", selected, _
         "error=" & CStr(Err.Number) & ":" & Err.Description
-    Set VTVisualTeXInlineShapeAtSelection = Nothing
+    Set resolvedShape = Nothing
+    formulaId = ""
+    displayMode = ""
+    numbered = False
+    encodedMetadata = ""
+    metadataNeedsWrite = False
+    formatNeedsWrite = False
 End Function
 
-Private Sub VTWordEditInlineShape( _
-    ByVal selectedShape As InlineShape, _
-    Optional ByVal convertToNative As Boolean = False)
-    Dim documentObject As Document
-    Dim encodedMetadata As String
+Public Function VTVisualTeXInlineShapeAtSelection( _
+    ByVal selected As Selection) As InlineShape
+
+    Dim formulaShape As InlineShape
     Dim formulaId As String
     Dim displayMode As String
     Dim numbered As Boolean
+    Dim encodedMetadata As String
+    Dim metadataNeedsWrite As Boolean
+    Dim formatNeedsWrite As Boolean
+
+    If VTTryResolveVisualTeXInlineShapeAtSelection( _
+       selected, formulaShape, formulaId, displayMode, numbered, _
+       encodedMetadata, metadataNeedsWrite, formatNeedsWrite) Then
+        Set VTVisualTeXInlineShapeAtSelection = formulaShape
+    End If
+End Function
+
+Private Function VTTimerElapsedSeconds( _
+    ByVal startedAt As Single, _
+    ByVal finishedAt As Single) As Double
+
+    If finishedAt < startedAt Then finishedAt = finishedAt + 86400!
+    VTTimerElapsedSeconds = CDbl(finishedAt) - CDbl(startedAt)
+End Function
+
+Private Function VTImageEditDispatchDebounced( _
+    ByVal formulaId As String) As Boolean
+
+    Dim elapsedSeconds As Double
+
+    If Len(VT_WORD_LAST_IMAGE_EDIT_FORMULA_ID) = 0 Or _
+       StrComp(VT_WORD_LAST_IMAGE_EDIT_FORMULA_ID, formulaId, _
+           vbBinaryCompare) <> 0 Then Exit Function
+    elapsedSeconds = VTTimerElapsedSeconds( _
+        VT_WORD_LAST_IMAGE_EDIT_AT, Timer)
+    VTImageEditDispatchDebounced = _
+        (elapsedSeconds >= 0# And _
+         elapsedSeconds <= VT_WORD_IMAGE_EDIT_DEBOUNCE_SECONDS)
+End Function
+
+Private Sub VTWordOpenResolvedInlineShape( _
+    ByVal selectedShape As InlineShape, _
+    ByVal formulaId As String, _
+    ByVal displayMode As String, _
+    ByVal numbered As Boolean, _
+    ByVal encodedMetadata As String, _
+    ByVal metadataNeedsWrite As Boolean, _
+    ByVal formatNeedsWrite As Boolean, _
+    Optional ByVal convertToNative As Boolean = False)
+
+    Dim documentObject As Document
     Dim sessionId As String
     Dim requestJson As String
     Dim fontSizePt As Double
@@ -6418,6 +7599,10 @@ Private Sub VTWordEditInlineShape( _
     Dim referenceHeightPt As Double
     Dim referenceBaselinePt As Double
     Dim observedWordFontSizePt As Double
+    Dim debounceArmed As Boolean
+    Dim launchTiming As String
+    Dim openErrorNumber As Long
+    Dim openErrorDescription As String
 
     VTTraceWordDoubleClick _
         "edit-inline-enter", Selection, _
@@ -6427,8 +7612,10 @@ Private Sub VTWordEditInlineShape( _
         VTTraceWordDoubleClick "edit-inline-error", Selection, "reason=no-shape"
         Err.Raise vbObjectError + 7400, "VisualTeX", "Select exactly one VisualTeX inline formula."
     End If
-    If Not VTTryResolveVisualTeXInlineShapeReference( _
-       selectedShape, formulaId, displayMode, numbered) Then
+    If Not VTIsCanonicalUuid(formulaId) Or _
+       (displayMode <> "inline" And displayMode <> "block") Or _
+       (numbered And displayMode <> "block") Or _
+       Not VTIsEncodedMetadata(encodedMetadata) Then
         VTTraceWordDoubleClick _
             "edit-inline-error", Selection, _
             "reason=metadata-unrecoverable " & _
@@ -6436,16 +7623,30 @@ Private Sub VTWordEditInlineShape( _
         Err.Raise vbObjectError + 7400, "VisualTeX", _
             "The selected image does not contain recoverable VisualTeX edit metadata."
     End If
+    If Not convertToNative And VTImageEditDispatchDebounced(formulaId) Then
+        VTTraceWordDoubleClick _
+            "edit-inline-debounced", Selection, "formulaId=" & formulaId
+        Exit Sub
+    End If
+    If Not convertToNative Then
+        VT_WORD_LAST_IMAGE_EDIT_FORMULA_ID = formulaId
+        VT_WORD_LAST_IMAGE_EDIT_AT = Timer
+        debounceArmed = True
+    End If
+    On Error GoTo OpenFailed
     Set documentObject = selectedShape.Range.Document
-    encodedMetadata = selectedShape.AlternativeText
     VTSynchronizeWordImageFormulaShape selectedShape
     VTEnsureWordImageScaleState _
         selectedShape, formulaId, displayMode, numbered, fontSizePt, _
         referenceWidthPt, referenceHeightPt, referenceBaselinePt, _
         observedWordFontSizePt
 
-    VTSetWordMetadataPayload documentObject, formulaId, encodedMetadata
-    VTSetWordFormulaFormat documentObject, formulaId, displayMode, numbered
+    If metadataNeedsWrite Then
+        VTSetWordMetadataPayload documentObject, formulaId, encodedMetadata
+    End If
+    If formatNeedsWrite Then
+        VTSetWordFormulaFormat documentObject, formulaId, displayMode, numbered
+    End If
 
     sessionId = VTNewUuidV4()
     requestJson = VTRequestJson( _
@@ -6469,14 +7670,68 @@ Private Sub VTWordEditInlineShape( _
         "formulaId=" & formulaId & _
         " displayMode=" & displayMode & _
         " numbered=" & CStr(numbered)
-    VTWriteRequest sessionId, requestJson
-    VTTraceWordDoubleClick _
-        "edit-inline-request-written", Selection, _
-        "sessionId=" & sessionId
-    VTLaunchSession VT_WORD_HOST, sessionId
+    launchTiming = _
+        VTWriteAndLaunchSession(VT_WORD_HOST, sessionId, requestJson)
     VTTraceWordDoubleClick _
         "edit-inline-editor-launched", Selection, _
-        "sessionId=" & sessionId
+        "sessionId=" & sessionId & " " & launchTiming
+    Exit Sub
+
+OpenFailed:
+    openErrorNumber = Err.Number
+    openErrorDescription = Err.Description
+    If debounceArmed And _
+       StrComp(VT_WORD_LAST_IMAGE_EDIT_FORMULA_ID, formulaId, _
+           vbBinaryCompare) = 0 Then
+        VT_WORD_LAST_IMAGE_EDIT_FORMULA_ID = ""
+        VT_WORD_LAST_IMAGE_EDIT_AT = 0!
+    End If
+    Err.Raise openErrorNumber, "VisualTeX Word image edit", _
+        openErrorDescription
+End Sub
+
+Private Function VTDispatchVisualTeXImageEditAtSelection( _
+    ByVal selected As Selection) As Boolean
+
+    Dim selectedShape As InlineShape
+    Dim formulaId As String
+    Dim displayMode As String
+    Dim numbered As Boolean
+    Dim encodedMetadata As String
+    Dim metadataNeedsWrite As Boolean
+    Dim formatNeedsWrite As Boolean
+
+    If Not VTTryResolveVisualTeXInlineShapeAtSelection( _
+       selected, selectedShape, formulaId, displayMode, numbered, _
+       encodedMetadata, metadataNeedsWrite, formatNeedsWrite) Then Exit Function
+    VTRequireWritableWordDocument
+    VTWordOpenResolvedInlineShape _
+        selectedShape, formulaId, displayMode, numbered, encodedMetadata, _
+        metadataNeedsWrite, formatNeedsWrite, False
+    VTDispatchVisualTeXImageEditAtSelection = True
+End Function
+
+Private Sub VTWordEditInlineShape( _
+    ByVal selectedShape As InlineShape, _
+    Optional ByVal convertToNative As Boolean = False)
+
+    Dim formulaId As String
+    Dim displayMode As String
+    Dim numbered As Boolean
+    Dim encodedMetadata As String
+    Dim metadataNeedsWrite As Boolean
+    Dim formatNeedsWrite As Boolean
+
+    If selectedShape Is Nothing Or _
+       Not VTTryResolveVisualTeXInlineShapeReference( _
+           selectedShape, formulaId, displayMode, numbered, _
+           encodedMetadata, metadataNeedsWrite, formatNeedsWrite) Then
+        Err.Raise vbObjectError + 7400, "VisualTeX", _
+            "The selected image does not contain recoverable VisualTeX edit metadata."
+    End If
+    VTWordOpenResolvedInlineShape _
+        selectedShape, formulaId, displayMode, numbered, encodedMetadata, _
+        metadataNeedsWrite, formatNeedsWrite, convertToNative
 End Sub
 
 Private Sub VTWordEditNativeBookmark(ByVal nativeBookmark As Bookmark)
@@ -6501,6 +7756,14 @@ Private Sub VTWordOpenNativeSession( _
     Dim referenceBaselinePt As Double
     Dim storedFontSizePt As Double
     Dim observedWordFontSizePt As Double
+    Dim bookmarkTrace As String
+    Dim launchTiming As String
+
+    bookmarkTrace = "nothing"
+    If Not nativeBookmark Is Nothing Then bookmarkTrace = nativeBookmark.Name
+    VTTraceWordDoubleClick _
+        "edit-native-enter", Selection, _
+        "bookmark=" & bookmarkTrace
 
     If nativeBookmark Is Nothing Then
         Err.Raise vbObjectError + 7452, "VisualTeX", "Select one VisualTeX native Word equation."
@@ -6518,8 +7781,13 @@ Private Sub VTWordOpenNativeSession( _
     End If
     If Not VTTryReadWordFormulaFormat( _
         documentObject, formulaId, displayMode, numbered) Then
-        Err.Raise vbObjectError + 7456, "VisualTeX", "The selected native equation is missing its VisualTeX display format."
+            Err.Raise vbObjectError + 7456, "VisualTeX", "The selected native equation is missing its VisualTeX display format."
     End If
+    VTTraceWordDoubleClick _
+        "edit-native-resolved", Selection, _
+        "formulaId=" & formulaId & _
+        " displayMode=" & displayMode & _
+        " numbered=" & CStr(numbered)
 
     ' OMath.Range.Font.Size can report the surrounding paragraph's default
     ' size (commonly 11 pt) even when the visible imported equation and its
@@ -6561,8 +7829,11 @@ Private Sub VTWordOpenNativeSession( _
         fontSizePt, _
         referenceWidthPt, _
         referenceHeightPt)
-    VTWriteRequest sessionId, requestJson
-    VTLaunchSession VT_WORD_HOST, sessionId
+    launchTiming = _
+        VTWriteAndLaunchSession(VT_WORD_HOST, sessionId, requestJson)
+    VTTraceWordDoubleClick _
+        "edit-native-editor-launched", Selection, _
+        "sessionId=" & sessionId & " " & launchTiming
 End Sub
 
 Public Sub VisualTeX_ConvertSelectedToNativeEquation()
@@ -7312,7 +8583,13 @@ Private Sub VTDocumentImportInsertFormula( _
     Dim referenceBaselinePt As Double
     Dim observedWordFontSizePt As Double
     Dim numberCreated As Boolean
+    Dim nativeMath As OMath
+    Dim formulaStage As String
+    Dim formulaErrorNumber As Long
+    Dim formulaErrorDescription As String
 
+    On Error GoTo FormulaFailed
+    formulaStage = "validate-input"
     If cursorRange Is Nothing Then
         Err.Raise vbObjectError + 7584, "VisualTeX", _
             "The document formula insertion point is missing."
@@ -7386,42 +8663,73 @@ Private Sub VTDocumentImportInsertFormula( _
     End If
 
     If outputKind = "omml" Then
+        formulaStage = "insert-native"
         Set formulaRange = VTInsertNativeEquationAtRange( _
             targetRange, ommlBase64, nativeDocumentPath, _
             displayMode, displayMode = "block", False)
+
+        ' Word for Mac can invalidate a live OMath Range while document
+        ' Variables are added or replaced. Persist the formula identity before
+        ' writing state, then reacquire the OMath from the durable Bookmark.
+        formulaStage = "bookmark-native-before-state"
+        VTSetNativeFormulaBookmark targetDocument, formulaRange, formulaId
+        formulaStage = "write-latex-state"
         VTSetWordLatexPayload targetDocument, formulaId, latexBase64
+        formulaStage = "write-omml-state"
         VTSetWordOmmlPayload targetDocument, formulaId, ommlBase64
+        formulaStage = "write-metadata-state"
         VTSetWordMetadataPayload targetDocument, formulaId, metadata
+        formulaStage = "write-format-state"
         VTSetWordFormulaFormat _
             targetDocument, formulaId, displayMode, numbered
+        formulaStage = "write-scale-state"
         VTSetWordImageScaleState _
             targetDocument, formulaId, fontSizePt, _
             referenceWidthPt, referenceHeightPt, referenceBaselinePt, _
             fontSizePt
-        VTSetNativeFormulaBookmark targetDocument, formulaRange, formulaId
-
-        If displayMode = "block" Then
-            If numbered Then
-                numberCreated = False
-                Set numberLayoutRange = VTEnsureNativeEquationNumber( _
-                    formulaRange, heightPoints, formulaId, captionText, _
-                    numberCreated)
-                Set formulaRange = _
-                    VTNativeMathForBookmark( _
-                        targetDocument.Bookmarks( _
-                            VTNativeFormulaBookmarkName(formulaId))).Range.Duplicate
-            Else
-                Set formulaRange = _
-                    VTPromoteNativeEquationToDisplay(formulaRange)
-            End If
-        Else
-            Set formulaRange = _
-                VTFinalizeInlineNativeEquation(formulaRange)
+        formulaStage = "resolve-native-after-state"
+        Set nativeMath = VTNativeMathForBookmark( _
+            targetDocument.Bookmarks( _
+                VTNativeFormulaBookmarkName(formulaId)))
+        If nativeMath Is Nothing Then
+            Err.Raise vbObjectError + 7584, "VisualTeX", _
+                "Word lost the imported native equation after storing its state."
         End If
+        Set formulaRange = nativeMath.Range.Duplicate
+
+        ' VTInsertNativeEquationAtRange already applies the requested inline or
+        ' display type. Only numbered display equations need extra layout here.
+        If displayMode = "block" And numbered Then
+            formulaStage = "number-native"
+            numberCreated = False
+            Set numberLayoutRange = VTEnsureNativeEquationNumber( _
+                formulaRange, heightPoints, formulaId, captionText, _
+                numberCreated)
+            Set nativeMath = VTNativeMathForBookmark( _
+                targetDocument.Bookmarks( _
+                    VTNativeFormulaBookmarkName(formulaId)))
+            If nativeMath Is Nothing Then
+                Err.Raise vbObjectError + 7584, "VisualTeX", _
+                    "Word lost the numbered imported native equation."
+            End If
+            Set formulaRange = nativeMath.Range.Duplicate
+        End If
+        formulaStage = "apply-native-font"
         formulaRange.Font.Size = CSng(fontSizePt)
+        formulaStage = "bookmark-native-final"
         VTSetNativeFormulaBookmark targetDocument, formulaRange, formulaId
+        formulaStage = "resolve-native-before-caret"
+        Set nativeMath = VTNativeMathForBookmark( _
+            targetDocument.Bookmarks( _
+                VTNativeFormulaBookmarkName(formulaId)))
+        If nativeMath Is Nothing Then
+            Err.Raise vbObjectError + 7584, "VisualTeX", _
+                "Word lost the imported native equation before caret placement."
+        End If
+        Set formulaRange = nativeMath.Range.Duplicate
         insertedFormulaIds.Add formulaId
 
+        formulaStage = "place-native-caret"
         If displayMode = "block" Then
             VTPlaceCaretAfterDisplayFormula formulaRange, formulaId
             Set cursorRange = Selection.Range.Duplicate
@@ -7466,7 +8774,7 @@ Private Sub VTDocumentImportInsertFormula( _
     candidate.Title = formulaReference
     On Error Resume Next
     candidate.Range.Font.Size = CSng(fontSizePt)
-    On Error GoTo 0
+    On Error GoTo FormulaFailed
     If displayMode = "inline" Then
         candidate.Range.Font.Position = CLng(baselinePoints)
     Else
@@ -7488,6 +8796,17 @@ Private Sub VTDocumentImportInsertFormula( _
         referenceWidthPt, referenceHeightPt, referenceBaselinePt, _
         observedWordFontSizePt
 
+    ' Document.Variable updates can invalidate an InlineShape COM wrapper on
+    ' Word for Mac even though the drawing remains in the document. Resolve the
+    ' newly committed image from its durable metadata before field wrapping.
+    Set candidate = VTFindCommittedInlineShapeInDocument( _
+        targetDocument, metadata, formulaReference)
+    If candidate Is Nothing Then
+        Err.Raise vbObjectError + 7584, "VisualTeX", _
+            "Word could not re-resolve the imported formula image before MacroButton wrapping."
+    End If
+    Set candidate = VTEnsureVisualTeXImageMacroButton(candidate)
+
     If displayMode = "block" Then
         If numbered Then
             numberCreated = False
@@ -7507,9 +8826,19 @@ Private Sub VTDocumentImportInsertFormula( _
         VTPlaceCaretAfterDisplayFormula candidate.Range, formulaId
         Set cursorRange = Selection.Range.Duplicate
     Else
+        Set formulaRange = VTVisualTeXImageContainerRange(candidate)
         Set cursorRange = targetDocument.Range( _
-            Start:=candidate.Range.End, End:=candidate.Range.End)
+            Start:=formulaRange.End, End:=formulaRange.End)
     End If
+    Exit Sub
+
+FormulaFailed:
+    formulaErrorNumber = Err.Number
+    formulaErrorDescription = Err.Description
+    On Error GoTo 0
+    Err.Raise formulaErrorNumber, _
+        "VisualTeX Word document formula import", _
+        formulaStage & ": " & formulaErrorDescription
 End Sub
 
 Private Sub VTTraceDocumentImportStage( _
@@ -7794,6 +9123,38 @@ Failed:
     On Error GoTo 0
     Err.Raise errorNumber, "VisualTeX Word document import", _
         transactionStage & ": " & errorDescription
+End Sub
+
+Public Sub VisualTeX_ApplyPendingResultForRegression()
+    Dim sessionId As String
+    Dim statusPath As String
+    Dim regressionErrorNumber As Long
+    Dim regressionErrorDescription As String
+
+    On Error GoTo Failed
+    sessionId = VTReadActiveSessionId(VT_WORD_HOST)
+    statusPath = VTSessionDirectory(sessionId) & "/word-callback-status.txt"
+    VisualTeX_ApplyPendingResult
+    VTWriteTextAtomic statusPath, "PASS" & vbLf
+    Exit Sub
+
+Failed:
+    regressionErrorNumber = Err.Number
+    regressionErrorDescription = Err.Description
+    On Error Resume Next
+    If Len(statusPath) = 0 And Len(sessionId) > 0 Then
+        statusPath = VTSessionDirectory(sessionId) & _
+            "/word-callback-status.txt"
+    End If
+    If Len(statusPath) > 0 Then
+        VTWriteTextAtomic statusPath, _
+            "FAIL" & vbLf & _
+            "errorNumber=" & CStr(regressionErrorNumber) & vbLf & _
+            "errorDescription=" & Replace$(Replace$( _
+                regressionErrorDescription, vbCr, " "), vbLf, " ") & vbLf
+    End If
+    Err.Clear
+    On Error GoTo 0
 End Sub
 
 Public Sub VisualTeX_ApplyPendingResult()
@@ -8222,6 +9583,7 @@ Private Sub VTWordCreate( _
     Dim insertionRange As Range
     Dim requestJson As String
     Dim requestedFontSizePt As Double
+    Dim launchTiming As String
     Dim errorNumber As Long
     Dim errorDescription As String
 
@@ -8267,9 +9629,11 @@ Private Sub VTWordCreate( _
         "", _
         nativeEquation, _
         requestedFontSizePt)
-    VTWriteRequest sessionId, requestJson
-    VTTraceWordSession sessionId, "request-written", pendingMarker
-    VTLaunchSession VT_WORD_HOST, sessionId
+    launchTiming = _
+        VTWriteAndLaunchSession(VT_WORD_HOST, sessionId, requestJson)
+    VTTraceWordSession _
+        sessionId, "request-written-and-launched", _
+        pendingMarker & " " & launchTiming
     VTTraceWordSession sessionId, "editor-launched", pendingMarker
     Exit Sub
 
@@ -8425,6 +9789,8 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
     Dim targetIsNative As Boolean
     Dim committed As InlineShape
     Dim candidate As InlineShape
+    Dim finalImageField As Field
+    Dim rollbackMacroField As Field
     Dim insertionRange As Range
     Dim widthPoints As Double
     Dim heightPoints As Double
@@ -8461,6 +9827,7 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
     Dim deferNativeDisplay As Boolean
     Dim pendingPlaceholderRemoved As Boolean
     Dim pendingPlaceholderStart As Long
+    Dim committedImageStart As Long
     Dim nativeEquationStart As Long
     Dim restoredPlaceholder As InlineShape
     Dim targetFormulaId As String
@@ -8470,6 +9837,7 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
     Dim internalMutationStarted As Boolean
 
     transactionStage = "validate-document"
+    committedImageStart = -1
     VTRequireWritableWordDocument
     Set targetDocument = ActiveDocument
     VTRequireDispatchValue dispatch, "mode"
@@ -8597,7 +9965,8 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
         originalNativeBookmarkName = nativeTarget.Name
         Set targetRange = originalNativeRange.Duplicate
     ElseIf Not targetImage Is Nothing Then
-        Set targetRange = targetImage.Range.Duplicate
+        Set targetRange = VTVisualTeXImageContainerRange(targetImage)
+        If mode = "create" Then pendingPlaceholderStart = targetImage.Range.Start
     ElseIf targetFromPendingBookmark And Not pendingBookmark Is Nothing Then
         Set targetRange = pendingBookmark.Range.Duplicate
     Else
@@ -8635,6 +10004,8 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
                     referenceHeightPt, referenceBaselinePt, _
                     observedWordFontSizePt
                 VTApplyWordImageFormulaFontSize committed, fontSizePt
+                Set committed = _
+                    VTEnsureVisualTeXImageMacroButton(committed)
                 VTDeletePendingBookmark targetDocument, sessionId
                 GoTo CommitSucceeded
             End If
@@ -8722,7 +10093,7 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
                 pendingPlaceholderStart = targetImage.Range.Start
                 pendingPlaceholderRemoved = True
             End If
-            targetImage.Delete
+            VTDeleteVisualTeXImageContainer targetImage
         End If
 
         transactionStage = "resolve-native-after-source-removal"
@@ -8886,7 +10257,8 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
         End If
         originalNativeBookmarkDeleted = True
     ElseIf Not targetImage Is Nothing Then
-        targetImage.Delete
+        If mode = "create" Then pendingPlaceholderRemoved = True
+        VTDeleteVisualTeXImageContainer targetImage
     End If
 
     transactionStage = "resolve-image-after-source-removal"
@@ -8895,6 +10267,9 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
         Err.Raise vbObjectError + 7426, "VisualTeX", _
             "Word could not resolve the committed formula image after replacement."
     End If
+    committedImageStart = candidate.Range.Start
+    Set candidate = VTEnsureVisualTeXImageMacroButton(candidate)
+    committedImageStart = candidate.Range.Start
 
     If displayMode = "block" Then
         If numbered Then
@@ -8911,6 +10286,19 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
         End If
         transactionStage = "normalize-image-paragraph-spacing"
         VTNormalizeImageDisplayParagraph candidate.Range
+    End If
+
+    transactionStage = "validate-image-native-final"
+    Set candidate = VTFindCommittedInlineShapeInDocument( _
+        targetDocument, metadata, formulaReference)
+    If candidate Is Nothing Then
+        Err.Raise vbObjectError + 7593, "VisualTeX", _
+            "Word lost the committed formula picture after final layout."
+    End If
+    Set finalImageField = VTContainingFieldForInlineShape(candidate)
+    If Not finalImageField Is Nothing Then
+        Err.Raise vbObjectError + 7593, "VisualTeX", _
+            "The committed VisualTeX formula picture is still inside a Word field."
     End If
     VTDeletePendingBookmark targetDocument, sessionId
 
@@ -8981,7 +10369,15 @@ RollbackCandidate:
             End If
         End If
     Else
-        If Not candidate Is Nothing Then candidate.Delete
+        If Not candidate Is Nothing Then
+            VTDeleteVisualTeXImageContainer candidate
+        End If
+        If mode = "create" And committedImageStart >= 0 Then
+            Set rollbackMacroField = _
+                VTVisualTeXImageMacroButtonFieldNearPosition( _
+                    targetDocument, committedImageStart, 16)
+            If Not rollbackMacroField Is Nothing Then rollbackMacroField.Delete
+        End If
         If Not nativeEquationRange Is Nothing Then nativeEquationRange.Delete
         If pendingPlaceholderRemoved Then
             Set insertionRange = targetDocument.Range( _
@@ -9095,21 +10491,38 @@ Private Function VTFindUniqueInlineShape(ByVal marker As String) As InlineShape
     Set VTFindUniqueInlineShape = match
 End Function
 
-Private Function VTFindCommittedInlineShape(ByVal metadata As String, ByVal formulaReference As String) As InlineShape
+Private Function VTFindCommittedInlineShapeInDocument( _
+    ByVal documentObject As Document, _
+    ByVal metadata As String, _
+    ByVal formulaReference As String) As InlineShape
+
     Dim item As InlineShape
     Dim match As InlineShape
     Dim count As Long
 
-    For Each item In ActiveDocument.InlineShapes
+    If documentObject Is Nothing Then Exit Function
+    For Each item In documentObject.InlineShapes
         If item.AlternativeText = metadata And item.Title = formulaReference Then
             count = count + 1
             Set match = item
         End If
     Next item
     If count > 1 Then
-        Err.Raise vbObjectError + 7427, "VisualTeX", "Word contains multiple committed copies of the same VisualTeX Session result."
+        Err.Raise vbObjectError + 7427, "VisualTeX", _
+            "Word contains multiple committed copies of the same VisualTeX Session result."
     End If
-    If count = 1 Then Set VTFindCommittedInlineShape = match
+    If count = 1 Then
+        Set VTFindCommittedInlineShapeInDocument = match
+    End If
+End Function
+
+Private Function VTFindCommittedInlineShape( _
+    ByVal metadata As String, _
+    ByVal formulaReference As String) As InlineShape
+
+    Set VTFindCommittedInlineShape = _
+        VTFindCommittedInlineShapeInDocument( _
+            ActiveDocument, metadata, formulaReference)
 End Function
 
 Private Function VTResolveImageFormulaInParagraph( _
@@ -9140,6 +10553,9 @@ Private Function VTPrependCenterTabPreservingImage( _
     Dim backupRange As Range
     Dim insertionRange As Range
     Dim restoredRange As Range
+    Dim containerRange As Range
+    Dim sourceShape As InlineShape
+    Dim restoredShape As InlineShape
     Dim formulaStart As Long
     Dim sourceAlternativeText As String
     Dim sourceTitle As String
@@ -9151,9 +10567,17 @@ Private Function VTPrependCenterTabPreservingImage( _
             "The numbered formula image backup target is invalid."
     End If
     Set documentObject = formulaRange.Document
+    Set sourceShape = formulaRange.InlineShapes(1)
+    ' Capture metadata before resolving the MacroButton container. Word for Mac
+    ' can invalidate the InlineShape wrapper while its containing Field/Range is
+    ' being resolved, even though the picture remains in the document.
+    sourceAlternativeText = sourceShape.AlternativeText
+    sourceTitle = sourceShape.Title
+    Set containerRange = _
+        VTVisualTeXImageContainerRange(sourceShape)
+    Set sourceShape = Nothing
+    Set formulaRange = containerRange.Duplicate
     formulaStart = formulaRange.Start
-    sourceAlternativeText = formulaRange.InlineShapes(1).AlternativeText
-    sourceTitle = formulaRange.InlineShapes(1).Title
     On Error GoTo RestoreFailed
 
     Set backupDocument = Documents.Add(Visible:=False)
@@ -9175,21 +10599,29 @@ Private Function VTPrependCenterTabPreservingImage( _
         Start:=formulaStart + 1, End:=formulaStart + 1)
     insertionRange.FormattedText = backupRange.FormattedText
     Set restoredRange = documentObject.Range( _
-        Start:=formulaStart + 1, End:=formulaStart + 2)
+        Start:=formulaStart + 1, _
+        End:=documentObject.Range( _
+            formulaStart + 1, formulaStart + 1).Paragraphs(1).Range.End)
     If restoredRange.InlineShapes.Count <> 1 Then
         Err.Raise vbObjectError + 7542, "VisualTeX", _
             "Word could not restore the numbered formula image after the center tab."
     End If
-    restoredRange.InlineShapes(1).AlternativeText = sourceAlternativeText
-    restoredRange.InlineShapes(1).Title = sourceTitle
-    If restoredRange.InlineShapes(1).AlternativeText <> _
+    Set restoredShape = restoredRange.InlineShapes(1)
+    restoredShape.AlternativeText = sourceAlternativeText
+    restoredShape.Title = sourceTitle
+    Set restoredShape = VTEnsureVisualTeXImageMacroButton(restoredShape)
+    ' Field creation and result replacement are structural mutations. Resolve
+    ' the final InlineShape again from its paragraph before reading metadata.
+    Set restoredShape = VTResolveImageFormulaInParagraph( _
+        documentObject, formulaStart)
+    If restoredShape.AlternativeText <> _
        sourceAlternativeText Or _
-       restoredRange.InlineShapes(1).Title <> sourceTitle Then
+       restoredShape.Title <> sourceTitle Then
         Err.Raise vbObjectError + 7542, "VisualTeX", _
             "Word did not preserve the VisualTeX image identity after layout."
     End If
     Set VTPrependCenterTabPreservingImage = _
-        restoredRange.InlineShapes(1).Range.Duplicate
+        restoredShape.Range.Duplicate
     backupDocument.Close SaveChanges:=wdDoNotSaveChanges
     Exit Function
 
@@ -9317,6 +10749,7 @@ Private Function VTInsertEquationNumber( _
 
     Dim documentObject As Document
     Dim paragraphRange As Range
+    Dim formulaContainerRange As Range
     Dim prefixRange As Range
     Dim suffixRange As Range
     Dim insertionRange As Range
@@ -9345,10 +10778,13 @@ Private Function VTInsertEquationNumber( _
             "The numbered formula image target is invalid."
     End If
 
+    Set formulaShape = VTEnsureVisualTeXImageMacroButton(formulaShape)
     Set documentObject = formulaShape.Range.Document
     Set paragraphRange = formulaShape.Range.Paragraphs(1).Range.Duplicate
+    Set formulaContainerRange = _
+        VTVisualTeXImageContainerRange(formulaShape)
     paragraphStart = paragraphRange.Start
-    formulaStart = formulaShape.Range.Start
+    formulaStart = formulaContainerRange.Start
     sequenceBookmarkName = _
         VTEquationSequenceNumberBookmarkName(formulaId)
     numberBookmarkName = VTEquationNumberBookmarkName(formulaId)
@@ -9371,7 +10807,7 @@ Private Function VTInsertEquationNumber( _
     ' Word's built-in Equation cross-reference list a pure number.
     operationStage = "validate-old-number-tail"
     Set suffixRange = documentObject.Range( _
-        Start:=formulaShape.Range.End, End:=paragraphRange.End - 1)
+        Start:=formulaContainerRange.End, End:=paragraphRange.End - 1)
     suffixText = suffixRange.Text
     If documentObject.Bookmarks.Exists(numberBookmarkName) Then
         Set numberRange = documentObject.Bookmarks( _
@@ -9429,8 +10865,10 @@ Private Function VTInsertEquationNumber( _
     Set formulaShape = VTResolveImageFormulaInParagraph( _
         documentObject, paragraphStart)
     Set paragraphRange = formulaShape.Range.Paragraphs(1).Range.Duplicate
+    Set formulaContainerRange = _
+        VTVisualTeXImageContainerRange(formulaShape)
     Set prefixRange = documentObject.Range( _
-        Start:=paragraphRange.Start, End:=formulaShape.Range.Start)
+        Start:=paragraphRange.Start, End:=formulaContainerRange.Start)
     If VTWordRangeHasMeaningfulText(prefixRange) Then
         Err.Raise vbObjectError + 7497, "VisualTeX", _
             "A numbered image formula must occupy its own paragraph."
@@ -10353,6 +11791,7 @@ Private Function VTImageEquationNumberRange( _
     ByVal numberField As Field) As Range
 
     Dim exactRange As Range
+    Dim containerRange As Range
     Dim paragraphRange As Range
     Dim fieldStart As Long
     Dim fieldEnd As Long
@@ -10362,10 +11801,12 @@ Private Function VTImageEquationNumberRange( _
        formulaRange.OMaths.Count <> 0 Or _
        numberField.Type <> wdFieldRef Then Exit Function
     Set exactRange = formulaRange.InlineShapes(1).Range.Duplicate
+    Set containerRange = _
+        VTVisualTeXImageContainerRange(formulaRange.InlineShapes(1))
     Set paragraphRange = exactRange.Paragraphs(1).Range.Duplicate
     fieldStart = VTEquationFieldStart(numberField)
     fieldEnd = VTEquationFieldEnd(numberField)
-    If fieldStart <= exactRange.End Or _
+    If fieldStart <= containerRange.End Or _
        fieldStart < 2 Or fieldEnd >= paragraphRange.End Or _
        exactRange.Document.Range(fieldStart - 2, fieldStart - 1).Text <> vbTab Or _
        exactRange.Document.Range(fieldStart - 1, fieldStart).Text <> "(" Or _
@@ -10382,6 +11823,7 @@ Private Function VTStaticImageEquationNumberRange( _
 
     Dim documentObject As Document
     Dim exactRange As Range
+    Dim containerRange As Range
     Dim paragraphRange As Range
     Dim numberRange As Range
     Dim separatorRange As Range
@@ -10397,15 +11839,17 @@ Private Function VTStaticImageEquationNumberRange( _
     bookmarkName = VTEquationNumberBookmarkName(formulaId)
     If Not documentObject.Bookmarks.Exists(bookmarkName) Then Exit Function
     Set exactRange = formulaRange.InlineShapes(1).Range.Duplicate
+    Set containerRange = _
+        VTVisualTeXImageContainerRange(formulaRange.InlineShapes(1))
     Set paragraphRange = exactRange.Paragraphs(1).Range.Duplicate
     Set numberRange = documentObject.Bookmarks( _
         bookmarkName).Range.Duplicate
     If numberRange.Information(wdWithInTable) Or _
-       numberRange.Start <= exactRange.End Or _
+       numberRange.Start <= containerRange.End Or _
        numberRange.End >= paragraphRange.End Or _
        numberRange.Fields.Count <> 0 Then Exit Function
     Set separatorRange = documentObject.Range( _
-        Start:=exactRange.End, End:=numberRange.Start)
+        Start:=containerRange.End, End:=numberRange.Start)
     If separatorRange.Text <> vbTab Then Exit Function
     visibleText = numberRange.Text
     If Len(visibleText) < 3 Or _
@@ -10422,6 +11866,7 @@ Private Function VTWriteStaticImageEquationNumber( _
     ByVal visibleNumber As String) As Range
 
     Dim formulaShape As InlineShape
+    Dim formulaContainerRange As Range
     Dim paragraphRange As Range
     Dim suffixRange As Range
     Dim insertionRange As Range
@@ -10449,6 +11894,8 @@ Private Function VTWriteStaticImageEquationNumber( _
     End If
 
     Set formulaShape = formulaRange.InlineShapes(1)
+    Set formulaContainerRange = _
+        VTVisualTeXImageContainerRange(formulaShape)
     Set paragraphRange = formulaShape.Range.Paragraphs(1).Range.Duplicate
     paragraphStart = paragraphRange.Start
     bookmarkName = VTEquationNumberBookmarkName(formulaId)
@@ -10456,7 +11903,7 @@ Private Function VTWriteStaticImageEquationNumber( _
         documentObject.Bookmarks(bookmarkName).Delete
     End If
     Set suffixRange = documentObject.Range( _
-        Start:=formulaShape.Range.End, End:=paragraphRange.End - 1)
+        Start:=formulaContainerRange.End, End:=paragraphRange.End - 1)
     For Each legacyField In suffixRange.Fields
         If legacyField.Locked Then legacyField.Locked = False
     Next legacyField
@@ -10464,16 +11911,20 @@ Private Function VTWriteStaticImageEquationNumber( _
 
     Set formulaShape = VTResolveImageFormulaInParagraph( _
         documentObject, paragraphStart)
-    insertionStart = formulaShape.Range.End
+    Set formulaContainerRange = _
+        VTVisualTeXImageContainerRange(formulaShape)
+    insertionStart = formulaContainerRange.End
     Set insertionRange = documentObject.Range( _
         Start:=insertionStart, End:=insertionStart)
     insertionRange.Text = vbTab & "(" & normalizedNumber & ")"
 
     Set formulaShape = VTResolveImageFormulaInParagraph( _
         documentObject, paragraphStart)
+    Set formulaContainerRange = _
+        VTVisualTeXImageContainerRange(formulaShape)
     Set paragraphRange = formulaShape.Range.Paragraphs(1).Range.Duplicate
     Set numberRange = documentObject.Range( _
-        Start:=formulaShape.Range.End + 1, _
+        Start:=formulaContainerRange.End + 1, _
         End:=paragraphRange.End - 1)
     If numberRange.Text <> "(" & normalizedNumber & ")" Or _
        numberRange.Fields.Count <> 0 Then
@@ -11306,7 +12757,8 @@ Private Sub VTVerifyParagraphEquationNumberIntegrity( _
            numberRange.Paragraphs(1).Range.Start <> _
                formulaParagraph.Start Or _
            numberRange.Text <> "(" & expectedText & ")" Or _
-           formulaParagraph.Fields.Count <> 0 Or _
+           Not VTParagraphHasSingleVisualTeXImageMacroButton( _
+               formulaParagraph) Or _
            Not VTEquationCaptionBookmarkIsCollapsedInParagraph( _
                captionRange, helperParagraph) Then
             Err.Raise vbObjectError + 7560, "VisualTeX", _
@@ -12214,6 +13666,7 @@ Private Sub VTAssertStaticImageEquationLayout( _
     Dim separatorRange As Range
     Dim suffixRange As Range
     Dim formulaShape As InlineShape
+    Dim formulaContainerRange As Range
     Dim textWidth As Single
     Dim numberSize As Single
     Dim numberPosition As Long
@@ -12233,6 +13686,8 @@ Private Sub VTAssertStaticImageEquationLayout( _
     End If
     Set documentObject = formulaRange.Document
     Set formulaShape = formulaRange.InlineShapes(1)
+    Set formulaContainerRange = _
+        VTVisualTeXImageContainerRange(formulaShape)
     Set paragraphRange = formulaShape.Range.Paragraphs(1).Range.Duplicate
     Set sequenceField = VTNativeEquationSequenceHelperField( _
         documentObject, formulaId)
@@ -12252,12 +13707,13 @@ Private Sub VTAssertStaticImageEquationLayout( _
     End If
     expectedNumber = VTEquationSequenceResultText(sequenceField)
     Set prefixRange = documentObject.Range( _
-        Start:=paragraphRange.Start, End:=formulaShape.Range.Start)
+        Start:=paragraphRange.Start, End:=formulaContainerRange.Start)
     Set separatorRange = documentObject.Range( _
-        Start:=formulaShape.Range.End, End:=numberRange.Start)
+        Start:=formulaContainerRange.End, End:=numberRange.Start)
     Set suffixRange = documentObject.Range( _
         Start:=numberRange.End, End:=paragraphRange.End)
-    If paragraphRange.Fields.Count <> 0 Or _
+    If Not VTParagraphHasSingleVisualTeXImageMacroButton( _
+           paragraphRange) Or _
        prefixRange.Text <> vbTab Or _
        separatorRange.Text <> vbTab Or _
        suffixRange.Text <> vbCr Or _
@@ -13754,6 +15210,10 @@ Private Function VTEnsureNumberedDisplayTable( _
             "The numbered display formula Range is missing."
     End If
     Set documentObject = formulaRange.Document
+    If formulaIsImage And formulaRange.InlineShapes.Count = 1 Then
+        Set formulaRange = VTVisualTeXImageContainerRange( _
+            formulaRange.InlineShapes(1))
+    End If
 
     If formulaRange.Information(wdWithInTable) Then
         operationStage = "reuse-table"
@@ -15206,6 +16666,11 @@ Private Sub VTPlaceCaretAfterInlineNativeEquation( _
         Err.Raise vbObjectError + 7530, "VisualTeX", _
             "Word could not resolve the inline equation paragraph."
     End If
+    If documentObject.Windows.Count = 0 Then
+        Err.Raise vbObjectError + 7530, "VisualTeX", _
+            "The inline equation document has no active Word window."
+    End If
+    documentObject.Activate
     Set caretRange = documentObject.Range( _
         Start:=exactEquationRange.End, End:=exactEquationRange.End)
     caretRange.Font.Position = 0
@@ -15322,6 +16787,7 @@ Private Function VTInsertNativeEquationAtRange( _
     Dim candidateMath As OMath
     Dim existingMaths As Collection
     Dim insertionStart As Long
+    Dim resolvedEquationStart As Long
     Dim preferredSize As Single
     Dim matchCount As Long
     Dim beforeMathCount As Long
@@ -15417,6 +16883,7 @@ Private Function VTInsertNativeEquationAtRange( _
     replacementApplied = replaceTarget
     stagingDocument.Close SaveChanges:=wdDoNotSaveChanges
     Set stagingDocument = Nothing
+    targetDocument.Activate
 
     ' FormattedText does not reliably expand the caller's Range on every Word
     ' for Mac build. Resolve exactly one meaningful transferred OMath, then
@@ -15481,18 +16948,23 @@ Private Function VTInsertNativeEquationAtRange( _
     End If
 
     Set equationRange = nativeEquation.Range.Duplicate
+    resolvedEquationStart = equationRange.Start
     equationRange.Font.Position = 0
     equationRange.Font.Size = preferredSize
     If displayMode = "inline" Then
         Set equationRange = _
-            VTFinalizeInlineNativeEquation(nativeEquation.Range.Duplicate)
+            VTFinalizeInlineNativeEquation(equationRange)
     Else
         nativeEquation.Type = wdOMathDisplay
         nativeEquation.Justification = wdOMathJcCenter
-        VTNormalizeUnnumberedDisplayParagraph nativeEquation.Range.Duplicate
+        Set equationRange = VTResolveNativeEquationRange( _
+            targetDocument, resolvedEquationStart, 16)
+        VTNormalizeUnnumberedDisplayParagraph equationRange
+        Set equationRange = VTResolveNativeEquationRange( _
+            targetDocument, resolvedEquationStart, 16)
     End If
 
-    Set VTInsertNativeEquationAtRange = nativeEquation.Range.Duplicate
+    Set VTInsertNativeEquationAtRange = equationRange.Duplicate
     If Not replacementBackupDocument Is Nothing Then
         replacementBackupDocument.Close SaveChanges:=wdDoNotSaveChanges
         Set replacementBackupDocument = Nothing
@@ -15560,20 +17032,27 @@ End Function
 Private Function VTFinalizeInlineNativeEquation( _
     ByVal equationRange As Range) As Range
 
+    Dim documentObject As Document
     Dim nativeEquation As OMath
     Dim exactRange As Range
+    Dim equationStart As Long
 
     If equationRange Is Nothing Or equationRange.OMaths.Count <> 1 Then
         Err.Raise vbObjectError + 7475, "VisualTeX", _
             "VisualTeX cannot finalize a missing inline native equation."
     End If
+    Set documentObject = equationRange.Document
+    equationStart = equationRange.OMaths(1).Range.Start
     Set nativeEquation = equationRange.OMaths(1)
     nativeEquation.Type = wdOMathInline
-    Set exactRange = nativeEquation.Range.Duplicate
+    Set exactRange = VTResolveNativeEquationRange( _
+        documentObject, equationStart, 16)
     exactRange.Font.Position = 0
     VTNormalizeInlineNativeParagraphAlignment exactRange
     VTDeleteTrailingInlineNativeSeparator exactRange
-    Set VTFinalizeInlineNativeEquation = nativeEquation.Range.Duplicate
+    Set exactRange = VTResolveNativeEquationRange( _
+        documentObject, equationStart, 16)
+    Set VTFinalizeInlineNativeEquation = exactRange.Duplicate
 End Function
 
 Private Sub VTNormalizeInlineNativeParagraphAlignment( _
@@ -15865,6 +17344,7 @@ Private Sub VTWordConvertInlineShapeToNativeEquation(ByVal target As InlineShape
     Dim nativeDisplayMode As String
     Dim targetDocument As Document
     Dim insertionAnchor As Range
+    Dim sourceContainerRange As Range
     Dim equationRange As Range
     Dim sourceImage As InlineShape
     Dim sourceBackupDocument As Document
@@ -15896,6 +17376,7 @@ Private Sub VTWordConvertInlineShapeToNativeEquation(ByVal target As InlineShape
         Err.Raise vbObjectError + 7431, "VisualTeX", "The selected VisualTeX formula reference is invalid."
     End If
     Set targetDocument = target.Range.Document
+    Set target = VTEnsureVisualTeXImageMacroButton(target)
     VTSynchronizeWordImageFormulaShape target
     VTEnsureWordImageScaleState _
         target, formulaId, displayMode, numbered, sourceFontSizePt, _
@@ -15923,8 +17404,9 @@ Private Sub VTWordConvertInlineShapeToNativeEquation(ByVal target As InlineShape
 
     nativeDisplayMode = displayMode
     If numbered Or displayMode = "block" Then nativeDisplayMode = "inline"
-    sourceStart = target.Range.Start
-    Set insertionAnchor = target.Range.Duplicate
+    Set sourceContainerRange = VTVisualTeXImageContainerRange(target)
+    sourceStart = sourceContainerRange.Start
+    Set insertionAnchor = sourceContainerRange.Duplicate
     insertionAnchor.Collapse wdCollapseEnd
     On Error GoTo ConversionFailed
     VTBeginWordInternalMutation
@@ -15937,13 +17419,15 @@ Private Sub VTWordConvertInlineShapeToNativeEquation(ByVal target As InlineShape
     Set sourceBackupDocument = Documents.Add(Visible:=False)
     Set sourceBackupRange = sourceBackupDocument.Content
     sourceBackupRange.Collapse wdCollapseStart
-    sourceBackupRange.FormattedText = target.Range.FormattedText
-    If sourceBackupDocument.InlineShapes.Count <> 1 Then
+    sourceBackupRange.FormattedText = sourceContainerRange.FormattedText
+    If sourceBackupDocument.InlineShapes.Count <> 1 Or _
+       sourceBackupDocument.Fields.Count <> 1 Then
         Err.Raise vbObjectError + 7472, "VisualTeX", _
-            "Word could not back up the formula image before native conversion."
+            "Word could not back up the formula image field before native conversion."
     End If
     Set sourceBackupRange = _
-        sourceBackupDocument.InlineShapes(1).Range.Duplicate
+        VTVisualTeXImageContainerRange( _
+            sourceBackupDocument.InlineShapes(1))
     targetDocument.Activate
 
     VTSetWordMetadataPayload targetDocument, formulaId, encodedMetadata
@@ -15959,7 +17443,7 @@ Private Sub VTWordConvertInlineShapeToNativeEquation(ByVal target As InlineShape
 
     targetDocument.Activate
     Set sourceImage = VTFindUniqueInlineShape(encodedMetadata)
-    sourceImage.Delete
+    VTDeleteVisualTeXImageContainer sourceImage
     sourceDeleted = True
 
     Set equationRange = VTResolveNativeEquationRange( _
@@ -17086,14 +18570,25 @@ Public Sub VisualTeX_SynchronizeSelectedImageFormulaSize( _
     ByVal selected As Selection)
 
     Dim formulaShape As InlineShape
+    Dim internalMutationStarted As Boolean
 
     On Error GoTo SynchronizeFinished
     If selected Is Nothing Or VTWordInternalMutationActive() Then Exit Sub
     Set formulaShape = VTVisualTeXInlineShapeAtSelection(selected)
     If formulaShape Is Nothing Then Exit Sub
+    If Not formulaShape.Range.Document.ReadOnly And _
+       formulaShape.Range.Document.ProtectionType = wdNoProtection Then
+        VTBeginWordInternalMutation
+        internalMutationStarted = True
+        Set formulaShape = _
+            VTEnsureVisualTeXImageMacroButton(formulaShape)
+        VTEndWordInternalMutation
+        internalMutationStarted = False
+    End If
     VTSynchronizeWordImageFormulaShape formulaShape
 
 SynchronizeFinished:
+    If internalMutationStarted Then VTEndWordInternalMutation
     VTEnsureImageSizeWatchScheduled
 End Sub
 
@@ -17760,16 +19255,50 @@ InvalidShape:
         VTDoubleClickTraceValue(Err.Description)
 End Function
 
-Private Sub VTBeginWordDoubleClickTraceContext()
+Private Sub VTInitializeWordDoubleClickTrace()
+    If VT_WORD_DOUBLE_CLICK_TRACE_INITIALIZED Then Exit Sub
+    On Error GoTo TraceDisabled
+    VT_WORD_DOUBLE_CLICK_TRACE_INITIALIZED = True
+    VT_WORD_DOUBLE_CLICK_TRACE_ACTIVE = _
+        VT_WORD_DOUBLE_CLICK_TRACE_ENABLED Or _
+        VTPathFileExists( _
+            VTApplicationSupportRoot() & _
+            VT_WORD_DOUBLE_CLICK_TRACE_SENTINEL)
+    Exit Sub
+
+TraceDisabled:
+    VT_WORD_DOUBLE_CLICK_TRACE_ACTIVE = False
+    VT_WORD_DOUBLE_CLICK_TRACE_INITIALIZED = True
+End Sub
+
+Public Sub VTBeginWordDoubleClickTraceContext()
+    If VT_WORD_DOUBLE_CLICK_TRACE_CONTEXT_DEPTH = 0 Then
+        VT_WORD_DOUBLE_CLICK_TRACE_BUFFER = ""
+        VT_WORD_DOUBLE_CLICK_TRACE_STARTED_AT = Timer
+    End If
     VT_WORD_DOUBLE_CLICK_TRACE_CONTEXT_DEPTH = _
         VT_WORD_DOUBLE_CLICK_TRACE_CONTEXT_DEPTH + 1
 End Sub
 
-Private Sub VTEndWordDoubleClickTraceContext()
+Public Sub VTEndWordDoubleClickTraceContext()
+    Dim traceText As String
+
     If VT_WORD_DOUBLE_CLICK_TRACE_CONTEXT_DEPTH > 0 Then
         VT_WORD_DOUBLE_CLICK_TRACE_CONTEXT_DEPTH = _
             VT_WORD_DOUBLE_CLICK_TRACE_CONTEXT_DEPTH - 1
     End If
+    If VT_WORD_DOUBLE_CLICK_TRACE_CONTEXT_DEPTH <> 0 Or _
+       Not VT_WORD_DOUBLE_CLICK_TRACE_ACTIVE Or _
+       Len(VT_WORD_DOUBLE_CLICK_TRACE_BUFFER) = 0 Then Exit Sub
+
+    traceText = VT_WORD_DOUBLE_CLICK_TRACE_BUFFER
+    VT_WORD_DOUBLE_CLICK_TRACE_BUFFER = ""
+    On Error Resume Next
+    VTAppendText _
+        VTApplicationSupportRoot() & VT_WORD_DOUBLE_CLICK_TRACE_FILE, _
+        traceText
+    Err.Clear
+    On Error GoTo 0
 End Sub
 
 Public Sub VTTraceWordDoubleClick( _
@@ -17777,24 +19306,23 @@ Public Sub VTTraceWordDoubleClick( _
     ByVal selected As Word.Selection, _
     Optional ByVal detail As String = "")
 
-    Dim tracePath As String
     Dim traceText As String
     Dim eventSinkReady As Boolean
+    Dim elapsedMilliseconds As Long
 
-    If Not VT_WORD_DOUBLE_CLICK_TRACE_ENABLED Then Exit Sub
+    If Not VT_WORD_DOUBLE_CLICK_TRACE_ACTIVE Then Exit Sub
+    If VT_WORD_DOUBLE_CLICK_TRACE_CONTEXT_DEPTH = 0 Then Exit Sub
     If Left$(eventName, 9) = "resolver-" And _
        VT_WORD_DOUBLE_CLICK_TRACE_CONTEXT_DEPTH = 0 Then Exit Sub
 
     On Error Resume Next
-    tracePath = VTApplicationSupportRoot() & VT_WORD_DOUBLE_CLICK_TRACE_FILE
-    If VTPathFileExists(tracePath) Then
-        traceText = VTReadText(tracePath, 524288)
-        If Len(traceText) > 420000 Then traceText = Right$(traceText, 210000)
-    End If
+    elapsedMilliseconds = CLng(1000# * VTTimerElapsedSeconds( _
+        VT_WORD_DOUBLE_CLICK_TRACE_STARTED_AT, Timer))
     eventSinkReady = Not VT_WORD_EVENT_SINK Is Nothing
-    traceText = traceText & _
+    traceText = _
         "event=" & VTDoubleClickTraceValue(eventName) & _
         " time=" & Format$(Now, "yyyy-mm-dd hh:nn:ss") & _
+        " elapsedMs=" & CStr(elapsedMilliseconds) & _
         " revision=" & VT_WORD_SOURCE_REVISION & _
         " wordVersion=" & Application.Version & _
         " documents=" & CStr(Documents.Count) & _
@@ -17815,7 +19343,8 @@ Public Sub VTTraceWordDoubleClick( _
             " detail=" & VTDoubleClickTraceValue(detail)
     End If
     traceText = traceText & vbLf
-    VTWriteTextAtomic tracePath, traceText
+    VT_WORD_DOUBLE_CLICK_TRACE_BUFFER = _
+        VT_WORD_DOUBLE_CLICK_TRACE_BUFFER & traceText
     Err.Clear
     On Error GoTo 0
 End Sub
@@ -17823,7 +19352,9 @@ End Sub
 Public Sub VisualTeX_WriteWordDoubleClickDiagnosticMarker()
     On Error Resume Next
     VTWriteWordHealth
+    VTBeginWordDoubleClickTraceContext
     VTTraceWordDoubleClick "manual-diagnostic-marker", Selection, ""
+    VTEndWordDoubleClickTraceContext
     VTShowInformation _
         "VisualTeX Word revision: " & VT_WORD_SOURCE_REVISION & vbCrLf & _
         "Trace: " & VTApplicationSupportRoot() & _

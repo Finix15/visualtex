@@ -2,24 +2,53 @@
 -- ~/Library/Application Scripts/com.microsoft.Powerpoint/VisualTeXPowerPoint.scpt
 
 use scripting additions
+use framework "Foundation"
 
 property runtimeSuffix : "Library/Application Scripts/com.microsoft.Powerpoint/VisualTeXRuntime"
 property maximumRelativePathLength : 1024
+property expectedHost : "powerpoint"
 
 on OpenVisualTeXSession(sessionId)
     try
         set safeSessionId to my validateSessionId(sessionId as text)
         set visualTeXURL to "visualtex://office/open?session=" & safeSessionId
-        -- Office's AppleScriptTask host is unreliable when one compiled script
-        -- mixes LaunchServices object bridging with later native file calls.
-        -- The URL payload is a validated UUID and is shell-quoted as one fixed
-        -- argument, so /usr/bin/open remains deterministic and non-injectable.
-        do shell script "/usr/bin/open " & quoted form of visualTeXURL
+        my launchVisualTeXURL(visualTeXURL)
         return "ok|1"
     on error errorMessage number errorNumber
         return my errorResponse(errorNumber, errorMessage)
     end try
 end OpenVisualTeXSession
+
+on WriteAndOpenVisualTeXSession(argumentText)
+    set startedAt to my monotonicSeconds()
+    try
+        set {requestedHost, sessionId, encodedData} to my splitTriple(argumentText as text)
+        set safeHost to my validateHostName(requestedHost)
+        set safeSessionId to my validateSessionId(sessionId)
+        set targetPath to my absoluteRuntimePath("OfficeSessions/" & safeSessionId & "/request.json")
+        set validatedAt to my monotonicSeconds()
+        my writeEncodedFileAtomically(targetPath, encodedData)
+        set writtenAt to my monotonicSeconds()
+        set visualTeXURL to "visualtex://office/open?session=" & safeSessionId
+        my launchVisualTeXURL(visualTeXURL)
+        set launchedAt to my monotonicSeconds()
+        return "ok|host=" & safeHost & ";validationMs=" & my elapsedMilliseconds(startedAt, validatedAt) & ";writeMs=" & my elapsedMilliseconds(validatedAt, writtenAt) & ";launchMs=" & my elapsedMilliseconds(writtenAt, launchedAt) & ";totalMs=" & my elapsedMilliseconds(startedAt, launchedAt)
+    on error errorMessage number errorNumber
+        return my errorResponse(errorNumber, errorMessage)
+    end try
+end WriteAndOpenVisualTeXSession
+
+on PrewarmVisualTeXApplication(hostName)
+    set startedAt to my monotonicSeconds()
+    try
+        set safeHost to my validateHostName(hostName as text)
+        do shell script "/usr/bin/open -gj -b " & quoted form of "com.visualtex.studio" & " --args --office-background"
+        set finishedAt to my monotonicSeconds()
+        return "ok|host=" & safeHost & ";prewarmMs=" & my elapsedMilliseconds(startedAt, finishedAt)
+    on error errorMessage number errorNumber
+        return my errorResponse(errorNumber, errorMessage)
+    end try
+end PrewarmVisualTeXApplication
 
 on OpenVisualTeXApplication(ignoredValue)
     try
@@ -41,27 +70,29 @@ on EnsureVisualTeXDirectory(relativePath)
 end EnsureVisualTeXDirectory
 
 on WriteVisualTeXFile(argumentText)
-    set temporaryPath to ""
+    try
+        set {relativePath, encodedData} to my splitPair(argumentText as text)
+        set targetPath to my absoluteRuntimePath(relativePath)
+        my writeEncodedFileAtomically(targetPath, encodedData)
+        return "ok|1"
+    on error errorMessage number errorNumber
+        return my errorResponse(errorNumber, errorMessage)
+    end try
+end WriteVisualTeXFile
+
+on AppendVisualTeXFile(argumentText)
     try
         set {relativePath, encodedData} to my splitPair(argumentText as text)
         set targetPath to my absoluteRuntimePath(relativePath)
         set parentPath to do shell script "/usr/bin/dirname " & quoted form of targetPath
         my ensureDirectory(parentPath)
         set normalizedData to my normalizeBase64Url(encodedData)
-        set temporaryPath to do shell script "/usr/bin/mktemp " & quoted form of (targetPath & ".tmp.XXXXXX")
-        do shell script "/usr/bin/printf %s " & quoted form of normalizedData & " | /usr/bin/base64 -D > " & quoted form of temporaryPath
-        do shell script "/bin/chmod 600 " & quoted form of temporaryPath & " && /bin/mv -f " & quoted form of temporaryPath & space & quoted form of targetPath
-        set temporaryPath to ""
+        do shell script "umask 077; /usr/bin/printf %s " & quoted form of normalizedData & " | /usr/bin/base64 -D >> " & quoted form of targetPath & " && /bin/chmod 600 " & quoted form of targetPath
         return "ok|1"
     on error errorMessage number errorNumber
-        if temporaryPath is not "" then
-            try
-                do shell script "/bin/rm -f " & quoted form of temporaryPath
-            end try
-        end if
         return my errorResponse(errorNumber, errorMessage)
     end try
-end WriteVisualTeXFile
+end AppendVisualTeXFile
 
 on ReadVisualTeXFile(relativePath)
     try
@@ -124,11 +155,84 @@ on ensureDirectory(targetPath)
     do shell script "/bin/mkdir -p " & quoted form of targetPath & " && /bin/chmod 700 " & quoted form of targetPath
 end ensureDirectory
 
+on launchVisualTeXURL(visualTeXURL)
+    set safeURL to visualTeXURL as text
+    if safeURL does not start with "visualtex://office/open?session=" then error "VisualTeX launch URL is invalid" number 7127
+    set executablePath to my runningVisualTeXExecutable()
+    -- Launch a short second process with the validated URL in argv. Tauri's
+    -- single-instance Unix socket forwards argv to the already-prewarmed app;
+    -- a LaunchServices URL AppleEvent would be lost when the second process
+    -- exits before RunEvent::Opened on macOS.
+    do shell script "/usr/bin/nohup " & quoted form of executablePath & space & quoted form of safeURL & " >/dev/null 2>&1 &"
+end launchVisualTeXURL
+
+on runningVisualTeXExecutable()
+    set executableSuffix to "/VisualTeX.app/Contents/MacOS/visualtex"
+    repeat with attemptIndex from 1 to 40
+        set processIds to ""
+        try
+            set processIds to do shell script "/usr/bin/pgrep -x " & quoted form of "visualtex"
+        end try
+        if processIds is not "" then
+            set previousDelimiters to AppleScript's text item delimiters
+            set AppleScript's text item delimiters to linefeed
+            set processIdItems to text items of processIds
+            set AppleScript's text item delimiters to previousDelimiters
+            repeat with processIdItem in processIdItems
+                set processId to processIdItem as text
+                if my isDecimalProcessId(processId) then
+                    try
+                        set candidatePath to do shell script "/bin/ps -p " & quoted form of processId & " -o comm="
+                        if candidatePath ends with executableSuffix then
+                            do shell script "/bin/test -x " & quoted form of candidatePath
+                            return candidatePath
+                        end if
+                    end try
+                end if
+            end repeat
+        end if
+        if attemptIndex is 1 then
+            do shell script "/usr/bin/open -gj -b " & quoted form of "com.visualtex.studio" & " --args --office-background"
+        end if
+        delay 0.05
+    end repeat
+    error "The prewarmed VisualTeX executable is not running" number 7128
+end runningVisualTeXExecutable
+
+on isDecimalProcessId(candidate)
+    set candidate to candidate as text
+    if candidate is "" then return false
+    repeat with currentCharacter in characters of candidate
+        if "0123456789" does not contain (currentCharacter as text) then return false
+    end repeat
+    return true
+end isDecimalProcessId
+
+on writeEncodedFileAtomically(targetPath, encodedData)
+    set temporaryPath to ""
+    try
+        set parentPath to do shell script "/usr/bin/dirname " & quoted form of targetPath
+        my ensureDirectory(parentPath)
+        set normalizedData to my normalizeBase64Url(encodedData)
+        set temporaryPath to do shell script "/usr/bin/mktemp " & quoted form of (targetPath & ".tmp.XXXXXX")
+        do shell script "/usr/bin/printf %s " & quoted form of normalizedData & " | /usr/bin/base64 -D > " & quoted form of temporaryPath
+        do shell script "/bin/chmod 600 " & quoted form of temporaryPath & " && /bin/mv -f " & quoted form of temporaryPath & space & quoted form of targetPath
+        set temporaryPath to ""
+    on error errorMessage number errorNumber
+        if temporaryPath is not "" then
+            try
+                do shell script "/bin/rm -f " & quoted form of temporaryPath
+            end try
+        end if
+        error errorMessage number errorNumber
+    end try
+end writeEncodedFileAtomically
+
 on validateRelativePath(candidate)
     set candidate to candidate as text
     if candidate is "" then error "VisualTeX runtime path is empty" number 7120
     if (count characters of candidate) > maximumRelativePathLength then error "VisualTeX runtime path is too long" number 7121
-    if candidate starts with "/" or candidate contains ".." or candidate contains "//" then error "VisualTeX runtime path is unsafe" number 7122
+    if candidate starts with "/" or candidate ends with "/" or candidate is "." or candidate contains ".." or candidate contains "//" then error "VisualTeX runtime path is unsafe" number 7122
     set allowedCharacters to "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-/"
     repeat with currentCharacter in characters of candidate
         if allowedCharacters does not contain (currentCharacter as text) then error "VisualTeX runtime path contains an unsupported character" number 7123
@@ -144,6 +248,15 @@ on splitPair(value)
     if (count fields) is not 2 then error "VisualTeX file bridge payload is invalid" number 7124
     return {item 1 of fields, item 2 of fields}
 end splitPair
+
+on splitTriple(value)
+    set previousDelimiters to AppleScript's text item delimiters
+    set AppleScript's text item delimiters to "|"
+    set fields to text items of value
+    set AppleScript's text item delimiters to previousDelimiters
+    if (count fields) is not 3 then error "VisualTeX write-and-launch payload is invalid" number 7126
+    return {item 1 of fields, item 2 of fields, item 3 of fields}
+end splitTriple
 
 on normalizeBase64Url(encodedData)
     set normalizedData to my replaceText(encodedData as text, "-", "+")
@@ -182,6 +295,20 @@ on validateSessionId(candidate)
     end repeat
     return candidate
 end validateSessionId
+
+on validateHostName(candidate)
+    set candidate to candidate as text
+    if candidate is not expectedHost then error "VisualTeX Office host does not match its Application Script" number 7107
+    return candidate
+end validateHostName
+
+on monotonicSeconds()
+    return (current application's NSProcessInfo's processInfo()'s systemUptime()) as real
+end monotonicSeconds
+
+on elapsedMilliseconds(startedAt, finishedAt)
+    return (round ((finishedAt - startedAt) * 1000)) as integer
+end elapsedMilliseconds
 
 on errorResponse(errorNumber, errorMessage)
     return "error|" & (errorNumber as text) & "|" & my safeError(errorMessage)

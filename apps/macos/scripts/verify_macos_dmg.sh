@@ -47,17 +47,26 @@ hdiutil verify "$DMG_PATH" >/dev/null
 
 MOUNT_POINT="$(mktemp -d "${TMPDIR:-/tmp}/visualtex-dmg-verify.XXXXXX")"
 ICON_CHECK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/visualtex-icon-verify.XXXXXX")"
-cleanup() {
+MOUNT_ATTACHED=0
+detach_mount() {
+  if [[ "$MOUNT_ATTACHED" != "1" ]]; then
+    return
+  fi
   # hdiutil canonicalizes /var to /private/var, so checking the literal mount
   # string can miss a live image. Always attempt detach by mount point.
   hdiutil detach "$MOUNT_POINT" >/dev/null 2>&1 \
     || hdiutil detach -force "$MOUNT_POINT" >/dev/null 2>&1 \
     || true
+  MOUNT_ATTACHED=0
+}
+cleanup() {
+  detach_mount
   rm -rf "$MOUNT_POINT" "$ICON_CHECK_DIR"
 }
 trap cleanup EXIT
 
 hdiutil attach -nobrowse -readonly -mountpoint "$MOUNT_POINT" "$DMG_PATH" >/dev/null
+MOUNT_ATTACHED=1
 APP_PATH="$MOUNT_POINT/VisualTeX.app"
 INFO_PLIST="$APP_PATH/Contents/Info.plist"
 CODE_RESOURCES="$APP_PATH/Contents/_CodeSignature/CodeResources"
@@ -226,10 +235,15 @@ if [[ "${REQUIRE_NOTARIZATION:-0}" == "1" ]]; then
   xcrun stapler validate "$APP_PATH"
 fi
 
-SHA256="$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')"
 RESOURCE_BYTES="$(du -sk "$RESOURCES" | awk '{print $1 * 1024}')"
 OCR_BYTES="$(du -sk "$OCR_ROOT" | awk '{print $1 * 1024}')"
 OFFICE_FILES="$(find "$OFFICE_ROOT" -type f | wc -l | tr -d ' ')"
+
+# Some macOS versions update the DMG image while detaching it, even when it was
+# attached read-only. Hash only the fully detached distributable image so the
+# printed checksum matches the file users actually receive.
+detach_mount
+SHA256="$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')"
 
 echo "Verified DMG container: $DMG_PATH"
 echo "Bundle identifier: $IDENTIFIER"

@@ -40,6 +40,7 @@ struct WordNativeFormulaSelection {
     marker: String,
     width: f64,
     height: f64,
+    macro_button_wrapped: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -108,26 +109,6 @@ impl PowerPointInteractionBus {
             shape_name,
             formula_id,
             Some(selection),
-        );
-    }
-
-    fn push_word_edit_selected(&self, selection: WordNativeFormulaSelection) {
-        let marker = selection.marker.clone();
-        self.push_edit_target(
-            "edit-selected",
-            "word",
-            marker.clone(),
-            String::new(),
-            Some(PowerPointNativeSelection {
-                shape_name: marker,
-                slide_index: 0,
-                slide_id: None,
-                presentation_identity: None,
-                left: 0.0,
-                top: 0.0,
-                width: selection.width,
-                height: selection.height,
-            }),
         );
     }
 
@@ -908,11 +889,13 @@ where
     ReadSelection: FnMut() -> Result<WordNativeFormulaSelection, String>,
     Wait: FnMut(Duration),
 {
-    // Word also commits an inline-picture selection after the second mouse
-    // down. Retry briefly so a fast double-click cannot be lost while Word is
-    // still replacing the text insertion caret with the picture selection.
-    for delay in [80_u64, 100, 160, 240] {
-        wait(Duration::from_millis(delay));
+    // Read immediately in the common case, then use a short bounded retry
+    // while Word replaces the insertion caret with the clicked InlineShape.
+    // The old unconditional 320 ms sleep made a warm editor feel cold.
+    for delay in [0_u64, 20, 35, 55] {
+        if delay > 0 {
+            wait(Duration::from_millis(delay));
+        }
         let Ok(selection) = read_selection() else {
             continue;
         };
@@ -1014,7 +997,6 @@ pub fn start_double_click_monitor(
                 // double-click macro from the global monitor, because native
                 // OMath can otherwise open a second editor while the first
                 // session is still becoming visible.
-                std::thread::sleep(Duration::from_millis(320));
                 if crate::office::macos_offline::has_open_office_editor(&app) {
                     return;
                 }
@@ -1026,10 +1008,20 @@ pub fn start_double_click_monitor(
                 if !selection.marker.starts_with(WORD_METADATA_PREFIX) {
                     return;
                 }
+                // Current VisualTeX images live inside a wdFieldMacroButton
+                // result and are routed by Word itself. The native monitor is
+                // only a compatibility entry for older, bare InlineShapes.
+                if selection.macro_button_wrapped {
+                    return;
+                }
                 if crate::office::macos_offline::focus_open_office_editor(&app) {
                     return;
                 }
-                bus.push_word_edit_selected(selection);
+                if let Err(error) =
+                    crate::office::macos_offline::run_word_image_double_click_edit_macro()
+                {
+                    eprintln!("Unable to route the bare Word formula image double-click: {error}");
+                }
             });
         }
     });
@@ -1082,14 +1074,33 @@ else
     set formulaPicture to inline shape 1 of probeRange
 end if
 set fieldSeparator to "<VISUALTEX_WORD_FIELD>"
-return ((alternative text of formulaPicture) as text) & fieldSeparator & (width of formulaPicture as text) & fieldSeparator & (height of formulaPicture as text)
+set alternativeMarker to ""
+set titleMarker to ""
+try
+    set alternativeMarker to alternative text of formulaPicture as text
+end try
+try
+    set titleMarker to title of formulaPicture as text
+end try
+set formulaMarker to ""
+if alternativeMarker starts with "visualtex:v1:deflate:" then
+    set formulaMarker to alternativeMarker
+else if titleMarker starts with "visualtex:v1:deflate:" then
+    set formulaMarker to titleMarker
+end if
+set macroButtonWrapped to "0"
+try
+    set formulaField to field of formulaPicture
+    if field type of formulaField is field macro button then set macroButtonWrapped to "1"
+end try
+return formulaMarker & fieldSeparator & (width of formulaPicture as text) & fieldSeparator & (height of formulaPicture as text) & fieldSeparator & macroButtonWrapped
 end tell"#,
         APPLESCRIPT_QUERY_TIMEOUT,
     )?;
     let fields = output
         .split(WORD_SELECTION_FIELD_SEPARATOR)
         .collect::<Vec<_>>();
-    if fields.len() != 3 {
+    if fields.len() != 4 {
         return Err(format!("Word returned an invalid formula selection payload: {output}"));
     }
     let parse_number = |value: &str, label: &str| {
@@ -1103,6 +1114,11 @@ end tell"#,
         marker: fields[0].to_string(),
         width: parse_number(fields[1], "width")?,
         height: parse_number(fields[2], "height")?,
+        macro_button_wrapped: match fields[3].trim() {
+            "0" => false,
+            "1" => true,
+            value => return Err(format!("Invalid Word MacroButton state: {value}")),
+        },
     })
 }
 
@@ -1238,6 +1254,7 @@ mod tests {
                     marker: marker.to_string(),
                     width: 84.0,
                     height: 21.0,
+                    macro_button_wrapped: true,
                 })
             },
             |delay| waits.push(delay),
@@ -1245,10 +1262,34 @@ mod tests {
         .expect("Word formula selection");
 
         assert_eq!(attempts, 3);
-        assert_eq!(waits, vec![Duration::from_millis(80), Duration::from_millis(100), Duration::from_millis(160)]);
+        assert_eq!(
+            waits,
+            vec![Duration::from_millis(20), Duration::from_millis(35)]
+        );
         assert_eq!(resolved.marker, marker);
         assert_eq!(resolved.width, 84.0);
         assert_eq!(resolved.height, 21.0);
+        assert!(resolved.macro_button_wrapped);
+    }
+
+    #[test]
+    fn word_double_click_reads_an_already_selected_bare_picture_without_waiting() {
+        let mut waits = Vec::new();
+        let resolved = word_formula_after_double_click(
+            || {
+                Ok(WordNativeFormulaSelection {
+                    marker: "visualtex:v1:deflate:legacy".to_string(),
+                    width: 72.0,
+                    height: 18.0,
+                    macro_button_wrapped: false,
+                })
+            },
+            |delay| waits.push(delay),
+        )
+        .expect("bare Word formula picture");
+
+        assert!(waits.is_empty());
+        assert!(!resolved.macro_button_wrapped);
     }
 
     #[test]

@@ -24,7 +24,7 @@
     "test:latex-format": "node --experimental-strip-types scripts/latex_format_smoke.mjs",
     "test:markdown-export": "node --experimental-strip-types scripts/markdown_export_smoke.mjs",
     "test:document-import": "npm run build:desktop && tsx scripts/document_import_parser_smoke.mjs && node scripts/document_import_word_layout_smoke.mjs && node scripts/document_import_browser_regression.mjs",
-    "test:document-import:word": "tsx scripts/document_import_word_integration.mjs && tsx scripts/document_import_word_integration.mjs --image",
+    "test:document-import:word": "tsx scripts/document_import_word_integration.mjs && tsx scripts/document_import_word_integration.mjs --image && tsx scripts/document_import_word_integration.mjs --create-image",
     "test:update-notes": "node --experimental-strip-types scripts/update_notes_smoke.mjs",
     "test:svg-export": "node --experimental-strip-types scripts/svg_export_smoke.mjs",
     "test:rare-integral-glyphs": "node --experimental-strip-types scripts/rare_integral_glyph_registry_regression.mjs",

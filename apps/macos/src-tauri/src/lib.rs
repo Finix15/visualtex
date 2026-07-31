@@ -1393,12 +1393,8 @@ async fn remove_optional_ocr_model(
     state.remove_optional_model(app, model).await
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(debug_assertions)))]
 fn claim_production_visualtex_url_handler() -> Result<(), String> {
-    if cfg!(debug_assertions) {
-        return Ok(());
-    }
-
     let executable = std::env::current_exe()
         .map_err(|error| format!("Unable to locate the VisualTeX executable: {error}"))?;
     let app_bundle = executable
@@ -1498,9 +1494,15 @@ pub fn run() {
             #[cfg(not(debug_assertions))]
             {
                 #[cfg(target_os = "macos")]
-                if let Err(error) = claim_production_visualtex_url_handler() {
-                    eprintln!("Unable to claim the production visualtex:// handler: {error}");
-                }
+                std::thread::spawn(|| {
+                    // LaunchServices repair is maintenance. Let a cold Office
+                    // URL hydrate its resident editor before lsregister scans
+                    // the application bundle.
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    if let Err(error) = claim_production_visualtex_url_handler() {
+                        eprintln!("Unable to claim the production visualtex:// handler: {error}");
+                    }
+                });
             }
 
             let office_state = office::initialize(app.handle(), office_ocr_state.clone())
@@ -1512,17 +1514,26 @@ pub fn run() {
                 eprintln!("Unable to start PowerPoint double-click monitor: {error}");
             }
             app.manage(office_state.clone());
+            if initial_office_url.is_some() || background_mode {
+                // Hide the desktop shell before WebKit prewarming. Otherwise a
+                // cold Office URL can flash the main editor while the resident
+                // formula WebViews initialize.
+                office::background::hide_main_window(app.handle())
+                    .map_err(std::io::Error::other)?;
+            }
+            if let Err(error) =
+                office::macos_offline::prewarm_office_editor_windows(app.handle())
+            {
+                // Prewarming is an optimization. handle_open_url still creates
+                // the fixed host window lazily if WebKit was unavailable here.
+                eprintln!("Unable to prewarm VisualTeX Office editors: {error}");
+            }
             #[cfg(not(target_os = "macos"))]
             office::lifecycle::start(office_state);
             if let Some(url) = initial_office_url.as_deref() {
-                office::background::hide_main_window(app.handle())
-                    .map_err(std::io::Error::other)?;
                 office::macos_offline::handle_open_url(app.handle(), url)
                     .map_err(std::io::Error::other)?;
-            } else if background_mode {
-                office::background::hide_main_window(app.handle())
-                    .map_err(std::io::Error::other)?;
-            } else {
+            } else if !background_mode {
                 office::background::reveal_main_window(app.handle())
                     .map_err(std::io::Error::other)?;
             }
@@ -1554,6 +1565,8 @@ pub fn run() {
             office::macos_offline::delete_macos_offline_office_session,
             office::macos_offline::commit_macos_offline_office_session,
             office::macos_offline::cancel_macos_offline_office_session,
+            office::macos_offline::get_macos_offline_office_editor_activation,
+            office::macos_offline::report_macos_offline_office_editor_ready,
             office::macos_offline::close_macos_offline_office_editor_window,
             office::macos_offline::get_macos_offline_plugin_health,
             office::macos_offline_installer::get_macos_offline_office_install_status,

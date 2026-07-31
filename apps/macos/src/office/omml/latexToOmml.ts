@@ -14,6 +14,7 @@ import {
   normalizeMathJaxUnsupportedNaryCommands,
 } from "../../export/mathJaxCompatibility.ts";
 import type { LatexCodeFormat } from "../../types/formula";
+import { errorMessage } from "../../runtime/errorMessage";
 
 export type OmmlDisplayMode = "inline" | "block";
 
@@ -33,7 +34,10 @@ RegisterHTMLHandler(adaptor);
 const texInput = new TeX({
   packages: AllPackages,
   formatError: (_jax: unknown, error: unknown) => {
-    throw error instanceof Error ? error : new Error(String(error));
+    throw new Error(
+      errorMessage(error, "MathJax 无法解析该公式。"),
+      { cause: error },
+    );
   },
 });
 const mathDocument = mathjax.document("", {
@@ -133,6 +137,13 @@ const ACCENT_CHARACTERS = new Set([
   "̃",
   "̇",
   "̈",
+]);
+const STRETCHY_ARROW_CHARACTERS = new Set(["→", "←", "↔"]);
+const OMML_ACCENT_CHARACTER_OVERRIDES = new Map([
+  // A spacing ASCII caret touches the top-left edge of italic letters in Word.
+  // The modifier circumflex remains a distinct, centred hat without the wide
+  // rightward displacement produced by a combining U+0302 accent.
+  ["^", "ˆ"],
 ]);
 
 function normalizeLines(lines: string[]) {
@@ -674,9 +685,11 @@ function accentCharacter(element: Element | undefined) {
 }
 
 function convertAccent(base: string, character: string) {
+  const ommlCharacter =
+    OMML_ACCENT_CHARACTER_OVERRIDES.get(character) ?? character;
   return (
     "<m:acc><m:accPr>" +
-    `<m:chr m:val="${escapeXmlAttribute(character)}"/>` +
+    `<m:chr m:val="${escapeXmlAttribute(ommlCharacter)}"/>` +
     "</m:accPr>" +
     `<m:e>${base}</m:e>` +
     "</m:acc>"
@@ -718,7 +731,13 @@ function convertUnderOver(element: Element) {
     const upper = upperElement ? convertElement(upperElement) : "";
     const character = accentCharacter(upperElement);
     if (OVER_BAR_CHARACTERS.has(character)) return convertBar(base, "top");
-    if (OVER_GROUP_CHARACTERS.has(character)) {
+    if (
+      OVER_GROUP_CHARACTERS.has(character) ||
+      STRETCHY_ARROW_CHARACTERS.has(character)
+    ) {
+      // Word's m:acc arrow touches or overlaps the base at normal document
+      // sizes. A top group character keeps both short \\vec accents and long
+      // \\overrightarrow arrows separate, stretchable and centred.
       return convertGroupCharacter(base, character, "top");
     }
     if (

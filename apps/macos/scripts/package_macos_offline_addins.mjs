@@ -22,7 +22,7 @@ const packageVersion = JSON.parse(readFileSync(join(repositoryRoot, "package.jso
 
 function usage() {
   process.stderr.write(
-    "Usage: node scripts/package_macos_offline_addins.mjs --word /path/VisualTeX.dotm (--word-only | --powerpoint /path/VisualTeX.pptm [--powerpoint-shell /path/known-good-VisualTeX.ppam]) [--ribbon-icons-archive /path/visualtex-icons.zip] [--artifacts-dir /path/to/final/files] [--root-word-output /path/VisualTeX.dotm] [--root-powerpoint-output /path/VisualTeX.ppam] [--install-macos]\n",
+    "Usage: node scripts/package_macos_offline_addins.mjs --word /path/VisualTeX.dotm [--word-shell /path/known-good-VisualTeX.dotm] (--word-only | --powerpoint /path/VisualTeX.pptm [--powerpoint-shell /path/known-good-VisualTeX.ppam]) [--ribbon-icons-archive /path/visualtex-icons.zip] [--artifacts-dir /path/to/final/files] [--root-word-output /path/VisualTeX.dotm] [--root-powerpoint-output /path/VisualTeX.ppam] [--install-macos]\n",
   );
 }
 
@@ -32,6 +32,7 @@ function argument(name) {
 }
 
 const wordInput = argument("--word");
+const wordShell = argument("--word-shell");
 const powerpointInput = argument("--powerpoint");
 const powerpointShell = argument("--powerpoint-shell");
 const artifactsDirectory = argument("--artifacts-dir");
@@ -130,12 +131,17 @@ function validateMacroContainer(path, kind, options = {}) {
       packageVersion,
       ...(kind === "Word"
         ? [
-            "word-double-click-routing-20260730-r65",
-            "FormatPicture",
+            "word-double-click-routing-20260730-r66",
             "VTTraceWordDoubleClick",
             "App_WindowSelectionChange",
             "VisualTeX_StabilizeImageEquationNumberSelection",
             "VTWordRibbonApplyImageFontSizePreset",
+            "VisualTeX_EditImageField",
+            "VisualTeX_EditSelectedImageFromNativeMonitor",
+            "VTEnsureVisualTeXImageMacroButton",
+            "VTAppendText",
+            "VTWriteAndLaunchSession",
+            "VTPrewarmApplication",
           ]
         : [
             "powerpoint-svg-font-size-dropdown-unicode-20260727-r3",
@@ -373,6 +379,36 @@ function syncArtifact(source, outputDirectory) {
   return atomicCopy(source, destination);
 }
 
+function compileAndInstallAppleScript(source, destination, requiredMarkers) {
+  mkdirSync(dirname(destination), { recursive: true });
+  const staged = `${destination}.staged.${process.pid}.scpt`;
+  rmSync(staged, { force: true });
+  try {
+    run("/usr/bin/osacompile", ["-o", staged, source]);
+    const decompiled = run("/usr/bin/osadecompile", [staged]);
+    for (const marker of requiredMarkers) {
+      if (!decompiled.includes(marker)) {
+        throw new Error(
+          `Compiled AppleScript is missing ${marker}: ${destination}`,
+        );
+      }
+    }
+    chmodSync(staged, 0o600);
+    renameSync(staged, destination);
+    const installedSource = run("/usr/bin/osadecompile", [destination]);
+    for (const marker of requiredMarkers) {
+      if (!installedSource.includes(marker)) {
+        throw new Error(
+          `Installed AppleScript is missing ${marker}: ${destination}`,
+        );
+      }
+    }
+    return destination;
+  } finally {
+    rmSync(staged, { force: true });
+  }
+}
+
 function installMacosArtifacts(wordOutput, powerpointOutput) {
   if (process.platform !== "darwin") {
     throw new Error("--install-macos is available only on macOS");
@@ -382,6 +418,12 @@ function installMacosArtifacts(wordOutput, powerpointOutput) {
     "Library",
     "Group Containers",
     "UBF8T346G9.Office",
+  );
+  const wordApplicationScripts = join(
+    homedir(),
+    "Library",
+    "Application Scripts",
+    "com.microsoft.Word",
   );
   const installed = [
     atomicCopy(
@@ -394,6 +436,16 @@ function installMacosArtifacts(wordOutput, powerpointOutput) {
         "VisualTeX.dotm",
       ),
       0o600,
+    ),
+    compileAndInstallAppleScript(
+      join(offlineRoot, "word", "VisualTeXWord.scpt"),
+      join(wordApplicationScripts, "VisualTeXWord.scpt"),
+      [
+        "on WriteAndOpenVisualTeXSession(argumentText)",
+        "on PrewarmVisualTeXApplication(hostName)",
+        "on AppendVisualTeXFile(argumentText)",
+        'property expectedHost : "word"',
+      ],
     ),
   ];
   if (powerpointOutput) {
@@ -414,11 +466,18 @@ function installMacosArtifacts(wordOutput, powerpointOutput) {
 }
 
 try {
+  const existingWordShell = join(resourcesRoot, "VisualTeX.dotm");
+  const resolvedWordShell = wordShell
+    ? resolve(wordShell)
+    : existsSync(existingWordShell) && resolve(wordInput) !== existingWordShell
+      ? existingWordShell
+      : undefined;
   const wordOutput = packageAddin(
     resolve(wordInput),
     "Word",
     "VisualTeX.dotm",
     join(offlineRoot, "word", "customUI14.xml"),
+    resolvedWordShell,
   );
   let manifest;
   let powerpointOutput;

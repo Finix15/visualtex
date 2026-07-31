@@ -49,6 +49,13 @@ struct NumberOnlyReport: Codable {
     let pageText: String
 }
 
+struct RasterOnlyReport: Codable {
+    let pageWidth: Double
+    let pageHeight: Double
+    let rasterBands: [RasterBand]
+    let pageText: String
+}
+
 enum GeometryError: Error, CustomStringConvertible {
     case usage
     case unreadablePdf(String)
@@ -58,7 +65,7 @@ enum GeometryError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .usage:
-            return "Usage: swift pdf_formula_geometry.swift <pdf> <unnumbered-token> <numbered-token> [<align-token> <align-star-token>] | <pdf> --number-only"
+            return "Usage: swift pdf_formula_geometry.swift <pdf> <unnumbered-token> <numbered-token> [<align-token> <align-star-token>] | <pdf> --number-only | <pdf> --raster-only"
         case .unreadablePdf(let path):
             return "Unable to open PDF: \(path)"
         case .missingToken(let token):
@@ -310,24 +317,39 @@ do {
         throw GeometryError.unreadablePdf(pdfPath)
     }
     if CommandLine.arguments.count == 3 {
-        guard CommandLine.arguments[2] == "--number-only" else {
+        let mode = CommandLine.arguments[2]
+        guard mode == "--number-only" || mode == "--raster-only" else {
             throw GeometryError.usage
         }
-        let equationNumber = try findRightmostEquationNumber(document: document)
-        guard let page = document.page(at: equationNumber.pageIndex) else {
-            throw GeometryError.unreadablePdf(pdfPath)
-        }
-        let pageBounds = page.bounds(for: .cropBox)
-        let report = NumberOnlyReport(
-            pageWidth: pageBounds.width,
-            pageHeight: pageBounds.height,
-            equationNumber: equationNumber,
-            rasterBands: rasterInkBands(page: page),
-            pageText: page.string ?? ""
-        )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        FileHandle.standardOutput.write(try encoder.encode(report))
+        if mode == "--raster-only" {
+            guard let page = document.page(at: 0) else {
+                throw GeometryError.unreadablePdf(pdfPath)
+            }
+            let pageBounds = page.bounds(for: .cropBox)
+            let report = RasterOnlyReport(
+                pageWidth: pageBounds.width,
+                pageHeight: pageBounds.height,
+                rasterBands: rasterInkBands(page: page),
+                pageText: page.string ?? ""
+            )
+            FileHandle.standardOutput.write(try encoder.encode(report))
+        } else {
+            let equationNumber = try findRightmostEquationNumber(document: document)
+            guard let page = document.page(at: equationNumber.pageIndex) else {
+                throw GeometryError.unreadablePdf(pdfPath)
+            }
+            let pageBounds = page.bounds(for: .cropBox)
+            let report = NumberOnlyReport(
+                pageWidth: pageBounds.width,
+                pageHeight: pageBounds.height,
+                equationNumber: equationNumber,
+                rasterBands: rasterInkBands(page: page),
+                pageText: page.string ?? ""
+            )
+            FileHandle.standardOutput.write(try encoder.encode(report))
+        }
         FileHandle.standardOutput.write(Data("\n".utf8))
         exit(0)
     }

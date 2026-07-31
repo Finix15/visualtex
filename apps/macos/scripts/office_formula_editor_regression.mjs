@@ -7,6 +7,48 @@ import { createFormulaMetadata } from "../src/office/shared/formulaMetadata.ts";
 import { renderOfficeFormulaArtifacts } from "../src/office/shared/formulaRenderArtifacts.ts";
 import { latexToSvg } from "../src/export/latexToSvg.ts";
 import { errorMessage } from "../src/runtime/errorMessage.ts";
+import {
+  clearsOfficeEditorActivation,
+  isOfficeEditorActivation,
+  shouldAcceptOfficeEditorActivation,
+} from "../src/office/dialog/officeEditorActivation.ts";
+
+const warmActivation = {
+  sessionId: "12345678-1234-4234-9234-123456789abc",
+  host: "word",
+  generation: 7,
+  receivedEpochMs: 1_750_000_000_000,
+};
+assert.equal(isOfficeEditorActivation(warmActivation), true);
+assert.equal(
+  shouldAcceptOfficeEditorActivation(null, warmActivation, "word"),
+  true,
+);
+assert.equal(
+  shouldAcceptOfficeEditorActivation(
+    warmActivation,
+    { ...warmActivation, generation: 6 },
+    "word",
+  ),
+  false,
+  "an older WebView event must never restore a stale Session",
+);
+assert.equal(
+  shouldAcceptOfficeEditorActivation(
+    warmActivation,
+    { ...warmActivation, generation: 8, host: "powerpoint" },
+    "word",
+  ),
+  false,
+  "a resident Word WebView must ignore PowerPoint activations",
+);
+assert.equal(
+  clearsOfficeEditorActivation(warmActivation, {
+    sessionId: warmActivation.sessionId,
+    generation: warmActivation.generation,
+  }),
+  true,
+);
 
 function normalize(source, codeFormat = "raw") {
   return normalizeFormulaEditorDocument(
@@ -157,10 +199,23 @@ for (const testCase of multilineCases) {
       displayMode: "block",
       includeWordOmml: false,
     });
+    const wordRendered = renderOfficeFormulaArtifacts({
+      lines: normalized.lines,
+      codeFormat: normalized.codeFormat,
+      displayMode: "block",
+      host: "word",
+      includeWordOmml: false,
+    });
     const firstImportSvg = latexToSvg(canonicalSource, {
       displayMode: true,
       fontSizePt: 14,
       paddingPx: 10,
+      background: "transparent",
+    });
+    const firstWordImportSvg = latexToSvg(canonicalSource, {
+      displayMode: true,
+      fontSizePt: 14,
+      paddingPx: 2,
       background: "transparent",
     });
     assert.equal(
@@ -176,6 +231,18 @@ for (const testCase of multilineCases) {
     assert.equal(rendered.svg.width, firstImportSvg.width);
     assert.equal(rendered.svg.height, firstImportSvg.height);
     assert.equal(rendered.svg.baseline, firstImportSvg.baseline);
+    assert.equal(
+      wordRendered.svg.svg.replace(/MJX-\d+-/g, "MJX-N-"),
+      firstWordImportSvg.svg.replace(/MJX-\d+-/g, "MJX-N-"),
+      `${testCase.name} Word rendering must use the tight 2 px display bounds`,
+    );
+    assert.equal(wordRendered.svg.width, firstWordImportSvg.width);
+    assert.equal(wordRendered.svg.height, firstWordImportSvg.height);
+    assert.equal(wordRendered.svg.baseline, firstWordImportSvg.baseline);
+    assert.ok(
+      wordRendered.svg.height < rendered.svg.height,
+      `${testCase.name} Word bounds must be tighter than PowerPoint bounds`,
+    );
   }
 }
 
@@ -231,6 +298,11 @@ assert.equal(
 );
 assert.equal(errorMessage({ status: 500 }, "fallback"), '{"status":500}');
 assert.equal(errorMessage(42, "fallback"), "42");
+assert.equal(errorMessage("[object Object]", "object fallback"), "object fallback");
+assert.equal(
+  errorMessage('{"error":{"message":"serialized failure"}}', "fallback"),
+  "serialized failure",
+);
 
 const cyclic = {};
 cyclic.cause = cyclic;

@@ -51,6 +51,7 @@ import {
 } from "./documentImportParser";
 
 const MAX_WORD_REFERENCE_WIDTH_PT = 500;
+const WORD_IMAGE_VISUAL_SCALE = 1.1;
 const REFERENCE_FONT_SIZE_PT = OFFICE_FORMULA_REFERENCE_FONT_SIZE_PT;
 
 class FormulaPreviewBoundary extends Component<
@@ -98,15 +99,20 @@ function textCharacterCount(blocks: DocumentImportBlock[]) {
 }
 
 function calculateReferenceGeometry(widthPx: number, heightPx: number, baselinePx: number) {
-  const naturalWidthPt = widthPx * 0.75;
-  const naturalHeightPt = heightPx * 0.75;
+  const naturalWidthPt = widthPx * 0.75 * WORD_IMAGE_VISUAL_SCALE;
+  const naturalHeightPt = heightPx * 0.75 * WORD_IMAGE_VISUAL_SCALE;
   const scale = Math.min(1, MAX_WORD_REFERENCE_WIDTH_PT / naturalWidthPt);
   const referenceWidthPt = naturalWidthPt * scale;
   const referenceHeightPt = naturalHeightPt * scale;
   const descentRatio = Math.max(0, Math.min(1, (heightPx - baselinePx) / heightPx));
+  // Keep the exported descent as a fractional 14 pt reference. Word accepts
+  // only an integer Font.Position, so rounding here and again after scaling to
+  // the requested font size makes short subscript formulas (for example L_z)
+  // lose almost a full point relative to superscript formulas such as L^2.
+  // Round exactly once at the final Word dispatch boundary instead.
   const referenceBaselinePt = -Math.max(
     0,
-    Math.round(referenceHeightPt * descentRatio),
+    referenceHeightPt * descentRatio,
   );
   return { referenceWidthPt, referenceHeightPt, referenceBaselinePt };
 }
@@ -123,6 +129,7 @@ async function prepareFormulaCommitItem(
     lines: editorDocument.lines,
     codeFormat: editorDocument.codeFormat,
     displayMode: block.displayMode,
+    host: "word",
   });
   const { canonicalLatex, svg } = artifacts;
   if (!artifacts.omml) {
@@ -329,7 +336,21 @@ export function OfficeDocumentImportApp() {
     setToast(outputKind === "omml" ? "正在生成 Word 原生公式…" : "正在生成 SVG 图片公式…");
     try {
       const preparedFormulas = await Promise.all(
-        formulas.map((block) => prepareFormulaCommitItem(block, outputKind)),
+        formulas.map(async (block, index) => {
+          try {
+            return await prepareFormulaCommitItem(block, outputKind);
+          } catch (reason) {
+            const detail = documentImportErrorMessage(
+              reason,
+              "未知公式转换错误。",
+            );
+            const preview = block.latex.trim().replace(/\s+/g, " ").slice(0, 120);
+            throw new Error(
+              `公式 ${index + 1} 生成失败：${detail}${preview ? `（${preview}）` : ""}`,
+              { cause: reason },
+            );
+          }
+        }),
       );
       let formulaIndex = 0;
       const items: DocumentImportCommitItem[] = blocks.map((block) => {

@@ -9,6 +9,9 @@ import { applyDocumentTheme, readSynchronizedTheme } from "../themeSync";
 
 configureOcrTransport(desktopOcrTransport);
 applyDocumentTheme(readSynchronizedTheme());
+if (new URLSearchParams(window.location.search).get("transport") !== "tauri") {
+  document.body.style.opacity = "1";
+}
 
 class OfficeFormulaErrorBoundary extends Component<
   { children: ReactNode },
