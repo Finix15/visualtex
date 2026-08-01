@@ -17,9 +17,30 @@ export interface FormulaEditorDocument {
 }
 
 function normalizeLogicalFormulaLineWhitespace(value: string) {
-  return value
-    .replace(/\r\n?/g, "\n")
-    .replace(/[ \t]*\n[ \t]*/g, " ")
+  const source = value.replace(/\r\n?/g, "\n");
+  return source
+    .replace(/[ \t]*\n[ \t]*/g, (match, offset: number) => {
+      const before = source.slice(0, offset);
+      const after = source.slice(offset + match.length);
+      const previous = before.at(-1) ?? "";
+      const next = after[0] ?? "";
+      if (!previous || !next) return "";
+
+      // MathLive does not reliably skip a literal space between consecutive
+      // mandatory arguments. Turning `}\\n{` into `} {` can therefore parse a
+      // valid `\\frac{numerator}{denominator}` as a fraction with an empty
+      // denominator. Preserve a separator only when removing it would merge
+      // two lexical words or extend a TeX control word.
+      const trailingControlWord = /\\[A-Za-z@]+$/.test(before);
+      const nextStartsControlWordCharacter = /^[A-Za-z@]/.test(after);
+      const mergesTextWords =
+        /[\p{L}\p{N}]$/u.test(before) && /^[\p{L}\p{N}]/u.test(after);
+      return trailingControlWord && nextStartsControlWordCharacter
+        ? " "
+        : mergesTextWords
+          ? " "
+          : "";
+    })
     .trim();
 }
 

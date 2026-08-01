@@ -1072,15 +1072,11 @@ pub fn start_double_click_monitor(
             });
         } else if frontmost.as_deref() == Some(WORD_BUNDLE_ID) {
             std::thread::spawn(move || {
-                // Word's native VBA WindowBeforeDoubleClick event owns both
-                // InlineShape and native OMath editing. Keep only an image-only
-                // compatibility fallback here: never invoke the generic Word
-                // double-click macro from the global monitor, because native
-                // OMath can otherwise open a second editor while the first
-                // session is still becoming visible.
-                if crate::office::macos_offline::has_open_office_editor(&app) {
-                    return;
-                }
+                // Word may execute its default picture action even when the
+                // wdFieldMacroButton or WindowBeforeDoubleClick route also opens
+                // VisualTeX. Resolve the selected image first and apply task-pane
+                // cleanup to every image carrying valid VisualTeX metadata,
+                // including the current macro-button-wrapped representation.
                 let Some(selection) =
                     word_formula_after_double_click(selected_word_formula, std::thread::sleep)
                 else {
@@ -1089,23 +1085,35 @@ pub fn start_double_click_monitor(
                 if !selection.marker.starts_with(WORD_METADATA_PREFIX) {
                     return;
                 }
-                // Current VisualTeX images live inside a wdFieldMacroButton
-                // result and are routed by Word itself. The native monitor is
-                // only a compatibility entry for older, bare InlineShapes.
-                if selection.macro_button_wrapped {
-                    return;
-                }
-                if crate::office::macos_offline::focus_open_office_editor(&app) {
+
+                let pane_cleanup = std::thread::spawn(|| {
                     close_word_picture_format_task_pane_with_retries();
+                });
+                if crate::office::macos_offline::focus_open_office_editor(&app) {
+                    let _ = pane_cleanup.join();
                     return;
                 }
-                let _ = close_word_picture_format_task_pane_once();
+
+                // A wrapped image normally reaches VBA through its MacroButton.
+                // Give that route a short opportunity to create the Session so
+                // the native fallback never creates a duplicate editor. If Word
+                // skipped the VBA event, use the same strict metadata-only image
+                // edit entry that also supports legacy bare InlineShapes.
+                if selection.macro_button_wrapped {
+                    for delay_ms in [80_u64, 120, 180] {
+                        std::thread::sleep(Duration::from_millis(delay_ms));
+                        if crate::office::macos_offline::focus_open_office_editor(&app) {
+                            let _ = pane_cleanup.join();
+                            return;
+                        }
+                    }
+                }
                 if let Err(error) =
                     crate::office::macos_offline::run_word_image_double_click_edit_macro()
                 {
-                    eprintln!("Unable to route the bare Word formula image double-click: {error}");
+                    eprintln!("Unable to route the Word formula image double-click: {error}");
                 }
-                close_word_picture_format_task_pane_with_retries();
+                let _ = pane_cleanup.join();
                 let _ = crate::office::macos_offline::focus_open_office_editor(&app);
             });
         }

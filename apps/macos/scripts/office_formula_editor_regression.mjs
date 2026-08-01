@@ -78,8 +78,8 @@ assert.equal(sourceFormattedEquation.lines.length, 1);
 assert.equal(sourceFormattedEquation.codeFormat, "equation");
 assert.equal(
   sourceFormattedEquation.lines[0].latex,
-  String.raw`\frac{\delta \mathbb{E}[L]} {\delta f(\mathbf{x})} = 2\int \{f(\mathbf{x})-t\} p(\mathbf{x},t)\, \mathrm{d}t = 0`,
-  "source-formatting newlines inside one logical formula row must become TeX whitespace",
+  String.raw`\frac{\delta \mathbb{E}[L]}{\delta f(\mathbf{x})}=2\int\{f(\mathbf{x})-t\}p(\mathbf{x},t)\,\mathrm{d}t=0`,
+  "source-formatting newlines inside one logical formula row must preserve adjacent TeX arguments without inserting parser-breaking spaces",
 );
 assert.doesNotThrow(() =>
   renderOfficeFormulaArtifacts({
@@ -374,9 +374,9 @@ assert.ok(
   equationWithAlignedRendered.canonicalLatex.startsWith("\\begin{equation}\n"),
 );
 assert.ok(
-  equationWithAlignedRendered.canonicalLatex.includes("\\begin{aligned} "),
+  equationWithAlignedRendered.canonicalLatex.includes("\\begin{aligned}"),
 );
-assert.ok(equationWithAlignedRendered.canonicalLatex.includes("\\\\ "));
+assert.ok(equationWithAlignedRendered.canonicalLatex.includes("\\\\&="));
 assert.ok(equationWithAlignedRendered.svg.width > 240);
 assert.ok(
   equationWithAlignedRendered.svg.height < 130,
