@@ -30,6 +30,20 @@ pub struct WindowsWheelhouseManifest {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WindowsOpenMpRuntimeManifest {
+    pub file: BundleFileRecord,
+    pub version: String,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowsAppLocalRuntimeManifest {
+    pub open_mp: WindowsOpenMpRuntimeManifest,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WindowsPythonBundleManifest {
     pub schema_version: u32,
     pub platform: String,
@@ -37,6 +51,7 @@ pub struct WindowsPythonBundleManifest {
     pub python_version: String,
     pub pip_version: String,
     pub archive: BundleFileRecord,
+    pub app_local_runtime: WindowsAppLocalRuntimeManifest,
     pub wheelhouse: WindowsWheelhouseManifest,
 }
 
@@ -89,6 +104,20 @@ fn parse_manifest(path: &Path) -> Result<WindowsPythonBundleManifest, String> {
         ));
     }
     validate_resource_name(&manifest.archive.name, "bundled Python archive")?;
+    validate_resource_name(
+        &manifest.app_local_runtime.open_mp.file.name,
+        "app-local Microsoft OpenMP runtime",
+    )?;
+    if !manifest
+        .app_local_runtime
+        .open_mp
+        .file
+        .name
+        .eq_ignore_ascii_case("vcomp140.dll")
+        || manifest.app_local_runtime.open_mp.file.size == 0
+    {
+        return Err("Bundled Python manifest has an invalid app-local vcomp140.dll record".to_string());
+    }
     validate_resource_name(&manifest.wheelhouse.lock.name, "OCR dependency lock")?;
     if manifest.wheelhouse.files.is_empty() {
         return Err("Bundled OCR wheelhouse manifest contains no wheels".to_string());
@@ -280,6 +309,7 @@ fn verify_extracted_tree(root: &Path, manifest: &WindowsPythonBundleManifest) ->
         "python312.dll",
         "python312.zip",
         "python312._pth",
+        "vcomp140.dll",
         "visualtex-python.json",
         "Lib/site-packages/pip/__init__.py",
         "Lib/site-packages/sitecustomize.py",
@@ -292,6 +322,23 @@ fn verify_extracted_tree(root: &Path, manifest: &WindowsPythonBundleManifest) ->
             ));
         }
     }
+    let openmp = root.join(&manifest.app_local_runtime.open_mp.file.name);
+    let openmp_metadata = fs::metadata(&openmp)
+        .map_err(|error| format!("Unable to inspect bundled app-local OpenMP runtime: {error}"))?;
+    if openmp_metadata.len() != manifest.app_local_runtime.open_mp.file.size {
+        return Err(format!(
+            "Bundled app-local OpenMP runtime size mismatch: {}",
+            openmp.display()
+        ));
+    }
+    let openmp_sha256 = sha256_file(&openmp)?;
+    if !openmp_sha256.eq_ignore_ascii_case(&manifest.app_local_runtime.open_mp.file.sha256) {
+        return Err(format!(
+            "Bundled app-local OpenMP runtime checksum mismatch: {}",
+            openmp.display()
+        ));
+    }
+
     let metadata: serde_json::Value = serde_json::from_slice(
         &fs::read(root.join("visualtex-python.json"))
             .map_err(|error| format!("Unable to read bundled Python metadata: {error}"))?,

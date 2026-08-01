@@ -33,6 +33,13 @@ fn run() -> Result<(), String> {
     let manifest =
         ocr_python_bundle::install_bundle_from_root(&bundle_root, &runtime_root)?;
     let python = runtime_root.join("python.exe");
+    let app_local_openmp = runtime_root.join("vcomp140.dll");
+    if !app_local_openmp.is_file() {
+        return Err(format!(
+            "Bundled private Python is missing the app-local Microsoft OpenMP runtime: {}",
+            app_local_openmp.display()
+        ));
+    }
 
     let probe = Command::new(&python)
         .arg("-c")
@@ -144,7 +151,22 @@ fn run() -> Result<(), String> {
 
     let interface_probe = Command::new(&python)
         .args(["-I", "-X", "utf8", "-c"])
-        .arg("import importlib.metadata as metadata, json, paddle, tokenizers; from paddleocr import FormulaRecognition; print(json.dumps({'paddle': paddle.__version__, 'paddleocr': metadata.version('paddleocr'), 'tokenizers': metadata.version('tokenizers'), 'formulaRecognition': FormulaRecognition.__name__}))")
+        .arg(
+            r#"import ctypes, importlib.metadata as metadata, json, paddle, tokenizers
+from paddleocr import FormulaRecognition
+kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+kernel32.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
+kernel32.GetModuleHandleW.restype = ctypes.c_void_p
+kernel32.GetModuleFileNameW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint32]
+kernel32.GetModuleFileNameW.restype = ctypes.c_uint32
+handle = kernel32.GetModuleHandleW('vcomp140.dll')
+if not handle:
+    raise RuntimeError('Paddle did not load vcomp140.dll')
+buffer = ctypes.create_unicode_buffer(32768)
+if not kernel32.GetModuleFileNameW(handle, buffer, len(buffer)):
+    raise ctypes.WinError(ctypes.get_last_error())
+print(json.dumps({'paddle': paddle.__version__, 'paddleocr': metadata.version('paddleocr'), 'tokenizers': metadata.version('tokenizers'), 'formulaRecognition': FormulaRecognition.__name__, 'vcompPath': buffer.value}))"#,
+        )
         .env_clear()
         .env("SystemRoot", &system_root)
         .env("WINDIR", &system_root)
@@ -182,6 +204,22 @@ fn run() -> Result<(), String> {
             != Some("FormulaRecognition")
     {
         return Err(format!("Unexpected offline OCR interface probe: {interface_value}"));
+    }
+    let loaded_openmp = interface_value
+        .get("vcompPath")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+    let expected_openmp = app_local_openmp
+        .display()
+        .to_string()
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+    if loaded_openmp != expected_openmp {
+        return Err(format!(
+            "Paddle loaded Microsoft OpenMP from outside the private runtime. Expected {expected_openmp}, actual {loaded_openmp}"
+        ));
     }
 
     let fake_user_base = temporary.join("fake-user-base");

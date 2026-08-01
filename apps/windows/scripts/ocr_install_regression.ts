@@ -89,17 +89,17 @@ assert.match(rustSource, /probe\.bits != 64/);
 assert.match(rustSource, /should_replace_with_bundled_python/);
 assert.match(rustSource, /ocr_python_bundle::install_bundle/);
 assert.match(rustSource, /private x64 Python 3\.12 runtime/);
-assert.match(pythonBundleSource, /Bundled Python archive checksum mismatch/);
+assert.match(pythonBundleSource, /Bundled \{label\} checksum mismatch/);
 assert.match(pythonBundleSource, /enclosed_name\(\)/);
 assert.match(tauriConfigSource, /ocr-python\/windows-x64/);
-assert.match(rustSource, /for minor in \[12, 11, 10, 9\]/);
-assert.match(rustSource, /Python 3\.13.*tokenizers 0\.19\.1/s);
+assert.match(rustSource, /matches!\(probe\.minor, 9 \| 10 \| 11 \| 12\)/);
+assert.match(rustSource, /Unsupported VisualTeX OCR Python/);
 assert.doesNotMatch(
   rustSource,
   /\.arg\("--clear"\)/,
   "resume installation must not clear a valid virtual environment",
 );
-assert.match(rustSource, /"tokenizers==0\.19\.1"[\s\S]*?Some\("0\.19\.1"\)[\s\S]*?true/);
+assert.match(rustSource, /"tokenizers"[\s\S]*?Some\("0\.19\.1"\)/);
 assert.match(rustSource, /"imagesize"[\s\S]*?"imagesize"[\s\S]*?"imagesize"/);
 assert.match(rustSource, /"ftfy"[\s\S]*?"ftfy"[\s\S]*?"ftfy"/);
 assert.match(rustSource, /"Wand"[\s\S]*?"wand"[\s\S]*?"Wand"/);
@@ -124,7 +124,7 @@ assert.match(rustSource, /ensure_private_python_isolation/);
 assert.match(rustSource, /PRIVATE_PYTHON_SITE_CUSTOMIZE/);
 assert.match(rustSource, /ensure_private_dependency_closure/);
 assert.match(rustSource, /\.arg\("check"\)/);
-assert.match(rustSource, /user site-packages remain disabled/);
+assert.match(rustSource, /isolated from user site-packages/);
 assert.doesNotMatch(
   rustSource,
   /Command::new\(&paths\.python\)/,
@@ -134,9 +134,18 @@ assert.match(processSource, /PYTHONNOUSERSITE/);
 assert.match(processSource, /PYTHONSAFEPATH/);
 assert.match(privateSiteCustomizeSource, /site\.ENABLE_USER_SITE = False/);
 assert.match(privateSiteCustomizeSource, /sys\.path\[:\] =/);
+assert.match(privateSiteCustomizeSource, /ctypes\.WinDLL\(_vcomp140_path\)/);
 assert.match(pythonBundleSource, /Lib\/site-packages\/sitecustomize\.py/);
+assert.match(pythonBundleSource, /vcomp140\.dll/);
+assert.match(rustSource, /ensure_private_python_app_local_runtime/);
+assert.match(rustSource, /app-local Microsoft OpenMP runtime/);
+assert.match(rustSource, /is_x86_feature_detected!\("avx"\)/);
+assert.match(rustSource, /skipped pip reinstall/);
 
 assert.match(rustSource, /--only-binary=:all:/);
+assert.match(rustSource, /--no-deps/);
+assert.match(rustSource, /--no-compile/);
+assert.match(rustSource, /--no-warn-script-location/);
 assert.match(processSource, /PYTHONUTF8/);
 assert.match(processSource, /PYTHONIOENCODING/);
 assert.match(processSource, /MultiByteToWideChar/);

@@ -1173,6 +1173,88 @@ fn ensure_private_python_isolation(paths: &RuntimePaths) -> Result<(), String> {
     })
 }
 
+#[cfg(windows)]
+fn ensure_private_python_app_local_runtime(paths: &RuntimePaths) -> Result<(), String> {
+    let private_root = paths.root.join("python");
+    let active_root = active_python_environment_root(paths);
+    if normalized_windows_path(active_root.display().to_string())
+        != normalized_windows_path(private_root.display().to_string())
+    {
+        return Ok(());
+    }
+    let openmp = private_root.join("vcomp140.dll");
+    if !openmp.is_file() {
+        return Err(format!(
+            "The existing VisualTeX OCR private Python is missing the app-local Microsoft OpenMP runtime {}. It must be replaced by the bundled self-contained x64 Python 3.12 runtime.",
+            openmp.display()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn ensure_private_python_app_local_runtime(_paths: &RuntimePaths) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(all(windows, any(target_arch = "x86", target_arch = "x86_64")))]
+fn paddle_cpu_supports_avx() -> bool {
+    std::is_x86_feature_detected!("avx")
+}
+
+#[cfg(all(windows, not(any(target_arch = "x86", target_arch = "x86_64"))))]
+fn paddle_cpu_supports_avx() -> bool {
+    false
+}
+
+#[cfg(not(windows))]
+fn paddle_cpu_supports_avx() -> bool {
+    true
+}
+
+fn ensure_paddle_cpu_compatibility() -> Result<(), String> {
+    if paddle_cpu_supports_avx() {
+        return Ok(());
+    }
+    Err(
+        "This processor or virtual machine does not expose AVX instructions required by PaddlePaddle 3.3.1 for Windows x64. Reinstalling Python packages, copying DLL files or repairing the Visual C++ runtime cannot make this PaddlePaddle build run. Enable AVX passthrough in the virtual machine or use a computer with AVX support."
+            .to_string(),
+    )
+}
+
+fn explain_paddle_import_failure(paths: &RuntimePaths, error: &str) -> String {
+    if let Err(cpu_error) = ensure_paddle_cpu_compatibility() {
+        return format!("{cpu_error}\nOriginal PaddlePaddle error:\n{error}");
+    }
+    let openmp = active_python_environment_root(paths).join("vcomp140.dll");
+    if !openmp.is_file() {
+        return format!(
+            "PaddlePaddle could not load because the VisualTeX private Python runtime is missing its app-local Microsoft OpenMP dependency {}. Install a VisualTeX build that bundles vcomp140.dll or repair the private runtime.\nOriginal PaddlePaddle error:\n{error}",
+            openmp.display()
+        );
+    }
+    let normalized = error.to_ascii_lowercase();
+    if normalized.contains("0xc0000005")
+        || normalized.contains("initialization routine failed")
+        || error.contains("初始化例程失败")
+    {
+        return format!(
+            "PaddlePaddle's native Windows DLL initialization failed after VisualTeX verified AVX support and the app-local Microsoft OpenMP runtime {}. This is not a wheel download failure, and retrying will reuse the installed dependency closure instead of reinstalling all packages. Security software, virtualization settings or another injected native runtime may be blocking libpaddle.pyd.\nOriginal PaddlePaddle error:\n{error}",
+            openmp.display()
+        );
+    }
+    if normalized.contains("specified module could not be found")
+        || error.contains("找不到指定的模块")
+        || normalized.contains("dll load failed")
+    {
+        return format!(
+            "PaddlePaddle's native dependency chain could not be loaded. VisualTeX found the app-local Microsoft OpenMP runtime at {}, so the remaining likely causes are a blocked/corrupted Paddle DLL or security software quarantine. The fixed installer will preserve the installed packages and report this native-load failure directly.\nOriginal PaddlePaddle error:\n{error}",
+            openmp.display()
+        );
+    }
+    error.to_string()
+}
+
 fn site_packages_candidates(paths: &RuntimePaths) -> Vec<PathBuf> {
     let mut candidates = vec![
         paths.venv.join("Lib").join("site-packages"),
@@ -1250,6 +1332,7 @@ fn probe_runtime_from_files(paths: &RuntimePaths) -> Result<RuntimeProbe, String
     if !paths.python.is_file() {
         return Err("OCR Python executable is missing".to_string());
     }
+    ensure_private_python_app_local_runtime(paths)?;
 
     let python_version = read_pyvenv_python_version(paths)
         .ok_or_else(|| "OCR Python version cache is missing".to_string())?;
@@ -1303,7 +1386,9 @@ fn probe_runtime(paths: &RuntimePaths) -> Result<RuntimeProbe, String> {
     if !paths.python.exists() {
         return Err("OCR runtime is not installed".to_string());
     }
+    ensure_paddle_cpu_compatibility()?;
     ensure_private_python_isolation(paths)?;
+    ensure_private_python_app_local_runtime(paths)?;
     let script = r#"import json, platform; import paddle; import paddleocr; import tokenizers, imagesize, ftfy, wand; from importlib.metadata import version; from paddleocr import FormulaRecognition; print(json.dumps({'pythonVersion': platform.python_version(), 'paddleVersion': paddle.__version__, 'paddleocrVersion': version('paddleocr')}))"#;
     let (stdout, stderr) = command_output_detailed(
         python_command(&paths.python).arg("-c").arg(script),
@@ -1670,6 +1755,10 @@ fn probe_package_for_install(
     import_name: &str,
     expected_version: Option<&str>,
 ) -> Result<InstalledPackageProbe, String> {
+    if import_name == "paddle" {
+        ensure_paddle_cpu_compatibility()?;
+        ensure_private_python_app_local_runtime(paths)?;
+    }
     let script = r#"import importlib, importlib.metadata as metadata, json, platform, sys
 name, import_name = sys.argv[1], sys.argv[2]
 module = importlib.import_module(import_name)
@@ -1686,14 +1775,20 @@ print(json.dumps({
         .arg(script)
         .arg(distribution)
         .arg(import_name);
-    let capture = install_command(
+    let capture = match install_command(
         paths,
         control,
         generation,
         "package-probe",
         &mut command,
         &format!("Verify Python package {distribution}"),
-    )?;
+    ) {
+        Ok(capture) => capture,
+        Err(error) if import_name == "paddle" => {
+            return Err(explain_paddle_import_failure(paths, &error));
+        }
+        Err(error) => return Err(error),
+    };
     let json_line = capture
         .stdout
         .lines()
@@ -1776,6 +1871,9 @@ fn offline_pip_install_arguments(
         assets.wheelhouse.display().to_string(),
         "--only-binary=:all:".to_string(),
         "--require-hashes".to_string(),
+        "--no-deps".to_string(),
+        "--no-compile".to_string(),
+        "--no-warn-script-location".to_string(),
         "--disable-pip-version-check".to_string(),
         "--no-input".to_string(),
         "--progress-bar".to_string(),
@@ -1888,6 +1986,8 @@ fn probe_runtime_for_install(
     control: &InstallControl,
     generation: u64,
 ) -> Result<RuntimeProbe, String> {
+    ensure_paddle_cpu_compatibility()?;
+    ensure_private_python_app_local_runtime(paths)?;
     let script = r#"import json, platform, sys
 import paddle, paddleocr, tokenizers, imagesize, ftfy, wand
 from importlib.metadata import version
@@ -1939,6 +2039,7 @@ fn should_replace_with_bundled_python(error: &str) -> bool {
     damaged_venv_python_error(error)
         || normalized.contains("unsupported visualtex ocr python")
         || normalized.contains("32-bit interpreter")
+        || normalized.contains("app-local microsoft openmp runtime")
 }
 
 fn verify_venv_identity(
@@ -1947,6 +2048,7 @@ fn verify_venv_identity(
     generation: u64,
 ) -> Result<PythonProbe, String> {
     ensure_private_python_isolation(paths)?;
+    ensure_private_python_app_local_runtime(paths)?;
     let script = r#"import json, os, platform, site, struct, sys
 user_site = site.getusersitepackages()
 user_sites = [user_site] if isinstance(user_site, str) else list(user_site)
@@ -2048,6 +2150,22 @@ fn install_windows_runtime_inner(
     )?;
 
     let installation_result = (|| -> Result<OcrRuntimeStatus, String> {
+        set_install_step(
+            app,
+            control,
+            paths,
+            &mut snapshot,
+            InstallState::Installing,
+            Some("cpu-check"),
+            3,
+            "正在检查处理器与 PaddlePaddle 的兼容性",
+            Some("Windows x64 的 PaddlePaddle 3.3.1 需要 CPU 与操作系统共同提供 AVX".to_string()),
+            None,
+        )?;
+        ensure_paddle_cpu_compatibility()?;
+        append_install_log(&paths.root, "processor compatibility check passed: AVX is available")?;
+        snapshot.mark_step_complete("cpu-check");
+
         if paths.python.is_file() {
             if let Ok(probe) = probe_runtime_for_install(paths, control, generation) {
                 snapshot.completed_steps = vec![
@@ -2243,11 +2361,47 @@ fn install_windows_runtime_inner(
             InstallState::Installing,
             Some("offline-wheelhouse"),
             32,
-            "正在从本地 wheelhouse 安装 OCR 完整依赖闭包",
-            Some("pip --no-index --find-links --require-hashes；系统 Python 与用户 site-packages 均不会参与".to_string()),
+            "正在检查或安装本地 OCR 依赖闭包",
+            Some("完整依赖已存在时会直接复用；否则从固定 wheelhouse 安装且不访问网络".to_string()),
             None,
         )?;
-        install_offline_dependency_lock(paths, control, generation, &offline_assets)?;
+        let dependency_files_ready = probe_runtime_from_files(paths).is_ok();
+        let dependency_closure_ready = if dependency_files_ready {
+            match pip_check_runtime(paths, control, generation) {
+                Ok(()) => true,
+                Err(error) => {
+                    append_install_log(
+                        &paths.root,
+                        &format!(
+                            "existing private dependency closure cannot be reused and will be repaired from the fixed wheelhouse: {error}"
+                        ),
+                    )?;
+                    false
+                }
+            }
+        } else {
+            false
+        };
+        if dependency_closure_ready {
+            set_install_step(
+                app,
+                control,
+                paths,
+                &mut snapshot,
+                InstallState::Installing,
+                Some("offline-wheelhouse"),
+                37,
+                "已检测到完整的 OCR 依赖，跳过重复安装",
+                Some("将直接重新验证 PaddlePaddle 原生 DLL；不会再次解压 68 个 wheel".to_string()),
+                None,
+            )?;
+            append_install_log(
+                &paths.root,
+                "reused the existing fixed offline dependency closure; skipped pip reinstall",
+            )?;
+        } else {
+            install_offline_dependency_lock(paths, control, generation, &offline_assets)?;
+        }
         snapshot.mark_step_complete("offline-wheelhouse");
         publish_install_snapshot(app, control, paths, &mut snapshot)?;
 
@@ -3569,6 +3723,9 @@ mod protocol_tests {
         assert!(should_replace_with_bundled_python(
             "The existing VisualTeX OCR environment uses Python 3.13.5"
         ));
+        assert!(should_replace_with_bundled_python(
+            "The existing VisualTeX OCR private Python is missing the app-local Microsoft OpenMP runtime vcomp140.dll"
+        ));
     }
 
     #[test]
@@ -3588,6 +3745,18 @@ mod protocol_tests {
                     size: 1,
                     sha256: "0".repeat(64),
                 },
+                app_local_runtime: ocr_python_bundle::WindowsAppLocalRuntimeManifest {
+                    open_mp: ocr_python_bundle::WindowsOpenMpRuntimeManifest {
+                        file: ocr_python_bundle::BundleFileRecord {
+                            name: "vcomp140.dll".to_string(),
+                            size: 1,
+                            sha256: "0".repeat(64),
+                        },
+                        version: "14.44.35211.0".to_string(),
+                        source: "Microsoft Visual C++ Redistributable app-local OpenMP runtime"
+                            .to_string(),
+                    },
+                },
                 wheelhouse: ocr_python_bundle::WindowsWheelhouseManifest {
                     lock: ocr_python_bundle::BundleFileRecord {
                         name: "requirements.lock".to_string(),
@@ -3603,6 +3772,11 @@ mod protocol_tests {
         assert!(arguments.iter().any(|value| value == "--find-links"));
         assert!(arguments.iter().any(|value| value == "--require-hashes"));
         assert!(arguments.iter().any(|value| value == "--only-binary=:all:"));
+        assert!(arguments.iter().any(|value| value == "--no-deps"));
+        assert!(arguments.iter().any(|value| value == "--no-compile"));
+        assert!(arguments
+            .iter()
+            .any(|value| value == "--no-warn-script-location"));
         assert!(!arguments.iter().any(|value| value.contains("pypi.org")));
         assert!(!arguments.iter().any(|value| value == "--index-url"));
     }

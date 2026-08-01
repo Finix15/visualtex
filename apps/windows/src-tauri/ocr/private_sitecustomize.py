@@ -12,6 +12,18 @@ import sys
 
 os.environ["PYTHONNOUSERSITE"] = "1"
 
+# PaddlePaddle's Windows CPU runtime depends on Microsoft's OpenMP runtime.
+# Preload the app-local copy beside python.exe so an older or incompatible
+# system-wide vcomp140.dll cannot win DLL resolution.
+_visualtex_vcomp140 = None
+if os.name == "nt":
+    _runtime_root = os.path.dirname(sys.executable)
+    _vcomp140_path = os.path.join(_runtime_root, "vcomp140.dll")
+    if os.path.isfile(_vcomp140_path):
+        import ctypes
+
+        _visualtex_vcomp140 = ctypes.WinDLL(_vcomp140_path)
+
 try:
     configured = site.getusersitepackages()
     user_sites = [configured] if isinstance(configured, str) else list(configured)

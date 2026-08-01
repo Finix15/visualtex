@@ -16,6 +16,7 @@ $PipWheelSha256 = "2913A38A2ABF4EA6B64AB507BD9E967F3B53DC1EDE74B01B0931E1CE54875
 $PaddleVersion = "3.3.1"
 $PaddleOcrVersion = "3.7.0"
 $TokenizersVersion = "0.19.1"
+$VcompFileName = "vcomp140.dll"
 
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $RequirementsSource = Join-Path $ProjectRoot "ocr\requirements.txt"
@@ -42,6 +43,73 @@ function Get-FileRecord([string]$Path) {
         size = $item.Length
         sha256 = Get-Sha256 $item.FullName
     }
+}
+
+function Get-PeMachine([string]$Path) {
+    $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+    $reader = $null
+    try {
+        $reader = New-Object System.IO.BinaryReader($stream)
+        if ($reader.ReadUInt16() -ne 0x5A4D) {
+            throw "Not a valid PE file: $Path"
+        }
+        $stream.Position = 0x3C
+        $peOffset = $reader.ReadUInt32()
+        if ($peOffset -gt ($stream.Length - 6)) {
+            throw "Invalid PE header offset in $Path"
+        }
+        $stream.Position = $peOffset
+        if ($reader.ReadUInt32() -ne 0x00004550) {
+            throw "Missing PE signature in $Path"
+        }
+        return $reader.ReadUInt16()
+    } finally {
+        if ($null -ne $reader) { $reader.Dispose() }
+        else { $stream.Dispose() }
+    }
+}
+
+function Resolve-Vcomp140Dll {
+    $roots = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    if ($env:VCToolsRedistDir -and (Test-Path -LiteralPath $env:VCToolsRedistDir -PathType Container)) {
+        [void]$roots.Add((Resolve-Path -LiteralPath $env:VCToolsRedistDir).Path)
+    }
+    foreach ($programFilesRoot in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+        if (-not $programFilesRoot) { continue }
+        $visualStudioRoot = Join-Path $programFilesRoot "Microsoft Visual Studio"
+        if (-not (Test-Path -LiteralPath $visualStudioRoot -PathType Container)) { continue }
+        foreach ($redistRoot in Get-ChildItem -LiteralPath $visualStudioRoot -Directory -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -like "*\VC\Redist\MSVC" }) {
+            [void]$roots.Add($redistRoot.FullName)
+        }
+    }
+
+    $candidates = @()
+    foreach ($root in $roots) {
+        foreach ($item in Get-ChildItem -LiteralPath $root -Filter $VcompFileName -File -Recurse -ErrorAction SilentlyContinue) {
+            if ($item.FullName -like "*\onecore\*") { continue }
+            if ($item.FullName -notmatch '\\x64\\Microsoft\.VC\d+\.OpenMP\\vcomp140\.dll$') { continue }
+            if ((Get-PeMachine $item.FullName) -ne 0x8664) { continue }
+            if ([string]$item.VersionInfo.CompanyName -notmatch "Microsoft") { continue }
+            $signature = Get-AuthenticodeSignature -LiteralPath $item.FullName
+            if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) { continue }
+            if ([string]$signature.SignerCertificate.Subject -notmatch "Microsoft") { continue }
+            $versionText = [string]$item.VersionInfo.FileVersion
+            $version = [version]::new(0, 0, 0, 0)
+            [void][version]::TryParse($versionText, [ref]$version)
+            $candidates += [pscustomobject]@{
+                Path = $item.FullName
+                Version = $version
+                VersionText = $versionText
+            }
+        }
+    }
+    $selected = $candidates | Sort-Object Version -Descending | Select-Object -First 1
+    if ($null -eq $selected) {
+        throw "Microsoft x64 vcomp140.dll was not found in a Visual Studio VC Redist directory. Install the Visual C++ build tools with the OpenMP runtime before producing the VisualTeX installer."
+    }
+    Write-Host "Using Microsoft OpenMP app-local runtime: $($selected.Path) ($($selected.VersionText))"
+    return [string]$selected.Path
 }
 
 function Write-Utf8NoBom([string]$Path, [string]$Content) {
@@ -111,9 +179,23 @@ function Invoke-PrivatePython(
     }
 }
 
-function Initialize-PrivateRuntime([string]$RuntimeRoot, [string]$WorkRoot) {
+function Initialize-PrivateRuntime(
+    [string]$RuntimeRoot,
+    [string]$WorkRoot,
+    [string]$VcompSource
+) {
     New-Item -ItemType Directory -Path $RuntimeRoot -Force | Out-Null
     Expand-Archive -LiteralPath $PythonArchive -DestinationPath $RuntimeRoot -Force
+    $vcompTarget = Join-Path $RuntimeRoot $VcompFileName
+    Copy-Item -LiteralPath $VcompSource -Destination $vcompTarget -Force
+    if ((Get-PeMachine $vcompTarget) -ne 0x8664) {
+        throw "Bundled Microsoft OpenMP runtime is not x64: $vcompTarget"
+    }
+    $vcompSignature = Get-AuthenticodeSignature -LiteralPath $vcompTarget
+    if ($vcompSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+        [string]$vcompSignature.SignerCertificate.Subject -notmatch "Microsoft") {
+        throw "Bundled Microsoft OpenMP runtime does not have a valid Microsoft Authenticode signature: $vcompTarget"
+    }
 
     $sitePackages = Join-Path $RuntimeRoot "Lib\site-packages"
     New-Item -ItemType Directory -Path $sitePackages -Force | Out-Null
@@ -135,12 +217,20 @@ function Initialize-PrivateRuntime([string]$RuntimeRoot, [string]$WorkRoot) {
     $siteCustomize = Get-Content -LiteralPath $SiteCustomizeSource -Raw
     Write-Utf8NoBom (Join-Path $sitePackages "sitecustomize.py") $siteCustomize
 
+    $vcompItem = Get-Item -LiteralPath $vcompTarget
     $runtimeMetadata = [ordered]@{
-        schemaVersion = 1
+        schemaVersion = 2
         pythonVersion = $PythonVersion
         architecture = "x64"
         distribution = "python.org embeddable"
         pipVersion = $PipVersion
+        appLocalRuntime = [ordered]@{
+            openMp = [ordered]@{
+                name = $VcompFileName
+                version = [string]$vcompItem.VersionInfo.FileVersion
+                sha256 = Get-Sha256 $vcompTarget
+            }
+        }
     }
     Write-Utf8NoBom (Join-Path $RuntimeRoot "visualtex-python.json") ($runtimeMetadata | ConvertTo-Json -Depth 4)
 }
@@ -150,8 +240,16 @@ function Test-PreparedBaseRuntime([string]$RuntimeRoot) {
     if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
         throw "Prepared OCR Python is missing python.exe"
     }
+    $vcomp = Join-Path $RuntimeRoot $VcompFileName
+    if (-not (Test-Path -LiteralPath $vcomp -PathType Leaf)) {
+        throw "Prepared OCR Python is missing the app-local Microsoft OpenMP runtime: $vcomp"
+    }
+    if ((Get-PeMachine $vcomp) -ne 0x8664) {
+        throw "Prepared OCR Python contains a non-x64 Microsoft OpenMP runtime: $vcomp"
+    }
     $probeScript = Join-Path $RuntimeRoot "_visualtex_runtime_probe.py"
     @'
+import ctypes
 import importlib.metadata as metadata
 import json
 import os
@@ -159,6 +257,9 @@ import platform
 import site
 import struct
 import sys
+runtime_root = os.path.dirname(sys.executable)
+vcomp_path = os.path.join(runtime_root, "vcomp140.dll")
+ctypes.WinDLL(vcomp_path)
 user_site = site.getusersitepackages()
 user_sites = [user_site] if isinstance(user_site, str) else list(user_site)
 normalized = lambda value: os.path.normcase(os.path.abspath(value))
@@ -175,6 +276,7 @@ print(json.dumps({
     "machine": platform.machine(),
     "executable": sys.executable,
     "prefix": sys.prefix,
+    "vcompPath": vcomp_path,
     "userSiteEnabled": bool(site.ENABLE_USER_SITE),
     "userSiteOnPath": user_site_on_path,
 }))
@@ -199,6 +301,9 @@ print(json.dumps({
     }
     if ($parsed.userSiteEnabled -or $parsed.userSiteOnPath) {
         throw "Prepared OCR Python is not isolated from user site-packages"
+    }
+    if (-not ([string]$parsed.vcompPath).StartsWith($RuntimeRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Prepared OCR Python did not load the bundled app-local Microsoft OpenMP runtime: $($parsed.vcompPath)"
     }
     $pipOutput = & $python -I -X utf8 -m pip --version
     if ($LASTEXITCODE -ne 0 -or -not ($pipOutput -match [regex]::Escape($RuntimeRoot))) {
@@ -273,6 +378,7 @@ function Test-FullOfflineRuntime(
 
     $probeScript = Join-Path $WorkRoot "full-runtime-probe.py"
     @'
+import ctypes
 import importlib.metadata as metadata
 import json
 import os
@@ -287,6 +393,19 @@ import imagesize
 import ftfy
 import wand
 from paddleocr import FormulaRecognition
+
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+kernel32.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
+kernel32.GetModuleHandleW.restype = ctypes.c_void_p
+kernel32.GetModuleFileNameW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint32]
+kernel32.GetModuleFileNameW.restype = ctypes.c_uint32
+vcomp_handle = kernel32.GetModuleHandleW("vcomp140.dll")
+if not vcomp_handle:
+    raise RuntimeError("Paddle did not load vcomp140.dll")
+vcomp_buffer = ctypes.create_unicode_buffer(32768)
+if not kernel32.GetModuleFileNameW(vcomp_handle, vcomp_buffer, len(vcomp_buffer)):
+    raise ctypes.WinError(ctypes.get_last_error())
+vcomp_path = vcomp_buffer.value
 
 user_site = site.getusersitepackages()
 user_sites = [user_site] if isinstance(user_site, str) else list(user_site)
@@ -306,6 +425,7 @@ print(json.dumps({
     "tokenizersVersion": metadata.version("tokenizers"),
     "formulaRecognition": FormulaRecognition.__name__,
     "executable": sys.executable,
+    "vcompPath": vcomp_path,
     "userSiteEnabled": bool(site.ENABLE_USER_SITE),
     "userSiteOnPath": user_site_on_path,
 }))
@@ -335,6 +455,9 @@ print(json.dumps({
     }
     if (-not ([string]$parsed.executable).StartsWith($RuntimeRoot, [StringComparison]::OrdinalIgnoreCase)) {
         throw "Full offline OCR runtime resolved the wrong interpreter: $($parsed.executable)"
+    }
+    if (-not ([string]$parsed.vcompPath).StartsWith($RuntimeRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Paddle loaded Microsoft OpenMP from outside the bundled OCR runtime: $($parsed.vcompPath)"
     }
 }
 
@@ -367,6 +490,7 @@ New-Item -ItemType Directory -Path $ResourceRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $CacheRoot -Force | Out-Null
 Get-VerifiedDownload $PythonArchiveUrl $PythonArchive $PythonArchiveSha256
 Get-VerifiedDownload $PipWheelUrl $PipWheel $PipWheelSha256
+$Vcomp140Source = Resolve-Vcomp140Dll
 
 $workRoot = Join-Path $env:TEMP ("visualtex-ocr-python-build-" + [guid]::NewGuid().ToString("N"))
 $runtimeRoot = Join-Path $workRoot "runtime"
@@ -374,7 +498,7 @@ $validationRoot = Join-Path $workRoot "validation"
 $stagedWheelhouse = Join-Path $workRoot "wheelhouse"
 $stagedLock = Join-Path $workRoot $OutputLockName
 try {
-    Initialize-PrivateRuntime $runtimeRoot $workRoot
+    Initialize-PrivateRuntime $runtimeRoot $workRoot $Vcomp140Source
     Test-PreparedBaseRuntime $runtimeRoot
     $python = Join-Path $runtimeRoot "python.exe"
 
@@ -438,6 +562,13 @@ try {
         pythonVersion = $PythonVersion
         pipVersion = $PipVersion
         archive = Get-FileRecord $OutputArchive
+        appLocalRuntime = [ordered]@{
+            openMp = [ordered]@{
+                file = Get-FileRecord (Join-Path $runtimeRoot $VcompFileName)
+                version = [string](Get-Item -LiteralPath (Join-Path $runtimeRoot $VcompFileName)).VersionInfo.FileVersion
+                source = "Microsoft Visual C++ Redistributable app-local OpenMP runtime"
+            }
+        }
         wheelhouse = [ordered]@{
             lock = Get-FileRecord $OutputLock
             files = $wheelRecords
@@ -461,9 +592,10 @@ try {
 
     Write-Host "Prepared bundled OCR Python: $OutputArchive"
     Write-Host "Runtime SHA-256: $($manifest.archive.sha256)"
+    Write-Host "App-local OpenMP runtime: $($manifest.appLocalRuntime.openMp.file.name) $($manifest.appLocalRuntime.openMp.version)"
     Write-Host "Wheelhouse files: $($wheelRecords.Count)"
     Write-Host "Wheelhouse bytes: $((Get-ChildItem -LiteralPath $OutputWheelhouse -File | Measure-Object Length -Sum).Sum)"
-    Write-Host "Offline validation: Python $PythonVersion x64, PaddlePaddle $PaddleVersion, PaddleOCR $PaddleOcrVersion, tokenizers $TokenizersVersion, FormulaRecognition available"
+    Write-Host "Offline validation: Python $PythonVersion x64, app-local Microsoft OpenMP, PaddlePaddle $PaddleVersion, PaddleOCR $PaddleOcrVersion, tokenizers $TokenizersVersion, FormulaRecognition available"
 } finally {
     Remove-Item -LiteralPath $workRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

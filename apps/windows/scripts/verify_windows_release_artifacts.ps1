@@ -69,6 +69,36 @@ if ([int]$ocrPythonManifest.schemaVersion -ne 2 -or
     throw "Unexpected private OCR Python manifest metadata: $ocrPythonManifestPath"
 }
 Assert-ManifestFileRecord $ocrPythonRoot $ocrPythonManifest.archive "Private Python archive"
+$openMpRecord = $ocrPythonManifest.appLocalRuntime.openMp.file
+if ($null -eq $openMpRecord -or [string]$openMpRecord.name -ne "vcomp140.dll" -or [int64]$openMpRecord.size -le 0) {
+    throw "The private OCR Python manifest is missing the app-local Microsoft OpenMP runtime record."
+}
+$archivePath = Join-Path $ocrPythonRoot ([string]$ocrPythonManifest.archive.name)
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$archive = [System.IO.Compression.ZipFile]::OpenRead($archivePath)
+try {
+    $entry = @($archive.Entries | Where-Object { [string]::Equals($_.FullName, "vcomp140.dll", [StringComparison]::OrdinalIgnoreCase) })
+    if ($entry.Count -ne 1) {
+        throw "The private OCR Python archive must contain exactly one app-local vcomp140.dll."
+    }
+    if ([int64]$entry[0].Length -ne [int64]$openMpRecord.size) {
+        throw "The archived vcomp140.dll size does not match the manifest."
+    }
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $stream = $entry[0].Open()
+    try {
+        $digest = $sha.ComputeHash($stream)
+    } finally {
+        $stream.Dispose()
+        $sha.Dispose()
+    }
+    $actualOpenMpHash = -join ($digest | ForEach-Object { $_.ToString("X2") })
+    if (-not [string]::Equals($actualOpenMpHash, [string]$openMpRecord.sha256, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "The archived vcomp140.dll checksum does not match the manifest."
+    }
+} finally {
+    $archive.Dispose()
+}
 Assert-ManifestFileRecord $ocrPythonRoot $ocrPythonManifest.wheelhouse.lock "Hash-locked OCR requirements"
 $wheelhouseRoot = Join-Path $ocrPythonRoot "wheelhouse"
 $manifestWheels = @($ocrPythonManifest.wheelhouse.files)
@@ -106,7 +136,7 @@ foreach ($requiredLockMarker in @("paddlepaddle==3.3.1", "paddleocr==3.7.0", "to
         throw "OCR requirements lock is missing $requiredLockMarker"
     }
 }
-Write-Host "Private OCR Python 3.12.10 x64 archive and exact 68-wheel offline closure verified."
+Write-Host "Private OCR Python 3.12.10 x64 archive, app-local Microsoft OpenMP runtime and exact 68-wheel offline closure verified."
 
 $ocrModelCatalog = Get-Content -LiteralPath $ocrModelCatalogPath -Raw | ConvertFrom-Json
 if ([int]$ocrModelCatalog.schemaVersion -ne 1 -or
@@ -284,7 +314,7 @@ foreach ($requiredMarker in @(
         throw "Custom NSIS template is missing verified release marker: $requiredMarker"
     }
 }
-$tauriConfig = Get-Content -LiteralPath (Join-Path $root "src-tauri\tauri.conf.json") -Raw | ConvertFrom-Json
+$tauriConfig = Get-Content -LiteralPath (Join-Path $root "src-tauri\tauri.conf.json") -Raw -Encoding UTF8 | ConvertFrom-Json
 if ([string]$tauriConfig.bundle.windows.nsis.template -ne "./target/nsis-template/visualtex-installer.nsi") {
     throw "Tauri is not configured to bundle with the verified custom NSIS template."
 }
