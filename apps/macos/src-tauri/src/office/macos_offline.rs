@@ -264,6 +264,7 @@ struct ActiveOfficeEditorSession {
     activation: MacOfflineOfficeEditorActivation,
     received_at: Instant,
     ready: bool,
+    main_was_visible: bool,
 }
 
 #[derive(Debug, Default)]
@@ -1382,6 +1383,23 @@ fn office_host_name(host: OfficeHost) -> &'static str {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn restore_office_host_focus(host: OfficeHost) {
+    let bundle_identifier = match host {
+        OfficeHost::Word => "com.microsoft.Word",
+        OfficeHost::Powerpoint => "com.microsoft.Powerpoint",
+    };
+    if !crate::office::background::activate_application_by_bundle_identifier(bundle_identifier) {
+        eprintln!(
+            "Unable to return focus to {} after closing the VisualTeX formula editor",
+            office_host_name(host)
+        );
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn restore_office_host_focus(_host: OfficeHost) {}
+
 fn editor_window_label(host: OfficeHost) -> &'static str {
     match host {
         OfficeHost::Word => "office-native-word-editor",
@@ -1658,6 +1676,10 @@ fn open_editor_window(
     let label = editor_window_label(host);
     let reused = app.get_webview_window(label).is_some();
     let window = create_editor_window(app, host)?;
+    // Keep the desktop workspace out of the Office z-order while retaining the
+    // process as a Regular application. This preserves the Dock/app-switcher
+    // identity without allowing the main editor to cover Word or PowerPoint.
+    let main_was_visible = crate::office::background::hide_main_window_for_office_editor(app)?;
     let activation = {
         let mut runtime = office_editor_runtime()
             .lock()
@@ -1678,6 +1700,7 @@ fn open_editor_window(
             activation: activation.clone(),
             received_at,
             ready: false,
+            main_was_visible,
         });
         activation
     };
@@ -1954,22 +1977,25 @@ pub fn close_macos_offline_office_editor_window(
     let generation = generation.ok_or_else(|| {
         "The Office formula editor close request is missing generation".to_string()
     })?;
-    {
+    let main_was_visible = {
         // Keep activation validation and hiding atomic with respect to a new
         // URL activation. A late close from generation N must never hide the
         // already-hydrating generation N+1.
         let mut runtime = office_editor_runtime()
             .lock()
             .map_err(|_| "VisualTeX Office editor state is unavailable".to_string())?;
-        let matches = runtime.active(host).is_some_and(|active| {
-            active.activation.session_id == session_id && active.activation.generation == generation
-        });
-        if !matches {
-            return Err("The Office editor Session is no longer active".to_string());
-        }
+        let active = runtime
+            .active(host)
+            .filter(|active| {
+                active.activation.session_id == session_id
+                    && active.activation.generation == generation
+            })
+            .ok_or_else(|| "The Office editor Session is no longer active".to_string())?;
+        let main_was_visible = active.main_was_visible;
         set_resident_editor_content_visible(&window, false)?;
         *runtime.active_mut(host) = None;
-    }
+        main_was_visible
+    };
     park_resident_editor_if_idle(&window, host)
         .map_err(|error| format!("Unable to close the VisualTeX Office editor: {error}"))?;
     let _ = window.emit(
@@ -1985,6 +2011,7 @@ pub fn close_macos_offline_office_editor_window(
             .unwrap_or(false);
         if !has_open_office_editor(&app)
             && !main_visible
+            && !main_was_visible
             && crate::office::background::is_background_mode()
         {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory)
@@ -1993,6 +2020,10 @@ pub fn close_macos_offline_office_editor_window(
                 })?;
         }
     }
+    // Applying or cancelling a formula ends the temporary VisualTeX editing
+    // interaction. Explicitly return the foreground application to the Office
+    // host so a hidden main workspace can never become the topmost window.
+    restore_office_host_focus(host);
     Ok(())
 }
 
@@ -2056,12 +2087,6 @@ pub(crate) fn handle_open_url(app: &AppHandle, value: &str) -> Result<(), String
     );
     ensure_runtime_root(host)?;
 
-    // An Office request owns only its dedicated editor window. Do not hide an
-    // already visible desktop workspace: a background-agent process may have
-    // been promoted to the user's main VisualTeX app through Dock/Reopen, and
-    // hiding it here would also return the whole process to Accessory after the
-    // Office editor closes. Cold Office launches are already hidden during
-    // setup, so preserving the current main-window state introduces no flash.
     if request.operation.as_deref() == Some("documentImport") {
         for host in [OfficeHost::Word, OfficeHost::Powerpoint] {
             if let Some(window) = app.get_webview_window(editor_window_label(host)) {

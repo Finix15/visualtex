@@ -429,7 +429,10 @@ pub(crate) fn activate_foreground_app(app: &AppHandle) -> Result<(), String> {
     app.set_activation_policy(tauri::ActivationPolicy::Regular)
         .map_err(|error| format!("Unable to activate VisualTeX: {error}"))?;
     let running = NSRunningApplication::currentApplication();
-    let options = NSApplicationActivationOptions::ActivateAllWindows;
+    // Do not use ActivateAllWindows here. Formula editing should activate only
+    // the dedicated key window; raising every VisualTeX window also pulls the
+    // desktop workspace above Word or PowerPoint after a formula is applied.
+    let options = NSApplicationActivationOptions::empty();
     // macOS can return false briefly after switching an accessory/background
     // application back to Regular, especially before its hidden resident
     // WebView is shown. Do not abort the request on that advisory result: the
@@ -450,6 +453,20 @@ pub(crate) fn activate_foreground_app(app: &AppHandle) -> Result<(), String> {
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn activate_foreground_app(_app: &AppHandle) -> Result<(), String> {
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn activate_application_by_bundle_identifier(bundle_identifier: &str) -> bool {
+    let identifier = NSString::from_str(bundle_identifier);
+    let applications = NSRunningApplication::runningApplicationsWithBundleIdentifier(&identifier);
+    applications.firstObject().is_some_and(|application| {
+        application.activateWithOptions(NSApplicationActivationOptions::empty())
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn activate_application_by_bundle_identifier(_bundle_identifier: &str) -> bool {
+    false
 }
 
 #[cfg(target_os = "macos")]
@@ -544,6 +561,21 @@ pub fn reveal_main_window(app: &AppHandle) -> Result<(), String> {
         eprintln!("{error}");
     }
     Ok(())
+}
+
+pub(crate) fn hide_main_window_for_office_editor(app: &AppHandle) -> Result<bool, String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "VisualTeX main window is unavailable".to_string())?;
+    let was_visible = window
+        .is_visible()
+        .map_err(|error| format!("Unable to inspect VisualTeX visibility: {error}"))?;
+    if was_visible {
+        window
+            .hide()
+            .map_err(|error| format!("Unable to hide VisualTeX during Office editing: {error}"))?;
+    }
+    Ok(was_visible)
 }
 
 pub fn hide_main_window(app: &AppHandle) -> Result<(), String> {
