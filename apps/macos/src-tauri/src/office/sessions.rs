@@ -141,6 +141,8 @@ pub struct OfficeFormulaSession {
     pub display_mode: String,
     #[serde(default)]
     pub numbered: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_size_pt: Option<f64>,
     pub export_width: f64,
     pub export_height: f64,
     pub export_result: Option<OfficeExportResult>,
@@ -169,6 +171,7 @@ pub struct CreateOfficeSessionInput {
     pub code_format: Option<String>,
     pub display_mode: Option<String>,
     pub numbered: Option<bool>,
+    pub font_size_pt: Option<f64>,
     pub export_width: Option<f64>,
     pub export_height: Option<f64>,
     pub original_metadata: Option<VisualTeXFormulaMetadata>,
@@ -464,6 +467,17 @@ impl SessionStore {
                 "Only Word display formulas can use equation numbering".to_string(),
             ));
         }
+        let font_size_pt = input.font_size_pt.or_else(|| {
+            input
+                .original_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.font_size_pt)
+        });
+        if font_size_pt.is_some_and(|value| !value.is_finite() || !(1.0..=512.0).contains(&value)) {
+            return Err(SessionError::Invalid(
+                "Office Session fontSizePt must be from 1 to 512 pt".to_string(),
+            ));
+        }
         let session = OfficeFormulaSession {
             id,
             mode: input.mode,
@@ -477,6 +491,7 @@ impl SessionStore {
             code_format: input.code_format.unwrap_or_else(|| "raw".to_string()),
             display_mode,
             numbered,
+            font_size_pt,
             export_width: input.export_width.unwrap_or_default(),
             export_height: input.export_height.unwrap_or_default(),
             export_result: None,
@@ -520,6 +535,7 @@ impl SessionStore {
             "codeFormat",
             "displayMode",
             "numbered",
+            "fontSizePt",
             "exportWidth",
             "exportHeight",
             "exportResult",
@@ -580,6 +596,13 @@ impl SessionStore {
         if next.numbered && (next.host != OfficeHost::Word || next.display_mode != "block") {
             return Err(SessionError::Invalid(
                 "Only Word display formulas can use equation numbering".to_string(),
+            ));
+        }
+        if next.font_size_pt.is_some_and(|value| {
+            !value.is_finite() || !(1.0..=512.0).contains(&value)
+        }) {
+            return Err(SessionError::Invalid(
+                "Office Session fontSizePt must be from 1 to 512 pt".to_string(),
             ));
         }
 
@@ -743,6 +766,7 @@ mod tests {
             code_format: None,
             display_mode: None,
             numbered: None,
+            font_size_pt: None,
             export_width: None,
             export_height: None,
             original_metadata: None,

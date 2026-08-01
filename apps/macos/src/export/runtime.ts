@@ -4,18 +4,26 @@ import { SVG } from "mathjax-full/js/output/svg.js";
 import { liteAdaptor } from "mathjax-full/js/adaptors/liteAdaptor.js";
 import { RegisterHTMLHandler } from "mathjax-full/js/handlers/html.js";
 import { AllPackages } from "mathjax-full/js/input/tex/AllPackages.js";
+import { STATE } from "mathjax-full/js/core/MathItem.js";
+import { SerializedMmlVisitor } from "mathjax-full/js/core/MmlTree/SerializedMmlVisitor.js";
+import type { MmlNode } from "mathjax-full/js/core/MmlTree/MmlNode.js";
 import { normalizeMathLiveCanonicalUprightCommands } from "../editor/normalizeChineseLatex.ts";
+import { normalizeExtendedIntegralLatexCommands } from "../math/extendedIntegralCompatibility.ts";
+import { applyVisualTexIntegralSvgGlyphs } from "../math/integralSvgExportCompatibility.ts";
 import {
-  normalizeMathJaxUnsupportedNaryCommands,
-  registerMathJaxIntegralGlyphs,
-} from "./mathJaxCompatibility.ts";
+  assertResolvedMathJaxSvg,
+  assertResolvedPresentationMathMl,
+  VISUALTEX_MATHML_MACROS,
+  VISUALTEX_SVG_MACROS,
+  type VisualTexMathJaxMacro,
+} from "../math/latexCompatibility.ts";
 import type {
   PngExportOptions,
   PngExportResult,
   SvgExportOptions,
   SvgExportResult,
 } from "./exportTypes";
-import { errorMessage } from "../runtime/errorMessage";
+import { errorMessage } from "../runtime/errorMessage.ts";
 
 const DEFAULT_OPTIONS: SvgExportOptions = {
   displayMode: true,
@@ -26,23 +34,41 @@ const DEFAULT_OPTIONS: SvgExportOptions = {
 
 const adaptor = liteAdaptor();
 RegisterHTMLHandler(adaptor);
-const texInput = new TeX({
-  packages: AllPackages,
-  formatError: (_jax: unknown, error: unknown) => {
-    throw new Error(errorMessage(error, "MathJax could not parse this formula."), {
-      cause: error,
-    });
-  },
+
+function createTexInput(macros: Record<string, VisualTexMathJaxMacro>) {
+  return new TeX({
+    packages: AllPackages,
+    macros,
+    formatError: (_jax: unknown, error: unknown) => {
+      throw new Error(
+        errorMessage(error, "MathJax could not parse this formula."),
+        { cause: error },
+      );
+    },
+  });
+}
+
+const mathMlTexInput = createTexInput(VISUALTEX_MATHML_MACROS);
+const svgTexInput = createTexInput(VISUALTEX_SVG_MACROS);
+const mathMlOutput = new SVG({
+  fontCache: "local",
+  internalSpeechTitles: false,
 });
 const svgOutput = new SVG({
   fontCache: "local",
   internalSpeechTitles: false,
 });
-registerMathJaxIntegralGlyphs(svgOutput.font);
+const mathMlDocument = mathjax.document("", {
+  InputJax: mathMlTexInput,
+  OutputJax: mathMlOutput,
+});
 const mathDocument = mathjax.document("", {
-  InputJax: texInput,
+  InputJax: svgTexInput,
   OutputJax: svgOutput,
 });
+const serializedMmlVisitor = new SerializedMmlVisitor(
+  mathMlDocument.mmlFactory,
+);
 
 function positiveFinite(value: number, fallback: number) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
@@ -79,10 +105,8 @@ function isSingleCompleteEnvironment(source: string) {
 }
 
 function prepareLatex(latex: string) {
-  const normalized = normalizeMathJaxUnsupportedNaryCommands(
-    normalizeMathLiveCanonicalUprightCommands(
-      latex.replace(/\r\n?/g, "\n"),
-    ),
+  const normalized = normalizeMathLiveCanonicalUprightCommands(
+    normalizeExtendedIntegralLatexCommands(latex.replace(/\r\n?/g, "\n")),
   ).trim();
   if (!normalized) throw new Error("Cannot export an empty formula.");
 
@@ -227,6 +251,20 @@ export function svgToBase64(svg: string) {
   return encodeUtf8Base64(svg);
 }
 
+export function latexToMathMl(latex: string, displayMode = true) {
+  const source = prepareLatex(latex);
+  const root = mathMlDocument.convert(source, {
+    display: displayMode,
+    end: STATE.COMPILED,
+  }) as unknown as MmlNode;
+  const mathMl = serializedMmlVisitor.visitTree(root).trim();
+  if (!mathMl.startsWith("<math") || !mathMl.includes("MathML")) {
+    throw new Error("MathJax did not produce valid Presentation MathML.");
+  }
+  assertResolvedPresentationMathMl(mathMl);
+  return mathMl;
+}
+
 export function latexToSvg(
   latex: string,
   options: SvgExportOptions = DEFAULT_OPTIONS,
@@ -244,6 +282,7 @@ export function latexToSvg(
     containerWidth: 100_000,
   });
   let svg = extractSvg(adaptor.outerHTML(container));
+  svg = applyVisualTexIntegralSvgGlyphs(svg, options.displayMode);
   const viewBox = parseViewBox(svg);
 
   const unitsPerPx = 1000 / fontSizePx;
@@ -295,6 +334,7 @@ export function latexToSvg(
     svg = forceWordCompatibleBlack(svg);
   }
 
+  assertResolvedMathJaxSvg(svg);
   assertSelfContained(svg);
   return {
     svg,

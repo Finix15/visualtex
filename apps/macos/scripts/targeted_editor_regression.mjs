@@ -4416,27 +4416,33 @@ async function main() {
           );
           const item = [...(stable?.querySelectorAll("li[data-command]") ?? [])]
             .find((candidate) => candidate.dataset.command === ${JSON.stringify(command)});
-          const placeholders = [...(item?.querySelectorAll(
-            ".visualtex-native-preview-placeholder",
+          const layers = [...(item?.querySelectorAll(
+            ".ML__popover__command .ML__center",
           ) ?? [])]
             .map((node) => {
-              const box = node.getBoundingClientRect();
-              return { top: box.top, width: box.width, height: box.height };
+              const content = node.lastElementChild ?? node;
+              const box = content.getBoundingClientRect();
+              return {
+                top: box.top,
+                width: box.width,
+                height: box.height,
+                text: node.textContent?.trim() ?? "",
+              };
             })
             .sort((left, right) => left.top - right.top);
-          const top = placeholders[0];
-          const bottom = placeholders[1];
+          const top = layers[0];
+          const bottom = layers[1];
           const expectedSizeOrder = ${JSON.stringify(expectedSizeOrder)};
           return {
             ready:
               Boolean(stable?.classList.contains("is-visible")) &&
               Boolean(item?.classList.contains("has-visualtex-command-preview")) &&
-              placeholders.length === 2 &&
+              layers.length === 2 &&
               (expectedSizeOrder === "small-large"
                 ? top.height < bottom.height
                 : top.height > bottom.height),
             command: item?.dataset.command ?? "",
-            placeholders,
+            layers,
           };
         })()`, `${command} structured native preview`);
       };
@@ -4507,19 +4513,25 @@ async function main() {
       })()`);
 
       const clickExportOption = async (label, expectedCount) => {
-        await evaluate(`document.querySelector(".export-menu-trigger")?.click()`);
+        await evaluate(`document.querySelector(".workspace-export-trigger")?.click()`);
         await waitForEvaluation(`(() => ({
-          ready: Boolean(document.querySelector(".export-menu-popover")),
-        }))()`, `export menu opened for ${label}`);
+          ready: Boolean(document.querySelector(".export-dialog")),
+        }))()`, `export dialog opened for ${label}`);
         await evaluate(`(() => {
-          const button = [...document.querySelectorAll(".export-format-options > button")]
+          const button = [...document.querySelectorAll(".export-format-option")]
             .find((candidate) => candidate.querySelector("strong")?.textContent?.trim() === ${JSON.stringify(label)});
           button?.click();
         })()`);
+        await waitForEvaluation(`(() => {
+          const button = [...document.querySelectorAll(".export-format-option")]
+            .find((candidate) => candidate.querySelector("strong")?.textContent?.trim() === ${JSON.stringify(label)});
+          return { ready: button?.getAttribute("aria-checked") === "true" };
+        })()`, `${label} export format selected`);
+        await evaluate(`document.querySelector(".export-confirm-button")?.click()`);
         await waitForEvaluation(`(() => ({
           ready:
             (window.__visualtexCapturedExports?.length ?? 0) >= ${expectedCount} &&
-            !document.querySelector(".export-menu-popover"),
+            !document.querySelector(".export-dialog"),
           count: window.__visualtexCapturedExports?.length ?? 0,
         }))()`, `${label} export captured`);
       };
@@ -4606,7 +4618,7 @@ async function main() {
       scenario === "wrapper-auto" ||
       scenario === "wrapper-continuous"
     ) {
-      await focusField();
+      await clearField();
       await typeText("abcdefghij");
       await typeText("\\mathbb");
       const nativeStructure = await waitForEvaluation(`(() => {
@@ -4781,8 +4793,8 @@ async function main() {
         localStorage.setItem(storageKey, JSON.stringify(persisted));
         location.reload();
       })()`);
-      await waitForEvaluation(`(() => ({ ready: Boolean(document.querySelector("math-field")) }))()`, "fresh field for mathcal test");
-      await focusField();
+      await waitForEvaluation(`(() => ({ ready: Boolean(document.querySelector("math-field")?.shadowRoot) }))()`, "fresh field for mathcal test");
+      await clearField();
       await typeText("\\mathcal");
       await key(" ", "Space", 32);
       await key("g", "KeyG", 71);

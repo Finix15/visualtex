@@ -66,7 +66,7 @@ assert.match(
 const canonicalUpright = String.raw`\differentialD x+\capitalDifferentialD y+\exponentialE^{\imaginaryI x}+\imaginaryJ`;
 assert.equal(
   normalizeMathLiveCanonicalUprightCommands(canonicalUpright),
-  String.raw`\mathrm{d} x+\mathrm{D} y+\mathrm{e}^{\mathrm{i} x}+\mathrm{j}`,
+  String.raw`\mathrm{d}x+\mathrm{D}y+\mathrm{e}^{\mathrm{i}x}+\mathrm{j}`,
   "MathLive upright commands must be converted to portable LaTeX",
 );
 assert.equal(
@@ -83,7 +83,7 @@ assert.equal(
 );
 assert.equal(
   formatLatex(canonicalUpright, "raw"),
-  String.raw`\mathrm{d} x+\mathrm{D} y+\mathrm{e}^{\mathrm{i} x}+\mathrm{j}`,
+  String.raw`\mathrm{d}x+\mathrm{D}y+\mathrm{e}^{\mathrm{i}x}+\mathrm{j}`,
   "copied LaTeX must never expose MathLive-only upright commands",
 );
 for (const shortcut of Object.values(visualTexUprightInlineShortcuts)) {

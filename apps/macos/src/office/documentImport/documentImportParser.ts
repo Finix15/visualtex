@@ -1,4 +1,4 @@
-import { createUuid } from "../../runtime/browserCompatibility";
+import { createUuid } from "../../runtime/browserCompatibility.ts";
 
 export type DocumentImportSourceKind = "auto" | "markdown" | "latex";
 export type DocumentFormulaDisplayMode = "inline" | "block";
@@ -539,18 +539,33 @@ function stripLatexComments(
 
 function unwrapSimpleLatexCommands(source: string) {
   let value = source;
+  value = value
+    .replace(/\\footnote\s*\{([^{}]*)\}/g, "（注：$1）")
+    .replace(/\\url\s*\{([^{}]*)\}/g, "$1")
+    .replace(/\\(?:eqref|ref|pageref)\s*\{([^{}]*)\}/g, "〔引用：$1〕")
+    .replace(
+      /\\cite(?:\[[^\]]*\])?\s*\{([^{}]*)\}/g,
+      "〔引用：$1〕",
+    )
+    .replace(/\\colorbox\s*\{[^{}]*\}\s*\{([^{}]*)\}/g, "$1")
+    .replace(/\\fcolorbox\s*\{[^{}]*\}\s*\{[^{}]*\}\s*\{([^{}]*)\}/g, "$1")
+    .replace(/\\resizebox\s*\{[^{}]*\}\s*\{[^{}]*\}\s*\{([^{}]*)\}/g, "$1")
+    .replace(/\\(?:makebox|framebox|parbox)\s*(?:\[[^\]]*\])?\s*\{([^{}]*)\}/g, "$1");
   const oneArgumentCommands = [
     "textbf",
     "textit",
     "emph",
     "underline",
+    "sout",
+    "st",
+    "strike",
     "texttt",
     "textrm",
     "textsf",
     "textnormal",
     "mbox",
     "caption",
-    "footnote",
+    "fbox",
   ];
   const commandPattern = new RegExp(
     `\\\\(?:${oneArgumentCommands.join("|")})\\s*\\{([^{}]*)\\}`,
@@ -561,7 +576,245 @@ function unwrapSimpleLatexCommands(source: string) {
     if (next === value) break;
     value = next;
   }
-  return value.replace(/\\href\s*\{[^{}]*\}\s*\{([^{}]*)\}/g, "$1");
+  return value.replace(
+    /\\href\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g,
+    (_match, target: string, label: string) =>
+      `${label}${target ? `（${target}）` : ""}`,
+  );
+}
+
+function decodeMarkdownHtmlEntities(value: string) {
+  const named: Record<string, string> = {
+    amp: "&",
+    apos: "'",
+    gt: ">",
+    lt: "<",
+    nbsp: " ",
+    quot: '"',
+  };
+  return value.replace(
+    /&(?:#(\d+)|#x([0-9a-f]+)|([a-z][a-z0-9]+));/gi,
+    (match, decimal: string | undefined, hexadecimal: string | undefined, name: string | undefined) => {
+      if (decimal) {
+        const codePoint = Number(decimal);
+        return Number.isInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+          ? String.fromCodePoint(codePoint)
+          : match;
+      }
+      if (hexadecimal) {
+        const codePoint = Number.parseInt(hexadecimal, 16);
+        return Number.isInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+          ? String.fromCodePoint(codePoint)
+          : match;
+      }
+      return name ? named[name.toLowerCase()] ?? match : match;
+    },
+  );
+}
+
+function markdownTableCells(line: string) {
+  const normalized = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  const cells: string[] = [];
+  let buffer = "";
+  for (let index = 0; index < normalized.length; index += 1) {
+    const character = normalized[index];
+    if (character === "\\" && index + 1 < normalized.length) {
+      buffer += character + normalized[index + 1];
+      index += 1;
+      continue;
+    }
+    if (character === "|") {
+      cells.push(buffer.trim());
+      buffer = "";
+    } else {
+      buffer += character;
+    }
+  }
+  cells.push(buffer.trim());
+  return cells;
+}
+
+function isMarkdownTableSeparator(line: string) {
+  const cells = markdownTableCells(line);
+  return (
+    cells.length > 0 &&
+    cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, "")))
+  );
+}
+
+/**
+ * Normalize Markdown extensions into the flat paragraph/list/code protocol
+ * understood by the native macOS Word writer. Formula delimiters are preserved
+ * verbatim so the normal formula extraction pass still owns every math span.
+ */
+function normalizeMarkdownStructure(source: string) {
+  const input = source.replace(/\r\n?/g, "\n");
+  const originalLines = input.split("\n");
+  const references = new Map<string, string>();
+  const footnotes = new Map<string, string>();
+  const retained: string[] = [];
+
+  for (let index = 0; index < originalLines.length; index += 1) {
+    const line = originalLines[index];
+    const footnote = line.match(/^\s*\[\^([^\]]+)\]:\s*(.*)$/);
+    if (footnote) {
+      const body = [footnote[2]];
+      while (
+        index + 1 < originalLines.length &&
+        /^(?: {2,}|\t)\S/.test(originalLines[index + 1])
+      ) {
+        index += 1;
+        body.push(originalLines[index].trim());
+      }
+      footnotes.set(footnote[1].trim().toLowerCase(), body.join(" ").trim());
+      continue;
+    }
+    const reference = line.match(
+      /^\s*\[([^\]^][^\]]*)\]:\s*(\S+)(?:\s+["'(].*["')])?\s*$/,
+    );
+    if (reference) {
+      references.set(reference[1].trim().toLowerCase(), reference[2]);
+      continue;
+    }
+    retained.push(line);
+  }
+
+  const replaceReferences = (line: string) => {
+    let next = line.replace(
+      /!\[([^\]]*)\]\[([^\]]*)\]/g,
+      (match, alt: string, key: string) => {
+        const target = references.get((key || alt).trim().toLowerCase());
+        return target ? `![${alt}](${target})` : match;
+      },
+    );
+    next = next.replace(
+      /\[([^\]]+)\]\[([^\]]*)\]/g,
+      (match, label: string, key: string) => {
+        const target = references.get((key || label).trim().toLowerCase());
+        return target ? `[${label}](${target})` : match;
+      },
+    );
+    next = next.replace(/\[\^([^\]]+)\]/g, (_match, key: string) => `〔注 ${key}〕`);
+    next = next.replace(
+      /\[(?!\^)([^\]]+)\](?![\[(])/g,
+      (match, label: string, offset: number, whole: string) => {
+        if (whole[offset - 1] === "!" || isEscaped(whole, offset)) return match;
+        const target = references.get(label.trim().toLowerCase());
+        return target ? `[${label}](${target})` : match;
+      },
+    );
+    return next;
+  };
+
+  const output: string[] = [];
+  let start = 0;
+  if (retained[0]?.trim() === "---") {
+    const end = retained
+      .slice(1)
+      .findIndex((line) => /^(?:---|\.\.\.)\s*$/.test(line.trim()));
+    if (end >= 0) {
+      output.push("**文档元数据**", "```yaml", ...retained.slice(1, end + 1), "```", "");
+      start = end + 2;
+    }
+  }
+
+  for (let index = start; index < retained.length; index += 1) {
+    const raw = retained[index];
+    const trimmed = raw.trim();
+
+    const tildeFence = raw.match(/^(\s*)~{3,}(.*)$/);
+    if (tildeFence) {
+      output.push(`${tildeFence[1]}\`\`\`${tildeFence[2]}`);
+      continue;
+    }
+
+    if (
+      /^(?: {4}|\t)/.test(raw) &&
+      !/^\s*(?:[-+*]|\d+[.)])\s+/.test(raw)
+    ) {
+      const code: string[] = [];
+      while (index < retained.length) {
+        const candidate = retained[index];
+        if (!candidate.trim()) {
+          code.push("");
+          index += 1;
+          continue;
+        }
+        if (!/^(?: {4}|\t)/.test(candidate)) break;
+        code.push(candidate.startsWith("\t") ? candidate.slice(1) : candidate.slice(4));
+        index += 1;
+      }
+      index -= 1;
+      output.push("```", ...code, "```");
+      continue;
+    }
+
+    if (
+      index + 1 < retained.length &&
+      trimmed &&
+      /^ {0,3}(?:=+|-+)\s*$/.test(retained[index + 1])
+    ) {
+      const level = retained[index + 1].includes("=") ? "#" : "##";
+      output.push(`${level} ${replaceReferences(trimmed)}`);
+      index += 1;
+      continue;
+    }
+
+    if (
+      raw.includes("|") &&
+      index + 1 < retained.length &&
+      isMarkdownTableSeparator(retained[index + 1])
+    ) {
+      const header = markdownTableCells(raw);
+      output.push(
+        header.map((cell) => `**${replaceReferences(cell)}**`).join(" ｜ "),
+        "",
+      );
+      index += 2;
+      while (
+        index < retained.length &&
+        retained[index].includes("|") &&
+        retained[index].trim()
+      ) {
+        output.push(
+          markdownTableCells(retained[index])
+            .map((cell) => replaceReferences(cell))
+            .join(" ｜ "),
+          "",
+        );
+        index += 1;
+      }
+      index -= 1;
+      continue;
+    }
+
+    if (
+      /^ {0,3}(?:\*\s*){3,}$/.test(raw) ||
+      /^ {0,3}(?:-\s*){3,}$/.test(raw) ||
+      /^ {0,3}(?:_\s*){3,}$/.test(raw)
+    ) {
+      output.push("────────────────────");
+      continue;
+    }
+
+    const task = raw.match(/^(\s*[-+*]\s+)\[([ xX])\]\s+(.*)$/);
+    if (task) {
+      output.push(
+        `${task[1]}${task[2].toLowerCase() === "x" ? "☒" : "☐"} ${replaceReferences(task[3])}`,
+      );
+      continue;
+    }
+
+    output.push(replaceReferences(raw));
+  }
+
+  if (footnotes.size) {
+    output.push("");
+    for (const [key, value] of footnotes) {
+      output.push(`**注 ${key}：** ${replaceReferences(value)}`, "");
+    }
+  }
+  return output.join("\n").replace(/<!--[\s\S]*?-->/g, "");
 }
 
 function cleanInlineMarkup(raw: string, sourceKind: DocumentImportSourceKind) {
@@ -582,14 +835,25 @@ function cleanInlineMarkup(raw: string, sourceKind: DocumentImportSourceKind) {
       .replace(/~/g, " ");
   } else {
     value = value
-      .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
-      .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+      .replace(
+        /!\[([^\]]*)\]\(([^)]*)\)/g,
+        (_match, alt: string, target: string) =>
+          `图片：${alt || "未命名"}${target ? `（${target}）` : ""}`,
+      )
+      .replace(
+        /\[([^\]]+)\]\(([^)]*)\)/g,
+        (_match, label: string, target: string) =>
+          `${label}${target ? `（${target}）` : ""}`,
+      )
       .replace(/`([^`]+)`/g, "$1")
       .replace(/\*\*([^*]+)\*\*/g, "$1")
       .replace(/__([^_]+)__/g, "$1")
       .replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, "$1")
       .replace(/(?<!_)_([^_\n]+)_(?!_)/g, "$1")
       .replace(/~~([^~]+)~~/g, "$1");
+  }
+  if (sourceKind === "markdown") {
+    value = decodeMarkdownHtmlEntities(value).replace(/<[^>]+>/g, "");
   }
   return value
     .replace(/[ \t]*\n[ \t]*/g, " ")
@@ -817,6 +1081,160 @@ function headingStyle(level: number): DocumentParagraphStyle {
   if (level === 2) return "heading2";
   if (level === 3) return "heading3";
   return "heading4";
+}
+
+function replaceLatexTableEnvironmentFlat(source: string) {
+  return source.replace(
+    /\\begin\s*\{tabular\}\s*\{[^{}]*\}([\s\S]*?)\\end\s*\{tabular\}/gi,
+    (_match, tableBody: string) => {
+      const normalized = tableBody
+        .replace(/\\(?:toprule|midrule|bottomrule|hline)\b/g, "")
+        .replace(/\\multicolumn\{[^{}]*\}\{[^{}]*\}\{([^{}]*)\}/g, "$1")
+        .replace(/\\multirow\{[^{}]*\}\{[^{}]*\}\{([^{}]*)\}/g, "$1");
+      const rows = normalized
+        .split(/\\\\(?:\[[^\]]*\])?/)
+        .map((row) => row.trim())
+        .filter(Boolean)
+        .map((row) => row.replace(/(?<!\\)&/g, " ｜ ").replace(/\\&/g, "&"));
+      return rows.length ? `\n${rows.join("\n\n")}\n\n` : "";
+    },
+  );
+}
+
+/** Expand only the LaTeX extensions that can be represented by the flat native
+ * macOS Word protocol. Unknown commands/environments are intentionally left for
+ * the existing literal-source fallback instead of being silently discarded. */
+function normalizeLatexExtensionsFlat(source: string) {
+  let body = source.replace(/\r\n?/g, "\n");
+  const macros = new Map<string, { argumentCount: number; replacement: string }>();
+  const preservedDefinitions: string[] = [];
+  const preserveDefinition = (definition: string) => {
+    const index = preservedDefinitions.push(definition) - 1;
+    return `\uE300VT_MACRO_DEFINITION_${index}\uE301`;
+  };
+  const commandDefinition =
+    /\\(?:newcommand|renewcommand|providecommand)\*?\s*\{\\([A-Za-z@]+)\}\s*(?:\[(\d+)\])?\s*\{((?:[^{}]|\{[^{}]*\})*)\}/g;
+  body = body.replace(
+    commandDefinition,
+    (match, name: string, count: string | undefined, replacement: string) => {
+      macros.set(name, {
+        argumentCount: Math.max(0, Math.min(2, Number(count ?? "0") || 0)),
+        replacement,
+      });
+      return preserveDefinition(match);
+    },
+  );
+  body = body.replace(
+    /\\def\\([A-Za-z@]+)\s*\{((?:[^{}]|\{[^{}]*\})*)\}/g,
+    (match, name: string, replacement: string) => {
+      macros.set(name, { argumentCount: 0, replacement });
+      return preserveDefinition(match);
+    },
+  );
+
+  for (let pass = 0; pass < 8; pass += 1) {
+    let changed = false;
+    for (const [name, macro] of macros) {
+      const escaped = escapeRegExp(name);
+      if (macro.argumentCount === 0) {
+        body = body.replace(new RegExp(`\\\\${escaped}(?![A-Za-z@])`, "g"), () => {
+          changed = true;
+          return macro.replacement;
+        });
+      } else if (macro.argumentCount === 1) {
+        body = body.replace(
+          new RegExp(
+            `\\\\${escaped}\\s*\\{((?:[^{}]|\\{[^{}]*\\})*)\\}`,
+            "g",
+          ),
+          (_match, argument: string) => {
+            changed = true;
+            return macro.replacement.replace(/#1/g, argument);
+          },
+        );
+      } else {
+        body = body.replace(
+          new RegExp(
+            `\\\\${escaped}\\s*\\{((?:[^{}]|\\{[^{}]*\\})*)\\}\\s*\\{((?:[^{}]|\\{[^{}]*\\})*)\\}`,
+            "g",
+          ),
+          (_match, first: string, second: string) => {
+            changed = true;
+            return macro.replacement.replace(/#1/g, first).replace(/#2/g, second);
+          },
+        );
+      }
+    }
+    if (!changed) break;
+  }
+
+  body = body.replace(
+    /\uE300VT_MACRO_DEFINITION_(\d+)\uE301/g,
+    (_match, index: string) => preservedDefinitions[Number(index)] ?? "",
+  );
+
+  const preservedFloatEnvironments: string[] = [];
+  const preserveFloatEnvironment = (environment: string) => {
+    const index = preservedFloatEnvironments.push(environment) - 1;
+    return `\uE302VT_FLOAT_ENVIRONMENT_${index}\uE303`;
+  };
+  body = body.replace(
+    /\\begin\s*\{(figure\*?|table\*?)\}(?:\s*\[[^\]]*\])?([\s\S]*?)\\end\s*\{\1\}/gi,
+    (match, environment: string, content: string) => {
+      const isFigure = environment.toLowerCase().startsWith("figure");
+      const containsMath =
+        /\$|\\\(|\\\[|\\begin\s*\{(?:equation|align|gather|multline|math|displaymath)/.test(
+          content,
+        );
+      if (isFigure && containsMath) return preserveFloatEnvironment(match);
+      if (!isFigure && !/\\begin\s*\{tabular\}/i.test(content)) {
+        return preserveFloatEnvironment(match);
+      }
+      return `\n${content}\n`;
+    },
+  );
+
+  body = body
+    .replace(
+      /\\(part|chapter|section|subsection|subsubsection|paragraph|subparagraph)(\*?)\s*\[[^\]]*\]\s*\{/gi,
+      "\\$1$2{",
+    )
+    .replace(/\\begin\s*\{(?:itemize|enumerate)\}\s*\[[^\]]*\]/gi, (match) =>
+      match.replace(/\s*\[[^\]]*\]$/, ""),
+    )
+    .replace(/\\begin\s*\{minipage\}(?:\[[^\]]*\])?\s*\{[^{}]*\}/gi, "")
+    .replace(/\\end\s*\{minipage\}/gi, "")
+    .replace(
+      /\\begin\s*\{thebibliography\}\s*\{[^{}]*\}/gi,
+      "\\section*{参考文献}\n\\begin{itemize}\n",
+    )
+    .replace(/\\end\s*\{thebibliography\}/gi, "\n\\end{itemize}")
+    .replace(
+      /\\bibitem(?:\[([^\]]+)\])?\{([^{}]+)\}/gi,
+      (_match, label: string | undefined, key: string) =>
+        `\\item \\textbf{[${label || key}]} `,
+    )
+    .replace(/\\begin\s*\{description\}/gi, "\\begin{itemize}\n")
+    .replace(/\\end\s*\{description\}/gi, "\n\\end{itemize}")
+    .replace(/\\item\s*\[([^\]]+)\]/g, "\\item \\textbf{$1}：")
+    .replace(/\\centering\b/gi, "")
+    .replace(
+      /\\includegraphics(?:\[[^\]]*\])?\{([^{}]+)\}/gi,
+      "【图片：$1】",
+    )
+    .replace(
+      /\\caption\s*\{((?:[^{}]|\{[^{}]*\})*)\}/gi,
+      "\\textbf{图注：} $1",
+    )
+    .replace(/\\input\s*\{([^{}]+)\}/gi, "【外部文件：$1】")
+    .replace(/\\include\s*\{([^{}]+)\}/gi, "【外部文件：$1】")
+    .replace(/\\bibliography\s*\{([^{}]+)\}/gi, "【参考文献库：$1】");
+
+  body = replaceLatexTableEnvironmentFlat(body);
+  return body.replace(
+    /\uE302VT_FLOAT_ENVIRONMENT_(\d+)\uE303/g,
+    (_match, index: string) => preservedFloatEnvironments[Number(index)] ?? "",
+  );
 }
 
 function normalizeTheoremEnvironments(
@@ -1237,6 +1655,11 @@ export function parseLatexMarkdownDocument(
   let literals: ExtractedLiteral[] = [];
   let theoremDefinitions = new Map<string, TheoremEnvironmentDefinition>();
   let theoremEnvironmentNames = new Set<string>();
+  if (sourceKind === "markdown") {
+    normalized = normalizeMarkdownStructure(normalized);
+  } else {
+    normalized = normalizeLatexExtensionsFlat(normalized);
+  }
   if (sourceKind === "latex") {
     theoremDefinitions = theoremDefinitionsFromSource(normalized);
     theoremEnvironmentNames = new Set(theoremDefinitions.keys());

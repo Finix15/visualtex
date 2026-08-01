@@ -60,6 +60,7 @@ import {
 } from "../api/sessionClient";
 import { useOfficeSession } from "./useOfficeSession";
 import { messageOfficeParent } from "./dialogMessages";
+import { registerOfficeApplyShortcut } from "./officeApplyShortcut";
 import {
   OCR_MODELS,
   cancelOcrRecognition,
@@ -97,6 +98,59 @@ const USE_NATIVE_POWERPOINT_COMMIT =
 
 const OFFICE_COMMIT_RESULT_TIMEOUT_MS = 45_000;
 
+function normalizeOfficeFontSizePt(value: unknown, fallback: number) {
+  const numeric = typeof value === "number" ? value : Number(value);
+  const resolved = Number.isFinite(numeric) ? numeric : fallback;
+  return Math.round(Math.min(200, Math.max(5, resolved)) * 2) / 2;
+}
+
+const OFFICE_CHINESE_FONT_SIZE_OPTIONS = [
+  { name: "初号", fontSizePt: 42 },
+  { name: "小初", fontSizePt: 36 },
+  { name: "一号", fontSizePt: 26 },
+  { name: "小一", fontSizePt: 24 },
+  { name: "二号", fontSizePt: 22 },
+  { name: "小二", fontSizePt: 18 },
+  { name: "三号", fontSizePt: 16 },
+  { name: "小三", fontSizePt: 15 },
+  { name: "四号", fontSizePt: 14 },
+  { name: "小四", fontSizePt: 12 },
+  { name: "五号", fontSizePt: 10.5 },
+  { name: "小五", fontSizePt: 9 },
+  { name: "六号", fontSizePt: 7.5 },
+  { name: "小六", fontSizePt: 6.5 },
+  { name: "七号", fontSizePt: 5.5 },
+  { name: "八号", fontSizePt: 5 },
+] as const;
+
+const OFFICE_CHINESE_FONT_SIZE_POINTS = new Set<number>(
+  OFFICE_CHINESE_FONT_SIZE_OPTIONS.map((option) => option.fontSizePt),
+);
+
+const OFFICE_FONT_SIZE_OPTIONS = [
+  ...Array.from({ length: 63 }, (_, index) => 5 + index * 0.5),
+  ...Array.from({ length: 18 }, (_, index) => 38 + index * 2),
+  80,
+  90,
+  96,
+  100,
+  120,
+  144,
+  160,
+  180,
+  200,
+].filter((fontSizePt) => !OFFICE_CHINESE_FONT_SIZE_POINTS.has(fontSizePt));
+
+function officePointFontSizeOptions(currentFontSizePt: number) {
+  const current = normalizeOfficeFontSizePt(currentFontSizePt, currentFontSizePt);
+  if (OFFICE_CHINESE_FONT_SIZE_POINTS.has(current)) {
+    return OFFICE_FONT_SIZE_OPTIONS;
+  }
+  return OFFICE_FONT_SIZE_OPTIONS.includes(current)
+    ? OFFICE_FONT_SIZE_OPTIONS
+    : [...OFFICE_FONT_SIZE_OPTIONS, current].sort((left, right) => left - right);
+}
+
 function delay(milliseconds: number) {
   return new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
 }
@@ -127,6 +181,7 @@ function documentFingerprint(
   codeFormat: string,
   displayMode: "inline" | "block",
   numbered: boolean,
+  fontSizePt: number,
 ) {
   return JSON.stringify({
     title,
@@ -134,6 +189,7 @@ function documentFingerprint(
     codeFormat,
     displayMode,
     numbered,
+    fontSizePt: normalizeOfficeFontSizePt(fontSizePt, fontSizePt),
   });
 }
 
@@ -163,6 +219,7 @@ export function OfficeDialogApp() {
   const [autoCommitOnClose, setAutoCommitOnClose] = useState(true);
   const [displayMode, setDisplayMode] = useState<"inline" | "block">("inline");
   const [numbered, setNumbered] = useState(false);
+  const [officeFontSizePt, setOfficeFontSizePt] = useState(14);
   const [toast, setToast] = useState("");
   const [ocrOpen, setOcrOpen] = useState(false);
   const [ocrModel, setOcrModel] = useState<OcrModelName>(() => {
@@ -243,6 +300,7 @@ export function OfficeDialogApp() {
     setAutoCommitOnClose(true);
     setDisplayMode("inline");
     setNumbered(false);
+    setOfficeFontSizePt(14);
   }, [sessionKey]);
 
   useEffect(() => {
@@ -268,6 +326,9 @@ export function OfficeDialogApp() {
   const theme = useEditorStore((state) => state.theme);
   const setTheme = useEditorStore((state) => state.setTheme);
   const latexCodeFormat = useEditorStore((state) => state.latexCodeFormat);
+  const powerPointDefaultFontSizePt = useEditorStore(
+    (state) => state.powerPointDefaultFontSizePt,
+  );
   const addHistory = useEditorStore((state) => state.addHistory);
   const historyState = useHistorySnapshot();
   const isEn = language === "en";
@@ -329,18 +390,38 @@ export function OfficeDialogApp() {
 
   const originalFingerprint = useMemo(() => {
     if (!session || !editableOriginalDocument) return "";
+    const fallbackFontSizePt = session.host === "word" ? 11 : 18;
+    const originalFontSizePt =
+      session.host === "powerpoint" &&
+      session.mode === "create" &&
+      session.status === "created" &&
+      !session.dirty
+        ? powerPointDefaultFontSizePt
+        : normalizeOfficeFontSizePt(
+            session.originalMetadata?.fontSizePt ?? session.fontSizePt,
+            fallbackFontSizePt,
+          );
     return documentFingerprint(
       session.originalMetadata?.title ?? session.title,
       editableOriginalDocument.lines,
       editableOriginalDocument.codeFormat,
       session.originalMetadata?.displayMode ?? session.displayMode,
       session.originalMetadata?.numbered ?? session.numbered ?? false,
+      originalFontSizePt,
     );
-  }, [editableOriginalDocument, session]);
+  }, [editableOriginalDocument, powerPointDefaultFontSizePt, session]);
 
   const currentFingerprint = useMemo(
-    () => documentFingerprint(title, lines, latexCodeFormat, displayMode, numbered),
-    [title, lines, latexCodeFormat, displayMode, numbered],
+    () =>
+      documentFingerprint(
+        title,
+        lines,
+        latexCodeFormat,
+        displayMode,
+        numbered,
+        officeFontSizePt,
+      ),
+    [title, lines, latexCodeFormat, displayMode, numbered, officeFontSizePt],
   );
   const dirty = Boolean(session) && currentFingerprint !== originalFingerprint;
 
@@ -376,12 +457,24 @@ export function OfficeDialogApp() {
     setAutoCommitOnClose(session.autoCommitOnClose);
     setDisplayMode(session.displayMode);
     setNumbered(session.displayMode === "block" && Boolean(session.numbered));
+    const loadedFontSizePt =
+      session.host === "powerpoint" &&
+      session.mode === "create" &&
+      session.status === "created" &&
+      !session.dirty
+        ? powerPointDefaultFontSizePt
+        : normalizeOfficeFontSizePt(
+            session.fontSizePt ?? session.originalMetadata?.fontSizePt,
+            session.host === "word" ? 11 : 18,
+          );
+    setOfficeFontSizePt(loadedFontSizePt);
     const loadedFingerprint = documentFingerprint(
       session.title,
       nextLines,
       editableSessionDocument.codeFormat,
       session.displayMode,
       session.displayMode === "block" && Boolean(session.numbered),
+      loadedFontSizePt,
     );
     lastSavedFingerprintRef.current = loadedFingerprint;
     latestCompleteExportRef.current = session.exportResult?.pngBase64
@@ -391,7 +484,13 @@ export function OfficeDialogApp() {
       typeof performance === "undefined" ? Date.now() : performance.now();
     setHydratedPerformanceMs(hydratedAt);
     setHydratedSessionKey(sessionKey);
-  }, [editableSessionDocument, session?.id, sessionKey, isEn]);
+  }, [
+    editableSessionDocument,
+    session?.id,
+    sessionKey,
+    isEn,
+    powerPointDefaultFontSizePt,
+  ]);
 
   useEffect(() => {
     if (
@@ -534,18 +633,23 @@ export function OfficeDialogApp() {
       after: DocumentSnapshot,
       source: ReplaceDocumentEntry["source"],
     ) => {
-      historyManager.commitPendingTransaction();
+      if (source !== "source-apply") historyManager.commitPendingTransaction();
       const before = captureSnapshot();
       if (documentSnapshotsEquivalent(before, after)) return false;
       useEditorStore.getState().replaceDocumentState(after);
-      historyManager.push({
+      const entry: ReplaceDocumentEntry = {
         type: "replace-document",
         before,
         after,
         source,
         timestamp: Date.now(),
-      });
-      window.requestAnimationFrame(() => restoreSnapshotFocus(after));
+      };
+      if (source === "source-apply") {
+        historyManager.recordSourceDocumentEdit(entry);
+      } else {
+        historyManager.push(entry);
+        window.requestAnimationFrame(() => restoreSnapshotFocus(after));
+      }
       return true;
     },
     [captureSnapshot, restoreSnapshotFocus],
@@ -1127,6 +1231,7 @@ export function OfficeDialogApp() {
         codeFormat: latexCodeFormat,
         displayMode,
         numbered: displayMode === "block" && numbered,
+        fontSizePt: officeFontSizePt,
         dirty,
         status,
         autoCommitOnClose,
@@ -1144,6 +1249,7 @@ export function OfficeDialogApp() {
       latexCodeFormat,
       displayMode,
       numbered,
+      officeFontSizePt,
       dirty,
       autoCommitOnClose,
       currentFingerprint,
@@ -1267,6 +1373,21 @@ export function OfficeDialogApp() {
     return () =>
       window.removeEventListener("keydown", handleApplyShortcut, true);
   }, [handleCommit]);
+
+  useEffect(
+    () =>
+      registerOfficeApplyShortcut({
+        onApply: async () => {
+          await handleCommit();
+        },
+        isEnabled: () =>
+          !ocrOpen &&
+          !inlineOcrBusyRef.current &&
+          !historyState.isReplaying &&
+          !finalizingRef.current,
+      }),
+    [handleCommit, historyState.isReplaying, ocrOpen],
+  );
 
   const handleCancel = useCallback(async () => {
     if (finalizingRef.current) return;
@@ -1422,6 +1543,47 @@ export function OfficeDialogApp() {
               </button>
             </div>
           ) : null}
+          <label
+            className="office-font-size-setting"
+            title={
+              session.host === "word" && session.mode === "create"
+                ? isEn
+                  ? "Starts from the current Word paragraph font size"
+                  : "默认读取当前 Word 段落正文的字号"
+                : isEn
+                  ? "Formula font size"
+                  : "公式字号"
+            }
+          >
+            <span>{isEn ? "Size" : "字号"}</span>
+            <select
+              value={officeFontSizePt}
+              data-office-font-size
+              aria-label={isEn ? "Formula font size" : "公式字号"}
+              onChange={(event) =>
+                setOfficeFontSizePt(
+                  normalizeOfficeFontSizePt(event.target.value, officeFontSizePt),
+                )
+              }
+            >
+              <optgroup label={isEn ? "Chinese sizes" : "中文字号"}>
+                {OFFICE_CHINESE_FONT_SIZE_OPTIONS.map((option) => (
+                  <option key={option.name} value={option.fontSizePt}>
+                    {isEn
+                      ? `${option.name} (${option.fontSizePt} pt)`
+                      : `${option.name}（${option.fontSizePt} 磅）`}
+                  </option>
+                ))}
+              </optgroup>
+              <optgroup label={isEn ? "Point sizes" : "磅值"}>
+                {officePointFontSizeOptions(officeFontSizePt).map((fontSizePt) => (
+                  <option key={fontSizePt} value={fontSizePt}>
+                    {isEn ? `${fontSizePt} pt` : `${fontSizePt} 磅`}
+                  </option>
+                ))}
+              </optgroup>
+            </select>
+          </label>
           {session.host === "word" && displayMode === "block" ? (
             <label className="office-auto-commit-setting">
               <input
@@ -1493,6 +1655,7 @@ export function OfficeDialogApp() {
         }}
         onCancel={handleCancel}
         editorRef={editorRef}
+        editorInstanceKey={session.id}
         sidebarOpen={sidebarOpen}
         onSidebarOpenChange={setSidebarOpen}
         onHistoryBusyChange={setHistoryBusy}

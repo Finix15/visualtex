@@ -66,3 +66,18 @@ function nestedErrorMessage(reason: unknown, seen: Set<object>): string {
 export function errorMessage(reason: unknown, fallback: string): string {
   return nestedErrorMessage(reason, new Set<object>()) || fallback;
 }
+
+export async function responseErrorMessage(
+  response: Response,
+  fallback = "VisualTeX service request failed.",
+): Promise<string> {
+  const text = await response.text().catch(() => "");
+  if (text.trim()) {
+    try {
+      return errorMessage(JSON.parse(text) as unknown, text.trim());
+    } catch {
+      return errorMessage(text, fallback);
+    }
+  }
+  return errorMessage(response.statusText, fallback);
+}

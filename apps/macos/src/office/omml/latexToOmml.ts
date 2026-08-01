@@ -14,6 +14,10 @@ import {
   normalizeMathJaxUnsupportedNaryCommands,
 } from "../../export/mathJaxCompatibility.ts";
 import type { LatexCodeFormat } from "../../types/formula";
+import {
+  assertResolvedPresentationMathMl,
+  VISUALTEX_MATHML_MACROS,
+} from "../../math/latexCompatibility.ts";
 import { errorMessage } from "../../runtime/errorMessage";
 
 export type OmmlDisplayMode = "inline" | "block";
@@ -33,6 +37,7 @@ const adaptor = liteAdaptor();
 RegisterHTMLHandler(adaptor);
 const texInput = new TeX({
   packages: AllPackages,
+  macros: VISUALTEX_MATHML_MACROS,
   formatError: (_jax: unknown, error: unknown) => {
     throw new Error(
       errorMessage(error, "MathJax 无法解析该公式。"),
@@ -272,7 +277,9 @@ function latexToMathMl(latex: string, displayMode: OmmlDisplayMode) {
     display: displayMode === "block",
     end: STATE.COMPILED,
   }) as MmlNode;
-  return serializedMmlVisitor.visitTree(root);
+  const mathMl = serializedMmlVisitor.visitTree(root);
+  assertResolvedPresentationMathMl(mathMl);
+  return mathMl;
 }
 
 function parseMathMl(latex: string, displayMode: OmmlDisplayMode) {

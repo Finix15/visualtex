@@ -31,12 +31,10 @@ export interface EditorWorkspaceProps {
 
   onPrimaryAction?: () => Promise<void>;
   onCancel?: () => Promise<void>;
-  onExport?: (format: WorkspaceExportFormat) => Promise<void>;
-  onChooseExportDirectory?: () => Promise<void>;
-  exportDirectory?: string;
-  exportBusy?: boolean;
+  onOpenExport?: () => void;
 
   editorRef: RefObject<MathEditorHandle | null>;
+  editorInstanceKey?: string;
   sidebarOpen: boolean;
   onSidebarOpenChange: (open: boolean) => void;
   onHistoryBusyChange: (busy: boolean) => void;

@@ -1333,6 +1333,19 @@ fn import_request(
         .as_ref()
         .map(|metadata| metadata.code_format.clone())
         .unwrap_or_else(|| "latex".to_string());
+    let font_size_pt = request
+        .font_size_pt
+        .or_else(|| {
+            request
+                .power_point
+                .as_ref()
+                .and_then(|powerpoint| powerpoint.font_size_pt)
+        })
+        .or_else(|| {
+            original_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.font_size_pt)
+        });
 
     let session_id = request.session_id.clone();
     match state.session_store.create_external(
@@ -1349,6 +1362,7 @@ fn import_request(
             code_format: Some(code_format),
             display_mode: Some(request.display_mode),
             numbered: Some(request.numbered),
+            font_size_pt,
             export_width: None,
             export_height: None,
             original_metadata,
@@ -4826,6 +4840,7 @@ c &= e
             code_format: "latex".to_string(),
             display_mode: "block".to_string(),
             numbered: false,
+            font_size_pt: None,
             export_width: 0.0,
             export_height: 0.0,
             export_result: Some(crate::office::sessions::OfficeExportResult {

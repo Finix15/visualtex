@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ChangeEvent,
   type ErrorInfo,
   type ReactNode,
 } from "react";
@@ -16,6 +17,7 @@ import {
   Eye,
   FileText,
   Image as ImageIcon,
+  Upload,
   LoaderCircle,
   Sigma,
   X,
@@ -47,6 +49,10 @@ import {
   type MacosDocumentImportRequest,
 } from "./documentImportClient";
 import {
+  type ImportedDocumentFile,
+  readDocumentImportFile,
+} from "./documentImportFile.ts";
+import {
   mergeDocumentImportBlocks,
   parseLatexMarkdownDocument,
   type DocumentFormulaBlock,
@@ -58,6 +64,17 @@ import {
 const MAX_WORD_REFERENCE_WIDTH_PT = 500;
 const WORD_IMAGE_VISUAL_SCALE = 1.1;
 const REFERENCE_FONT_SIZE_PT = OFFICE_FORMULA_REFERENCE_FONT_SIZE_PT;
+
+type ImportedFileState = Pick<
+  ImportedDocumentFile,
+  "name" | "encoding" | "size"
+> & { modified: boolean };
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
 
 class FormulaPreviewBoundary extends Component<
   { children: ReactNode; message: string },
@@ -298,10 +315,12 @@ export function OfficeDocumentImportApp() {
   const [sourceKind, setSourceKind] = useState<DocumentImportSourceKind>("auto");
   const [outputKind, setOutputKind] = useState<DocumentFormulaOutputKind>("omml");
   const [blocks, setBlocks] = useState<DocumentImportBlock[]>([]);
+  const [importedFile, setImportedFile] = useState<ImportedFileState | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const sourceRef = useRef<HTMLTextAreaElement>(null);
   const allowNativeCloseRef = useRef(false);
   const nativeCloseInFlightRef = useRef(false);
@@ -359,8 +378,47 @@ export function OfficeDocumentImportApp() {
 
   const handleSourceChange = (value: string) => {
     setSource(value);
+    setImportedFile((current) =>
+      current ? { ...current, modified: true } : current,
+    );
     setError("");
     reparse(value);
+  };
+
+  const handleDocumentFile = async (file: File | null) => {
+    if (!file || busy) return;
+    setError("");
+    setToast("正在读取文档源码…");
+    try {
+      const imported = await readDocumentImportFile(file);
+      setSource(imported.source);
+      setSourceKind(imported.format);
+      setImportedFile({
+        name: imported.name,
+        encoding: imported.encoding,
+        size: imported.size,
+        modified: false,
+      });
+      const parsed = parseLatexMarkdownDocument(
+        imported.source,
+        imported.format,
+        request?.defaultFontSizePt ?? 12,
+      );
+      setBlocks((previous) => mergeDocumentImportBlocks(previous, parsed));
+      setToast(
+        `已加载 ${imported.name} · ${imported.encoding} · ${formatFileSize(imported.size)}`,
+      );
+      window.requestAnimationFrame(() => sourceRef.current?.focus());
+    } catch (reason) {
+      setError(documentImportErrorMessage(reason, "无法读取文档源码文件。"));
+      setToast("");
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const handleFileInput = (event: ChangeEvent<HTMLInputElement>) => {
+    void handleDocumentFile(event.currentTarget.files?.[0] ?? null);
   };
 
   const handleSourceKindChange = (value: DocumentImportSourceKind) => {
@@ -569,6 +627,24 @@ export function OfficeDocumentImportApp() {
               <option value="image">SVG 图片公式</option>
             </select>
           </label>
+          <button
+            type="button"
+            className="doc-import-secondary doc-import-file-button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={busy}
+            title="导入单个 LaTeX 或 Markdown 文件"
+          >
+            <Upload size={16} />
+            导入 .tex / .md
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".tex,.md,.markdown,text/x-tex,text/markdown"
+            aria-label="导入 LaTeX 或 Markdown 文件"
+            hidden
+            onChange={handleFileInput}
+          />
         </div>
       </header>
 
@@ -585,7 +661,22 @@ export function OfficeDocumentImportApp() {
               </div>
             </div>
             <div className="doc-import-source-meta">
-              <span className="doc-import-pane-stat">{source.length.toLocaleString()} 字符</span>
+              {importedFile ? (
+                <span
+                  className="doc-import-file-chip"
+                  title={`${importedFile.name} · ${importedFile.encoding} · ${formatFileSize(importedFile.size)}`}
+                >
+                  <FileText size={12} />
+                  <span>{importedFile.name}</span>
+                  <small>
+                    {importedFile.encoding}
+                    {importedFile.modified ? " · 已编辑" : ""}
+                  </small>
+                </span>
+              ) : null}
+              <span className="doc-import-pane-stat">
+                {source.length.toLocaleString()} 字符
+              </span>
             </div>
           </div>
           <textarea

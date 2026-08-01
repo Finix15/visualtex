@@ -7807,6 +7807,36 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
   box-shadow: var(--shadow-sm);
 }
 
+.office-font-size-setting {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.office-font-size-setting select {
+  width: 152px;
+  min-height: 26px;
+  padding: 2px 22px 2px 7px;
+  border: 0;
+  border-radius: 4px;
+  outline: none;
+  background: var(--bg-elevated);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.office-font-size-setting select:focus {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
 .office-auto-commit-setting {
   display: flex;
   align-items: center;

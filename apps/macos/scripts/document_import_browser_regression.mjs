@@ -497,9 +497,7 @@ f^{*}(\mathbf{x})
     const formulas = input?.items?.filter((item) => item.kind === "formula") ?? [];
     const texts = input?.items?.filter((item) => item.kind === "text") ?? [];
     const expectedOutputKind = longPhysicsRegression ? "omml" : "image";
-    const expectedCommittedFormulaCount = literalFallbackRegression
-      ? 1
-      : expectedFormulaCount;
+    const expectedCommittedFormulaCount = expectedFormulaCount;
     if (
       input?.outputKind !== expectedOutputKind ||
       formulas.length !== expectedCommittedFormulaCount ||
@@ -596,7 +594,7 @@ f^{*}(\mathbf{x})
         alignedFormula.metadata?.codeFormat !== "equation" ||
         alignedFormula.metadata?.lines?.length !== 1 ||
         !alignedFormula.latex.startsWith("\\begin{equation}\n") ||
-        !alignedFormula.latex.includes("\\begin{aligned}\n") ||
+        !alignedFormula.latex.includes("\\begin{aligned}") ||
         alignedFormula.width < 240 ||
         alignedFormula.width > 360 ||
         alignedFormula.height > 130
@@ -657,9 +655,6 @@ f^{*}(\mathbf{x})
         String.raw`\documentclass{article}`,
         String.raw`\usepackage{custompkg}`,
         String.raw`\newcommand{\customsymbol}[1]{\mathbf{#1}}`,
-        String.raw`\[
-\customsymbol{q}
-\]`,
       ]) {
         if (!literalText.includes(expected)) {
           throw new Error(
@@ -667,9 +662,12 @@ f^{*}(\mathbf{x})
           );
         }
       }
-      if (formulas[0]?.latex !== "x=1") {
+      if (
+        formulas[0]?.latex !== "x=1" ||
+        formulas[1]?.latex !== "\\mathbf{q}"
+      ) {
         throw new Error(
-          `A supported formula beside literal fallback was not converted: ${JSON.stringify(formulas)}`,
+          `Supported formulas beside literal fallback were not converted: ${JSON.stringify(formulas)}`,
         );
       }
     }

@@ -1,3 +1,5 @@
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   AlertCircle,
   Check,
@@ -26,6 +28,7 @@ import {
 } from "react";
 import { MathPreview } from "./MathPreview";
 import {
+  DEFAULT_OCR_MODEL,
   OCR_MODELS,
   cancelOcrRecognition,
   type OcrInstallProgress,
@@ -36,6 +39,7 @@ import {
   fileToOcrRequest,
   getOcrRuntimeStatus,
   installOcrRuntime,
+  installOptionalOcrModel,
   isOfficeCompanionEnvironment,
   isTauriEnvironment,
   listenOcrInstallProgress,
@@ -43,6 +47,7 @@ import {
   recognizeFormulaImage,
   resolveAvailableOcrModel,
   prewarmOcrModel,
+  removeOptionalOcrModel,
   resetOcrRuntime,
   restartOcrWorker,
   validateOcrImage,
@@ -62,7 +67,8 @@ interface OcrDialogProps {
 function readableBytes(bytes: number) {
   if (bytes < 1024) return bytes + " B";
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
-  return (bytes / 1024 / 1024).toFixed(1) + " MB";
+  if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + " MB";
+  return (bytes / 1024 / 1024 / 1024).toFixed(2) + " GB";
 }
 
 function readError(error: unknown) {
@@ -73,6 +79,33 @@ function readError(error: unknown) {
   } catch {
     return "Unknown OCR error";
   }
+}
+
+const OCR_MODEL_PACKAGE_EXTENSION = ".vtxocrmodel";
+
+function isOcrModelPackagePath(path: string) {
+  return path.trim().toLowerCase().endsWith(OCR_MODEL_PACKAGE_EXTENSION);
+}
+
+function modelNameFromPackagePath(path: string): OcrModelName | null {
+  const normalized = path.replaceAll("\\", "/").toLowerCase();
+  return (
+    OCR_MODELS.find((candidate) =>
+      normalized.includes(candidate.id.toLowerCase()),
+    )?.id ?? null
+  );
+}
+
+function isDropPositionInsideElement(
+  position: { x: number; y: number },
+  element: HTMLElement | null,
+) {
+  if (!element) return false;
+  const scale = window.devicePixelRatio || 1;
+  const x = position.x / scale;
+  const y = position.y / scale;
+  const bounds = element.getBoundingClientRect();
+  return x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom;
 }
 
 function normalizeResultLatex(value: string) {
@@ -97,11 +130,15 @@ export function OcrDialog({
   const isEn = language === "en";
   const dialogRef = useRef<HTMLElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  const modelDropZoneRef = useRef<HTMLDivElement>(null);
+  const modelDragPathsRef = useRef<string[]>([]);
   const recognizingRef = useRef(false);
   const cancellingRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const objectUrlRef = useRef<string | null>(null);
   const [runtime, setRuntime] = useState<OcrRuntimeStatus | null>(null);
+  const [modelBusy, setModelBusy] = useState(false);
+  const [modelPackageDragging, setModelPackageDragging] = useState(false);
   const [checkingRuntime, setCheckingRuntime] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [installProgress, setInstallProgress] = useState<OcrInstallProgress | null>(null);
@@ -120,13 +157,17 @@ export function OcrDialog({
   const [copied, setCopied] = useState(false);
 
   const selectedModel = useMemo(
-    () => OCR_MODELS.find((item) => item.id === model) ?? OCR_MODELS[1],
+    () =>
+      OCR_MODELS.find((item) => item.id === model) ??
+      OCR_MODELS.find((item) => item.id === DEFAULT_OCR_MODEL)!,
     [model],
   );
-  const defaultModel = runtime?.defaultModel ?? "PP-FormulaNet_plus-M";
+  const defaultModel = runtime?.defaultModel ?? DEFAULT_OCR_MODEL;
   const installedModels = runtime?.installedModels ?? [];
   const selectedModelInstalled = installedModels.includes(model);
   const optionalModelMissing = model !== defaultModel && !selectedModelInstalled;
+  const selectedModelRemovable =
+    selectedModelInstalled && model !== defaultModel && isTauriEnvironment();
 
   const clearObjectUrl = useCallback(() => {
     if (objectUrlRef.current) {
@@ -146,7 +187,7 @@ export function OcrDialog({
         runtimePath: "",
         offlineBundleAvailable: false,
         installedModels: [],
-        defaultModel: "PP-FormulaNet_plus-M",
+        defaultModel: DEFAULT_OCR_MODEL,
         message: isEn
           ? "OCR is available in the VisualTeX desktop app, not in the browser preview."
           : "OCR 只能在 VisualTeX 桌面应用中运行，浏览器预览无法调用本地模型。",
@@ -164,11 +205,45 @@ export function OcrDialog({
     }
   }, [isEn]);
 
-  useEffect(() => {
-    if (!runtime?.installed) return;
-    const availableModel = resolveAvailableOcrModel(runtime, model);
-    if (availableModel !== model) onModelChange(availableModel);
-  }, [defaultModel, model, onModelChange, runtime]);
+  const importModelPackage = useCallback(
+    async (packagePath: string) => {
+      if (!isTauriEnvironment() || modelBusy) return;
+      if (!isOcrModelPackagePath(packagePath)) {
+        setError(
+          isEn
+            ? "Choose a VisualTeX .vtxocrmodel package."
+            : "请选择 VisualTeX 的 .vtxocrmodel 模型包。",
+        );
+        return;
+      }
+
+      const previouslyInstalled = new Set(runtime?.installedModels ?? []);
+      const packageModel = modelNameFromPackagePath(packagePath);
+      setModelBusy(true);
+      setError("");
+      try {
+        const nextRuntime = await installOptionalOcrModel(packagePath);
+        setRuntime(nextRuntime);
+        const newlyInstalled = nextRuntime.installedModels.find(
+          (candidate) => !previouslyInstalled.has(candidate),
+        ) as OcrModelName | undefined;
+        const imported =
+          newlyInstalled ??
+          (packageModel && nextRuntime.installedModels.includes(packageModel)
+            ? packageModel
+            : undefined) ??
+          (nextRuntime.installedModels.includes(model) ? model : undefined) ??
+          (nextRuntime.installedModels.at(-1) as OcrModelName | undefined);
+        if (imported) onModelChange(imported);
+        onNotify(isEn ? "Verified OCR model imported" : "OCR 模型已校验并导入");
+      } catch (importError) {
+        setError(readError(importError));
+      } finally {
+        setModelBusy(false);
+      }
+    },
+    [isEn, model, modelBusy, onModelChange, onNotify, runtime?.installedModels],
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -184,6 +259,79 @@ export function OcrDialog({
       window.cancelAnimationFrame(frame);
     };
   }, [open, runtime, refreshRuntime]);
+
+  useEffect(() => {
+    if (!open || !isTauriEnvironment()) return;
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+
+    const updateDropHighlight = (
+      paths: string[],
+      position: { x: number; y: number },
+    ) => {
+      setModelPackageDragging(
+        !modelBusy &&
+          paths.some(isOcrModelPackagePath) &&
+          isDropPositionInsideElement(position, modelDropZoneRef.current),
+      );
+    };
+
+    void getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (disposed) return;
+        const payload = event.payload;
+        if (payload.type === "enter") {
+          modelDragPathsRef.current = payload.paths;
+          updateDropHighlight(payload.paths, payload.position);
+          return;
+        }
+        if (payload.type === "over") {
+          updateDropHighlight(modelDragPathsRef.current, payload.position);
+          return;
+        }
+        if (payload.type === "leave") {
+          modelDragPathsRef.current = [];
+          setModelPackageDragging(false);
+          return;
+        }
+
+        const droppedInsideModelArea = isDropPositionInsideElement(
+          payload.position,
+          modelDropZoneRef.current,
+        );
+        const packages = payload.paths.filter(isOcrModelPackagePath);
+        modelDragPathsRef.current = [];
+        setModelPackageDragging(false);
+        if (!droppedInsideModelArea) return;
+        if (packages.length !== 1) {
+          setError(
+            packages.length > 1
+              ? isEn
+                ? "Import one .vtxocrmodel package at a time."
+                : "每次只能导入一个 .vtxocrmodel 模型包。"
+              : isEn
+                ? "Drop a VisualTeX .vtxocrmodel package here."
+                : "请将 VisualTeX 的 .vtxocrmodel 模型包拖到这里。",
+          );
+          return;
+        }
+        void importModelPackage(packages[0]);
+      })
+      .then((dispose) => {
+        if (disposed) dispose();
+        else unlisten = dispose;
+      })
+      .catch((dragDropError) => {
+        if (!disposed) setError(readError(dragDropError));
+      });
+
+    return () => {
+      disposed = true;
+      modelDragPathsRef.current = [];
+      setModelPackageDragging(false);
+      unlisten?.();
+    };
+  }, [importModelPackage, isEn, modelBusy, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -304,6 +452,48 @@ export function OcrDialog({
     }
   };
 
+  const handleImportModel = async () => {
+    if (!isTauriEnvironment() || modelBusy) return;
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        directory: false,
+        filters: [
+          {
+            name: "VisualTeX OCR model",
+            extensions: ["vtxocrmodel"],
+          },
+        ],
+      });
+      if (typeof selected === "string") await importModelPackage(selected);
+    } catch (importError) {
+      setError(readError(importError));
+    }
+  };
+
+  const handleRemoveModel = async () => {
+    if (!selectedModelRemovable || modelBusy) return;
+    const confirmed = window.confirm(
+      isEn
+        ? `Remove the installed ${selectedModel.labelEn} model? The OCR runtime and other models will be kept.`
+        : `确定删除已安装的${selectedModel.labelZh}吗？OCR 运行环境和其他模型会保留。`,
+    );
+    if (!confirmed) return;
+    setModelBusy(true);
+    setError("");
+    try {
+      const nextRuntime = await removeOptionalOcrModel(model);
+      setRuntime(nextRuntime);
+      const fallback = resolveAvailableOcrModel(nextRuntime, DEFAULT_OCR_MODEL);
+      onModelChange(fallback);
+      onNotify(isEn ? "Optional OCR model removed" : "可选 OCR 模型已删除");
+    } catch (removeError) {
+      setError(readError(removeError));
+    } finally {
+      setModelBusy(false);
+    }
+  };
+
   const handleRecognize = async () => {
     if (!file) {
       setError(isEn ? "Choose or paste a formula image first." : "请先选择或粘贴一张公式图片。");
@@ -311,6 +501,14 @@ export function OcrDialog({
     }
     if (!runtime?.installed) {
       setError(isEn ? "Install the OCR runtime first." : "请先安装 OCR 运行环境。");
+      return;
+    }
+    if (!selectedModelInstalled) {
+      setError(
+        isEn
+          ? "Import the selected OCR model package first."
+          : "请先导入当前选择的 OCR 模型包。",
+      );
       return;
     }
 
@@ -593,22 +791,23 @@ export function OcrDialog({
               <span>{isEn ? "Recognition model" : "识别模型"}</span>
               <select
                 value={model}
-                disabled={recognizing || cancelling}
+                disabled={recognizing || cancelling || modelBusy}
                 onChange={(event) =>
                   onModelChange(event.target.value as OcrModelName)
                 }
               >
                 {OCR_MODELS.map((item) => {
-                  const available =
-                    installedModels.includes(item.id);
+                  const available = installedModels.includes(item.id);
                   return (
-                    <option value={item.id} key={item.id} disabled={!available}>
+                    <option value={item.id} key={item.id}>
                       {isEn ? item.labelEn : item.labelZh}
-                      {!available
+                      {available
                         ? isEn
-                          ? " · optional offline pack required"
-                          : " · 需要可选离线模型包"
-                        : ""}
+                          ? " · installed"
+                          : " · 已安装"
+                        : isEn
+                          ? " · not installed"
+                          : " · 未安装"}
                     </option>
                   );
                 })}
@@ -616,17 +815,84 @@ export function OcrDialog({
               <small>{isEn ? selectedModel.hintEn : selectedModel.hintZh}</small>
             </label>
 
-            {(model === "PP-FormulaNet_plus-L" || optionalModelMissing) && (
+            <div
+              ref={modelDropZoneRef}
+              className={
+                "ocr-model-warning ocr-model-drop-zone" +
+                (modelPackageDragging ? " is-dragging" : "")
+              }
+              role="status"
+            >
+              {selectedModelInstalled ? (
+                <CheckCircle2 size={15} />
+              ) : (
+                <AlertCircle size={15} />
+              )}
+              <div>
+                <strong>
+                  {selectedModelInstalled
+                    ? isEn
+                      ? `${selectedModel.labelEn} is installed`
+                      : `${selectedModel.labelZh}已安装`
+                    : isEn
+                      ? `${selectedModel.labelEn} is not installed`
+                      : `${selectedModel.labelZh}尚未安装`}
+                </strong>
+                <span>
+                  {selectedModelInstalled
+                    ? isEn
+                      ? "Recognition and warmup use this verified local model."
+                      : "识别与预热会使用这个已校验的本地模型。"
+                    : isEn
+                      ? "Import the matching verified .vtxocrmodel package before recognition."
+                      : "识别前请导入对应的已校验 .vtxocrmodel 模型包。"}
+                </span>
+                <small className="ocr-model-drop-hint">
+                  {modelPackageDragging
+                    ? isEn
+                      ? "Release to verify and import this model package"
+                      : "松开鼠标即可校验并导入这个模型包"
+                    : isEn
+                      ? "Choose a package below, or drag one .vtxocrmodel package into this area."
+                      : "可点击下方按钮选择，也可将一个 .vtxocrmodel 模型包拖到此区域。"}
+                </small>
+                <div className="ocr-install-actions">
+                  {!selectedModelInstalled && (
+                    <button
+                      type="button"
+                      onClick={() => void handleImportModel()}
+                      disabled={!isTauriEnvironment() || modelBusy}
+                    >
+                      {modelBusy ? (
+                        <LoaderCircle size={14} className="is-spinning" />
+                      ) : (
+                        <Upload size={14} />
+                      )}
+                      {isEn ? "Import package" : "导入模型包"}
+                    </button>
+                  )}
+                  {selectedModelRemovable && (
+                    <button
+                      type="button"
+                      className="is-danger"
+                      onClick={() => void handleRemoveModel()}
+                      disabled={modelBusy || recognizing}
+                    >
+                      <Trash2 size={14} />
+                      {isEn ? "Remove model" : "删除模型"}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {model === "PP-FormulaNet_plus-L" && (
               <div className="ocr-model-warning" role="note">
                 <AlertCircle size={15} />
                 <span>
-                  {optionalModelMissing
-                    ? isEn
-                      ? `${selectedModel.labelEn} is not installed. Import the matching VisualTeX offline model pack before selecting it.`
-                      : `${selectedModel.labelZh}尚未安装，请先导入对应的 VisualTeX 离线模型包。`
-                    : isEn
-                      ? "The L model occupies about 698 MB and can use several GB of memory. Use the bundled M model unless L accuracy is necessary."
-                      : "L 模型约占 698 MB，并可能占用数 GB 内存；没有明确精度需求时建议使用内置 M 模型。"}
+                  {isEn
+                    ? "The L model occupies about 698 MB and can use several GB of memory. Use M unless L accuracy is necessary."
+                    : "L 模型约占 698 MB，并可能占用数 GB 内存；没有明确精度需求时建议使用 M 模型。"}
                 </span>
               </div>
             )}
@@ -672,7 +938,18 @@ export function OcrDialog({
                   <span>Python {runtime.pythonVersion}</span>
                   <span>Paddle {runtime.paddleVersion}</span>
                   <span>PaddleOCR {runtime.paddleocrVersion}</span>
-                  <button type="button" onClick={handleRestartWorker}>
+                  <span>
+                    {isEn ? "Models" : "模型"}: {installedModels.length > 0
+                      ? installedModels.join(", ")
+                      : isEn
+                        ? "none"
+                        : "未安装"}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleRestartWorker}
+                    disabled={!selectedModelInstalled}
+                  >
                     <RefreshCw size={13} />
                     {isEn ? "Restart" : "重启进程"}
                   </button>
@@ -813,7 +1090,13 @@ export function OcrDialog({
               type="button"
               className="secondary-button"
               onClick={handleRecognize}
-              disabled={!file || !runtime?.installed || installing}
+              disabled={
+                !file ||
+                !runtime?.installed ||
+                !selectedModelInstalled ||
+                installing ||
+                modelBusy
+              }
             >
               <ScanLine size={15} />
               {isEn ? "Recognize" : "开始识别"}
