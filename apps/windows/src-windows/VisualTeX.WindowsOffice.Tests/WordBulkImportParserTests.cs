@@ -425,6 +425,107 @@ public sealed class WordBulkImportParserTests
     }
 
     [Fact]
+    public void MarkdownStrongMarkersAndNestedEmphasisRemainStructured()
+    {
+        const string source = """
+            **asterisk bold**
+
+            __underscore bold__
+
+            ***bold italic***
+
+            ___underscore bold italic___
+
+            **outer with *inner italic***
+            """;
+
+        var document = WordBulkImportParser.Parse(
+            source,
+            WordBulkSourceFormat.Markdown,
+            WordBulkFormulaObjectMode.Omml);
+
+        var runs = document.Blocks.SelectMany(block => block.Runs).ToArray();
+        Assert.Contains(runs, run => !run.IsFormula && run.Bold && !run.Italic && run.Text == "asterisk bold");
+        Assert.Contains(runs, run => !run.IsFormula && run.Bold && !run.Italic && run.Text == "underscore bold");
+        Assert.Contains(runs, run => !run.IsFormula && run.Bold && run.Italic && run.Text == "bold italic");
+        Assert.Contains(runs, run => !run.IsFormula && run.Bold && run.Italic && run.Text == "underscore bold italic");
+        Assert.Contains(runs, run => !run.IsFormula && run.Bold && !run.Italic && run.Text.Contains("outer with"));
+        Assert.Contains(runs, run => !run.IsFormula && run.Bold && run.Italic && run.Text == "inner italic");
+        Assert.Empty(document.Warnings);
+    }
+
+    [Fact]
+    public void SerializedPreviewDocumentIsUsedVerbatimByWordImport()
+    {
+        const string serialized = """
+            {
+              "format": "markdown",
+              "blocks": [
+                {
+                  "kind": "heading",
+                  "level": 2,
+                  "runs": [{ "kind": "text", "text": "Title", "bold": true }]
+                },
+                {
+                  "kind": "paragraph",
+                  "level": 0,
+                  "runs": [
+                    { "kind": "text", "text": "deleted", "strike": true },
+                    { "kind": "text", "text": "underlined", "underline": true },
+                    { "kind": "formula", "latex": "x+y", "display": false }
+                  ]
+                },
+                {
+                  "kind": "display",
+                  "level": 0,
+                  "runs": [
+                    { "kind": "formula", "latex": "E=mc^2", "display": true, "equationTag": "4.2" }
+                  ]
+                },
+                {
+                  "kind": "code",
+                  "level": 0,
+                  "runs": [{ "kind": "text", "text": "const x = 1;", "code": true }]
+                }
+              ],
+              "warnings": ["fallback warning"]
+            }
+            """;
+
+        var document = WordBulkImportParser.ParseSerialized(
+            serialized,
+            WordBulkFormulaObjectMode.Ole);
+
+        Assert.Equal(WordBulkSourceFormat.Markdown, document.SourceFormat);
+        Assert.Equal(WordBulkFormulaObjectMode.Ole, document.FormulaObjectMode);
+        Assert.Equal(4, document.Blocks.Count);
+        Assert.Equal(2, document.FormulaCount);
+        Assert.Equal(1, document.InlineFormulaCount);
+        Assert.Equal(1, document.DisplayFormulaCount);
+        Assert.Equal(WordBulkBlockKind.Heading, document.Blocks[0].Kind);
+        Assert.Equal(2, document.Blocks[0].Level);
+        Assert.True(document.Blocks[1].Runs[0].Strike);
+        Assert.True(document.Blocks[1].Runs[1].Underline);
+        Assert.Equal("x+y", document.Blocks[1].Runs[2].Latex);
+        Assert.Equal("E=mc^2", document.Blocks[2].Runs.Single().Latex);
+        Assert.Equal("4.2", document.Blocks[2].Runs.Single().EquationTag);
+        Assert.Equal(WordBulkBlockKind.Code, document.Blocks[3].Kind);
+        Assert.True(document.Blocks[3].Runs.Single().Code);
+        Assert.Equal("fallback warning", Assert.Single(document.Warnings));
+    }
+
+    [Fact]
+    public void SerializedPreviewDocumentRejectsInvalidOrEmptyPayloads()
+    {
+        Assert.Throws<InvalidDataException>(() => WordBulkImportParser.ParseSerialized(
+            "not-json",
+            WordBulkFormulaObjectMode.Omml));
+        Assert.Throws<InvalidDataException>(() => WordBulkImportParser.ParseSerialized(
+            "{\"format\":\"markdown\",\"blocks\":[]}",
+            WordBulkFormulaObjectMode.Omml));
+    }
+
+    [Fact]
     public void RejectsEmptyOrExcessivelyLargeInput()
     {
         Assert.Throws<InvalidDataException>(() => WordBulkImportParser.Parse(

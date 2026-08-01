@@ -1,0 +1,721 @@
+import assert from "node:assert/strict";
+import { webcrypto } from "node:crypto";
+import {
+  parseDocumentImport,
+  type DocumentImportBlock,
+  type DocumentImportRun,
+  type DocumentSourceFormat,
+  type ParsedDocumentImport,
+} from "../src/office/documentImport/documentImportParser.ts";
+
+if (!globalThis.crypto) {
+  Object.defineProperty(globalThis, "crypto", { value: webcrypto });
+}
+
+type CoverageCase = {
+  name: string;
+  format: DocumentSourceFormat;
+  source: string;
+  check: (parsed: ParsedDocumentImport) => boolean;
+};
+
+function runs(parsed: ParsedDocumentImport): DocumentImportRun[] {
+  return parsed.blocks.flatMap((block) => block.runs);
+}
+
+function text(parsed: ParsedDocumentImport): string {
+  return runs(parsed)
+    .filter((run): run is Extract<DocumentImportRun, { kind: "text" }> => run.kind === "text")
+    .map((run) => run.text)
+    .join("");
+}
+
+function formulas(parsed: ParsedDocumentImport) {
+  return runs(parsed).filter(
+    (run): run is Extract<DocumentImportRun, { kind: "formula" }> => run.kind === "formula",
+  );
+}
+
+function blocksOf(parsed: ParsedDocumentImport, kind: DocumentImportBlock["kind"]) {
+  return parsed.blocks.filter((block) => block.kind === kind);
+}
+
+const markdownBaseline: CoverageCase[] = [
+  {
+    name: "ATX headings # through ######",
+    format: "markdown",
+    source: "# H1\n\n## H2\n\n### H3\n\n#### H4\n\n##### H5\n\n###### H6",
+    check: (parsed) =>
+      blocksOf(parsed, "heading").length === 6 &&
+      blocksOf(parsed, "heading").every((block, index) => block.level === index + 1),
+  },
+  {
+    name: "paragraph line wrapping",
+    format: "markdown",
+    source: "第一行\n第二行\n\n新段落",
+    check: (parsed) =>
+      blocksOf(parsed, "paragraph").length === 2 && text(parsed).includes("第一行 第二行"),
+  },
+  {
+    name: "bold italic nested emphasis and inline code",
+    format: "markdown",
+    source: "**粗体**、*斜体*、_斜体_、**粗体含 *斜体***、`code()`",
+    check: (parsed) => {
+      const all = runs(parsed);
+      return (
+        all.some((run) => run.kind === "text" && run.bold && run.text === "粗体") &&
+        all.filter((run) => run.kind === "text" && run.italic).length >= 3 &&
+        all.some((run) => run.kind === "text" && run.bold && run.italic) &&
+        all.some((run) => run.kind === "text" && run.code && run.text === "code()")
+      );
+    },
+  },
+  {
+    name: "escaped Markdown punctuation",
+    format: "markdown",
+    source: String.raw`\*literal\* \_name\_ \#hash \{brace\} \!bang \$5`,
+    check: (parsed) =>
+      parsed.formulaCount === 0 && text(parsed).includes("*literal* _name_ #hash {brace} !bang $5"),
+  },
+  {
+    name: "inline math dollar and parenthesis delimiters",
+    format: "markdown",
+    source: String.raw`行内 $E=mc^2$ 与 \(a+b=c\)。价格 \$5。`,
+    check: (parsed) =>
+      formulas(parsed).filter((run) => !run.display).map((run) => run.latex).join("|") ===
+        "E=mc^2|a+b=c" && text(parsed).includes("$5"),
+  },
+  {
+    name: "display math dollar delimiters same-line and multiline",
+    format: "markdown",
+    source: String.raw`前文 $$x=1$$ 后文
+
+$$
+\int_0^1 x\,dx
+$$`,
+    check: (parsed) =>
+      formulas(parsed).filter((run) => run.display).length === 2 &&
+      formulas(parsed).some((run) => run.display && run.latex === "x=1") &&
+      formulas(parsed).some((run) => run.display && run.latex.includes("\\int_0^1")),
+  },
+  {
+    name: "display math bracket delimiters",
+    format: "markdown",
+    source: String.raw`正文 \[\frac{a}{b}\] 结尾`,
+    check: (parsed) =>
+      formulas(parsed).some((run) => run.display && run.latex === String.raw`\frac{a}{b}`),
+  },
+  {
+    name: "multiline blockquote",
+    format: "markdown",
+    source: "> 第一行\n> 第二行 $q=1$",
+    check: (parsed) =>
+      blocksOf(parsed, "quote").length === 1 &&
+      formulas(parsed).some((run) => run.latex === "q=1"),
+  },
+  {
+    name: "unordered list markers and nested indentation",
+    format: "markdown",
+    source: "- dash\n+ plus\n* star\n  - nested",
+    check: (parsed) => {
+      const list = blocksOf(parsed, "bullet");
+      return list.length === 4 && list.map((block) => block.level).join(",") === "0,0,0,1";
+    },
+  },
+  {
+    name: "ordered list dot and parenthesis markers",
+    format: "markdown",
+    source: "1. first\n2) second\n    1. nested",
+    check: (parsed) => {
+      const list = blocksOf(parsed, "numbered");
+      return list.length === 3 && list.map((block) => block.level).join(",") === "0,0,2";
+    },
+  },
+  {
+    name: "backtick fenced code with info string",
+    format: "markdown",
+    source: "```ts\nconst x = `$notMath`;\n```",
+    check: (parsed) => {
+      const code = blocksOf(parsed, "code");
+      return code.length === 1 && text(parsed).includes("const x = `$notMath`;");
+    },
+  },
+  {
+    name: "unclosed fenced code warning",
+    format: "markdown",
+    source: "```\nconst x = 1;",
+    check: (parsed) => blocksOf(parsed, "code").length === 1 && parsed.warnings.length === 1,
+  },
+];
+
+const latexBaseline: CoverageCase[] = [
+  {
+    name: "full document preamble stripping and comments",
+    format: "auto",
+    source: String.raw`\documentclass{article}
+\usepackage{amsmath}
+\begin{document}
+正文 % remove this
+保留 \% 百分号
+\end{document}`,
+    check: (parsed) =>
+      parsed.format === "latex" &&
+      !text(parsed).includes("documentclass") &&
+      !text(parsed).includes("remove this") &&
+      text(parsed).includes("保留 % 百分号"),
+  },
+  {
+    name: "all common sectioning commands",
+    format: "latex",
+    source: String.raw`\part{P}
+\chapter{C}
+\section{S}
+\subsection{SS}
+\subsubsection{SSS}
+\paragraph{P4}
+\subparagraph{P5}`,
+    check: (parsed) => {
+      const headings = blocksOf(parsed, "heading");
+      return headings.length === 7 && headings.map((block) => block.level).join(",") === "1,1,1,2,3,4,5";
+    },
+  },
+  {
+    name: "nested textbf textit emph and texttt",
+    format: "latex",
+    source: String.raw`\textbf{粗体和 \textit{粗斜体}} \emph{强调} \texttt{code_1}`,
+    check: (parsed) => {
+      const all = runs(parsed);
+      return (
+        all.some((run) => run.kind === "text" && run.bold && run.text.includes("粗体和")) &&
+        all.some((run) => run.kind === "text" && run.bold && run.italic && run.text === "粗斜体") &&
+        all.some((run) => run.kind === "text" && run.italic && run.text.includes("强调")) &&
+        all.some((run) => run.kind === "text" && run.code && run.text === "code_1")
+      );
+    },
+  },
+  {
+    name: "escaped LaTeX text characters",
+    format: "latex",
+    source: String.raw`A\% B\_ C\& D\# E\$ F\{ G\} H\textbackslash{}I~J`,
+    check: (parsed) => text(parsed).includes("A% B_ C& D# E$ F{ G} H\\I\u00a0J"),
+  },
+  {
+    name: "inline math dollar and parenthesis delimiters",
+    format: "latex",
+    source: String.raw`公式 $x_1$ 与 \(\alpha+\beta\)。`,
+    check: (parsed) =>
+      formulas(parsed).filter((run) => !run.display).map((run) => run.latex).join("|") ===
+      String.raw`x_1|\alpha+\beta`,
+  },
+  {
+    name: "display dollar and bracket delimiters including adjacency",
+    format: "latex",
+    source: String.raw`前 $$a=1$$ 中 \[b=2\]\[c=3\] 后`,
+    check: (parsed) =>
+      formulas(parsed).filter((run) => run.display).map((run) => run.latex).join("|") === "a=1|b=2|c=3",
+  },
+  {
+    name: "equation and equation* environments",
+    format: "latex",
+    source: String.raw`\begin{equation}a=1\end{equation}
+\begin{equation*}b=2\end{equation*}`,
+    check: (parsed) => formulas(parsed).filter((run) => run.display).length === 2,
+  },
+  {
+    name: "align gather multline and displaymath environments",
+    format: "latex",
+    source: String.raw`\begin{align}a&=1\\b&=2\end{align}
+\begin{gather*}c=3\\d=4\end{gather*}
+\begin{multline}e+f\\=g\end{multline}
+\begin{displaymath}h=5\end{displaymath}`,
+    check: (parsed) => {
+      const display = formulas(parsed).filter((run) => run.display);
+      return (
+        display.length === 4 &&
+        display[0].latex.includes("begin{aligned}") &&
+        display[1].latex.includes("begin{gathered}") &&
+        display[2].latex.includes("begin{gathered}")
+      );
+    },
+  },
+  {
+    name: "equation tags separated from editable formula",
+    format: "latex",
+    source: String.raw`\[x+y\tag{4.8.4}\]`,
+    check: (parsed) => {
+      const formula = formulas(parsed)[0];
+      return formula?.latex === "x+y" && formula.equationTag === "4.8.4";
+    },
+  },
+  {
+    name: "nested itemize enumerate and optional item label",
+    format: "latex",
+    source: String.raw`\begin{itemize}
+\item outer
+\begin{enumerate}
+\item[1)] inner $n=1$
+\end{enumerate}
+\end{itemize}`,
+    check: (parsed) => {
+      const list = parsed.blocks.filter((block) => block.kind === "bullet" || block.kind === "numbered");
+      return list.length === 2 && list[0].kind === "bullet" && list[0].level === 0 && list[1].kind === "numbered" && list[1].level === 1;
+    },
+  },
+  {
+    name: "quote and quotation environments",
+    format: "latex",
+    source: String.raw`\begin{quote}
+Q1 $x$
+\end{quote}
+\begin{quotation}
+Q2
+\end{quotation}`,
+    check: (parsed) => blocksOf(parsed, "quote").length === 2,
+  },
+  {
+    name: "verbatim and lstlisting literal code",
+    format: "latex",
+    source: String.raw`\begin{verbatim}
+a_1 = 20 % literal
+\end{verbatim}
+\begin{lstlisting}[language=Python]
+print("$x$")
+\end{lstlisting}`,
+    check: (parsed) => {
+      const code = blocksOf(parsed, "code");
+      return code.length === 2 && text(parsed).includes("a_1 = 20 % literal") && text(parsed).includes('print("$x$")');
+    },
+  },
+  {
+    name: "formula internals matrices cases arrays and operators pass through",
+    format: "latex",
+    source: String.raw`\[\begin{cases}x^2,&x>0\\0,&x\le0\end{cases}\]
+\[\begin{pmatrix}a&b\\c&d\end{pmatrix}+\sum_{i=1}^n i+\oiint_\Sigma f\,dS\]`,
+    check: (parsed) => {
+      const display = formulas(parsed).filter((run) => run.display);
+      return display.length === 2 && display[0].latex.includes("begin{cases}") && display[1].latex.includes("begin{pmatrix}") && display[1].latex.includes("\\oiint");
+    },
+  },
+  {
+    name: "unclosed structures produce warnings rather than crashes",
+    format: "latex",
+    source: String.raw`\begin{itemize}
+\item item
+\begin{quote}
+text
+\[
+x+y`,
+    check: (parsed) => parsed.warnings.length >= 2 && formulas(parsed).some((run) => run.display),
+  },
+];
+
+const markdownExtended: CoverageCase[] = [
+  {
+    name: "escaped square brackets alongside the \\[...\\] math extension",
+    format: "markdown",
+    source: String.raw`\[literal bracket\]`,
+    check: (parsed) => parsed.formulaCount === 0 && text(parsed) === "[literal bracket]",
+  },
+  {
+    name: "Setext headings",
+    format: "markdown",
+    source: "Heading\n=======",
+    check: (parsed) => blocksOf(parsed, "heading").length === 1,
+  },
+  {
+    name: "double-underscore strong emphasis",
+    format: "markdown",
+    source: "__bold__",
+    check: (parsed) => runs(parsed).some((run) => run.kind === "text" && run.bold && run.text === "bold"),
+  },
+  {
+    name: "triple-marker bold italic",
+    format: "markdown",
+    source: "***both***",
+    check: (parsed) => runs(parsed).some((run) => run.kind === "text" && run.bold && run.italic && run.text === "both"),
+  },
+  {
+    name: "GFM strikethrough",
+    format: "markdown",
+    source: "~~deleted~~",
+    check: (parsed) =>
+      runs(parsed).some((run) => run.kind === "text" && run.strike && run.text === "deleted"),
+  },
+  {
+    name: "inline links",
+    format: "markdown",
+    source: "[OpenAI](https://openai.com)",
+    check: (parsed) => text(parsed).includes("OpenAI") && text(parsed).includes("https://openai.com"),
+  },
+  {
+    name: "reference links",
+    format: "markdown",
+    source: "[OpenAI][oa]\n\n[oa]: https://openai.com",
+    check: (parsed) =>
+      text(parsed).includes("OpenAI") &&
+      !text(parsed).includes("[oa]") &&
+      text(parsed).includes("https://openai.com"),
+  },
+  {
+    name: "images with alt text",
+    format: "markdown",
+    source: "![diagram](diagram.png)",
+    check: (parsed) => text(parsed).includes("diagram") && text(parsed).includes("diagram.png"),
+  },
+  {
+    name: "GFM tables",
+    format: "markdown",
+    source: "| A | B |\n|---|---|\n| 1 | 2 |",
+    check: (parsed) =>
+      text(parsed).includes("A") &&
+      text(parsed).includes("B") &&
+      text(parsed).includes("1") &&
+      text(parsed).includes("2") &&
+      !text(parsed).includes("---"),
+  },
+  {
+    name: "horizontal rules",
+    format: "markdown",
+    source: "before\n\n---\n\nafter",
+    check: (parsed) => text(parsed).includes("────────────────────"),
+  },
+  {
+    name: "task list semantics",
+    format: "markdown",
+    source: "- [x] done\n- [ ] todo",
+    check: (parsed) => {
+      const items = blocksOf(parsed, "bullet");
+      return items.length === 2 && text(parsed).includes("☒ done") && text(parsed).includes("☐ todo");
+    },
+  },
+  {
+    name: "tilde fenced code",
+    format: "markdown",
+    source: "~~~js\nconst x = 1;\n~~~",
+    check: (parsed) => blocksOf(parsed, "code").length === 1,
+  },
+  {
+    name: "indented code blocks",
+    format: "markdown",
+    source: "    const x = 1;",
+    check: (parsed) => blocksOf(parsed, "code").length === 1,
+  },
+  {
+    name: "multi-backtick inline code",
+    format: "markdown",
+    source: "``code with ` tick``",
+    check: (parsed) => runs(parsed).some((run) => run.kind === "text" && run.code && run.text === "code with ` tick"),
+  },
+  {
+    name: "hard line breaks",
+    format: "markdown",
+    source: "line one  \nline two",
+    check: (parsed) => text(parsed).includes("line one\nline two"),
+  },
+  {
+    name: "raw HTML blocks",
+    format: "markdown",
+    source: "<details><summary>Title</summary>Body</details>",
+    check: (parsed) => text(parsed) === "TitleBody",
+  },
+  {
+    name: "footnotes",
+    format: "markdown",
+    source: "Text[^1]\n\n[^1]: note",
+    check: (parsed) =>
+      text(parsed).includes("Text〔注 1〕") &&
+      text(parsed).includes("注 1：") &&
+      text(parsed).includes("note"),
+  },
+  {
+    name: "shortcut reference links",
+    format: "markdown",
+    source: "[OpenAI]\n\n[OpenAI]: https://openai.com",
+    check: (parsed) =>
+      text(parsed).includes("OpenAI") && text(parsed).includes("https://openai.com"),
+  },
+  {
+    name: "HTML entities",
+    format: "markdown",
+    source: "A &amp; B, &#x03B1; &lt; x &gt; &quot;q&quot;",
+    check: (parsed) => text(parsed).includes('A & B, α < x > "q"'),
+  },
+  {
+    name: "HTML comments are hidden",
+    format: "markdown",
+    source: "before <!-- hidden --> after",
+    check: (parsed) => text(parsed).includes("before") && text(parsed).includes("after") && !text(parsed).includes("hidden"),
+  },
+  {
+    name: "YAML front matter is preserved as metadata code",
+    format: "markdown",
+    source: "---\ntitle: Demo\nauthor: Test\n---\n# Body",
+    check: (parsed) =>
+      blocksOf(parsed, "code").length === 1 &&
+      blocksOf(parsed, "heading").length === 1 &&
+      text(parsed).includes("title: Demo") &&
+      text(parsed).includes("Body"),
+  },
+];
+
+const latexExtended: CoverageCase[] = [
+  {
+    name: "description lists",
+    format: "latex",
+    source: String.raw`\begin{description}\item[Term] Definition\end{description}`,
+    check: (parsed) =>
+      blocksOf(parsed, "bullet").length === 1 &&
+      text(parsed).includes("Term") &&
+      text(parsed).includes("Definition"),
+  },
+  {
+    name: "flalign environments",
+    format: "latex",
+    source: String.raw`\begin{flalign}a&=b&&\end{flalign}`,
+    check: (parsed) => formulas(parsed).some((run) => run.display),
+  },
+  {
+    name: "alignat environments",
+    format: "latex",
+    source: String.raw`\begin{alignat}{2}a&=b&\quad c&=d\end{alignat}`,
+    check: (parsed) => formulas(parsed).some((run) => run.display),
+  },
+  {
+    name: "eqnarray environments",
+    format: "latex",
+    source: String.raw`\begin{eqnarray}a&=&b\end{eqnarray}`,
+    check: (parsed) => formulas(parsed).some((run) => run.display),
+  },
+  {
+    name: "math environments",
+    format: "latex",
+    source: String.raw`text \begin{math}x+y\end{math}`,
+    check: (parsed) => formulas(parsed).some((run) => !run.display && run.latex === "x+y"),
+  },
+  {
+    name: "center flushleft and flushright environments",
+    format: "latex",
+    source: String.raw`\begin{center}Centered\end{center}`,
+    check: (parsed) => text(parsed) === "Centered",
+  },
+  {
+    name: "tabular and table structures",
+    format: "latex",
+    source: String.raw`\begin{tabular}{cc}A&B\\1&2\end{tabular}`,
+    check: (parsed) =>
+      parsed.blocks.length === 2 &&
+      text(parsed).includes("A ｜ B") &&
+      text(parsed).includes("1 ｜ 2"),
+  },
+  {
+    name: "figure and includegraphics",
+    format: "latex",
+    source: String.raw`\begin{figure}\includegraphics{plot.png}\caption{Plot}\end{figure}`,
+    check: (parsed) =>
+      text(parsed).includes("图片：plot.png") &&
+      text(parsed).includes("图注：") &&
+      text(parsed).includes("Plot"),
+  },
+  {
+    name: "title author date and maketitle",
+    format: "latex",
+    source: String.raw`\title{Title}\author{Author}\date{}\begin{document}\maketitle\end{document}`,
+    check: (parsed) => text(parsed).includes("Title") && text(parsed).includes("Author"),
+  },
+  {
+    name: "href and url commands",
+    format: "latex",
+    source: String.raw`\href{https://example.com}{Example} \url{https://example.com}`,
+    check: (parsed) =>
+      text(parsed).includes("Example") &&
+      text(parsed).split("https://example.com").length === 3,
+  },
+  {
+    name: "footnotes",
+    format: "latex",
+    source: String.raw`Text\footnote{Note}`,
+    check: (parsed) => text(parsed) === "Text（注：Note）",
+  },
+  {
+    name: "citations and references",
+    format: "latex",
+    source: String.raw`See \cite{key}, Eq.~\ref{eq:a}.`,
+    check: (parsed) => !text(parsed).includes("\\cite") && !text(parsed).includes("\\ref"),
+  },
+  {
+    name: "theorem-like environments",
+    format: "latex",
+    source: String.raw`\begin{theorem}Every finite subgroup is...\end{theorem}`,
+    check: (parsed) =>
+      blocksOf(parsed, "quote").length === 1 &&
+      text(parsed).includes("定理：") &&
+      text(parsed).includes("Every finite subgroup is..."),
+  },
+  {
+    name: "custom macro expansion",
+    format: "latex",
+    source: String.raw`\newcommand{\R}{\mathbb{R}}\begin{document}$x\in\R$\end{document}`,
+    check: (parsed) => formulas(parsed).some((run) => run.latex.includes("\\mathbb{R}")),
+  },
+  {
+    name: "verb and verb star commands",
+    format: "latex",
+    source: String.raw`\verb|a_b%$| and \verb*+x y+`,
+    check: (parsed) => {
+      const codeRuns = runs(parsed).filter((run) => run.kind === "text" && run.code);
+      return codeRuns.length === 2 && codeRuns[0].text === "a_b%$" && codeRuns[1].text === "x y";
+    },
+  },
+  {
+    name: "underline and strike formatting commands",
+    format: "latex",
+    source: String.raw`\underline{under} \uline{again} \sout{gone}`,
+    check: (parsed) =>
+      runs(parsed).some((run) => run.kind === "text" && run.underline && run.text === "under") &&
+      runs(parsed).some((run) => run.kind === "text" && run.underline && run.text === "again") &&
+      runs(parsed).some((run) => run.kind === "text" && run.strike && run.text === "gone"),
+  },
+  {
+    name: "color and transform boxes preserve visible arguments",
+    format: "latex",
+    source: String.raw`\textcolor{red}{Red} \colorbox{yellow}{Box} \fcolorbox{black}{white}{Frame} \scalebox{2}{Scale} \resizebox{3cm}{!}{Resize} \rotatebox{90}{Rotate}`,
+    check: (parsed) =>
+      ["Red", "Box", "Frame", "Scale", "Resize", "Rotate"].every((value) => text(parsed).includes(value)) &&
+      !text(parsed).includes("yellow") &&
+      !text(parsed).includes("3cm"),
+  },
+  {
+    name: "box commands with optional arguments preserve content",
+    format: "latex",
+    source: String.raw`\makebox[3cm][c]{Make} \framebox[2cm]{Frame} \parbox{4cm}{Paragraph} \raisebox{1ex}{Raised}`,
+    check: (parsed) =>
+      ["Make", "Frame", "Paragraph", "Raised"].every((value) => text(parsed).includes(value)) &&
+      !text(parsed).includes("3cm"),
+  },
+  {
+    name: "optional section and list arguments",
+    format: "latex",
+    source: String.raw`\section[Short]{Long title}
+\begin{enumerate}[label=(\alph*)]
+\item First
+\end{enumerate}`,
+    check: (parsed) =>
+      blocksOf(parsed, "heading").some((block) => block.runs.some((run) => run.kind === "text" && run.text === "Long title")) &&
+      blocksOf(parsed, "numbered").length === 1 &&
+      text(parsed).includes("First"),
+  },
+  {
+    name: "minipage wrappers preserve body",
+    format: "latex",
+    source: String.raw`\begin{minipage}[t]{0.45\textwidth}Left $x$\end{minipage}`,
+    check: (parsed) => text(parsed).includes("Left") && formulas(parsed).some((run) => run.latex === "x"),
+  },
+  {
+    name: "thebibliography and bibitem entries",
+    format: "latex",
+    source: String.raw`\begin{thebibliography}{9}
+\bibitem[Knuth84]{knuth} Donald Knuth, TeXbook.
+\end{thebibliography}`,
+    check: (parsed) =>
+      blocksOf(parsed, "heading").length === 1 &&
+      blocksOf(parsed, "bullet").length === 1 &&
+      text(parsed).includes("Knuth84") &&
+      text(parsed).includes("TeXbook"),
+  },
+  {
+    name: "external input and bibliography resources degrade visibly",
+    format: "latex",
+    source: String.raw`\input{chapter1} \include{appendix} \bibliography{refs} \addbibresource{more.bib}`,
+    check: (parsed) =>
+      text(parsed).includes("外部 LaTeX 文件：chapter1") &&
+      text(parsed).includes("外部 LaTeX 文件：appendix") &&
+      text(parsed).includes("参考文献数据：refs") &&
+      text(parsed).includes("参考文献数据：more.bib"),
+  },
+  {
+    name: "two argument custom macros",
+    format: "latex",
+    source: String.raw`\newcommand{\pair}[2]{#1 and #2}\begin{document}\pair{left}{right}\end{document}`,
+    check: (parsed) => text(parsed).includes("left and right"),
+  },
+  {
+    name: "unknown environments preserve visible body with warning",
+    format: "latex",
+    source: String.raw`\begin{custombox}Visible $x+1$\end{custombox}`,
+    check: (parsed) =>
+      text(parsed).includes("Visible") &&
+      formulas(parsed).some((run) => run.latex === "x+1") &&
+      parsed.warnings.some((warning) => warning.includes("custombox")),
+  },
+];
+
+function evaluate(cases: CoverageCase[]) {
+  return cases.map((testCase) => {
+    try {
+      const parsed = parseDocumentImport(testCase.source, testCase.format);
+      return {
+        name: testCase.name,
+        supported: Boolean(testCase.check(parsed)),
+        blocks: parsed.blocks.length,
+        formulas: parsed.formulaCount,
+        warnings: parsed.warnings,
+        text: text(parsed),
+        blockKinds: parsed.blocks.map((block) => `${block.kind}:${block.level}`),
+      };
+    } catch (error) {
+      return {
+        name: testCase.name,
+        supported: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+}
+
+function summarize(label: string, results: ReturnType<typeof evaluate>) {
+  const supported = results.filter((result) => result.supported).length;
+  return {
+    label,
+    supported,
+    total: results.length,
+    unsupported: results.filter((result) => !result.supported).map((result) => result.name),
+  };
+}
+
+const results = {
+  markdownBaseline: evaluate(markdownBaseline),
+  latexBaseline: evaluate(latexBaseline),
+  markdownExtended: evaluate(markdownExtended),
+  latexExtended: evaluate(latexExtended),
+};
+
+const summary = [
+  summarize("Markdown baseline", results.markdownBaseline),
+  summarize("LaTeX baseline", results.latexBaseline),
+  summarize("Markdown extended/common dialect features", results.markdownExtended),
+  summarize("LaTeX extended/document features", results.latexExtended),
+];
+
+const showDetails = process.argv.includes("--details");
+console.log(JSON.stringify(showDetails ? { summary, results } : { summary }, null, 2));
+
+assert.equal(
+  results.markdownBaseline.filter((result) => result.supported).length,
+  markdownBaseline.length,
+  "Markdown baseline coverage regressed",
+);
+assert.equal(
+  results.latexBaseline.filter((result) => result.supported).length,
+  latexBaseline.length,
+  "LaTeX baseline coverage regressed",
+);
+assert.equal(
+  results.markdownExtended.filter((result) => result.supported).length,
+  markdownExtended.length,
+  "Markdown extended coverage regressed",
+);
+assert.equal(
+  results.latexExtended.filter((result) => result.supported).length,
+  latexExtended.length,
+  "LaTeX extended coverage regressed",
+);

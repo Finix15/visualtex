@@ -27,6 +27,14 @@ const source = String.raw`# 长公式预览
 $$
 \frac{\displaystyle\sum_{n=1}^{N}\left(a_n+b_n+c_n+d_n\right)^2}{\displaystyle\prod_{k=1}^{M}\left(1+x_k^2+y_k^2\right)}+\int_{-\infty}^{\infty}e^{-x^2}\,\mathrm{d}x+\oiint_{\Sigma}\bm F\cdot\mathrm{d}\bm S
 $$`;
+const importedTexSource = String.raw`\section{文件导入回归}
+
+正文中的公式 $E=mc^2$。
+
+\[
+\frac{a}{b}
+\]`;
+const importedMarkdownSource = "# UTF16 Markdown 文件\r\n\r\n正文中的公式 $x=1$。";
 
 const session = {
   id: sessionId,
@@ -242,8 +250,8 @@ async function main() {
     }
 
     assert.ok(metrics, "Document import preview did not render");
-    assert.equal(metrics.bodyFontSize, "9px");
-    assert.equal(metrics.headingFontSize, "14px");
+    assert.equal(metrics.bodyFontSize, "17.3333px");
+    assert.equal(metrics.headingFontSize, "26.6667px");
     assert.ok(metrics.svgHeight >= 6, `Formula became unreadably short: ${metrics.svgHeight}px`);
     assert.ok(
       metrics.svgWidth <= metrics.rowClientWidth + 1,
@@ -253,8 +261,140 @@ async function main() {
       metrics.rowScrollWidth <= metrics.rowClientWidth + 2,
       `Preview row still overflows horizontally: ${metrics.rowScrollWidth}px > ${metrics.rowClientWidth}px`,
     );
+
+    const picker = await client.evaluate(`(() => {
+      const input = document.querySelector('input[type="file"]');
+      const button = document.querySelector('.doc-import-file-button');
+      return {
+        accept: input?.getAttribute('accept') || '',
+        label: input?.getAttribute('aria-label') || '',
+        buttonText: button?.textContent?.trim() || '',
+      };
+    })()`);
+    assert.ok(picker.accept.includes('.tex'));
+    assert.ok(picker.accept.includes('.md'));
+    assert.ok(picker.accept.includes('.markdown'));
+    assert.ok(!picker.accept.includes('.txt'));
+    assert.equal(picker.label, '导入 LaTeX 或 Markdown 文件');
+    assert.ok(picker.buttonText.includes('导入 .tex / .md'));
+
+    await client.evaluate(`(() => {
+      const input = document.querySelector('input[type="file"]');
+      if (!(input instanceof HTMLInputElement)) throw new Error('Missing document import file input');
+      const file = new File(
+        [new TextEncoder().encode(${JSON.stringify(importedTexSource)})],
+        'imported-paper.tex',
+        { type: 'text/x-tex' },
+      );
+      const transfer = new DataTransfer();
+      transfer.items.add(file);
+      input.files = transfer.files;
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    })()`);
+
+    let texImport;
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      texImport = await client.evaluate(`(() => {
+        const textarea = document.querySelector('textarea[aria-label="文档源码"]');
+        const format = document.querySelector('.doc-import-options select');
+        const chip = document.querySelector('.doc-import-file-chip');
+        const preview = document.querySelector('.doc-import-paper-content');
+        if (!(textarea instanceof HTMLTextAreaElement) || !(format instanceof HTMLSelectElement)) return null;
+        return {
+          source: textarea.value,
+          format: format.value,
+          chip: chip?.textContent?.replace(/\\s+/g, ' ').trim() || '',
+          preview: preview?.textContent?.replace(/\\s+/g, ' ').trim() || '',
+        };
+      })()`);
+      if (
+        texImport?.source.includes('文件导入回归') &&
+        texImport?.format === 'latex' &&
+        texImport?.chip.includes('imported-paper.tex')
+      ) break;
+      await sleep(100);
+    }
+    assert.ok(texImport?.source.includes('\\section{文件导入回归}'));
+    assert.equal(texImport?.format, 'latex');
+    assert.ok(texImport?.chip.includes('imported-paper.tex'));
+    assert.ok(texImport?.chip.includes('UTF-8'));
+    assert.ok(texImport?.preview.includes('文件导入回归'));
+
+    await client.evaluate(`(() => {
+      const textarea = document.querySelector('textarea[aria-label="文档源码"]');
+      if (!(textarea instanceof HTMLTextAreaElement)) throw new Error('Missing document source textarea');
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+      if (!setter) throw new Error('Missing native textarea value setter');
+      setter.call(textarea, textarea.value + '\\n手动编辑');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    })()`);
+    let editedChip = '';
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      editedChip = await client.evaluate(
+        `document.querySelector('.doc-import-file-chip')?.textContent?.replace(/\\s+/g, ' ').trim() || ''`,
+      );
+      if (editedChip.includes('已编辑')) break;
+      await sleep(50);
+    }
+    assert.ok(editedChip.includes('已编辑'));
+
+    await client.evaluate(`(() => {
+      const input = document.querySelector('input[type="file"]');
+      if (!(input instanceof HTMLInputElement)) throw new Error('Missing document import file input');
+      const value = ${JSON.stringify(importedMarkdownSource)};
+      const bytes = new Uint8Array(value.length * 2 + 2);
+      bytes[0] = 0xff;
+      bytes[1] = 0xfe;
+      for (let index = 0; index < value.length; index += 1) {
+        const code = value.charCodeAt(index);
+        bytes[index * 2 + 2] = code & 0xff;
+        bytes[index * 2 + 3] = code >> 8;
+      }
+      const file = new File([bytes], 'utf16-notes.markdown', { type: 'text/markdown' });
+      const transfer = new DataTransfer();
+      transfer.items.add(file);
+      input.files = transfer.files;
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    })()`);
+
+    let markdownImport;
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      markdownImport = await client.evaluate(`(() => {
+        const textarea = document.querySelector('textarea[aria-label="文档源码"]');
+        const format = document.querySelector('.doc-import-options select');
+        const chip = document.querySelector('.doc-import-file-chip');
+        const preview = document.querySelector('.doc-import-paper-content');
+        if (!(textarea instanceof HTMLTextAreaElement) || !(format instanceof HTMLSelectElement)) return null;
+        return {
+          source: textarea.value,
+          format: format.value,
+          chip: chip?.textContent?.replace(/\\s+/g, ' ').trim() || '',
+          preview: preview?.textContent?.replace(/\\s+/g, ' ').trim() || '',
+        };
+      })()`);
+      if (
+        markdownImport?.source.includes('UTF16 Markdown 文件') &&
+        markdownImport?.format === 'markdown' &&
+        markdownImport?.chip.includes('UTF-16 LE')
+      ) break;
+      await sleep(100);
+    }
+    assert.equal(markdownImport?.format, 'markdown');
+    assert.ok(markdownImport?.source.includes('# UTF16 Markdown 文件'));
+    assert.ok(markdownImport?.chip.includes('utf16-notes.markdown'));
+    assert.ok(markdownImport?.chip.includes('UTF-16 LE'));
+    assert.ok(!markdownImport?.chip.includes('已编辑'));
+    assert.ok(markdownImport?.preview.includes('UTF16 Markdown 文件'));
+
     process.stdout.write(
-      `Document import preview scaling regression passed: ${JSON.stringify(metrics)}\n`,
+      `Document import preview and file selection regression passed: ${JSON.stringify({
+        metrics,
+        texFile: texImport?.chip,
+        markdownFile: markdownImport?.chip,
+      })}\n`,
     );
   } finally {
     client?.close();

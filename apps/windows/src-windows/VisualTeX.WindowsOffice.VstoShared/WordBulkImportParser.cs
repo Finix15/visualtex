@@ -1,4 +1,6 @@
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using VisualTeX.WindowsOffice.Contracts;
 
@@ -37,6 +39,8 @@ internal sealed class WordBulkRun
     internal bool Bold { get; set; }
     internal bool Italic { get; set; }
     internal bool Code { get; set; }
+    internal bool Strike { get; set; }
+    internal bool Underline { get; set; }
     internal string DisplayMode { get; set; } = "inline";
     internal string? EquationTag { get; set; }
 }
@@ -65,6 +69,63 @@ internal sealed class WordBulkImportDocument
 
 internal static class WordBulkImportParser
 {
+    private sealed class SerializedDocument
+    {
+        [JsonPropertyName("format")]
+        public string Format { get; set; } = "markdown";
+
+        [JsonPropertyName("blocks")]
+        public List<SerializedBlock> Blocks { get; set; } = new();
+
+        [JsonPropertyName("warnings")]
+        public List<string> Warnings { get; set; } = new();
+    }
+
+    private sealed class SerializedBlock
+    {
+        [JsonPropertyName("kind")]
+        public string Kind { get; set; } = "paragraph";
+
+        [JsonPropertyName("level")]
+        public int Level { get; set; }
+
+        [JsonPropertyName("runs")]
+        public List<SerializedRun> Runs { get; set; } = new();
+    }
+
+    private sealed class SerializedRun
+    {
+        [JsonPropertyName("kind")]
+        public string Kind { get; set; } = "text";
+
+        [JsonPropertyName("text")]
+        public string? Text { get; set; }
+
+        [JsonPropertyName("latex")]
+        public string? Latex { get; set; }
+
+        [JsonPropertyName("display")]
+        public bool Display { get; set; }
+
+        [JsonPropertyName("equationTag")]
+        public string? EquationTag { get; set; }
+
+        [JsonPropertyName("bold")]
+        public bool Bold { get; set; }
+
+        [JsonPropertyName("italic")]
+        public bool Italic { get; set; }
+
+        [JsonPropertyName("code")]
+        public bool Code { get; set; }
+
+        [JsonPropertyName("strike")]
+        public bool Strike { get; set; }
+
+        [JsonPropertyName("underline")]
+        public bool Underline { get; set; }
+    }
+
     private static readonly Regex MarkdownHeading = new(
         @"^(?<marks>#{1,6})\s+(?<text>.+?)\s*#*\s*$",
         RegexOptions.Compiled);
@@ -83,6 +144,120 @@ internal static class WordBulkImportParser
     private static readonly Regex LatexItem = new(
         @"^\s*\\item(?:\s*\[[^\]]*\])?\s*(?<text>.*)$",
         RegexOptions.Compiled);
+
+    internal static WordBulkImportDocument ParseSerialized(
+        string serialized,
+        WordBulkFormulaObjectMode objectMode)
+    {
+        if (string.IsNullOrWhiteSpace(serialized))
+            throw new InvalidDataException("批量导入没有返回可用的文档结构。");
+        if (serialized.Length > 5_000_000)
+            throw new InvalidDataException("批量导入文档结构不能超过 5 MB。");
+
+        SerializedDocument? wire;
+        try
+        {
+            wire = JsonSerializer.Deserialize<SerializedDocument>(
+                serialized,
+                new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true,
+                    MaxDepth = 128,
+                });
+        }
+        catch (JsonException error)
+        {
+            throw new InvalidDataException("批量导入返回了无效的文档结构。", error);
+        }
+        if (wire is null || wire.Blocks.Count == 0)
+            throw new InvalidDataException("批量导入没有找到可以插入 Word 的内容。");
+        if (wire.Blocks.Count > 10_000)
+            throw new InvalidDataException("批量导入包含过多段落（上限 10000）。");
+
+        var blocks = new List<WordBulkBlock>(wire.Blocks.Count);
+        foreach (var sourceBlock in wire.Blocks)
+        {
+            var kind = sourceBlock.Kind.Trim().ToLowerInvariant() switch
+            {
+                "heading" => WordBulkBlockKind.Heading,
+                "bullet" => WordBulkBlockKind.Bullet,
+                "numbered" => WordBulkBlockKind.Numbered,
+                "quote" => WordBulkBlockKind.Quote,
+                "code" => WordBulkBlockKind.Code,
+                "display" => WordBulkBlockKind.DisplayFormula,
+                _ => WordBulkBlockKind.Paragraph,
+            };
+            var runs = new List<WordBulkRun>();
+            foreach (var sourceRun in sourceBlock.Runs)
+            {
+                if (string.Equals(sourceRun.Kind, "formula", StringComparison.OrdinalIgnoreCase))
+                {
+                    var latex = sourceRun.Latex?.Trim() ?? string.Empty;
+                    if (latex.Length == 0) continue;
+                    runs.Add(new WordBulkRun
+                    {
+                        IsFormula = true,
+                        Latex = latex,
+                        DisplayMode = sourceRun.Display || kind == WordBulkBlockKind.DisplayFormula
+                            ? "block"
+                            : "inline",
+                        EquationTag = sourceRun.EquationTag,
+                    });
+                }
+                else
+                {
+                    runs.Add(new WordBulkRun
+                    {
+                        Text = sourceRun.Text ?? string.Empty,
+                        Bold = sourceRun.Bold,
+                        Italic = sourceRun.Italic,
+                        Code = sourceRun.Code,
+                        Strike = sourceRun.Strike,
+                        Underline = sourceRun.Underline,
+                    });
+                }
+            }
+            if (kind == WordBulkBlockKind.DisplayFormula)
+            {
+                var formula = runs.FirstOrDefault(run => run.IsFormula);
+                if (formula is null) continue;
+                blocks.Add(new WordBulkBlock
+                {
+                    Kind = kind,
+                    Level = 0,
+                    Runs = new List<WordBulkRun> { formula },
+                });
+                continue;
+            }
+            if (runs.Count == 0) runs.Add(new WordBulkRun { Text = string.Empty });
+            blocks.Add(new WordBulkBlock
+            {
+                Kind = kind,
+                Level = Math.Min(8, Math.Max(0, sourceBlock.Level)),
+                Runs = runs,
+            });
+        }
+
+        if (blocks.Count == 0)
+            throw new InvalidDataException("批量导入没有找到可以插入 Word 的内容。");
+        var formulaCount = blocks.Sum(block => block.Runs.Count(run => run.IsFormula));
+        if (formulaCount > 1_000)
+            throw new InvalidDataException("批量导入包含过多公式（上限 1000）。");
+
+        return new WordBulkImportDocument
+        {
+            SourceFormat = string.Equals(wire.Format, "latex", StringComparison.OrdinalIgnoreCase)
+                ? WordBulkSourceFormat.Latex
+                : WordBulkSourceFormat.Markdown,
+            FormulaObjectMode = objectMode,
+            Blocks = blocks,
+            Warnings = wire.Warnings
+                .Where(warning => !string.IsNullOrWhiteSpace(warning))
+                .Select(warning => warning.Trim())
+                .Take(256)
+                .ToList(),
+        };
+    }
 
     internal static WordBulkImportDocument Parse(
         string source,
@@ -811,21 +986,59 @@ internal static class WordBulkImportParser
 
             if (format == WordBulkSourceFormat.Markdown)
             {
-                if (index + 1 < text.Length && text.Substring(index, 2) == "**")
+                var tripleDelimiter = text.IndexOf("***", index, StringComparison.Ordinal) == index
+                    ? "***"
+                    : text.IndexOf("___", index, StringComparison.Ordinal) == index
+                        ? "___"
+                        : null;
+                if (tripleDelimiter is not null && !IsEscaped(text, index))
                 {
-                    var end = text.IndexOf("**", index + 2, StringComparison.Ordinal);
-                    if (end > index + 2)
+                    var end = FindMarkdownClosingDelimiter(
+                        text,
+                        tripleDelimiter,
+                        index + tripleDelimiter.Length);
+                    if (end > index + tripleDelimiter.Length)
                     {
                         Flush();
                         ParseInlineSegment(
-                            text.Substring(index + 2, end - index - 2),
+                            text.Substring(
+                                index + tripleDelimiter.Length,
+                                end - index - tripleDelimiter.Length),
+                            format,
+                            true,
+                            true,
+                            code,
+                            runs,
+                            warnings);
+                        index = end + tripleDelimiter.Length;
+                        continue;
+                    }
+                }
+                var strongDelimiter = text.IndexOf("**", index, StringComparison.Ordinal) == index
+                    ? "**"
+                    : text.IndexOf("__", index, StringComparison.Ordinal) == index
+                        ? "__"
+                        : null;
+                if (strongDelimiter is not null && !IsEscaped(text, index))
+                {
+                    var end = FindMarkdownClosingDelimiter(
+                        text,
+                        strongDelimiter,
+                        index + strongDelimiter.Length);
+                    if (end > index + strongDelimiter.Length)
+                    {
+                        Flush();
+                        ParseInlineSegment(
+                            text.Substring(
+                                index + strongDelimiter.Length,
+                                end - index - strongDelimiter.Length),
                             format,
                             true,
                             italic,
                             code,
                             runs,
                             warnings);
-                        index = end + 2;
+                        index = end + strongDelimiter.Length;
                         continue;
                     }
                 }
@@ -915,7 +1128,9 @@ internal static class WordBulkImportParser
                 && !previous.IsFormula
                 && previous.Bold == run.Bold
                 && previous.Italic == run.Italic
-                && previous.Code == run.Code)
+                && previous.Code == run.Code
+                && previous.Strike == run.Strike
+                && previous.Underline == run.Underline)
             {
                 merged[merged.Count - 1] = new WordBulkRun
                 {
@@ -924,6 +1139,8 @@ internal static class WordBulkImportParser
                     Bold = previous.Bold,
                     Italic = previous.Italic,
                     Code = previous.Code,
+                    Strike = previous.Strike,
+                    Underline = previous.Underline,
                 };
             }
             else
@@ -965,6 +1182,31 @@ internal static class WordBulkImportParser
                 depth--;
                 if (depth == 0) return index;
             }
+        }
+        return -1;
+    }
+
+    private static int FindMarkdownClosingDelimiter(
+        string text,
+        string delimiter,
+        int start)
+    {
+        var cursor = Math.Max(0, start);
+        while (cursor <= text.Length - delimiter.Length)
+        {
+            var found = text.IndexOf(delimiter, cursor, StringComparison.Ordinal);
+            if (found < 0) return -1;
+            if (!IsEscaped(text, found))
+            {
+                if (delimiter.Length == 2
+                    && found + delimiter.Length < text.Length
+                    && text[found + delimiter.Length] == delimiter[0])
+                {
+                    return found + 1;
+                }
+                return found;
+            }
+            cursor = found + delimiter.Length;
         }
         return -1;
     }

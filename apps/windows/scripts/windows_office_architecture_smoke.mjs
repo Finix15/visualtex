@@ -306,6 +306,9 @@ const documentImportApp = await source(
 const documentImportParser = await source(
   "src/office/documentImport/documentImportParser.ts",
 );
+const documentImportFile = await source(
+  "src/office/documentImport/documentImportFile.ts",
+);
 const documentImportCss = await source(
   "src/office/documentImport/documentImport.css",
 );
@@ -401,18 +404,38 @@ assert.ok(documentImportApp.includes("doc-import-preview-stage"));
 assert.ok(documentImportApp.includes("doc-import-preview-counts"));
 assert.ok(documentImportApp.includes("applyDocumentTheme"));
 assert.ok(documentImportApp.includes("latexToSvg"));
-assert.ok(documentImportApp.includes("fontSizePt: display ? 9 : 8"));
+assert.ok(documentImportApp.includes("fontSizePt: 13"));
 assert.ok(documentImportApp.includes("parseDocumentImport"));
-assert.ok(documentImportCss.includes("font-size: 9px;"));
+assert.ok(documentImportApp.includes("readDocumentImportFile"));
+assert.ok(documentImportApp.includes("导入 .tex / .md"));
+assert.ok(documentImportApp.includes('accept=".tex,.md,.markdown,text/x-tex,text/markdown"'));
+assert.ok(documentImportApp.includes("importedFile.encoding"));
+assert.ok(documentImportApp.includes("已编辑"));
+assert.ok(documentImportApp.includes("JSON.stringify(preview.parsed)"));
+assert.ok(documentImportApp.includes('codeFormat: "visualtex-document-json"'));
+assert.ok(documentImportCss.includes("font-size: 13pt;"));
 assert.ok(documentImportCss.includes(".doc-import-formula.display"));
 assert.ok(documentImportCss.includes("width: 100%;\n  min-width: 0;"));
 assert.ok(documentImportParser.includes("findDisplayStart"));
 assert.ok(documentImportParser.includes('findUnescaped(text, "\\\\["'));
 assert.ok(documentImportParser.includes("normalizeDisplayEnvironment"));
+assert.ok(documentImportParser.includes("normalizeMarkdownSource"));
+assert.ok(documentImportParser.includes("normalizeLatexExtensions"));
+assert.ok(documentImportParser.includes("visibleMultiArgumentCommands"));
+assert.ok(documentImportFile.includes("readDocumentImportFile"));
+assert.ok(documentImportFile.includes("documentFormatFromFileName"));
+assert.ok(documentImportFile.includes('new TextDecoder("gb18030"'));
+assert.ok(documentImportFile.includes('new TextDecoder("utf-16le"'));
+assert.ok(documentImportFile.includes("DOCUMENT_IMPORT_MAX_FILE_BYTES"));
+assert.ok(documentImportCss.includes(".doc-import-file-button"));
+assert.ok(documentImportCss.includes(".doc-import-file-chip"));
 assert.ok(wordVsto.includes("ResolveBulkImportDocumentAsync"));
+assert.ok(wordVsto.includes("ParseSerialized"));
+assert.ok(wordVsto.includes('"visualtex-document-json"'));
 assert.ok(wordVsto.includes("OpenBulkImportAsync"));
 assert.ok(officeSessions.includes("unchanged_edit"));
 assert.ok(officeSessions.includes("document_import"));
+assert.ok(officeSessions.includes('"visualtex-document-json"'));
 assert.ok(officeSessions.includes("document_import_can_commit_source_without_formula_export"));
 assert.ok(officeSessions.includes("unchanged_edit_can_complete_without_new_export_result"));
 assert.ok(officeSessions.includes("changed_edit_still_requires_a_new_export_result"));
@@ -425,6 +448,8 @@ assert.ok(wordInlineAlignment.includes("HasValidExportedBaseline"));
 assert.ok(wordInlineAlignment.includes("dequantizedMagnitude"));
 assert.ok(wordInlineAlignment.includes("LegacyDescentRatio"));
 assert.ok(wordVstoService.includes("RestoreTypingBaselineAfter(shape)"));
+assert.ok(wordVstoService.includes("font.StrikeThrough = run.Strike"));
+assert.ok(wordVstoService.includes("font.Underline = run.Underline"));
 assert.ok(wordVstoService.includes("TryResolveWordFontSize"));
 assert.ok(wordVstoService.includes("selectionRange.Start - 1"));
 assert.ok(wordVstoService.includes("selectionRange.Start + 1"));

@@ -1196,18 +1196,27 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 $"VisualTeX 文档导入窗口返回了意外状态：{session.Status}。");
 
         var source = string.Join("\n", session.Lines.Select(item => item.Latex));
-        var format = session.CodeFormat.Trim().ToLowerInvariant() switch
-        {
-            "markdown-document" => WordBulkSourceFormat.Markdown,
-            "latex-document" => WordBulkSourceFormat.Latex,
-            _ => WordBulkSourceFormat.Auto,
-        };
         var objectMode = string.Equals(
             session.ObjectMode,
             FormulaOleContract.NativeOleMode,
             StringComparison.Ordinal)
             ? WordBulkFormulaObjectMode.Ole
             : WordBulkFormulaObjectMode.Omml;
+        if (string.Equals(
+                session.CodeFormat,
+                "visualtex-document-json",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return (
+                WordBulkImportParser.ParseSerialized(source, objectMode),
+                session.Id);
+        }
+        var format = session.CodeFormat.Trim().ToLowerInvariant() switch
+        {
+            "markdown-document" => WordBulkSourceFormat.Markdown,
+            "latex-document" => WordBulkSourceFormat.Latex,
+            _ => WordBulkSourceFormat.Auto,
+        };
         return (
             WordBulkImportParser.Parse(source, format, objectMode),
             session.Id);

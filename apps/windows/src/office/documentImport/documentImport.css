@@ -151,6 +151,11 @@
   background: var(--surface-hover);
 }
 
+.doc-import-file-button {
+  min-width: 148px;
+  font-weight: 650;
+}
+
 .doc-import-primary {
   border-color: var(--accent);
   background: var(--accent);
@@ -251,6 +256,47 @@
   white-space: nowrap;
 }
 
+.doc-import-source-meta {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.doc-import-file-chip {
+  min-width: 0;
+  max-width: min(250px, 28vw);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent-border) 55%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-soft) 44%, var(--surface));
+  color: var(--text);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.doc-import-file-chip > svg {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.doc-import-file-chip > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.doc-import-file-chip > small {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  font-size: 9px;
+}
+
 .doc-import-pane-stat,
 .doc-import-preview-counts > span {
   flex: 0 0 auto;
@@ -313,19 +359,17 @@
 .doc-import-preview-scroll {
   min-height: 0;
   overflow: auto;
-  padding: 18px clamp(18px, 3.5vw, 46px) 52px;
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--surface-sunken) 86%, var(--bg)) 0,
-      color-mix(in srgb, var(--bg) 92%, var(--surface-sunken)) 100%
-    );
+  padding: 0;
+  background: var(--doc-import-page);
   scrollbar-gutter: stable;
 }
 
 .doc-import-preview-stage {
-  width: min(100%, 850px);
-  margin: 0 auto;
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .doc-import-preview-caption {
@@ -334,8 +378,10 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 9px;
-  padding: 0 4px;
+  margin: 0;
+  padding: 10px 16px 8px;
+  border-bottom: 1px solid var(--doc-import-page-rule);
+  background: var(--doc-import-page);
   color: var(--text-faint);
   font-size: 10px;
   font-weight: 600;
@@ -353,21 +399,19 @@
 }
 
 .doc-import-preview-document {
-  width: min(100%, 790px);
+  width: 100%;
   min-height: max(620px, calc(100vh - 230px));
-  margin: 0 auto;
+  margin: 0;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
-  padding: clamp(42px, 5.2vw, 68px) clamp(40px, 6.5vw, 78px) 24px;
-  border: 1px solid #d8dce2;
-  border-radius: 4px;
+  padding: 20px 24px 16px;
+  border: 0;
+  border-radius: 0;
   background: var(--doc-import-page);
   color: var(--doc-import-page-ink);
-  box-shadow:
-    0 22px 52px rgba(29, 36, 46, 0.16),
-    0 3px 10px rgba(29, 36, 46, 0.08);
+  box-shadow: none;
   font-family: "Cambria", "Times New Roman", "Microsoft YaHei", serif;
-  font-size: 9px;
+  font-size: 13pt;
   line-height: 1.58;
 }
 
@@ -429,19 +473,19 @@ h1.doc-import-heading {
   margin: 0 0 0.82em;
   padding-bottom: 0.42em;
   border-bottom: 1px solid var(--doc-import-page-rule);
-  font-size: 14px;
+  font-size: 20pt;
   font-weight: 700;
 }
 
 h2.doc-import-heading {
   margin: 1.45em 0 0.68em;
-  font-size: 11px;
+  font-size: 17pt;
   font-weight: 700;
 }
 
 h3.doc-import-heading {
   margin: 1.3em 0 0.58em;
-  font-size: 10px;
+  font-size: 15pt;
   font-weight: 700;
 }
 
@@ -449,7 +493,7 @@ h4.doc-import-heading,
 h5.doc-import-heading,
 h6.doc-import-heading {
   margin: 1.15em 0 0.52em;
-  font-size: 9px;
+  font-size: 13pt;
   font-weight: 700;
 }
 
@@ -564,6 +608,14 @@ h6.doc-import-heading {
 
 .doc-import-preview-document .italic {
   font-style: italic;
+}
+
+.doc-import-preview-document .strike {
+  text-decoration: line-through;
+}
+
+.doc-import-preview-document .underline {
+  text-decoration: underline;
 }
 
 .doc-import-preview-document .code {
@@ -690,16 +742,25 @@ h6.doc-import-heading {
   }
 
   .doc-import-pane-heading small,
-  .doc-import-preview-counts > span:not(:first-child) {
+  .doc-import-preview-counts > span:not(:first-child),
+  .doc-import-file-chip > small {
     display: none;
   }
 
+  .doc-import-file-button {
+    flex: 1 1 100%;
+  }
+
+  .doc-import-file-chip {
+    max-width: 150px;
+  }
+
   .doc-import-preview-scroll {
-    padding: 12px 8px 34px;
+    padding: 0;
   }
 
   .doc-import-preview-document {
     min-height: 520px;
-    padding: 34px 26px 20px;
+    padding: 16px 18px 14px;
   }
 }

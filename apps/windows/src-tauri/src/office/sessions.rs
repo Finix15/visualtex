@@ -645,7 +645,10 @@ impl SessionStore {
             && next.original_metadata.is_some();
         let document_import = matches!(
             next.code_format.as_str(),
-            "auto-document" | "markdown-document" | "latex-document"
+            "auto-document"
+                | "markdown-document"
+                | "latex-document"
+                | "visualtex-document-json"
         );
         if matches!(
             next.status,
@@ -1034,18 +1037,18 @@ mod tests {
                 serde_json::json!({
                     "status": "committing",
                     "dirty": true,
-                    "codeFormat": "latex-document",
+                    "codeFormat": "visualtex-document-json",
                     "objectMode": "wordOmml",
                     "lines": [{
                         "id": line_id,
-                        "latex": "正文 \\[x^2\\]"
+                        "latex": "{\"format\":\"latex\",\"blocks\":[{\"kind\":\"display\",\"level\":0,\"runs\":[{\"kind\":\"formula\",\"latex\":\"x^2\",\"display\":true}]}],\"warnings\":[]}"
                     }],
                     "exportResult": null
                 }),
             )
             .unwrap();
         assert_eq!(committing.status, OfficeSessionStatus::Committing);
-        assert_eq!(committing.code_format, "latex-document");
+        assert_eq!(committing.code_format, "visualtex-document-json");
         assert!(committing.export_result.is_none());
     }
 

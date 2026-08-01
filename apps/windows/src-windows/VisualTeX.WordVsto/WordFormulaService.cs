@@ -1403,6 +1403,10 @@ internal sealed class WordFormulaService
             font = inserted.Font;
             font.Bold = run.Bold ? 1 : 0;
             font.Italic = run.Italic ? 1 : 0;
+            font.StrikeThrough = run.Strike ? 1 : 0;
+            font.Underline = run.Underline
+                ? WdUnderline.wdUnderlineSingle
+                : WdUnderline.wdUnderlineNone;
             if (run.Code)
             {
                 font.Name = "Consolas";

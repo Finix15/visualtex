@@ -26,6 +26,10 @@ import {
   type OfficeFormulaSession,
 } from "../api/sessionClient";
 import {
+  readDocumentImportFile,
+  type ImportedDocumentFile,
+} from "./documentImportFile";
+import {
   parseDocumentImport,
   type DocumentImportBlock,
   type DocumentImportRun,
@@ -47,17 +51,13 @@ function formatFromSession(session: OfficeFormulaSession): DocumentSourceFormat 
   return "auto";
 }
 
-function codeFormatFor(format: DocumentSourceFormat) {
-  return `${format}-document`;
-}
-
 function FormulaPreview({ latex, display }: { latex: string; display: boolean }) {
   const rendered = useMemo(() => {
     try {
       return {
         svg: latexToSvg(latex, {
           displayMode: display,
-          fontSizePt: display ? 9 : 8,
+          fontSizePt: 13,
           paddingPx: display ? 4 : 1,
           background: "transparent",
         }).svg,
@@ -98,6 +98,8 @@ function InlineRuns({ runs }: { runs: DocumentImportRun[] }) {
           run.bold ? "bold" : "",
           run.italic ? "italic" : "",
           run.code ? "code" : "",
+          run.strike ? "strike" : "",
+          run.underline ? "underline" : "",
         ]
           .filter(Boolean)
           .join(" ");
@@ -201,6 +203,16 @@ function PreviewPane({ parsed }: { parsed: ParsedDocumentImport }) {
   );
 }
 
+type ImportedFileState = Pick<ImportedDocumentFile, "name" | "encoding" | "size"> & {
+  modified: boolean;
+};
+
+function formatFileSize(size: number) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 export function DocumentImportApp() {
   const sessionId = useMemo(sessionIdFromLocation, []);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -211,6 +223,8 @@ export function DocumentImportApp() {
   const [objectMode, setObjectMode] = useState<DocumentObjectMode>("wordOmml");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [fileBusy, setFileBusy] = useState(false);
+  const [importedFile, setImportedFile] = useState<ImportedFileState | null>(null);
   const [loadError, setLoadError] = useState("");
 
   useEffect(() => {
@@ -296,11 +310,15 @@ export function DocumentImportApp() {
     setBusy(true);
     try {
       const lineId = session.lines[0]?.id || crypto.randomUUID();
+      const serializedDocument = JSON.stringify(preview.parsed);
+      if (serializedDocument.length > 5_000_000) {
+        throw new Error("解析后的文档结构超过 5 MB，无法提交给 Word。请拆分后导入。");
+      }
       await updateOfficeSession(sessionId, {
         title: "Word 文档批量导入",
-        lines: [{ id: lineId, latex: source }],
+        lines: [{ id: lineId, latex: serializedDocument }],
         activeLineId: lineId,
-        codeFormat: codeFormatFor(format),
+        codeFormat: "visualtex-document-json",
         objectMode,
         displayMode: "block",
         numbered: false,
@@ -318,19 +336,23 @@ export function DocumentImportApp() {
   };
 
   const openFile = async (file: File) => {
-    if (file.size > 5_000_000) {
-      setLoadError("文件超过 5 MB，无法批量导入。");
-      return;
-    }
+    if (fileBusy || busy) return;
+    setFileBusy(true);
+    setLoadError("");
     try {
-      const text = await file.text();
-      setSource(text);
-      const name = file.name.toLowerCase();
-      if (name.endsWith(".tex")) setFormat("latex");
-      else if (name.endsWith(".md") || name.endsWith(".markdown")) setFormat("markdown");
-      setLoadError("");
+      const imported = await readDocumentImportFile(file);
+      setSource(imported.source);
+      setFormat(imported.format);
+      setImportedFile({
+        name: imported.name,
+        encoding: imported.encoding,
+        size: imported.size,
+        modified: false,
+      });
     } catch (error) {
       setLoadError(readErrorMessage(error, "无法读取所选文件。"));
+    } finally {
+      setFileBusy(false);
     }
   };
 
@@ -377,13 +399,20 @@ export function DocumentImportApp() {
               <option value="nativeOle">VisualTeX OLE</option>
             </select>
           </label>
-          <button className="doc-import-secondary" onClick={() => fileInputRef.current?.click()}>
-            <FolderOpen size={16} />打开文件
+          <button
+            className="doc-import-secondary doc-import-file-button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={busy || fileBusy}
+            title="导入单个 LaTeX 或 Markdown 文件"
+          >
+            {fileBusy ? <LoaderCircle size={16} className="spin" /> : <FolderOpen size={16} />}
+            {fileBusy ? "正在读取…" : "导入 .tex / .md"}
           </button>
           <input
             ref={fileInputRef}
             type="file"
-            accept=".tex,.md,.markdown,.txt,text/plain"
+            accept=".tex,.md,.markdown,text/x-tex,text/markdown"
+            aria-label="导入 LaTeX 或 Markdown 文件"
             hidden
             onChange={(event) => {
               const file = event.target.files?.[0];
@@ -406,9 +435,21 @@ export function DocumentImportApp() {
                 <small>支持正文、标题、列表、引用、代码块和混合公式</small>
               </div>
             </div>
-            <span className="doc-import-pane-stat">
-              {source.length.toLocaleString()} 字符
-            </span>
+            <div className="doc-import-source-meta">
+              {importedFile ? (
+                <span
+                  className="doc-import-file-chip"
+                  title={`${importedFile.name} · ${importedFile.encoding} · ${formatFileSize(importedFile.size)}`}
+                >
+                  <FileText size={12} />
+                  <span>{importedFile.name}</span>
+                  <small>{importedFile.encoding}{importedFile.modified ? " · 已编辑" : ""}</small>
+                </span>
+              ) : null}
+              <span className="doc-import-pane-stat">
+                {source.length.toLocaleString()} 字符
+              </span>
+            </div>
           </div>
           <textarea
             value={source}
@@ -422,7 +463,12 @@ export function DocumentImportApp() {
 \item 第一项
 \item 第二项
 \end{itemize}`}
-            onChange={(event) => setSource(event.target.value)}
+            onChange={(event) => {
+              setSource(event.target.value);
+              setImportedFile((current) =>
+                current && !current.modified ? { ...current, modified: true } : current,
+              );
+            }}
             spellCheck={false}
             autoCapitalize="off"
             autoCorrect="off"
@@ -471,7 +517,7 @@ export function DocumentImportApp() {
           {!loadError && preview.parsed && preview.parsed.warnings.length === 0 ? (
             <span className="ok">
               <CheckCircle2 size={15} />
-              预览解析正常；插入时会再次由 Word 插件严格解析。
+              预览解析正常；Word 将按当前结构化预览结果插入。
             </span>
           ) : null}
         </div>
