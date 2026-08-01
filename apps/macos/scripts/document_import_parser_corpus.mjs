@@ -974,6 +974,9 @@ f^{*}(\mathbf{x})
         ],
         minSvgWidth: 240,
         maxSvgHeight: 130,
+        ommlIncludes: ["<m:eqArr>", "&amp;="],
+        ommlExcludes: ["<m:m>", "<m:e></m:e>"],
+        ommlCount: { fragment: "&amp;=", count: 2 },
       },
     ],
   },
@@ -995,6 +998,8 @@ e&=f &\qquad g&=h
         artifactLineCount: 1,
         canonicalIncludes: [String.raw`\begin{equation*}`, String.raw`\begin{alignedat}`],
         maxSvgHeight: 100,
+        ommlIncludes: ["<m:eqArr>", "&amp;="],
+        ommlExcludes: ["<m:m>", "<m:e></m:e>"],
       },
     ],
   },
@@ -1106,6 +1111,48 @@ for (const fixture of fixtures) {
         assert.ok(
           artifacts.svg.height <= expected.maxSvgHeight,
           `${label} SVG height ${artifacts.svg.height} must be at most ${expected.maxSvgHeight}`,
+        );
+      }
+      const omml = artifacts.omml?.omml ?? "";
+      if (
+        [
+          "align",
+          "align-star",
+          "aligned",
+          "equation-split",
+          "equation-star-split",
+        ].includes(artifacts.codeFormat)
+      ) {
+        assert.ok(
+          omml.includes("<m:eqArr>"),
+          `${label} aligned OMML must use a Word equation array`,
+        );
+        assert.ok(
+          !omml.includes("<m:m>"),
+          `${label} aligned OMML must not fall back to a Word matrix`,
+        );
+        assert.ok(
+          !omml.includes("<m:e></m:e>"),
+          `${label} aligned OMML must not contain an empty placeholder slot`,
+        );
+      }
+      for (const fragment of expected.ommlIncludes ?? []) {
+        assert.ok(
+          omml.includes(fragment),
+          `${label} OMML must contain ${fragment}`,
+        );
+      }
+      for (const fragment of expected.ommlExcludes ?? []) {
+        assert.ok(
+          !omml.includes(fragment),
+          `${label} OMML must not contain ${fragment}`,
+        );
+      }
+      if (expected.ommlCount) {
+        assert.equal(
+          omml.split(expected.ommlCount.fragment).length - 1,
+          expected.ommlCount.count,
+          `${label} OMML ${expected.ommlCount.fragment} count`,
         );
       }
       renderedFormulas += 1;

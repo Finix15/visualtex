@@ -216,6 +216,14 @@ async function main() {
                 defaultFontSizePt: 12,
               };
             }
+            if (command === "focus_macos_offline_document_import_target") {
+              window.__VISUALTEX_DOCUMENT_IMPORT_TARGET_FOCUSED__ = true;
+              return null;
+            }
+            if (command === "restore_macos_offline_document_import_window") return null;
+            if (command === "get_macos_offline_document_import_progress") {
+              return { current: 0, total: 0, stage: "preparing" };
+            }
             if (command === "commit_macos_offline_document_import") {
               window.__VISUALTEX_DOCUMENT_IMPORT_COMMIT__ = args;
               return null;
@@ -254,12 +262,12 @@ async function main() {
     const started = Date.now();
     while (Date.now() - started < 15_000) {
       const ready = await evaluate(
-        `Boolean(document.querySelector(".document-import-app"))`,
+        `Boolean(document.querySelector(".doc-import-shell"))`,
       );
       if (ready) break;
       await sleep(80);
     }
-    if (!(await evaluate(`Boolean(document.querySelector(".document-import-app"))`))) {
+    if (!(await evaluate(`Boolean(document.querySelector(".doc-import-shell"))`))) {
       const failure = await evaluate(`(() => ({
         text: document.body.innerText,
         html: document.getElementById("root")?.innerHTML?.slice(0, 2000) ?? "",
@@ -351,7 +359,7 @@ f^{*}(\mathbf{x})
             ? longPhysicsDocumentSource
             : source;
     await evaluate(`(() => {
-      const textarea = document.querySelector(".document-import-source-pane textarea");
+      const textarea = document.querySelector(".source-pane textarea");
       if (!textarea) throw new Error("Missing document import source textarea");
       const setter = Object.getOwnPropertyDescriptor(
         HTMLTextAreaElement.prototype,
@@ -431,10 +439,17 @@ f^{*}(\mathbf{x})
 
     await evaluate(`(() => {
       if (!${JSON.stringify(longPhysicsRegression)}) {
-        const imageRadio = document.querySelector(
-          'input[name="document-formula-output"][type="radio"]:not(:checked)',
+        const outputSelect = document.querySelector(
+          ".doc-import-options label:nth-child(2) select",
         );
-        imageRadio?.click();
+        if (!outputSelect) throw new Error("Missing formula output select");
+        const selectSetter = Object.getOwnPropertyDescriptor(
+          HTMLSelectElement.prototype,
+          "value",
+        ).set;
+        selectSetter.call(outputSelect, "image");
+        outputSelect.dispatchEvent(new Event("input", { bubbles: true }));
+        outputSelect.dispatchEvent(new Event("change", { bubbles: true }));
       }
       if (${JSON.stringify(customSettingsRegression)}) {
         const cards = [...document.querySelectorAll(".document-import-formula-card")];
@@ -451,7 +466,9 @@ f^{*}(\mathbf{x})
         });
       }
       const insertButton = [...document.querySelectorAll("button")].find(
-        (button) => button.textContent?.includes("插入 Word"),
+        (button) =>
+          button.textContent?.includes("插入 Word") ||
+          button.textContent?.includes("导入到 Word"),
       );
       if (!insertButton) throw new Error("Missing insert button");
       insertButton.click();
@@ -463,12 +480,18 @@ f^{*}(\mathbf{x})
       commit = await evaluate(`window.__VISUALTEX_DOCUMENT_IMPORT_COMMIT__ ?? null`);
       if (commit) break;
       const error = await evaluate(
-        `document.querySelector(".document-import-error")?.innerText ?? ""`,
+        `document.querySelector(".doc-import-messages .error")?.innerText ?? ""`,
       );
       if (error) throw new Error(`Document import UI reported: ${error}`);
       await sleep(100);
     }
     if (!commit) throw new Error("Document importer did not submit its Tauri commit");
+    const targetFocused = await evaluate(
+      `window.__VISUALTEX_DOCUMENT_IMPORT_TARGET_FOCUSED__ === true`,
+    );
+    if (!targetFocused) {
+      throw new Error("Document importer did not return focus to Word before commit");
+    }
 
     const input = commit.input;
     const formulas = input?.items?.filter((item) => item.kind === "formula") ?? [];

@@ -392,6 +392,56 @@ function runAppleScript(lines, timeout = 60_000) {
   return result.stdout.trim();
 }
 
+function startAppleScript(lines) {
+  const args = lines.flatMap((line) => ["-e", line]);
+  const child = spawn("/usr/bin/osascript", args, {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  let settled = false;
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk;
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk;
+  });
+  const completion = new Promise((resolvePromise, rejectPromise) => {
+    child.once("error", rejectPromise);
+    child.once("close", (status, signal) => {
+      settled = true;
+      resolvePromise({ status, signal, stdout, stderr });
+    });
+  });
+  return {
+    child,
+    completion,
+    isSettled: () => settled,
+  };
+}
+
+function readDocumentImportProgress(path) {
+  if (!existsSync(path)) return null;
+  const fields = new Map(
+    readFileSync(path, "utf8")
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => {
+        const separator = line.indexOf("=");
+        return separator < 0
+          ? [line, ""]
+          : [line.slice(0, separator), line.slice(separator + 1)];
+      }),
+  );
+  const current = Number(fields.get("current"));
+  const total = Number(fields.get("total"));
+  const stage = fields.get("stage") ?? "";
+  if (!Number.isInteger(current) || !Number.isInteger(total) || !stage) return null;
+  return { current, total, stage };
+}
+
 function base64Url(value) {
   return Buffer.from(value, "utf8").toString("base64url");
 }
@@ -3480,14 +3530,90 @@ try {
     sessionDirectory,
     "word-callback-status.txt",
   );
+  const documentImportProgressPath = join(
+    sessionDirectory,
+    "document-import-progress.txt",
+  );
   rmSync(callbackStatusPath, { force: true });
-  runAppleScript([
+  rmSync(documentImportProgressPath, { force: true });
+  const observedDocumentImportProgress = [];
+  const callbackProcess = startAppleScript([
     'tell application "Microsoft Word"',
     `activate object document ${JSON.stringify(testDocumentName)}`,
     'run VB macro macro name "VisualTeX_ConfigureDocumentImportParagraphSpacingRegression"',
     'run VB macro macro name "VisualTeX_ApplyPendingResultForRegression"',
     "end tell",
-  ], 90_000);
+  ]);
+  const callbackDeadline = Date.now() + 90_000;
+  while (!callbackProcess.isSettled() && Date.now() < callbackDeadline) {
+    const progress = readDocumentImportProgress(documentImportProgressPath);
+    const previous = observedDocumentImportProgress.at(-1);
+    if (
+      progress &&
+      (!previous ||
+        previous.current !== progress.current ||
+        previous.total !== progress.total ||
+        previous.stage !== progress.stage)
+    ) {
+      observedDocumentImportProgress.push(progress);
+    }
+    await sleep(12);
+  }
+  if (!callbackProcess.isSettled()) {
+    callbackProcess.child.kill("SIGTERM");
+    throw new Error("Word document-import callback timed out after 90 seconds");
+  }
+  const callbackResult = await callbackProcess.completion;
+  if (callbackResult.status !== 0) {
+    throw new Error(
+      [
+        callbackResult.stderr.trim(),
+        callbackResult.stdout.trim(),
+        callbackResult.signal ? `signal=${callbackResult.signal}` : "",
+        `status=${String(callbackResult.status)}`,
+      ]
+        .filter(Boolean)
+        .join("\n") || "Word document-import AppleScript failed",
+    );
+  }
+  const finalDocumentImportProgress = readDocumentImportProgress(
+    documentImportProgressPath,
+  );
+  if (
+    !finalDocumentImportProgress ||
+    finalDocumentImportProgress.current !== diagnosticItemLimit ||
+    finalDocumentImportProgress.total !== diagnosticItemLimit ||
+    finalDocumentImportProgress.stage !== "complete"
+  ) {
+    throw new Error(
+      `Word document-import progress did not finish correctly: ${JSON.stringify({
+        finalDocumentImportProgress,
+        observedDocumentImportProgress,
+      })}`,
+    );
+  }
+  if (
+    !observedDocumentImportProgress.some(
+      (progress) =>
+        progress.stage === "inserting" &&
+        progress.current > 0 &&
+        progress.current < progress.total,
+    )
+  ) {
+    throw new Error(
+      `Word document-import progress did not expose an intermediate insertion count: ${JSON.stringify(observedDocumentImportProgress)}`,
+    );
+  }
+  for (let index = 1; index < observedDocumentImportProgress.length; index += 1) {
+    if (
+      observedDocumentImportProgress[index].current <
+      observedDocumentImportProgress[index - 1].current
+    ) {
+      throw new Error(
+        `Word document-import progress moved backwards: ${JSON.stringify(observedDocumentImportProgress)}`,
+      );
+    }
+  }
   if (!existsSync(callbackStatusPath)) {
     throw new Error("Word did not write the regression callback status file");
   }
@@ -4315,6 +4441,10 @@ try {
         })),
         shapeCount,
         tableCount,
+        documentImportProgress: {
+          observed: observedDocumentImportProgress,
+          final: finalDocumentImportProgress,
+        },
         geometry: {
           pageWidth,
           leftMargin,

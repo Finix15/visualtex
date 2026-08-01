@@ -60,9 +60,30 @@ export interface CommitMacosDocumentImportInput {
   items: DocumentImportCommitItem[];
 }
 
+export interface MacosDocumentImportProgress {
+  current: number;
+  total: number;
+  stage: "preparing" | "inserting" | "complete" | "error" | string;
+}
+
 export function getMacosDocumentImportRequest(sessionId: string) {
   return invokeTauri<MacosDocumentImportRequest>(
     "get_macos_offline_document_import_request",
+    { sessionId },
+  );
+}
+
+export function focusMacosDocumentImportTarget() {
+  return invokeTauri<void>("focus_macos_offline_document_import_target", {});
+}
+
+export function restoreMacosDocumentImportWindow() {
+  return invokeTauri<void>("restore_macos_offline_document_import_window", {});
+}
+
+export function getMacosDocumentImportProgress(sessionId: string) {
+  return invokeTauri<MacosDocumentImportProgress>(
+    "get_macos_offline_document_import_progress",
     { sessionId },
   );
 }

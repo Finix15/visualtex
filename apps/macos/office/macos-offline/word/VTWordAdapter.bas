@@ -8857,6 +8857,43 @@ Private Sub VTTraceDocumentImportStage( _
     On Error GoTo 0
 End Sub
 
+Private Sub VTUpdateDocumentImportProgress( _
+    ByVal sessionId As String, _
+    ByVal currentItem As Long, _
+    ByVal totalItems As Long, _
+    ByVal stageName As String)
+
+    Dim statusText As String
+
+    If currentItem < 0 Then currentItem = 0
+    If totalItems < 0 Then totalItems = 0
+    If currentItem > totalItems Then currentItem = totalItems
+
+    On Error Resume Next
+    VTWriteTextAtomic _
+        VTSessionDirectory(sessionId) & "/document-import-progress.txt", _
+        "current=" & CStr(currentItem) & vbLf & _
+        "total=" & CStr(totalItems) & vbLf & _
+        "stage=" & stageName & vbLf
+
+    Select Case stageName
+        Case "preparing"
+            statusText = "VisualTeX 正在准备批量导入…"
+        Case "inserting"
+            statusText = "VisualTeX 正在插入 Word 文档：" & _
+                CStr(currentItem) & "/" & CStr(totalItems)
+        Case "complete"
+            statusText = "VisualTeX 批量导入完成：" & _
+                CStr(totalItems) & "/" & CStr(totalItems)
+        Case Else
+            statusText = ""
+    End Select
+    Application.StatusBar = statusText
+    DoEvents
+    Err.Clear
+    On Error GoTo 0
+End Sub
+
 Private Sub VTCancelWordDocumentImportDispatch( _
     ByVal dispatch As Object)
 
@@ -8961,6 +8998,7 @@ Private Sub VTCommitWordDocumentImportDispatch( _
         Err.Raise vbObjectError + 7586, "VisualTeX", _
             "The document import item count is outside the supported range."
     End If
+    VTUpdateDocumentImportProgress sessionId, 0, itemCount, "inserting"
 
     Set targetDocument = ActiveDocument
     Set anchorBookmark = targetDocument.Bookmarks(bookmarkName)
@@ -9080,6 +9118,9 @@ Private Sub VTCommitWordDocumentImportDispatch( _
         End If
         insertedEnd = cursorRange.Start
         VTTraceDocumentImportStage sessionId, "item-complete", itemIndex
+        VTUpdateDocumentImportProgress _
+            sessionId, itemIndex + 1, itemCount, "inserting"
+        cursorRange.Select
     Next itemIndex
 
     If Len(activeParagraphId) > 0 Then
@@ -9092,12 +9133,16 @@ Private Sub VTCommitWordDocumentImportDispatch( _
     End If
     cursorRange.Collapse wdCollapseStart
     cursorRange.Select
+    VTUpdateDocumentImportProgress _
+        sessionId, itemCount, itemCount, "complete"
+    Application.StatusBar = ""
     Exit Sub
 
 Failed:
     errorNumber = Err.Number
     errorDescription = Err.Description
     On Error Resume Next
+    VTUpdateDocumentImportProgress sessionId, 0, itemCount, "error"
     VTWriteWordFailureTrace _
         sessionId, transactionStage, errorNumber, errorDescription
     If internalMutationStarted Then VTEndWordInternalMutation

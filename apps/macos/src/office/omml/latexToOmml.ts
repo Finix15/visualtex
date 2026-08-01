@@ -329,6 +329,7 @@ const ALIGNMENT_TRANSPARENT_ELEMENTS = new Set([
   "mpadded",
   "maction",
   "semantics",
+  "mtd",
 ]);
 
 const ALIGNMENT_ATTRIBUTE = "data-visualtex-omml-alignment";
@@ -770,7 +771,45 @@ function convertUnderOver(element: Element) {
   return `<m:limLow><m:e>${upperWrapper}</m:e><m:lim>${lower}</m:lim></m:limLow>`;
 }
 
+function isMathJaxAlignmentTable(element: Element) {
+  const columns = (element.getAttribute("columnalign") ?? "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (columns.length < 2 || columns.length % 2 !== 0) return false;
+  if (!columns.every((value, index) => value === (index % 2 === 0 ? "right" : "left"))) {
+    return false;
+  }
+  const spacing = (element.getAttribute("columnspacing") ?? "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  return spacing.length > 0 && spacing.every((value) => /^0(?:\.0+)?(?:em|ex|px|pt)?$/i.test(value));
+}
+
+function convertAlignmentTable(element: Element) {
+  const rows = elementChildren(element).filter((child) =>
+    ["mtr", "mlabeledtr"].includes(elementName(child)),
+  );
+  const rowXml = rows
+    .map((row) => {
+      const cells = elementChildren(row).filter(
+        (child) => elementName(child) === "mtd",
+      );
+      cells.forEach((cell, index) => {
+        if (index % 2 === 1) markTopLevelRelationAlignment(cell);
+      });
+      const body = cells
+        .map((cell) => convertSequence(elementChildren(cell)))
+        .join("");
+      return `<m:e>${body}</m:e>`;
+    })
+    .join("");
+  return `<m:eqArr><m:eqArrPr><m:baseJc m:val="center"/></m:eqArrPr>${rowXml}</m:eqArr>`;
+}
+
 function convertTable(element: Element) {
+  if (isMathJaxAlignmentTable(element)) return convertAlignmentTable(element);
   const rows = elementChildren(element).filter((child) =>
     ["mtr", "mlabeledtr"].includes(elementName(child)),
   );

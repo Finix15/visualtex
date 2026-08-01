@@ -27,6 +27,7 @@ const RESULT_PNG_FILE: &str = "formula.png";
 const RESULT_SVG_FILE: &str = "formula.svg";
 const RESULT_WORD_SVG_DOCX_FILE: &str = "formula-svg.docx";
 const DOCUMENT_IMPORT_MANIFEST_FILE: &str = "document-import.txt";
+const DOCUMENT_IMPORT_PROGRESS_FILE: &str = "document-import-progress.txt";
 const EDITOR_READY_FILE: &str = "editor-ready.json";
 const EDITOR_PERFORMANCE_FILE: &str = "editor-performance.jsonl";
 const OFFICE_EDITOR_ACTIVATE_EVENT: &str = "visualtex-office-editor-activate";
@@ -126,6 +127,14 @@ pub struct MacOfflineDocumentImportPublicRequest {
     source_document_id: String,
     bookmark_name: String,
     default_font_size_pt: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MacOfflineDocumentImportProgress {
+    current: usize,
+    total: usize,
+    stage: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1620,6 +1629,41 @@ fn open_editor_window(
     Ok(())
 }
 
+fn set_word_document_import_preparing_status() -> Result<(), String> {
+    let output = Command::new("/usr/bin/osascript")
+        .args([
+            "-e",
+            "tell application \"Microsoft Word\"",
+            "-e",
+            "activate",
+            "-e",
+            "set status bar to \"VisualTeX 正在准备批量导入…\"",
+            "-e",
+            "end tell",
+        ])
+        .output()
+        .map_err(|error| format!("Unable to activate Microsoft Word: {error}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if detail.is_empty() {
+            "Unable to activate Microsoft Word".to_string()
+        } else {
+            format!("Unable to activate Microsoft Word: {detail}")
+        })
+    }
+}
+
+fn clear_word_document_import_status() {
+    let _ = Command::new("/usr/bin/osascript")
+        .args([
+            "-e",
+            "tell application \"Microsoft Word\" to set status bar to \"\"",
+        ])
+        .output();
+}
+
 fn open_document_import_window(app: &AppHandle, session_id: &str) -> Result<(), String> {
     crate::office::background::activate_foreground_app(app)?;
     crate::office::background::install_application_icon(app)?;
@@ -1635,7 +1679,7 @@ fn open_document_import_window(app: &AppHandle, session_id: &str) -> Result<(), 
         "index.html?view=office-document-import&sessionId={session_id}&transport=tauri&theme={theme}"
     );
     let window = WebviewWindowBuilder::new(app, label, WebviewUrl::App(path.into()))
-        .title("VisualTeX LaTeX / Markdown Import")
+        .title("VisualTeX Word 文档批量导入")
         .inner_size(1260.0, 840.0)
         .min_inner_size(860.0, 620.0)
         .center()
@@ -3348,6 +3392,13 @@ fn commit_document_import_blocking(
     }
     let manifest_path = document_import_manifest_path(&session_id)?;
     atomic_write(&manifest_path, manifest.as_bytes(), 0o600)?;
+    let progress_path = session_directory(OfficeHost::Word, &session_id)?
+        .join(DOCUMENT_IMPORT_PROGRESS_FILE);
+    atomic_write(
+        &progress_path,
+        format!("current=0\ntotal={}\nstage=preparing\n", input.items.len()).as_bytes(),
+        0o600,
+    )?;
     let dispatch = dispatch_text(&[
         ("protocolVersion", OFFLINE_PROTOCOL_VERSION.to_string()),
         ("sessionId", session_id.clone()),
@@ -3538,6 +3589,79 @@ pub fn get_macos_offline_document_import_request(
     validate_uuid(&session_id, "Session id")?;
     let request = read_request(&session_id)?;
     document_import_request_data(&request)
+}
+
+#[tauri::command]
+pub fn focus_macos_offline_document_import_target(
+    window: WebviewWindow,
+) -> Result<(), String> {
+    if !window.label().starts_with("office-native-document-") {
+        return Err("Only the VisualTeX document importer can focus Word".to_string());
+    }
+    set_word_document_import_preparing_status()?;
+    window
+        .hide()
+        .map_err(|error| format!("Unable to hide the VisualTeX document importer: {error}"))
+}
+
+#[tauri::command]
+pub fn restore_macos_offline_document_import_window(
+    window: WebviewWindow,
+) -> Result<(), String> {
+    if !window.label().starts_with("office-native-document-") {
+        return Err("Only the VisualTeX document importer can restore itself".to_string());
+    }
+    clear_word_document_import_status();
+    let app = window.app_handle().clone();
+    crate::office::background::activate_foreground_app(&app)?;
+    window.show().map_err(|error| error.to_string())?;
+    window.unminimize().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn get_macos_offline_document_import_progress(
+    session_id: String,
+) -> Result<MacOfflineDocumentImportProgress, String> {
+    validate_uuid(&session_id, "Session id")?;
+    let path = session_directory(OfficeHost::Word, &session_id)?
+        .join(DOCUMENT_IMPORT_PROGRESS_FILE);
+    let source = match fs::read_to_string(path) {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(MacOfflineDocumentImportProgress {
+                current: 0,
+                total: 0,
+                stage: "preparing".to_string(),
+            });
+        }
+        Err(error) => return Err(format!("Unable to read document import progress: {error}")),
+    };
+    let mut current = None;
+    let mut total = None;
+    let mut stage = None;
+    for line in source.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        match key {
+            "current" => current = value.parse::<usize>().ok(),
+            "total" => total = value.parse::<usize>().ok(),
+            "stage" => stage = Some(value.to_string()),
+            _ => {}
+        }
+    }
+    let current = current.ok_or_else(|| "Document import progress is missing current".to_string())?;
+    let total = total.ok_or_else(|| "Document import progress is missing total".to_string())?;
+    let stage = stage.ok_or_else(|| "Document import progress is missing stage".to_string())?;
+    if total > 2048 || current > total || stage.len() > 32 || stage.chars().any(char::is_control) {
+        return Err("Document import progress is invalid".to_string());
+    }
+    Ok(MacOfflineDocumentImportProgress {
+        current,
+        total,
+        stage,
+    })
 }
 
 #[tauri::command]
