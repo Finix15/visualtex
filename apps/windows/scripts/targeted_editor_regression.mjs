@@ -7,9 +7,9 @@ import {
 } from "./browser_test_runtime.mjs";
 
 const scenario = process.argv[2];
-if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "usage-ranking", "native-space-selection", "candidate-query-reset", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "accent-placeholder", "caret-probe", "scripts", "upright", "context-style", "suggestions", "navigation", "geometry", "source-layout", "toolbar-compact", "toolbar-postfix", "formula-tiles", "cursor-placement", "settings", "layout", "multi-line-selection", "delete", "export"]).has(scenario)) {
+if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "usage-ranking", "native-space-selection", "candidate-query-reset", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "accent-placeholder", "caret-probe", "scripts", "upright", "context-style", "suggestions", "navigation", "geometry", "source-layout", "toolbar-compact", "toolbar-postfix", "formula-tiles", "formula-formatting", "cursor-placement", "settings", "layout", "multi-line-selection", "delete", "export"]).has(scenario)) {
   throw new Error(
-    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|usage-ranking|native-space-selection|candidate-query-reset|raw-placeholder-visual|placeholder-selection|structural-placeholder|accent-placeholder|caret-probe|scripts|upright|context-style|suggestions|navigation|geometry|source-layout|toolbar-compact|toolbar-postfix|formula-tiles|cursor-placement|settings|layout|multi-line-selection|delete|export>",
+    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|usage-ranking|native-space-selection|candidate-query-reset|raw-placeholder-visual|placeholder-selection|structural-placeholder|accent-placeholder|caret-probe|scripts|upright|context-style|suggestions|navigation|geometry|source-layout|toolbar-compact|toolbar-postfix|formula-tiles|formula-formatting|cursor-placement|settings|layout|multi-line-selection|delete|export>",
   );
 }
 
@@ -203,6 +203,36 @@ async function main() {
       }
     };
 
+    const clickSelectorWithPointer = async (selector) => {
+      const point = await waitForEvaluation(`(() => {
+        const element = document.querySelector(${JSON.stringify("__SELECTOR__")});
+        if (!(element instanceof HTMLElement)) return { ready: false };
+        const rect = element.getBoundingClientRect();
+        return {
+          ready: rect.width > 0 && rect.height > 0,
+          x: rect.left + rect.width / 2,
+          y: rect.top + rect.height / 2,
+        };
+      })()`.replace("__SELECTOR__", selector), `pointer target ${selector}`);
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: point.x,
+        y: point.y,
+        button: "left",
+        buttons: 1,
+        clickCount: 1,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: point.x,
+        y: point.y,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+      });
+      await sleep(80);
+    };
+
     await client.send("Page.navigate", { url: baseUrl });
     await sleep(650);
     await evaluate(`(() => {
@@ -314,6 +344,231 @@ async function main() {
       await sleep(100);
       await focusField();
     };
+
+    if (scenario === "formula-formatting") {
+      await waitForEvaluation(`(() => ({
+        ready: [
+          '[data-formula-typing-bold]',
+          '[data-formula-typing-italic]',
+          '[data-formula-selection-bold]',
+          '[data-formula-selection-italic]',
+          '[data-formula-selection-color]',
+          '[data-formula-selection-background]',
+        ].every((selector) => {
+          const button = document.querySelector(selector);
+          if (!(button instanceof HTMLElement)) return false;
+          const rect = button.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        }),
+      }))()`, "desktop formula formatting controls");
+
+      await evaluate(`(() => {
+        const field = document.querySelector('math-field');
+        if (!field) return false;
+        field.setValue('abc', {
+          mode: 'math',
+          format: 'latex',
+          insertionMode: 'replaceAll',
+          selectionMode: 'after',
+          silenceNotifications: true,
+        });
+        field.focus();
+        field.selection = { ranges: [[0, 3]], direction: 'forward' };
+        field.shadowRoot?.querySelector('[part="keyboard-sink"]')?.focus({ preventScroll: true });
+        window.__visualtexBeforeSelectionBold = field.value;
+        window.__visualtexFormattingEvents = [];
+        const button = document.querySelector('[data-formula-selection-bold]');
+        button?.addEventListener('pointerdown', () =>
+          window.__visualtexFormattingEvents.push('pointerdown'),
+        );
+        button?.addEventListener('click', () =>
+          window.__visualtexFormattingEvents.push('click'),
+        );
+        const originalApplyStyle = field.applyStyle.bind(field);
+        field.applyStyle = (style, options) => {
+          window.__visualtexFormattingEvents.push({
+            kind: 'applyStyle',
+            style,
+            selection: JSON.parse(JSON.stringify(field.selection)),
+          });
+          return originalApplyStyle(style, options);
+        };
+        return true;
+      })()`);
+      await clickSelectorWithPointer('[data-formula-selection-bold]');
+      const selectionBold = await waitForEvaluation(`(() => {
+        const field = document.querySelector('math-field');
+        if (!field) return { ready: false };
+        field.selection = { ranges: [[0, field.lastOffset]], direction: 'forward' };
+        const style = field.queryStyle({ variantStyle: 'bolditalic' });
+        const value = field.value;
+        const visualBold = Boolean(
+          field.shadowRoot?.querySelector('.ML__mathbfit, .ML__mathbf, .ML__bold'),
+        );
+        return {
+          ready:
+            style === 'all' &&
+            value !== window.__visualtexBeforeSelectionBold &&
+            visualBold,
+          style,
+          value,
+          visualBold,
+          focused: field.hasFocus(),
+          events: window.__visualtexFormattingEvents ?? [],
+        };
+      })()`, "desktop selection bold applies visible math style");
+
+      await evaluate(`(() => {
+        const field = document.querySelector('math-field');
+        if (!field) return false;
+        field.setValue('xyz', {
+          mode: 'math',
+          format: 'latex',
+          insertionMode: 'replaceAll',
+          selectionMode: 'after',
+          silenceNotifications: true,
+        });
+        field.focus();
+        field.selection = { ranges: [[0, 3]], direction: 'forward' };
+        field.shadowRoot?.querySelector('[part="keyboard-sink"]')?.focus({ preventScroll: true });
+        window.__visualtexBeforeSelectionItalic = field.value;
+        return true;
+      })()`);
+      await clickSelectorWithPointer('[data-formula-selection-italic]');
+      const selectionItalic = await waitForEvaluation(`(() => {
+        const field = document.querySelector('math-field');
+        if (!field) return { ready: false };
+        field.selection = { ranges: [[0, field.lastOffset]], direction: 'forward' };
+        const style = field.queryStyle({ variantStyle: 'italic' });
+        const value = field.value;
+        const visualItalic = Boolean(
+          field.shadowRoot?.querySelector('.ML__mathit, .ML__it'),
+        );
+        return {
+          ready:
+            style === 'all' &&
+            value !== window.__visualtexBeforeSelectionItalic &&
+            visualItalic,
+          style,
+          value,
+          visualItalic,
+          focused: field.hasFocus(),
+        };
+      })()`, "desktop selection italic applies visible math style");
+
+      await evaluate(`(() => {
+        const field = document.querySelector('math-field');
+        if (!field) return false;
+        field.setValue('', {
+          mode: 'math',
+          format: 'latex',
+          insertionMode: 'replaceAll',
+          selectionMode: 'after',
+          silenceNotifications: true,
+        });
+        field.focus();
+        field.position = field.lastOffset;
+        field.shadowRoot?.querySelector('[part="keyboard-sink"]')?.focus({ preventScroll: true });
+        return true;
+      })()`);
+      await clickSelectorWithPointer('[data-formula-typing-bold]');
+      const focusAfterBoldToggle = await evaluate(`(() => {
+        const field = document.querySelector('math-field');
+        return {
+          focused: field?.hasFocus?.() ?? false,
+          boldPressed:
+            document.querySelector('[data-formula-typing-bold]')?.getAttribute('aria-pressed') ?? '',
+          italicPressed:
+            document.querySelector('[data-formula-typing-italic]')?.getAttribute('aria-pressed') ?? '',
+        };
+      })()`);
+      if (!focusAfterBoldToggle.focused || focusAfterBoldToggle.boldPressed !== 'true') {
+        throw new Error(`Persistent bold pointer click lost the editor target: ${JSON.stringify(focusAfterBoldToggle)}`);
+      }
+      await typeText('a');
+      const persistentBoldItalic = await waitForEvaluation(`(() => {
+        const field = document.querySelector('math-field');
+        if (!field || field.lastOffset < 1) return { ready: false };
+        const end = field.lastOffset;
+        field.selection = { ranges: [[end - 1, end]], direction: 'forward' };
+        const style = field.queryStyle({ variantStyle: 'bolditalic' });
+        const value = field.value;
+        return {
+          ready: style === 'all' && /\\\\(?:mathbf|mathbfit|bm)\{/.test(value),
+          style,
+          value,
+        };
+      })()`, "desktop persistent bold italic input");
+
+      await evaluate(`(() => {
+        const field = document.querySelector('math-field');
+        if (!field) return false;
+        field.selection = {
+          ranges: [[field.lastOffset, field.lastOffset]],
+          direction: 'none',
+        };
+        field.position = field.lastOffset;
+        field.focus();
+        field.shadowRoot?.querySelector('[part="keyboard-sink"]')?.focus({ preventScroll: true });
+        return true;
+      })()`);
+      await clickSelectorWithPointer('[data-formula-typing-italic]');
+      await typeText('b');
+      const persistentBoldUpright = await waitForEvaluation(`(() => {
+        const field = document.querySelector('math-field');
+        if (!field || field.lastOffset < 1) return { ready: false };
+        const end = field.lastOffset;
+        field.selection = { ranges: [[end - 1, end]], direction: 'forward' };
+        const style = field.queryStyle({ variantStyle: 'bold' });
+        return {
+          ready:
+            style === 'all' &&
+            document.querySelector('[data-formula-typing-italic]')?.getAttribute('aria-pressed') === 'false',
+          style,
+          value: field.value,
+        };
+      })()`, "desktop persistent bold upright input");
+
+      await evaluate(`(() => {
+        const field = document.querySelector('math-field');
+        if (!field) return false;
+        field.selection = {
+          ranges: [[field.lastOffset, field.lastOffset]],
+          direction: 'none',
+        };
+        field.position = field.lastOffset;
+        field.focus();
+        field.shadowRoot?.querySelector('[part="keyboard-sink"]')?.focus({ preventScroll: true });
+        return true;
+      })()`);
+      await clickSelectorWithPointer('[data-formula-typing-bold]');
+      await typeText('c');
+      const persistentUpright = await waitForEvaluation(`(() => {
+        const field = document.querySelector('math-field');
+        if (!field || field.lastOffset < 1) return { ready: false };
+        const end = field.lastOffset;
+        field.selection = { ranges: [[end - 1, end]], direction: 'forward' };
+        const style = field.queryStyle({ variantStyle: 'up' });
+        return {
+          ready:
+            style === 'all' &&
+            document.querySelector('[data-formula-typing-bold]')?.getAttribute('aria-pressed') === 'false',
+          style,
+          value: field.value,
+        };
+      })()`, "desktop persistent upright input");
+
+      console.log(JSON.stringify({
+        selectionBold,
+        selectionItalic,
+        focusAfterBoldToggle,
+        persistentBoldItalic,
+        persistentBoldUpright,
+        persistentUpright,
+      }, null, 2));
+      console.log("Targeted desktop formula formatting regression passed");
+      return;
+    }
 
     if (scenario === "multi-line-selection") {
       await evaluate(`(() => {

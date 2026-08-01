@@ -924,6 +924,7 @@ assert.ok(certificateInstaller.includes("explicitly supplied VisualTeX executabl
 const platformBundle = await source("scripts/build_platform_bundle.mjs");
 const windowsBundle = await source("src-tauri/tauri.windows.conf.json");
 const installerHooks = await source("src-tauri/windows/hooks.nsh");
+const nsisPatch = await source("scripts/patch_generated_nsis.ps1");
 assert.ok(platformBundle.includes('"scripts/build_windows_office.ps1"'));
 assert.ok(platformBundle.includes('"scripts/prepare_windows_vsto_runtime.ps1"'));
 assert.ok(platformBundle.includes('"-SkipTests"'));
@@ -942,12 +943,13 @@ for (const bundledOfficeResource of [
   assert.ok(windowsBundle.includes(bundledOfficeResource));
 }
 assert.ok(installerHooks.includes("${NSD_Check} $VisualTeXOfficeNativeRadio"));
-assert.ok(installerHooks.includes("!define MUI_CUSTOMFUNCTION_GUIINIT VisualTeXOnGuiInit"));
-assert.ok(installerHooks.includes("Function VisualTeXOnGuiInit"));
-assert.ok(installerHooks.includes("VisualTeXDefaultMaintenanceUninstall"));
-assert.ok(installerHooks.includes('$(addOrReinstall)'));
-assert.ok(installerHooks.includes('SendMessage $R3 ${BM_CLICK} 0 0'));
-assert.ok(installerHooks.includes('${NSD_SetFocus} $R3'));
+assert.ok(!installerHooks.includes("MUI_CUSTOMFUNCTION_GUIINIT"));
+assert.ok(!installerHooks.includes("VisualTeXDefaultMaintenanceUninstall"));
+assert.ok(installerHooks.includes("generated Tauri PageReinstall function is patched"));
+assert.ok(nsisPatch.includes("Same-version maintenance defaults to the second option"));
+assert.ok(nsisPatch.includes('SendMessage $R3 ${BM_SETCHECK} ${BST_CHECKED} 0'));
+assert.ok(nsisPatch.includes('StrCpy $ReinstallPageCheck 2'));
+assert.ok(nsisPatch.includes('${NSD_SetFocus} $R3'));
 assert.ok(installerHooks.includes("VisualTeXRepairMainUninstallRegistration"));
 assert.ok(installerHooks.includes('WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\VisualTeX"'));
 assert.ok(installerHooks.includes('$INSTDIR == "$PROFILE\\AppData\\VisualTeX"'));
@@ -967,14 +969,12 @@ assert.ok(!installerHooks.includes('ExecToLog `powershell.exe -NoProfile -NonInt
 assert.ok(installerHooks.includes('${If} $VisualTeXOfficeChoice == ""'));
 assert.ok(installerHooks.includes('StrCpy $VisualTeXOfficeChoice "native"'));
 assert.ok(installerHooks.includes("install_windows_vsto.ps1"));
-assert.ok(installerHooks.includes('test_windows_office_runtime.ps1" -VisualTeXPath "$INSTDIR\\VisualTeX.exe" -CompanionOnly'));
+assert.ok(!installerHooks.includes("-CompanionOnly"));
 assert.ok(installerHooks.includes("visualtex_office_static_installed"));
-assert.ok(installerHooks.includes("visualtex_office_runtime_pending"));
 assert.ok(installerHooks.includes("RuntimeVerificationPending"));
-assert.ok(installerHooks.includes("这不代表插件安装失败"));
-assert.ok(installerHooks.includes("non-elevated companion runtime verification passed"));
-assert.ok(/Companion runtime verification is not ready yet[\s\S]*?Goto visualtex_office_runtime_pending/.test(installerHooks));
-assert.ok(!/Companion runtime verification is not ready yet[\s\S]*?Goto visualtex_office_failed/.test(installerHooks));
+assert.ok(installerHooks.includes("without leaving a resident VisualTeX process"));
+assert.ok(installerHooks.includes("安装阶段不会启动常驻后台进程"));
+assert.ok(installerHooks.includes("Companion and Word/PowerPoint connection verification are deferred"));
 assert.ok(installerHooks.includes("install_windows_vsto_runtime.ps1"));
 assert.ok(installerHooks.includes("vstor_redist.exe"));
 assert.ok(installerHooks.includes("vstor_redist.sha256.json"));
@@ -1004,10 +1004,10 @@ assert.ok(
   !installerHooks.includes('-File "$INSTDIR\\scripts\\install_windows_ole.ps1"'),
 );
 assert.ok(installerHooks.includes("companion"));
-assert.ok(installerHooks.includes("COMAddIn.Connect"));
-assert.ok(installerHooks.includes("visualtex_office_static_runtime_verified"));
+assert.ok(installerHooks.includes("Word/PowerPoint connection verification are deferred"));
+assert.ok(!installerHooks.includes("visualtex_office_static_runtime_verified"));
 assert.ok(installerHooks.includes("IfSilent visualtex_office_done 0"));
-assert.ok(installerHooks.includes("native Office static installation and non-elevated companion runtime verification passed"));
+assert.ok(installerHooks.includes("Office bootstrap completed without leaving a resident VisualTeX process"));
 assert.ok(!installerHooks.includes("Office Add-ins dialogs"));
 assert.ok(!installerHooks.includes("Automatically configuring Word and PowerPoint"));
 

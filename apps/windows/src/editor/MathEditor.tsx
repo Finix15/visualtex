@@ -196,6 +196,10 @@ interface FormulaFieldProps {
   register: (lineId: string, field: MathfieldElement | null) => void;
   onEdit: (edit: FormulaFieldEdit, field: MathfieldElement) => void;
   onInputActivity: (field: MathfieldElement) => void;
+  onSelectionChange: (
+    lineId: string,
+    selection: MathSelectionSnapshot,
+  ) => void;
   onFocus: (index: number, field: MathfieldElement) => void;
   onCommitPending: () => void;
   onKeyDown: (index: number, event: KeyboardEvent, field: MathfieldElement) => void;
@@ -1514,10 +1518,16 @@ function selectionHasContent(selection: MathSelectionSnapshot) {
 
 function typingStyleAsMathLiveStyle(
   style: MathEditorTypingStyle,
-): Pick<Style, "fontSeries" | "fontShape"> {
+): Pick<Style, "variant" | "variantStyle"> {
   return {
-    fontSeries: style.bold ? "b" : "m",
-    fontShape: style.italic ? "it" : "n",
+    variant: "normal",
+    variantStyle: style.bold
+      ? style.italic
+        ? "bolditalic"
+        : "bold"
+      : style.italic
+        ? "italic"
+        : "up",
   };
 }
 
@@ -1531,6 +1541,12 @@ function applyTypingStyleAtCollapsedSelection(
     field.applyStyle(mathLiveStyle, { operation: "set" });
   }
   return true;
+}
+
+function isDefaultMathTypingStyle(
+  style: MathEditorTypingStyle | null | undefined,
+) {
+  return Boolean(style && !style.bold && style.italic);
 }
 
 function captureFieldSnapshot(field: MathfieldElement) {
@@ -4480,8 +4496,54 @@ function FormulaField(props: FormulaFieldProps) {
         }
       }
     };
+    let applyingPersistentTypingStyle = false;
+    const persistDirectInputStyle = (
+      before: ReturnType<typeof captureFieldSnapshot>,
+      after: ReturnType<typeof captureFieldSnapshot>,
+    ) => {
+      const style = propsRef.current.typingStyle;
+      if (!style || isDefaultMathTypingStyle(style)) return after;
+      const beforeRange = before.selection.ranges[0];
+      const afterRange = after.selection.ranges[0];
+      if (!beforeRange || !afterRange) return after;
+      const beforeStart = Math.min(beforeRange[0], beforeRange[1]);
+      const afterCaret = Math.max(afterRange[0], afterRange[1]);
+      const replacedSelection = beforeRange[0] !== beforeRange[1];
+      const start = replacedSelection
+        ? beforeStart
+        : Math.max(0, afterCaret - 1);
+      const end = Math.max(start, Math.min(afterCaret, field.lastOffset));
+      if (end <= start) return after;
+
+      const finalSelection = clampSelection(after.selection, field.lastOffset);
+      const baselineStyle = typingStyleAsMathLiveStyle({
+        bold: false,
+        italic: true,
+      });
+      const persistentStyle = typingStyleAsMathLiveStyle(style);
+      applyingPersistentTypingStyle = true;
+      try {
+        field.selection = {
+          ranges: [[end, end]],
+          direction: "none",
+        };
+        field.applyStyle(baselineStyle, { operation: "set" });
+        field.selection = {
+          ranges: [[start, end]],
+          direction: "forward",
+        };
+        field.applyStyle(persistentStyle, { operation: "set" });
+        field.selection = clampSelection(finalSelection, field.lastOffset);
+        applyTypingStyleAtCollapsedSelection(field, style);
+        return captureFieldSnapshot(field);
+      } finally {
+        applyingPersistentTypingStyle = false;
+      }
+    };
+
   const handleInput = (event: Event) => {
     if (
+      applyingPersistentTypingStyle ||
       replacingPendingWrapperInput ||
       restoringRawCommandAnchor ||
       visualTexRestoringPlaceholderFields.has(field)
@@ -4541,6 +4603,8 @@ function FormulaField(props: FormulaFieldProps) {
       if (restoredPlaceholder) {
         postInputSnapshot = captureFieldSnapshot(field);
       }
+    } else if (shouldRetryDirectAutoExit) {
+      postInputSnapshot = persistDirectInputStyle(before, postInputSnapshot);
     }
     const after = postInputSnapshot;
       emitEdit(
@@ -4589,24 +4653,28 @@ function FormulaField(props: FormulaFieldProps) {
         decorateNativeSuggestionPreviews();
       });
     };
-  const handleSelectionChange = () => {
-    markVisualTexStructuralPlaceholders(field);
-    const selectedAccentState = captureSelectedAccentPlaceholderState(field);
-    if (selectedAccentState) {
-      activateVisualTexAccentPlaceholder(field, selectedAccentState);
-    }
-    observeVisualTexActiveAccentPlaceholder(field);
-    schedulePointerPlaceholderSnapshotStyle();
-    syncFrameSize();
+    const handleSelectionChange = () => {
+      markVisualTexStructuralPlaceholders(field);
+      const selectedAccentState = captureSelectedAccentPlaceholderState(field);
+      if (selectedAccentState) {
+        activateVisualTexAccentPlaceholder(field, selectedAccentState);
+      }
+      observeVisualTexActiveAccentPlaceholder(field);
+      schedulePointerPlaceholderSnapshotStyle();
+      syncFrameSize();
+      const selection = captureSelection(field);
+      propsRef.current.onSelectionChange(lineId, selection);
       if (imeGuard.isComposing() || !lastSnapshotRef.current) return;
       lastSnapshotRef.current = {
         ...lastSnapshotRef.current,
-        selection: captureSelection(field),
+        selection,
       };
-      applyTypingStyleAtCollapsedSelection(
-        field,
-        propsRef.current.typingStyle,
-      );
+      if (!applyingPersistentTypingStyle) {
+        applyTypingStyleAtCollapsedSelection(
+          field,
+          propsRef.current.typingStyle,
+        );
+      }
     };
     const handleFocus = () => {
       applyTypingStyleAtCollapsedSelection(
@@ -5622,6 +5690,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
     const focusRequestRef = useRef(0);
     const suppressedHistoryLineIdRef = useRef<string | null>(null);
     const multiLineSelectionRef = useRef<MultiLineSelectionState | null>(null);
+    const lastSelectionTargetRef = useRef<MathEditorSelectionTarget | null>(null);
     const pointerSelectionSessionRef = useRef<PointerSelectionSession | null>(
       null,
     );
@@ -6139,6 +6208,22 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       };
     };
 
+    const rememberSelectionTarget = (
+      lineId: string,
+      selection: MathSelectionSnapshot,
+    ) => {
+      if (!selectionHasContent(selection)) return;
+      lastSelectionTargetRef.current = {
+        selections: [
+          {
+            lineId,
+            ranges: selection.ranges,
+            direction: selection.direction,
+          },
+        ],
+      };
+    };
+
     const applyMultiLineSelection = (
       anchor: MultiLineSelectionPoint,
       focus: MultiLineSelectionPoint,
@@ -6193,12 +6278,29 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
 
       multiLineSelectedIdsRef.current = nextSelectedIds;
       multiLineSelectionRef.current = { anchor, focus };
+      const selections = linesRef.current.flatMap((line) => {
+        if (!nextSelectedIds.has(line.id)) return [];
+        const field = fieldRefs.current.get(line.id);
+        if (!field?.isConnected) return [];
+        const selection = captureSelection(field);
+        return selectionHasContent(selection)
+          ? [
+              {
+                lineId: line.id,
+                ranges: selection.ranges,
+                direction: selection.direction,
+              } satisfies MathEditorInsertionTarget,
+            ]
+          : [];
+      });
+      if (selections.length) lastSelectionTargetRef.current = { selections };
     };
 
     const handleFieldEdit = (
       edit: FormulaFieldEdit,
       field: MathfieldElement,
     ) => {
+      lastSelectionTargetRef.current = null;
       if (multiLineSelectionRef.current) clearMultiLineSelection();
       const state = useEditorStore.getState();
       const currentLine = state.lines.find((line) => line.id === edit.lineId);
@@ -7405,7 +7507,12 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
           } satisfies MathEditorInsertionTarget,
         ];
       });
-      return selections.length ? { selections } : null;
+      if (selections.length) {
+        const target = { selections };
+        lastSelectionTargetRef.current = target;
+        return target;
+      }
+      return lastSelectionTargetRef.current;
     };
 
     const applySelectionStyle = (
@@ -7429,23 +7536,37 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       });
       if (!resolved.length) return false;
 
-      let mathLiveStyle: Pick<
-        Style,
-        "fontSeries" | "fontShape" | "color" | "backgroundColor"
-      >;
-      if (style.kind === "bold") {
-        mathLiveStyle = { fontSeries: "b" };
-      } else if (style.kind === "italic") {
-        mathLiveStyle = { fontShape: "it" };
-      } else if (style.kind === "color") {
-        mathLiveStyle = { color: style.value };
-      } else {
-        mathLiveStyle = { backgroundColor: style.value };
-      }
-
       historyManager.commitPendingTransaction();
       for (const { field, selection } of resolved) {
         field.selection = selection;
+        let mathLiveStyle: Pick<
+          Style,
+          "variant" | "variantStyle" | "color" | "backgroundColor"
+        >;
+        if (style.kind === "bold") {
+          const explicitlyUpright =
+            field.queryStyle({ variantStyle: "up" }) === "all";
+          const explicitlyItalic =
+            field.queryStyle({ variantStyle: "italic" }) === "all" ||
+            field.queryStyle({ variantStyle: "bolditalic" }) === "all";
+          mathLiveStyle = {
+            variant: "normal",
+            variantStyle:
+              explicitlyItalic || !explicitlyUpright ? "bolditalic" : "bold",
+          };
+        } else if (style.kind === "italic") {
+          const alreadyBold =
+            field.queryStyle({ variantStyle: "bold" }) === "all" ||
+            field.queryStyle({ variantStyle: "bolditalic" }) === "all";
+          mathLiveStyle = {
+            variant: "normal",
+            variantStyle: alreadyBold ? "bolditalic" : "italic",
+          };
+        } else if (style.kind === "color") {
+          mathLiveStyle = { color: style.value };
+        } else {
+          mathLiveStyle = { backgroundColor: style.value };
+        }
         field.applyStyle(mathLiveStyle, { operation: "set" });
         field.selection = selection;
       }
@@ -7462,6 +7583,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
           ?.querySelector<HTMLElement>('[part="keyboard-sink"]')
           ?.focus({ preventScroll: true });
       }
+      lastSelectionTargetRef.current = null;
       return true;
     };
 
@@ -7754,6 +7876,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
 
       const handleSurfacePointerDown = (event: PointerEvent) => {
         if (event.button !== 0 || !event.isPrimary || event.shiftKey) return;
+        lastSelectionTargetRef.current = null;
         const path = event.composedPath();
         const entry = Array.from(fieldRefs.current.entries()).find(
           ([, field]) =>
@@ -7928,6 +8051,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
                       normalizeChineseLatex(field.value),
                     )
                   }
+                  onSelectionChange={rememberSelectionTarget}
                   onCommitPending={() => historyManager.commitPendingTransaction()}
                   onFocus={(_lineIndex, field) => {
                     setActiveLine(lineId);

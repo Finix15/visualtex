@@ -275,6 +275,10 @@ pub fn write_shared_configuration(
     registry_set_dword(OFFICE_MODE_KEY, "ProtocolVersion", protocol_version)
 }
 
+pub fn background_start_enabled() -> bool {
+    registry_value_exists(WINDOWS_RUN_KEY, WINDOWS_RUN_VALUE)
+}
+
 pub fn set_background_start_enabled(enabled: bool) -> Result<(), String> {
     if !enabled {
         return registry_delete_value(WINDOWS_RUN_KEY, WINDOWS_RUN_VALUE);

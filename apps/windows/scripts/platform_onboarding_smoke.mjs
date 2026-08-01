@@ -146,19 +146,20 @@ assert(removeCertificateSource.includes("SystemCertificates\\Root\\Certificates"
 assert(removeCertificateSource.includes("TimeoutSeconds"));
 assert(!removeCertificateSource.includes("X509Store"));
 assert(!removeCertificateSource.includes("certutil.exe"));
-assert(hooksSource.includes('test_windows_office_runtime.ps1" -VisualTeXPath "$INSTDIR\\VisualTeX.exe" -CompanionOnly'));
+assert(!hooksSource.includes("-CompanionOnly"));
 assert(hooksSource.includes("visualtex_office_static_installed"));
-assert(hooksSource.includes("visualtex_office_runtime_pending"));
 assert(hooksSource.includes("RuntimeVerificationPending"));
-assert(hooksSource.includes("这不代表插件安装失败"));
-assert(/Companion runtime verification is not ready yet[\s\S]*?Goto visualtex_office_runtime_pending/.test(hooksSource));
-assert(!/Companion runtime verification is not ready yet[\s\S]*?Goto visualtex_office_failed/.test(hooksSource));
-assert(hooksSource.includes("non-elevated companion runtime verification passed"));
+assert(hooksSource.includes("without leaving a resident VisualTeX process"));
+assert(hooksSource.includes("安装阶段不会启动常驻后台进程"));
+assert(hooksSource.includes("Companion and Word/PowerPoint connection verification are deferred"));
 assert(hooksSource.includes('StrCpy $VisualTeXOfficeChoice "native"'));
 assert(hooksSource.includes('-VisualTeXPath "$INSTDIR\\VisualTeX.exe"'));
 assert(!hooksSource.includes('install_windows_ole.ps1'));
 assert(installOleSource.includes("forwarding to the native Ribbon + OLE LocalServer installer"));
 assert(certificateSource.includes("certutil.exe -user -f -addstore Root $certificatePath"));
+assert(certificateSource.includes('ArgumentList "--office-bootstrap"'));
+assert(certificateSource.includes("WaitForExit(30000)"));
+assert(!certificateSource.includes('ArgumentList "--office-background"'));
 assert(certificateSource.includes('Split-Path -Parent $PSScriptRoot'));
 
 console.log("Windows onboarding and Office integration controls passed.");

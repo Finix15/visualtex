@@ -100,7 +100,15 @@ fn ocr_worker_available(app: &AppHandle) -> bool {
     bundled
 }
 
-pub fn initialize(app: &AppHandle, ocr: OcrState) -> Result<OfficeCompanionState, String> {
+struct PreparedOfficeConfiguration {
+    paths: OfficePaths,
+    install_token: String,
+}
+
+fn prepare_office_configuration(
+    app: &AppHandle,
+    phase: &str,
+) -> Result<PreparedOfficeConfiguration, String> {
     let app_data = app.path().app_data_dir().map_err(|error| {
         format!("Unable to resolve VisualTeX application data directory: {error}")
     })?;
@@ -122,7 +130,7 @@ pub fn initialize(app: &AppHandle, ocr: OcrState) -> Result<OfficeCompanionState
         &paths,
         "startup.log",
         &format!(
-            "startup begin pid={} executable={} app_data_root={} office_root={}",
+            "{phase} begin pid={} executable={} app_data_root={} office_root={}",
             std::process::id(),
             executable.display(),
             app_data.display(),
@@ -135,7 +143,7 @@ pub fn initialize(app: &AppHandle, ocr: OcrState) -> Result<OfficeCompanionState
             append_office_log(
                 &paths,
                 "startup.log",
-                &format!("Office UI resource root resolved: {}", path.display()),
+                &format!("{phase} Office UI resource root resolved: {}", path.display()),
             );
             path
         }
@@ -143,7 +151,7 @@ pub fn initialize(app: &AppHandle, ocr: OcrState) -> Result<OfficeCompanionState
             append_office_log(
                 &paths,
                 "startup.log",
-                &format!("Office UI resource resolution failed: {error}"),
+                &format!("{phase} Office UI resource resolution failed: {error}"),
             );
             return Err(error);
         }
@@ -153,7 +161,7 @@ pub fn initialize(app: &AppHandle, ocr: OcrState) -> Result<OfficeCompanionState
         append_office_log(
             &paths,
             "startup.log",
-            &format!("Office data/certificate initialization failed: {error}"),
+            &format!("{phase} Office data/certificate initialization failed: {error}"),
         );
         error
     })?;
@@ -161,7 +169,7 @@ pub fn initialize(app: &AppHandle, ocr: OcrState) -> Result<OfficeCompanionState
         append_office_log(
             &paths,
             "startup.log",
-            &format!("Certificate thumbprint calculation failed: {error}"),
+            &format!("{phase} certificate thumbprint calculation failed: {error}"),
         );
         error
     })?;
@@ -179,7 +187,7 @@ pub fn initialize(app: &AppHandle, ocr: OcrState) -> Result<OfficeCompanionState
         append_office_log(
             &paths,
             "startup.log",
-            &format!("OfficeIntegration registry write failed: {error}"),
+            &format!("{phase} OfficeIntegration registry write failed: {error}"),
         );
         error
     })?;
@@ -188,15 +196,56 @@ pub fn initialize(app: &AppHandle, ocr: OcrState) -> Result<OfficeCompanionState
         &paths,
         "startup.log",
         &format!(
-            "Office configuration ready certificate={} private_key={} thumbprint={} port={} protocol={} install_json={}",
+            "{phase} Office configuration ready certificate={} private_key={} thumbprint={} port={} protocol={} install_json={} office_dialog={}",
             paths.certificate.display(),
             paths.private_key.display(),
             certificate_thumbprint,
             OFFICE_PORT,
             OFFICE_PROTOCOL_VERSION,
-            paths.install.display()
+            paths.install.display(),
+            paths.ui_root.join("dialog").join("index.html").display()
         ),
     );
+
+    Ok(PreparedOfficeConfiguration {
+        paths,
+        install_token,
+    })
+}
+
+pub fn bootstrap_configuration(app: &AppHandle) -> Result<(), String> {
+    let prepared = prepare_office_configuration(app, "office-bootstrap")?;
+    let required = [
+        &prepared.paths.certificate,
+        &prepared.paths.private_key,
+        &prepared.paths.certificate_metadata,
+        &prepared.paths.install,
+    ];
+    let missing = required
+        .iter()
+        .filter(|path| !path.is_file())
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>();
+    if !missing.is_empty() || prepared.install_token.len() != 64 {
+        let error = format!(
+            "Office bootstrap verification failed: missing={} install_token_length={}",
+            missing.join("|"),
+            prepared.install_token.len()
+        );
+        append_office_log(&prepared.paths, "startup.log", &error);
+        return Err(error);
+    }
+    append_office_log(
+        &prepared.paths,
+        "startup.log",
+        "office-bootstrap completed without creating a WebView, starting the companion, or scheduling OCR/Office editor prewarm",
+    );
+    Ok(())
+}
+
+pub fn initialize(app: &AppHandle, ocr: OcrState) -> Result<OfficeCompanionState, String> {
+    let prepared = prepare_office_configuration(app, "startup")?;
+    let paths = prepared.paths;
 
     // An installed (or temporarily paused) LaunchAgent means the user
     // explicitly installed Office integration. Reassert only VisualTeX's
@@ -222,7 +271,7 @@ pub fn initialize(app: &AppHandle, ocr: OcrState) -> Result<OfficeCompanionState
         Some(app.clone()),
         ocr,
         paths,
-        install_token,
+        prepared.install_token,
         session_store,
         formula_cache,
         ocr_worker_available(app),
@@ -237,14 +286,11 @@ pub fn start(state: OfficeCompanionState) {
     append_office_log(
         &state.paths,
         "companion.log",
-        &format!("companion task requested by pid={}", std::process::id()),
+        &format!(
+            "companion task requested by pid={} (Office editor WebView remains on-demand)",
+            std::process::id()
+        ),
     );
-    #[cfg(target_os = "windows")]
-    if let Some(app) = state.app.clone() {
-        tauri::async_runtime::spawn_blocking(move || {
-            let _ = server::prewarm_desktop_session_window(app);
-        });
-    }
 
     let service = state.clone();
     tauri::async_runtime::spawn(async move {

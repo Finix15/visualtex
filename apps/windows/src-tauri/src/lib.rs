@@ -7,7 +7,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, TryLockError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -16,6 +16,7 @@ use std::os::windows::process::CommandExt;
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+mod app_lifecycle;
 mod ocr_install;
 mod ocr_offline;
 #[cfg(windows)]
@@ -306,6 +307,17 @@ impl OcrState {
         );
 
         terminate_result.map(|_| ())
+    }
+
+    pub(crate) fn shutdown(&self, app: &AppHandle) -> Result<(), String> {
+        self.cancel_generation.fetch_add(1, Ordering::SeqCst);
+        let _ = self.install_control.cancel();
+        stop_worker(&self.worker, &self.worker_pid)?;
+        if let Ok(paths) = runtime_paths(app) {
+            let _ = cleanup_stale_process(&paths.root);
+            cleanup_runtime_processes(&paths.root)?;
+        }
+        Ok(())
     }
 
     pub(crate) async fn restart(&self, app: AppHandle) -> Result<(), String> {
@@ -3036,49 +3048,129 @@ async fn remove_optional_ocr_model(
     state.remove_optional_model(app, model).await
 }
 
+fn shutdown_runtime(app: &AppHandle, started: &AtomicBool, reason: &str) {
+    if started.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    app_lifecycle::append_lifecycle_log(format!("runtime shutdown begin reason={reason}"));
+
+    if let Some(state) = app.try_state::<office::state::OfficeCompanionState>() {
+        if let Err(error) = office::server::stop(state.inner()) {
+            app_lifecycle::append_lifecycle_log(format!(
+                "Unable to stop Office companion server during shutdown: {error}"
+            ));
+        }
+        if let Err(error) = state.platform_backend.shutdown() {
+            app_lifecycle::append_lifecycle_log(format!(
+                "Unable to stop VisualTeX Office platform backend: {error}"
+            ));
+        }
+    }
+
+    if let Some(state) = app.try_state::<OcrState>() {
+        if let Err(error) = state.shutdown(app) {
+            app_lifecycle::append_lifecycle_log(format!(
+                "Unable to stop OCR worker and child processes: {error}"
+            ));
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    if let Err(error) = office::background::pause_launch_agent_for_quit() {
+        app_lifecycle::append_lifecycle_log(format!(
+            "Unable to pause VisualTeX Office background service: {error}"
+        ));
+    }
+    app_lifecycle::append_lifecycle_log("runtime shutdown completed");
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let background_mode = office::background::is_background_mode();
+    let run_mode = app_lifecycle::AppRunMode::current();
+    app_lifecycle::append_lifecycle_log(format!(
+        "process startup mode={} args={:?}",
+        run_mode.label(),
+        std::env::args().collect::<Vec<_>>()
+    ));
+
     let ocr_state = OcrState::default();
     let office_ocr_state = ocr_state.clone();
-    let app = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(
-            |app, arguments, _cwd| {
-                if arguments
-                    .iter()
-                    .any(|argument| argument == office::background::BACKGROUND_ARGUMENT)
-                {
+    let mut builder = tauri::Builder::default();
+
+    if run_mode != app_lifecycle::AppRunMode::OfficeBootstrap {
+        builder = builder.plugin(tauri_plugin_single_instance::init(
+            |app, arguments, cwd| {
+                app_lifecycle::append_lifecycle_log(format!(
+                    "single-instance notification cwd={} args={arguments:?}",
+                    cwd
+                ));
+                if !app_lifecycle::arguments_request_desktop(&arguments) {
+                    app_lifecycle::append_lifecycle_log(
+                        "single-instance notification does not request a desktop window",
+                    );
                     return;
                 }
-                let _ = office::background::reveal_main_window(app);
+                if let Err(error) = app_lifecycle::ensure_main_window(app) {
+                    app_lifecycle::append_lifecycle_log(format!(
+                        "single-instance desktop activation failed: {error}"
+                    ));
+                }
             },
-        ))
+        ));
+    }
+
+    let app = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(ocr_state)
         .setup(move |app| {
+            if run_mode == app_lifecycle::AppRunMode::OfficeBootstrap {
+                app_lifecycle::append_lifecycle_log(
+                    "office-bootstrap setup skipped all windows, companion startup and warmup tasks",
+                );
+                return Ok(());
+            }
+
             let office_state = office::initialize(app.handle(), office_ocr_state.clone())
-                .map_err(std::io::Error::other)?;
+                .map_err(|error| {
+                    app_lifecycle::append_lifecycle_log(format!(
+                        "Office companion initialization failed: {error}"
+                    ));
+                    std::io::Error::other(error)
+                })?;
             if let Err(error) = office::powerpoint_native::start_double_click_monitor(
                 office_state.powerpoint_interactions.clone(),
             ) {
-                eprintln!("Unable to start PowerPoint double-click monitor: {error}");
+                app_lifecycle::append_lifecycle_log(format!(
+                    "Unable to start PowerPoint double-click monitor: {error}"
+                ));
             }
             app.manage(office_state.clone());
             office::start(office_state);
-            // Start loading the recommended M model as soon as the background
-            // service is ready. This runs even before the desktop OCR dialog is
-            // opened, so normal application startup time overlaps model setup.
-            office_ocr_state.schedule_startup_warmup(app.handle().clone());
-            if background_mode {
-                office::background::hide_main_window(app.handle())
-                    .map_err(std::io::Error::other)?;
-            } else {
+
+            if run_mode.schedules_ocr_warmup() {
+                // Preserve OCR model prewarming. It is independent from the main
+                // embedded index.html and from the removed Office editor WebView prewarm.
+                office_ocr_state.schedule_startup_warmup(app.handle().clone());
+                app_lifecycle::append_lifecycle_log("OCR startup warmup scheduled");
+            }
+
+            if run_mode.creates_main_window() {
                 if let Err(error) = office::background::resume_installed_launch_agent() {
-                    eprintln!("Unable to resume VisualTeX Office background service: {error}");
+                    app_lifecycle::append_lifecycle_log(format!(
+                        "Unable to resume installed Office background service: {error}"
+                    ));
                 }
-                office::background::reveal_main_window(app.handle())
-                    .map_err(std::io::Error::other)?;
+                app_lifecycle::ensure_main_window(app.handle()).map_err(|error| {
+                    app_lifecycle::append_lifecycle_log(format!(
+                        "desktop startup could not create main window: {error}"
+                    ));
+                    std::io::Error::other(error)
+                })?;
+            } else {
+                app_lifecycle::append_lifecycle_log(
+                    "office-background mode started companion without requesting main index.html or creating any WebView",
+                );
             }
             Ok(())
         })
@@ -3120,9 +3212,56 @@ pub fn run() {
             office::lifecycle::open_powerpoint
         ])
         .build(tauri::generate_context!())
-        .expect("error while building VisualTeX");
+        .unwrap_or_else(|error| {
+            app_lifecycle::append_lifecycle_log(format!(
+                "fatal Tauri application build failure: {error}"
+            ));
+            panic!("error while building VisualTeX: {error}");
+        });
 
+    if run_mode == app_lifecycle::AppRunMode::OfficeBootstrap {
+        let result = office::bootstrap_configuration(app.handle());
+        match result {
+            Ok(()) => {
+                app_lifecycle::append_lifecycle_log(
+                    "office-bootstrap completed successfully and will exit without entering the event loop",
+                );
+                return;
+            }
+            Err(error) => {
+                app_lifecycle::append_lifecycle_log(format!(
+                    "office-bootstrap failed and will exit: {error}"
+                ));
+                std::process::exit(1);
+            }
+        }
+    }
+
+    let shutdown_started = Arc::new(AtomicBool::new(false));
+    let shutdown_for_events = shutdown_started.clone();
     app.run(move |app, event| match event {
+        #[cfg(target_os = "windows")]
+        tauri::RunEvent::WindowEvent {
+            label,
+            event: tauri::WindowEvent::CloseRequested { api, .. },
+            ..
+        } if label == "main" => {
+            if app_lifecycle::background_retention_enabled() {
+                api.prevent_close();
+                if let Err(error) = app_lifecycle::destroy_main_window_for_background(app) {
+                    app_lifecycle::append_lifecycle_log(format!(
+                        "main close could not retain background companion: {error}"
+                    ));
+                }
+            } else {
+                api.prevent_close();
+                app_lifecycle::append_lifecycle_log(
+                    "main window close requested with background disabled; stopping companion, OCR worker and child processes",
+                );
+                shutdown_runtime(app, &shutdown_for_events, "main-window-close");
+                app.exit(0);
+            }
+        }
         #[cfg(target_os = "macos")]
         tauri::RunEvent::WindowEvent {
             label,
@@ -3130,25 +3269,36 @@ pub fn run() {
             ..
         } if label == "main" => {
             api.prevent_close();
-            let _ = office::background::hide_main_window(app);
+            if let Err(error) = office::background::hide_main_window(app) {
+                app_lifecycle::append_lifecycle_log(format!(
+                    "Unable to hide macOS main window: {error}"
+                ));
+            }
         }
         #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen { .. } => {
-            let _ = office::background::reveal_main_window(app);
+            if let Err(error) = app_lifecycle::ensure_main_window(app) {
+                app_lifecycle::append_lifecycle_log(format!(
+                    "macOS reopen could not ensure main window: {error}"
+                ));
+            }
         }
-        tauri::RunEvent::ExitRequested { .. } => {
-            if let Some(state) = app.try_state::<OcrState>() {
-                let _ = state.cancel_install();
+        tauri::RunEvent::ExitRequested { code, api, .. } => {
+            let automatic_last_window_exit = code.is_none();
+            let retain_background = automatic_last_window_exit
+                && (run_mode == app_lifecycle::AppRunMode::OfficeBackground
+                    || app_lifecycle::background_retention_enabled());
+            if retain_background {
+                api.prevent_exit();
+                app_lifecycle::append_lifecycle_log(
+                    "automatic exit prevented because the Office companion is configured to remain in the background",
+                );
+                return;
             }
-            #[cfg(target_os = "macos")]
-            if let Err(error) = office::background::pause_launch_agent_for_quit() {
-                eprintln!("Unable to pause VisualTeX Office background service: {error}");
-            }
-            if let Some(state) = app.try_state::<office::state::OfficeCompanionState>() {
-                if let Err(error) = state.platform_backend.shutdown() {
-                    eprintln!("Unable to stop the VisualTeX Office platform backend: {error}");
-                }
-            }
+            shutdown_runtime(app, &shutdown_for_events, "exit-requested");
+        }
+        tauri::RunEvent::Exit => {
+            shutdown_runtime(app, &shutdown_for_events, "event-loop-exit");
         }
         _ => {}
     });

@@ -166,35 +166,51 @@ if ($ResolveVisualTeXPathOnly) {
 
 $resolvedAppDataRoot = Resolve-AppDataRoot $resolvedExecutable
 $certificatePath = Resolve-CertificatePath $resolvedAppDataRoot
-$startedProcess = $null
+$bootstrapProcess = $null
 
+try {
+    # Installation/bootstrap must never start the long-lived Office companion.
+    # The dedicated mode creates the certificate and install.json, writes the
+    # exact executable/app-data registry configuration, validates the result,
+    # creates no WebView, schedules no warmup, and exits on its own.
+    $bootstrapProcess = Start-Process `
+        -FilePath $resolvedExecutable `
+        -ArgumentList "--office-bootstrap" `
+        -WindowStyle Hidden `
+        -PassThru
+    if (-not $bootstrapProcess.WaitForExit(30000)) {
+        Stop-Process -Id $bootstrapProcess.Id -Force -ErrorAction SilentlyContinue
+        throw "VisualTeX Office bootstrap did not exit within 30 seconds and was terminated. Executable='$resolvedExecutable'; PID=$($bootstrapProcess.Id). Check %LOCALAPPDATA%\VisualTeX\logs\app-lifecycle.log and %LOCALAPPDATA%\VisualTeX\office\logs\startup.log."
+    }
+    if ($bootstrapProcess.ExitCode -ne 0) {
+        throw "VisualTeX Office bootstrap failed. Executable='$resolvedExecutable'; PID=$($bootstrapProcess.Id); ExitCode=$($bootstrapProcess.ExitCode). Check %LOCALAPPDATA%\VisualTeX\logs\app-lifecycle.log and %LOCALAPPDATA%\VisualTeX\office\logs\startup.log."
+    }
+} finally {
+    if ($null -ne $bootstrapProcess) {
+        $bootstrapPid = $bootstrapProcess.Id
+        $bootstrapProcess.Dispose()
+        if (Get-Process -Id $bootstrapPid -ErrorAction SilentlyContinue) {
+            Stop-Process -Id $bootstrapPid -Force -ErrorAction SilentlyContinue
+            throw "VisualTeX Office bootstrap left a residual process: PID=$bootstrapPid"
+        }
+    }
+}
+
+$registeredRoot = [string](Get-IntegrationValue "AppDataRoot")
+if (-not [string]::IsNullOrWhiteSpace($registeredRoot)) {
+    $resolvedAppDataRoot = $registeredRoot.Trim().Trim('"')
+}
+$certificatePath = Resolve-CertificatePath $resolvedAppDataRoot
 if (-not $certificatePath) {
-    $startedProcess = Start-Process -FilePath $resolvedExecutable -ArgumentList "--office-background" -WindowStyle Hidden -PassThru
-    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(20)
-    do {
-        Start-Sleep -Milliseconds 200
-        if ($startedProcess.HasExited) {
-            throw "VisualTeX background process exited before creating the Office certificate. Executable='$resolvedExecutable'; PID=$($startedProcess.Id); ExitCode=$($startedProcess.ExitCode). Check %LOCALAPPDATA%\VisualTeX\office\logs\startup.log and companion.log."
-        }
-        $registeredRoot = [string](Get-IntegrationValue "AppDataRoot")
-        if (-not [string]::IsNullOrWhiteSpace($registeredRoot)) {
-            $resolvedAppDataRoot = $registeredRoot.Trim().Trim('"')
-        }
-        $certificatePath = Resolve-CertificatePath $resolvedAppDataRoot
-    } while (-not $certificatePath -and [DateTimeOffset]::UtcNow -lt $deadline)
-
-    if (-not $certificatePath) {
-        $certificateAttempts = ($attemptedCertificatePaths | ForEach-Object { "  - $_" }) -join [Environment]::NewLine
-        throw @"
-VisualTeX.exe was found and started, but no Office HTTPS certificate was created within 20 seconds.
+    $certificateAttempts = ($attemptedCertificatePaths | ForEach-Object { "  - $_" }) -join [Environment]::NewLine
+    throw @"
+VisualTeX Office bootstrap exited successfully, but the generated HTTPS certificate could not be resolved.
 Executable: $resolvedExecutable
-Started PID: $($startedProcess.Id)
 AppDataRoot: $resolvedAppDataRoot
 Certificate paths checked:
 $certificateAttempts
-Check startup.log and companion.log under the registered AppDataRoot\office\logs directory.
+Check %LOCALAPPDATA%\VisualTeX\logs\app-lifecycle.log and startup.log under the registered AppDataRoot\office\logs directory.
 "@
-    }
 }
 
 $certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($certificatePath)

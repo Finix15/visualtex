@@ -231,13 +231,18 @@ async fn reveal_desktop_app(State(context): State<ServerContext>) -> Response {
             .into_response();
     };
 
-    match crate::office::background::reveal_main_window(&app) {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(error) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
+    match crate::app_lifecycle::ensure_main_window(&app) {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => {
+            crate::app_lifecycle::append_lifecycle_log(format!(
+                "Office companion reveal request could not ensure main window: {error}"
+            ));
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": error })),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -277,6 +282,9 @@ fn open_desktop_session_window(
     .map_err(|error| format!("Unable to construct the VisualTeX Session URL: {error}"))?;
 
     if let Some(window) = app.get_webview_window(&label) {
+        crate::app_lifecycle::append_lifecycle_log(format!(
+            "reusing on-demand Office editor WebView for session={session_id}"
+        ));
         let encoded = serde_json::to_string(&session_id)
             .map_err(|error| format!("Unable to encode the Office Session id: {error}"))?;
         let script = format!(
@@ -288,6 +296,9 @@ fn open_desktop_session_window(
         return bring_session_window_to_front(&window);
     }
 
+    crate::app_lifecycle::append_lifecycle_log(format!(
+        "creating Office editor WebView on demand for session={session_id}"
+    ));
     let window = WebviewWindowBuilder::new(&app, label, WebviewUrl::External(url))
         .title("VisualTeX · Office 公式编辑器")
         .inner_size(1240.0, 820.0)
@@ -363,35 +374,6 @@ fn open_desktop_conversion_window(
         .build()
         .map(|_| ())
         .map_err(|error| format!("Unable to create the hidden VisualTeX conversion window: {error}"))
-}
-
-#[cfg(target_os = "windows")]
-pub(crate) fn prewarm_desktop_session_window(
-    app: tauri::AppHandle,
-) -> Result<(), String> {
-    if app.get_webview_window(OFFICE_EDITOR_WINDOW_LABEL).is_some() {
-        return Ok(());
-    }
-    let url = tauri::Url::parse(&format!(
-        "https://127.0.0.1:{}/dialog?runtime=vsto-desktop",
-        crate::office::state::OFFICE_PORT
-    ))
-    .map_err(|error| format!("Unable to construct the Office editor warmup URL: {error}"))?;
-    WebviewWindowBuilder::new(
-        &app,
-        OFFICE_EDITOR_WINDOW_LABEL,
-        WebviewUrl::External(url),
-    )
-    .title("VisualTeX · Office 公式编辑器")
-    .inner_size(1240.0, 820.0)
-    .min_inner_size(640.0, 480.0)
-    .resizable(true)
-    .center()
-    .focused(false)
-    .visible(false)
-    .build()
-    .map(|_| ())
-    .map_err(|error| format!("Unable to prewarm the VisualTeX Office editor: {error}"))
 }
 
 async fn close_desktop_session(

@@ -3,6 +3,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
   AlignCenter,
@@ -105,7 +106,7 @@ export function EditorWorkspace({
   const [formulaColorMenu, setFormulaColorMenu] =
     useState<FormulaColorMenu | null>(null);
   const formulaColorMenuRef = useRef<HTMLDivElement>(null);
-  const formulaColorSelectionRef = useRef<MathEditorSelectionTarget | null>(null);
+  const formulaSelectionTargetRef = useRef<MathEditorSelectionTarget | null>(null);
   const [formulaTextColor, setFormulaTextColor] = useState("#2563eb");
   const [formulaBackgroundColor, setFormulaBackgroundColor] = useState("#fef3c7");
   const [sourceDraftFallback, setSourceDraftFallback] = useState<{
@@ -150,12 +151,12 @@ export function EditorWorkspace({
         return;
       }
       setFormulaColorMenu(null);
-      formulaColorSelectionRef.current = null;
+      formulaSelectionTargetRef.current = null;
     };
     const closeFromKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setFormulaColorMenu(null);
-        formulaColorSelectionRef.current = null;
+        formulaSelectionTargetRef.current = null;
       }
     };
     document.addEventListener("pointerdown", close, true);
@@ -166,6 +167,23 @@ export function EditorWorkspace({
     };
   }, [formulaColorMenu]);
 
+  const preserveFormulaFocus = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  const rememberFormulaSelection = () => {
+    const target = editorRef.current?.captureSelectionTarget() ?? null;
+    if (target) formulaSelectionTargetRef.current = target;
+  };
+
+  const preserveFormulaSelection = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) => {
+    preserveFormulaFocus(event);
+    rememberFormulaSelection();
+  };
+
   const updateTypingStyle = (patch: Partial<MathEditorTypingStyle>) => {
     const next = { ...typingStyleRef.current, ...patch };
     typingStyleRef.current = next;
@@ -174,31 +192,45 @@ export function EditorWorkspace({
   };
 
   const applySelectedFormulaStyle = (kind: "bold" | "italic") => {
-    editorRef.current?.applySelectionStyle({ kind });
+    const target =
+      formulaSelectionTargetRef.current ??
+      editorRef.current?.captureSelectionTarget() ??
+      null;
+    if (target) editorRef.current?.applySelectionStyle({ kind }, target);
+    formulaSelectionTargetRef.current = null;
   };
 
   const toggleFormulaColorMenu = (kind: FormulaColorMenu) => {
-    const selection = editorRef.current?.captureSelectionTarget() ?? null;
+    const selection =
+      formulaSelectionTargetRef.current ??
+      editorRef.current?.captureSelectionTarget() ??
+      null;
     if (!selection) {
       setFormulaColorMenu(null);
-      formulaColorSelectionRef.current = null;
+      formulaSelectionTargetRef.current = null;
       return;
     }
-    formulaColorSelectionRef.current = selection;
-    setFormulaColorMenu((current) => (current === kind ? null : kind));
+    formulaSelectionTargetRef.current = selection;
+    setFormulaColorMenu((current) => {
+      if (current === kind) {
+        formulaSelectionTargetRef.current = null;
+        return null;
+      }
+      return kind;
+    });
   };
 
   const applySelectedFormulaColor = (
     kind: FormulaColorMenu,
     value: string,
   ) => {
-    const target = formulaColorSelectionRef.current;
+    const target = formulaSelectionTargetRef.current;
     if (!target) return;
     editorRef.current?.applySelectionStyle({ kind, value }, target);
     if (kind === "color") setFormulaTextColor(value);
     else setFormulaBackgroundColor(value);
     setFormulaColorMenu(null);
-    formulaColorSelectionRef.current = null;
+    formulaSelectionTargetRef.current = null;
   };
 
   const applyFormulaAlignment = (alignment: FormulaAlignment) => {
@@ -464,6 +496,7 @@ export function EditorWorkspace({
                         }
                         aria-pressed={typingStyle.bold}
                         data-formula-typing-bold
+                        onPointerDown={preserveFormulaFocus}
                         onMouseDown={(event) => event.preventDefault()}
                         onClick={() =>
                           updateTypingStyle({ bold: !typingStyle.bold })
@@ -489,6 +522,7 @@ export function EditorWorkspace({
                         }
                         aria-pressed={typingStyle.italic}
                         data-formula-typing-italic
+                        onPointerDown={preserveFormulaFocus}
                         onMouseDown={(event) => event.preventDefault()}
                         onClick={() =>
                           updateTypingStyle({ italic: !typingStyle.italic })
@@ -514,6 +548,8 @@ export function EditorWorkspace({
                             : "选中部分粗体 · 不影响后续输入"
                         }
                         data-formula-selection-bold
+                        onPointerEnter={rememberFormulaSelection}
+                        onPointerDown={preserveFormulaSelection}
                         onMouseDown={(event) => event.preventDefault()}
                         onClick={() => applySelectedFormulaStyle("bold")}
                       >
@@ -533,6 +569,8 @@ export function EditorWorkspace({
                             : "选中部分斜体 · 不影响后续输入"
                         }
                         data-formula-selection-italic
+                        onPointerEnter={rememberFormulaSelection}
+                        onPointerDown={preserveFormulaSelection}
                         onMouseDown={(event) => event.preventDefault()}
                         onClick={() => applySelectedFormulaStyle("italic")}
                       >
@@ -557,6 +595,8 @@ export function EditorWorkspace({
                         }
                         aria-pressed={formulaColorMenu === "color"}
                         data-formula-selection-color
+                        onPointerEnter={rememberFormulaSelection}
+                        onPointerDown={preserveFormulaSelection}
                         onMouseDown={(event) => event.preventDefault()}
                         onClick={() => toggleFormulaColorMenu("color")}
                       >
@@ -587,6 +627,8 @@ export function EditorWorkspace({
                         }
                         aria-pressed={formulaColorMenu === "backgroundColor"}
                         data-formula-selection-background
+                        onPointerEnter={rememberFormulaSelection}
+                        onPointerDown={preserveFormulaSelection}
                         onMouseDown={(event) => event.preventDefault()}
                         onClick={() => toggleFormulaColorMenu("backgroundColor")}
                       >

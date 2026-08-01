@@ -7,44 +7,12 @@
 Var VisualTeXOfficeChoice
 Var VisualTeXOfficeOnlyRadio
 Var VisualTeXOfficeNativeRadio
-Var VisualTeXMaintenanceDefaultApplied
-Var VisualTeXMaintenanceTimerTicks
+Var VisualTeXAcceptanceMode
 
-; On Tauri's same-version maintenance page, default to the second radio:
-; "Uninstall VisualTeX". Upgrades use different button text and are untouched.
-!define MUI_CUSTOMFUNCTION_GUIINIT VisualTeXOnGuiInit
-Function VisualTeXOnGuiInit
-  StrCpy $VisualTeXMaintenanceDefaultApplied "0"
-  StrCpy $VisualTeXMaintenanceTimerTicks "0"
-  ${NSD_CreateTimer} VisualTeXDefaultMaintenanceUninstall 50
-FunctionEnd
-
-Function VisualTeXDefaultMaintenanceUninstall
-  ${If} $VisualTeXMaintenanceDefaultApplied == "1"
-    ${NSD_KillTimer} VisualTeXDefaultMaintenanceUninstall
-    Return
-  ${EndIf}
-
-  IntOp $VisualTeXMaintenanceTimerTicks $VisualTeXMaintenanceTimerTicks + 1
-  ${If} $VisualTeXMaintenanceTimerTicks > 200
-    ${NSD_KillTimer} VisualTeXDefaultMaintenanceUninstall
-    Return
-  ${EndIf}
-
-  System::Call 'user32::IsWindow(p $R2)i.r0'
-  ${If} $0 == 0
-    Return
-  ${EndIf}
-  ${NSD_GetText} $R2 $0
-  ${If} $0 != "$(addOrReinstall)"
-    Return
-  ${EndIf}
-
-  SendMessage $R3 ${BM_CLICK} 0 0
-  ${NSD_SetFocus} $R3
-  StrCpy $VisualTeXMaintenanceDefaultApplied "1"
-  ${NSD_KillTimer} VisualTeXDefaultMaintenanceUninstall
-FunctionEnd
+; The generated Tauri PageReinstall function is patched after bundling so the
+; same-version maintenance page defaults to "Uninstall VisualTeX" directly at
+; control creation time. Do not use a GUI timer here: it races the generated
+; page and does not reliably change the checked radio button.
 
 Page custom VisualTeXOfficePageCreate VisualTeXOfficePageLeave
 
@@ -165,10 +133,33 @@ FunctionEnd
     StrCpy $INSTDIR "$LOCALAPPDATA\VisualTeX"
   ${EndIf}
 
-  ; Custom pages are skipped by NSIS /S. Preserve an explicit interactive
-  ; choice, but default unattended installs to the recommended Office mode.
+  ; Custom pages are skipped by NSIS /S. A release acceptance install may use
+  ; /VISUALTEXOFFICE=skip to leave the machine's existing Office integration
+  ; untouched while testing the exact installed desktop executable. Interactive
+  ; installs retain the page choice; ordinary unattended installs default to
+  ; the recommended native Office mode.
+  ${GetParameters} $0
+  ClearErrors
+  ${GetOptions} $0 "/VISUALTEXOFFICE=" $1
+  ${IfNot} ${Errors}
+    ${If} $1 == "native"
+      StrCpy $VisualTeXOfficeChoice "native"
+    ${ElseIf} $1 == "none"
+      StrCpy $VisualTeXOfficeChoice "none"
+    ${ElseIf} $1 == "skip"
+      StrCpy $VisualTeXOfficeChoice "skip"
+      StrCpy $VisualTeXAcceptanceMode "1"
+    ${Else}
+      Abort "Unsupported /VISUALTEXOFFICE value: $1"
+    ${EndIf}
+  ${EndIf}
   ${If} $VisualTeXOfficeChoice == ""
     StrCpy $VisualTeXOfficeChoice "native"
+  ${EndIf}
+
+  ${If} $VisualTeXAcceptanceMode == "1"
+    DetailPrint "Installed-release acceptance mode: preserving existing Office integration and skipping machine prerequisite prompts."
+    Goto visualtex_python_check_done
   ${EndIf}
 
   DetailPrint "Checking the Python environment required by VisualTeX OCR..."
@@ -258,46 +249,11 @@ visualtex_vsto_runtime_ready:
     StrCmp $0 "0" visualtex_office_static_installed visualtex_office_failed
 
 visualtex_office_static_installed:
-    DetailPrint "Machine-wide Office files and registrations passed. Verifying the companion in the normal user session."
+    DetailPrint "Machine-wide Office files and registrations passed. Office bootstrap completed without leaving a resident VisualTeX process."
     WriteRegDWORD HKCU "Software\VisualTeX\OfficeIntegration" "RuntimeVerificationPending" 1
-    nsExec::ExecToStack `powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\test_windows_office_runtime.ps1" -VisualTeXPath "$INSTDIR\VisualTeX.exe" -CompanionOnly`
-    Pop $0
-    Pop $1
-    ${If} $0 != "0"
-      DetailPrint "Companion runtime verification is not ready yet. The machine-wide Office installation remains valid. ExitCode=$0 Output=$1"
-      Goto visualtex_office_runtime_pending
-    ${EndIf}
-    WriteRegDWORD HKCU "Software\VisualTeX\OfficeIntegration" "RuntimeVerificationPending" 0
-
-visualtex_office_static_runtime_verified:
-    DetailPrint "VisualTeX native Office static installation and non-elevated companion runtime verification passed."
+    DetailPrint "Companion and Word/PowerPoint connection verification are deferred until VisualTeX is launched from Finish or by the user."
     IfSilent visualtex_office_done 0
-    MessageBox MB_ICONQUESTION|MB_YESNO "Office 插件和本地服务已经安装完成。要确认 Word 与 PowerPoint 的加载项是否真正连接成功，需要临时启动这两个 Office 应用进行验证。$\r$\n$\r$\n请先保存文档并关闭所有正在运行的 Word、PowerPoint 和其他 Office 窗口。是否现在开始验证？$\r$\n$\r$\n选择“否”不会影响 VisualTeX 主程序和插件安装，之后仍可在 VisualTeX 设置中点击“验证 Office 连接”。" IDYES visualtex_office_verify_connections IDNO visualtex_office_verification_deferred
-
-visualtex_office_verify_connections:
-    DetailPrint "Launching Word and PowerPoint to verify VisualTeX COMAddIn.Connect."
-    nsExec::ExecToLog `powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\test_windows_office_runtime.ps1" -VisualTeXPath "$INSTDIR\VisualTeX.exe"`
-    Pop $0
-    StrCmp $0 "0" visualtex_office_fully_verified visualtex_office_connection_verification_failed
-
-visualtex_office_fully_verified:
-    DetailPrint "Word and PowerPoint COMAddIn.Connect verification passed."
-    MessageBox MB_ICONINFORMATION "Word 和 PowerPoint 的 VisualTeX 加载项连接验证成功。打开 VisualTeX 设置时，Office 集成状态将直接显示为可正常使用。"
-    Goto visualtex_office_done
-
-visualtex_office_connection_verification_failed:
-    DetailPrint "Office connection verification did not complete. The installed integration remains available for in-app retry."
-    MessageBox MB_ICONEXCLAMATION "Office 插件已经安装，但本次连接验证没有完成。请确认 Word 和 PowerPoint 已全部关闭，然后进入 VisualTeX 设置点击“验证 Office 连接”；如仍无法关闭，可在提示窗口中选择强制关闭 Office 后验证。"
-    Goto visualtex_office_done
-
-visualtex_office_verification_deferred:
-    DetailPrint "The user deferred Word and PowerPoint connection verification."
-    Goto visualtex_office_done
-
-visualtex_office_runtime_pending:
-    DetailPrint "VisualTeX Office files, registry entries, COM classes and OLE server are installed. Companion runtime verification will be retried from VisualTeX settings."
-    IfSilent visualtex_office_done 0
-    MessageBox MB_ICONINFORMATION "Office 集成已经安装完成，但本地伴侣服务首次启动尚未在安装器等待时间内完成。$\r$\n$\r$\n这不代表插件安装失败。启动 VisualTeX 后会继续初始化，也可以稍后在“设置 → Office 集成”中点击“验证 Office 连接”重新检查。"
+    MessageBox MB_ICONINFORMATION "Office 集成的文件、注册信息、证书、COM 类和 OLE 服务已安装并完成静态验证。安装阶段不会启动常驻后台进程，也不会创建任何 WebView。$\r$\n$\r$\n点击“完成”启动 VisualTeX 后，本地 companion 才会按正常运行模式启动；也可以稍后在“设置 → Office 集成”中验证 Word 和 PowerPoint 连接。"
     Goto visualtex_office_done
 
 visualtex_office_failed:
@@ -306,10 +262,13 @@ visualtex_office_failed:
     IfSilent visualtex_office_done 0
     MessageBox MB_ICONEXCLAMATION "VisualTeX 主程序已安装，但 Office 插件的文件、注册信息、COM 类或 OLE 服务未通过静态安装验证。请查看安装详情，以及 %LOCALAPPDATA%\VisualTeX\office\install-logs 中最新的 vsto-bootstrap 和 vsto-diagnostic 报告。"
     Goto visualtex_office_done
-  ${Else}
+  ${ElseIf} $VisualTeXOfficeChoice == "none"
     IfFileExists "$INSTDIR\scripts\uninstall_windows_vsto.ps1" 0 visualtex_office_done
     nsExec::ExecToLog `powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\uninstall_windows_vsto.ps1"`
     Pop $0
+    Goto visualtex_office_done
+  ${Else}
+    DetailPrint "Skipping Office integration changes for installed-release acceptance. Existing Office files, registrations, certificates and companion configuration are untouched."
     Goto visualtex_office_done
   ${EndIf}
 
@@ -320,6 +279,11 @@ visualtex_office_missing:
   Goto visualtex_office_done
 
 visualtex_office_done:
+  ${If} $VisualTeXAcceptanceMode == "1"
+    DetailPrint "Installed-release acceptance mode: legacy install roots are untouched."
+    Goto visualtex_postinstall_cleanup_done
+  ${EndIf}
+
   ; Remove only recognized legacy installation roots after the canonical
   ; installation has completed. User data lives under the application bundle
   ; directories, not these installer roots.
@@ -337,6 +301,7 @@ visualtex_remove_roaming_legacy:
     RMDir /r "$APPDATA\VisualTeX"
 visualtex_roaming_legacy_done:
   ${EndIf}
+visualtex_postinstall_cleanup_done:
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL

@@ -78,14 +78,12 @@ for (const required of [
   assert.ok(installer.includes(required), `installer missing ${required}`);
 }
 assert.ok(!installer.includes("& $runtimeScript"));
-assert.ok(hooks.includes('test_windows_office_runtime.ps1" -VisualTeXPath "$INSTDIR\\VisualTeX.exe" -CompanionOnly'));
+assert.ok(!hooks.includes("-CompanionOnly"));
 assert.ok(hooks.includes("visualtex_office_static_installed"));
-assert.ok(hooks.includes("visualtex_office_runtime_pending"));
 assert.ok(hooks.includes("RuntimeVerificationPending"));
-assert.ok(hooks.includes("这不代表插件安装失败"));
-assert.ok(/Companion runtime verification is not ready yet[\s\S]*?Goto visualtex_office_runtime_pending/.test(hooks));
-assert.ok(!/Companion runtime verification is not ready yet[\s\S]*?Goto visualtex_office_failed/.test(hooks));
-assert.ok(hooks.includes("non-elevated companion runtime verification passed"));
+assert.ok(hooks.includes("without leaving a resident VisualTeX process"));
+assert.ok(hooks.includes("安装阶段不会启动常驻后台进程"));
+assert.ok(hooks.includes("Companion and Word/PowerPoint connection verification are deferred"));
 assert.ok(!/devenv|Visual Studio IDE/i.test(installer));
 assert.ok(!installer.includes("uninstall_windows_ole.ps1"));
 
@@ -223,11 +221,11 @@ assert.ok(!backend.includes("register_ole_catalog"));
 assert.ok(!backend.includes("office_catalog_path"));
 
 assert.ok(hooks.includes('-VisualTeXPath "$INSTDIR\\VisualTeX.exe"'));
-assert.ok(hooks.includes("visualtex_office_static_runtime_verified"));
-assert.ok(hooks.includes("visualtex_office_verify_connections"));
-assert.ok(hooks.includes("visualtex_office_verification_deferred"));
-assert.ok(hooks.includes("需要临时启动这两个 Office 应用进行验证"));
-assert.ok(hooks.includes("COMAddIn.Connect"));
+assert.ok(!hooks.includes("visualtex_office_static_runtime_verified"));
+assert.ok(!hooks.includes("visualtex_office_verify_connections"));
+assert.ok(!hooks.includes("visualtex_office_verification_deferred"));
+assert.ok(hooks.includes("安装阶段不会启动常驻后台进程"));
+assert.ok(hooks.includes("在“设置 → Office 集成”中验证 Word 和 PowerPoint 连接"));
 assert.ok(settings.includes("wordFilesPresent"));
 assert.ok(settings.includes("wordRegistryComplete"));
 assert.ok(settings.includes("wordLoadEnabled"));

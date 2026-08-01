@@ -54,7 +54,10 @@
     "test:windows-office-architecture": "node scripts/windows_office_architecture_smoke.mjs",
     "test:windows-office-paths": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test_windows_office_path_resolution.ps1",
     "test:windows-office-diagnostics": "node scripts/windows_office_diagnostics_smoke.mjs",
-    "verify:windows-release": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify_windows_release_artifacts.ps1"
+    "verify:windows-release": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify_windows_release_artifacts.ps1",
+    "verify:frontend-dist": "node scripts/verify_frontend_dist.mjs",
+    "verify:embedded-frontend": "node scripts/verify_embedded_frontend_assets.mjs",
+    "test:windows-app-lifecycle": "node scripts/windows_app_lifecycle_smoke.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.8.1",

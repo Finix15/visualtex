@@ -264,6 +264,40 @@ async function setFontSize(client, fontSizePt) {
   })()`);
 }
 
+async function clickSelectorWithPointer(client, selector) {
+  const point = await waitForEvaluation(
+    client,
+    `(() => {
+      const element = document.querySelector(${JSON.stringify("__SELECTOR__")});
+      if (!(element instanceof HTMLElement)) return { ready: false };
+      const rect = element.getBoundingClientRect();
+      return {
+        ready: rect.width > 0 && rect.height > 0,
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+      };
+    })()`.replace("__SELECTOR__", selector),
+    `pointer target ${selector}`,
+  );
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: point.x,
+    y: point.y,
+    button: "left",
+    buttons: 1,
+    clickCount: 1,
+  });
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: point.x,
+    y: point.y,
+    button: "left",
+    buttons: 0,
+    clickCount: 1,
+  });
+  await sleep(80);
+}
+
 async function dispatchOfficeShortcut(client, overrides = {}) {
   return client.evaluate(`(() => {
     const target = document.querySelector('math-field') ?? document.body;
@@ -675,16 +709,16 @@ async function main() {
       });
       field.focus();
       field.selection = { ranges: [[0, 3]], direction: 'forward' };
-      document.querySelector('[data-formula-selection-bold]')?.click();
       return true;
     })()`);
+    await clickSelectorWithPointer(client, '[data-formula-selection-bold]');
     const selectedBold = await waitForEvaluation(
       client,
       `(() => {
         const field = document.querySelector('math-field');
         if (!field) return { ready: false };
         field.selection = { ranges: [[0, 3]], direction: 'forward' };
-        const selectionBold = field.queryStyle({ fontSeries: 'b' });
+        const selectionBold = field.queryStyle({ variantStyle: 'bolditalic' });
         field.selection = {
           ranges: [[field.lastOffset, field.lastOffset]],
           direction: 'none',
@@ -705,8 +739,12 @@ async function main() {
         return {
           ready: selectionBold === 'all',
           selectionBold,
-          laterBold: field.queryStyle({ fontSeries: 'b' }),
-          laterItalic: field.queryStyle({ fontShape: 'it' }),
+          laterBold:
+            field.queryStyle({ variantStyle: 'bold' }) === 'all' ||
+            field.queryStyle({ variantStyle: 'bolditalic' }) === 'all'
+              ? 'all'
+              : 'none',
+          laterItalic: field.queryStyle({ variantStyle: 'italic' }),
           value: field.value,
         };
       })()`,
@@ -724,14 +762,13 @@ async function main() {
       const field = document.querySelector('math-field');
       if (!field) return false;
       field.selection = { ranges: [[1, 4]], direction: 'forward' };
-      document.querySelector('[data-formula-selection-italic]')?.click();
-      field.selection = { ranges: [[1, 4]], direction: 'forward' };
       return true;
     })()`);
+    await clickSelectorWithPointer(client, '[data-formula-selection-italic]');
     const selectedItalic = await client.evaluate(`(() => {
       const field = document.querySelector('math-field');
       return {
-        italic: field?.queryStyle({ fontShape: 'it' }) ?? 'none',
+        italic: field?.queryStyle({ variantStyle: 'italic' }) ?? 'none',
         typingBoldPressed:
           document.querySelector('[data-formula-typing-bold]')?.getAttribute(
             'aria-pressed',
@@ -754,7 +791,12 @@ async function main() {
         direction: 'none',
       };
       field.position = field.lastOffset;
-      document.querySelector('[data-formula-typing-bold]')?.click();
+      return true;
+    })()`);
+    await clickSelectorWithPointer(client, '[data-formula-typing-bold]');
+    await client.evaluate(`(() => {
+      const field = document.querySelector('math-field');
+      if (!field) return false;
       field.insert('g', {
         mode: 'math',
         format: 'latex',
@@ -768,15 +810,20 @@ async function main() {
         direction: 'forward',
       };
       window.__visualtexPersistentBold = {
-        bold: field.queryStyle({ fontSeries: 'b' }),
-        italic: field.queryStyle({ fontShape: 'it' }),
+        bold: field.queryStyle({ variantStyle: 'bolditalic' }),
+        italic: field.queryStyle({ variantStyle: 'bolditalic' }),
       };
       field.selection = {
         ranges: [[field.lastOffset, field.lastOffset]],
         direction: 'none',
       };
       field.position = field.lastOffset;
-      document.querySelector('[data-formula-typing-italic]')?.click();
+      return true;
+    })()`);
+    await clickSelectorWithPointer(client, '[data-formula-typing-italic]');
+    const persistentActionState = await client.evaluate(`(() => {
+      const field = document.querySelector('math-field');
+      if (!field) return null;
       field.insert('h', {
         mode: 'math',
         format: 'latex',
@@ -791,8 +838,8 @@ async function main() {
       };
       return {
         persistentBold: window.__visualtexPersistentBold,
-        uprightBold: field.queryStyle({ fontSeries: 'b' }),
-        uprightShape: field.queryStyle({ fontShape: 'n' }),
+        uprightBold: field.queryStyle({ variantStyle: 'bold' }),
+        uprightShape: field.queryStyle({ variantStyle: 'bold' }),
         boldPressed:
           document.querySelector('[data-formula-typing-bold]')?.getAttribute(
             'aria-pressed',
@@ -808,8 +855,8 @@ async function main() {
       const end = field?.lastOffset ?? 0;
       return {
         persistentBold: window.__visualtexPersistentBold ?? null,
-        uprightBold: field?.queryStyle({ fontSeries: 'b' }) ?? 'none',
-        uprightShape: field?.queryStyle({ fontShape: 'n' }) ?? 'none',
+        uprightBold: field?.queryStyle({ variantStyle: 'bold' }) ?? 'none',
+        uprightShape: field?.queryStyle({ variantStyle: 'bold' }) ?? 'none',
         boldPressed:
           document.querySelector('[data-formula-typing-bold]')?.getAttribute(
             'aria-pressed',
@@ -820,8 +867,8 @@ async function main() {
           ) ?? '',
         value: field?.value ?? '',
         selection: field?.selection ?? null,
-        fontSeriesBold: field?.queryStyle({ fontSeries: 'b' }) ?? 'none',
-        fontShapeNormal: field?.queryStyle({ fontShape: 'n' }) ?? 'none',
+        variantBold: field?.queryStyle({ variantStyle: 'bold' }) ?? 'none',
+        variantUpright: field?.queryStyle({ variantStyle: 'up' }) ?? 'none',
         end,
       };
     })()`);

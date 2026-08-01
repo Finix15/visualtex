@@ -18,4 +18,4 @@ pub mod word_native;
 pub mod windows_backend;
 pub mod windows_pipe;
 
-pub use lifecycle::{initialize, start};
+pub use lifecycle::{bootstrap_configuration, initialize, start};

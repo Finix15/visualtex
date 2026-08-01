@@ -1,8 +1,10 @@
+use crate::app_lifecycle::{
+    self, AppRunMode, OFFICE_BACKGROUND_ARGUMENT,
+};
 use serde::Serialize;
-use std::ffi::OsStr;
 use tauri::{AppHandle, Manager};
 
-pub const BACKGROUND_ARGUMENT: &str = "--office-background";
+pub const BACKGROUND_ARGUMENT: &str = OFFICE_BACKGROUND_ARGUMENT;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -16,7 +18,7 @@ pub struct OfficeBackgroundStatus {
 }
 
 pub fn is_background_mode() -> bool {
-    std::env::args_os().any(|argument| argument == OsStr::new(BACKGROUND_ARGUMENT))
+    AppRunMode::current() == AppRunMode::OfficeBackground
 }
 
 pub fn status() -> OfficeBackgroundStatus {
@@ -85,15 +87,7 @@ pub fn uninstall_launch_agent() -> Result<OfficeBackgroundStatus, String> {
 }
 
 pub fn reveal_main_window(app: &AppHandle) -> Result<(), String> {
-    let window = app
-        .get_webview_window("main")
-        .ok_or_else(|| "VisualTeX main window is unavailable".to_string())?;
-    window
-        .show()
-        .map_err(|error| format!("Unable to show VisualTeX main window: {error}"))?;
-    let _ = window.unminimize();
-    let _ = window.set_focus();
-    Ok(())
+    app_lifecycle::ensure_main_window(app).map(|_| ())
 }
 
 pub fn hide_main_window(app: &AppHandle) -> Result<(), String> {

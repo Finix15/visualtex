@@ -149,4 +149,25 @@ foreach ($entry in @(
     }
 }
 
-Write-Host "VisualTeX Windows release artifacts passed static verification."
+$generatedNsis = Join-Path $root "src-tauri\target\release\nsis\x64\installer.nsi"
+if (-not (Test-Path -LiteralPath $generatedNsis -PathType Leaf)) {
+    throw "Generated patched NSIS source is missing: $generatedNsis"
+}
+$generatedNsisSource = Get-Content -LiteralPath $generatedNsis -Raw
+foreach ($requiredMarker in @(
+    "Same-version maintenance defaults to the second option",
+    'StrCpy $ReinstallPageCheck 2',
+    '/VISUALTEXACCEPTANCE'
+)) {
+    if (-not $generatedNsisSource.Contains($requiredMarker)) {
+        throw "Generated NSIS source is missing verified release marker: $requiredMarker"
+    }
+}
+
+& node.exe (Join-Path $root "scripts\verify_embedded_frontend_assets.mjs") `
+    --exe (Join-Path $root "src-tauri\target\release\visualtex.exe")
+if ($LASTEXITCODE -ne 0) {
+    throw "The release VisualTeX.exe failed embedded frontend verification."
+}
+
+Write-Host "VisualTeX Windows release artifacts passed static verification, including the embedded main frontend and patched maintenance flow."
