@@ -415,8 +415,24 @@ assert.ok(editorStore.includes("powerPointDefaultFontSizePt: 20"));
 assert.ok(editorStore.includes("contextCounts"));
 assert.ok(mathEditor.includes("rankNativeSuggestionItems"));
 assert.ok(mathEditor.includes("recordNativeSuggestionUsage"));
-assert.ok(formulaToolbar.includes("contextCounts.toolbar"));
-assert.ok(formulaToolbar.includes("rightUsage?.useCount ?? 0"));
+assert.ok(formulaToolbar.includes("commonToolbarCommandLimit = 45"));
+assert.ok(formulaToolbar.includes("visualtex-common-toolbar-command-ids-v1"));
+assert.ok(formulaToolbar.includes("addCommandToCommon"));
+assert.ok(formulaToolbar.includes("设为常用"));
+assert.ok(!formulaToolbar.includes("contextCounts.toolbar"));
+assert.ok(editorWorkspace.includes("data-formula-typing-bold"));
+assert.ok(editorWorkspace.includes("data-formula-typing-italic"));
+assert.ok(editorWorkspace.includes("data-formula-selection-bold"));
+assert.ok(editorWorkspace.includes("data-formula-selection-italic"));
+assert.ok(editorWorkspace.includes("data-formula-selection-color"));
+assert.ok(editorWorkspace.includes("data-formula-selection-background"));
+assert.ok(
+  editorWorkspace.includes("typingStyle={showOfficeActions ? typingStyle : undefined}"),
+);
+assert.ok(mathEditor.includes("applyTypingStyleAtCollapsedSelection"));
+assert.ok(mathEditor.includes("captureSelectionTarget"));
+assert.ok(mathEditor.includes("applySelectionStyle"));
+assert.ok(mathEditor.includes("MathLive owns pointer capture"));
 assert.ok(documentImportApp.includes("Word 结构预览"));
 assert.ok(documentImportApp.includes("doc-import-preview-stage"));
 assert.ok(documentImportApp.includes("doc-import-preview-counts"));

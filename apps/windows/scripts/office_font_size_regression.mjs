@@ -302,7 +302,7 @@ async function main() {
         "--no-default-browser-check",
         `--remote-debugging-port=${debugPort}`,
         `--user-data-dir=${chromeProfile}`,
-        "--window-size=1400,1000",
+        "--window-size=1240,820",
         officeUrl,
       ],
       { stdio: "ignore" },
@@ -470,6 +470,562 @@ async function main() {
     assert.ok(
       updates.some((update) => update.fontSizePt === 13),
       "Word autosave should include selected font size",
+    );
+
+    const commonBefore = await waitForEvaluation(
+      client,
+      `(() => {
+        const toolbar = document.querySelector('.formula-toolbar');
+        const commonTab = document.querySelector('[data-category="common"]');
+        if (!toolbar && document.querySelector('.sidebar-toggle')) {
+          document.querySelector('.sidebar-toggle').click();
+        }
+        if (commonTab && commonTab.getAttribute('aria-pressed') !== 'true') {
+          commonTab.click();
+        }
+        const buttons = [...document.querySelectorAll(
+          '.template-strip[data-active-category="common"] > [data-command-id]',
+        )];
+        return {
+          ready:
+            buttons.length === 45 &&
+            buttons[0]?.dataset.commandId === 'frac' &&
+            buttons.at(-1)?.dataset.commandId === 'leftarrow',
+          count: buttons.length,
+          ids: buttons.map((button) => button.dataset.commandId ?? ''),
+        };
+      })()`,
+      "fixed 45-item common toolbar",
+    );
+    assert.equal(commonBefore.count, 45);
+    assert.equal(commonBefore.ids[0], "frac");
+    assert.equal(commonBefore.ids.at(-1), "leftarrow");
+
+    await client.evaluate(`(() => {
+      document.querySelector('[data-category="matrix"]')?.click();
+      return true;
+    })()`);
+    await waitForEvaluation(
+      client,
+      `(() => ({
+        ready: Boolean(document.querySelector('[data-command-id="blackboard-bold"]')),
+      }))()`,
+      "matrix toolbar category",
+    );
+    const contextMenuTriggered = await client.evaluate(`(() => {
+      const button = document.querySelector('[data-command-id="blackboard-bold"]');
+      if (!(button instanceof HTMLElement)) return false;
+      button.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: 320,
+        clientY: 240,
+        button: 2,
+      }));
+      return true;
+    })()`);
+    assert.equal(contextMenuTriggered, true);
+    await waitForEvaluation(
+      client,
+      `(() => ({
+        ready: Boolean(
+          document.querySelector('[data-add-to-common-command="blackboard-bold"]'),
+        ),
+      }))()`,
+      "Add to Common context-menu action",
+    );
+    await client.evaluate(`(() => {
+      const action = document.querySelector(
+        '[data-add-to-common-command="blackboard-bold"]',
+      );
+      if (!(action instanceof HTMLElement)) return false;
+      action.click();
+      return true;
+    })()`);
+    const commonAfter = await waitForEvaluation(
+      client,
+      `(() => {
+        const buttons = [...document.querySelectorAll(
+          '.template-strip[data-active-category="common"] > [data-command-id]',
+        )];
+        const stored = JSON.parse(
+          localStorage.getItem('visualtex-common-toolbar-command-ids-v1') || '[]',
+        );
+        return {
+          ready:
+            buttons.length === 45 &&
+            buttons[0]?.dataset.commandId === 'blackboard-bold' &&
+            !buttons.some((button) => button.dataset.commandId === 'leftarrow') &&
+            stored.length === 45 &&
+            stored[0] === 'blackboard-bold',
+          count: buttons.length,
+          first: buttons[0]?.dataset.commandId ?? '',
+          last: buttons.at(-1)?.dataset.commandId ?? '',
+          includesEjectedDefault: buttons.some(
+            (button) => button.dataset.commandId === 'leftarrow',
+          ),
+          stored,
+        };
+      })()`,
+      "manual common command promotion",
+    );
+    assert.equal(commonAfter.count, 45);
+    assert.equal(commonAfter.first, "blackboard-bold");
+    assert.equal(commonAfter.includesEjectedDefault, false);
+    assert.equal(commonAfter.stored.length, 45);
+    await client.evaluate(`(() => {
+      document.querySelector(
+        '.template-strip[data-active-category="common"] [data-command-id="sqrt"]',
+      )?.click();
+      return true;
+    })()`);
+    await sleep(100);
+    const commonAfterUse = await client.evaluate(`(() => {
+      const buttons = [...document.querySelectorAll(
+        '.template-strip[data-active-category="common"] > [data-command-id]',
+      )];
+      return {
+        count: buttons.length,
+        first: buttons[0]?.dataset.commandId ?? '',
+      };
+    })()`);
+    assert.equal(commonAfterUse.count, 45);
+    assert.equal(
+      commonAfterUse.first,
+      "blackboard-bold",
+      "Using another common command must not reorder the Common category",
+    );
+
+    const formattingControls = await waitForEvaluation(
+      client,
+      `(() => {
+        const typingBold = document.querySelector('[data-formula-typing-bold]');
+        const typingItalic = document.querySelector('[data-formula-typing-italic]');
+        const selectionBold = document.querySelector('[data-formula-selection-bold]');
+        const selectionItalic = document.querySelector('[data-formula-selection-italic]');
+        const color = document.querySelector('[data-formula-selection-color]');
+        const background = document.querySelector(
+          '[data-formula-selection-background]',
+        );
+        const titleGroup = document.querySelector('.pane-title-group');
+        const canvasTools = document.querySelector('.canvas-tool-group');
+        const titleBounds = titleGroup?.getBoundingClientRect();
+        const canvasBounds = canvasTools?.getBoundingClientRect();
+        const noOverlap = Boolean(
+          titleBounds &&
+          canvasBounds &&
+          titleBounds.right <= canvasBounds.left + 1,
+        );
+        const noHorizontalOverflow =
+          document.documentElement.scrollWidth <=
+          document.documentElement.clientWidth + 2;
+        return {
+          ready: Boolean(
+            typingBold &&
+            typingItalic &&
+            selectionBold &&
+            selectionItalic &&
+            color &&
+            background &&
+            noOverlap &&
+            noHorizontalOverflow
+          ),
+          typingBoldPressed: typingBold?.getAttribute('aria-pressed') ?? '',
+          typingItalicPressed: typingItalic?.getAttribute('aria-pressed') ?? '',
+          noOverlap,
+          noHorizontalOverflow,
+          titleRight: titleBounds?.right ?? 0,
+          canvasLeft: canvasBounds?.left ?? 0,
+        };
+      })()`,
+      "Office formula formatting controls",
+    );
+    assert.equal(formattingControls.typingBoldPressed, "false");
+    assert.equal(formattingControls.typingItalicPressed, "true");
+    const noSelectionActions = await client.evaluate(`(() => {
+      const field = document.querySelector('math-field');
+      if (!field) return null;
+      field.selection = {
+        ranges: [[field.lastOffset, field.lastOffset]],
+        direction: 'none',
+      };
+      field.position = field.lastOffset;
+      const before = field.value;
+      document.querySelector('[data-formula-selection-bold]')?.click();
+      document.querySelector('[data-formula-selection-italic]')?.click();
+      document.querySelector('[data-formula-selection-color]')?.click();
+      document.querySelector('[data-formula-selection-background]')?.click();
+      return {
+        before,
+        after: field.value,
+        popoverOpen: Boolean(document.querySelector('[data-formula-color-popover]')),
+      };
+    })()`);
+    assert.equal(noSelectionActions?.after, noSelectionActions?.before);
+    assert.equal(noSelectionActions?.popoverOpen, false);
+
+    await client.evaluate(`(() => {
+      const field = document.querySelector('math-field');
+      if (!field) return false;
+      field.setValue('abcde', {
+        mode: 'math',
+        format: 'latex',
+        insertionMode: 'replaceAll',
+        selectionMode: 'after',
+      });
+      field.focus();
+      field.selection = { ranges: [[0, 3]], direction: 'forward' };
+      document.querySelector('[data-formula-selection-bold]')?.click();
+      return true;
+    })()`);
+    const selectedBold = await waitForEvaluation(
+      client,
+      `(() => {
+        const field = document.querySelector('math-field');
+        if (!field) return { ready: false };
+        field.selection = { ranges: [[0, 3]], direction: 'forward' };
+        const selectionBold = field.queryStyle({ fontSeries: 'b' });
+        field.selection = {
+          ranges: [[field.lastOffset, field.lastOffset]],
+          direction: 'none',
+        };
+        field.position = field.lastOffset;
+        field.insert('f', {
+          mode: 'math',
+          format: 'latex',
+          insertionMode: 'insertAfter',
+          selectionMode: 'after',
+          focus: true,
+        });
+        const insertedEnd = field.lastOffset;
+        field.selection = {
+          ranges: [[insertedEnd - 1, insertedEnd]],
+          direction: 'forward',
+        };
+        return {
+          ready: selectionBold === 'all',
+          selectionBold,
+          laterBold: field.queryStyle({ fontSeries: 'b' }),
+          laterItalic: field.queryStyle({ fontShape: 'it' }),
+          value: field.value,
+        };
+      })()`,
+      "selection-only bold formatting",
+    );
+    assert.equal(selectedBold.selectionBold, "all");
+    assert.notEqual(
+      selectedBold.laterBold,
+      "all",
+      "Selection bold must not make later input persistently bold",
+    );
+    assert.equal(selectedBold.laterItalic, "all");
+
+    await client.evaluate(`(() => {
+      const field = document.querySelector('math-field');
+      if (!field) return false;
+      field.selection = { ranges: [[1, 4]], direction: 'forward' };
+      document.querySelector('[data-formula-selection-italic]')?.click();
+      field.selection = { ranges: [[1, 4]], direction: 'forward' };
+      return true;
+    })()`);
+    const selectedItalic = await client.evaluate(`(() => {
+      const field = document.querySelector('math-field');
+      return {
+        italic: field?.queryStyle({ fontShape: 'it' }) ?? 'none',
+        typingBoldPressed:
+          document.querySelector('[data-formula-typing-bold]')?.getAttribute(
+            'aria-pressed',
+          ) ?? '',
+        typingItalicPressed:
+          document.querySelector('[data-formula-typing-italic]')?.getAttribute(
+            'aria-pressed',
+          ) ?? '',
+      };
+    })()`);
+    assert.equal(selectedItalic.italic, "all");
+    assert.equal(selectedItalic.typingBoldPressed, "false");
+    assert.equal(selectedItalic.typingItalicPressed, "true");
+
+    await client.evaluate(`(() => {
+      const field = document.querySelector('math-field');
+      if (!field) return false;
+      field.selection = {
+        ranges: [[field.lastOffset, field.lastOffset]],
+        direction: 'none',
+      };
+      field.position = field.lastOffset;
+      document.querySelector('[data-formula-typing-bold]')?.click();
+      field.insert('g', {
+        mode: 'math',
+        format: 'latex',
+        insertionMode: 'insertAfter',
+        selectionMode: 'after',
+        focus: true,
+      });
+      const boldEnd = field.lastOffset;
+      field.selection = {
+        ranges: [[boldEnd - 1, boldEnd]],
+        direction: 'forward',
+      };
+      window.__visualtexPersistentBold = {
+        bold: field.queryStyle({ fontSeries: 'b' }),
+        italic: field.queryStyle({ fontShape: 'it' }),
+      };
+      field.selection = {
+        ranges: [[field.lastOffset, field.lastOffset]],
+        direction: 'none',
+      };
+      field.position = field.lastOffset;
+      document.querySelector('[data-formula-typing-italic]')?.click();
+      field.insert('h', {
+        mode: 'math',
+        format: 'latex',
+        insertionMode: 'insertAfter',
+        selectionMode: 'after',
+        focus: true,
+      });
+      const uprightEnd = field.lastOffset;
+      field.selection = {
+        ranges: [[uprightEnd - 1, uprightEnd]],
+        direction: 'forward',
+      };
+      return {
+        persistentBold: window.__visualtexPersistentBold,
+        uprightBold: field.queryStyle({ fontSeries: 'b' }),
+        uprightShape: field.queryStyle({ fontShape: 'n' }),
+        boldPressed:
+          document.querySelector('[data-formula-typing-bold]')?.getAttribute(
+            'aria-pressed',
+          ) ?? '',
+        italicPressed:
+          document.querySelector('[data-formula-typing-italic]')?.getAttribute(
+            'aria-pressed',
+          ) ?? '',
+      };
+    })()`);
+    const persistentStyleState = await client.evaluate(`(() => {
+      const field = document.querySelector('math-field');
+      const end = field?.lastOffset ?? 0;
+      return {
+        persistentBold: window.__visualtexPersistentBold ?? null,
+        uprightBold: field?.queryStyle({ fontSeries: 'b' }) ?? 'none',
+        uprightShape: field?.queryStyle({ fontShape: 'n' }) ?? 'none',
+        boldPressed:
+          document.querySelector('[data-formula-typing-bold]')?.getAttribute(
+            'aria-pressed',
+          ) ?? '',
+        italicPressed:
+          document.querySelector('[data-formula-typing-italic]')?.getAttribute(
+            'aria-pressed',
+          ) ?? '',
+        value: field?.value ?? '',
+        selection: field?.selection ?? null,
+        fontSeriesBold: field?.queryStyle({ fontSeries: 'b' }) ?? 'none',
+        fontShapeNormal: field?.queryStyle({ fontShape: 'n' }) ?? 'none',
+        end,
+      };
+    })()`);
+    assert.equal(persistentStyleState.persistentBold?.bold, "all");
+    assert.equal(persistentStyleState.persistentBold?.italic, "all");
+    assert.equal(
+      persistentStyleState.uprightBold,
+      "all",
+      JSON.stringify(persistentStyleState),
+    );
+    assert.equal(persistentStyleState.uprightShape, "all");
+    assert.equal(persistentStyleState.boldPressed, "true");
+    assert.equal(persistentStyleState.italicPressed, "false");
+
+    await client.evaluate(`(() => {
+      const field = document.querySelector('math-field');
+      if (!field) return false;
+      field.selection = { ranges: [[0, 2]], direction: 'forward' };
+      document.querySelector('[data-formula-selection-color]')?.click();
+      return true;
+    })()`);
+    await waitForEvaluation(
+      client,
+      `(() => ({
+        ready: Boolean(
+          document.querySelector(
+            '[data-formula-color-popover="color"] [data-formula-color="#dc2626"]',
+          ),
+        ),
+      }))()`,
+      "formula text color popover",
+    );
+    await client.evaluate(`(() => {
+      document.querySelector(
+        '[data-formula-color-popover="color"] [data-formula-color="#dc2626"]',
+      )?.click();
+      return true;
+    })()`);
+    const selectedColor = await client.evaluate(`(() => {
+      const field = document.querySelector('math-field');
+      if (!field) return { color: 'none' };
+      field.selection = { ranges: [[0, 2]], direction: 'forward' };
+      return {
+        color: field.queryStyle({ color: '#dc2626' }),
+        popoverOpen: Boolean(document.querySelector('[data-formula-color-popover]')),
+      };
+    })()`);
+    assert.equal(selectedColor.color, "all");
+    assert.equal(selectedColor.popoverOpen, false);
+
+    await client.evaluate(`(() => {
+      const field = document.querySelector('math-field');
+      if (!field) return false;
+      field.selection = { ranges: [[2, 4]], direction: 'forward' };
+      document.querySelector('[data-formula-selection-background]')?.click();
+      return true;
+    })()`);
+    await waitForEvaluation(
+      client,
+      `(() => ({
+        ready: Boolean(
+          document.querySelector(
+            '[data-formula-color-popover="backgroundColor"] [data-formula-color="#fef3c7"]',
+          ),
+        ),
+      }))()`,
+      "formula background color popover",
+    );
+    await client.evaluate(`(() => {
+      document.querySelector(
+        '[data-formula-color-popover="backgroundColor"] [data-formula-color="#fef3c7"]',
+      )?.click();
+      return true;
+    })()`);
+    const selectedBackground = await client.evaluate(`(() => {
+      const field = document.querySelector('math-field');
+      if (!field) return { background: 'none' };
+      field.selection = { ranges: [[2, 4]], direction: 'forward' };
+      return {
+        background: field.queryStyle({ backgroundColor: '#fef3c7' }),
+        popoverOpen: Boolean(document.querySelector('[data-formula-color-popover]')),
+      };
+    })()`);
+    assert.equal(selectedBackground.background, "all");
+    assert.equal(selectedBackground.popoverOpen, false);
+    const laterColorState = await client.evaluate(`(() => {
+      const field = document.querySelector('math-field');
+      if (!field) return null;
+      field.selection = {
+        ranges: [[field.lastOffset, field.lastOffset]],
+        direction: 'none',
+      };
+      field.position = field.lastOffset;
+      field.insert('i', {
+        mode: 'math',
+        format: 'latex',
+        insertionMode: 'insertAfter',
+        selectionMode: 'after',
+        focus: true,
+      });
+      const end = field.lastOffset;
+      field.selection = { ranges: [[end - 1, end]], direction: 'forward' };
+      return {
+        color: field.queryStyle({ color: '#dc2626' }),
+        background: field.queryStyle({ backgroundColor: '#fef3c7' }),
+      };
+    })()`);
+    assert.notEqual(
+      laterColorState?.color,
+      "all",
+      "Selection text color must not affect later input",
+    );
+    assert.notEqual(
+      laterColorState?.background,
+      "all",
+      "Selection background color must not affect later input",
+    );
+
+    await client.evaluate(`(() => {
+      const field = document.querySelector('math-field');
+      if (!field) return false;
+      field.setValue('abcde', {
+        mode: 'math',
+        format: 'latex',
+        insertionMode: 'replaceAll',
+        selectionMode: 'after',
+      });
+      field.focus();
+      return true;
+    })()`);
+    const dragPoints = await waitForEvaluation(
+      client,
+      `(() => {
+        const field = document.querySelector('math-field');
+        const first = field?.getElementInfo(1)?.bounds;
+        const fourth = field?.getElementInfo(4)?.bounds;
+        const last = field?.getElementInfo(field?.lastOffset ?? 0)?.bounds;
+        return {
+          ready: Boolean(first && fourth && last),
+          start: first
+            ? { x: first.left + first.width / 2, y: first.top + first.height / 2 }
+            : null,
+          end: fourth
+            ? { x: fourth.left + fourth.width / 2, y: fourth.top + fourth.height / 2 }
+            : null,
+          after: last
+            ? { x: last.right + 80, y: last.top + last.height / 2 }
+            : null,
+        };
+      })()`,
+      "formula drag-selection geometry",
+    );
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x: dragPoints.start.x,
+      y: dragPoints.start.y,
+      button: "left",
+      buttons: 1,
+      clickCount: 1,
+    });
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: dragPoints.end.x,
+      y: dragPoints.end.y,
+      button: "left",
+      buttons: 1,
+    });
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: dragPoints.end.x,
+      y: dragPoints.end.y,
+      button: "left",
+      buttons: 0,
+      clickCount: 1,
+    });
+    await sleep(100);
+    const selectionAfterRelease = await client.evaluate(`(() => {
+      const field = document.querySelector('math-field');
+      return field
+        ? JSON.parse(JSON.stringify(field.selection))
+        : null;
+    })()`);
+    assert.ok(
+      selectionAfterRelease?.ranges?.some(([start, end]) => start !== end),
+      "Mouse drag should create a non-collapsed selection",
+    );
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: dragPoints.after.x,
+      y: dragPoints.after.y,
+      button: "none",
+      buttons: 0,
+    });
+    await sleep(120);
+    const selectionAfterFreeMove = await client.evaluate(`(() => {
+      const field = document.querySelector('math-field');
+      return field
+        ? JSON.parse(JSON.stringify(field.selection))
+        : null;
+    })()`);
+    assert.deepEqual(
+      selectionAfterFreeMove,
+      selectionAfterRelease,
+      "Selection must remain fixed after pointerup",
     );
 
     const shortcutMetadata = await client.evaluate(`(() => {

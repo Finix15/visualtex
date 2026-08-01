@@ -1,19 +1,32 @@
-import { useEffect, useState } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import {
   AlignCenter,
   AlignLeft,
   AlignRight,
+  Bold,
   Braces,
   Code2,
   Copy,
   FileDown,
+  Highlighter,
+  Italic,
   Minus,
+  Palette,
   PanelBottomClose,
   PanelBottomOpen,
   Plus,
   ScanLine,
 } from "lucide-react";
-import { MathEditor } from "../editor/MathEditor";
+import {
+  MathEditor,
+  type MathEditorSelectionTarget,
+  type MathEditorTypingStyle,
+} from "../editor/MathEditor";
 import { InputBehaviorMenu } from "../components/InputBehaviorMenu";
 import { FormulaToolbar } from "../toolbar/FormulaToolbar";
 import { LatexSourceEditor } from "../source-editor/LatexSourceEditor";
@@ -31,6 +44,32 @@ import { normalizeChineseLatex } from "../editor/normalizeChineseLatex";
 import { reconcileFormulaLines } from "../history/documentHistory";
 import type { FormulaAlignment, FormulaLine } from "../types/formula";
 import type { EditorWorkspaceProps } from "./workspaceTypes";
+
+const formulaTextColorPresets = [
+  "#111827",
+  "#dc2626",
+  "#ea580c",
+  "#ca8a04",
+  "#16a34a",
+  "#0891b2",
+  "#2563eb",
+  "#7c3aed",
+  "#db2777",
+] as const;
+
+const formulaBackgroundColorPresets = [
+  "#fef3c7",
+  "#fed7aa",
+  "#fecaca",
+  "#fbcfe8",
+  "#ddd6fe",
+  "#bfdbfe",
+  "#a5f3fc",
+  "#bbf7d0",
+  "#e5e7eb",
+] as const;
+
+type FormulaColorMenu = "color" | "backgroundColor";
 
 export function EditorWorkspace({
   mode,
@@ -57,6 +96,18 @@ export function EditorWorkspace({
 }: EditorWorkspaceProps) {
   const [primaryBusy, setPrimaryBusy] = useState(false);
   const [classicDockOpen, setClassicDockOpen] = useState(true);
+  const [typingStyle, setTypingStyle] = useState<MathEditorTypingStyle>({
+    bold: false,
+    italic: true,
+  });
+  const typingStyleRef = useRef(typingStyle);
+  typingStyleRef.current = typingStyle;
+  const [formulaColorMenu, setFormulaColorMenu] =
+    useState<FormulaColorMenu | null>(null);
+  const formulaColorMenuRef = useRef<HTMLDivElement>(null);
+  const formulaColorSelectionRef = useRef<MathEditorSelectionTarget | null>(null);
+  const [formulaTextColor, setFormulaTextColor] = useState("#2563eb");
+  const [formulaBackgroundColor, setFormulaBackgroundColor] = useState("#fef3c7");
   const [sourceDraftFallback, setSourceDraftFallback] = useState<{
     source: string;
     error: string;
@@ -88,6 +139,67 @@ export function EditorWorkspace({
   useEffect(() => {
     setSourceDraftFallback(null);
   }, [latexCodeFormat]);
+
+  useEffect(() => {
+    if (!formulaColorMenu) return;
+    const close = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        formulaColorMenuRef.current?.contains(event.target)
+      ) {
+        return;
+      }
+      setFormulaColorMenu(null);
+      formulaColorSelectionRef.current = null;
+    };
+    const closeFromKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setFormulaColorMenu(null);
+        formulaColorSelectionRef.current = null;
+      }
+    };
+    document.addEventListener("pointerdown", close, true);
+    document.addEventListener("keydown", closeFromKey, true);
+    return () => {
+      document.removeEventListener("pointerdown", close, true);
+      document.removeEventListener("keydown", closeFromKey, true);
+    };
+  }, [formulaColorMenu]);
+
+  const updateTypingStyle = (patch: Partial<MathEditorTypingStyle>) => {
+    const next = { ...typingStyleRef.current, ...patch };
+    typingStyleRef.current = next;
+    setTypingStyle(next);
+    editorRef.current?.setTypingStyle(next);
+  };
+
+  const applySelectedFormulaStyle = (kind: "bold" | "italic") => {
+    editorRef.current?.applySelectionStyle({ kind });
+  };
+
+  const toggleFormulaColorMenu = (kind: FormulaColorMenu) => {
+    const selection = editorRef.current?.captureSelectionTarget() ?? null;
+    if (!selection) {
+      setFormulaColorMenu(null);
+      formulaColorSelectionRef.current = null;
+      return;
+    }
+    formulaColorSelectionRef.current = selection;
+    setFormulaColorMenu((current) => (current === kind ? null : kind));
+  };
+
+  const applySelectedFormulaColor = (
+    kind: FormulaColorMenu,
+    value: string,
+  ) => {
+    const target = formulaColorSelectionRef.current;
+    if (!target) return;
+    editorRef.current?.applySelectionStyle({ kind, value }, target);
+    if (kind === "color") setFormulaTextColor(value);
+    else setFormulaBackgroundColor(value);
+    setFormulaColorMenu(null);
+    formulaColorSelectionRef.current = null;
+  };
 
   const applyFormulaAlignment = (alignment: FormulaAlignment) => {
     setFormulaAlignment(alignment);
@@ -194,6 +306,7 @@ export function EditorWorkspace({
         activeLineId={visualActiveLineId}
         formulaAlignment={formulaAlignment}
         zoom={zoom}
+        typingStyle={showOfficeActions ? typingStyle : undefined}
         readOnly={Boolean(previewLines)}
         draftError={sourceDraftFallback?.error}
         onPasteImage={
@@ -325,6 +438,235 @@ export function EditorWorkspace({
                     <Icon size={16} strokeWidth={2} />
                   </button>
                 ))}
+                {showOfficeActions && (
+                  <>
+                    <span className="formula-formatting-divider" aria-hidden="true" />
+                    <div
+                      ref={formulaColorMenuRef}
+                      className="formula-formatting-controls"
+                      role="group"
+                      aria-label={isEn ? "Formula formatting" : "公式格式"}
+                    >
+                      <button
+                        type="button"
+                        className={
+                          "icon-button compact formula-formatting-button is-persistent" +
+                          (typingStyle.bold ? " is-active" : "")
+                        }
+                        aria-label={
+                          isEn
+                            ? "Keep bold enabled for subsequent input"
+                            : "持续粗体：后续输入保持粗体"
+                        }
+                        title={
+                          isEn
+                            ? "Persistent bold · affects subsequent input"
+                            : "持续粗体 · 影响后续输入"
+                        }
+                        aria-pressed={typingStyle.bold}
+                        data-formula-typing-bold
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() =>
+                          updateTypingStyle({ bold: !typingStyle.bold })
+                        }
+                      >
+                        <Bold size={16} strokeWidth={2.2} />
+                      </button>
+                      <button
+                        type="button"
+                        className={
+                          "icon-button compact formula-formatting-button is-persistent" +
+                          (typingStyle.italic ? " is-active" : "")
+                        }
+                        aria-label={
+                          isEn
+                            ? "Keep italic enabled for subsequent input"
+                            : "持续斜体：后续输入保持斜体"
+                        }
+                        title={
+                          isEn
+                            ? "Persistent italic · enabled by default"
+                            : "持续斜体 · 默认开启，关闭后后续输入为正体"
+                        }
+                        aria-pressed={typingStyle.italic}
+                        data-formula-typing-italic
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() =>
+                          updateTypingStyle({ italic: !typingStyle.italic })
+                        }
+                      >
+                        <Italic size={16} strokeWidth={2.2} />
+                      </button>
+                      <span
+                        className="formula-formatting-subdivider"
+                        aria-hidden="true"
+                      />
+                      <button
+                        type="button"
+                        className="icon-button compact formula-formatting-button is-selection-action"
+                        aria-label={
+                          isEn
+                            ? "Apply bold to selected content"
+                            : "将选中内容设为粗体"
+                        }
+                        title={
+                          isEn
+                            ? "Selection bold · does not affect later input"
+                            : "选中部分粗体 · 不影响后续输入"
+                        }
+                        data-formula-selection-bold
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => applySelectedFormulaStyle("bold")}
+                      >
+                        <Bold size={15} strokeWidth={2.2} />
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-button compact formula-formatting-button is-selection-action"
+                        aria-label={
+                          isEn
+                            ? "Apply italic to selected content"
+                            : "将选中内容设为斜体"
+                        }
+                        title={
+                          isEn
+                            ? "Selection italic · does not affect later input"
+                            : "选中部分斜体 · 不影响后续输入"
+                        }
+                        data-formula-selection-italic
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => applySelectedFormulaStyle("italic")}
+                      >
+                        <Italic size={15} strokeWidth={2.2} />
+                      </button>
+                      <button
+                        type="button"
+                        className={
+                          "icon-button compact formula-formatting-button is-color-action" +
+                          (formulaColorMenu === "color" ? " is-active" : "")
+                        }
+                        style={
+                          {
+                            "--formula-format-color": formulaTextColor,
+                          } as CSSProperties
+                        }
+                        aria-label={isEn ? "Selected text color" : "选中内容字体颜色"}
+                        title={
+                          isEn
+                            ? "Apply a font color to the selection only"
+                            : "字体颜色 · 仅应用于选中内容"
+                        }
+                        aria-pressed={formulaColorMenu === "color"}
+                        data-formula-selection-color
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => toggleFormulaColorMenu("color")}
+                      >
+                        <Palette size={15} strokeWidth={2} />
+                      </button>
+                      <button
+                        type="button"
+                        className={
+                          "icon-button compact formula-formatting-button is-color-action" +
+                          (formulaColorMenu === "backgroundColor"
+                            ? " is-active"
+                            : "")
+                        }
+                        style={
+                          {
+                            "--formula-format-color": formulaBackgroundColor,
+                          } as CSSProperties
+                        }
+                        aria-label={
+                          isEn
+                            ? "Selected text background color"
+                            : "选中内容字体背景颜色"
+                        }
+                        title={
+                          isEn
+                            ? "Apply a background color to the selection only"
+                            : "字体背景颜色 · 仅应用于选中内容"
+                        }
+                        aria-pressed={formulaColorMenu === "backgroundColor"}
+                        data-formula-selection-background
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => toggleFormulaColorMenu("backgroundColor")}
+                      >
+                        <Highlighter size={15} strokeWidth={2} />
+                      </button>
+
+                      {formulaColorMenu && (
+                        <div
+                          className="formula-color-popover"
+                          data-formula-color-popover={formulaColorMenu}
+                          role="dialog"
+                          aria-label={
+                            formulaColorMenu === "color"
+                              ? isEn
+                                ? "Formula text color"
+                                : "公式字体颜色"
+                              : isEn
+                                ? "Formula background color"
+                                : "公式背景颜色"
+                          }
+                        >
+                          <strong>
+                            {formulaColorMenu === "color"
+                              ? isEn
+                                ? "Text color"
+                                : "字体颜色"
+                              : isEn
+                                ? "Background color"
+                                : "背景颜色"}
+                          </strong>
+                          <div className="formula-color-swatches" role="group">
+                            {(formulaColorMenu === "color"
+                              ? formulaTextColorPresets
+                              : formulaBackgroundColorPresets
+                            ).map((color) => (
+                              <button
+                                key={color}
+                                type="button"
+                                className="formula-color-swatch"
+                                style={{ backgroundColor: color }}
+                                aria-label={`${isEn ? "Use" : "使用"} ${color}`}
+                                title={color}
+                                data-formula-color={color}
+                                onMouseDown={(event) => event.preventDefault()}
+                                onClick={() =>
+                                  applySelectedFormulaColor(
+                                    formulaColorMenu,
+                                    color,
+                                  )
+                                }
+                              />
+                            ))}
+                            <label
+                              className="formula-custom-color"
+                              title={isEn ? "Custom color" : "自定义颜色"}
+                            >
+                              <input
+                                type="color"
+                                value={
+                                  formulaColorMenu === "color"
+                                    ? formulaTextColor
+                                    : formulaBackgroundColor
+                                }
+                                aria-label={isEn ? "Custom color" : "自定义颜色"}
+                                onChange={(event) =>
+                                  applySelectedFormulaColor(
+                                    formulaColorMenu,
+                                    event.currentTarget.value,
+                                  )
+                                }
+                              />
+                              <Plus size={13} />
+                            </label>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
               </div>
             </div>
             <div className="canvas-tool-group">

@@ -23,6 +23,7 @@
 }
 
 .formula-alignment-controls {
+  position: relative;
   display: flex;
   flex: 0 0 auto;
   align-items: center;
@@ -30,6 +31,143 @@
   margin-left: 4px;
   padding-left: 8px;
   border-left: 1px solid var(--border);
+}
+
+.formula-formatting-divider {
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: var(--border);
+}
+
+.formula-formatting-controls {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.formula-formatting-subdivider {
+  width: 1px;
+  height: 16px;
+  margin: 0 2px;
+  background: color-mix(in srgb, var(--border) 78%, transparent);
+}
+
+.formula-formatting-button {
+  position: relative;
+  color: var(--text-muted);
+}
+
+.formula-formatting-button.is-active {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.formula-formatting-button.is-selection-action::after {
+  content: "";
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  opacity: 0.72;
+}
+
+.formula-formatting-button.is-color-action::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  right: 5px;
+  bottom: 3px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--formula-format-color, currentColor);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 18%, transparent);
+}
+
+.formula-color-popover {
+  position: absolute;
+  z-index: 2200;
+  top: calc(100% + 7px);
+  right: 0;
+  width: 190px;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.formula-color-popover strong {
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.formula-color-swatches {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+}
+
+.formula-color-swatch,
+.formula-custom-color {
+  width: 28px;
+  height: 26px;
+  min-width: 0;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--text) 22%, var(--border));
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, white 48%, transparent);
+}
+
+.formula-color-swatch:hover,
+.formula-color-swatch:focus-visible,
+.formula-custom-color:hover,
+.formula-custom-color:focus-within {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.formula-custom-color {
+  position: relative;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: conic-gradient(
+    #ef4444,
+    #f59e0b,
+    #eab308,
+    #22c55e,
+    #06b6d4,
+    #3b82f6,
+    #8b5cf6,
+    #ec4899,
+    #ef4444
+  );
+  color: white;
+  cursor: pointer;
+}
+
+.formula-custom-color input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.formula-custom-color svg {
+  pointer-events: none;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.42));
 }
 
 .formula-alignment-button {

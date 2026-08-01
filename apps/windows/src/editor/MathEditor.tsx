@@ -73,6 +73,21 @@ export interface MathEditorInsertionTarget {
   direction: "forward" | "backward" | "none";
 }
 
+export interface MathEditorTypingStyle {
+  bold: boolean;
+  italic: boolean;
+}
+
+export interface MathEditorSelectionTarget {
+  selections: MathEditorInsertionTarget[];
+}
+
+export type MathEditorSelectionStyle =
+  | { kind: "bold" }
+  | { kind: "italic" }
+  | { kind: "color"; value: string }
+  | { kind: "backgroundColor"; value: string };
+
 export interface MathEditorFocusOptions {
   target?: "active" | "first" | "last";
   moveToEnd?: boolean;
@@ -96,6 +111,12 @@ export interface MathEditorHandle {
     latex: string,
     selection: MathSelectionSnapshot | null,
   ) => Promise<boolean>;
+  setTypingStyle: (style: MathEditorTypingStyle) => boolean;
+  captureSelectionTarget: () => MathEditorSelectionTarget | null;
+  applySelectionStyle: (
+    style: MathEditorSelectionStyle,
+    target?: MathEditorSelectionTarget | null,
+  ) => boolean;
 }
 
 interface Props {
@@ -103,6 +124,7 @@ interface Props {
   activeLineId: string | null;
   formulaAlignment: FormulaAlignment;
   zoom: number;
+  typingStyle?: MathEditorTypingStyle;
   readOnly?: boolean;
   draftError?: string;
   onPasteImage?: (file: File, target: MathEditorInsertionTarget) => void;
@@ -170,6 +192,7 @@ interface FormulaFieldProps {
   language: "cn" | "en";
   autoPairDelimiters: boolean;
   inputBehavior: InputBehaviorSettings;
+  typingStyle?: MathEditorTypingStyle;
   register: (lineId: string, field: MathfieldElement | null) => void;
   onEdit: (edit: FormulaFieldEdit, field: MathfieldElement) => void;
   onInputActivity: (field: MathfieldElement) => void;
@@ -1483,6 +1506,31 @@ function captureSelection(field: MathfieldElement): MathSelectionSnapshot {
     ),
     direction: field.selection.direction ?? "none",
   };
+}
+
+function selectionHasContent(selection: MathSelectionSnapshot) {
+  return selection.ranges.some(([start, end]) => start !== end);
+}
+
+function typingStyleAsMathLiveStyle(
+  style: MathEditorTypingStyle,
+): Pick<Style, "fontSeries" | "fontShape"> {
+  return {
+    fontSeries: style.bold ? "b" : "m",
+    fontShape: style.italic ? "it" : "n",
+  };
+}
+
+function applyTypingStyleAtCollapsedSelection(
+  field: MathfieldElement,
+  style: MathEditorTypingStyle | null | undefined,
+) {
+  if (!style || selectionHasContent(captureSelection(field))) return false;
+  const mathLiveStyle = typingStyleAsMathLiveStyle(style);
+  if (field.queryStyle(mathLiveStyle) !== "all") {
+    field.applyStyle(mathLiveStyle, { operation: "set" });
+  }
+  return true;
 }
 
 function captureFieldSnapshot(field: MathfieldElement) {
@@ -4234,6 +4282,12 @@ function FormulaField(props: FormulaFieldProps) {
     };
   const handleBeforeInput = (event: InputEvent) => {
     if (restoringRawCommandAnchor) return;
+    if (event.inputType.startsWith("insert") && !event.isComposing) {
+      applyTypingStyleAtCollapsedSelection(
+        field,
+        propsRef.current.typingStyle,
+      );
+    }
     const selectedAccentState = captureSelectedAccentPlaceholderState(field);
     if (selectedAccentState) {
       activateVisualTexAccentPlaceholder(field, selectedAccentState);
@@ -4543,8 +4597,16 @@ function FormulaField(props: FormulaFieldProps) {
         ...lastSnapshotRef.current,
         selection: captureSelection(field),
       };
+      applyTypingStyleAtCollapsedSelection(
+        field,
+        propsRef.current.typingStyle,
+      );
     };
     const handleFocus = () => {
+      applyTypingStyleAtCollapsedSelection(
+        field,
+        propsRef.current.typingStyle,
+      );
       propsRef.current.onFocus(propsRef.current.index, field);
       lastSnapshotRef.current = captureFieldSnapshot(field);
     };
@@ -5311,6 +5373,7 @@ function FormulaField(props: FormulaFieldProps) {
     // Collapse that implicit selection so toolbar commands insert at the end
     // instead of unexpectedly replacing/wrapping the entire line.
     field.position = field.lastOffset;
+    applyTypingStyleAtCollapsedSelection(field, propsRef.current.typingStyle);
     field.resetUndo();
     lastSnapshotRef.current = captureFieldSnapshot(field);
     fieldRef.current = field;
@@ -5506,6 +5569,12 @@ function FormulaField(props: FormulaFieldProps) {
 
   useEffect(() => {
     const field = fieldRef.current;
+    if (!field?.hasFocus()) return;
+    applyTypingStyleAtCollapsedSelection(field, props.typingStyle);
+  }, [props.typingStyle?.bold, props.typingStyle?.italic]);
+
+  useEffect(() => {
+    const field = fieldRef.current;
     if (!field) return;
     MathfieldElement.locale = props.language === "en" ? "en" : "zh-cn";
     const isEn = props.language === "en";
@@ -5528,6 +5597,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       activeLineId,
       formulaAlignment,
       zoom,
+      typingStyle,
       readOnly = false,
       draftError,
       onPasteImage,
@@ -5539,6 +5609,8 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
     const surfaceRef = useRef<HTMLDivElement>(null);
     const fieldRefs = useRef(new Map<string, MathfieldElement>());
     const linesRef = useRef(lines);
+    const typingStyleRef = useRef<MathEditorTypingStyle | undefined>(typingStyle);
+    typingStyleRef.current = typingStyle;
     const activeIndexRef = useRef(0);
     const activeLineIdRef = useRef<string | null>(activeLineId);
     const focusRequestRef = useRef(0);
@@ -6233,6 +6305,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       const { lineId: targetLineId, field } = target;
       setActiveLine(targetLineId);
       field.focus();
+      applyTypingStyleAtCollapsedSelection(field, typingStyleRef.current);
 
       const rawAnchor = activeQuery
         ? rawCommandAnchors.get(field) ?? null
@@ -7312,6 +7385,88 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         }),
       );
 
+    const captureSelectionTarget = (): MathEditorSelectionTarget | null => {
+      const selections = linesRef.current.flatMap((line) => {
+        const field = fieldRefs.current.get(line.id);
+        if (!field?.isConnected) return [];
+        const selection = captureSelection(field);
+        if (!selectionHasContent(selection)) return [];
+        return [
+          {
+            lineId: line.id,
+            ranges: selection.ranges,
+            direction: selection.direction,
+          } satisfies MathEditorInsertionTarget,
+        ];
+      });
+      return selections.length ? { selections } : null;
+    };
+
+    const applySelectionStyle = (
+      style: MathEditorSelectionStyle,
+      target: MathEditorSelectionTarget | null = captureSelectionTarget(),
+    ) => {
+      if (readOnly || !target?.selections.length) return false;
+      const resolved = target.selections.flatMap((selectionTarget) => {
+        const field = fieldRefs.current.get(selectionTarget.lineId);
+        if (!field?.isConnected) return [];
+        const selection = clampSelection(
+          {
+            ranges: selectionTarget.ranges,
+            direction: selectionTarget.direction,
+          },
+          field.lastOffset,
+        );
+        if (!selectionHasContent(selection)) return [];
+        field.selection = selection;
+        return [{ lineId: selectionTarget.lineId, field, selection }];
+      });
+      if (!resolved.length) return false;
+
+      let mathLiveStyle: Pick<
+        Style,
+        "fontSeries" | "fontShape" | "color" | "backgroundColor"
+      >;
+      if (style.kind === "bold") {
+        mathLiveStyle = { fontSeries: "b" };
+      } else if (style.kind === "italic") {
+        mathLiveStyle = { fontShape: "it" };
+      } else if (style.kind === "color") {
+        mathLiveStyle = { color: style.value };
+      } else {
+        mathLiveStyle = { backgroundColor: style.value };
+      }
+
+      historyManager.commitPendingTransaction();
+      for (const { field, selection } of resolved) {
+        field.selection = selection;
+        field.applyStyle(mathLiveStyle, { operation: "set" });
+        field.selection = selection;
+      }
+      historyManager.commitPendingTransaction();
+
+      const activeSelection =
+        resolved.find(({ lineId }) => lineId === activeLineIdRef.current) ??
+        resolved.at(-1);
+      if (activeSelection) {
+        setActiveLine(activeSelection.lineId);
+        activeSelection.field.focus();
+        activeSelection.field.selection = activeSelection.selection;
+        activeSelection.field.shadowRoot
+          ?.querySelector<HTMLElement>('[part="keyboard-sink"]')
+          ?.focus({ preventScroll: true });
+      }
+      return true;
+    };
+
+    const setTypingStyle = (style: MathEditorTypingStyle) => {
+      typingStyleRef.current = style;
+      const target = resolveTargetField();
+      if (!target) return false;
+      target.field.focus();
+      return applyTypingStyleAtCollapsedSelection(target.field, style);
+    };
+
     const restoreSelection = (
       lineId: string,
       latex: string,
@@ -7386,6 +7541,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       const { lineId, field } = target;
       setActiveLine(lineId);
       field.focus();
+      applyTypingStyleAtCollapsedSelection(field, typingStyleRef.current);
       const inserted = applyDiscreteFormulaMutation(
         lineId,
         field,
@@ -7433,6 +7589,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       );
       setActiveLine(target.lineId);
       field.focus();
+      applyTypingStyleAtCollapsedSelection(field, typingStyleRef.current);
       const inserted = applyDiscreteFormulaMutation(
         target.lineId,
         field,
@@ -7538,6 +7695,9 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       commitPendingTransaction: () => historyManager.commitPendingTransaction(),
       getSelectionMap,
       restoreSelection,
+      setTypingStyle,
+      captureSelectionTarget,
+      applySelectionStyle,
     }));
 
     useEffect(() => {
@@ -7639,7 +7799,10 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         if (!session.active) return;
 
         event.preventDefault();
-        event.stopImmediatePropagation();
+        // Do not stop propagation here. MathLive owns pointer capture on the
+        // active mathfield and must receive pointerup to end its internal drag
+        // tracker. Blocking that target listener leaves the selection attached
+        // to later pointermove events even after the mouse button is released.
         for (const field of fieldRefs.current.values()) {
           visualTexPointerSelectingFields.delete(field);
           field.classList.remove(visualTexPointerSelectingClass);
@@ -7731,6 +7894,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
                   language={language}
                   autoPairDelimiters={autoPairDelimiters}
                   inputBehavior={inputBehavior}
+                  typingStyle={typingStyle}
                   register={registerField}
                   onEdit={handleFieldEdit}
                   onInputActivity={(field) =>

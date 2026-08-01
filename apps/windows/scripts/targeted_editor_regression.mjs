@@ -3291,13 +3291,13 @@ async function main() {
         );
         return {
           ready:
-            buttons.length > 1 &&
-            buttons[0]?.dataset.commandId === "sqrt" &&
+            buttons.length === 45 &&
+            buttons[0]?.dataset.commandId === "frac" &&
             persisted.state?.usage?.sqrt?.contextCounts?.toolbar === 18,
           firstCommandId: buttons[0]?.dataset.commandId ?? "",
           usage: persisted.state?.usage?.sqrt ?? null,
         };
-      })()`, "toolbar common commands sorted by toolbar frequency");
+      })()`, "toolbar common commands keep their fixed order despite usage");
 
       await evaluate(`document.querySelector('[data-toolbar-view="tiles"]').click()`);
       const commonTileState = await waitForEvaluation(`(() => {
@@ -3307,10 +3307,10 @@ async function main() {
         return {
           ready:
             tiles.length === 10 &&
-            tiles[0]?.dataset.formulaTileId === "gaussian-integral",
+            tiles[0]?.dataset.formulaTileId === "quadratic-formula",
           firstTileId: tiles[0]?.dataset.formulaTileId ?? "",
         };
-      })()`, "common formula tiles sorted by toolbar frequency");
+      })()`, "common formula tiles keep their fixed order despite usage");
       await evaluate(`document.querySelector(
         '[data-formula-tile-id="gaussian-integral"]',
       ).click()`);
@@ -3327,6 +3327,9 @@ async function main() {
         };
       })()`, "formula tile click frequency persistence");
 
+      await sleep(180);
+      await clearField();
+      await sleep(120);
       await clearField();
       await typeText("\\be");
       const nativeRankState = await waitForEvaluation(`(() => {
