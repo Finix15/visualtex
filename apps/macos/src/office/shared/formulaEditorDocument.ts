@@ -173,6 +173,16 @@ export function normalizeFormulaEditorDocument(
   if (!detected) {
     return { lines: safeLines, codeFormat: fallbackFormat };
   }
+  // A caller may already own a normalized logical document. For example, an
+  // imported `equation` can legitimately contain one `aligned` environment as
+  // its body. Re-detecting that inner environment on a second normalization
+  // pass would silently replace the outer `equation`, lose its numbering
+  // semantics, and then split source-formatting newlines into visual rows.
+  // Only unwrap a detected environment when the caller supplied raw source or
+  // when the detected wrapper agrees with the caller's existing code format.
+  if (fallbackFormat !== "raw" && detected.codeFormat !== fallbackFormat) {
+    return { lines: safeLines, codeFormat: fallbackFormat };
+  }
 
   const parsed = parseLatexSource(detected.source, detected.codeFormat)
     .map((latex) => latex.trim())

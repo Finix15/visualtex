@@ -16,6 +16,7 @@ const stages = [
   { name: "default", args: [] },
   { name: "literal-fallback", args: ["--literal-fallback"] },
   { name: "theorem-structure", args: ["--theorem-structure"] },
+  { name: "edge-structures", args: ["--edge-structures"] },
   { name: "long-physics", args: ["--long-physics"] },
   { name: "boundary-value", args: ["--boundary-value"] },
 ];

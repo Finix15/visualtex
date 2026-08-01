@@ -472,33 +472,67 @@ function protectedSourceRanges(
     : markdownProtectedRanges(source);
 }
 
+function latexCommentIndex(
+  line: string,
+  lineOffset: number,
+  protectedRanges: ProtectedSourceRange[],
+) {
+  for (let index = 0; index < line.length; index += 1) {
+    if (
+      line[index] === "%" &&
+      !isEscaped(line, index) &&
+      !sourceIndexInsideRanges(protectedRanges, lineOffset + index)
+    ) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function hasLatexCommentSignal(source: string) {
+  return source.split("\n").some((line) => {
+    const index = line.indexOf("%");
+    return index >= 0 && !isEscaped(line, index) && line.slice(0, index).trim() === "";
+  });
+}
+
 function stripLatexComments(
   source: string,
   theoremEnvironmentNames: ReadonlySet<string>,
 ) {
   const protectedRanges = latexProtectedRanges(source, theoremEnvironmentNames);
-  let rangeIndex = 0;
+  const records: Array<{
+    text: string;
+    commentOnly: boolean;
+    decorativeComment: boolean;
+  }> = [];
   let lineOffset = 0;
-  return source
-    .split("\n")
-    .map((line) => {
-      const lineEnd = lineOffset + line.length;
-      while (
-        rangeIndex < protectedRanges.length &&
-        protectedRanges[rangeIndex].end <= lineOffset
-      ) {
-        rangeIndex += 1;
-      }
-      const range = protectedRanges[rangeIndex];
-      const protectedLine = Boolean(
-        range && range.start <= lineEnd && range.end > lineOffset,
-      );
-      lineOffset = lineEnd + 1;
-      if (protectedLine) return line;
-      for (let index = 0; index < line.length; index += 1) {
-        if (line[index] === "%" && !isEscaped(line, index)) return line.slice(0, index);
-      }
-      return line;
+  for (const line of source.split("\n")) {
+    const commentIndex = latexCommentIndex(line, lineOffset, protectedRanges);
+    const commentOnly =
+      commentIndex >= 0 && line.slice(0, commentIndex).trim().length === 0;
+    const commentBody = commentIndex >= 0 ? line.slice(commentIndex + 1) : "";
+    records.push({
+      text: commentIndex >= 0 ? line.slice(0, commentIndex) : line,
+      commentOnly,
+      decorativeComment:
+        commentOnly && /(?:={3,}|-{3,}|_{3,}|\*{3,}|#{3,})/.test(commentBody),
+    });
+    lineOffset += line.length + 1;
+  }
+
+  // Section-divider comments are often wrapped manually as two physical
+  // lines, for example `% ===== title %` followed by `=====`. The second line
+  // is not meaningful document content; remove it only when it is directly
+  // attached to a decorative comment so ordinary equations/text using `=` are
+  // unaffected.
+  const decorativeLinePattern = /^\s*[=\-_*#]{3,}\s*$/;
+  return records
+    .map((record, index) => {
+      if (!decorativeLinePattern.test(record.text)) return record.text;
+      const previous = records[index - 1];
+      const next = records[index + 1];
+      return previous?.decorativeComment || next?.decorativeComment ? "" : record.text;
     })
     .join("\n");
 }
@@ -846,6 +880,41 @@ function normalizeLatexStructure(
     .replace(/\\par\b/g, "\n\n");
 }
 
+const cjkInlineBoundaryCharacter =
+  /[\u2E80-\u2EFF\u3000-\u303F\u3040-\u30FF\u31F0-\u31FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF\uFE30-\uFE4F\uFF00-\uFFEF]/;
+
+function textEndsAtCjkBoundary(value: string) {
+  const character = value.match(/(\S)\s*$/)?.[1] ?? "";
+  return cjkInlineBoundaryCharacter.test(character);
+}
+
+function textStartsAtCjkBoundary(value: string) {
+  const character = value.match(/^\s*(\S)/)?.[1] ?? "";
+  return cjkInlineBoundaryCharacter.test(character);
+}
+
+function normalizeInlineFormulaBoundarySpacing(content: DocumentImportBlock[]) {
+  for (let index = 0; index < content.length; index += 1) {
+    if (content[index].kind !== "formula") continue;
+    const previous = content[index - 1];
+    const next = content[index + 1];
+    if (
+      previous?.kind === "text" &&
+      /[ \t]$/.test(previous.text) &&
+      textEndsAtCjkBoundary(previous.text)
+    ) {
+      previous.text = previous.text.replace(/[ \t]+$/g, "");
+    }
+    if (
+      next?.kind === "text" &&
+      /^[ \t]/.test(next.text) &&
+      textStartsAtCjkBoundary(next.text)
+    ) {
+      next.text = next.text.replace(/^[ \t]+/g, "");
+    }
+  }
+}
+
 function emitParagraph(
   blocks: DocumentImportBlock[],
   raw: string,
@@ -868,6 +937,7 @@ function emitParagraph(
   const tail = cleanInlineMarkup(raw.slice(cursor), sourceKind);
   if (tail) content.push({ id: createUuid(), kind: "text", text: tail });
   if (!content.length) return;
+  normalizeInlineFormulaBoundarySpacing(content);
 
   const firstText = content.find((block): block is DocumentTextBlock => block.kind === "text");
   const lastText = [...content]
@@ -1138,6 +1208,7 @@ function parseStructuredLines(
 
 function resolvedSourceKind(source: string, requested: DocumentImportSourceKind) {
   if (requested !== "auto") return requested;
+  if (hasLatexCommentSignal(source)) return "latex";
   literalLatexCommandPattern.lastIndex = 0;
   if (literalLatexCommandPattern.test(source)) return "latex";
   const hasLiteralEnvironmentOutsideMath = latexLiteralFallbackRanges(source).some(

@@ -880,6 +880,124 @@ Result body with $z=3$.
     styledTextIncludes: [{ style: "quote", text: "Result body" }],
     codeTextIncludes: [String.raw`\newtheorem{result}{Result}[section]`],
   },
+  {
+    name: "latex-auto-percent-comment-banner",
+    kind: "auto",
+    source: String.raw`这就是色散媒质中频域形式的本构关系。
+
+% ==================== % 6. 磁色散媒质中的本构关系 %
+====================
+
+如果磁响应也具有色散，则磁化强度为
+\[
+M(\omega)=\chi_m(\omega)H(\omega)
+\]`,
+    lineEndings: allLineEndings,
+    expected: [{ mode: "block", contains: "\\chi_m" }],
+    textIncludes: [
+      "这就是色散媒质中频域形式的本构关系。",
+      "如果磁响应也具有色散，则磁化强度为",
+    ],
+    textExcludes: ["磁色散媒质中的本构关系", "====================", "%"],
+  },
+  {
+    name: "latex-escaped-percent-and-inline-comment",
+    kind: "latex",
+    source: String.raw`效率为 50\%，公式为 $x=1$。 % 这一段应被删除
+下一句。`,
+    lineEndings: allLineEndings,
+    expected: [{ mode: "inline", contains: "x=1" }],
+    textIncludes: ["效率为 50%", "下一句。"],
+    textExcludes: ["这一段应被删除"],
+  },
+  {
+    name: "latex-cjk-inline-formula-boundary-spacing",
+    kind: "latex",
+    source: String.raw`对于良导体低频近似，若 \(\varepsilon_r(\omega)\) 的本征极化部分可以忽略，则成立。`,
+    expected: [{ mode: "inline", contains: "\\varepsilon_r" }],
+    blockSequence: [
+      { kind: "text", value: "对于良导体低频近似，若" },
+      { kind: "formula", value: String.raw`\varepsilon_r(\omega)` },
+      { kind: "text", value: "的本征极化部分可以忽略，则成立。" },
+    ],
+  },
+  {
+    name: "markdown-cjk-inline-formula-boundary-spacing",
+    kind: "markdown",
+    source: String.raw`对于良导体低频近似，若 $\varepsilon_r(\omega)$ 的本征极化部分可以忽略，则成立。`,
+    expected: [{ mode: "inline", contains: "\\varepsilon_r" }],
+    blockSequence: [
+      { kind: "text", value: "对于良导体低频近似，若" },
+      { kind: "formula", value: String.raw`\varepsilon_r(\omega)` },
+      { kind: "text", value: "的本征极化部分可以忽略，则成立。" },
+    ],
+  },
+  {
+    name: "markdown-english-inline-spacing-preserved",
+    kind: "markdown",
+    source: "Let $x$ be a variable.",
+    expected: [{ mode: "inline", contains: "x" }],
+    blockSequence: [
+      { kind: "text", value: "Let " },
+      { kind: "formula", value: "x" },
+      { kind: "text", value: " be a variable." },
+    ],
+  },
+  {
+    name: "latex-equation-with-inner-aligned-is-idempotent",
+    kind: "latex",
+    source: String.raw`\begin{equation}
+\begin{aligned}
+f^{*}(\mathbf{x})
+&=
+\frac{1}{p(\mathbf{x})}
+\int t\,p(\mathbf{x},t)\,\mathrm{d}t  \\
+&=
+\int t\,p(t\mid\mathbf{x})\,\mathrm{d}t
+=
+\mathbb{E}_{t}[t\mid\mathbf{x}]
+\end{aligned}
+\end{equation}`,
+    lineEndings: allLineEndings,
+    expected: [
+      {
+        mode: "block",
+        numbered: true,
+        contains: String.raw`\begin{aligned}`,
+        artifactCodeFormat: "equation",
+        artifactLineCount: 1,
+        canonicalIncludes: [
+          String.raw`\begin{equation}`,
+          String.raw`\begin{aligned}`,
+          String.raw`\end{aligned}`,
+          String.raw`\end{equation}`,
+        ],
+        minSvgWidth: 240,
+        maxSvgHeight: 130,
+      },
+    ],
+  },
+  {
+    name: "latex-equation-star-with-inner-alignedat-is-idempotent",
+    kind: "latex",
+    source: String.raw`\begin{equation*}
+\begin{alignedat}{2}
+a&=b &\qquad c&=d \\
+e&=f &\qquad g&=h
+\end{alignedat}
+\end{equation*}`,
+    expected: [
+      {
+        mode: "block",
+        numbered: false,
+        contains: String.raw`\begin{alignedat}`,
+        artifactCodeFormat: "equation-star",
+        artifactLineCount: 1,
+        canonicalIncludes: [String.raw`\begin{equation*}`, String.raw`\begin{alignedat}`],
+        maxSvgHeight: 100,
+      },
+    ],
+  },
 ];
 
 function withLineEnding(source, lineEnding) {
@@ -958,6 +1076,38 @@ for (const fixture of fixtures) {
       );
       assert.ok(artifacts.omml?.ommlBase64, `${label} OMML artifact`);
       assert.ok(artifacts.omml?.ommlDocxBase64, `${label} OMML DOCX artifact`);
+      if (expected.artifactCodeFormat) {
+        assert.equal(
+          artifacts.codeFormat,
+          expected.artifactCodeFormat,
+          `${label} artifact code format`,
+        );
+      }
+      if (expected.artifactLineCount) {
+        assert.equal(
+          artifacts.lines.length,
+          expected.artifactLineCount,
+          `${label} artifact logical line count`,
+        );
+      }
+      for (const sourceFragment of expected.canonicalIncludes ?? []) {
+        assert.ok(
+          artifacts.canonicalLatex.includes(sourceFragment),
+          `${label} canonical LaTeX must contain ${sourceFragment}`,
+        );
+      }
+      if (expected.minSvgWidth) {
+        assert.ok(
+          artifacts.svg.width >= expected.minSvgWidth,
+          `${label} SVG width ${artifacts.svg.width} must be at least ${expected.minSvgWidth}`,
+        );
+      }
+      if (expected.maxSvgHeight) {
+        assert.ok(
+          artifacts.svg.height <= expected.maxSvgHeight,
+          `${label} SVG height ${artifacts.svg.height} must be at most ${expected.maxSvgHeight}`,
+        );
+      }
       renderedFormulas += 1;
     });
 
@@ -977,6 +1127,16 @@ for (const fixture of fixtures) {
     }
     for (const text of fixture.textExcludes ?? []) {
       assert.ok(!prose.includes(text), `${label} prose must remove ${text}`);
+    }
+    if (fixture.blockSequence) {
+      assert.deepEqual(
+        blocks.map((block) => ({
+          kind: block.kind,
+          value: block.kind === "text" ? block.text : block.latex,
+        })),
+        fixture.blockSequence,
+        `${label} paragraph/formula boundary sequence`,
+      );
     }
     for (const text of fixture.codeTextIncludes ?? []) {
       const literalBlock = blocks.find(

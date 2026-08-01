@@ -12,6 +12,7 @@ const longPhysicsRegression = process.argv.includes("--long-physics");
 const boundaryValueRegression = process.argv.includes("--boundary-value");
 const literalFallbackRegression = process.argv.includes("--literal-fallback");
 const theoremStructureRegression = process.argv.includes("--theorem-structure");
+const edgeStructureRegression = process.argv.includes("--edge-structures");
 const artifactOutputArgument = process.argv.find((argument) =>
   argument.startsWith("--artifact-output="),
 );
@@ -24,13 +25,17 @@ if (
     boundaryValueRegression,
     literalFallbackRegression,
     theoremStructureRegression,
+    edgeStructureRegression,
   ].filter(Boolean).length > 1
 ) {
   throw new Error("Choose only one document import fixture regression");
 }
 const fixtureRegression = longPhysicsRegression || boundaryValueRegression;
 const customSettingsRegression =
-  !fixtureRegression && !literalFallbackRegression && !theoremStructureRegression;
+  !fixtureRegression &&
+  !literalFallbackRegression &&
+  !theoremStructureRegression &&
+  !edgeStructureRegression;
 const baseUrl = `http://127.0.0.1:${previewPort}/?view=office-document-import&sessionId=${sessionId}&transport=tauri`;
 const chromeProfile = `/tmp/visualtex-document-import-${process.pid}`;
 const chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -315,9 +320,30 @@ A=\begin{pmatrix}1&0\\0&2\end{pmatrix}
 \begin{proof}[充分性]
 由 $x=1$ 立即得到。\qedhere
 \end{proof}`;
-    const regressionSource = theoremStructureRegression
-      ? theoremStructureSource
-      : literalFallbackRegression
+    const edgeStructureSource = String.raw`这就是色散媒质中频域形式的本构关系。
+
+% ==================== % 6. 磁色散媒质中的本构关系 %
+====================
+
+对于良导体低频近似，若 \(\varepsilon_r(\omega)\) 的本征极化部分可以忽略，则
+
+\begin{equation}
+\begin{aligned}
+f^{*}(\mathbf{x})
+&=
+\frac{1}{p(\mathbf{x})}
+\int t\,p(\mathbf{x},t)\,\mathrm{d}t  \\
+&=
+\int t\,p(t\mid\mathbf{x})\,\mathrm{d}t
+=
+\mathbb{E}_{t}[t\mid\mathbf{x}]
+\end{aligned}
+\end{equation}`;
+    const regressionSource = edgeStructureRegression
+      ? edgeStructureSource
+      : theoremStructureRegression
+        ? theoremStructureSource
+        : literalFallbackRegression
         ? literalFallbackSource
         : boundaryValueRegression
           ? boundaryValueDocumentSource
@@ -335,9 +361,11 @@ A=\begin{pmatrix}1&0\\0&2\end{pmatrix}
       textarea.dispatchEvent(new Event("input", { bubbles: true }));
     })()`);
 
-    const expectedFormulaCount = theoremStructureRegression
-      ? 3
-      : literalFallbackRegression
+    const expectedFormulaCount = edgeStructureRegression
+      ? 2
+      : theoremStructureRegression
+        ? 3
+        : literalFallbackRegression
         ? 2
         : boundaryValueRegression
           ? 22
@@ -361,7 +389,15 @@ A=\begin{pmatrix}1&0\\0&2\end{pmatrix}
         summary: document.querySelector(".document-import-summary")?.innerText ?? "",
       };
     })()`);
-    if (theoremStructureRegression) {
+    if (edgeStructureRegression) {
+      if (
+        parsed.count !== 2 ||
+        parsed.modes.join(",") !== "inline,block" ||
+        parsed.numbered.join(",") !== "false,true"
+      ) {
+        throw new Error(`Unexpected edge structure blocks: ${JSON.stringify(parsed)}`);
+      }
+    } else if (theoremStructureRegression) {
       if (
         parsed.count !== 3 ||
         parsed.modes.join(",") !== "inline,block,inline" ||
@@ -491,6 +527,61 @@ A=\begin{pmatrix}1&0\\0&2\end{pmatrix}
     }
     if (new Set(formulas.map((formula) => formula.formulaId)).size !== formulas.length) {
       throw new Error("Imported formulas did not receive independent identities");
+    }
+    if (edgeStructureRegression) {
+      const allText = texts.map((item) => item.text).join("\n");
+      if (
+        allText.includes("%") ||
+        allText.includes("====================") ||
+        allText.includes("磁色散媒质中的本构关系")
+      ) {
+        throw new Error(
+          `LaTeX comments leaked into the commit: ${JSON.stringify(texts)}`,
+        );
+      }
+      const beforeInline = texts.find(
+        (item) => item.text === "对于良导体低频近似，若",
+      );
+      const afterInline = texts.find(
+        (item) => item.text === "的本征极化部分可以忽略，则",
+      );
+      const inlineFormula = formulas.find((formula) =>
+        formula.latex.includes(String.raw`\varepsilon_r(\omega)`),
+      );
+      const alignedFormula = formulas.find((formula) =>
+        formula.latex.includes(String.raw`\begin{aligned}`),
+      );
+      if (
+        !beforeInline ||
+        !afterInline ||
+        !inlineFormula ||
+        beforeInline.paragraphId !== inlineFormula.paragraphId ||
+        afterInline.paragraphId !== inlineFormula.paragraphId ||
+        beforeInline.paragraphStart !== true ||
+        inlineFormula.paragraphStart !== false ||
+        inlineFormula.paragraphEnd !== false ||
+        afterInline.paragraphEnd !== true
+      ) {
+        throw new Error(
+          `Inline formula CJK boundaries retained spacing or lost paragraph identity: ${JSON.stringify({ texts, formulas })}`,
+        );
+      }
+      if (
+        !alignedFormula ||
+        alignedFormula.displayMode !== "block" ||
+        alignedFormula.numbered !== true ||
+        alignedFormula.metadata?.codeFormat !== "equation" ||
+        alignedFormula.metadata?.lines?.length !== 1 ||
+        !alignedFormula.latex.startsWith("\\begin{equation}\n") ||
+        !alignedFormula.latex.includes("\\begin{aligned}\n") ||
+        alignedFormula.width < 240 ||
+        alignedFormula.width > 360 ||
+        alignedFormula.height > 130
+      ) {
+        throw new Error(
+          `Nested aligned equation was renormalized or rendered vertically: ${JSON.stringify(alignedFormula)}`,
+        );
+      }
     }
     if (theoremStructureRegression) {
       const findText = (value, style, listKind = "none") =>

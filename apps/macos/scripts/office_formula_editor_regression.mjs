@@ -301,6 +301,53 @@ f(x,y)=\sum_{n=1}^{+\infty}\sum_{m=1}^{+\infty}d_{nm}\sin\frac{n\pi}{a}x\sin\fra
   assert.ok(rendered.svg.width > 0 && rendered.svg.height > 0);
 }
 
+const equationWithAlignedSource = String.raw`\begin{equation}
+\begin{aligned}
+f^{*}(\mathbf{x})
+&=
+\frac{1}{p(\mathbf{x})}
+\int t\,p(\mathbf{x},t)\,\mathrm{d}t \\
+&=
+\int t\,p(t\mid\mathbf{x})\,\mathrm{d}t
+=
+\mathbb{E}_{t}[t\mid\mathbf{x}]
+\end{aligned}
+\end{equation}`;
+const equationWithAligned = normalize(equationWithAlignedSource);
+assert.equal(equationWithAligned.codeFormat, "equation");
+assert.equal(equationWithAligned.lines.length, 1);
+assert.ok(equationWithAligned.lines[0].latex.includes("\\begin{aligned}"));
+const equationWithAlignedSecondPass = normalizeFormulaEditorDocument(
+  equationWithAligned.lines,
+  equationWithAligned.codeFormat,
+);
+assert.equal(equationWithAlignedSecondPass.codeFormat, "equation");
+assert.deepEqual(
+  equationWithAlignedSecondPass.lines,
+  equationWithAligned.lines,
+  "a normalized outer equation must not be reclassified from its inner aligned environment",
+);
+const equationWithAlignedRendered = renderOfficeFormulaArtifacts({
+  lines: equationWithAligned.lines,
+  codeFormat: equationWithAligned.codeFormat,
+  displayMode: "block",
+  host: "word",
+  includeWordOmml: false,
+});
+assert.equal(equationWithAlignedRendered.codeFormat, "equation");
+assert.equal(equationWithAlignedRendered.lines.length, 1);
+assert.ok(
+  equationWithAlignedRendered.canonicalLatex.startsWith("\\begin{equation}\n"),
+);
+assert.ok(
+  equationWithAlignedRendered.canonicalLatex.includes("\\begin{aligned}\n"),
+);
+assert.ok(equationWithAlignedRendered.svg.width > 240);
+assert.ok(
+  equationWithAlignedRendered.svg.height < 130,
+  "source-formatting newlines inside aligned must not become independent visual rows",
+);
+
 const displayMath = normalize(
   String.raw`\begin{displaymath}x^2+y^2=z^2\end{displaymath}`,
 );
