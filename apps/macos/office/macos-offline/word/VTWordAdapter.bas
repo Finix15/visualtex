@@ -8857,6 +8857,43 @@ Private Sub VTTraceDocumentImportStage( _
     On Error GoTo 0
 End Sub
 
+Private Function VTUnicodeBmp(ByVal codePoint As Long) As String
+    If codePoint > &H7FFF& Then codePoint = codePoint - &H10000
+    VTUnicodeBmp = ChrW$(codePoint)
+End Function
+
+Private Function VTDocumentImportStatusPrefix( _
+    ByVal stageName As String) As String
+
+    Select Case stageName
+        Case "preparing"
+            VTDocumentImportStatusPrefix = _
+                "VisualTeX " & _
+                VTUnicodeBmp(&H6B63&) & VTUnicodeBmp(&H5728&) & _
+                VTUnicodeBmp(&H51C6&) & VTUnicodeBmp(&H5907&) & _
+                VTUnicodeBmp(&H6279&) & VTUnicodeBmp(&H91CF&) & _
+                VTUnicodeBmp(&H5BFC&) & VTUnicodeBmp(&H5165&) & _
+                VTUnicodeBmp(&H2026&)
+        Case "inserting"
+            VTDocumentImportStatusPrefix = _
+                "VisualTeX " & _
+                VTUnicodeBmp(&H6B63&) & VTUnicodeBmp(&H5728&) & _
+                VTUnicodeBmp(&H63D2&) & VTUnicodeBmp(&H5165&) & _
+                " Word " & _
+                VTUnicodeBmp(&H6587&) & VTUnicodeBmp(&H6863&) & _
+                VTUnicodeBmp(&HFF1A&)
+        Case "complete"
+            VTDocumentImportStatusPrefix = _
+                "VisualTeX " & _
+                VTUnicodeBmp(&H6279&) & VTUnicodeBmp(&H91CF&) & _
+                VTUnicodeBmp(&H5BFC&) & VTUnicodeBmp(&H5165&) & _
+                VTUnicodeBmp(&H5B8C&) & VTUnicodeBmp(&H6210&) & _
+                VTUnicodeBmp(&HFF1A&)
+        Case Else
+            VTDocumentImportStatusPrefix = ""
+    End Select
+End Function
+
 Private Sub VTUpdateDocumentImportProgress( _
     ByVal sessionId As String, _
     ByVal currentItem As Long, _
@@ -8876,22 +8913,33 @@ Private Sub VTUpdateDocumentImportProgress( _
         "total=" & CStr(totalItems) & vbLf & _
         "stage=" & stageName & vbLf
 
-    Select Case stageName
-        Case "preparing"
-            statusText = "VisualTeX 正在准备批量导入…"
-        Case "inserting"
-            statusText = "VisualTeX 正在插入 Word 文档：" & _
-                CStr(currentItem) & "/" & CStr(totalItems)
-        Case "complete"
-            statusText = "VisualTeX 批量导入完成：" & _
-                CStr(totalItems) & "/" & CStr(totalItems)
-        Case Else
-            statusText = ""
-    End Select
+    statusText = VTDocumentImportStatusPrefix(stageName)
+    If stageName = "inserting" Then
+        statusText = statusText & _
+            CStr(currentItem) & "/" & CStr(totalItems)
+    ElseIf stageName = "complete" Then
+        statusText = statusText & _
+            CStr(totalItems) & "/" & CStr(totalItems)
+    End If
     Application.StatusBar = statusText
     DoEvents
     Err.Clear
     On Error GoTo 0
+End Sub
+
+Public Sub VisualTeX_SetDocumentImportStatusEncodingRegression()
+    Dim statusText As String
+
+    statusText = VTDocumentImportStatusPrefix("inserting") & "11/35"
+    Application.StatusBar = statusText
+    VTWriteTextAtomic _
+        VTApplicationSupportRoot() & _
+            "/document-import-status-encoding-regression.txt", _
+        statusText
+End Sub
+
+Public Sub VisualTeX_ClearDocumentImportStatusEncodingRegression()
+    Application.StatusBar = ""
 End Sub
 
 Private Sub VTCancelWordDocumentImportDispatch( _
