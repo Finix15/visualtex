@@ -426,13 +426,16 @@ assert.ok(editorWorkspace.includes("data-formula-selection-bold"));
 assert.ok(editorWorkspace.includes("data-formula-selection-italic"));
 assert.ok(editorWorkspace.includes("data-formula-selection-color"));
 assert.ok(editorWorkspace.includes("data-formula-selection-background"));
+assert.ok(editorWorkspace.includes("typingStyle={typingStyle}"));
 assert.ok(
-  editorWorkspace.includes("typingStyle={showOfficeActions ? typingStyle : undefined}"),
+  !editorWorkspace.includes("typingStyle={showOfficeActions ? typingStyle : undefined}"),
 );
 assert.ok(mathEditor.includes("applyTypingStyleAtCollapsedSelection"));
 assert.ok(mathEditor.includes("captureSelectionTarget"));
 assert.ok(mathEditor.includes("applySelectionStyle"));
 assert.ok(mathEditor.includes("MathLive owns pointer capture"));
+assert.ok(mathEditor.includes(":host(.has-visualtex-multi-line-selection)"));
+assert.ok(mathEditor.includes("multiLineSelectionRef.current && event.buttons === 0"));
 assert.ok(documentImportApp.includes("Word 结构预览"));
 assert.ok(documentImportApp.includes("doc-import-preview-stage"));
 assert.ok(documentImportApp.includes("doc-import-preview-counts"));
@@ -939,6 +942,12 @@ for (const bundledOfficeResource of [
   assert.ok(windowsBundle.includes(bundledOfficeResource));
 }
 assert.ok(installerHooks.includes("${NSD_Check} $VisualTeXOfficeNativeRadio"));
+assert.ok(installerHooks.includes("!define MUI_CUSTOMFUNCTION_GUIINIT VisualTeXOnGuiInit"));
+assert.ok(installerHooks.includes("Function VisualTeXOnGuiInit"));
+assert.ok(installerHooks.includes("VisualTeXDefaultMaintenanceUninstall"));
+assert.ok(installerHooks.includes('$(addOrReinstall)'));
+assert.ok(installerHooks.includes('SendMessage $R3 ${BM_CLICK} 0 0'));
+assert.ok(installerHooks.includes('${NSD_SetFocus} $R3'));
 assert.ok(installerHooks.includes("VisualTeXRepairMainUninstallRegistration"));
 assert.ok(installerHooks.includes('WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\VisualTeX"'));
 assert.ok(installerHooks.includes('$INSTDIR == "$PROFILE\\AppData\\VisualTeX"'));

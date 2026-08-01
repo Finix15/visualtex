@@ -2562,6 +2562,12 @@ function installVisualTexStructuralPlaceholderStyle(field: MathfieldElement) {
       .ML__container.${visualTexRawLatexClass} .ML__selection {
         display: none !important;
       }
+
+      :host(.has-visualtex-multi-line-selection)
+        .ML__container .ML__selection {
+        display: block !important;
+        background: var(--_selection-background-color) !important;
+      }
     `;
     shadowRoot.append(style);
   }
@@ -7774,7 +7780,13 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
 
       const handleWindowPointerMove = (event: PointerEvent) => {
         const session = pointerSelectionSessionRef.current;
-        if (!session || event.pointerId !== session.pointerId) return;
+        if (!session) {
+          if (multiLineSelectionRef.current && event.buttons === 0) {
+            event.stopImmediatePropagation();
+          }
+          return;
+        }
+        if (event.pointerId !== session.pointerId) return;
         const distance = Math.hypot(
           event.clientX - session.startX,
           event.clientY - session.startY,
@@ -7798,11 +7810,11 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         pointerSelectionSessionRef.current = null;
         if (!session.active) return;
 
-        event.preventDefault();
-        // Do not stop propagation here. MathLive owns pointer capture on the
-        // active mathfield and must receive pointerup to end its internal drag
-        // tracker. Blocking that target listener leaves the selection attached
-        // to later pointermove events even after the mouse button is released.
+        // Do not prevent or stop this pointerup. MathLive owns pointer capture
+        // on the active mathfield and must finish its own drag tracker first.
+        // Reapply the cross-line ranges in the next task, after MathLive's
+        // target-phase pointerup handlers have completed, so later free mouse
+        // movement cannot collapse the final line again.
         for (const field of fieldRefs.current.values()) {
           visualTexPointerSelectingFields.delete(field);
           field.classList.remove(visualTexPointerSelectingClass);
@@ -7811,14 +7823,24 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         }
         const selection = multiLineSelectionRef.current;
         if (!selection) return;
-        const focusField = fieldRefs.current.get(selection.focus.lineId);
-        if (focusField?.isConnected) {
-          focusField.focus();
-          focusField.shadowRoot
-            ?.querySelector<HTMLElement>('[part="keyboard-sink"]')
-            ?.focus({ preventScroll: true });
-          applyMultiLineSelection(selection.anchor, selection.focus);
-          setActiveLine(selection.focus.lineId);
+        window.setTimeout(() => {
+          const currentSelection = multiLineSelectionRef.current;
+          if (!currentSelection) return;
+          applyMultiLineSelection(
+            currentSelection.anchor,
+            currentSelection.focus,
+          );
+          setActiveLine(currentSelection.focus.lineId);
+        }, 0);
+      };
+
+      const handleWindowMouseMove = (event: MouseEvent) => {
+        if (
+          !pointerSelectionSessionRef.current &&
+          multiLineSelectionRef.current &&
+          event.buttons === 0
+        ) {
+          event.stopImmediatePropagation();
         }
       };
 
@@ -7837,11 +7859,13 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
 
       surface.addEventListener("pointerdown", handleSurfacePointerDown, true);
       window.addEventListener("pointermove", handleWindowPointerMove, true);
+      window.addEventListener("mousemove", handleWindowMouseMove, true);
       window.addEventListener("pointerup", handleWindowPointerEnd, true);
       window.addEventListener("pointercancel", handleWindowPointerCancel, true);
       return () => {
         surface.removeEventListener("pointerdown", handleSurfacePointerDown, true);
         window.removeEventListener("pointermove", handleWindowPointerMove, true);
+        window.removeEventListener("mousemove", handleWindowMouseMove, true);
         window.removeEventListener("pointerup", handleWindowPointerEnd, true);
         window.removeEventListener("pointercancel", handleWindowPointerCancel, true);
       };

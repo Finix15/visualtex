@@ -2,9 +2,49 @@
 ; The production path installs the per-user Ribbon COM add-ins and ATL OLE
 ; LocalServer. Legacy Office.js Trusted Catalog resources are not installed.
 
+!define VISUALTEX_INSTALLER_VERSION "1.2.3"
+
 Var VisualTeXOfficeChoice
 Var VisualTeXOfficeOnlyRadio
 Var VisualTeXOfficeNativeRadio
+Var VisualTeXMaintenanceDefaultApplied
+Var VisualTeXMaintenanceTimerTicks
+
+; On Tauri's same-version maintenance page, default to the second radio:
+; "Uninstall VisualTeX". Upgrades use different button text and are untouched.
+!define MUI_CUSTOMFUNCTION_GUIINIT VisualTeXOnGuiInit
+Function VisualTeXOnGuiInit
+  StrCpy $VisualTeXMaintenanceDefaultApplied "0"
+  StrCpy $VisualTeXMaintenanceTimerTicks "0"
+  ${NSD_CreateTimer} VisualTeXDefaultMaintenanceUninstall 50
+FunctionEnd
+
+Function VisualTeXDefaultMaintenanceUninstall
+  ${If} $VisualTeXMaintenanceDefaultApplied == "1"
+    ${NSD_KillTimer} VisualTeXDefaultMaintenanceUninstall
+    Return
+  ${EndIf}
+
+  IntOp $VisualTeXMaintenanceTimerTicks $VisualTeXMaintenanceTimerTicks + 1
+  ${If} $VisualTeXMaintenanceTimerTicks > 200
+    ${NSD_KillTimer} VisualTeXDefaultMaintenanceUninstall
+    Return
+  ${EndIf}
+
+  System::Call 'user32::IsWindow(p $R2)i.r0'
+  ${If} $0 == 0
+    Return
+  ${EndIf}
+  ${NSD_GetText} $R2 $0
+  ${If} $0 != "$(addOrReinstall)"
+    Return
+  ${EndIf}
+
+  SendMessage $R3 ${BM_CLICK} 0 0
+  ${NSD_SetFocus} $R3
+  StrCpy $VisualTeXMaintenanceDefaultApplied "1"
+  ${NSD_KillTimer} VisualTeXDefaultMaintenanceUninstall
+FunctionEnd
 
 Page custom VisualTeXOfficePageCreate VisualTeXOfficePageLeave
 
@@ -34,7 +74,7 @@ Function VisualTeXRepairMainUninstallRegistration
   WriteRegStr HKCU "Software\visualtex\VisualTeX" "" "$1"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VisualTeX" "DisplayName" "VisualTeX"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VisualTeX" "DisplayIcon" '$\"$1\visualtex.exe$\"'
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VisualTeX" "DisplayVersion" "1.2.3"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VisualTeX" "DisplayVersion" "${VISUALTEX_INSTALLER_VERSION}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VisualTeX" "Publisher" "visualtex"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VisualTeX" "InstallLocation" '$\"$1$\"'
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VisualTeX" "UninstallString" '$\"$1\uninstall.exe$\"'

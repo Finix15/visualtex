@@ -4743,14 +4743,6 @@ textarea:disabled {
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
-.formula-line.is-multi-line-selected {
-  background: color-mix(in srgb, var(--accent-soft) 58%, transparent);
-}
-
-.formula-line.is-multi-line-selected.is-active {
-  background: color-mix(in srgb, var(--accent-soft) 68%, transparent);
-}
-
 .formula-line-number {
   width: 27px;
   height: 20px;

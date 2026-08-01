@@ -306,7 +306,7 @@ export function EditorWorkspace({
         activeLineId={visualActiveLineId}
         formulaAlignment={formulaAlignment}
         zoom={zoom}
-        typingStyle={showOfficeActions ? typingStyle : undefined}
+        typingStyle={typingStyle}
         readOnly={Boolean(previewLines)}
         draftError={sourceDraftFallback?.error}
         onPasteImage={
@@ -438,8 +438,7 @@ export function EditorWorkspace({
                     <Icon size={16} strokeWidth={2} />
                   </button>
                 ))}
-                {showOfficeActions && (
-                  <>
+                <>
                     <span className="formula-formatting-divider" aria-hidden="true" />
                     <div
                       ref={formulaColorMenuRef}
@@ -666,7 +665,6 @@ export function EditorWorkspace({
                       )}
                     </div>
                   </>
-                )}
               </div>
             </div>
             <div className="canvas-tool-group">
