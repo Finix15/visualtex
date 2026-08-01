@@ -1502,6 +1502,12 @@ pub fn run() {
                 });
             }
 
+            // Set the application icon while setup is still on AppKit's main
+            // thread. Background-agent launches may stay accessory-only for a
+            // long time, but the first later transition to a regular app must
+            // already have the real VisualTeX Dock icon installed.
+            office::background::install_application_icon(app.handle())
+                .map_err(std::io::Error::other)?;
             let office_state = office::initialize(app.handle(), office_ocr_state.clone())
                 .map_err(std::io::Error::other)?;
             if let Err(error) = office::powerpoint_native::start_double_click_monitor(

@@ -43,6 +43,7 @@ const requiredFiles = [
   "office/macos-offline/powerpoint/customUI14.xml",
   "office/macos-offline/powerpoint/VisualTeXPowerPoint.scpt",
   "src-tauri/src/office/macos_offline.rs",
+  "src-tauri/src/office/background.rs",
   "src-tauri/src/office/macos_offline_installer.rs",
   "src-tauri/Info.macos.plist",
   "scripts/package_macos_offline_addins.mjs",
@@ -75,6 +76,7 @@ const launcher = read("office/macos-offline/shared/VTLauncher.bas");
 const wordScript = read("office/macos-offline/word/VisualTeXWord.scpt");
 const powerpointScript = read("office/macos-offline/powerpoint/VisualTeXPowerPoint.scpt");
 const rustRuntime = read("src-tauri/src/office/macos_offline.rs");
+const backgroundRuntime = read("src-tauri/src/office/background.rs");
 const nativeInteraction = read("src-tauri/src/office/powerpoint_native.rs");
 const appRuntime = read("src-tauri/src/lib.rs");
 const installer = read("src-tauri/src/office/macos_offline_installer.rs");
@@ -863,7 +865,14 @@ expectIncludes(rustRuntime, "previous_reference_height", "PowerPoint edits must 
 expectIncludes(rustRuntime, '("fontSizePt", format!', "PowerPoint dispatches must carry the resolved point size back to VBA");
 expectIncludes(rustRuntime, "metadata.font_size_pt = Some(geometry.font_size_pt)", "PowerPoint metadata must retain the resolved SVG point size");
 expectIncludes(wordAdapter, 'VTApplicationSupportRoot() & "/NativeDocuments/" & formulaId & ".docx"', "Word image-to-OMML conversion must resolve the same durable formula-scoped staging path");
-expectIncludes(rustRuntime, "hide_main_window(app)?", "Office formula requests must hide the main VisualTeX workspace");
+const handleOpenUrlStart = rustRuntime.indexOf("pub(crate) fn handle_open_url");
+const handleOpenUrlEnd = rustRuntime.indexOf("fn decode_png", handleOpenUrlStart);
+const handleOpenUrlSource = rustRuntime.slice(handleOpenUrlStart, handleOpenUrlEnd);
+expect(handleOpenUrlStart >= 0 && handleOpenUrlEnd > handleOpenUrlStart, "The native Office URL handler source must be discoverable");
+expect(!handleOpenUrlSource.includes("hide_main_window"), "Opening an Office formula must not hide an already visible VisualTeX main workspace");
+expectIncludes(appRuntime, "office::background::install_application_icon(app.handle())", "macOS setup must install the VisualTeX application icon before any background-to-foreground transition");
+expectIncludes(backgroundRuntime, 'const DOCK_ICON_MIGRATION_MARKER_FILE: &str = "dock-icon-v4.refreshed"', "The repaired Dock icon lifecycle must refresh stale same-version icon cache once");
+expectIncludes(backgroundRuntime, "Install the bundle icon before changing activation policy", "Foreground reveal must install the VisualTeX icon before creating a regular Dock tile");
 expectIncludes(rustRuntime, "open_editor_window(app, host, &session_id, received_epoch_ms, received_at)", "Office formula requests must activate the fixed host editor with one generation and timing origin");
 expectIncludes(rustRuntime, "office-native-dialog.html?transport=tauri", "The resident Office editor must use the direct native-dialog entry so a hidden prewarmed WebView cannot stall on the desktop entry's dynamic import");
 expectIncludes(read("src/desktop/main.tsx"), 'view === "office-formula"', "The desktop entry must select the dedicated Office formula view from the window query");

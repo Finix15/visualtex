@@ -2056,7 +2056,12 @@ pub(crate) fn handle_open_url(app: &AppHandle, value: &str) -> Result<(), String
     );
     ensure_runtime_root(host)?;
 
-    crate::office::background::hide_main_window(app)?;
+    // An Office request owns only its dedicated editor window. Do not hide an
+    // already visible desktop workspace: a background-agent process may have
+    // been promoted to the user's main VisualTeX app through Dock/Reopen, and
+    // hiding it here would also return the whole process to Accessory after the
+    // Office editor closes. Cold Office launches are already hidden during
+    // setup, so preserving the current main-window state introduces no flash.
     if request.operation.as_deref() == Some("documentImport") {
         for host in [OfficeHost::Word, OfficeHost::Powerpoint] {
             if let Some(window) = app.get_webview_window(editor_window_label(host)) {

@@ -20,7 +20,7 @@ pub const BACKGROUND_ARGUMENT: &str = "--office-background";
 pub const LAUNCH_AGENT_LABEL: &str = "com.visualtex.studio.office";
 const LAUNCH_AGENT_FILE: &str = "com.visualtex.studio.office.plist";
 const BACKGROUND_MARKER_FILE: &str = "office-background.enabled";
-const DOCK_ICON_MIGRATION_MARKER_FILE: &str = "dock-icon-v3.refreshed";
+const DOCK_ICON_MIGRATION_MARKER_FILE: &str = "dock-icon-v4.refreshed";
 #[cfg(target_os = "macos")]
 static APPLICATION_ICON_INSTALLED: AtomicBool = AtomicBool::new(false);
 
@@ -521,8 +521,12 @@ fn refresh_dock_after_icon_migration() -> Result<(), String> {
 }
 
 pub fn reveal_main_window(app: &AppHandle) -> Result<(), String> {
-    activate_foreground_app(app)?;
+    // Install the bundle icon before changing activation policy. A process
+    // launched by the Office background agent has no Dock tile until it becomes
+    // Regular; setting the icon first prevents macOS from creating a generic or
+    // empty tile during that transition.
     install_application_icon(app)?;
+    activate_foreground_app(app)?;
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "VisualTeX main window is unavailable".to_string())?;
