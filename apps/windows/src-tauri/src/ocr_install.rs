@@ -71,6 +71,7 @@ pub const INSTALL_STATUS_SCHEMA: u32 = 1;
 pub const INSTALL_STATUS_FILE: &str = "install-status.json";
 pub const INSTALL_PID_FILE: &str = "install-process.json";
 pub const INSTALL_LOG_FILE: &str = "ocr-install.log";
+pub const PREVIOUS_INSTALL_LOG_FILE: &str = "ocr-install.previous.log";
 const INSTALL_ACTIVITY_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const INSTALL_STATUS_UPDATE_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -429,6 +430,56 @@ fn update_live_install_status(
 
 pub fn install_log_path(runtime_root: &Path) -> PathBuf {
     runtime_root.join("logs").join(INSTALL_LOG_FILE)
+}
+
+pub fn previous_install_log_path(runtime_root: &Path) -> PathBuf {
+    runtime_root.join("logs").join(PREVIOUS_INSTALL_LOG_FILE)
+}
+
+pub fn begin_install_log_session(runtime_root: &Path) -> Result<(), String> {
+    let path = install_log_path(runtime_root);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("Unable to create OCR installation log directory: {error}"))?;
+    }
+    let previous = previous_install_log_path(runtime_root);
+    if path.is_file() {
+        if previous.exists() {
+            fs::remove_file(&previous).map_err(|error| {
+                format!(
+                    "Unable to replace the previous OCR installation log {}: {error}",
+                    previous.display()
+                )
+            })?;
+        }
+        if let Err(rename_error) = fs::rename(&path, &previous) {
+            fs::copy(&path, &previous).map_err(|copy_error| {
+                format!(
+                    "Unable to rotate OCR installation log {} to {}: rename={rename_error}; copy={copy_error}",
+                    path.display(),
+                    previous.display()
+                )
+            })?;
+            fs::remove_file(&path).map_err(|error| {
+                format!(
+                    "Unable to clear the previous OCR installation log {} after rotation: {error}",
+                    path.display()
+                )
+            })?;
+        }
+    }
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&path)
+        .map_err(|error| format!("Unable to start a new OCR installation log: {error}"))?;
+    writeln!(
+        file,
+        "===== VisualTeX OCR install session | unix_ms={} =====",
+        now_ms()
+    )
+    .map_err(|error| format!("Unable to initialize OCR installation log: {error}"))
 }
 
 pub fn install_status_path(runtime_root: &Path) -> PathBuf {
@@ -1040,6 +1091,18 @@ mod tests {
             command.args(["-c", script]);
             command
         }
+    }
+
+    #[test]
+    fn install_log_session_rotates_the_previous_attempt() {
+        let root = tempdir().unwrap();
+        append_install_log(root.path(), "older attempt").unwrap();
+        begin_install_log_session(root.path()).unwrap();
+        let current = fs::read_to_string(install_log_path(root.path())).unwrap();
+        let previous = fs::read_to_string(previous_install_log_path(root.path())).unwrap();
+        assert!(current.contains("VisualTeX OCR install session"));
+        assert!(!current.contains("older attempt"));
+        assert!(previous.contains("older attempt"));
     }
 
     #[test]

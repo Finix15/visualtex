@@ -26,8 +26,9 @@ mod ocr_python_bundle;
 mod office;
 
 use ocr_install::{
-    append_install_log, cleanup_runtime_processes, cleanup_stale_process,
-    decode_process_output, install_log_path, load_snapshot, run_logged_command, save_snapshot,
+    append_install_log, begin_install_log_session, cleanup_runtime_processes,
+    cleanup_stale_process, decode_process_output, install_log_path, load_snapshot,
+    run_logged_command, save_snapshot,
     CommandCapture, CommandLimits,
     InstallControl, InstallSnapshot, InstallState,
 };
@@ -2013,6 +2014,9 @@ fn install_windows_runtime_inner(
     ] {
         fs::create_dir_all(directory)
             .map_err(|error| format!("Unable to create OCR runtime directory: {error}"))?;
+    }
+    if let Err(error) = begin_install_log_session(&paths.root) {
+        eprintln!("Unable to rotate OCR installation log: {error}");
     }
     let residual_processes = cleanup_runtime_processes(&paths.root)?;
     let stale_removed = cleanup_stale_process(&paths.root)?;
