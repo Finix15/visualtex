@@ -11,6 +11,7 @@ const sessionId = "12345678-1234-4234-9234-123456789abc";
 const longPhysicsRegression = process.argv.includes("--long-physics");
 const boundaryValueRegression = process.argv.includes("--boundary-value");
 const literalFallbackRegression = process.argv.includes("--literal-fallback");
+const theoremStructureRegression = process.argv.includes("--theorem-structure");
 const artifactOutputArgument = process.argv.find((argument) =>
   argument.startsWith("--artifact-output="),
 );
@@ -18,13 +19,18 @@ const artifactOutputPath = artifactOutputArgument?.slice(
   "--artifact-output=".length,
 ) ?? "";
 if (
-  [longPhysicsRegression, boundaryValueRegression, literalFallbackRegression].filter(Boolean)
-    .length > 1
+  [
+    longPhysicsRegression,
+    boundaryValueRegression,
+    literalFallbackRegression,
+    theoremStructureRegression,
+  ].filter(Boolean).length > 1
 ) {
   throw new Error("Choose only one document import fixture regression");
 }
 const fixtureRegression = longPhysicsRegression || boundaryValueRegression;
-const customSettingsRegression = !fixtureRegression && !literalFallbackRegression;
+const customSettingsRegression =
+  !fixtureRegression && !literalFallbackRegression && !theoremStructureRegression;
 const baseUrl = `http://127.0.0.1:${previewPort}/?view=office-document-import&sessionId=${sessionId}&transport=tauri`;
 const chromeProfile = `/tmp/visualtex-document-import-${process.pid}`;
 const chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -295,13 +301,29 @@ y &= z
 \customsymbol{q}
 \]
 \end{document}`;
-    const regressionSource = literalFallbackRegression
-      ? literalFallbackSource
-      : boundaryValueRegression
-        ? boundaryValueDocumentSource
-        : longPhysicsRegression
-          ? longPhysicsDocumentSource
-          : source;
+    const theoremStructureSource = String.raw`\newtheorem{thm}{定理}
+\newtheorem{lem}[thm]{引理}
+\begin{thm}[谱定理]
+正文公式 $Av=\lambda v$。
+\[
+A=\begin{pmatrix}1&0\\0&2\end{pmatrix}
+\]
+\end{thm}
+\begin{lem}
+共享计数器正文。
+\end{lem}
+\begin{proof}[充分性]
+由 $x=1$ 立即得到。\qedhere
+\end{proof}`;
+    const regressionSource = theoremStructureRegression
+      ? theoremStructureSource
+      : literalFallbackRegression
+        ? literalFallbackSource
+        : boundaryValueRegression
+          ? boundaryValueDocumentSource
+          : longPhysicsRegression
+            ? longPhysicsDocumentSource
+            : source;
     await evaluate(`(() => {
       const textarea = document.querySelector(".document-import-source-pane textarea");
       if (!textarea) throw new Error("Missing document import source textarea");
@@ -313,13 +335,15 @@ y &= z
       textarea.dispatchEvent(new Event("input", { bubbles: true }));
     })()`);
 
-    const expectedFormulaCount = literalFallbackRegression
-      ? 2
-      : boundaryValueRegression
-        ? 22
-        : longPhysicsRegression
-          ? 16
-          : 4;
+    const expectedFormulaCount = theoremStructureRegression
+      ? 3
+      : literalFallbackRegression
+        ? 2
+        : boundaryValueRegression
+          ? 22
+          : longPhysicsRegression
+            ? 16
+            : 4;
     const parseStarted = Date.now();
     while (Date.now() - parseStarted < 10_000) {
       if ((await evaluate(`document.querySelectorAll(".document-import-formula-card").length`)) === expectedFormulaCount) {
@@ -337,7 +361,15 @@ y &= z
         summary: document.querySelector(".document-import-summary")?.innerText ?? "",
       };
     })()`);
-    if (literalFallbackRegression) {
+    if (theoremStructureRegression) {
+      if (
+        parsed.count !== 3 ||
+        parsed.modes.join(",") !== "inline,block,inline" ||
+        parsed.numbered.some(Boolean)
+      ) {
+        throw new Error(`Unexpected theorem structure blocks: ${JSON.stringify(parsed)}`);
+      }
+    } else if (literalFallbackRegression) {
       if (
         parsed.count !== 2 ||
         parsed.modes.join(",") !== "inline,block" ||
@@ -459,6 +491,51 @@ y &= z
     }
     if (new Set(formulas.map((formula) => formula.formulaId)).size !== formulas.length) {
       throw new Error("Imported formulas did not receive independent identities");
+    }
+    if (theoremStructureRegression) {
+      const findText = (value, style, listKind = "none") =>
+        texts.find(
+          (item) =>
+            item.text.includes(value) &&
+            item.paragraphStyle === style &&
+            item.listKind === listKind,
+        );
+      for (const [value, style] of [
+        [String.raw`\newtheorem{thm}{定理}`, "code"],
+        [String.raw`\newtheorem{lem}[thm]{引理}`, "code"],
+        ["定理 1（谱定理）", "heading4"],
+        ["引理 2", "heading4"],
+        ["证明（充分性）", "heading4"],
+        ["正文公式", "quote"],
+        ["共享计数器正文", "quote"],
+        ["由", "normal"],
+        ["□", "normal"],
+      ]) {
+        if (!findText(value, style)) {
+          throw new Error(
+            `Theorem structure commit lost ${style} text ${value}: ${JSON.stringify(texts)}`,
+          );
+        }
+      }
+      const theoremInline = formulas.find((formula) =>
+        formula.latex.includes(String.raw`Av=\lambda v`),
+      );
+      const theoremDisplay = formulas.find((formula) =>
+        formula.latex.includes(String.raw`\begin{pmatrix}`),
+      );
+      const proofInline = formulas.find((formula) => formula.latex.includes("x=1"));
+      if (
+        theoremInline?.paragraphStyle !== "quote" ||
+        theoremInline?.displayMode !== "inline" ||
+        theoremDisplay?.displayMode !== "block" ||
+        theoremDisplay?.paragraphId ||
+        proofInline?.paragraphStyle !== "normal" ||
+        proofInline?.displayMode !== "inline"
+      ) {
+        throw new Error(
+          `Theorem formula paragraph metadata is invalid: ${JSON.stringify(formulas)}`,
+        );
+      }
     }
     if (literalFallbackRegression) {
       const literalText = texts.map((item) => item.text).join("\n");

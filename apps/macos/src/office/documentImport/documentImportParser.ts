@@ -59,6 +59,22 @@ interface ParagraphContext {
   listLevel: number;
 }
 
+interface TheoremEnvironmentDefinition {
+  environment: string;
+  label: string;
+  numbered: boolean;
+  counterName: string;
+  bodyStyle: DocumentParagraphStyle;
+}
+
+interface TheoremMarkerPayload {
+  label: string;
+  note: string;
+  numbered: boolean;
+  counterName: string;
+  bodyStyle: DocumentParagraphStyle;
+}
+
 const blockEnvironmentNames = new Set([
   "equation",
   "equation*",
@@ -96,7 +112,37 @@ const structuredLatexEnvironmentNames = new Set([
   "abstract",
   "description",
 ]);
-const literalLatexCommandPattern = /\\(?:documentclass|usepackage|RequirePackage|PassOptionsToPackage|newcommand|renewcommand|providecommand|DeclareRobustCommand|DeclareMathOperator\*?|newenvironment|renewenvironment|provideenvironment|newtheorem|def|gdef|edef|xdef|let|newlength|setlength|addtolength|definecolor|colorlet|newcolumntype|DeclarePairedDelimiter\*?|DeclareDocumentCommand|NewDocumentCommand|RenewDocumentCommand|ProvideDocumentCommand)\b/g;
+const builtInTheoremDefinitions: TheoremEnvironmentDefinition[] = [
+  ["theorem", "定理", true, "theorem", "quote"],
+  ["lemma", "引理", true, "lemma", "quote"],
+  ["proposition", "命题", true, "proposition", "quote"],
+  ["corollary", "推论", true, "corollary", "quote"],
+  ["definition", "定义", true, "definition", "quote"],
+  ["axiom", "公理", true, "axiom", "quote"],
+  ["conjecture", "猜想", true, "conjecture", "quote"],
+  ["claim", "断言", true, "claim", "quote"],
+  ["criterion", "判据", true, "criterion", "quote"],
+  ["property", "性质", true, "property", "quote"],
+  ["fact", "事实", true, "fact", "quote"],
+  ["observation", "观察", true, "observation", "quote"],
+  ["example", "例", true, "example", "quote"],
+  ["exercise", "练习", true, "exercise", "quote"],
+  ["problem", "问题", true, "problem", "quote"],
+  ["question", "问题", true, "question", "quote"],
+  ["remark", "注", false, "remark", "quote"],
+  ["note", "注", false, "note", "quote"],
+  ["notation", "记号", false, "notation", "quote"],
+  ["case", "情形", false, "case", "quote"],
+  ["proof", "证明", false, "proof", "normal"],
+  ["solution", "解答", false, "solution", "normal"],
+].map(([environment, label, numbered, counterName, bodyStyle]) => ({
+  environment: environment as string,
+  label: label as string,
+  numbered: numbered as boolean,
+  counterName: counterName as string,
+  bodyStyle: bodyStyle as DocumentParagraphStyle,
+}));
+const literalLatexCommandPattern = /\\(?:documentclass|usepackage|RequirePackage|PassOptionsToPackage|newcommand|renewcommand|providecommand|DeclareRobustCommand|DeclareMathOperator\*?|newenvironment|renewenvironment|provideenvironment|newtheoremstyle|newtheorem|theoremstyle|swapnumbers|def|gdef|edef|xdef|let|newlength|setlength|addtolength|definecolor|colorlet|newcolumntype|DeclarePairedDelimiter\*?|DeclareDocumentCommand|NewDocumentCommand|RenewDocumentCommand|ProvideDocumentCommand)\b/g;
 const formulaTokenPrefix = "\uE000VT_FORMULA_";
 const formulaTokenSuffix = "\uE001";
 const formulaTokenPattern = /\uE000VT_FORMULA_(\d+)\uE001/g;
@@ -118,6 +164,62 @@ function leadingMarker(line: string) {
     value: trimmed.slice(markerPrefix.length, end),
     rest: trimmed.slice(end + markerSuffix.length),
   };
+}
+
+function theoremDefinitionsFromSource(source: string) {
+  const definitions = new Map<string, TheoremEnvironmentDefinition>();
+  for (const definition of builtInTheoremDefinitions) {
+    definitions.set(definition.environment, { ...definition });
+    definitions.set(`${definition.environment}*`, {
+      ...definition,
+      environment: `${definition.environment}*`,
+      numbered: false,
+    });
+  }
+
+  const declarationPattern =
+    /\\newtheorem(\*)?\s*\{([^{}]+)\}\s*(?:\[([^\]]+)\]\s*)?\{([^{}]*)\}\s*(?:\[([^\]]+)\])?/g;
+  for (
+    let match = declarationPattern.exec(source);
+    match;
+    match = declarationPattern.exec(source)
+  ) {
+    const environment = match[2].trim();
+    const sharedCounter = match[3]?.trim();
+    const label = match[4].trim() || environment;
+    if (!environment) continue;
+    const builtIn = definitions.get(environment);
+    definitions.set(environment, {
+      environment,
+      label,
+      numbered: !match[1],
+      counterName: sharedCounter || environment,
+      bodyStyle: builtIn?.bodyStyle ?? "quote",
+    });
+  }
+  return definitions;
+}
+
+function encodeTheoremMarker(payload: TheoremMarkerPayload) {
+  return encodeURIComponent(JSON.stringify(payload));
+}
+
+function decodeTheoremMarker(value: string): TheoremMarkerPayload | null {
+  try {
+    const payload = JSON.parse(decodeURIComponent(value)) as Partial<TheoremMarkerPayload>;
+    if (
+      typeof payload.label !== "string" ||
+      typeof payload.note !== "string" ||
+      typeof payload.numbered !== "boolean" ||
+      typeof payload.counterName !== "string" ||
+      !["normal", "quote"].includes(payload.bodyStyle ?? "")
+    ) {
+      return null;
+    }
+    return payload as TheoremMarkerPayload;
+  } catch {
+    return null;
+  }
 }
 
 function isEscaped(source: string, index: number) {
@@ -222,7 +324,10 @@ function latexMathSourceRanges(source: string) {
   return mergeProtectedRanges(ranges);
 }
 
-function latexLiteralFallbackRanges(source: string) {
+function latexLiteralFallbackRanges(
+  source: string,
+  theoremEnvironmentNames: ReadonlySet<string> = new Set(),
+) {
   const ranges: ProtectedSourceRange[] = [];
   const mathRanges = latexMathSourceRanges(source);
 
@@ -259,7 +364,8 @@ function latexLiteralFallbackRanges(source: string) {
     const supported =
       blockEnvironmentNames.has(environment) ||
       inlineEnvironmentNames.has(environment) ||
-      structuredLatexEnvironmentNames.has(environment);
+      structuredLatexEnvironmentNames.has(environment) ||
+      theoremEnvironmentNames.has(environment);
     const literalEnvironment =
       protectedLatexEnvironmentNames.has(environment) || !supported;
     if (!literalEnvironment || sourceIndexInsideRanges(mathRanges, match.index)) continue;
@@ -270,9 +376,12 @@ function latexLiteralFallbackRanges(source: string) {
   return mergeProtectedRanges(ranges);
 }
 
-function extractLatexLiteralFallbacks(source: string) {
+function extractLatexLiteralFallbacks(
+  source: string,
+  theoremEnvironmentNames: ReadonlySet<string>,
+) {
   const literals: ExtractedLiteral[] = [];
-  const ranges = latexLiteralFallbackRanges(source);
+  const ranges = latexLiteralFallbackRanges(source, theoremEnvironmentNames);
   let output = "";
   let cursor = 0;
   for (const range of ranges) {
@@ -286,8 +395,11 @@ function extractLatexLiteralFallbacks(source: string) {
   return { text: output, literals };
 }
 
-function latexProtectedRanges(source: string) {
-  const ranges = latexLiteralFallbackRanges(source);
+function latexProtectedRanges(
+  source: string,
+  theoremEnvironmentNames: ReadonlySet<string> = new Set(),
+) {
+  const ranges = latexLiteralFallbackRanges(source, theoremEnvironmentNames);
   const verbPattern = /\\verb\*?([^\sA-Za-z0-9])[^\n]*?\1/g;
   for (let match = verbPattern.exec(source); match; match = verbPattern.exec(source)) {
     ranges.push({ start: match.index, end: verbPattern.lastIndex });
@@ -353,14 +465,18 @@ function markdownProtectedRanges(source: string) {
 function protectedSourceRanges(
   source: string,
   sourceKind: DocumentImportSourceKind,
+  theoremEnvironmentNames: ReadonlySet<string> = new Set(),
 ) {
   return sourceKind === "latex"
-    ? latexProtectedRanges(source)
+    ? latexProtectedRanges(source, theoremEnvironmentNames)
     : markdownProtectedRanges(source);
 }
 
-function stripLatexComments(source: string) {
-  const protectedRanges = latexProtectedRanges(source);
+function stripLatexComments(
+  source: string,
+  theoremEnvironmentNames: ReadonlySet<string>,
+) {
+  const protectedRanges = latexProtectedRanges(source, theoremEnvironmentNames);
   let rangeIndex = 0;
   let lineOffset = 0;
   return source
@@ -419,6 +535,8 @@ function cleanInlineMarkup(raw: string, sourceKind: DocumentImportSourceKind) {
   if (sourceKind === "latex") {
     value = unwrapSimpleLatexCommands(value)
       .replace(/\\(?:newline|linebreak)\b/g, "\n")
+      .replace(/\\(?:qedhere|qed)\b/g, "□")
+      .replace(/\\label\s*\{[^{}]*\}/g, "")
       .replace(/\\\\(?:\[[^\]]*\])?/g, "\n")
       .replace(/\\%/g, "%")
       .replace(/\\&/g, "&")
@@ -558,9 +676,14 @@ function extractFormulas(
   source: string,
   defaultFontSizePt: number,
   sourceKind: DocumentImportSourceKind,
+  theoremEnvironmentNames: ReadonlySet<string> = new Set(),
 ) {
   const formulas: ExtractedFormula[] = [];
-  const protectedRanges = protectedSourceRanges(source, sourceKind);
+  const protectedRanges = protectedSourceRanges(
+    source,
+    sourceKind,
+    theoremEnvironmentNames,
+  );
   let protectedIndex = 0;
   let output = "";
   let textStart = 0;
@@ -662,8 +785,40 @@ function headingStyle(level: number): DocumentParagraphStyle {
   return "heading4";
 }
 
-function normalizeLatexStructure(source: string) {
-  return source
+function normalizeTheoremEnvironments(
+  source: string,
+  definitions: ReadonlyMap<string, TheoremEnvironmentDefinition>,
+) {
+  const withOpenings = source.replace(
+    /\\begin\s*\{([^{}]+)\}\s*(?:\[([^\]]*)\])?/g,
+    (match, rawEnvironment: string, note = "") => {
+      const environment = rawEnvironment.trim();
+      const definition = definitions.get(environment);
+      if (!definition) return match;
+      const payload: TheoremMarkerPayload = {
+        label: definition.label,
+        note: note.trim(),
+        numbered: definition.numbered,
+        counterName: definition.counterName,
+        bodyStyle: definition.bodyStyle,
+      };
+      return `\n${marker(`THEOREM_START:${encodeTheoremMarker(payload)}`)}\n`;
+    },
+  );
+  return withOpenings.replace(
+    /\\end\s*\{([^{}]+)\}/g,
+    (match, rawEnvironment: string) =>
+      definitions.has(rawEnvironment.trim())
+        ? `\n${marker("THEOREM_END")}\n`
+        : match,
+  );
+}
+
+function normalizeLatexStructure(
+  source: string,
+  theoremDefinitions: ReadonlyMap<string, TheoremEnvironmentDefinition>,
+) {
+  return normalizeTheoremEnvironments(source, theoremDefinitions)
     .replace(/\\begin\s*\{document\}|\\end\s*\{document\}/g, "")
     .replace(/\\maketitle\b/g, "")
     .replace(/\\title\s*\{([^{}]*)\}/g, `\n${marker("HEADING:1")}$1\n`)
@@ -776,17 +931,26 @@ function parseStructuredLines(
 ) {
   const blocks: DocumentImportBlock[] = [];
   const listStack: DocumentListKind[] = [];
+  const theoremBodyStyleStack: DocumentParagraphStyle[] = [];
+  const theoremCounters = new Map<string, number>();
   let alignment: DocumentParagraphAlignment = "left";
   let quoteDepth = 0;
   let current = "";
   let currentContext = defaultContext();
   let codeFence = false;
 
+  const activeParagraphStyle = (): DocumentParagraphStyle =>
+    codeFence
+      ? "code"
+      : quoteDepth > 0
+        ? "quote"
+        : theoremBodyStyleStack.at(-1) ?? "normal";
+
   const flush = () => {
     emitParagraph(blocks, current, currentContext, formulas, sourceKind);
     current = "";
     currentContext = {
-      style: quoteDepth > 0 ? "quote" : codeFence ? "code" : "normal",
+      style: activeParagraphStyle(),
       alignment,
       listKind: "none",
       listLevel: 0,
@@ -806,7 +970,35 @@ function parseStructuredLines(
     const control = leading?.value;
 
     if (control) {
-      if (control.startsWith("HEADING:")) {
+      if (control.startsWith("THEOREM_START:")) {
+        flush();
+        const payload = decodeTheoremMarker(
+          control.slice("THEOREM_START:".length),
+        );
+        if (payload) {
+          let title = payload.label;
+          if (payload.numbered) {
+            const number = (theoremCounters.get(payload.counterName) ?? 0) + 1;
+            theoremCounters.set(payload.counterName, number);
+            title = `${title} ${number}`;
+          }
+          if (payload.note) title += `（${payload.note}）`;
+          beginParagraph(
+            {
+              style: "heading4",
+              alignment: "left",
+              listKind: "none",
+              listLevel: 0,
+            },
+            title,
+          );
+          flush();
+          theoremBodyStyleStack.push(payload.bodyStyle);
+        }
+      } else if (control === "THEOREM_END") {
+        flush();
+        theoremBodyStyleStack.pop();
+      } else if (control.startsWith("HEADING:")) {
         const title = leading?.rest ?? "";
         beginParagraph(
           {
@@ -827,7 +1019,7 @@ function parseStructuredLines(
       } else if (control === "ITEM") {
         beginParagraph(
           {
-            style: "normal",
+            style: activeParagraphStyle(),
             alignment,
             listKind: listStack.at(-1) ?? "bullet",
             listLevel: Math.max(1, listStack.length),
@@ -930,7 +1122,7 @@ function parseStructuredLines(
     }
     if (!current) {
       currentContext = {
-        style: quoteDepth > 0 ? "quote" : codeFence ? "code" : "normal",
+        style: activeParagraphStyle(),
         alignment,
         listKind: "none",
         listLevel: 0,
@@ -972,14 +1164,31 @@ export function parseLatexMarkdownDocument(
   let normalized = source.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
   const sourceKind = resolvedSourceKind(normalized, requestedKind);
   let literals: ExtractedLiteral[] = [];
+  let theoremDefinitions = new Map<string, TheoremEnvironmentDefinition>();
+  let theoremEnvironmentNames = new Set<string>();
   if (sourceKind === "latex") {
-    const literalized = extractLatexLiteralFallbacks(normalized);
-    normalized = stripLatexComments(literalized.text);
+    theoremDefinitions = theoremDefinitionsFromSource(normalized);
+    theoremEnvironmentNames = new Set(theoremDefinitions.keys());
+    const literalized = extractLatexLiteralFallbacks(
+      normalized,
+      theoremEnvironmentNames,
+    );
+    normalized = stripLatexComments(
+      literalized.text,
+      theoremEnvironmentNames,
+    );
     literals = literalized.literals;
   }
-  const extracted = extractFormulas(normalized, defaultFontSizePt, sourceKind);
+  const extracted = extractFormulas(
+    normalized,
+    defaultFontSizePt,
+    sourceKind,
+    theoremEnvironmentNames,
+  );
   const structured =
-    sourceKind === "latex" ? normalizeLatexStructure(extracted.text) : extracted.text;
+    sourceKind === "latex"
+      ? normalizeLatexStructure(extracted.text, theoremDefinitions)
+      : extracted.text;
   return parseStructuredLines(
     structured,
     extracted.formulas,

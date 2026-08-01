@@ -699,6 +699,187 @@ E=mc^2
       "可识别标题",
     ],
   },
+  {
+    name: "latex-built-in-theorem-structured",
+    kind: "auto",
+    source: String.raw`\begin{theorem}[勾股定理]
+设直角三角形满足 $a^2+b^2=c^2$。
+\[
+A=\frac{1}{2}ab
+\]
+\end{theorem}`,
+    lineEndings: allLineEndings,
+    expected: [
+      { mode: "inline", contains: "a^2+b^2=c^2" },
+      { mode: "block", contains: "\\frac{1}{2}" },
+    ],
+    headingTextIncludes: ["定理 1（勾股定理）"],
+    styledTextIncludes: [
+      { style: "quote", text: "设直角三角形满足" },
+    ],
+    formulaStyleExpectations: [
+      { contains: "a^2+b^2=c^2", style: "quote" },
+    ],
+  },
+  {
+    name: "latex-proof-structured-and-qed",
+    kind: "auto",
+    source: String.raw`\begin{proof}[充分性]
+由 $x>0$ 可立即得到结论。\qedhere
+\end{proof}`,
+    expected: [{ mode: "inline", contains: "x>0" }],
+    headingTextIncludes: ["证明（充分性）"],
+    styledTextIncludes: [
+      { style: "normal", text: "由" },
+      { style: "normal", text: "□" },
+    ],
+    formulaStyleExpectations: [{ contains: "x>0", style: "normal" }],
+  },
+  {
+    name: "latex-dynamic-newtheorem-structured",
+    kind: "auto",
+    source: String.raw`\newtheorem{thm}{自定义定理}
+\begin{thm}[谱定理]
+正文含有行内公式 $Av=\lambda v$。
+\end{thm}`,
+    expected: [{ mode: "inline", contains: "Av=\\lambda v" }],
+    headingTextIncludes: ["自定义定理 1（谱定理）"],
+    styledTextIncludes: [{ style: "quote", text: "正文含有行内公式" }],
+    codeTextIncludes: [String.raw`\newtheorem{thm}{自定义定理}`],
+  },
+  {
+    name: "latex-newtheorem-shared-counter",
+    kind: "latex",
+    source: String.raw`\newtheorem{thm}{定理}
+\newtheorem{lem}[thm]{引理}
+\begin{thm}第一个结论。\end{thm}
+\begin{lem}第二个结论。\end{lem}`,
+    expected: [],
+    headingTextIncludes: ["定理 1", "引理 2"],
+    styledTextIncludes: [
+      { style: "quote", text: "第一个结论" },
+      { style: "quote", text: "第二个结论" },
+    ],
+    codeTextIncludes: [String.raw`\newtheorem{lem}[thm]{引理}`],
+  },
+  {
+    name: "latex-newtheorem-star-unnumbered",
+    kind: "latex",
+    source: String.raw`\newtheorem*{specialremark}{特别说明}
+\begin{specialremark}[边界情况]
+这一段不应自动编号。
+\end{specialremark}`,
+    expected: [],
+    headingTextIncludes: ["特别说明（边界情况）"],
+    headingTextExcludes: ["特别说明 1"],
+    styledTextIncludes: [
+      { style: "quote", text: "这一段不应自动编号" },
+    ],
+  },
+  {
+    name: "latex-common-theorem-family",
+    kind: "auto",
+    source: String.raw`\begin{lemma}引理正文。\end{lemma}
+\begin{proposition}命题正文。\end{proposition}
+\begin{corollary}推论正文。\end{corollary}
+\begin{definition}定义正文。\end{definition}
+\begin{axiom}公理正文。\end{axiom}
+\begin{conjecture}猜想正文。\end{conjecture}
+\begin{claim}断言正文。\end{claim}
+\begin{example}例子正文。\end{example}
+\begin{exercise}练习正文。\end{exercise}
+\begin{remark}备注正文。\end{remark}
+\begin{notation}记号正文。\end{notation}
+\begin{solution}解答正文。\end{solution}`,
+    expected: [],
+    headingTextIncludes: [
+      "引理 1",
+      "命题 1",
+      "推论 1",
+      "定义 1",
+      "公理 1",
+      "猜想 1",
+      "断言 1",
+      "例 1",
+      "练习 1",
+      "注",
+      "记号",
+      "解答",
+    ],
+    styledTextIncludes: [
+      { style: "quote", text: "引理正文" },
+      { style: "quote", text: "定义正文" },
+      { style: "normal", text: "解答正文" },
+    ],
+  },
+  {
+    name: "latex-theorem-list-and-formula",
+    kind: "latex",
+    source: String.raw`\begin{theorem}
+满足以下条件：
+\begin{itemize}
+\item 第一项 $x=1$
+\item 第二项
+\end{itemize}
+\end{theorem}`,
+    expected: [{ mode: "inline", contains: "x=1" }],
+    headingTextIncludes: ["定理 1"],
+    styledTextIncludes: [
+      { style: "quote", text: "满足以下条件" },
+      { style: "quote", text: "第一项", listKind: "bullet" },
+      { style: "quote", text: "第二项", listKind: "bullet" },
+    ],
+    formulaStyleExpectations: [
+      { contains: "x=1", style: "quote", listKind: "bullet" },
+    ],
+  },
+  {
+    name: "latex-theorem-title-with-inline-formula",
+    kind: "latex",
+    source: String.raw`\begin{theorem}[关于 $f(x)$ 的结论]
+正文为 $f(0)=0$。
+\end{theorem}`,
+    expected: [
+      { mode: "inline", contains: "f(x)" },
+      { mode: "inline", contains: "f(0)=0" },
+    ],
+    headingTextIncludes: ["定理 1（关于", "的结论）"],
+    formulaStyleExpectations: [
+      { contains: "f(x)", style: "heading4" },
+      { contains: "f(0)=0", style: "quote" },
+    ],
+  },
+  {
+    name: "latex-nested-proof-inside-theorem",
+    kind: "latex",
+    source: String.raw`\begin{theorem}
+定理的第一段。
+\begin{proof}
+证明中的公式 $y=2$。\qed
+\end{proof}
+定理的最后一段。
+\end{theorem}`,
+    expected: [{ mode: "inline", contains: "y=2" }],
+    headingTextIncludes: ["定理 1", "证明"],
+    styledTextIncludes: [
+      { style: "quote", text: "定理的第一段" },
+      { style: "normal", text: "证明中的公式" },
+      { style: "quote", text: "定理的最后一段" },
+    ],
+  },
+  {
+    name: "latex-newtheorem-section-reset-syntax",
+    kind: "auto",
+    source: String.raw`\newtheorem{result}{Result}[section]
+\begin{result}[Local form]
+Result body with $z=3$.
+\end{result}`,
+    lineEndings: allLineEndings,
+    expected: [{ mode: "inline", contains: "z=3" }],
+    headingTextIncludes: ["Result 1（Local form）"],
+    styledTextIncludes: [{ style: "quote", text: "Result body" }],
+    codeTextIncludes: [String.raw`\newtheorem{result}{Result}[section]`],
+  },
 ];
 
 function withLineEnding(source, lineEnding) {
@@ -805,6 +986,62 @@ for (const fixture of fixtures) {
           block.text.includes(text),
       );
       assert.ok(literalBlock, `${label} literal fallback must preserve ${text}`);
+    }
+    const headingText = blocks
+      .filter(
+        (block) =>
+          block.kind === "text" &&
+          ["heading1", "heading2", "heading3", "heading4"].includes(
+            block.paragraphStyle ?? "",
+          ),
+      )
+      .map((block) => block.text)
+      .join("\n");
+    for (const text of fixture.headingTextIncludes ?? []) {
+      assert.ok(
+        headingText.includes(text),
+        `${label} structured heading must contain ${text}`,
+      );
+    }
+    for (const text of fixture.headingTextExcludes ?? []) {
+      assert.ok(
+        !headingText.includes(text),
+        `${label} structured heading must not contain ${text}`,
+      );
+    }
+    for (const expected of fixture.styledTextIncludes ?? []) {
+      const matchingBlock = blocks.find(
+        (block) =>
+          block.kind === "text" &&
+          block.paragraphStyle === expected.style &&
+          block.text.includes(expected.text) &&
+          (expected.listKind === undefined || block.listKind === expected.listKind),
+      );
+      assert.ok(
+        matchingBlock,
+        `${label} must contain ${expected.style} text ${expected.text}`,
+      );
+    }
+    for (const expected of fixture.formulaStyleExpectations ?? []) {
+      const matchingFormula = formulas.find((formula) =>
+        formula.latex.includes(expected.contains),
+      );
+      assert.ok(
+        matchingFormula,
+        `${label} must contain formula ${expected.contains}`,
+      );
+      assert.equal(
+        matchingFormula.paragraphStyle,
+        expected.style,
+        `${label} formula ${expected.contains} paragraph style`,
+      );
+      if (expected.listKind !== undefined) {
+        assert.equal(
+          matchingFormula.listKind,
+          expected.listKind,
+          `${label} formula ${expected.contains} list kind`,
+        );
+      }
     }
   }
 }

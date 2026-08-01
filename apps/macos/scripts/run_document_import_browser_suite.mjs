@@ -15,6 +15,7 @@ const logRoot = join(process.cwd(), "build-logs", "document-import");
 const stages = [
   { name: "default", args: [] },
   { name: "literal-fallback", args: ["--literal-fallback"] },
+  { name: "theorem-structure", args: ["--theorem-structure"] },
   { name: "long-physics", args: ["--long-physics"] },
   { name: "boundary-value", args: ["--boundary-value"] },
 ];
