@@ -6986,12 +6986,190 @@ MonitorFailed:
     ' silent, image-only route and never falls through to OMML or Word commands.
 End Sub
 
+Private Sub VTCreatePictureRoutingRegressionFixture( _
+    ByVal fixtureKind As String)
+
+    Const damagedFormulaId As String = _
+        "11111111-1111-4111-8111-111111111111"
+    Const fixturePath As String = _
+        "/Users/lpj/Library/Group Containers/UBF8T346G9.Office/" & _
+        "VisualTeX/Scratch/picture-routing-fixture.png"
+
+    Dim insertionRange As Range
+    Dim inlinePicture As InlineShape
+    Dim floatingPicture As Shape
+
+    If Documents.Count = 0 Then Documents.Add
+    Set insertionRange = ActiveDocument.Content
+    insertionRange.Collapse wdCollapseEnd
+    Set inlinePicture = ActiveDocument.InlineShapes.AddPicture( _
+        FileName:=fixturePath, _
+        LinkToFile:=False, SaveWithDocument:=True, _
+        Range:=insertionRange)
+    inlinePicture.LockAspectRatio = msoFalse
+    inlinePicture.Width = 72
+    inlinePicture.Height = 36
+    inlinePicture.LockAspectRatio = msoTrue
+
+    Select Case fixtureKind
+        Case "forged-prefix"
+            inlinePicture.Title = _
+                VT_FORMULA_REF_PREFIX & "not-a-uuid:inline:0"
+            inlinePicture.Range.Select
+        Case "damaged-metadata"
+            inlinePicture.Title = _
+                VTFormulaReference(damagedFormulaId, "inline", False)
+            inlinePicture.AlternativeText = ""
+            inlinePicture.Range.Select
+        Case "ordinary-floating"
+            Set floatingPicture = inlinePicture.ConvertToShape
+            floatingPicture.RelativeHorizontalPosition = _
+                wdRelativeHorizontalPositionPage
+            floatingPicture.RelativeVerticalPosition = _
+                wdRelativeVerticalPositionPage
+            floatingPicture.Left = 180
+            floatingPicture.Top = 180
+            floatingPicture.Width = 72
+            floatingPicture.Height = 36
+            floatingPicture.Select
+        Case Else
+            inlinePicture.Title = ""
+            inlinePicture.AlternativeText = ""
+            inlinePicture.Range.Select
+    End Select
+End Sub
+
+Public Sub VisualTeX_CreateOrdinaryInlinePictureRegression()
+    VTCreatePictureRoutingRegressionFixture "ordinary-inline"
+End Sub
+
+Public Sub VisualTeX_CreateOrdinaryFloatingPictureRegression()
+    VTCreatePictureRoutingRegressionFixture "ordinary-floating"
+End Sub
+
+Public Sub VisualTeX_CreateForgedPrefixPictureRegression()
+    VTCreatePictureRoutingRegressionFixture "forged-prefix"
+End Sub
+
+Public Sub VisualTeX_CreateDamagedMetadataPictureRegression()
+    VTCreatePictureRoutingRegressionFixture "damaged-metadata"
+End Sub
+
+Private Function VTInlineShapeHasVisualTeXMetadata( _
+    ByVal candidate As InlineShape) As Boolean
+
+    On Error GoTo InvalidShape
+    If candidate Is Nothing Then Exit Function
+    VTInlineShapeHasVisualTeXMetadata = _
+        VTIsEncodedMetadata(candidate.AlternativeText)
+    Exit Function
+
+InvalidShape:
+    VTInlineShapeHasVisualTeXMetadata = False
+End Function
+
+Private Function VTTryVisualTeXMetadataShapeAtSelection( _
+    ByVal selected As Selection, _
+    ByRef resolvedShape As InlineShape) As Boolean
+
+    Dim candidate As InlineShape
+    Dim candidateField As Field
+    Dim probeRange As Range
+    Dim match As InlineShape
+    Dim matchCount As Long
+    Dim fieldStart As Long
+    Dim fieldEnd As Long
+
+    On Error GoTo InvalidSelection
+    Set resolvedShape = Nothing
+    If selected Is Nothing Then Exit Function
+
+    If selected.InlineShapes.Count = 1 Then
+        Set candidate = selected.InlineShapes(1)
+        If VTInlineShapeHasVisualTeXMetadata(candidate) Then
+            Set resolvedShape = candidate
+            VTTryVisualTeXMetadataShapeAtSelection = True
+            Exit Function
+        End If
+    End If
+
+    For Each candidateField In selected.Range.Paragraphs(1).Range.Fields
+        If VTIsVisualTeXImageMacroButtonField(candidateField) And _
+           VTMacroButtonResultHasOnlyImage(candidateField) Then
+            fieldStart = candidateField.Code.Start - 1
+            fieldEnd = candidateField.Result.End + 1
+            If selected.Range.Start <= fieldEnd + 1 And _
+               selected.Range.End >= fieldStart - 1 Then
+                Set candidate = candidateField.Result.InlineShapes(1)
+                If VTInlineShapeHasVisualTeXMetadata(candidate) Then
+                    matchCount = matchCount + 1
+                    Set match = candidate
+                End If
+            End If
+        End If
+    Next candidateField
+    If matchCount = 1 Then
+        Set resolvedShape = match
+        VTTryVisualTeXMetadataShapeAtSelection = True
+        Exit Function
+    End If
+
+    matchCount = 0
+    Set match = Nothing
+    Set probeRange = selected.Range.Duplicate
+    probeRange.MoveStart Unit:=wdCharacter, Count:=-1
+    probeRange.MoveEnd Unit:=wdCharacter, Count:=1
+    For Each candidate In probeRange.InlineShapes
+        If VTInlineShapeHasVisualTeXMetadata(candidate) Then
+            matchCount = matchCount + 1
+            Set match = candidate
+        End If
+    Next candidate
+    If matchCount = 1 Then
+        Set resolvedShape = match
+        VTTryVisualTeXMetadataShapeAtSelection = True
+    End If
+    Exit Function
+
+InvalidSelection:
+    Set resolvedShape = Nothing
+    VTTryVisualTeXMetadataShapeAtSelection = False
+End Function
+
 Public Sub FormatPicture()
-    ' Legacy binary-compatible override only. VisualTeX image editing is routed
-    ' by its per-image MACROBUTTON or the strict native-monitor entry point.
+    Dim selectedShape As InlineShape
+    Dim editErrorNumber As Long
+    Dim editErrorDescription As String
+
+    On Error GoTo VisualTeXEditFailed
+    If VTTryVisualTeXMetadataShapeAtSelection( _
+       Selection, selectedShape) Then
+        VTBeginWordDoubleClickTraceContext
+        VTTraceWordDoubleClick _
+            "format-picture-visualtex-metadata", Selection, _
+            VTInlineShapeTraceSummary(selectedShape)
+        VTRequireWritableWordDocument
+        VTWordEditInlineShape selectedShape
+        VTEndWordDoubleClickTraceContext
+        Exit Sub
+    End If
+
+    ' Ordinary pictures do not carry VisualTeX's compressed AlternativeText
+    ' metadata. Preserve Word's native Format Picture behavior exactly.
     On Error Resume Next
     WordBasic.FormatPicture
     On Error GoTo 0
+    Exit Sub
+
+VisualTeXEditFailed:
+    editErrorNumber = Err.Number
+    editErrorDescription = Err.Description
+    VTTraceWordDoubleClick _
+        "format-picture-visualtex-error", Selection, _
+        "error=" & CStr(editErrorNumber) & ":" & editErrorDescription
+    VTEndWordDoubleClickTraceContext
+    VTShowError _
+        "Word image formula edit", editErrorNumber, editErrorDescription
 End Sub
 
 Public Function VTHandleWordBeforeDoubleClick( _
@@ -7023,13 +7201,23 @@ Public Function VTHandleWordBeforeDoubleClick( _
         VTTraceWordDoubleClick "handler-skip", selected, "reason=internal-mutation"
         GoTo HandlerFinished
     End If
-    If VTTryResolveVisualTeXInlineShapeAtSelection( _
-       selected, selectedShape, formulaId, displayMode, numbered, _
-       encodedMetadata, metadataNeedsWrite, formatNeedsWrite) Then
-        VTTraceWordDoubleClick _
-            "handler-image-resolved", selected, _
-            VTInlineShapeTraceSummary(selectedShape)
+    If VTTryVisualTeXMetadataShapeAtSelection( _
+       selected, selectedShape) Then
         VTHandleWordBeforeDoubleClick = True
+        VTTraceWordDoubleClick _
+            "handler-image-metadata-resolved", selected, _
+            VTInlineShapeTraceSummary(selectedShape)
+        If Not VTTryResolveVisualTeXInlineShapeReference( _
+           selectedShape, formulaId, displayMode, numbered, _
+           encodedMetadata, metadataNeedsWrite, formatNeedsWrite) Then
+            VTTraceWordDoubleClick _
+                "handler-image-metadata-invalid", selected, _
+                VTInlineShapeTraceSummary(selectedShape)
+            VTShowError _
+                "Word image formula edit", vbObjectError + 7400, _
+                "The selected VisualTeX image metadata cannot be restored."
+            GoTo HandlerFinished
+        End If
         VTWordOpenResolvedInlineShape _
             selectedShape, formulaId, displayMode, numbered, _
             encodedMetadata, metadataNeedsWrite, formatNeedsWrite, False
