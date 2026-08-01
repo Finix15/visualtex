@@ -6,10 +6,39 @@
 
 .formula-line .visual-mathfield {
   width: fit-content;
-  max-width: 100%;
+  max-width: none;
   min-width: 0;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   justify-content: initial;
+}
+
+.formula-line .mathfield-host {
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+.formula-line .mathfield-host::-webkit-scrollbar {
+  height: 8px;
+}
+
+.formula-line .mathfield-host::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.formula-line .mathfield-host::-webkit-scrollbar-thumb {
+  min-width: 36px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--border-strong) 78%, transparent);
+  background-clip: padding-box;
+}
+
+.formula-line .mathfield-host::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--accent) 62%, var(--border-strong));
+  background-clip: padding-box;
 }
 
 .formula-line .visual-mathfield::part(container),
@@ -45,13 +74,6 @@
   display: flex;
   align-items: center;
   gap: 2px;
-}
-
-.formula-formatting-subdivider {
-  width: 1px;
-  height: 16px;
-  margin: 0 2px;
-  background: color-mix(in srgb, var(--border) 78%, transparent);
 }
 
 .formula-formatting-button {
@@ -197,11 +219,11 @@
 }
 
 .multi-line-editor[data-formula-alignment="center"] .mathfield-host {
-  justify-content: center;
+  justify-content: safe center;
 }
 
 .multi-line-editor[data-formula-alignment="right"] .mathfield-host {
-  justify-content: flex-end;
+  justify-content: safe flex-end;
 }
 
 .visualtex-native-placeholder-preview,

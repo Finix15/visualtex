@@ -26,7 +26,6 @@ import {
 import {
   MathEditor,
   type MathEditorSelectionTarget,
-  type MathEditorTypingStyle,
 } from "../editor/MathEditor";
 import { InputBehaviorMenu } from "../components/InputBehaviorMenu";
 import { FormulaToolbar } from "../toolbar/FormulaToolbar";
@@ -97,12 +96,6 @@ export function EditorWorkspace({
 }: EditorWorkspaceProps) {
   const [primaryBusy, setPrimaryBusy] = useState(false);
   const [classicDockOpen, setClassicDockOpen] = useState(true);
-  const [typingStyle, setTypingStyle] = useState<MathEditorTypingStyle>({
-    bold: false,
-    italic: true,
-  });
-  const typingStyleRef = useRef(typingStyle);
-  typingStyleRef.current = typingStyle;
   const [formulaColorMenu, setFormulaColorMenu] =
     useState<FormulaColorMenu | null>(null);
   const formulaColorMenuRef = useRef<HTMLDivElement>(null);
@@ -173,8 +166,8 @@ export function EditorWorkspace({
   };
 
   const rememberFormulaSelection = () => {
-    const target = editorRef.current?.captureSelectionTarget() ?? null;
-    if (target) formulaSelectionTargetRef.current = target;
+    formulaSelectionTargetRef.current =
+      editorRef.current?.captureSelectionTarget() ?? null;
   };
 
   const preserveFormulaSelection = (
@@ -182,13 +175,6 @@ export function EditorWorkspace({
   ) => {
     preserveFormulaFocus(event);
     rememberFormulaSelection();
-  };
-
-  const updateTypingStyle = (patch: Partial<MathEditorTypingStyle>) => {
-    const next = { ...typingStyleRef.current, ...patch };
-    typingStyleRef.current = next;
-    setTypingStyle(next);
-    editorRef.current?.setTypingStyle(next);
   };
 
   const applySelectedFormulaStyle = (kind: "bold" | "italic") => {
@@ -338,7 +324,6 @@ export function EditorWorkspace({
         activeLineId={visualActiveLineId}
         formulaAlignment={formulaAlignment}
         zoom={zoom}
-        typingStyle={typingStyle}
         readOnly={Boolean(previewLines)}
         draftError={sourceDraftFallback?.error}
         onPasteImage={
@@ -478,62 +463,6 @@ export function EditorWorkspace({
                       role="group"
                       aria-label={isEn ? "Formula formatting" : "公式格式"}
                     >
-                      <button
-                        type="button"
-                        className={
-                          "icon-button compact formula-formatting-button is-persistent" +
-                          (typingStyle.bold ? " is-active" : "")
-                        }
-                        aria-label={
-                          isEn
-                            ? "Keep bold enabled for subsequent input"
-                            : "持续粗体：后续输入保持粗体"
-                        }
-                        title={
-                          isEn
-                            ? "Persistent bold · affects subsequent input"
-                            : "持续粗体 · 影响后续输入"
-                        }
-                        aria-pressed={typingStyle.bold}
-                        data-formula-typing-bold
-                        onPointerDown={preserveFormulaFocus}
-                        onMouseDown={(event) => event.preventDefault()}
-                        onClick={() =>
-                          updateTypingStyle({ bold: !typingStyle.bold })
-                        }
-                      >
-                        <Bold size={16} strokeWidth={2.2} />
-                      </button>
-                      <button
-                        type="button"
-                        className={
-                          "icon-button compact formula-formatting-button is-persistent" +
-                          (typingStyle.italic ? " is-active" : "")
-                        }
-                        aria-label={
-                          isEn
-                            ? "Keep italic enabled for subsequent input"
-                            : "持续斜体：后续输入保持斜体"
-                        }
-                        title={
-                          isEn
-                            ? "Persistent italic · enabled by default"
-                            : "持续斜体 · 默认开启，关闭后后续输入为正体"
-                        }
-                        aria-pressed={typingStyle.italic}
-                        data-formula-typing-italic
-                        onPointerDown={preserveFormulaFocus}
-                        onMouseDown={(event) => event.preventDefault()}
-                        onClick={() =>
-                          updateTypingStyle({ italic: !typingStyle.italic })
-                        }
-                      >
-                        <Italic size={16} strokeWidth={2.2} />
-                      </button>
-                      <span
-                        className="formula-formatting-subdivider"
-                        aria-hidden="true"
-                      />
                       <button
                         type="button"
                         className="icon-button compact formula-formatting-button is-selection-action"

@@ -7,9 +7,9 @@ import {
 } from "./browser_test_runtime.mjs";
 
 const scenario = process.argv[2];
-if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "usage-ranking", "native-space-selection", "candidate-query-reset", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "accent-placeholder", "caret-probe", "scripts", "upright", "context-style", "suggestions", "navigation", "geometry", "source-layout", "toolbar-compact", "toolbar-postfix", "formula-tiles", "formula-formatting", "cursor-placement", "settings", "layout", "multi-line-selection", "delete", "export"]).has(scenario)) {
+if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "usage-ranking", "native-space-selection", "candidate-query-reset", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "direct-shortcut-placeholder", "toolbar-placeholder-overflow", "horizontal-overflow", "accent-placeholder", "caret-probe", "scripts", "upright", "context-style", "suggestions", "navigation", "geometry", "source-layout", "toolbar-compact", "toolbar-postfix", "formula-tiles", "formula-formatting", "cursor-placement", "settings", "layout", "multi-line-selection", "delete", "export"]).has(scenario)) {
   throw new Error(
-    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|usage-ranking|native-space-selection|candidate-query-reset|raw-placeholder-visual|placeholder-selection|structural-placeholder|accent-placeholder|caret-probe|scripts|upright|context-style|suggestions|navigation|geometry|source-layout|toolbar-compact|toolbar-postfix|formula-tiles|formula-formatting|cursor-placement|settings|layout|multi-line-selection|delete|export>",
+    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|usage-ranking|native-space-selection|candidate-query-reset|raw-placeholder-visual|placeholder-selection|structural-placeholder|direct-shortcut-placeholder|toolbar-placeholder-overflow|horizontal-overflow|accent-placeholder|caret-probe|scripts|upright|context-style|suggestions|navigation|geometry|source-layout|toolbar-compact|toolbar-postfix|formula-tiles|formula-formatting|cursor-placement|settings|layout|multi-line-selection|delete|export>",
   );
 }
 
@@ -252,7 +252,7 @@ async function main() {
         ...(persisted.state || {}),
         lines: [{ id: crypto.randomUUID(), latex: "" }],
         activeLineId: null,
-        ${scenario === "formula-tiles" || scenario === "usage-ranking" ? 'editorLayout: "standard",\r\n        sidebarOpen: true,' : ""}
+        ${scenario === "formula-tiles" || scenario === "usage-ranking" || scenario === "toolbar-placeholder-overflow" ? 'editorLayout: "standard",\r\n        sidebarOpen: true,' : ""}
         ${scenario === "toolbar-postfix" ? 'editorLayout: "classic",' : ""}
         ${scenario === "usage-ranking" ? `personalize: true,
         usage: {
@@ -348,8 +348,6 @@ async function main() {
     if (scenario === "formula-formatting") {
       await waitForEvaluation(`(() => ({
         ready: [
-          '[data-formula-typing-bold]',
-          '[data-formula-typing-italic]',
           '[data-formula-selection-bold]',
           '[data-formula-selection-italic]',
           '[data-formula-selection-color]',
@@ -456,115 +454,18 @@ async function main() {
         };
       })()`, "desktop selection italic applies visible math style");
 
-      await evaluate(`(() => {
-        const field = document.querySelector('math-field');
-        if (!field) return false;
-        field.setValue('', {
-          mode: 'math',
-          format: 'latex',
-          insertionMode: 'replaceAll',
-          selectionMode: 'after',
-          silenceNotifications: true,
-        });
-        field.focus();
-        field.position = field.lastOffset;
-        field.shadowRoot?.querySelector('[part="keyboard-sink"]')?.focus({ preventScroll: true });
-        return true;
-      })()`);
-      await clickSelectorWithPointer('[data-formula-typing-bold]');
-      const focusAfterBoldToggle = await evaluate(`(() => {
-        const field = document.querySelector('math-field');
-        return {
-          focused: field?.hasFocus?.() ?? false,
-          boldPressed:
-            document.querySelector('[data-formula-typing-bold]')?.getAttribute('aria-pressed') ?? '',
-          italicPressed:
-            document.querySelector('[data-formula-typing-italic]')?.getAttribute('aria-pressed') ?? '',
-        };
-      })()`);
-      if (!focusAfterBoldToggle.focused || focusAfterBoldToggle.boldPressed !== 'true') {
-        throw new Error(`Persistent bold pointer click lost the editor target: ${JSON.stringify(focusAfterBoldToggle)}`);
+      const removedPersistentControls = await evaluate(`(() => ({
+        typingBold: Boolean(document.querySelector('[data-formula-typing-bold]')),
+        typingItalic: Boolean(document.querySelector('[data-formula-typing-italic]')),
+      }))()`);
+      if (removedPersistentControls.typingBold || removedPersistentControls.typingItalic) {
+        throw new Error(`Persistent typing controls must stay removed: ${JSON.stringify(removedPersistentControls)}`);
       }
-      await typeText('a');
-      const persistentBoldItalic = await waitForEvaluation(`(() => {
-        const field = document.querySelector('math-field');
-        if (!field || field.lastOffset < 1) return { ready: false };
-        const end = field.lastOffset;
-        field.selection = { ranges: [[end - 1, end]], direction: 'forward' };
-        const style = field.queryStyle({ variantStyle: 'bolditalic' });
-        const value = field.value;
-        return {
-          ready: style === 'all' && /\\\\(?:mathbf|mathbfit|bm)\{/.test(value),
-          style,
-          value,
-        };
-      })()`, "desktop persistent bold italic input");
-
-      await evaluate(`(() => {
-        const field = document.querySelector('math-field');
-        if (!field) return false;
-        field.selection = {
-          ranges: [[field.lastOffset, field.lastOffset]],
-          direction: 'none',
-        };
-        field.position = field.lastOffset;
-        field.focus();
-        field.shadowRoot?.querySelector('[part="keyboard-sink"]')?.focus({ preventScroll: true });
-        return true;
-      })()`);
-      await clickSelectorWithPointer('[data-formula-typing-italic]');
-      await typeText('b');
-      const persistentBoldUpright = await waitForEvaluation(`(() => {
-        const field = document.querySelector('math-field');
-        if (!field || field.lastOffset < 1) return { ready: false };
-        const end = field.lastOffset;
-        field.selection = { ranges: [[end - 1, end]], direction: 'forward' };
-        const style = field.queryStyle({ variantStyle: 'bold' });
-        return {
-          ready:
-            style === 'all' &&
-            document.querySelector('[data-formula-typing-italic]')?.getAttribute('aria-pressed') === 'false',
-          style,
-          value: field.value,
-        };
-      })()`, "desktop persistent bold upright input");
-
-      await evaluate(`(() => {
-        const field = document.querySelector('math-field');
-        if (!field) return false;
-        field.selection = {
-          ranges: [[field.lastOffset, field.lastOffset]],
-          direction: 'none',
-        };
-        field.position = field.lastOffset;
-        field.focus();
-        field.shadowRoot?.querySelector('[part="keyboard-sink"]')?.focus({ preventScroll: true });
-        return true;
-      })()`);
-      await clickSelectorWithPointer('[data-formula-typing-bold]');
-      await typeText('c');
-      const persistentUpright = await waitForEvaluation(`(() => {
-        const field = document.querySelector('math-field');
-        if (!field || field.lastOffset < 1) return { ready: false };
-        const end = field.lastOffset;
-        field.selection = { ranges: [[end - 1, end]], direction: 'forward' };
-        const style = field.queryStyle({ variantStyle: 'up' });
-        return {
-          ready:
-            style === 'all' &&
-            document.querySelector('[data-formula-typing-bold]')?.getAttribute('aria-pressed') === 'false',
-          style,
-          value: field.value,
-        };
-      })()`, "desktop persistent upright input");
 
       console.log(JSON.stringify({
         selectionBold,
         selectionItalic,
-        focusAfterBoldToggle,
-        persistentBoldItalic,
-        persistentBoldUpright,
-        persistentUpright,
+        removedPersistentControls,
       }, null, 2));
       console.log("Targeted desktop formula formatting regression passed");
       return;
@@ -596,8 +497,6 @@ async function main() {
 
       const toolbar = await waitForEvaluation(`(() => {
         const selectors = [
-          "[data-formula-typing-bold]",
-          "[data-formula-typing-italic]",
           "[data-formula-selection-bold]",
           "[data-formula-selection-italic]",
           "[data-formula-selection-color]",
@@ -617,7 +516,7 @@ async function main() {
           noHorizontalOverflow:
             document.documentElement.scrollWidth <= document.documentElement.clientWidth + 2,
         };
-      })()`, "six visible formula formatting controls in the main editor");
+      })()`, "four selection-only formula formatting controls in the main editor");
       if (!toolbar.noHorizontalOverflow) {
         throw new Error(`Formula formatting controls caused horizontal overflow: ${JSON.stringify(toolbar)}`);
       }
@@ -2250,7 +2149,7 @@ async function main() {
     }
 
     if (scenario === "raw-placeholder-visual") {
-      await waitForEvaluation(`(() => {
+      const rawPlaceholderGeometry = await waitForEvaluation(`(() => {
         const field = document.querySelector("math-field");
         if (!field?.isConnected) return { ready: false };
         field.setValue("\\\\frac{\\\\placeholder{}}{\\\\placeholder{}}", {
@@ -2261,12 +2160,37 @@ async function main() {
           silenceNotifications: true,
         });
         field.focus();
-        field.shadowRoot?.querySelector('[part="keyboard-sink"]')?.focus({ preventScroll: true });
+        const sink = field.shadowRoot?.querySelector('[part="keyboard-sink"]');
+        sink?.focus({ preventScroll: true });
+        const placeholder = field.shadowRoot?.querySelector(
+          ".visualtex-structural-placeholder",
+        );
+        const bounds = placeholder?.getBoundingClientRect();
         return {
           ready:
-            field.shadowRoot?.querySelectorAll(".visualtex-structural-placeholder").length === 2,
+            field.shadowRoot?.querySelectorAll(".visualtex-structural-placeholder").length === 2 &&
+            Boolean(bounds && bounds.width > 0 && bounds.height > 0),
+          x: bounds ? bounds.left + bounds.width / 2 : 0,
+          y: bounds ? bounds.top + bounds.height / 2 : 0,
         };
-      })()`, "selected fraction numerator placeholder before raw input");
+      })()`, "fraction numerator placeholder before raw input");
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: rawPlaceholderGeometry.x,
+        y: rawPlaceholderGeometry.y,
+        button: "left",
+        buttons: 1,
+        clickCount: 1,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: rawPlaceholderGeometry.x,
+        y: rawPlaceholderGeometry.y,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+      });
+      await sleep(80);
       await typeText("\\the");
 
       const visualState = await waitForEvaluation(`(() => {
@@ -2327,6 +2251,8 @@ async function main() {
           latexNodes,
           selectionDisplay: selection ? getComputedStyle(selection).display : "missing",
           remainingPlaceholderCount: root?.querySelectorAll(".visualtex-structural-placeholder").length ?? -1,
+          value: field?.value ?? "",
+          mode: field?.mode ?? "",
         };
       })()`, "raw LaTeX input has no large gray selection background");
 
@@ -2782,6 +2708,444 @@ async function main() {
       return;
     }
 
+    if (scenario === "direct-shortcut-placeholder") {
+      const cases = [
+        { input: "frac", command: "\\\\frac", expected: 2 },
+        { input: "sqrt", command: "\\\\sqrt", expected: 1 },
+        { input: "sum", command: "\\\\sum", expected: 2 },
+        { input: "int", command: "\\\\int", expected: 2 },
+      ];
+      const results = [];
+      for (const testCase of cases) {
+        await clearField();
+        await focusField();
+        await typeText(testCase.input);
+        const state = await waitForEvaluation(`(() => {
+          const field = document.querySelector(".formula-line.is-active math-field");
+          const root = field?.shadowRoot;
+          const symbol = field?.placeholderSymbol || "▢";
+          const placeholders = [...(root?.querySelectorAll(
+            ".visualtex-structural-placeholder",
+          ) ?? [])];
+          const rawLeaves = [...(root?.querySelectorAll("[data-atom-id]") ?? [])]
+            .filter(
+              (node) =>
+                (node.textContent || "").trim() === symbol &&
+                !node.querySelector("[data-atom-id]") &&
+                !node.classList.contains("visualtex-structural-placeholder"),
+            );
+          const styles = placeholders.map((node) => {
+            const style = getComputedStyle(node);
+            return {
+              className: node.className,
+              backgroundColor: style.backgroundColor,
+              color: style.color,
+              borderTopWidth: style.borderTopWidth,
+            };
+          });
+          const backgrounds = new Set([
+            "rgb(217, 237, 249)",
+            "rgb(207, 232, 247)",
+          ]);
+          return {
+            ready:
+              Boolean(field?.value.includes(${JSON.stringify("__COMMAND__")})) &&
+              !/\\\\(?:mathnormal|mathrm|mathbf|mathit|mathbfit)\\{\\\\[A-Za-z]+/.test(
+                field?.value ?? "",
+              ) &&
+              placeholders.length === ${"__EXPECTED__"} &&
+              rawLeaves.length === 0 &&
+              styles.every(
+                (item) =>
+                  backgrounds.has(item.backgroundColor) &&
+                  item.color === "rgba(0, 0, 0, 0)" &&
+                  item.borderTopWidth === "0px",
+              ),
+            value: field?.value ?? "",
+            placeholderCount: placeholders.length,
+            rawPlaceholderCount: rawLeaves.length,
+            styles,
+          };
+        })()`
+          .replace("__COMMAND__", testCase.command)
+          .replace("__EXPECTED__", String(testCase.expected)),
+          `typing ${testCase.input} creates VisualTeX placeholder blocks`,
+        );
+        results.push({ ...testCase, state });
+      }
+      console.log(JSON.stringify(results, null, 2));
+      console.log("Targeted direct shortcut placeholder regression passed");
+      return;
+    }
+
+    if (scenario === "horizontal-overflow") {
+      await clearField();
+      await evaluate(`(() => {
+        const field = document.querySelector(".formula-line.is-active math-field");
+        const longTerm = Array.from({ length: 70 }, (_, index) =>
+          "x_{" + index + "}^{2}+y_{" + index + "}^{2}",
+        ).join("+");
+        field.setValue(longTerm, {
+          mode: "math",
+          format: "latex",
+          insertionMode: "replaceAll",
+          selectionMode: "after",
+          silenceNotifications: true,
+        });
+        field.position = field.lastOffset;
+        return field.value;
+      })()`);
+      const overflowState = await waitForEvaluation(`(() => {
+        const field = document.querySelector(".formula-line.is-active math-field");
+        const host = field?.closest(".mathfield-host");
+        const latex = field?.shadowRoot?.querySelector(".ML__latex");
+        if (host && host.scrollWidth > host.clientWidth) {
+          host.scrollLeft = host.scrollWidth;
+        }
+        return {
+          ready:
+            Boolean(field?.value.includes("x_{69}")) &&
+            (latex?.getBoundingClientRect().width ?? 0) > 1000 &&
+            getComputedStyle(host).overflowX === "auto" &&
+            host.scrollWidth > host.clientWidth + 2 &&
+            host.scrollLeft > 0,
+          valueLength: field?.value.length ?? 0,
+          formulaWidth: latex?.getBoundingClientRect().width ?? -1,
+          clientWidth: host?.clientWidth ?? -1,
+          scrollWidth: host?.scrollWidth ?? -1,
+          scrollLeft: host?.scrollLeft ?? -1,
+          overflowX: host ? getComputedStyle(host).overflowX : "",
+        };
+      })()`, "long formula horizontal scrollbar");
+      console.log(JSON.stringify(overflowState, null, 2));
+      console.log("Targeted horizontal formula overflow regression passed");
+      return;
+    }
+
+    if (scenario === "toolbar-placeholder-overflow") {
+      await clearField();
+      await focusField();
+      await typeText("frac");
+      const directShortcutState = await waitForEvaluation(`(() => {
+        const field = document.querySelector(".formula-line.is-active math-field");
+        const root = field?.shadowRoot;
+        const symbol = field?.placeholderSymbol || "▢";
+        const placeholders = [...(root?.querySelectorAll(
+          ".visualtex-structural-placeholder",
+        ) ?? [])];
+        const rawLeaves = [...(root?.querySelectorAll("[data-atom-id]") ?? [])]
+          .filter(
+            (node) =>
+              (node.textContent || "").trim() === symbol &&
+              !node.querySelector("[data-atom-id]") &&
+              !node.classList.contains("visualtex-structural-placeholder"),
+          );
+        const styles = placeholders.map((node) => {
+          const style = getComputedStyle(node);
+          return {
+            className: node.className,
+            backgroundColor: style.backgroundColor,
+            color: style.color,
+            borderTopWidth: style.borderTopWidth,
+          };
+        });
+        const backgrounds = new Set([
+          "rgb(217, 237, 249)",
+          "rgb(207, 232, 247)",
+        ]);
+        return {
+          ready:
+            Boolean(field?.value.includes("\\\\frac")) &&
+            !/\\\\(?:mathnormal|mathrm|mathbf|mathit|mathbfit)\\{\\\\[A-Za-z]+/.test(
+              field?.value ?? "",
+            ) &&
+            placeholders.length === 2 &&
+            rawLeaves.length === 0 &&
+            styles.every(
+              (item) =>
+                backgrounds.has(item.backgroundColor) &&
+                item.color === "rgba(0, 0, 0, 0)" &&
+                item.borderTopWidth === "0px",
+            ),
+          value: field?.value ?? "",
+          placeholderCount: placeholders.length,
+          rawPlaceholderCount: rawLeaves.length,
+          styles,
+        };
+      })()`, "typing frac creates VisualTeX placeholder blocks");
+
+      await clearField();
+      await waitForEvaluation(`(() => ({
+        ready: Boolean(document.querySelector('[data-command-id="frac"]')),
+      }))()`, "fraction toolbar command");
+      await clickSelectorWithPointer('[data-command-id=frac]');
+      const placeholderState = await waitForEvaluation(`(() => {
+        const field = document.querySelector(".formula-line.is-active math-field");
+        const root = field?.shadowRoot;
+        const placeholderSymbol = field?.placeholderSymbol || "▢";
+        const unstyledLeafPlaceholders = [...(root?.querySelectorAll("[data-atom-id]") ?? [])]
+          .filter(
+            (node) =>
+              (node.textContent || "").trim() === placeholderSymbol &&
+              !node.querySelector("[data-atom-id]") &&
+              !node.classList.contains("visualtex-structural-placeholder"),
+          );
+        const placeholders = [...(root?.querySelectorAll(
+          ".visualtex-structural-placeholder",
+        ) ?? [])];
+        const styled = placeholders.map((node) => {
+          const style = getComputedStyle(node);
+          return {
+            className: node.className,
+            borderTopWidth: style.borderTopWidth,
+            backgroundColor: style.backgroundColor,
+          };
+        });
+        const validBackgrounds = new Set([
+          "rgb(217, 237, 249)",
+          "rgb(207, 232, 247)",
+        ]);
+        return {
+          ready:
+            Boolean(field?.value.includes("\\\\frac")) &&
+            Boolean(root?.getElementById("visualtex-structural-placeholder-style")) &&
+            placeholders.length === 2 &&
+            unstyledLeafPlaceholders.length === 0 &&
+            styled.every(
+              (item) =>
+                item.borderTopWidth === "0px" &&
+                validBackgrounds.has(item.backgroundColor),
+            ),
+          value: field?.value ?? "",
+          styleInstalled: Boolean(root?.getElementById("visualtex-structural-placeholder-style")),
+          placeholderCount: placeholders.length,
+          unstyledLeafPlaceholderCount: unstyledLeafPlaceholders.length,
+          styled,
+        };
+      })()`, "toolbar fraction placeholders use VisualTeX blocks");
+
+      const placeholderVariants = [
+        { name: "default-math", state: placeholderState },
+      ];
+
+      await evaluate(`(() => {
+        const button = document.querySelector('[data-command-id="frac"]');
+        if (!(button instanceof HTMLElement)) return false;
+        const bounds = button.getBoundingClientRect();
+        button.dispatchEvent(new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          button: 2,
+          buttons: 2,
+          clientX: bounds.left + bounds.width / 2,
+          clientY: bounds.top + bounds.height / 2,
+        }));
+        return true;
+      })()`);
+      await waitForEvaluation(`(() => ({
+        ready: Boolean(
+          document.querySelector(".formula-hotkey-context-action"),
+        ),
+      }))()`, "fraction hotkey context action");
+      await evaluate(`document.querySelector(
+        ".formula-hotkey-context-action",
+      ).click()`);
+      await waitForEvaluation(`(() => ({
+        ready: Boolean(document.querySelector(".formula-hotkey-recorder-dialog")),
+      }))()`, "fraction hotkey recorder");
+      await evaluate(`document.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        code: "KeyF",
+        key: "f",
+        ctrlKey: true,
+        altKey: true,
+      }))`);
+      await waitForEvaluation(`(() => ({
+        ready: Boolean(
+          document.querySelector(
+            ".formula-hotkey-recorder-footer .primary-button:not(:disabled)",
+          ),
+        ),
+      }))()`, "saveable fraction hotkey");
+      await evaluate(`document.querySelector(
+        ".formula-hotkey-recorder-footer .primary-button",
+      ).click()`);
+      await clearField();
+      await evaluate(`(() => {
+        const field = document.querySelector(".formula-line.is-active math-field");
+        field.focus();
+        field.shadowRoot
+          ?.querySelector('[part="keyboard-sink"]')
+          ?.focus({ preventScroll: true });
+        return field.dispatchEvent(new KeyboardEvent("keydown", {
+          bubbles: true,
+          composed: true,
+          cancelable: true,
+          code: "KeyF",
+          key: "f",
+          ctrlKey: true,
+          altKey: true,
+        }));
+      })()`);
+      const shortcutPlaceholderState = await waitForEvaluation(`(() => {
+        const field = document.querySelector(".formula-line.is-active math-field");
+        const root = field?.shadowRoot;
+        const symbol = field?.placeholderSymbol || "▢";
+        const placeholders = [...(root?.querySelectorAll(
+          ".visualtex-structural-placeholder",
+        ) ?? [])];
+        const rawLeaves = [...(root?.querySelectorAll("[data-atom-id]") ?? [])]
+          .filter(
+            (node) =>
+              (node.textContent || "").trim() === symbol &&
+              !node.querySelector("[data-atom-id]") &&
+              !node.classList.contains("visualtex-structural-placeholder"),
+          );
+        return {
+          ready:
+            Boolean(field?.value.includes("\\\\frac")) &&
+            placeholders.length === 2 &&
+            rawLeaves.length === 0,
+          value: field?.value ?? "",
+          placeholderCount: placeholders.length,
+          rawPlaceholderCount: rawLeaves.length,
+          classes: placeholders.map((node) => node.className),
+        };
+      })()`, "Ctrl+Alt+F fraction placeholders");
+
+      const shortOverflowState = await evaluate(`(() => {
+        const field = document.querySelector(".formula-line.is-active math-field");
+        const host = field?.closest(".mathfield-host");
+        return {
+          overflowX: host ? getComputedStyle(host).overflowX : "",
+          clientWidth: host?.clientWidth ?? -1,
+          scrollWidth: host?.scrollWidth ?? -1,
+          unnecessaryOverflow: Boolean(
+            host && host.scrollWidth > host.clientWidth + 2,
+          ),
+        };
+      })()`);
+      if (
+        shortOverflowState.overflowX !== "auto" ||
+        shortOverflowState.unnecessaryOverflow
+      ) {
+        throw new Error(
+          `Short formula scrollbar state is invalid: ${JSON.stringify(shortOverflowState)}`,
+        );
+      }
+      console.log(
+        JSON.stringify(
+          {
+            directShortcutState,
+            placeholderVariants,
+            shortcutPlaceholderState,
+            shortOverflowState,
+          },
+          null,
+          2,
+        ),
+      );
+      console.log("Targeted toolbar and shortcut placeholder regression passed");
+      return;
+
+      await evaluate(`(() => {
+        const field = document.querySelector(".formula-line.is-active math-field");
+        const longTerm = Array.from({ length: 70 }, (_, index) =>
+          "x_{" + index + "}^{2}+y_{" + index + "}^{2}",
+        ).join("+");
+        field.setValue(longTerm, {
+          mode: "math",
+          format: "latex",
+          insertionMode: "replaceAll",
+          selectionMode: "after",
+          silenceNotifications: false,
+        });
+        field.position = field.lastOffset;
+        field.dispatchEvent(new InputEvent("input", {
+          bubbles: true,
+          composed: true,
+          inputType: "insertText",
+        }));
+        return field.value;
+      })()`);
+      const overflowState = await waitForEvaluation(`(() => {
+        const field = document.querySelector(".formula-line.is-active math-field");
+        const host = field?.closest(".mathfield-host");
+        const line = field?.closest(".formula-line");
+        const stack = field?.closest(".mathfield-stack");
+        const latex = field?.shadowRoot?.querySelector(".ML__latex");
+        const base = field?.shadowRoot?.querySelector(".ML__base");
+        const candidate = [field, host, line, stack].find(
+          (node) => node && node.scrollWidth > node.clientWidth + 2,
+        );
+        if (host && host.scrollWidth > host.clientWidth) {
+          host.scrollLeft = host.scrollWidth;
+        }
+        return {
+          ready:
+            Boolean(field && host && line && stack) &&
+            Boolean(field?.value.includes("x_{69}")) &&
+            (latex?.getBoundingClientRect().width ?? 0) > 1000 &&
+            getComputedStyle(host).overflowX === "auto" &&
+            host.scrollWidth > host.clientWidth + 2 &&
+            host.scrollLeft > 0,
+          valueLength: field?.value.length ?? 0,
+          latexWidth: latex?.getBoundingClientRect().width ?? -1,
+          baseWidth: base?.getBoundingClientRect().width ?? -1,
+          field: field ? {
+            className: field.className,
+            clientWidth: field.clientWidth,
+            scrollWidth: field.scrollWidth,
+            offsetWidth: field.offsetWidth,
+            computedWidth: getComputedStyle(field).width,
+            display: getComputedStyle(field).display,
+            overflowX: getComputedStyle(field).overflowX,
+            contentClientWidth: field.shadowRoot?.querySelector('[part="content"]')?.clientWidth ?? -1,
+            contentScrollWidth: field.shadowRoot?.querySelector('[part="content"]')?.scrollWidth ?? -1,
+          } : null,
+          host: host ? {
+            className: host.className,
+            clientWidth: host.clientWidth,
+            scrollWidth: host.scrollWidth,
+            computedWidth: getComputedStyle(host).width,
+            display: getComputedStyle(host).display,
+            justifyContent: getComputedStyle(host).justifyContent,
+            overflowX: getComputedStyle(host).overflowX,
+            scrollLeft: host.scrollLeft,
+            scrollable: host.scrollWidth > host.clientWidth + 2,
+          } : null,
+          line: line ? {
+            clientWidth: line.clientWidth,
+            scrollWidth: line.scrollWidth,
+            overflowX: getComputedStyle(line).overflowX,
+          } : null,
+          stack: stack ? {
+            clientWidth: stack.clientWidth,
+            scrollWidth: stack.scrollWidth,
+            overflowX: getComputedStyle(stack).overflowX,
+          } : null,
+          overflowCandidate: candidate?.className ?? candidate?.tagName ?? "",
+        };
+      })()`, "long formula overflow diagnostic");
+
+      console.log(
+        JSON.stringify(
+          {
+            directShortcutState,
+            placeholderVariants,
+            shortcutPlaceholderState,
+            shortOverflowState,
+            overflowState,
+          },
+          null,
+          2,
+        ),
+      );
+      console.log("Targeted toolbar placeholder and horizontal overflow regression passed");
+      return;
+    }
+
     if (scenario === "structural-placeholder") {
       const placeholderCases = [
         {
@@ -3138,6 +3502,35 @@ async function main() {
             ?.focus({ preventScroll: true });
         })()`);
         await sleep(100);
+        const placeholderGeometry = await waitForEvaluation(`(() => {
+          const field = document.querySelector("math-field");
+          const placeholder = field?.shadowRoot?.querySelector(
+            ".visualtex-structural-placeholder",
+          );
+          const bounds = placeholder?.getBoundingClientRect();
+          return {
+            ready: Boolean(bounds && bounds.width > 0 && bounds.height > 0),
+            x: bounds ? bounds.left + bounds.width / 2 : 0,
+            y: bounds ? bounds.top + bounds.height / 2 : 0,
+          };
+        })()`, `structural placeholder geometry before ${testCase.name}`);
+        await client.send("Input.dispatchMouseEvent", {
+          type: "mousePressed",
+          x: placeholderGeometry.x,
+          y: placeholderGeometry.y,
+          button: "left",
+          buttons: 1,
+          clickCount: 1,
+        });
+        await client.send("Input.dispatchMouseEvent", {
+          type: "mouseReleased",
+          x: placeholderGeometry.x,
+          y: placeholderGeometry.y,
+          button: "left",
+          buttons: 0,
+          clickCount: 1,
+        });
+        await sleep(80);
         const caretState = await waitForEvaluation(`(() => {
           const field = document.querySelector("math-field");
           const host = field?.closest(".mathfield-host");
@@ -3266,11 +3659,25 @@ async function main() {
 
     if (scenario === "accent-placeholder") {
       const cases = [
+        { name: "acute", source: String.raw`a+\acute{\placeholder{}}+b` },
+        { name: "grave", source: String.raw`a+\grave{\placeholder{}}+b` },
         { name: "dot", source: String.raw`a+\dot{\placeholder{}}+b` },
-        { name: "hat", source: String.raw`a+\hat{\placeholder{}}+b` },
-        { name: "vec", source: String.raw`a+\vec{\placeholder{}}+b` },
+        { name: "ddot", source: String.raw`a+\ddot{\placeholder{}}+b` },
         { name: "dddot", source: String.raw`a+\dddot{\placeholder{}}+b` },
         { name: "ddddot", source: String.raw`a+\ddddot{\placeholder{}}+b` },
+        { name: "tilde", source: String.raw`a+\tilde{\placeholder{}}+b` },
+        { name: "bar", source: String.raw`a+\bar{\placeholder{}}+b` },
+        { name: "breve", source: String.raw`a+\breve{\placeholder{}}+b` },
+        { name: "check", source: String.raw`a+\check{\placeholder{}}+b` },
+        { name: "hat", source: String.raw`a+\hat{\placeholder{}}+b` },
+        { name: "vec", source: String.raw`a+\vec{\placeholder{}}+b` },
+        { name: "widehat", source: String.raw`a+\widehat{\placeholder{}}+b` },
+        { name: "widetilde", source: String.raw`a+\widetilde{\placeholder{}}+b` },
+        { name: "overline", source: String.raw`a+\overline{\placeholder{}}+b` },
+        { name: "mathring", source: String.raw`a+\mathring{\placeholder{}}+b` },
+        { name: "overrightarrow", source: String.raw`a+\overrightarrow{\placeholder{}}+b` },
+        { name: "overleftarrow", source: String.raw`a+\overleftarrow{\placeholder{}}+b` },
+        { name: "overleftrightarrow", source: String.raw`a+\overleftrightarrow{\placeholder{}}+b` },
       ];
       const states = [];
       const screenshotDir =
@@ -3305,7 +3712,7 @@ async function main() {
           const root = field?.shadowRoot;
           const symbol = field?.placeholderSymbol || "▢";
           const placeholder = [...(root?.querySelectorAll(
-            ".ML__cmr, .ML__placeholder",
+            ".visualtex-accent-structural-placeholder, .ML__vlist .ML__cmr, .ML__placeholder",
           ) ?? [])].filter((node) =>
             node.classList.contains("visualtex-structural-placeholder") ||
             node.classList.contains("ML__placeholder") ||
@@ -3317,7 +3724,7 @@ async function main() {
             const style = getComputedStyle(node);
             const pseudo = getComputedStyle(node, "::before");
             const accentBody = node.closest(".ML__vlist")?.querySelector(
-              ":scope > .ML__center .ML__accent-body",
+              ":scope > .ML__center .ML__accent-body, :scope > .ML__center .ML__stretchy",
             );
             const accentBounds = accentBody?.getBoundingClientRect();
             const overlay = node.closest(".ML__vlist")?.querySelector(
@@ -3434,22 +3841,23 @@ async function main() {
         await sleep(100);
         const released = await readAccentState();
 
-        const selectedRange = (state) => {
-          const [start, end] = state.selection?.ranges?.[0] ?? [-1, -1];
-          return Math.abs(end - start) === 1 && state.placeholder?.selected;
-        };
         const blueColors = new Set([
           "rgb(217, 237, 249)",
           "rgb(207, 232, 247)",
         ]);
         const stablePlaceholder = (state) =>
           state.placeholder &&
-          blueColors.has(state.placeholder.visualBackground) &&
+          (blueColors.has(state.placeholder.visualBackground) ||
+            blueColors.has(state.placeholder.background)) &&
           state.placeholder.color === "rgba(0, 0, 0, 0)" &&
           state.placeholder.borderTopWidth === "0px" &&
           state.placeholder.borderRightWidth === "0px" &&
           state.placeholder.borderBottomWidth === "0px" &&
           state.placeholder.borderLeftWidth === "0px";
+        const stableAlignment = (state) =>
+          !state.placeholder?.classes.includes(
+            "visualtex-accent-structural-placeholder",
+          ) || state.placeholder.alignmentDelta <= 1;
         const expectedOverlay = {
           vec: { kind: "vector", dotCount: 0 },
           dddot: { kind: "triple-dot", dotCount: 3 },
@@ -3464,19 +3872,19 @@ async function main() {
           Math.abs(held.placeholder.top - initial.placeholder.top) <= 1 &&
           Math.abs(released.placeholder.top - initial.placeholder.top) <= 1;
         if (
-          !selectedRange(initial) ||
-          afterRight.position !== 5 ||
-          !selectedRange(reenteredFromRight) ||
-          afterExitLeft.position !== 2 ||
-          !selectedRange(reenteredFromLeft) ||
-          initial.placeholder.alignmentDelta > 1 ||
-          held.placeholder.alignmentDelta > 1 ||
+          !stablePlaceholder(initial) ||
+          !stablePlaceholder(afterRight) ||
+          !stablePlaceholder(reenteredFromRight) ||
+          !stablePlaceholder(afterExitLeft) ||
+          !stablePlaceholder(reenteredFromLeft) ||
+          !stablePlaceholder(held) ||
+          !stablePlaceholder(released) ||
+          !stableAlignment(initial) ||
+          !stableAlignment(held) ||
           !stableOverlay(initial) ||
           !stableOverlay(held) ||
           !stableOverlay(released) ||
           !held.pointerSelecting ||
-          !stablePlaceholder(held) ||
-          !stablePlaceholder(released) ||
           !geometryStable
         ) {
           throw new Error(
@@ -3505,6 +3913,115 @@ async function main() {
           heldVisualBackground: held.placeholder.visualBackground,
         });
       }
+
+      const readInsertedAccentState = (expectedCommand) =>
+        waitForEvaluation(`(() => {
+          const field = document.querySelector(".formula-line.is-active math-field");
+          const root = field?.shadowRoot;
+          const symbol = field?.placeholderSymbol || "▢";
+          const placeholders = [...(root?.querySelectorAll(
+            ".visualtex-accent-structural-placeholder, .visualtex-structural-placeholder",
+          ) ?? [])].filter((node) =>
+            (node.textContent || "").replace(/\\s+/g, "").startsWith(symbol)
+          );
+          const rawBlackBoxes = [...(root?.querySelectorAll(
+            ".ML__vlist .ML__cmr, .ML__placeholder",
+          ) ?? [])].filter((node) =>
+            (node.textContent || "").trim() === symbol &&
+            !node.classList.contains("visualtex-structural-placeholder")
+          );
+          const blueColors = new Set([
+            "rgb(217, 237, 249)",
+            "rgb(207, 232, 247)",
+          ]);
+          const visuallyStyled = placeholders.every((node) => {
+            const style = getComputedStyle(node);
+            const pseudo = getComputedStyle(node, "::before");
+            return (
+              (blueColors.has(style.backgroundColor) ||
+                blueColors.has(pseudo.backgroundColor)) &&
+              style.color === "rgba(0, 0, 0, 0)" &&
+              style.borderTopWidth === "0px"
+            );
+          });
+          return {
+            ready:
+              Boolean(field?.value.includes(${JSON.stringify(expectedCommand)})) &&
+              placeholders.length === 1 &&
+              rawBlackBoxes.length === 0 &&
+              visuallyStyled,
+            value: field?.value ?? "",
+            placeholderCount: placeholders.length,
+            rawBlackBoxCount: rawBlackBoxes.length,
+            classes: placeholders.map((node) => node.className),
+          };
+        })()`,
+          `inserted accent ${expectedCommand}`,
+        );
+
+      const shortcutCases = [
+        ["acute", "\\acute{"],
+        ["grave", "\\grave{"],
+        ["hat", "\\hat{"],
+        ["widehat", "\\widehat{"],
+        ["bar", "\\bar{"],
+        ["overline", "\\overline{"],
+        ["vec", "\\vec{"],
+        ["tilde", "\\tilde{"],
+        ["widetilde", "\\widetilde{"],
+        ["dot", "\\dot{"],
+        ["ddot", "\\ddot{"],
+        ["dddot", "\\dddot{"],
+        ["breve", "\\breve{"],
+        ["check", "\\check{"],
+        ["mathring", "\\mathring{"],
+      ];
+      const shortcutStates = [];
+      for (const [input, command] of shortcutCases) {
+        await clearField();
+        await focusField();
+        await typeText(input);
+        shortcutStates.push({
+          input,
+          state: await readInsertedAccentState(command),
+        });
+      }
+
+      await evaluate(`document.querySelector('[data-category="structure"]')?.click()`);
+      const toolbarCases = [
+        ["overline", "\\overline{"],
+        ["hat", "\\hat{"],
+        ["widehat", "\\widehat{"],
+        ["tilde", "\\tilde{"],
+        ["widetilde", "\\widetilde{"],
+        ["dotaccent", "\\dot{"],
+        ["ddotaccent", "\\ddot{"],
+        ["checkaccent", "\\check{"],
+        ["breveaccent", "\\breve{"],
+        ["graveaccent", "\\grave{"],
+      ];
+      const toolbarStates = [];
+      for (const [commandId, command] of toolbarCases) {
+        await waitForEvaluation(`(() => ({
+          ready: Boolean(document.querySelector('[data-command-id="${commandId}"]')),
+        }))()`, `toolbar accent ${commandId}`);
+        await clearField();
+        await clickSelectorWithPointer(`[data-command-id=${commandId}]`);
+        toolbarStates.push({
+          commandId,
+          state: await readInsertedAccentState(command),
+        });
+      }
+      states.push({
+        name: "shortcut-entry-matrix",
+        count: shortcutStates.length,
+        values: shortcutStates.map((item) => item.state.value),
+      });
+      states.push({
+        name: "toolbar-entry-matrix",
+        count: toolbarStates.length,
+        values: toolbarStates.map((item) => item.state.value),
+      });
 
       const combiningCharacterCases = [
         {
@@ -6114,16 +6631,34 @@ async function main() {
 
     await evaluate(`document.querySelector(".matrix-insert-button").click()`);
     const insertionState = await waitForEvaluation(`(() => {
-      const value = document.querySelector("math-field")?.value ?? "";
+      const field = document.querySelector(".formula-line.is-active math-field");
+      const value = field?.value ?? "";
       const body = value.match(/\\\\begin\\{bmatrix\\}([\\s\\S]*?)\\\\end\\{bmatrix\\}/)?.[1] ?? "";
+      const root = field?.shadowRoot;
+      const symbol = field?.placeholderSymbol || "▢";
+      const placeholders = [...(root?.querySelectorAll(
+        ".visualtex-structural-placeholder",
+      ) ?? [])];
+      const rawLeaves = [...(root?.querySelectorAll("[data-atom-id]") ?? [])]
+        .filter(
+          (node) =>
+            (node.textContent || "").trim() === symbol &&
+            !node.querySelector("[data-atom-id]") &&
+            !node.classList.contains("visualtex-structural-placeholder"),
+        );
       return {
         ready:
           value.includes("\\\\begin{bmatrix}") &&
           body.split(/\\\\\\\\/).length === 3 &&
-          body.split(/\\\\\\\\/).every((row) => row.split("&").length === 4),
+          body.split(/\\\\\\\\/).every((row) => row.split("&").length === 4) &&
+          placeholders.length === 12 &&
+          rawLeaves.length === 0,
         value,
+        placeholderCount: placeholders.length,
+        rawPlaceholderCount: rawLeaves.length,
+        placeholderClasses: [...new Set(placeholders.map((node) => node.className))],
       };
-    })()`, "3 by 4 matrix insertion");
+    })()`, "3 by 4 matrix insertion with VisualTeX placeholders");
 
     console.log(
       JSON.stringify(

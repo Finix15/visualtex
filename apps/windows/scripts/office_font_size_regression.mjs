@@ -633,8 +633,6 @@ async function main() {
     const formattingControls = await waitForEvaluation(
       client,
       `(() => {
-        const typingBold = document.querySelector('[data-formula-typing-bold]');
-        const typingItalic = document.querySelector('[data-formula-typing-italic]');
         const selectionBold = document.querySelector('[data-formula-selection-bold]');
         const selectionItalic = document.querySelector('[data-formula-selection-italic]');
         const color = document.querySelector('[data-formula-selection-color]');
@@ -655,8 +653,6 @@ async function main() {
           document.documentElement.clientWidth + 2;
         return {
           ready: Boolean(
-            typingBold &&
-            typingItalic &&
             selectionBold &&
             selectionItalic &&
             color &&
@@ -664,8 +660,9 @@ async function main() {
             noOverlap &&
             noHorizontalOverflow
           ),
-          typingBoldPressed: typingBold?.getAttribute('aria-pressed') ?? '',
-          typingItalicPressed: typingItalic?.getAttribute('aria-pressed') ?? '',
+          persistentControlsAbsent:
+            !document.querySelector('[data-formula-typing-bold]') &&
+            !document.querySelector('[data-formula-typing-italic]'),
           noOverlap,
           noHorizontalOverflow,
           titleRight: titleBounds?.right ?? 0,
@@ -674,8 +671,7 @@ async function main() {
       })()`,
       "Office formula formatting controls",
     );
-    assert.equal(formattingControls.typingBoldPressed, "false");
-    assert.equal(formattingControls.typingItalicPressed, "true");
+    assert.equal(formattingControls.persistentControlsAbsent, true);
     const noSelectionActions = await client.evaluate(`(() => {
       const field = document.querySelector('math-field');
       if (!field) return null;
@@ -744,7 +740,6 @@ async function main() {
             field.queryStyle({ variantStyle: 'bolditalic' }) === 'all'
               ? 'all'
               : 'none',
-          laterItalic: field.queryStyle({ variantStyle: 'italic' }),
           value: field.value,
         };
       })()`,
@@ -756,7 +751,6 @@ async function main() {
       "all",
       "Selection bold must not make later input persistently bold",
     );
-    assert.equal(selectedBold.laterItalic, "all");
 
     await client.evaluate(`(() => {
       const field = document.querySelector('math-field');
@@ -769,119 +763,9 @@ async function main() {
       const field = document.querySelector('math-field');
       return {
         italic: field?.queryStyle({ variantStyle: 'italic' }) ?? 'none',
-        typingBoldPressed:
-          document.querySelector('[data-formula-typing-bold]')?.getAttribute(
-            'aria-pressed',
-          ) ?? '',
-        typingItalicPressed:
-          document.querySelector('[data-formula-typing-italic]')?.getAttribute(
-            'aria-pressed',
-          ) ?? '',
       };
     })()`);
     assert.equal(selectedItalic.italic, "all");
-    assert.equal(selectedItalic.typingBoldPressed, "false");
-    assert.equal(selectedItalic.typingItalicPressed, "true");
-
-    await client.evaluate(`(() => {
-      const field = document.querySelector('math-field');
-      if (!field) return false;
-      field.selection = {
-        ranges: [[field.lastOffset, field.lastOffset]],
-        direction: 'none',
-      };
-      field.position = field.lastOffset;
-      return true;
-    })()`);
-    await clickSelectorWithPointer(client, '[data-formula-typing-bold]');
-    await client.evaluate(`(() => {
-      const field = document.querySelector('math-field');
-      if (!field) return false;
-      field.insert('g', {
-        mode: 'math',
-        format: 'latex',
-        insertionMode: 'insertAfter',
-        selectionMode: 'after',
-        focus: true,
-      });
-      const boldEnd = field.lastOffset;
-      field.selection = {
-        ranges: [[boldEnd - 1, boldEnd]],
-        direction: 'forward',
-      };
-      window.__visualtexPersistentBold = {
-        bold: field.queryStyle({ variantStyle: 'bolditalic' }),
-        italic: field.queryStyle({ variantStyle: 'bolditalic' }),
-      };
-      field.selection = {
-        ranges: [[field.lastOffset, field.lastOffset]],
-        direction: 'none',
-      };
-      field.position = field.lastOffset;
-      return true;
-    })()`);
-    await clickSelectorWithPointer(client, '[data-formula-typing-italic]');
-    const persistentActionState = await client.evaluate(`(() => {
-      const field = document.querySelector('math-field');
-      if (!field) return null;
-      field.insert('h', {
-        mode: 'math',
-        format: 'latex',
-        insertionMode: 'insertAfter',
-        selectionMode: 'after',
-        focus: true,
-      });
-      const uprightEnd = field.lastOffset;
-      field.selection = {
-        ranges: [[uprightEnd - 1, uprightEnd]],
-        direction: 'forward',
-      };
-      return {
-        persistentBold: window.__visualtexPersistentBold,
-        uprightBold: field.queryStyle({ variantStyle: 'bold' }),
-        uprightShape: field.queryStyle({ variantStyle: 'bold' }),
-        boldPressed:
-          document.querySelector('[data-formula-typing-bold]')?.getAttribute(
-            'aria-pressed',
-          ) ?? '',
-        italicPressed:
-          document.querySelector('[data-formula-typing-italic]')?.getAttribute(
-            'aria-pressed',
-          ) ?? '',
-      };
-    })()`);
-    const persistentStyleState = await client.evaluate(`(() => {
-      const field = document.querySelector('math-field');
-      const end = field?.lastOffset ?? 0;
-      return {
-        persistentBold: window.__visualtexPersistentBold ?? null,
-        uprightBold: field?.queryStyle({ variantStyle: 'bold' }) ?? 'none',
-        uprightShape: field?.queryStyle({ variantStyle: 'bold' }) ?? 'none',
-        boldPressed:
-          document.querySelector('[data-formula-typing-bold]')?.getAttribute(
-            'aria-pressed',
-          ) ?? '',
-        italicPressed:
-          document.querySelector('[data-formula-typing-italic]')?.getAttribute(
-            'aria-pressed',
-          ) ?? '',
-        value: field?.value ?? '',
-        selection: field?.selection ?? null,
-        variantBold: field?.queryStyle({ variantStyle: 'bold' }) ?? 'none',
-        variantUpright: field?.queryStyle({ variantStyle: 'up' }) ?? 'none',
-        end,
-      };
-    })()`);
-    assert.equal(persistentStyleState.persistentBold?.bold, "all");
-    assert.equal(persistentStyleState.persistentBold?.italic, "all");
-    assert.equal(
-      persistentStyleState.uprightBold,
-      "all",
-      JSON.stringify(persistentStyleState),
-    );
-    assert.equal(persistentStyleState.uprightShape, "all");
-    assert.equal(persistentStyleState.boldPressed, "true");
-    assert.equal(persistentStyleState.italicPressed, "false");
 
     await client.evaluate(`(() => {
       const field = document.querySelector('math-field');

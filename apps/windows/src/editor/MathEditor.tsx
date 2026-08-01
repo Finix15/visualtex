@@ -73,11 +73,6 @@ export interface MathEditorInsertionTarget {
   direction: "forward" | "backward" | "none";
 }
 
-export interface MathEditorTypingStyle {
-  bold: boolean;
-  italic: boolean;
-}
-
 export interface MathEditorSelectionTarget {
   selections: MathEditorInsertionTarget[];
 }
@@ -111,7 +106,6 @@ export interface MathEditorHandle {
     latex: string,
     selection: MathSelectionSnapshot | null,
   ) => Promise<boolean>;
-  setTypingStyle: (style: MathEditorTypingStyle) => boolean;
   captureSelectionTarget: () => MathEditorSelectionTarget | null;
   applySelectionStyle: (
     style: MathEditorSelectionStyle,
@@ -124,7 +118,6 @@ interface Props {
   activeLineId: string | null;
   formulaAlignment: FormulaAlignment;
   zoom: number;
-  typingStyle?: MathEditorTypingStyle;
   readOnly?: boolean;
   draftError?: string;
   onPasteImage?: (file: File, target: MathEditorInsertionTarget) => void;
@@ -192,7 +185,6 @@ interface FormulaFieldProps {
   language: "cn" | "en";
   autoPairDelimiters: boolean;
   inputBehavior: InputBehaviorSettings;
-  typingStyle?: MathEditorTypingStyle;
   register: (lineId: string, field: MathfieldElement | null) => void;
   onEdit: (edit: FormulaFieldEdit, field: MathfieldElement) => void;
   onInputActivity: (field: MathfieldElement) => void;
@@ -1516,39 +1508,6 @@ function selectionHasContent(selection: MathSelectionSnapshot) {
   return selection.ranges.some(([start, end]) => start !== end);
 }
 
-function typingStyleAsMathLiveStyle(
-  style: MathEditorTypingStyle,
-): Pick<Style, "variant" | "variantStyle"> {
-  return {
-    variant: "normal",
-    variantStyle: style.bold
-      ? style.italic
-        ? "bolditalic"
-        : "bold"
-      : style.italic
-        ? "italic"
-        : "up",
-  };
-}
-
-function applyTypingStyleAtCollapsedSelection(
-  field: MathfieldElement,
-  style: MathEditorTypingStyle | null | undefined,
-) {
-  if (!style || selectionHasContent(captureSelection(field))) return false;
-  const mathLiveStyle = typingStyleAsMathLiveStyle(style);
-  if (field.queryStyle(mathLiveStyle) !== "all") {
-    field.applyStyle(mathLiveStyle, { operation: "set" });
-  }
-  return true;
-}
-
-function isDefaultMathTypingStyle(
-  style: MathEditorTypingStyle | null | undefined,
-) {
-  return Boolean(style && !style.bold && style.italic);
-}
-
 function captureFieldSnapshot(field: MathfieldElement) {
   return {
     latex: normalizeChineseLatex(field.value),
@@ -2048,7 +2007,13 @@ function settleVisualTexPlaceholderDelete(field: MathfieldElement) {
 function accentLayoutForPlaceholder(node: HTMLElement) {
   let layout = node.closest<HTMLElement>(".ML__vlist");
   while (layout) {
-    if (layout.querySelector(".ML__accent-body")) return layout;
+    if (
+      layout.querySelector(
+        ":scope > .ML__center .ML__accent-body, :scope > .ML__center .ML__stretchy",
+      )
+    ) {
+      return layout;
+    }
     layout = layout.parentElement?.closest<HTMLElement>(".ML__vlist") ?? null;
   }
   return null;
@@ -2160,7 +2125,7 @@ function alignVisualTexAccentPlaceholder(
     ":scope > .ML__center",
   );
   const accentBody = accentCenter?.querySelector<HTMLElement>(
-    ".ML__accent-body",
+    ".ML__accent-body, .ML__stretchy",
   );
   if (!accentCenter || !accentBody) return;
 
@@ -2195,13 +2160,12 @@ function markVisualTexStructuralPlaceholders(field: MathfieldElement) {
       host.classList.remove(visualTexCombiningAccentHostClass);
     });
 
-  if (visualTexPointerSelectingFields.has(field)) return;
-
+  const pointerSelecting = visualTexPointerSelectingFields.has(field);
   const placeholderSymbol = field.placeholderSymbol || "▢";
   const selectionRanges = field.selection.ranges;
   const [selectionStart, selectionEnd] = selectionRanges[0] ?? [-1, -1];
   const isFocusedPlaceholderSelection =
-    !visualTexPointerSelectingFields.has(field) &&
+    !pointerSelecting &&
     selectionRanges.length === 1 &&
     Math.abs(selectionEnd - selectionStart) <= 1 &&
     !shadowRoot.querySelector(".ML__raw-latex");
@@ -2219,16 +2183,15 @@ function markVisualTexStructuralPlaceholders(field: MathfieldElement) {
         .map((child) => child.textContent ?? "")
         .join("")
         .trim();
-    const isPlaceholder =
-      node.classList.contains(visualTexPlaceholderClass) ||
-      node.classList.contains("ML__placeholder") ||
-      visibleText === placeholderSymbol;
-    const accentLayout = accentLayoutForPlaceholder(node);
-    const isAccentPlaceholder =
-      isPlaceholder && Boolean(accentLayout);
-    if (isPlaceholder) {
-      rememberVisualTexPlaceholderBranch(field, node, isAccentPlaceholder);
-    }
+      const isPlaceholder =
+        node.classList.contains(visualTexPlaceholderClass) ||
+        node.classList.contains("ML__placeholder") ||
+        visibleText === placeholderSymbol;
+      const accentLayout = accentLayoutForPlaceholder(node);
+      const isAccentPlaceholder = isPlaceholder && Boolean(accentLayout);
+      if (isPlaceholder && !pointerSelecting) {
+        rememberVisualTexPlaceholderBranch(field, node, isAccentPlaceholder);
+      }
       node.classList.toggle(visualTexPlaceholderClass, isPlaceholder);
       node.classList.toggle(
         visualTexAccentPlaceholderClass,
@@ -2241,6 +2204,8 @@ function markVisualTexStructuralPlaceholders(field: MathfieldElement) {
       if (isAccentPlaceholder && accentLayout) {
         alignVisualTexAccentPlaceholder(node, accentLayout);
       }
+
+      if (pointerSelecting) return;
 
       const isSelected = Boolean(
         isFocusedPlaceholderSelection &&
@@ -2264,6 +2229,8 @@ function markVisualTexStructuralPlaceholders(field: MathfieldElement) {
         caret?.remove();
       }
     });
+
+  if (pointerSelecting) return;
 
   const container = shadowRoot.querySelector<HTMLElement>(".ML__container");
   container?.classList.toggle(
@@ -4304,12 +4271,6 @@ function FormulaField(props: FormulaFieldProps) {
     };
   const handleBeforeInput = (event: InputEvent) => {
     if (restoringRawCommandAnchor) return;
-    if (event.inputType.startsWith("insert") && !event.isComposing) {
-      applyTypingStyleAtCollapsedSelection(
-        field,
-        propsRef.current.typingStyle,
-      );
-    }
     const selectedAccentState = captureSelectedAccentPlaceholderState(field);
     if (selectedAccentState) {
       activateVisualTexAccentPlaceholder(field, selectedAccentState);
@@ -4496,54 +4457,8 @@ function FormulaField(props: FormulaFieldProps) {
         }
       }
     };
-    let applyingPersistentTypingStyle = false;
-    const persistDirectInputStyle = (
-      before: ReturnType<typeof captureFieldSnapshot>,
-      after: ReturnType<typeof captureFieldSnapshot>,
-    ) => {
-      const style = propsRef.current.typingStyle;
-      if (!style || isDefaultMathTypingStyle(style)) return after;
-      const beforeRange = before.selection.ranges[0];
-      const afterRange = after.selection.ranges[0];
-      if (!beforeRange || !afterRange) return after;
-      const beforeStart = Math.min(beforeRange[0], beforeRange[1]);
-      const afterCaret = Math.max(afterRange[0], afterRange[1]);
-      const replacedSelection = beforeRange[0] !== beforeRange[1];
-      const start = replacedSelection
-        ? beforeStart
-        : Math.max(0, afterCaret - 1);
-      const end = Math.max(start, Math.min(afterCaret, field.lastOffset));
-      if (end <= start) return after;
-
-      const finalSelection = clampSelection(after.selection, field.lastOffset);
-      const baselineStyle = typingStyleAsMathLiveStyle({
-        bold: false,
-        italic: true,
-      });
-      const persistentStyle = typingStyleAsMathLiveStyle(style);
-      applyingPersistentTypingStyle = true;
-      try {
-        field.selection = {
-          ranges: [[end, end]],
-          direction: "none",
-        };
-        field.applyStyle(baselineStyle, { operation: "set" });
-        field.selection = {
-          ranges: [[start, end]],
-          direction: "forward",
-        };
-        field.applyStyle(persistentStyle, { operation: "set" });
-        field.selection = clampSelection(finalSelection, field.lastOffset);
-        applyTypingStyleAtCollapsedSelection(field, style);
-        return captureFieldSnapshot(field);
-      } finally {
-        applyingPersistentTypingStyle = false;
-      }
-    };
-
   const handleInput = (event: Event) => {
     if (
-      applyingPersistentTypingStyle ||
       replacingPendingWrapperInput ||
       restoringRawCommandAnchor ||
       visualTexRestoringPlaceholderFields.has(field)
@@ -4603,8 +4518,6 @@ function FormulaField(props: FormulaFieldProps) {
       if (restoredPlaceholder) {
         postInputSnapshot = captureFieldSnapshot(field);
       }
-    } else if (shouldRetryDirectAutoExit) {
-      postInputSnapshot = persistDirectInputStyle(before, postInputSnapshot);
     }
     const after = postInputSnapshot;
       emitEdit(
@@ -4669,18 +4582,8 @@ function FormulaField(props: FormulaFieldProps) {
         ...lastSnapshotRef.current,
         selection,
       };
-      if (!applyingPersistentTypingStyle) {
-        applyTypingStyleAtCollapsedSelection(
-          field,
-          propsRef.current.typingStyle,
-        );
-      }
     };
     const handleFocus = () => {
-      applyTypingStyleAtCollapsedSelection(
-        field,
-        propsRef.current.typingStyle,
-      );
       propsRef.current.onFocus(propsRef.current.index, field);
       lastSnapshotRef.current = captureFieldSnapshot(field);
     };
@@ -5447,7 +5350,6 @@ function FormulaField(props: FormulaFieldProps) {
     // Collapse that implicit selection so toolbar commands insert at the end
     // instead of unexpectedly replacing/wrapping the entire line.
     field.position = field.lastOffset;
-    applyTypingStyleAtCollapsedSelection(field, propsRef.current.typingStyle);
     field.resetUndo();
     lastSnapshotRef.current = captureFieldSnapshot(field);
     fieldRef.current = field;
@@ -5643,12 +5545,6 @@ function FormulaField(props: FormulaFieldProps) {
 
   useEffect(() => {
     const field = fieldRef.current;
-    if (!field?.hasFocus()) return;
-    applyTypingStyleAtCollapsedSelection(field, props.typingStyle);
-  }, [props.typingStyle?.bold, props.typingStyle?.italic]);
-
-  useEffect(() => {
-    const field = fieldRef.current;
     if (!field) return;
     MathfieldElement.locale = props.language === "en" ? "en" : "zh-cn";
     const isEn = props.language === "en";
@@ -5671,7 +5567,6 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       activeLineId,
       formulaAlignment,
       zoom,
-      typingStyle,
       readOnly = false,
       draftError,
       onPasteImage,
@@ -5683,8 +5578,6 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
     const surfaceRef = useRef<HTMLDivElement>(null);
     const fieldRefs = useRef(new Map<string, MathfieldElement>());
     const linesRef = useRef(lines);
-    const typingStyleRef = useRef<MathEditorTypingStyle | undefined>(typingStyle);
-    typingStyleRef.current = typingStyle;
     const activeIndexRef = useRef(0);
     const activeLineIdRef = useRef<string | null>(activeLineId);
     const focusRequestRef = useRef(0);
@@ -6413,7 +6306,6 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       const { lineId: targetLineId, field } = target;
       setActiveLine(targetLineId);
       field.focus();
-      applyTypingStyleAtCollapsedSelection(field, typingStyleRef.current);
 
       const rawAnchor = activeQuery
         ? rawCommandAnchors.get(field) ?? null
@@ -6507,9 +6399,21 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
               format: "latex",
               insertionMode: "replaceSelection",
               selectionMode: hasPlaceholder ? "placeholder" : "after",
+              style: {
+                variant: "normal",
+                variantStyle: undefined,
+              },
               focus: true,
               scrollIntoView: false,
             });
+            if (inserted && hasPlaceholder) {
+              markVisualTexStructuralPlaceholders(field);
+              window.requestAnimationFrame(() => {
+                if (field.isConnected) {
+                  markVisualTexStructuralPlaceholders(field);
+                }
+              });
+            }
             if (
               inserted &&
               !hasPlaceholder &&
@@ -7512,7 +7416,8 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         lastSelectionTargetRef.current = target;
         return target;
       }
-      return lastSelectionTargetRef.current;
+      lastSelectionTargetRef.current = null;
+      return null;
     };
 
     const applySelectionStyle = (
@@ -7585,14 +7490,6 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       }
       lastSelectionTargetRef.current = null;
       return true;
-    };
-
-    const setTypingStyle = (style: MathEditorTypingStyle) => {
-      typingStyleRef.current = style;
-      const target = resolveTargetField();
-      if (!target) return false;
-      target.field.focus();
-      return applyTypingStyleAtCollapsedSelection(target.field, style);
     };
 
     const restoreSelection = (
@@ -7669,7 +7566,6 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       const { lineId, field } = target;
       setActiveLine(lineId);
       field.focus();
-      applyTypingStyleAtCollapsedSelection(field, typingStyleRef.current);
       const inserted = applyDiscreteFormulaMutation(
         lineId,
         field,
@@ -7717,7 +7613,6 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       );
       setActiveLine(target.lineId);
       field.focus();
-      applyTypingStyleAtCollapsedSelection(field, typingStyleRef.current);
       const inserted = applyDiscreteFormulaMutation(
         target.lineId,
         field,
@@ -7823,7 +7718,6 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       commitPendingTransaction: () => historyManager.commitPendingTransaction(),
       getSelectionMap,
       restoreSelection,
-      setTypingStyle,
       captureSelectionTarget,
       applySelectionStyle,
     }));
@@ -8041,7 +7935,6 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
                   language={language}
                   autoPairDelimiters={autoPairDelimiters}
                   inputBehavior={inputBehavior}
-                  typingStyle={typingStyle}
                   register={registerField}
                   onEdit={handleFieldEdit}
                   onInputActivity={(field) =>

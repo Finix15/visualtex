@@ -420,17 +420,15 @@ assert.ok(formulaToolbar.includes("visualtex-common-toolbar-command-ids-v1"));
 assert.ok(formulaToolbar.includes("addCommandToCommon"));
 assert.ok(formulaToolbar.includes("设为常用"));
 assert.ok(!formulaToolbar.includes("contextCounts.toolbar"));
-assert.ok(editorWorkspace.includes("data-formula-typing-bold"));
-assert.ok(editorWorkspace.includes("data-formula-typing-italic"));
+assert.ok(!editorWorkspace.includes("data-formula-typing-bold"));
+assert.ok(!editorWorkspace.includes("data-formula-typing-italic"));
 assert.ok(editorWorkspace.includes("data-formula-selection-bold"));
 assert.ok(editorWorkspace.includes("data-formula-selection-italic"));
 assert.ok(editorWorkspace.includes("data-formula-selection-color"));
 assert.ok(editorWorkspace.includes("data-formula-selection-background"));
-assert.ok(editorWorkspace.includes("typingStyle={typingStyle}"));
-assert.ok(
-  !editorWorkspace.includes("typingStyle={showOfficeActions ? typingStyle : undefined}"),
-);
-assert.ok(mathEditor.includes("applyTypingStyleAtCollapsedSelection"));
+assert.ok(!editorWorkspace.includes("typingStyle={typingStyle}"));
+assert.ok(!mathEditor.includes("applyTypingStyleAtCollapsedSelection"));
+assert.ok(!mathEditor.includes("MathEditorTypingStyle"));
 assert.ok(mathEditor.includes("captureSelectionTarget"));
 assert.ok(mathEditor.includes("applySelectionStyle"));
 assert.ok(mathEditor.includes("MathLive owns pointer capture"));
