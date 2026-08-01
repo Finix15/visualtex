@@ -839,10 +839,7 @@ mod tests {
         assert!(session.numbered);
 
         let inline_error = store
-            .patch(
-                &session.id,
-                serde_json::json!({ "displayMode": "inline" }),
-            )
+            .patch(&session.id, serde_json::json!({ "displayMode": "inline" }))
             .unwrap_err();
         assert!(matches!(inline_error, SessionError::Invalid(_)));
 

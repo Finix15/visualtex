@@ -346,8 +346,7 @@ fn replacement_render_height_ratio(
         .map(|previous_height| {
             if !previous_height.is_finite() || previous_height <= 0.0 {
                 return Err(
-                    "PowerPoint formula metadata has an invalid previous render height"
-                        .to_string(),
+                    "PowerPoint formula metadata has an invalid previous render height".to_string(),
                 );
             }
             Ok(render_height_px / previous_height)
@@ -696,9 +695,7 @@ end tell"#,
 }
 
 fn parse_slide_snapshot(output: &str) -> Result<PowerPointNativeSlideSnapshot, String> {
-    let fields: Vec<&str> = output
-        .split(POWERPOINT_SNAPSHOT_FIELD_SEPARATOR)
-        .collect();
+    let fields: Vec<&str> = output.split(POWERPOINT_SNAPSHOT_FIELD_SEPARATOR).collect();
     if fields.len() != 5 {
         return Err(format!(
             "PowerPoint returned an invalid slide snapshot payload: {output}"
@@ -938,6 +935,90 @@ where
 }
 
 #[cfg(target_os = "macos")]
+fn close_word_picture_format_task_pane_once() -> Result<bool, String> {
+    let script = r#"(() => {
+  const systemEvents = Application("System Events");
+  const word = systemEvents.processes.byName("Microsoft Word");
+  if (!word.exists()) return "not-running";
+
+  let clicked = false;
+  let visited = 0;
+  const text = (element, property) => {
+    try {
+      const value = element[property]();
+      return value === null || value === undefined ? "" : String(value);
+    } catch (_) {
+      return "";
+    }
+  };
+  const matchesCloseButton = (element) => {
+    if (text(element, "role") !== "AXButton") return false;
+    const name = text(element, "name").trim().toLowerCase();
+    return (
+      (name.startsWith("关闭 ") && name.includes("格式")) ||
+      (name.startsWith("close ") && name.includes("format"))
+    );
+  };
+  const walk = (element, depth) => {
+    if (clicked || visited >= 5000 || depth > 12) return;
+    visited += 1;
+    if (matchesCloseButton(element)) {
+      try {
+        element.click();
+        clicked = true;
+        return;
+      } catch (_) {}
+    }
+    let children = [];
+    try {
+      children = element.uiElements();
+    } catch (_) {}
+    for (let index = 0; index < children.length; index += 1) {
+      walk(children[index], depth + 1);
+      if (clicked) return;
+    }
+  };
+
+  const windows = word.windows();
+  for (let index = 0; index < windows.length; index += 1) {
+    walk(windows[index], 0);
+    if (clicked) break;
+  }
+  return clicked ? "clicked" : "not-found";
+})()"#;
+    let output = Command::new("/usr/bin/osascript")
+        .args(["-l", "JavaScript", "-e", script])
+        .output()
+        .map_err(|error| format!("Unable to inspect the Word picture-format task pane: {error}"))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if detail.is_empty() {
+            "Unable to close the Word picture-format task pane".to_string()
+        } else {
+            format!("Unable to close the Word picture-format task pane: {detail}")
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim() == "clicked")
+}
+
+#[cfg(target_os = "macos")]
+fn close_word_picture_format_task_pane_with_retries() {
+    for delay_ms in [0_u64, 100, 200, 350, 550] {
+        if delay_ms > 0 {
+            thread::sleep(Duration::from_millis(delay_ms));
+        }
+        match close_word_picture_format_task_pane_once() {
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(error) => {
+                eprintln!("Unable to close the Word picture-format task pane: {error}");
+                return;
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
 pub fn start_double_click_monitor(
     app: tauri::AppHandle,
     bus: PowerPointInteractionBus,
@@ -1015,13 +1096,17 @@ pub fn start_double_click_monitor(
                     return;
                 }
                 if crate::office::macos_offline::focus_open_office_editor(&app) {
+                    close_word_picture_format_task_pane_with_retries();
                     return;
                 }
+                let _ = close_word_picture_format_task_pane_once();
                 if let Err(error) =
                     crate::office::macos_offline::run_word_image_double_click_edit_macro()
                 {
                     eprintln!("Unable to route the bare Word formula image double-click: {error}");
                 }
+                close_word_picture_format_task_pane_with_retries();
+                let _ = crate::office::macos_offline::focus_open_office_editor(&app);
             });
         }
     });
@@ -1101,7 +1186,9 @@ end tell"#,
         .split(WORD_SELECTION_FIELD_SEPARATOR)
         .collect::<Vec<_>>();
     if fields.len() != 4 {
-        return Err(format!("Word returned an invalid formula selection payload: {output}"));
+        return Err(format!(
+            "Word returned an invalid formula selection payload: {output}"
+        ));
     }
     let parse_number = |value: &str, label: &str| {
         value
@@ -1326,8 +1413,14 @@ mod tests {
 
     #[test]
     fn powerpoint_replacement_keeps_the_previous_visual_scale() {
-        assert_eq!(replacement_render_height_ratio(40.0, Some(40.0)), Ok(Some(1.0)));
-        assert_eq!(replacement_render_height_ratio(80.0, Some(40.0)), Ok(Some(2.0)));
+        assert_eq!(
+            replacement_render_height_ratio(40.0, Some(40.0)),
+            Ok(Some(1.0))
+        );
+        assert_eq!(
+            replacement_render_height_ratio(80.0, Some(40.0)),
+            Ok(Some(2.0))
+        );
         assert_eq!(replacement_render_height_ratio(40.0, None), Ok(None));
         assert!(replacement_render_height_ratio(0.0, Some(40.0)).is_err());
         assert!(replacement_render_height_ratio(40.0, Some(0.0)).is_err());

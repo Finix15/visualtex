@@ -10,9 +10,7 @@ use uuid::Uuid;
 #[cfg(target_os = "macos")]
 use objc2::{AnyThread, MainThreadMarker};
 #[cfg(target_os = "macos")]
-use objc2_app_kit::{
-    NSApplication, NSApplicationActivationOptions, NSImage, NSRunningApplication,
-};
+use objc2_app_kit::{NSApplication, NSApplicationActivationOptions, NSImage, NSRunningApplication};
 #[cfg(target_os = "macos")]
 use objc2_foundation::NSString;
 #[cfg(target_os = "macos")]
@@ -470,8 +468,9 @@ pub(crate) fn install_application_icon(app: &AppHandle) -> Result<(), String> {
             icon_path.display()
         ));
     }
-    let main_thread = MainThreadMarker::new()
-        .ok_or_else(|| "VisualTeX application icon must be installed on the main thread".to_string())?;
+    let main_thread = MainThreadMarker::new().ok_or_else(|| {
+        "VisualTeX application icon must be installed on the main thread".to_string()
+    })?;
     let path = NSString::from_str(&icon_path.to_string_lossy());
     let image = NSImage::initWithContentsOfFile(NSImage::alloc(), &path)
         .ok_or_else(|| format!("macOS could not decode {}", icon_path.display()))?;

@@ -4,7 +4,7 @@ Option Explicit
 Private Const VT_WORD_HOST As String = "word"
 Private Const VT_WORD_STATUS_FILE As String = "/OfficePluginStatus/word.json"
 Private Const VT_WORD_SOURCE_REVISION As String = _
-    "word-double-click-routing-20260730-r66"
+    "word-image-metadata-format-routing-20260801-r66"
 Private Const VT_WORD_EQUATION_NUMBER_FONT_NAME As String = "Cambria Math"
 Private Const VT_WORD_BOOKMARK_PREFIX As String = "VT_Pending_"
 Private Const VT_WORD_DOCUMENT_IMPORT_BOOKMARK_PREFIX As String = "VT_D_"
@@ -4212,6 +4212,10 @@ InitializationFailed:
     Err.Raise Err.Number, Err.Source, Err.Description
 End Sub
 
+Public Sub VisualTeX_DisableWordEventsForRegression()
+    Set VT_WORD_EVENT_SINK = Nothing
+End Sub
+
 Public Sub VisualTeX_StabilizeImageEquationNumberSelection( _
     ByVal selectedRange As Range)
 
@@ -6758,6 +6762,54 @@ Public Sub VisualTeX_RefreshImageMacroButtonsForRegression()
     End If
 End Sub
 
+Public Sub VisualTeX_WriteSelectedPictureScreenBoundsRegression()
+    Dim targetRange As Range
+    Dim screenLeft As Long
+    Dim screenTop As Long
+    Dim screenWidth As Long
+    Dim screenHeight As Long
+    Dim statusPath As String
+    Dim regressionErrorNumber As Long
+    Dim regressionErrorDescription As String
+
+    statusPath = VTApplicationSupportRoot() & _
+        "/physical-double-click-screen-bounds.txt"
+    On Error GoTo Failed
+    If Documents.Count = 0 Or Selection Is Nothing Then
+        Err.Raise vbObjectError + 7593, "VisualTeX regression", _
+            "There is no selected Word picture for physical double-click bounds."
+    End If
+    If Selection.InlineShapes.Count = 1 Then
+        Set targetRange = Selection.InlineShapes(1).Range.Duplicate
+    ElseIf Selection.ShapeRange.Count = 1 Then
+        Set targetRange = Selection.ShapeRange(1).Anchor.Duplicate
+    End If
+    If targetRange Is Nothing Then
+        Err.Raise vbObjectError + 7593, "VisualTeX regression", _
+            "The selected physical double-click target is not a Word picture."
+    End If
+    ActiveWindow.GetPoint _
+        screenLeft, screenTop, screenWidth, screenHeight, targetRange
+    If screenWidth <= 0 Or screenHeight <= 0 Then
+        Err.Raise vbObjectError + 7593, "VisualTeX regression", _
+            "Word returned invalid picture screen bounds."
+    End If
+    VTWriteTextAtomic statusPath, _
+        "PASS|" & CStr(screenLeft) & "|" & CStr(screenTop) & "|" & _
+        CStr(screenWidth) & "|" & CStr(screenHeight) & vbLf
+    Exit Sub
+
+Failed:
+    regressionErrorNumber = Err.Number
+    regressionErrorDescription = Err.Description
+    On Error Resume Next
+    VTWriteTextAtomic statusPath, _
+        "FAIL|" & CStr(regressionErrorNumber) & "|" & _
+        Replace$(Replace$(regressionErrorDescription, vbCr, " "), _
+            vbLf, " ") & vbLf
+    On Error GoTo 0
+End Sub
+
 Public Sub VisualTeX_WriteSelectedScreenBoundsForRegression()
     Dim formulaShape As InlineShape
     Dim nativeBookmark As Bookmark
@@ -6970,10 +7022,23 @@ Failed:
 End Sub
 
 Public Sub VisualTeX_EditSelectedImageFromNativeMonitor()
+    Dim selectedShape As InlineShape
+
     On Error GoTo MonitorFailed
     VTBeginWordDoubleClickTraceContext
     VTTraceWordDoubleClick "native-monitor-enter", Selection, ""
-    Call VTDispatchVisualTeXImageEditAtSelection(Selection)
+    If Not VTTryVisualTeXMetadataShapeAtSelection( _
+       Selection, selectedShape) Then
+        VTTraceWordDoubleClick _
+            "native-monitor-skip", Selection, "reason=no-metadata-image"
+        VTEndWordDoubleClickTraceContext
+        Exit Sub
+    End If
+
+    ' The macOS native monitor owns task-pane cleanup because a global mouse
+    ' monitor cannot cancel Word's native second-click action. This VBA entry
+    ' performs only the strict metadata-resolved image edit.
+    VTWordEditInlineShape selectedShape
     VTEndWordDoubleClickTraceContext
     Exit Sub
 
@@ -7136,40 +7201,84 @@ InvalidSelection:
     VTTryVisualTeXMetadataShapeAtSelection = False
 End Function
 
-Public Sub FormatPicture()
+Private Function VTInterceptVisualTeXPictureFormatCommand( _
+    ByVal commandName As String) As Boolean
+
     Dim selectedShape As InlineShape
     Dim editErrorNumber As Long
     Dim editErrorDescription As String
 
     On Error GoTo VisualTeXEditFailed
-    If VTTryVisualTeXMetadataShapeAtSelection( _
-       Selection, selectedShape) Then
-        VTBeginWordDoubleClickTraceContext
-        VTTraceWordDoubleClick _
-            "format-picture-visualtex-metadata", Selection, _
-            VTInlineShapeTraceSummary(selectedShape)
-        VTRequireWritableWordDocument
-        VTWordEditInlineShape selectedShape
-        VTEndWordDoubleClickTraceContext
-        Exit Sub
-    End If
+    If Not VTTryVisualTeXMetadataShapeAtSelection( _
+       Selection, selectedShape) Then Exit Function
+
+    VTBeginWordDoubleClickTraceContext
+    VTTraceWordDoubleClick _
+        commandName & "-visualtex-metadata", Selection, _
+        VTInlineShapeTraceSummary(selectedShape)
+    VTRequireWritableWordDocument
+    VTWordEditInlineShape selectedShape
+    VTEndWordDoubleClickTraceContext
+    VTInterceptVisualTeXPictureFormatCommand = True
+    Exit Function
+
+VisualTeXEditFailed:
+    editErrorNumber = Err.Number
+    editErrorDescription = Err.Description
+    VTTraceWordDoubleClick _
+        commandName & "-visualtex-error", Selection, _
+        "error=" & CStr(editErrorNumber) & ":" & editErrorDescription
+    VTEndWordDoubleClickTraceContext
+    VTShowError _
+        "Word image formula edit", editErrorNumber, editErrorDescription
+    VTInterceptVisualTeXPictureFormatCommand = True
+End Function
+
+Public Sub FormatPicture()
+    If VTInterceptVisualTeXPictureFormatCommand("format-picture") Then Exit Sub
 
     ' Ordinary pictures do not carry VisualTeX's compressed AlternativeText
     ' metadata. Preserve Word's native Format Picture behavior exactly.
     On Error Resume Next
     WordBasic.FormatPicture
     On Error GoTo 0
-    Exit Sub
+End Sub
 
-VisualTeXEditFailed:
-    editErrorNumber = Err.Number
-    editErrorDescription = Err.Description
-    VTTraceWordDoubleClick _
-        "format-picture-visualtex-error", Selection, _
-        "error=" & CStr(editErrorNumber) & ":" & editErrorDescription
-    VTEndWordDoubleClickTraceContext
-    VTShowError _
-        "Word image formula edit", editErrorNumber, editErrorDescription
+Public Sub FormatDrawingObject()
+    If VTInterceptVisualTeXPictureFormatCommand( _
+       "format-drawing-object") Then Exit Sub
+
+    On Error Resume Next
+    WordBasic.FormatDrawingObject
+    On Error GoTo 0
+End Sub
+
+Public Sub WW7_FormatDrawingObject()
+    If VTInterceptVisualTeXPictureFormatCommand( _
+       "ww7-format-drawing-object") Then Exit Sub
+
+    On Error Resume Next
+    Err.Clear
+    WordBasic.WW7_FormatDrawingObject
+    If Err.Number <> 0 Then
+        Err.Clear
+        WordBasic.FormatDrawingObject
+    End If
+    On Error GoTo 0
+End Sub
+
+Public Sub FormatObjectCore()
+    If VTInterceptVisualTeXPictureFormatCommand( _
+       "format-object-core") Then Exit Sub
+
+    On Error Resume Next
+    Err.Clear
+    WordBasic.FormatObjectCore
+    If Err.Number <> 0 Then
+        Err.Clear
+        WordBasic.FormatDrawingObject
+    End If
+    On Error GoTo 0
 End Sub
 
 Public Function VTHandleWordBeforeDoubleClick( _

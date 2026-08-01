@@ -42,6 +42,7 @@ import {
   writeLocalStorage,
 } from "../../runtime/safeStorage";
 import {
+  closeCurrentTauriWindow,
   invokeTauri,
   onCurrentTauriWindowCloseRequested,
 } from "../shared/tauriTransport";
@@ -1091,15 +1092,15 @@ export function OfficeDialogApp() {
     }
   }, [generation, sessionId]);
 
-  const handleCommit = useCallback(async () => {
+  const handleCommit = useCallback(async (): Promise<boolean> => {
     // React state updates do not disable the button until the next render.
     // Keep a synchronous guard as well so a rapid double-click cannot enqueue
     // two commits for the same Office Session.
-    if (finalizingRef.current) return;
+    if (finalizingRef.current) return false;
     historyManager.commitPendingTransaction();
     if (!latex.trim()) {
       setToast(isEn ? "Enter a formula before inserting" : "请输入公式后再插入");
-      return;
+      return false;
     }
     const targetSessionKey = sessionKey;
     finalizingRef.current = true;
@@ -1108,11 +1109,11 @@ export function OfficeDialogApp() {
 
       if (isMacosOfflineTauriTransport()) {
         await commitMacosOfflineOfficeSession(next.id);
-        if (activeSessionKeyRef.current !== targetSessionKey) return;
+        if (activeSessionKeyRef.current !== targetSessionKey) return false;
         try {
           await closeOfficeEditorWindow();
         } catch (closeError) {
-          if (activeSessionKeyRef.current !== targetSessionKey) return;
+          if (activeSessionKeyRef.current !== targetSessionKey) return false;
           finalizingRef.current = false;
           const detail = errorMessage(
             closeError,
@@ -1124,7 +1125,7 @@ export function OfficeDialogApp() {
               : `公式已经插入，但编辑窗口无法自动关闭：${detail}`,
           );
         }
-        return;
+        return true;
       }
 
       messageOfficeParent({ type: "visualtex-commit", sessionId: next.id });
@@ -1134,8 +1135,9 @@ export function OfficeDialogApp() {
       // error instead of closing after creating an anonymous Graphic shape.
       await waitForOfficeCommitResult(next.id, next.host);
       window.close();
+      return true;
     } catch (error) {
-      if (activeSessionKeyRef.current !== targetSessionKey) return;
+      if (activeSessionKeyRef.current !== targetSessionKey) return false;
       finalizingRef.current = false;
       setToast(
         errorMessage(
@@ -1143,6 +1145,7 @@ export function OfficeDialogApp() {
           isEn ? "Unable to insert the Office formula" : "无法插入 Office 公式",
         ),
       );
+      return false;
     }
   }, [closeOfficeEditorWindow, isEn, latex, saveCurrentSession, sessionKey]);
 
@@ -1186,10 +1189,30 @@ export function OfficeDialogApp() {
       if (nativeCloseRequestInFlightRef.current) return;
       nativeCloseRequestInFlightRef.current = true;
 
-      const finalize = latex.trim() && autoCommitOnClose
-        ? handleCommit()
-        : handleCancel();
-      void finalize.finally(() => {
+      const finalize = async () => {
+        if (latex.trim() && autoCommitOnClose) {
+          const committed = await handleCommit();
+          if (committed || allowNativeCloseRef.current || disposed) return;
+        }
+        // Closing the window must never trap the user behind a malformed or
+        // partially rendered formula. If close-to-commit cannot export the
+        // current draft, cancel this edit Session and leave the Office object
+        // unchanged instead of blocking the native close request.
+        await handleCancel();
+        if (allowNativeCloseRef.current || disposed) return;
+
+        // A stale or already-cleaned Office Session can make both commit and
+        // cancel fail. The native close request is still authoritative: allow
+        // one final close event and destroy this WebView without mutating the
+        // Office object, rather than trapping the user behind an error toast.
+        allowNativeCloseRef.current = true;
+        try {
+          await closeCurrentTauriWindow();
+        } catch {
+          allowNativeCloseRef.current = false;
+        }
+      };
+      void finalize().finally(() => {
         nativeCloseRequestInFlightRef.current = false;
       });
     })
@@ -1346,7 +1369,9 @@ export function OfficeDialogApp() {
               ? "Finish and insert"
               : "完成并插入"
         }
-        onPrimaryAction={handleCommit}
+        onPrimaryAction={async () => {
+          await handleCommit();
+        }}
         onCancel={handleCancel}
         editorRef={editorRef}
         sidebarOpen={sidebarOpen}

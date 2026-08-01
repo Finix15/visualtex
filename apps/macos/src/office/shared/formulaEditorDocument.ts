@@ -16,6 +16,13 @@ export interface FormulaEditorDocument {
   codeFormat: LatexCodeFormat;
 }
 
+function normalizeLogicalFormulaLineWhitespace(value: string) {
+  return value
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]*\n[ \t]*/g, " ")
+    .trim();
+}
+
 export function serializeFormulaEditorDocument(document: FormulaEditorDocument) {
   return formatLatexLines(
     document.lines.map((line) => line.latex),
@@ -161,7 +168,10 @@ export function normalizeFormulaEditorDocument(
   const safeLines = sourceLines.length
     ? sourceLines.map((line) => ({
         id: line.id || createUuid(),
-        latex: typeof line.latex === "string" ? line.latex : "",
+        latex:
+          typeof line.latex === "string"
+            ? normalizeLogicalFormulaLineWhitespace(line.latex)
+            : "",
       }))
     : [{ id: createUuid(), latex: "" }];
 

@@ -25,8 +25,7 @@ const LEGACY_WORD_MANIFEST_ID: &str = "d6fcb260-4c37-4f73-a173-cf24674f81f2";
 const LEGACY_POWERPOINT_MANIFEST_ID: &str = "a6d13cf2-54e8-4dfa-a20c-15de864ab3c5";
 const WORD_VBA_ENTRY: &str = "word/vbaProject.bin";
 const POWERPOINT_VBA_ENTRY: &str = "ppt/vbaProject.bin";
-const WORD_VBA_SOURCE_REVISION: &str =
-    "word-image-metadata-format-routing-20260801-r64";
+const WORD_VBA_SOURCE_REVISION: &str = "word-image-metadata-format-routing-20260801-r66";
 const POWERPOINT_VBA_SOURCE_REVISION: &str =
     "powerpoint-svg-font-size-dropdown-unicode-20260727-r3";
 const CUSTOM_UI_ENTRY: &str = "customUI/customUI14.xml";
@@ -257,9 +256,10 @@ fn compatibility_placeholder_path() -> Result<PathBuf, String> {
 }
 
 fn canonical_placeholder_path() -> Result<PathBuf, String> {
-    Ok(user_home()?.join(
-        "Library/Application Scripts/com.microsoft.Word/VisualTeXPlaceholder.png",
-    ))
+    Ok(
+        user_home()?
+            .join("Library/Application Scripts/com.microsoft.Word/VisualTeXPlaceholder.png"),
+    )
 }
 
 fn word_script_path() -> Result<PathBuf, String> {
@@ -303,9 +303,9 @@ fn collect_legacy_visualtex_wef_files(
         let entry = entry.map_err(|error| {
             format!("Unable to inspect a legacy Office add-in cache entry: {error}")
         })?;
-        let file_type = entry.file_type().map_err(|error| {
-            format!("Unable to inspect {}: {error}", entry.path().display())
-        })?;
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("Unable to inspect {}: {error}", entry.path().display()))?;
         if file_type.is_symlink() {
             continue;
         }
@@ -468,9 +468,8 @@ fn discover_word_startup_artifacts() -> Result<Vec<PathBuf>, String> {
         for entry in fs::read_dir(&startup)
             .map_err(|error| format!("Unable to inspect {}: {error}", startup.display()))?
         {
-            let entry = entry.map_err(|error| {
-                format!("Unable to inspect a Word Startup entry: {error}")
-            })?;
+            let entry = entry
+                .map_err(|error| format!("Unable to inspect a Word Startup entry: {error}"))?;
             let path = entry.path();
             if entry
                 .file_type()
@@ -555,10 +554,7 @@ fn backup_compiled_artifacts_to_scratch(word: &Path, powerpoint: &Path) -> Resul
     let backup_root = offline_root()?.join("Scratch/InstallBackup");
     fs::create_dir_all(&backup_root)
         .map_err(|error| format!("Unable to create {}: {error}", backup_root.display()))?;
-    for (source, name) in [
-        (word, WORD_ADDIN_NAME),
-        (powerpoint, POWERPOINT_ADDIN_NAME),
-    ] {
+    for (source, name) in [(word, WORD_ADDIN_NAME), (powerpoint, POWERPOINT_ADDIN_NAME)] {
         let destination = backup_root.join(name);
         copy_atomic(source, &destination, 0o600)?;
         verify_copy(source, &destination)?;
@@ -621,7 +617,9 @@ fn atomic_write(path: &Path, bytes: &[u8], mode: u32) -> Result<(), String> {
         .map_err(|error| format!("Unable to create {}: {error}", parent.display()))?;
     let temporary = parent.join(format!(
         ".{}.{}.tmp",
-        path.file_name().and_then(|value| value.to_str()).unwrap_or("visualtex"),
+        path.file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("visualtex"),
         Uuid::new_v4()
     ));
     let mut file = OpenOptions::new()
@@ -730,7 +728,10 @@ fn restore_backups(backups: &[FileBackup]) -> Result<(), String> {
 }
 
 fn bytes_contain(haystack: &[u8], needle: &[u8]) -> bool {
-    !needle.is_empty() && haystack.windows(needle.len()).any(|window| window == needle)
+    !needle.is_empty()
+        && haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -745,9 +746,14 @@ fn validate_zip_entries(path: &Path, required_entries: &[&str]) -> Result<(), St
         .output()
         .map_err(|error| format!("Unable to validate {} with unzip: {error}", path.display()))?;
     if !integrity.status.success() {
-        let detail = String::from_utf8_lossy(&integrity.stderr).trim().to_string();
+        let detail = String::from_utf8_lossy(&integrity.stderr)
+            .trim()
+            .to_string();
         return Err(if detail.is_empty() {
-            format!("Compiled add-in {} is a corrupt OOXML package", path.display())
+            format!(
+                "Compiled add-in {} is a corrupt OOXML package",
+                path.display()
+            )
         } else {
             format!("Compiled add-in {} is corrupt: {detail}", path.display())
         });
@@ -758,7 +764,10 @@ fn validate_zip_entries(path: &Path, required_entries: &[&str]) -> Result<(), St
         .output()
         .map_err(|error| format!("Unable to inspect {} with unzip: {error}", path.display()))?;
     if !listing.status.success() {
-        return Err(format!("Unable to list OOXML entries in {}", path.display()));
+        return Err(format!(
+            "Unable to list OOXML entries in {}",
+            path.display()
+        ));
     }
     let listing_text = String::from_utf8_lossy(&listing.stdout);
     let entries = listing_text
@@ -788,9 +797,17 @@ fn validate_vba_markers(path: &Path, vba_entry: &str, markers: &[&str]) -> Resul
         .arg(path)
         .arg(vba_entry)
         .output()
-        .map_err(|error| format!("Unable to inspect VBA modules in {}: {error}", path.display()))?;
+        .map_err(|error| {
+            format!(
+                "Unable to inspect VBA modules in {}: {error}",
+                path.display()
+            )
+        })?;
     if !output.status.success() {
-        return Err(format!("Unable to read {vba_entry} from {}", path.display()));
+        return Err(format!(
+            "Unable to read {vba_entry} from {}",
+            path.display()
+        ));
     }
     for marker in markers {
         if !bytes_contain(&output.stdout, marker.as_bytes()) {
@@ -832,9 +849,9 @@ fn validate_main_content_type(path: &Path, expected_name: &str) -> Result<(), St
         ));
     }
     let xml = String::from_utf8_lossy(&output.stdout);
-    let valid = xml.split("<Override").any(|segment| {
-        segment.contains(part_name) && segment.contains(content_type)
-    });
+    let valid = xml
+        .split("<Override")
+        .any(|segment| segment.contains(part_name) && segment.contains(content_type));
     if valid {
         Ok(())
     } else {
@@ -932,7 +949,10 @@ fn validate_compiled_artifacts(root: &Path) -> Result<(PathBuf, PathBuf), String
             .get(name)
             .ok_or_else(|| format!("Compiled add-in manifest is missing {name}"))?;
         if expected.sha256.len() != 64
-            || !expected.sha256.bytes().all(|value| value.is_ascii_hexdigit())
+            || !expected
+                .sha256
+                .bytes()
+                .all(|value| value.is_ascii_hexdigit())
             || !expected.sha256.eq_ignore_ascii_case(&sha256_hex(&bytes))
         {
             return Err(format!("Compiled add-in checksum failed for {name}"));
@@ -1043,16 +1063,11 @@ fn host_status(
     let macro_responsive = files_installed
         && application_running
         && crate::office::macos_offline::refresh_health_signal(host);
-    let (mut health_reported, mut loaded, mut plugin_version, last_error) =
-        match read_health(host) {
-            Ok(health) => (
-                health.reported,
-                health.loaded,
-                health.plugin_version,
-                None,
-            ),
-            Err(error) => (false, false, None, Some(error)),
-        };
+    let (mut health_reported, mut loaded, mut plugin_version, last_error) = match read_health(host)
+    {
+        Ok(health) => (health.reported, health.loaded, health.plugin_version, None),
+        Err(error) => (false, false, None, Some(error)),
+    };
     if macro_responsive {
         // A successful fixed macro invocation proves that the installed DOTM or
         // PPAM is loaded. Do not display a false warning merely because Office
@@ -1101,14 +1116,8 @@ pub fn status(app: &AppHandle) -> Result<MacOfflineOfficeInstallStatus, String> 
     ];
     let powerpoint_support_paths = vec![powerpoint_script.clone()];
     let word_files_installed = word_support_paths.iter().all(|path| path.is_file())
-        && addin_installation_matches(
-            &word_source,
-            &word_destinations,
-            &discovered_word_artifacts,
-        );
-    let powerpoint_files_installed = powerpoint_support_paths
-        .iter()
-        .all(|path| path.is_file())
+        && addin_installation_matches(&word_source, &word_destinations, &discovered_word_artifacts);
+    let powerpoint_files_installed = powerpoint_support_paths.iter().all(|path| path.is_file())
         && addin_installation_matches(
             &powerpoint_source,
             &powerpoint_destinations,
@@ -1144,10 +1153,7 @@ pub fn status(app: &AppHandle) -> Result<MacOfflineOfficeInstallStatus, String> 
         powerpoint_addin_path: powerpoint_path.display().to_string(),
         word_script_path: word_script.display().to_string(),
         powerpoint_script_path: powerpoint_script.display().to_string(),
-        tutorial_path: root
-            .join("POWERPOINT_INSTALL.md")
-            .display()
-            .to_string(),
+        tutorial_path: root.join("POWERPOINT_INSTALL.md").display().to_string(),
     })
 }
 
@@ -1275,7 +1281,9 @@ pub fn install(app: &AppHandle) -> Result<MacOfflineOfficeInstallStatus, String>
 
     if let Err(error) = install_result {
         return match restore_backups(&backups) {
-            Ok(()) => Err(format!("{error}. The previous VisualTeX add-ins were restored.")),
+            Ok(()) => Err(format!(
+                "{error}. The previous VisualTeX add-ins were restored."
+            )),
             Err(rollback_error) => Err(format!(
                 "{error}. VisualTeX could not fully restore the previous files: {rollback_error}"
             )),
@@ -1304,8 +1312,10 @@ fn remove_if_exists(path: &Path) -> Result<(), String> {
 pub fn reveal_powerpoint_addin() -> Result<(), String> {
     let path = powerpoint_addin_path()?;
     if !path.is_file() {
-        return Err("VisualTeX.ppam is not installed. Install or repair the offline add-in first."
-            .to_string());
+        return Err(
+            "VisualTeX.ppam is not installed. Install or repair the offline add-in first."
+                .to_string(),
+        );
     }
     let status = Command::new("/usr/bin/open")
         .arg("-R")
@@ -1467,7 +1477,10 @@ mod tests {
 
     #[test]
     fn localized_startup_names_are_matched_without_locale_assumptions() {
-        assert!(directory_name_matches(Path::new("Startup.localized"), "Startup"));
+        assert!(directory_name_matches(
+            Path::new("Startup.localized"),
+            "Startup"
+        ));
         assert!(directory_name_matches(Path::new("Word"), "Word"));
         assert!(!directory_name_matches(Path::new("PowerPoint"), "Word"));
     }
@@ -1482,7 +1495,10 @@ mod tests {
             ".VisualTeX_copy.dotm",
             "~$VisualTeX.dotm",
         ] {
-            assert!(is_visualtex_word_startup_artifact(Path::new(name)), "{name}");
+            assert!(
+                is_visualtex_word_startup_artifact(Path::new(name)),
+                "{name}"
+            );
         }
         assert!(!is_visualtex_word_startup_artifact(Path::new(
             "VisualTeXWordBuild.dotm"
@@ -1499,10 +1515,8 @@ mod tests {
 
     #[test]
     fn installed_addins_require_exact_bytes_and_no_extra_loadable_copy() {
-        let root = std::env::temp_dir().join(format!(
-            "visualtex-installed-addin-test-{}",
-            Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("visualtex-installed-addin-test-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).expect("temp directory should be created");
         let source = root.join("source.dotm");
         let destination = root.join("VisualTeX.dotm");

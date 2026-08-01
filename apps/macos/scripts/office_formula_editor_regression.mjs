@@ -57,6 +57,39 @@ function normalize(source, codeFormat = "raw") {
   );
 }
 
+const sourceFormattedEquation = normalizeFormulaEditorDocument(
+  [
+    {
+      id: "source-formatted-equation",
+      latex: String.raw`\frac{\delta \mathbb{E}[L]}
+     {\delta f(\mathbf{x})}
+=
+2\int
+\{f(\mathbf{x})-t\}
+p(\mathbf{x},t)\,
+\mathrm{d}t
+=
+0`,
+    },
+  ],
+  "equation",
+);
+assert.equal(sourceFormattedEquation.lines.length, 1);
+assert.equal(sourceFormattedEquation.codeFormat, "equation");
+assert.equal(
+  sourceFormattedEquation.lines[0].latex,
+  String.raw`\frac{\delta \mathbb{E}[L]} {\delta f(\mathbf{x})} = 2\int \{f(\mathbf{x})-t\} p(\mathbf{x},t)\, \mathrm{d}t = 0`,
+  "source-formatting newlines inside one logical formula row must become TeX whitespace",
+);
+assert.doesNotThrow(() =>
+  renderOfficeFormulaArtifacts({
+    lines: sourceFormattedEquation.lines,
+    codeFormat: sourceFormattedEquation.codeFormat,
+    displayMode: "block",
+    includeWordOmml: false,
+  }),
+);
+
 const multilineCases = [
   {
     name: "align",
@@ -278,7 +311,8 @@ f(x,y)=\sum_{n=1}^{+\infty}\sum_{m=1}^{+\infty}d_{nm}\sin\frac{n\pi}{a}x\sin\fra
     1,
     `${environment} source-formatting newlines must remain one logical formula`,
   );
-  assert.ok(normalized.lines[0].latex.includes("\n"));
+  assert.ok(!normalized.lines[0].latex.includes("\n"));
+  assert.ok(normalized.lines[0].latex.includes("\\qquad f(x,y)"));
   const canonical = serializeFormulaEditorDocument(normalized);
   assert.equal(
     (canonical.match(new RegExp(`\\\\begin\\{${environment.replace("*", "\\*")}\\}`, "g")) ?? []).length,
@@ -340,8 +374,9 @@ assert.ok(
   equationWithAlignedRendered.canonicalLatex.startsWith("\\begin{equation}\n"),
 );
 assert.ok(
-  equationWithAlignedRendered.canonicalLatex.includes("\\begin{aligned}\n"),
+  equationWithAlignedRendered.canonicalLatex.includes("\\begin{aligned} "),
 );
+assert.ok(equationWithAlignedRendered.canonicalLatex.includes("\\\\ "));
 assert.ok(equationWithAlignedRendered.svg.width > 240);
 assert.ok(
   equationWithAlignedRendered.svg.height < 130,

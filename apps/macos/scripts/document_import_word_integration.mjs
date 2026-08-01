@@ -115,9 +115,16 @@ const pictureRoutingBrowserArtifactsPath = join(
 const sessionsRoot = join(runtimeRoot, "OfficeSessions");
 const nativeRoot = join(runtimeRoot, "NativeDocuments");
 const physicalDoubleClick = process.argv.includes("--physical-double-click");
-const createImagePhysicalRegression = process.argv.includes(
-  "--create-image-physical-double-click",
+const createSourceFormattedEquationRegression = process.argv.includes(
+  "--create-source-formatted-equation",
 );
+const createImageNativeMonitorRegression = process.argv.includes(
+  "--create-image-native-monitor-double-click",
+);
+const createImagePhysicalRegression =
+  process.argv.includes("--create-image-physical-double-click") ||
+  createImageNativeMonitorRegression ||
+  createSourceFormattedEquationRegression;
 const createImageRegression =
   process.argv.includes("--create-image") || createImagePhysicalRegression;
 const physicalTargets = new Set([
@@ -240,33 +247,282 @@ const transparentPng = Buffer.from(
 const sleep = (ms) => new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
 
 function wordPictureFormatUiSnapshot() {
-  const raw = runAppleScript([
+  const snapshot = JSON.parse(
+    runJxa(
+      String.raw`
+const systemEvents = Application("System Events");
+const word = systemEvents.processes.byName("Microsoft Word");
+if (!word.exists()) {
+  JSON.stringify({ processExists: false, lines: [] });
+} else {
+  word.frontmost = true;
+  delay(0.45);
+  const lines = [];
+  let visited = 0;
+  const text = (element, property) => {
+    try {
+      const value = element[property]();
+      return value === null || value === undefined ? "" : String(value);
+    } catch (_) {
+      return "";
+    }
+  };
+  const walk = (element, path, depth) => {
+    if (visited >= 5000 || depth > 12) return;
+    visited += 1;
+    const role = text(element, "role");
+    const name = text(element, "name");
+    const description = text(element, "description");
+    const help = text(element, "help");
+    const value = text(element, "value");
+    if (name || description || help || value) {
+      lines.push([path, role, name, description, help, value].join("|"));
+    }
+    let children = [];
+    try {
+      children = element.uiElements();
+    } catch (_) {}
+    for (let index = 0; index < children.length; index += 1) {
+      walk(children[index], path + "/" + index, depth + 1);
+    }
+  };
+  const windows = word.windows();
+  for (let index = 0; index < windows.length; index += 1) {
+    walk(windows[index], "window" + index, 0);
+  }
+  JSON.stringify({ processExists: true, visited, lines });
+}
+`,
+      45_000,
+    ),
+  );
+  const lines = snapshot.lines ?? [];
+  const raw = lines.join("\n");
+  const taskPaneMarkers = [
+    "调整图形格式",
+    "设置图片格式",
+    "adjust shape format",
+    "format shape",
+    "format picture",
+  ];
+  const paneMatches = lines.filter((line) => {
+    const normalized = line.toLowerCase();
+    const fields = line.split("|");
+    const role = fields[1] ?? "";
+    const description = fields[3] ?? "";
+    const ribbonContextTab =
+      role === "AXRadioButton" &&
+      (description.includes("选项卡") ||
+        description.toLowerCase().includes("tab"));
+    return (
+      !ribbonContextTab &&
+      taskPaneMarkers.some((marker) =>
+        normalized.includes(marker.toLowerCase()),
+      )
+    );
+  });
+  const contextualRibbonMatches = lines.filter((line) => {
+    const fields = line.split("|");
+    const role = fields[1] ?? "";
+    const name = (fields[2] ?? "").toLowerCase();
+    const description = (fields[3] ?? "").toLowerCase();
+    return (
+      role === "AXRadioButton" &&
+      (description.includes("选项卡") || description.includes("tab")) &&
+      (name.includes("图形格式") ||
+        name.includes("图片格式") ||
+        name.includes("shape format") ||
+        name.includes("picture format"))
+    );
+  });
+  return {
+    raw,
+    visited: snapshot.visited ?? 0,
+    paneMatches,
+    contextualRibbonMatches,
+    pictureFormatVisible: paneMatches.length > 0,
+  };
+}
+
+function closeWordPictureFormatTaskPaneViaAccessibility() {
+  return JSON.parse(
+    runJxa(
+      String.raw`
+const systemEvents = Application("System Events");
+const word = systemEvents.processes.byName("Microsoft Word");
+if (!word.exists()) {
+  JSON.stringify({ clicked: false, reason: "word-not-running" });
+} else {
+  let clicked = false;
+  let visited = 0;
+  const text = (element, property) => {
+    try {
+      const value = element[property]();
+      return value === null || value === undefined ? "" : String(value);
+    } catch (_) {
+      return "";
+    }
+  };
+  const walk = (element, depth) => {
+    if (clicked || visited >= 5000 || depth > 12) return;
+    visited += 1;
+    const role = text(element, "role");
+    const name = text(element, "name").trim().toLowerCase();
+    if (
+      role === "AXButton" &&
+      ((name.startsWith("关闭 ") && name.includes("格式")) ||
+        (name.startsWith("close ") && name.includes("format")))
+    ) {
+      try {
+        element.click();
+        clicked = true;
+        return;
+      } catch (_) {}
+    }
+    let children = [];
+    try {
+      children = element.uiElements();
+    } catch (_) {}
+    for (let index = 0; index < children.length; index += 1) {
+      walk(children[index], depth + 1);
+      if (clicked) return;
+    }
+  };
+  const windows = word.windows();
+  for (let index = 0; index < windows.length; index += 1) {
+    walk(windows[index], 0);
+    if (clicked) break;
+  }
+  JSON.stringify({ clicked, visited });
+}
+`,
+      45_000,
+    ),
+  );
+}
+
+function visualTeXEditorUiSnapshot() {
+  const snapshot = JSON.parse(
+    runJxa(
+      String.raw`
+const systemEvents = Application("System Events");
+const visualTeX = systemEvents.processes.byName("visualtex");
+if (!visualTeX.exists()) {
+  JSON.stringify({ processExists: false, lines: [] });
+} else {
+  visualTeX.frontmost = true;
+  delay(0.35);
+  const lines = [];
+  let visited = 0;
+  const text = (element, property) => {
+    try {
+      const value = element[property]();
+      return value === null || value === undefined ? "" : String(value);
+    } catch (_) {
+      return "";
+    }
+  };
+  const walk = (element, path, depth) => {
+    if (visited >= 5000 || depth > 12) return;
+    visited += 1;
+    const role = text(element, "role");
+    const name = text(element, "name");
+    const description = text(element, "description");
+    const value = text(element, "value");
+    if (name || description || value) {
+      lines.push([path, role, name, description, value].join("|"));
+    }
+    let children = [];
+    try {
+      children = element.uiElements();
+    } catch (_) {}
+    for (let index = 0; index < children.length; index += 1) {
+      walk(children[index], path + "/" + index, depth + 1);
+    }
+  };
+  const windows = visualTeX.windows();
+  for (let index = 0; index < windows.length; index += 1) {
+    walk(windows[index], "window" + index, 0);
+  }
+  JSON.stringify({ processExists: true, windowCount: windows.length, visited, lines });
+}
+`,
+      45_000,
+    ),
+  );
+  const lines = snapshot.lines ?? [];
+  const firstWindowLines = lines.filter((line) => line.startsWith("window0/"));
+  const staticNames = firstWindowLines
+    .filter((line) => line.split("|")[1] === "AXStaticText")
+    .map((line) => line.split("|")[2] ?? "");
+  const lineLabelIndex = staticNames.indexOf("行");
+  const characterLabelIndex = staticNames.indexOf("字符");
+  const lineCount =
+    lineLabelIndex > 0 ? Number(staticNames[lineLabelIndex - 1]) : Number.NaN;
+  const characterCount =
+    characterLabelIndex > 0
+      ? Number(staticNames[characterLabelIndex - 1])
+      : Number.NaN;
+  const errorMatches = firstWindowLines.filter((line) =>
+    /missing\s*\\end|missing\s*end|无法打开|公式渲染失败|formula rendering failed/i.test(
+      line,
+    ),
+  );
+  return {
+    windowCount: snapshot.windowCount ?? 0,
+    visited: snapshot.visited ?? 0,
+    lineCount,
+    characterCount,
+    errorMatches,
+    raw: firstWindowLines.join("\n"),
+  };
+}
+
+function closeVisualTeXEditorByWindowButton() {
+  const status = runAppleScript([
     'tell application "System Events"',
-    'if not (exists process "Microsoft Word") then return ""',
-    'tell process "Microsoft Word"',
-    'set output to ""',
-    'repeat with targetWindow in windows',
-    'try\nset output to output & "window:" & (name of targetWindow as text) & linefeed\nend try',
-    'try\nrepeat with targetSheet in sheets of targetWindow\nset output to output & "sheet:" & (name of targetSheet as text) & linefeed\nend repeat\nend try',
-    'end repeat',
-    'try\nset output to output & "ui:" & (entire contents of front window as text)\nend try',
-    'return output',
+    'if not (exists process "visualtex") then return "NO_PROCESS"',
+    'tell process "visualtex"',
+    'set frontmost to true',
+    'if (count windows) = 0 then return "NO_WINDOW"',
+    'if exists (first button of first window whose subrole is "AXCloseButton") then',
+    'click (first button of first window whose subrole is "AXCloseButton")',
+    'return "PRESSED"',
+    'end if',
+    'if (count buttons of first window) > 0 then',
+    'click first button of first window',
+    'return "PRESSED_FALLBACK"',
+    'end if',
+    'return "NO_BUTTON"',
     'end tell',
     'end tell',
   ], 30_000);
-  const normalized = raw.toLowerCase();
-  const pictureFormatMarkers = [
-    "设置图片格式",
-    "图片格式",
-    "format picture",
-    "picture format",
-  ];
   return {
-    raw,
-    pictureFormatVisible: pictureFormatMarkers.some((marker) =>
-      normalized.includes(marker.toLowerCase()),
-    ),
+    pressed: status === "PRESSED" || status === "PRESSED_FALLBACK",
+    status,
   };
+}
+
+async function waitForVisualTeXEditorToClose(timeoutMs = 45_000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const state = JSON.parse(
+      runJxa(
+        String.raw`
+const systemEvents = Application("System Events");
+const visualTeX = systemEvents.processes.byName("visualtex");
+JSON.stringify({
+  processExists: visualTeX.exists(),
+  windowCount: visualTeX.exists() ? visualTeX.windows().length : 0
+});
+`,
+        15_000,
+      ),
+    );
+    if (!state.processExists || state.windowCount === 0) return state;
+    await sleep(250);
+  }
+  throw new Error("VisualTeX formula editor did not close after its native close button was pressed");
 }
 
 async function invokeWordFormatPictureCommand(testDocumentName) {
@@ -308,16 +564,19 @@ async function startVisualTeXForPhysicalRegression() {
     stdio: "ignore",
   });
   child.unref();
-  await sleep(2_000);
+  await sleep(4_000);
 }
 
-function physicallyDoubleClickSelectedWordFormula(testDocumentName) {
+function physicallyDoubleClickSelectedWordFormula(
+  testDocumentName,
+  boundsMacro = "VisualTeX_WriteSelectedScreenBoundsForRegression",
+) {
   rmSync(physicalScreenBoundsPath, { force: true });
   runAppleScript([
     'tell application "Microsoft Word"',
     `activate object document ${JSON.stringify(testDocumentName)}`,
     "activate",
-    'run VB macro macro name "VisualTeX_WriteSelectedScreenBoundsForRegression"',
+    `run VB macro macro name ${JSON.stringify(boundsMacro)}`,
     "end tell",
   ], 30_000);
   if (!existsSync(physicalScreenBoundsPath)) {
@@ -371,6 +630,29 @@ const legacyAlignStarLatex = String.raw`\begin{align*}
 666 &= 777 + 8 \\
 999999 &= 0
 \end{align*}`;
+
+function runJxa(source, timeout = 60_000) {
+  const result = spawnSync(
+    "/usr/bin/osascript",
+    ["-l", "JavaScript", "-e", source],
+    {
+      encoding: "utf8",
+      timeout,
+      maxBuffer: 16 * 1024 * 1024,
+    },
+  );
+  if (result.status !== 0) {
+    const details = [
+      result.stderr?.trim(),
+      result.stdout?.trim(),
+      result.error?.message,
+      result.signal ? `signal=${result.signal}` : "",
+      `status=${String(result.status)}`,
+    ].filter(Boolean);
+    throw new Error(details.join("\n") || "JXA failed");
+  }
+  return result.stdout.trim();
+}
 
 function runAppleScript(lines, timeout = 60_000) {
   const args = lines.flatMap((line) => ["-e", line]);
@@ -1210,7 +1492,10 @@ function runFormulaRegressionReport(testDocumentName, formulas) {
   const report = parseRegressionReport(
     readFileSync(formulaRegressionStatusPath, "utf8"),
   );
-  if (report.revision !== "word-double-click-routing-20260730-r66") {
+  if (
+    report.revision !==
+    "word-image-metadata-format-routing-20260801-r66"
+  ) {
     throw new Error(`Word loaded the wrong VisualTeX source revision: ${report.revision}`);
   }
 
@@ -1757,7 +2042,7 @@ function validatedPhysicalEditorReadiness(sessionId, formulaId, marker, records)
   ) {
     throw new Error(
       `The resident Word editor missed the ${warmEditorReadyLimitMs} ms warm target: ` +
-        JSON.stringify(marker),
+        JSON.stringify({ marker, records }),
     );
   }
 
@@ -1944,8 +2229,25 @@ async function waitForPhysicalEditorReadiness(
     }
     await sleep(50);
   }
+  const sessionDirectory = join(sessionsRoot, sessionId);
+  const files = existsSync(sessionDirectory)
+    ? readdirSync(sessionDirectory).sort()
+    : [];
+  const requestPath = join(sessionDirectory, "request.json");
+  const performancePath = join(sessionDirectory, editorPerformanceFileName);
+  const request = existsSync(requestPath)
+    ? readFileSync(requestPath, "utf8")
+    : "<missing>";
+  const performance = existsSync(performancePath)
+    ? readFileSync(performancePath, "utf8")
+    : "<missing>";
   throw new Error(
-    `VisualTeX did not write ${editorReadyFileName} and complete performance stages for ${formulaId}`,
+    `VisualTeX did not write ${editorReadyFileName} and complete performance stages for ${formulaId}: ${JSON.stringify({
+      sessionId,
+      files,
+      request,
+      performance,
+    })}`,
   );
 }
 
@@ -2617,10 +2919,58 @@ async function runPictureRoutingNativeRegression(beforeSessions) {
     "end tell",
   ], 60_000);
   const sessionsBeforeClick = currentSessionIds();
-  const physicalClick = {
-    skipped: "ordinary/damaged picture routing is validated through FormatPicture",
+  let physicalClick = {
+    skipped: "damaged picture routing is validated through FormatPicture",
   };
-  const physicalDoubleClickUi = { raw: "", pictureFormatVisible: false };
+  let physicalDoubleClickUi = {
+    raw: "",
+    visited: 0,
+    paneMatches: [],
+    contextualRibbonMatches: [],
+    pictureFormatVisible: false,
+  };
+  let paneAfterCloseUi = null;
+  if (pictureRoutingTarget === "ordinary-inline") {
+    const physicalClickAttempts = [];
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      physicalClickAttempts.push(
+        physicallyDoubleClickSelectedWordFormula(
+          testDocumentName,
+          "VisualTeX_WriteSelectedPictureScreenBoundsRegression",
+        ),
+      );
+      await sleep(1_750);
+      physicalDoubleClickUi = wordPictureFormatUiSnapshot();
+      if (physicalDoubleClickUi.pictureFormatVisible) break;
+    }
+    physicalClick = { attempts: physicalClickAttempts };
+    if (!physicalDoubleClickUi.pictureFormatVisible) {
+      throw new Error(
+        `The pane detector missed Word's native Format Shape task pane after three ordinary-picture double-clicks: ${physicalDoubleClickUi.raw}`,
+      );
+    }
+    const sessionsAfterPhysicalClick = [...currentSessionIds()].filter(
+      (sessionId) => !sessionsBeforeClick.has(sessionId),
+    );
+    if (sessionsAfterPhysicalClick.length > 0) {
+      throw new Error(
+        `An ordinary picture double-click incorrectly created VisualTeX Session(s): ${sessionsAfterPhysicalClick.join(",")}`,
+      );
+    }
+    const closePaneResult = closeWordPictureFormatTaskPaneViaAccessibility();
+    if (!closePaneResult.clicked) {
+      throw new Error(
+        `The accessibility close helper did not click Word's Format Shape close button: ${JSON.stringify(closePaneResult)}`,
+      );
+    }
+    await sleep(750);
+    paneAfterCloseUi = wordPictureFormatUiSnapshot();
+    if (paneAfterCloseUi.pictureFormatVisible) {
+      throw new Error(
+        `VisualTeX ClosePane fallback did not close Word's Format Shape task pane: ${paneAfterCloseUi.raw}`,
+      );
+    }
+  }
   const nativeCommandProcess = await invokeWordFormatPictureCommand(testDocumentName);
   const nativeCommandUi = wordPictureFormatUiSnapshot();
   const nativeCommandPending =
@@ -2653,6 +3003,7 @@ async function runPictureRoutingNativeRegression(beforeSessions) {
         testDocumentName,
         physicalClick,
         physicalDoubleClickUi,
+        paneAfterCloseUi,
         nativeCommandUi,
         nativeCommandPending,
         nativeCommandDispatchedWithoutVisualTeXSession: true,
@@ -2903,6 +3254,24 @@ async function runCreatedImageFormulaRegression(
   beforeSessions,
   runPhysicalDoubleClickAfterReopen = false,
 ) {
+  const createdDisplayMode = createSourceFormattedEquationRegression
+    ? "block"
+    : "inline";
+  const createdLatex = createSourceFormattedEquationRegression
+    ? String.raw`\begin{equation}
+\frac{\delta \mathbb{E}[L]}
+     {\delta f(\mathbf{x})}
+=
+2\int
+\{f(\mathbf{x})-t\}
+p(\mathbf{x},t)\,
+\mathrm{d}t
+=
+0
+\end{equation}`
+    : "dfdfdf";
+  const createMacroName = "VisualTeX_CreateInline";
+  const requestedDisplayMode = "inline";
   if (runPhysicalDoubleClickAfterReopen) {
     rmSync(finalBinaryPhysicalStatusPath, { force: true });
   }
@@ -2922,7 +3291,7 @@ async function runCreatedImageFormulaRegression(
     "delay 0.2",
     "end repeat",
     "activate",
-    'run VB macro macro name "VisualTeX_CreateInline"',
+    `run VB macro macro name ${JSON.stringify(createMacroName)}`,
     "return testDocumentName",
     "end tell",
   ], 60_000);
@@ -2939,7 +3308,7 @@ async function runCreatedImageFormulaRegression(
     request.mode !== "create" ||
     request.host !== "word" ||
     request.sessionId !== sessionId ||
-    request.displayMode !== "inline" ||
+    request.displayMode !== requestedDisplayMode ||
     request.numbered ||
     !request.formulaId ||
     !request.sourceDocumentId ||
@@ -2953,8 +3322,11 @@ async function runCreatedImageFormulaRegression(
 
   const formula = formulaItem({
     formulaId: request.formulaId,
-    latex: "dfdfdf",
-    displayMode: "inline",
+    latex: createdLatex,
+    expectedCodeFormat: createSourceFormattedEquationRegression
+      ? "equation"
+      : "raw",
+    displayMode: createdDisplayMode,
     numbered: false,
     fontSizePt,
     artifactDirectory: sessionDirectory,
@@ -3116,6 +3488,9 @@ async function runCreatedImageFormulaRegression(
       "activate object documentObject",
       "activate",
       'run VB macro macro name "VisualTeX_AssertWordHostSelfTest"',
+      ...(createImageNativeMonitorRegression
+        ? ['run VB macro macro name "VisualTeX_DisableWordEventsForRegression"']
+        : []),
       "set formulaShape to inline shape 1 of documentObject",
       'set title of formulaShape to ""',
       "set formulaRange to text object of formulaShape",
@@ -3133,9 +3508,21 @@ async function runCreatedImageFormulaRegression(
         `Word did not expose the required metadata-only image fixture: ${physicalSelection}`,
       );
     }
-    const physicalClick = physicallyDoubleClickSelectedWordFormula(
-      testDocumentName,
-    );
+    const physicalClick = createSourceFormattedEquationRegression
+      ? (() => {
+          runAppleScript([
+            'tell application "Microsoft Word"',
+            `activate object document ${JSON.stringify(testDocumentName)}`,
+            "activate",
+            'run VB macro macro name "VisualTeX_DoubleClickEditSelected"',
+            "end tell",
+          ], 60_000);
+          return {
+            skipped:
+              "source-formatted equation content uses the same VBA edit entry; physical pane routing is covered separately",
+          };
+        })()
+      : physicallyDoubleClickSelectedWordFormula(testDocumentName);
     const physicalEditSessionId = await waitForFormulaEditSession(
       sessionsBeforePhysicalEdit,
       formula.formulaId,
@@ -3163,6 +3550,29 @@ async function runCreatedImageFormulaRegression(
         `Word displayed its native picture-format UI for the final binary formula double-click: ${pictureFormatUi.raw}`,
       );
     }
+    let editorUi = null;
+    let editorClose = null;
+    if (createSourceFormattedEquationRegression) {
+      editorUi = visualTeXEditorUiSnapshot();
+      const expectedCharacterCount = formula.metadataLines[0].length;
+      if (
+        editorUi.lineCount !== 1 ||
+        editorUi.characterCount !== expectedCharacterCount ||
+        editorUi.errorMatches.length > 0
+      ) {
+        throw new Error(
+          `The source-formatted equation did not load as one complete editable formula: ${JSON.stringify({ expectedCharacterCount, editorUi })}`,
+        );
+      }
+      const closeRequest = closeVisualTeXEditorByWindowButton();
+      if (!closeRequest.pressed) {
+        throw new Error(
+          `The VisualTeX formula editor close button was not pressed: ${JSON.stringify(closeRequest)}`,
+        );
+      }
+      const closeState = await waitForVisualTeXEditorToClose();
+      editorClose = { closeRequest, closeState };
+    }
     physicalDoubleClickResult = {
       sessionId: physicalEditSessionId,
       formulaId: formula.formulaId,
@@ -3173,13 +3583,15 @@ async function runCreatedImageFormulaRegression(
       physicalClick,
       editorReadiness,
       pictureFormatUi,
+      editorUi,
+      editorClose,
     };
     writeFileSync(
       finalBinaryPhysicalStatusPath,
       JSON.stringify(
         {
           status: "PASS",
-          revision: "word-double-click-routing-20260730-r66",
+          revision: "word-image-metadata-format-routing-20260801-r66",
           ...physicalDoubleClickResult,
         },
         null,
@@ -4567,7 +4979,7 @@ try {
         JSON.stringify(
           {
             status: "FAIL",
-            revision: "word-double-click-routing-20260730-r66",
+            revision: "word-image-metadata-format-routing-20260801-r66",
             error: error instanceof Error ? error.message : String(error),
           },
           null,
