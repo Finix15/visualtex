@@ -1346,10 +1346,12 @@ pub fn open_powerpoint_tutorial(app: &AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn get_macos_offline_office_install_status(
+pub async fn get_macos_offline_office_install_status(
     app: AppHandle,
 ) -> Result<MacOfflineOfficeInstallStatus, String> {
-    status(&app)
+    tauri::async_runtime::spawn_blocking(move || status(&app))
+        .await
+        .map_err(|error| format!("Office installation status worker failed: {error}"))?
 }
 
 #[tauri::command]

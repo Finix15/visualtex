@@ -20,7 +20,7 @@ pub const BACKGROUND_ARGUMENT: &str = "--office-background";
 pub const LAUNCH_AGENT_LABEL: &str = "com.visualtex.studio.office";
 const LAUNCH_AGENT_FILE: &str = "com.visualtex.studio.office.plist";
 const BACKGROUND_MARKER_FILE: &str = "office-background.enabled";
-const DOCK_ICON_MIGRATION_MARKER_FILE: &str = "dock-icon-v2.refreshed";
+const DOCK_ICON_MIGRATION_MARKER_FILE: &str = "dock-icon-v3.refreshed";
 #[cfg(target_os = "macos")]
 static APPLICATION_ICON_INSTALLED: AtomicBool = AtomicBool::new(false);
 
@@ -499,10 +499,10 @@ fn refresh_dock_after_icon_migration() -> Result<(), String> {
     }
 
     // Older same-version builds could leave zero-width Dock items behind after
-    // switching between Accessory and Regular activation policies. The bundled
-    // icon and current activation logic cannot resize those already-cached
-    // ghost items. Restart Dock once after installing the new high-coverage
-    // icon; macOS immediately recreates the tile from the running application.
+    // exposing resident Office windows at a tiny non-zero alpha. The bundled
+    // icon and hidden-window prewarming fix cannot resize those already-cached
+    // ghost items. Restart Dock once after migrating to genuinely hidden
+    // resident windows; macOS immediately recreates the normal application tile.
     let status = Command::new("/usr/bin/killall")
         .arg("Dock")
         .status()

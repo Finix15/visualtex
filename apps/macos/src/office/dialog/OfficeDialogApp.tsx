@@ -148,6 +148,7 @@ export function OfficeDialogApp() {
   const exportRunIdRef = useRef(0);
   const activeSessionKeyRef = useRef("");
   const readyReportedSessionKeyRef = useRef("");
+  const prewarmReportedRef = useRef(false);
   const latestCompleteExportRef = useRef<{
     fingerprint: string;
     exportResult: OfficeExportResult;
@@ -188,6 +189,22 @@ export function OfficeDialogApp() {
     session && sessionKey && hydratedSessionKey === sessionKey,
   );
   activeSessionKeyRef.current = sessionKey;
+
+  useEffect(() => {
+    if (
+      !isMacosOfflineTauriTransport() ||
+      prewarmReportedRef.current
+    ) {
+      return;
+    }
+    prewarmReportedRef.current = true;
+    void invokeTauri<void>(
+      "report_macos_offline_office_editor_prewarmed",
+    ).catch((reason) => {
+      prewarmReportedRef.current = false;
+      console.error("Unable to schedule Office editor prewarming", reason);
+    });
+  }, []);
 
   useEffect(() => {
     loadedSessionIdRef.current = "";
@@ -422,31 +439,44 @@ export function OfficeDialogApp() {
       }
       if (!contentMounted) return;
 
-      const contentReadyMs = Math.max(editorMountedMs, now - origin);
-      readyReportedSessionKeyRef.current = sessionKey;
-      void invokeTauri<void>(
-        "report_macos_offline_office_editor_ready",
-        {
-          input: {
-            sessionId: session.id,
-            generation,
-            frontendEpochMs: Date.now(),
-            hydrateMs,
-            editorMountedMs,
-            contentReadyMs,
-          },
-        },
-      ).catch((reason) => {
-        if (activeSessionKeyRef.current !== sessionKey) return;
-        readyReportedSessionKeyRef.current = "";
-        setToast(
-          errorMessage(
-            reason,
-            isEn
-              ? "Unable to reveal the Office formula editor"
-              : "无法显示 Office 公式编辑器",
-          ),
-        );
+      // Paint the fully hydrated editor at full page opacity while the native
+      // window is still in its 1%-alpha hydration state. Waiting two frames
+      // prevents macOS from presenting an incompletely painted WebView.
+      document.body.style.opacity = "1";
+      frameRequest = window.requestAnimationFrame(() => {
+        if (disposed || activeSessionKeyRef.current !== sessionKey) return;
+        frameRequest = window.requestAnimationFrame(() => {
+          if (disposed || activeSessionKeyRef.current !== sessionKey) return;
+          const paintedAt =
+            typeof performance === "undefined" ? Date.now() : performance.now();
+          const contentReadyMs = Math.max(editorMountedMs, paintedAt - origin);
+          readyReportedSessionKeyRef.current = sessionKey;
+          void invokeTauri<void>(
+            "report_macos_offline_office_editor_ready",
+            {
+              input: {
+                sessionId: session.id,
+                generation,
+                frontendEpochMs: Date.now(),
+                hydrateMs,
+                editorMountedMs,
+                contentReadyMs,
+              },
+            },
+          ).catch((reason) => {
+            if (activeSessionKeyRef.current !== sessionKey) return;
+            document.body.style.opacity = "0";
+            readyReportedSessionKeyRef.current = "";
+            setToast(
+              errorMessage(
+                reason,
+                isEn
+                  ? "Unable to reveal the Office formula editor"
+                  : "无法显示 Office 公式编辑器",
+              ),
+            );
+          });
+        });
       });
     };
 

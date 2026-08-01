@@ -1559,6 +1559,7 @@ pub fn run() {
             office::macos_offline::commit_macos_offline_document_import,
             office::macos_offline::cancel_macos_offline_document_import,
             office::macos_offline::get_macos_offline_office_session,
+            office::macos_offline::report_macos_offline_office_editor_prewarmed,
             office::macos_offline::update_macos_offline_office_session,
             office::macos_offline::delete_macos_offline_office_session,
             office::macos_offline::commit_macos_offline_office_session,
