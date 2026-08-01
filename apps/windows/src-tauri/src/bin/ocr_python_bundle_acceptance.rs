@@ -26,6 +26,10 @@ fn run() -> Result<(), String> {
     std::fs::create_dir_all(&temporary)
         .map_err(|error| format!("Unable to create acceptance directory: {error}"))?;
     let runtime_root = temporary.join("ocr-runtime").join("python");
+    let system_root = std::env::var_os("SystemRoot")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+    let system32 = system_root.join("System32");
     let manifest =
         ocr_python_bundle::install_bundle_from_root(&bundle_root, &runtime_root)?;
     let python = runtime_root.join("python.exe");
@@ -72,6 +76,112 @@ fn run() -> Result<(), String> {
         return Err(format!(
             "Bundled Python resolved the wrong executable. Expected {expected}, actual {executable}"
         ));
+    }
+
+    let offline_assets = ocr_python_bundle::offline_install_assets_from_root(&bundle_root)?;
+    let offline_install = Command::new(&python)
+        .args([
+            "-I",
+            "-X",
+            "utf8",
+            "-m",
+            "pip",
+            "install",
+            "--isolated",
+            "--no-index",
+            "--find-links",
+        ])
+        .arg(&offline_assets.wheelhouse)
+        .args([
+            "--only-binary=:all:",
+            "--require-hashes",
+            "--disable-pip-version-check",
+            "--no-input",
+            "--requirement",
+        ])
+        .arg(&offline_assets.lockfile)
+        .env_clear()
+        .env("PATH", "")
+        .env("PIP_NO_INDEX", "1")
+        .env("PIP_FIND_LINKS", &offline_assets.wheelhouse)
+        .env("PYTHONNOUSERSITE", "1")
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8")
+        .output()
+        .map_err(|error| format!("Unable to start fixed offline wheelhouse installation: {error}"))?;
+    if !offline_install.status.success() {
+        return Err(format!(
+            "Fixed offline wheelhouse installation failed with {:?}\nstdout:\n{}\nstderr:\n{}",
+            offline_install.status.code(),
+            String::from_utf8_lossy(&offline_install.stdout),
+            String::from_utf8_lossy(&offline_install.stderr)
+        ));
+    }
+
+    let dependency_check = Command::new(&python)
+        .args(["-I", "-X", "utf8", "-m", "pip", "check"])
+        .env_clear()
+        .env("PATH", "")
+        .env("PIP_NO_INDEX", "1")
+        .env("PYTHONNOUSERSITE", "1")
+        .output()
+        .map_err(|error| format!("Unable to run offline dependency closure check: {error}"))?;
+    if !dependency_check.status.success() {
+        return Err(format!(
+            "Offline dependency closure check failed with {:?}\nstdout:\n{}\nstderr:\n{}",
+            dependency_check.status.code(),
+            String::from_utf8_lossy(&dependency_check.stdout),
+            String::from_utf8_lossy(&dependency_check.stderr)
+        ));
+    }
+
+    let isolated_profile = temporary.join("isolated-profile");
+    let isolated_appdata = isolated_profile.join("AppData").join("Roaming");
+    let isolated_local_appdata = isolated_profile.join("AppData").join("Local");
+    std::fs::create_dir_all(&isolated_appdata)
+        .and_then(|_| std::fs::create_dir_all(&isolated_local_appdata))
+        .map_err(|error| format!("Unable to create isolated OCR profile: {error}"))?;
+
+    let interface_probe = Command::new(&python)
+        .args(["-I", "-X", "utf8", "-c"])
+        .arg("import importlib.metadata as metadata, json, paddle, tokenizers; from paddleocr import FormulaRecognition; print(json.dumps({'paddle': paddle.__version__, 'paddleocr': metadata.version('paddleocr'), 'tokenizers': metadata.version('tokenizers'), 'formulaRecognition': FormulaRecognition.__name__}))")
+        .env_clear()
+        .env("SystemRoot", &system_root)
+        .env("WINDIR", &system_root)
+        .env("PATH", &system32)
+        .env("USERPROFILE", &isolated_profile)
+        .env("HOME", &isolated_profile)
+        .env("APPDATA", &isolated_appdata)
+        .env("LOCALAPPDATA", &isolated_local_appdata)
+        .env("MODELSCOPE_CACHE", isolated_local_appdata.join("modelscope"))
+        .env("PADDLE_PDX_CACHE_HOME", isolated_local_appdata.join("paddlex"))
+        .env("VISUALTEX_OFFLINE_OCR", "1")
+        .env("HF_HUB_OFFLINE", "1")
+        .env("TRANSFORMERS_OFFLINE", "1")
+        .env("MODELSCOPE_OFFLINE", "1")
+        .env("PIP_NO_INDEX", "1")
+        .env("PYTHONNOUSERSITE", "1")
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8")
+        .output()
+        .map_err(|error| format!("Unable to run FormulaRecognition interface probe: {error}"))?;
+    if !interface_probe.status.success() {
+        return Err(format!(
+            "FormulaRecognition interface probe failed with {:?}\nstdout:\n{}\nstderr:\n{}",
+            interface_probe.status.code(),
+            String::from_utf8_lossy(&interface_probe.stdout),
+            String::from_utf8_lossy(&interface_probe.stderr)
+        ));
+    }
+    let interface_value: Value = serde_json::from_slice(&interface_probe.stdout)
+        .map_err(|error| format!("FormulaRecognition interface probe returned invalid JSON: {error}"))?;
+    if interface_value.get("paddle").and_then(Value::as_str) != Some("3.3.1")
+        || interface_value.get("paddleocr").and_then(Value::as_str) != Some("3.7.0")
+        || interface_value.get("tokenizers").and_then(Value::as_str) != Some("0.19.1")
+        || interface_value.get("formulaRecognition").and_then(Value::as_str)
+            != Some("FormulaRecognition")
+    {
+        return Err(format!("Unexpected offline OCR interface probe: {interface_value}"));
     }
 
     let fake_user_base = temporary.join("fake-user-base");
@@ -204,6 +314,9 @@ fn run() -> Result<(), String> {
     println!("python={}", manifest.python_version);
     println!("pip={}", manifest.pip_version);
     println!("runtime={}", runtime_root.display());
+    println!("wheelhouse_files={}", offline_assets.manifest.wheelhouse.files.len());
+    println!("offline_dependency_closure=true");
+    println!("formula_recognition=true");
     println!("path_isolated=true");
     std::fs::remove_dir_all(&temporary).ok();
     Ok(())

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 
 let currentSessionId = crypto.randomUUID();
 let currentFormulaId = crypto.randomUUID();
@@ -232,7 +233,10 @@ const adapter = {
 };
 
 const { OfficeBridge } = await import("../src/office/bridge/OfficeBridge.ts");
-const { MacOfficeBridge } = await import("../src/office/macos/MacOfficeBridge.ts");
+const macBridgePath = new URL("../src/office/macos/MacOfficeBridge.ts", import.meta.url);
+const MacOfficeBridge = existsSync(macBridgePath)
+  ? (await import(macBridgePath.href)).MacOfficeBridge
+  : null;
 
 // Scenario 1: PowerPoint loses DialogMessageReceived, but the editor has already
 // persisted status=committing. The bridge watcher must still insert the formula.
@@ -323,6 +327,7 @@ await new Promise((resolve) => setTimeout(resolve, 350));
 assert.equal(applyCount, 3, "closing a dirty edit dialog must update the formula");
 assert.equal(session.status, "completed");
 
+if (MacOfficeBridge) {
 // Scenario 4: even if an Office dialog falls back to its parent bridge, a
 // native macOS PowerPoint Session must still use the native commit endpoint.
 currentSessionId = crypto.randomUUID();
@@ -417,6 +422,13 @@ assert.equal(
   "visualtex:v1:deflate:test-marker",
   "native Word fallback must target the durable formula marker, not the caret",
 );
+} else {
+  assert.equal(
+    nativeCommitCount,
+    0,
+    "Windows lifecycle smoke must not invoke macOS-native commit routes",
+  );
+}
 
 // Scenario 7: a double-click target must be prepared before selection is read,
 // so PowerPoint's native format UI cannot steal the mutable selection.
@@ -440,4 +452,8 @@ assert.deepEqual(preparedInteractionTargets.at(-1), interactionTarget);
 session.status = "cancelled";
 await new Promise((resolve) => setTimeout(resolve, 250));
 
-console.log("Office command lifecycle, native commit and Word numbering command passed");
+console.log(
+  MacOfficeBridge
+    ? "Office command lifecycle, native commit and Word numbering command passed"
+    : "Office command lifecycle passed; macOS-native scenarios correctly skipped on Windows",
+);

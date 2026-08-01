@@ -506,7 +506,7 @@ pub fn set_office_integration_mode(
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[cfg(target_os = "windows")]
-fn hidden_windows_command(program: &str) -> Command {
+fn hidden_windows_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     let mut command = Command::new(program);
     command.creation_flags(CREATE_NO_WINDOW);
     command
@@ -601,7 +601,8 @@ fn run_windows_script(
         ));
     }
     let powershell_script = powershell_compatible_path(&script);
-    let output = hidden_windows_command("powershell.exe")
+    let powershell = crate::ocr_install::windows_powershell_executable()?;
+    let output = hidden_windows_command(&powershell)
         .args([
             "-NoProfile",
             "-NonInteractive",

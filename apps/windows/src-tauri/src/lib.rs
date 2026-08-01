@@ -18,6 +18,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 mod app_lifecycle;
 mod ocr_install;
+#[cfg(windows)]
+mod ocr_models;
 mod ocr_offline;
 #[cfg(windows)]
 mod ocr_python_bundle;
@@ -130,6 +132,8 @@ pub(crate) struct OcrState {
     cancel_generation: Arc<AtomicU64>,
     runtime_status: Arc<Mutex<Option<OcrRuntimeStatus>>>,
     install_control: Arc<InstallControl>,
+    #[cfg(windows)]
+    model_download_control: Arc<ocr_models::ModelDownloadControl>,
     desired_warmup_model: Arc<Mutex<Option<String>>>,
     events: OcrEventBus,
 }
@@ -142,6 +146,8 @@ impl Default for OcrState {
             cancel_generation: Arc::new(AtomicU64::new(0)),
             runtime_status: Arc::new(Mutex::new(None)),
             install_control: Arc::new(InstallControl::default()),
+            #[cfg(windows)]
+            model_download_control: Arc::new(ocr_models::ModelDownloadControl::default()),
             desired_warmup_model: Arc::new(Mutex::new(None)),
             events: OcrEventBus::default(),
         }
@@ -160,6 +166,8 @@ impl Drop for OcrState {
         if is_final_ocr_state_owner(&self.worker) {
             self.cancel_generation.fetch_add(1, Ordering::SeqCst);
             let _ = self.install_control.cancel();
+            #[cfg(windows)]
+            self.model_download_control.cancel();
             let _ = terminate_worker_process(&self.worker_pid);
         }
     }
@@ -258,6 +266,19 @@ impl OcrState {
         app: AppHandle,
         request: OcrImageRequest,
     ) -> Result<OcrRecognitionResult, String> {
+        if !ALLOWED_MODELS.contains(&request.model.as_str()) {
+            return Err(format!("Unsupported PP-FormulaNet model: {}", request.model));
+        }
+        let status = self.runtime_status(app.clone(), false).await?;
+        if !status.installed {
+            return Err(format!("OCR runtime is not installed: {}", status.message));
+        }
+        if !status.installed_models.iter().any(|model| model == &request.model) {
+            return Err(format!(
+                "OCR model {} is not installed. Import a verified .vtxocrmodel package or explicitly download it first.",
+                request.model
+            ));
+        }
         if ALLOWED_MODELS.contains(&request.model.as_str()) {
             {
                 let mut desired = self
@@ -350,11 +371,16 @@ impl OcrState {
                 return;
             }
             let status = state.runtime_status(app.clone(), false).await;
-            if status.as_ref().is_ok_and(|status| status.installed) {
-                let model = runtime_paths(&app)
+            if let Ok(status) = status {
+                if !status.installed || status.installed_models.is_empty() {
+                    return;
+                }
+                let preferred = runtime_paths(&app)
                     .ok()
-                    .and_then(|paths| read_preferred_ocr_model(&paths))
-                    .unwrap_or_else(|| DEFAULT_OCR_MODEL.to_string());
+                    .and_then(|paths| read_preferred_ocr_model(&paths));
+                let model = preferred
+                    .filter(|model| status.installed_models.iter().any(|installed| installed == model))
+                    .unwrap_or_else(|| status.installed_models[0].clone());
                 if let Err(error) = state.warmup_model(app, model).await {
                     eprintln!("Unable to prewarm the preferred OCR model: {error}");
                 }
@@ -369,6 +395,12 @@ impl OcrState {
     ) -> Result<(), String> {
         if !ALLOWED_MODELS.contains(&model.as_str()) {
             return Err(format!("Unsupported PP-FormulaNet model: {model}"));
+        }
+        let status = self.runtime_status(app.clone(), false).await?;
+        if !status.installed_models.iter().any(|installed| installed == &model) {
+            return Err(format!(
+                "OCR model {model} is not installed. Import a verified .vtxocrmodel package or explicitly download it first."
+            ));
         }
         {
             let mut desired = self
@@ -442,6 +474,9 @@ impl OcrState {
         tauri::async_runtime::spawn_blocking(move || {
             stop_worker(&worker, &worker_pid)?;
             let paths = runtime_paths(&app)?;
+            #[cfg(windows)]
+            ocr_models::install_model_pack(&package_path, &paths.root)?;
+            #[cfg(not(windows))]
             ocr_offline::install_optional_model_pack(&package_path, &paths.root)?;
             let status = get_runtime_status_fast(&app)?;
             write_cached_runtime_status(&runtime_status, Some(status.clone()))?;
@@ -463,6 +498,9 @@ impl OcrState {
         tauri::async_runtime::spawn_blocking(move || {
             stop_worker(&worker, &worker_pid)?;
             let paths = runtime_paths(&app)?;
+            #[cfg(windows)]
+            ocr_models::remove_model(&paths.root, &model)?;
+            #[cfg(not(windows))]
             ocr_offline::remove_optional_model(&paths.root, &model)?;
             let status = get_runtime_status_fast(&app)?;
             write_cached_runtime_status(&runtime_status, Some(status.clone()))?;
@@ -470,6 +508,79 @@ impl OcrState {
         })
         .await
         .map_err(|error| format!("OCR model removal task failed: {error}"))?
+    }
+
+    #[cfg(windows)]
+    pub(crate) async fn model_catalog(
+        &self,
+        app: AppHandle,
+    ) -> Result<ocr_models::ModelCatalog, String> {
+        tauri::async_runtime::spawn_blocking(move || ocr_models::load_catalog(&app))
+            .await
+            .map_err(|error| format!("OCR model catalog task failed: {error}"))?
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn model_download_status(
+        &self,
+    ) -> Result<Option<ocr_models::ModelDownloadSnapshot>, String> {
+        self.model_download_control.snapshot()
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn cancel_model_download(&self) -> bool {
+        self.model_download_control.cancel()
+    }
+
+    #[cfg(windows)]
+    pub(crate) async fn download_model(
+        &self,
+        app: AppHandle,
+        model: String,
+    ) -> Result<OcrRuntimeStatus, String> {
+        if !ocr_models::KNOWN_MODELS.contains(&model.as_str()) {
+            return Err(format!("Unsupported PP-FormulaNet model: {model}"));
+        }
+        let lease = self.model_download_control.begin()?;
+        let generation = lease.generation();
+        let worker = self.worker.clone();
+        let worker_pid = self.worker_pid.clone();
+        let prepare_app = app.clone();
+        let paths = tauri::async_runtime::spawn_blocking(move || {
+            stop_worker(&worker, &worker_pid)?;
+            let paths = runtime_paths(&prepare_app)?;
+            probe_runtime_from_files(&paths).map_err(|error| {
+                format!("Install and verify the OCR runtime before downloading a model: {error}")
+            })?;
+            Ok::<_, String>(paths)
+        })
+        .await
+        .map_err(|error| format!("OCR model preparation task failed: {error}"))??;
+
+        let events = self.events.clone();
+        let download_app = app.clone();
+        ocr_models::download_and_install_model(
+            &download_app,
+            &paths.root,
+            &model,
+            lease.control(),
+            generation,
+            |progress| {
+                let _ = download_app.emit("ocr-model-download-progress", progress);
+                events.publish("ocr-model-download-progress", progress);
+            },
+        )
+        .await?;
+
+        let runtime_status = self.runtime_status.clone();
+        let status_app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let status = get_runtime_status_fast(&status_app)?;
+            write_cached_runtime_status(&runtime_status, Some(status.clone()))?;
+            Ok::<OcrRuntimeStatus, String>(status)
+        })
+        .await
+        .map_err(|error| format!("OCR model status refresh task failed: {error}"))?
     }
 
     pub(crate) fn poll_events(&self, cursor: u64, event: Option<&str>) -> OcrEventEnvelope {
@@ -618,8 +729,11 @@ pub(crate) struct OcrRuntimeStatus {
     paddle_version: Option<String>,
     paddleocr_version: Option<String>,
     runtime_path: String,
+    runtime_bundle_available: bool,
     offline_bundle_available: bool,
     installed_models: Vec<String>,
+    damaged_models: Vec<String>,
+    model_catalog_available: bool,
     default_model: String,
     message: String,
 }
@@ -929,99 +1043,6 @@ fn command_output_detailed(command: &mut Command, label: &str) -> Result<(String
     ))
 }
 
-fn command_output(command: &mut Command, label: &str) -> Result<String, String> {
-    command_output_detailed(command, label).map(|(stdout, _)| stdout.trim().to_string())
-}
-
-fn probe_python(
-    program: &Path,
-    prefix_args: &[String],
-    label: &str,
-) -> Result<PythonProbe, String> {
-    let script = r#"import json, platform, struct, sys; print(json.dumps({'version': platform.python_version(), 'major': sys.version_info.major, 'minor': sys.version_info.minor, 'bits': struct.calcsize('P') * 8, 'machine': platform.machine(), 'executable': sys.executable}))"#;
-    let mut command = Command::new(program);
-    command
-        .args(prefix_args)
-        .args(["-I", "-X", "utf8"])
-        .arg("-c")
-        .arg(script);
-    configure_python_environment(&mut command);
-    let output = command_output(&mut command, &format!("Python version check ({label})"))?;
-    serde_json::from_str(&output)
-        .map_err(|error| format!("Python returned an invalid version response: {error}"))
-}
-
-#[cfg(windows)]
-fn find_system_python() -> Result<(PathBuf, PythonProbe), String> {
-    let mut candidates: Vec<(String, PathBuf, Vec<String>)> = Vec::new();
-
-    if let Ok(explicit) = env::var("VISUALTEX_PYTHON") {
-        let explicit = explicit.trim().trim_matches('"');
-        if !explicit.is_empty() {
-            candidates.push((
-                "VISUALTEX_PYTHON".to_string(),
-                PathBuf::from(explicit),
-                Vec::new(),
-            ));
-        }
-    }
-
-    // tokenizers 0.19.1 has Windows x64 wheels through Python 3.12, but not
-    // Python 3.13. Keep the selection order explicit so a newer incompatible
-    // system interpreter can never trigger a Rust source build at 84%.
-    for minor in [12, 11, 10, 9] {
-        for launcher in ["py.exe", "py"] {
-            for selector in [format!("-V:3.{minor}"), format!("-3.{minor}")] {
-                candidates.push((
-                    format!("{launcher} {selector}"),
-                    PathBuf::from(launcher),
-                    vec![selector],
-                ));
-            }
-        }
-    }
-    for name in [
-        "python3.12",
-        "python3.11",
-        "python3.10",
-        "python3.9",
-        "python.exe",
-        "python",
-        "py.exe",
-        "py",
-    ] {
-        candidates.push((name.to_string(), PathBuf::from(name), Vec::new()));
-    }
-
-    let mut failures = Vec::new();
-    for (label, program, prefix_args) in candidates {
-        match probe_python(&program, &prefix_args, &label) {
-            Ok(probe) => {
-                let machine = probe.machine.to_ascii_lowercase();
-                let compatible = is_supported_windows_ocr_python(&probe)
-                    && matches!(machine.as_str(), "x86_64" | "amd64" | "x64");
-                if compatible && !probe.executable.trim().is_empty() {
-                    return Ok((PathBuf::from(&probe.executable), probe));
-                }
-                failures.push(format!(
-                    "{label}: Python {}, interpreter {}-bit, platform architecture {}",
-                    probe.version, probe.bits, probe.machine
-                ));
-            }
-            Err(error) => failures.push(format!("{label}: {error}")),
-        }
-    }
-
-    Err(format!(
-        "未检测到可用于 OCR 的 64 位 Python 3.9–3.12。建议安装 x64 Python 3.12，并启用 Python Launcher，然后完全重启 VisualTeX。Python 3.13 与本版本固定使用的 tokenizers 0.19.1 不兼容，安装器不会选择它，也不会回退到 Rust 源码编译。\n\nNo compatible 64-bit Python 3.9–3.12 interpreter was found. Install x64 Python 3.12 with the Python Launcher enabled, then restart VisualTeX. Python 3.13 is intentionally rejected because tokenizers 0.19.1 has no compatible Windows wheel and source compilation is disabled.\n\nChecked:\n{}",
-        failures.join("\n")
-    ))
-}
-
-fn is_supported_windows_ocr_python(probe: &PythonProbe) -> bool {
-    probe.major == 3 && matches!(probe.minor, 9 | 10 | 11 | 12) && probe.bits == 64
-}
-
 fn runtime_status_manifest_path(paths: &RuntimePaths) -> PathBuf {
     paths.root.join(OCR_RUNTIME_STATUS_FILE)
 }
@@ -1299,13 +1320,42 @@ fn probe_runtime(paths: &RuntimePaths) -> Result<RuntimeProbe, String> {
     Ok(probe)
 }
 
+fn runtime_bundle_available(app: &AppHandle) -> bool {
+    #[cfg(windows)]
+    {
+        ocr_python_bundle::bundle_available(app)
+    }
+    #[cfg(not(windows))]
+    {
+        ocr_offline::bundle_available(app)
+    }
+}
+
+fn model_inventory(app: &AppHandle, paths: &RuntimePaths) -> (Vec<String>, Vec<String>, bool) {
+    #[cfg(windows)]
+    {
+        let inventory = ocr_models::inspect_models(&paths.root).unwrap_or_default();
+        let catalog_available = ocr_models::load_catalog(app).is_ok();
+        (inventory.installed, inventory.damaged, catalog_available)
+    }
+    #[cfg(not(windows))]
+    {
+        (
+            ocr_offline::installed_models(&paths.root),
+            Vec::new(),
+            false,
+        )
+    }
+}
+
 fn runtime_status_from_probe(
     app: &AppHandle,
     paths: &RuntimePaths,
     result: Result<RuntimeProbe, String>,
 ) -> OcrRuntimeStatus {
-    let offline_bundle_available = ocr_offline::bundle_available(app);
-    let installed_models = ocr_offline::installed_models(&paths.root);
+    let runtime_bundle_available = runtime_bundle_available(app);
+    let offline_bundle_available = runtime_bundle_available;
+    let (installed_models, damaged_models, model_catalog_available) = model_inventory(app, paths);
     match result {
         Ok(probe) => {
             let default_cached = installed_models
@@ -1318,13 +1368,16 @@ fn runtime_status_from_probe(
                 paddle_version: Some(probe.paddle_version),
                 paddleocr_version: Some(probe.paddleocr_version),
                 runtime_path: paths.root.display().to_string(),
+                runtime_bundle_available,
                 offline_bundle_available,
                 installed_models,
-                default_model: ocr_offline::OFFLINE_DEFAULT_MODEL.to_string(),
+                damaged_models,
+                model_catalog_available,
+                default_model: DEFAULT_OCR_MODEL.to_string(),
                 message: if default_cached {
-                    "PaddleOCR formula runtime and the default M model are ready".to_string()
+                    "PaddleOCR formula runtime is ready; the M model is installed".to_string()
                 } else {
-                    "PaddleOCR formula runtime is ready; the default M model will be prepared in the background".to_string()
+                    "PaddleOCR formula runtime is ready; no default model is installed".to_string()
                 },
             }
         }
@@ -1338,11 +1391,14 @@ fn runtime_status_from_probe(
             paddle_version: None,
             paddleocr_version: None,
             runtime_path: paths.root.display().to_string(),
+            runtime_bundle_available,
             offline_bundle_available,
             installed_models,
-            default_model: ocr_offline::OFFLINE_DEFAULT_MODEL.to_string(),
-            message: if offline_bundle_available {
-                format!("Offline OCR package is ready to install. Current runtime: {error}")
+            damaged_models,
+            model_catalog_available,
+            default_model: DEFAULT_OCR_MODEL.to_string(),
+            message: if runtime_bundle_available {
+                format!("The bundled OCR runtime is ready to install. Current runtime: {error}")
             } else {
                 error
             },
@@ -1706,62 +1762,48 @@ fn validate_installed_package_probe(
     Ok(())
 }
 
-fn package_probe_requires_install(result: &Result<InstalledPackageProbe, String>) -> bool {
-    result.is_err()
-}
-
-fn pip_install_arguments(
-    requirement: &str,
-    only_binary: bool,
-    cache_dir: &Path,
+fn offline_pip_install_arguments(
+    assets: &ocr_python_bundle::WindowsOfflineInstallAssets,
 ) -> Vec<String> {
-    let mut arguments = vec![
+    vec![
         "-m".to_string(),
         "pip".to_string(),
         "install".to_string(),
         "--isolated".to_string(),
-        "--index-url".to_string(),
-        "https://pypi.org/simple".to_string(),
-        "--cache-dir".to_string(),
-        cache_dir.display().to_string(),
+        "--no-index".to_string(),
+        "--find-links".to_string(),
+        assets.wheelhouse.display().to_string(),
+        "--only-binary=:all:".to_string(),
+        "--require-hashes".to_string(),
         "--disable-pip-version-check".to_string(),
         "--no-input".to_string(),
         "--progress-bar".to_string(),
         "raw".to_string(),
-        "--timeout".to_string(),
-        "30".to_string(),
-        "--retries".to_string(),
-        "2".to_string(),
-        "--prefer-binary".to_string(),
-    ];
-    if only_binary {
-        arguments.push("--only-binary=:all:".to_string());
-    }
-    arguments.push(requirement.to_string());
-    arguments
+        "--requirement".to_string(),
+        assets.lockfile.display().to_string(),
+    ]
 }
 
-fn pip_install_package(
+fn install_offline_dependency_lock(
     paths: &RuntimePaths,
     control: &InstallControl,
     generation: u64,
-    step: &str,
-    requirement: &str,
-    only_binary: bool,
+    assets: &ocr_python_bundle::WindowsOfflineInstallAssets,
 ) -> Result<(), String> {
     let mut command = python_command(&paths.python);
-    command.args(pip_install_arguments(
-        requirement,
-        only_binary,
-        &paths.cache.join("pip"),
-    ));
+    command
+        .args(offline_pip_install_arguments(assets))
+        .env("PIP_NO_INDEX", "1")
+        .env("PIP_FIND_LINKS", &assets.wheelhouse)
+        .env("PIP_REQUIRE_VIRTUALENV", "0")
+        .env("PIP_DISABLE_PIP_VERSION_CHECK", "1");
     install_command(
         paths,
         control,
         generation,
-        step,
+        "offline-wheelhouse",
         &mut command,
-        &format!("pip install {requirement}"),
+        "Install the fixed VisualTeX OCR wheelhouse",
     )?;
     Ok(())
 }
@@ -1772,7 +1814,12 @@ fn pip_check_runtime(
     generation: u64,
 ) -> Result<(), String> {
     let mut command = python_command(&paths.python);
-    command.arg("-m").arg("pip").arg("check");
+    command
+        .arg("-m")
+        .arg("pip")
+        .arg("check")
+        .env("PIP_NO_INDEX", "1")
+        .env("PIP_DISABLE_PIP_VERSION_CHECK", "1");
     install_command(
         paths,
         control,
@@ -1789,42 +1836,14 @@ fn ensure_private_dependency_closure(
     control: &InstallControl,
     generation: u64,
 ) -> Result<(), String> {
-    match pip_check_runtime(paths, control, generation) {
-        Ok(()) => return Ok(()),
-        Err(error) => {
-            append_install_log(
-                &paths.root,
-                &format!(
-                    "private OCR dependency closure requires repair; user site-packages remain disabled: {error}"
-                ),
-            )?;
-        }
-    }
-
-    pip_install_package(
-        paths,
-        control,
-        generation,
-        "dependency-repair",
-        &format!("paddlepaddle=={PADDLE_VERSION}"),
-        true,
-    )?;
-    pip_install_package(
-        paths,
-        control,
-        generation,
-        "dependency-repair",
-        &format!("paddleocr=={PADDLEOCR_VERSION}"),
-        false,
-    )?;
     pip_check_runtime(paths, control, generation).map_err(|error| {
         format!(
-            "The VisualTeX private OCR Python environment still has missing or incompatible dependencies after isolated repair. User site-packages were not used. {error}"
+            "The fixed offline OCR wheelhouse did not produce a complete dependency closure. No index, system Python or user site-packages were used. {error}"
         )
     })
 }
 
-fn ensure_package_step(
+fn verify_package_step(
     app: &AppHandle,
     paths: &RuntimePaths,
     control: &InstallControl,
@@ -1835,9 +1854,7 @@ fn ensure_package_step(
     message: &str,
     distribution: &str,
     import_name: &str,
-    requirement: &str,
     expected_version: Option<&str>,
-    only_binary: bool,
 ) -> Result<(), String> {
     set_install_step(
         app,
@@ -1848,33 +1865,11 @@ fn ensure_package_step(
         Some(step),
         percent,
         message,
-        Some(format!("检查 {distribution} 是否已安装；已完成的步骤不会重复下载")),
+        Some(format!(
+            "仅验证 {distribution} 来自 VisualTeX 私有 Python；此步骤不访问网络"
+        )),
         None,
     )?;
-    let existing_probe = probe_package_for_install(
-        paths,
-        control,
-        generation,
-        distribution,
-        import_name,
-        expected_version,
-    );
-    if package_probe_requires_install(&existing_probe) {
-        if let Err(error) = &existing_probe {
-            append_install_log(
-                &paths.root,
-                &format!("package {distribution} requires installation or repair: {error}"),
-            )?;
-        }
-        pip_install_package(
-            paths,
-            control,
-            generation,
-            step,
-            requirement,
-            only_binary,
-        )?;
-    }
     probe_package_for_install(
         paths,
         control,
@@ -2211,7 +2206,48 @@ fn install_windows_runtime_inner(
         )?;
         snapshot.mark_step_complete("pip-bootstrap");
 
-        ensure_package_step(
+        set_install_step(
+            app,
+            control,
+            paths,
+            &mut snapshot,
+            InstallState::Installing,
+            Some("wheelhouse-verify"),
+            26,
+            "正在校验安装包内置的固定 OCR wheelhouse",
+            Some("逐个校验 requirements lock、wheel 大小与 SHA-256；不会连接 PyPI".to_string()),
+            None,
+        )?;
+        let offline_assets = ocr_python_bundle::locate_offline_install_assets(app)?;
+        append_install_log(
+            &paths.root,
+            &format!(
+                "verified bundled OCR wheelhouse files={} lock={} python={} architecture={}",
+                offline_assets.manifest.wheelhouse.files.len(),
+                offline_assets.lockfile.display(),
+                offline_assets.manifest.python_version,
+                offline_assets.manifest.architecture
+            ),
+        )?;
+        snapshot.mark_step_complete("wheelhouse-verify");
+
+        set_install_step(
+            app,
+            control,
+            paths,
+            &mut snapshot,
+            InstallState::Installing,
+            Some("offline-wheelhouse"),
+            32,
+            "正在从本地 wheelhouse 安装 OCR 完整依赖闭包",
+            Some("pip --no-index --find-links --require-hashes；系统 Python 与用户 site-packages 均不会参与".to_string()),
+            None,
+        )?;
+        install_offline_dependency_lock(paths, control, generation, &offline_assets)?;
+        snapshot.mark_step_complete("offline-wheelhouse");
+        publish_install_snapshot(app, control, paths, &mut snapshot)?;
+
+        verify_package_step(
             app,
             paths,
             control,
@@ -2222,11 +2258,9 @@ fn install_windows_runtime_inner(
             &format!("正在检查或安装 PaddlePaddle {PADDLE_VERSION}"),
             "paddlepaddle",
             "paddle",
-            &format!("paddlepaddle=={PADDLE_VERSION}"),
             Some(PADDLE_VERSION),
-            true,
         )?;
-        ensure_package_step(
+        verify_package_step(
             app,
             paths,
             control,
@@ -2237,11 +2271,9 @@ fn install_windows_runtime_inner(
             &format!("正在检查或安装 PaddleOCR {PADDLEOCR_VERSION}"),
             "paddleocr",
             "paddleocr",
-            &format!("paddleocr=={PADDLEOCR_VERSION}"),
             Some(PADDLEOCR_VERSION),
-            false,
         )?;
-        ensure_package_step(
+        verify_package_step(
             app,
             paths,
             control,
@@ -2252,11 +2284,9 @@ fn install_windows_runtime_inner(
             "正在安装并验证 tokenizers 预编译 wheel",
             "tokenizers",
             "tokenizers",
-            "tokenizers==0.19.1",
             Some("0.19.1"),
-            true,
         )?;
-        ensure_package_step(
+        verify_package_step(
             app,
             paths,
             control,
@@ -2267,11 +2297,9 @@ fn install_windows_runtime_inner(
             "正在安装并验证 imagesize",
             "imagesize",
             "imagesize",
-            "imagesize",
             None,
-            false,
         )?;
-        ensure_package_step(
+        verify_package_step(
             app,
             paths,
             control,
@@ -2282,11 +2310,9 @@ fn install_windows_runtime_inner(
             "正在安装并验证 ftfy",
             "ftfy",
             "ftfy",
-            "ftfy",
             None,
-            false,
         )?;
-        ensure_package_step(
+        verify_package_step(
             app,
             paths,
             control,
@@ -2297,9 +2323,7 @@ fn install_windows_runtime_inner(
             "正在安装并单独验证 Wand 导入",
             "Wand",
             "wand",
-            "Wand",
             None,
-            false,
         )?;
 
         set_install_step(
@@ -2311,7 +2335,7 @@ fn install_windows_runtime_inner(
             Some("dependency-check"),
             92,
             "正在检查私有 Python 的完整依赖闭包",
-            Some("用户级 site-packages 已禁用；若发现缺失依赖，只在 VisualTeX 私有目录中补装".to_string()),
+            Some("pip check 仅检查刚才从本地固定 wheelhouse 安装的依赖；不会尝试联网修复".to_string()),
             None,
         )?;
         ensure_private_dependency_closure(paths, control, generation)?;
@@ -2326,8 +2350,8 @@ fn install_windows_runtime_inner(
             InstallState::DependenciesInstalled,
             Some("dependencies-installed"),
             93,
-            "PP-FormulaNet 依赖已全部安装并验证",
-            Some("tokenizers、imagesize、ftfy 和 Wand 均来自当前 OCR 虚拟环境".to_string()),
+            "PP-FormulaNet 依赖已从固定离线 wheelhouse 安装并验证",
+            Some("PaddlePaddle、PaddleOCR、tokenizers 及完整传递依赖均来自安装包本地资源".to_string()),
             None,
         )?;
         set_install_step(
@@ -2486,7 +2510,10 @@ fn spawn_worker(
         .env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8")
         .env("VISUALTEX_PARENT_PID", std::process::id().to_string())
-        .env("PADDLE_PDX_MODEL_SOURCE", "BOS")
+        .env("VISUALTEX_OFFLINE_OCR", "1")
+        .env("HF_HUB_OFFLINE", "1")
+        .env("TRANSFORMERS_OFFLINE", "1")
+        .env("MODELSCOPE_OFFLINE", "1")
         .env("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
         .env("PADDLE_PDX_CACHE_HOME", paths.cache.join("paddlex"))
         .env("PADDLE_HOME", paths.cache.join("paddle"))
@@ -2497,12 +2524,6 @@ fn spawn_worker(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::from(log_file_error));
-    #[cfg(not(windows))]
-    command
-        .env("VISUALTEX_OFFLINE_OCR", "1")
-        .env("HF_HUB_OFFLINE", "1")
-        .env("TRANSFORMERS_OFFLINE", "1")
-        .env("MODELSCOPE_OFFLINE", "1");
     hide_windows_console(&mut command);
     let mut child = command
         .spawn()
@@ -2639,6 +2660,11 @@ fn warmup_worker(
     if !status.installed {
         return Err(format!("OCR runtime is not installed: {}", status.message));
     }
+    if !status.installed_models.iter().any(|installed| installed == model) {
+        return Err(format!(
+            "OCR model {model} is not installed. Startup warmup will not download it automatically."
+        ));
+    }
 
     {
         let mut guard = worker_state
@@ -2724,10 +2750,26 @@ fn run_recognition(
     }
 
     let paths = runtime_paths(app)?;
-    if let Some(status) = read_cached_runtime_status(runtime_status)? {
-        if !status.installed {
-            return Err(format!("OCR runtime is not installed: {}", status.message));
+    let status = match read_cached_runtime_status(runtime_status)? {
+        Some(status) => status,
+        None => {
+            let status = get_runtime_status_fast(app)?;
+            write_cached_runtime_status(runtime_status, Some(status.clone()))?;
+            status
         }
+    };
+    if !status.installed {
+        return Err(format!("OCR runtime is not installed: {}", status.message));
+    }
+    if !status
+        .installed_models
+        .iter()
+        .any(|installed| installed == &request.model)
+    {
+        return Err(format!(
+            "OCR model {} is not installed. VisualTeX will not download it during recognition.",
+            request.model
+        ));
     }
     if !paths.python.exists() {
         return Err("OCR runtime is not installed: Python executable is missing".to_string());
@@ -3048,6 +3090,39 @@ async fn remove_optional_ocr_model(
     state.remove_optional_model(app, model).await
 }
 
+#[cfg(windows)]
+#[tauri::command]
+async fn get_ocr_model_catalog(
+    app: AppHandle,
+    state: State<'_, OcrState>,
+) -> Result<ocr_models::ModelCatalog, String> {
+    state.model_catalog(app).await
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn get_ocr_model_download_status(
+    state: State<'_, OcrState>,
+) -> Result<Option<ocr_models::ModelDownloadSnapshot>, String> {
+    state.model_download_status()
+}
+
+#[cfg(windows)]
+#[tauri::command]
+async fn download_ocr_model(
+    app: AppHandle,
+    state: State<'_, OcrState>,
+    model: String,
+) -> Result<OcrRuntimeStatus, String> {
+    state.download_model(app, model).await
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn cancel_ocr_model_download(state: State<'_, OcrState>) -> bool {
+    state.cancel_model_download()
+}
+
 fn shutdown_runtime(app: &AppHandle, started: &AtomicBool, reason: &str) {
     if started.swap(true, Ordering::SeqCst) {
         return;
@@ -3188,6 +3263,10 @@ pub fn run() {
             reset_ocr_runtime,
             install_optional_ocr_model,
             remove_optional_ocr_model,
+            get_ocr_model_catalog,
+            get_ocr_model_download_status,
+            download_ocr_model,
+            cancel_ocr_model_download,
             office::lifecycle::set_app_theme,
             office::lifecycle::set_app_editor_layout,
             office::lifecycle::set_powerpoint_default_font_size,
@@ -3378,6 +3457,32 @@ mod protocol_tests {
     }
 
     #[test]
+    fn desktop_and_office_ocr_state_clones_share_one_runtime_and_model_manager() {
+        let desktop = OcrState::default();
+        let office = desktop.clone();
+
+        assert!(Arc::ptr_eq(&desktop.worker, &office.worker));
+        assert!(Arc::ptr_eq(&desktop.worker_pid, &office.worker_pid));
+        assert!(Arc::ptr_eq(
+            &desktop.runtime_status,
+            &office.runtime_status
+        ));
+        assert!(Arc::ptr_eq(
+            &desktop.install_control,
+            &office.install_control
+        ));
+        assert!(Arc::ptr_eq(
+            &desktop.desired_warmup_model,
+            &office.desired_warmup_model
+        ));
+        #[cfg(windows)]
+        assert!(Arc::ptr_eq(
+            &desktop.model_download_control,
+            &office.model_download_control
+        ));
+    }
+
+    #[test]
     fn runtime_status_cache_round_trips_and_clears() {
         let cache = Arc::new(Mutex::new(None));
         let expected = OcrRuntimeStatus {
@@ -3387,9 +3492,12 @@ mod protocol_tests {
             paddle_version: Some(PADDLE_VERSION.to_string()),
             paddleocr_version: Some(PADDLEOCR_VERSION.to_string()),
             runtime_path: "/tmp/visualtex-ocr".to_string(),
+            runtime_bundle_available: true,
             offline_bundle_available: true,
-            installed_models: vec![ocr_offline::OFFLINE_DEFAULT_MODEL.to_string()],
-            default_model: ocr_offline::OFFLINE_DEFAULT_MODEL.to_string(),
+            installed_models: vec![DEFAULT_OCR_MODEL.to_string()],
+            damaged_models: Vec::new(),
+            model_catalog_available: true,
+            default_model: DEFAULT_OCR_MODEL.to_string(),
             message: "ready".to_string(),
         };
 
@@ -3450,52 +3558,49 @@ mod protocol_tests {
     }
 
     #[test]
-    fn python_313_is_rejected_for_tokenizers_0191() {
-        let python_312 = PythonProbe {
-            version: "3.12.10".to_string(),
-            major: 3,
-            minor: 12,
-            bits: 64,
-            machine: "AMD64".to_string(),
-            executable: "C:\\Python312\\python.exe".to_string(),
-        };
-        let python_313 = PythonProbe {
-            version: "3.13.5".to_string(),
-            major: 3,
-            minor: 13,
-            bits: 64,
-            machine: "AMD64".to_string(),
-            executable: "C:\\Python313\\python.exe".to_string(),
-        };
-        let python_312_32 = PythonProbe {
-            version: "3.12.10".to_string(),
-            major: 3,
-            minor: 12,
-            bits: 32,
-            machine: "AMD64".to_string(),
-            executable: "C:\\Python312-32\\python.exe".to_string(),
-        };
-        assert!(is_supported_windows_ocr_python(&python_312));
-        assert!(!is_supported_windows_ocr_python(&python_313));
-        assert!(!is_supported_windows_ocr_python(&python_312_32));
+    fn bundled_python_replaces_incompatible_private_runtime() {
         assert!(should_replace_with_bundled_python(
             "The existing VisualTeX OCR environment uses a 32-bit interpreter"
+        ));
+        assert!(should_replace_with_bundled_python(
+            "The existing VisualTeX OCR environment uses Python 3.13.5"
         ));
     }
 
     #[test]
-    fn tokenizers_install_forbids_source_compilation() {
-        let cache = tempfile::tempdir().unwrap();
-        let arguments = pip_install_arguments("tokenizers==0.19.1", true, cache.path());
+    fn fixed_wheelhouse_install_is_strictly_offline_and_hashed() {
+        let root = tempfile::tempdir().unwrap();
+        let assets = ocr_python_bundle::WindowsOfflineInstallAssets {
+            wheelhouse: root.path().join("wheelhouse"),
+            lockfile: root.path().join("requirements.lock"),
+            manifest: ocr_python_bundle::WindowsPythonBundleManifest {
+                schema_version: 2,
+                platform: "windows".to_string(),
+                architecture: "x64".to_string(),
+                python_version: "3.12.10".to_string(),
+                pip_version: "25.1.1".to_string(),
+                archive: ocr_python_bundle::BundleFileRecord {
+                    name: "python.zip".to_string(),
+                    size: 1,
+                    sha256: "0".repeat(64),
+                },
+                wheelhouse: ocr_python_bundle::WindowsWheelhouseManifest {
+                    lock: ocr_python_bundle::BundleFileRecord {
+                        name: "requirements.lock".to_string(),
+                        size: 1,
+                        sha256: "0".repeat(64),
+                    },
+                    files: Vec::new(),
+                },
+            },
+        };
+        let arguments = offline_pip_install_arguments(&assets);
+        assert!(arguments.iter().any(|value| value == "--no-index"));
+        assert!(arguments.iter().any(|value| value == "--find-links"));
+        assert!(arguments.iter().any(|value| value == "--require-hashes"));
         assert!(arguments.iter().any(|value| value == "--only-binary=:all:"));
-        assert!(arguments.iter().any(|value| value == "--isolated"));
-        assert!(arguments.iter().any(|value| value == "https://pypi.org/simple"));
-        assert!(arguments.iter().any(|value| value == "--prefer-binary"));
-        assert!(arguments.windows(2).any(|pair| pair == ["--progress-bar", "raw"]));
-        assert!(arguments.iter().any(|value| value == "--retries"));
-        assert!(arguments.iter().any(|value| value == "30"));
-        assert!(!arguments.iter().any(|value| value.contains("no-binary")));
-        assert_eq!(arguments.last().map(String::as_str), Some("tokenizers==0.19.1"));
+        assert!(!arguments.iter().any(|value| value.contains("pypi.org")));
+        assert!(!arguments.iter().any(|value| value == "--index-url"));
     }
 
     #[test]
@@ -3509,12 +3614,7 @@ mod protocol_tests {
     }
 
     #[test]
-    fn missing_tokenizers_resumes_that_step_instead_of_resetting_environment() {
-        let missing: Result<InstalledPackageProbe, String> = Err(
-            "ModuleNotFoundError: No module named 'tokenizers'".to_string(),
-        );
-        assert!(package_probe_requires_install(&missing));
-
+    fn failed_offline_install_resumes_that_step_instead_of_resetting_environment() {
         let root = tempfile::tempdir().unwrap();
         let mut snapshot = InstallSnapshot::new(&install_log_path(root.path()));
         snapshot.mark_step_complete("venv");

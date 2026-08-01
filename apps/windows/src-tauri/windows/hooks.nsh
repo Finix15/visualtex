@@ -80,14 +80,14 @@ FunctionEnd
 Function VisualTeXOfficePageLeave
   ${NSD_GetState} $VisualTeXOfficeNativeRadio $0
   ${If} $0 == ${BST_CHECKED}
-    nsExec::ExecToStack `powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command "if (Get-Process WINWORD,POWERPNT,EXCEL,OUTLOOK,ONENOTE,MSACCESS,MSPUB,VISIO,MSPROJECT -ErrorAction SilentlyContinue) { exit 1 }; exit 0"`
+    nsExec::ExecToStack `"$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -Command "if (Get-Process WINWORD,POWERPNT,EXCEL,OUTLOOK,ONENOTE,MSACCESS,MSPUB,VISIO,MSPROJECT -ErrorAction SilentlyContinue) { exit 1 }; exit 0"`
     Pop $1
     Pop $2
     ${If} $1 != "0"
       MessageBox MB_ICONEXCLAMATION|MB_YESNO "检测到 Microsoft Office 仍在运行。强制关闭会立即结束 Word、PowerPoint、Excel、Outlook、OneNote、Access、Publisher、Visio 和 Project；未保存的 Office 文档可能丢失。$\r$\n$\r$\n是否强制关闭所有这些 Office 进程并继续安装？选择“否”将返回上一页，由您自行保存并关闭 Office。$\r$\n$\r$\nMicrosoft Office is still running. Force closing will terminate all common Office apps immediately and may discard unsaved work.$\r$\n$\r$\nForce close all Office processes and continue? Choose No to go back and close Office yourself." IDYES visualtex_force_close_office IDNO visualtex_office_close_declined
 
 visualtex_force_close_office:
-      nsExec::ExecToStack `powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command "Get-Process WINWORD,POWERPNT,EXCEL,OUTLOOK,ONENOTE,MSACCESS,MSPUB,VISIO,MSPROJECT -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 800; if (Get-Process WINWORD,POWERPNT,EXCEL,OUTLOOK,ONENOTE,MSACCESS,MSPUB,VISIO,MSPROJECT -ErrorAction SilentlyContinue) { exit 1 }; exit 0"`
+      nsExec::ExecToStack `"$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -Command "Get-Process WINWORD,POWERPNT,EXCEL,OUTLOOK,ONENOTE,MSACCESS,MSPUB,VISIO,MSPROJECT -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 800; if (Get-Process WINWORD,POWERPNT,EXCEL,OUTLOOK,ONENOTE,MSACCESS,MSPUB,VISIO,MSPROJECT -ErrorAction SilentlyContinue) { exit 1 }; exit 0"`
       Pop $1
       Pop $2
       ${If} $1 != "0"
@@ -107,22 +107,8 @@ visualtex_office_process_check_done:
   StrCpy $VisualTeXOfficeChoice "none"
 FunctionEnd
 
-; The editor itself works without Python, so an incompatible environment warns
-; the user instead of silently failing later or blocking installation outright.
-
-!macro VisualTeXProbeLauncher SELECTOR
-  nsExec::ExecToStack `"py.exe" ${SELECTOR} -c "import platform,sys;sys.exit(0 if (3,9) <= sys.version_info[:2] <= (3,13) and platform.machine().lower() in ('amd64','x86_64','x64') else 1)"`
-  Pop $0
-  Pop $1
-  StrCmp $0 "0" visualtex_python_ok
-!macroend
-
-!macro VisualTeXProbeCommand PROGRAM
-  nsExec::ExecToStack `"${PROGRAM}" -c "import platform,sys;sys.exit(0 if (3,9) <= sys.version_info[:2] <= (3,13) and platform.machine().lower() in ('amd64','x86_64','x64') else 1)"`
-  Pop $0
-  Pop $1
-  StrCmp $0 "0" visualtex_python_ok
-!macroend
+; OCR uses the bundled private Python 3.12.10 x64 runtime and a fixed local
+; wheelhouse. The installer must never probe or depend on system Python.
 
 !macro NSIS_HOOK_PREINSTALL
   ; Normalize the two legacy 1.2.3 install locations back to Tauri's canonical
@@ -159,41 +145,9 @@ FunctionEnd
 
   ${If} $VisualTeXAcceptanceMode == "1"
     DetailPrint "Installed-release acceptance mode: preserving existing Office integration and skipping machine prerequisite prompts."
-    Goto visualtex_python_check_done
   ${EndIf}
 
-  DetailPrint "Checking the Python environment required by VisualTeX OCR..."
-
-  ; Probe every supported runtime through both the new Python Install Manager
-  ; selector and the legacy py launcher selector. A default Python 3.14 must not
-  ; hide a compatible side-by-side installation.
-  !insertmacro VisualTeXProbeLauncher "-V:3.13"
-  !insertmacro VisualTeXProbeLauncher "-3.13"
-  !insertmacro VisualTeXProbeLauncher "-V:3.12"
-  !insertmacro VisualTeXProbeLauncher "-3.12"
-  !insertmacro VisualTeXProbeLauncher "-V:3.11"
-  !insertmacro VisualTeXProbeLauncher "-3.11"
-  !insertmacro VisualTeXProbeLauncher "-V:3.10"
-  !insertmacro VisualTeXProbeLauncher "-3.10"
-  !insertmacro VisualTeXProbeLauncher "-V:3.9"
-  !insertmacro VisualTeXProbeLauncher "-3.9"
-
-  ; Fall back to interpreters exposed directly on PATH.
-  !insertmacro VisualTeXProbeCommand "python.exe"
-  !insertmacro VisualTeXProbeCommand "python"
-
-  MessageBox MB_ICONEXCLAMATION|MB_YESNO "未检测到可用于 OCR 的 64 位 Python 3.9–3.13。$\r$\n$\r$\nVisualTeX 编辑器仍可正常安装和使用，但图片公式 OCR 将不可用。请安装 x64 Python 3.13，并启用 Python Launcher。仅安装默认 Python 3.14 不兼容当前 OCR 运行环境。$\r$\n$\r$\nNo compatible 64-bit Python 3.9–3.13 installation was detected. The editor can still be installed, but formula OCR will remain unavailable until a compatible Python runtime is installed.$\r$\n$\r$\n是否继续安装？ / Continue installation?" IDYES visualtex_python_continue
-
-  Abort "VisualTeX installation cancelled because the OCR Python prerequisite is missing."
-
-visualtex_python_continue:
-  DetailPrint "Continuing without a compatible OCR Python runtime."
-  Goto visualtex_python_check_done
-
-visualtex_python_ok:
-  DetailPrint "Compatible Python 3.9–3.13 x64 runtime detected."
-
-visualtex_python_check_done:
+  DetailPrint "VisualTeX OCR uses the bundled private Python 3.12.10 x64 runtime and fixed offline wheelhouse; system Python is not required."
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
@@ -213,7 +167,7 @@ visualtex_python_check_done:
     IfFileExists "$INSTDIR\windows-office\vstor_redist.sha256.json" 0 visualtex_office_missing
 
     DetailPrint "Checking Microsoft Visual Studio Tools for Office Runtime..."
-    nsExec::ExecToStack `powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install_windows_vsto_runtime.ps1" -RuntimeInstallerPath "$INSTDIR\windows-office\vstor_redist.exe" -ManifestPath "$INSTDIR\windows-office\vstor_redist.sha256.json" -CheckOnly`
+    nsExec::ExecToStack `"$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install_windows_vsto_runtime.ps1" -RuntimeInstallerPath "$INSTDIR\windows-office\vstor_redist.exe" -ManifestPath "$INSTDIR\windows-office\vstor_redist.sha256.json" -CheckOnly`
     Pop $1
     Pop $2
     StrCmp $1 "0" visualtex_vsto_runtime_ready 0
@@ -227,7 +181,7 @@ visualtex_vsto_runtime_declined:
 
 visualtex_vsto_runtime_install:
     DetailPrint "Installing the bundled Microsoft VSTO Runtime. A UAC elevation prompt may appear."
-    nsExec::ExecToLog `powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install_windows_vsto_runtime.ps1" -RuntimeInstallerPath "$INSTDIR\windows-office\vstor_redist.exe" -ManifestPath "$INSTDIR\windows-office\vstor_redist.sha256.json"`
+    nsExec::ExecToLog `"$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install_windows_vsto_runtime.ps1" -RuntimeInstallerPath "$INSTDIR\windows-office\vstor_redist.exe" -ManifestPath "$INSTDIR\windows-office\vstor_redist.sha256.json"`
     Pop $1
     StrCmp $1 "0" visualtex_vsto_runtime_ready visualtex_vsto_runtime_failed
 
@@ -240,11 +194,11 @@ visualtex_vsto_runtime_failed:
 visualtex_vsto_runtime_ready:
     DetailPrint "Microsoft VSTO Runtime is installed and verified."
 
-    nsExec::ExecToLog `powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\ensure_windows_office_certificate.ps1" -VisualTeXPath "$INSTDIR\VisualTeX.exe"`
+    nsExec::ExecToLog `"$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\ensure_windows_office_certificate.ps1" -VisualTeXPath "$INSTDIR\VisualTeX.exe"`
     Pop $0
     StrCmp $0 "0" 0 visualtex_office_failed
 
-    nsExec::ExecToLog `powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install_windows_vsto.ps1" -PackageDirectory "$INSTDIR\windows-office" -VisualTeXPath "$INSTDIR\VisualTeX.exe"`
+    nsExec::ExecToLog `"$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install_windows_vsto.ps1" -PackageDirectory "$INSTDIR\windows-office" -VisualTeXPath "$INSTDIR\VisualTeX.exe"`
     Pop $0
     StrCmp $0 "0" visualtex_office_static_installed visualtex_office_failed
 
@@ -264,7 +218,7 @@ visualtex_office_failed:
     Goto visualtex_office_done
   ${ElseIf} $VisualTeXOfficeChoice == "none"
     IfFileExists "$INSTDIR\scripts\uninstall_windows_vsto.ps1" 0 visualtex_office_done
-    nsExec::ExecToLog `powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\uninstall_windows_vsto.ps1"`
+    nsExec::ExecToLog `"$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\uninstall_windows_vsto.ps1"`
     Pop $0
     Goto visualtex_office_done
   ${Else}
@@ -306,7 +260,7 @@ visualtex_postinstall_cleanup_done:
 
 !macro NSIS_HOOK_PREUNINSTALL
   IfFileExists "$INSTDIR\scripts\uninstall_windows_vsto.ps1" 0 visualtex_preuninstall_done
-  nsExec::ExecToStack `powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\uninstall_windows_vsto.ps1"`
+  nsExec::ExecToStack `"$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\uninstall_windows_vsto.ps1"`
   Pop $0
   Pop $1
   ${If} $0 != "0"

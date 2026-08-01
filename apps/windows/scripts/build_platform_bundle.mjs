@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { windowsPowerShellPath } from "./windows_powershell.mjs";
 
 function run(command, args) {
   const isWindowsCmd =
@@ -18,18 +19,19 @@ function run(command, args) {
 }
 
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+const powershell = process.platform === "win32" ? windowsPowerShellPath() : "powershell";
 
 // Prepare only native/resource inputs consumed by Tauri. The main desktop
 // frontend is built exactly once by tauri_build.mjs before Tauri codegen.
 if (process.platform === "win32") {
-  run("powershell.exe", [
+  run(powershell, [
     "-NoProfile",
     "-ExecutionPolicy",
     "Bypass",
     "-File",
     "scripts/prepare_windows_ocr_python.ps1",
   ]);
-  run("powershell.exe", [
+  run(powershell, [
     "-NoProfile",
     "-ExecutionPolicy",
     "Bypass",
@@ -37,7 +39,7 @@ if (process.platform === "win32") {
     "scripts/prepare_windows_vsto_runtime.ps1",
   ]);
   run(npm, ["run", "build:office:windows-native"]);
-  run("powershell.exe", [
+  run(powershell, [
     "-NoProfile",
     "-ExecutionPolicy",
     "Bypass",

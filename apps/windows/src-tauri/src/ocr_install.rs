@@ -18,6 +18,41 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const MB_ERR_INVALID_CHARS: u32 = 0x0000_0008;
 
 #[cfg(windows)]
+pub fn windows_powershell_executable() -> Result<PathBuf, String> {
+    let mut roots = Vec::new();
+    for name in ["SystemRoot", "WINDIR"] {
+        if let Some(value) = std::env::var_os(name) {
+            let root = PathBuf::from(value);
+            if !roots.iter().any(|existing| existing == &root) {
+                roots.push(root);
+            }
+        }
+    }
+    let conventional = PathBuf::from(r"C:\Windows");
+    if !roots.iter().any(|existing| existing == &conventional) {
+        roots.push(conventional);
+    }
+    for root in roots {
+        for system_directory in ["Sysnative", "System32"] {
+            let candidate = root
+                .join(system_directory)
+                .join("WindowsPowerShell")
+                .join("v1.0")
+                .join("powershell.exe");
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+    }
+    Err("Windows PowerShell was not found under SystemRoot\\System32\\WindowsPowerShell\\v1.0; VisualTeX does not use PATH lookup for OCR maintenance".to_string())
+}
+
+#[cfg(windows)]
+fn powershell_command() -> Result<Command, String> {
+    Ok(Command::new(windows_powershell_executable()?))
+}
+
+#[cfg(windows)]
 #[link(name = "kernel32")]
 unsafe extern "system" {
     fn GetACP() -> u32;
@@ -449,7 +484,7 @@ pub fn cleanup_runtime_processes(runtime_root: &Path) -> Result<Vec<u32>, String
         let script = format!(
             "$root='{escaped_root}'.Replace('/',[char]92).ToLowerInvariant(); [Console]::OutputEncoding=[Text.UTF8Encoding]::new(); Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {{ $_.ProcessId -ne $PID -and $_.Name -match '^(python|pythonw|pip|pip3|cargo|rustc|maturin)(\\.exe)?$' -and ((($_.ExecutablePath + ' ' + $_.CommandLine).Replace('/',[char]92).ToLowerInvariant()).Contains($root)) }} | ForEach-Object {{ [Console]::WriteLine($_.ProcessId) }}"
         );
-        let output = Command::new("powershell.exe")
+        let output = powershell_command()?
             .args(["-NoProfile", "-NonInteractive", "-Command", &script])
             .creation_flags(CREATE_NO_WINDOW)
             .env("PYTHONUTF8", "1")
@@ -922,7 +957,7 @@ fn process_belongs_to_runtime(pid: u32, runtime_root: &Path) -> Result<bool, Str
     let script = format!(
         "$p=Get-CimInstance Win32_Process -Filter \"ProcessId = {pid}\" -ErrorAction SilentlyContinue; if($null -eq $p){{exit 3}}; [Console]::OutputEncoding=[Text.UTF8Encoding]::new(); Write-Output (($p.ExecutablePath + ' ' + $p.CommandLine).ToLowerInvariant())"
     );
-    let output = Command::new("powershell.exe")
+    let output = powershell_command()?
         .args(["-NoProfile", "-Command", &script])
         .creation_flags(CREATE_NO_WINDOW)
         .output()
@@ -995,7 +1030,7 @@ mod tests {
     fn test_command(script: &str) -> Command {
         #[cfg(windows)]
         {
-            let mut command = Command::new("powershell.exe");
+            let mut command = powershell_command().expect("absolute Windows PowerShell path");
             command.args(["-NoProfile", "-Command", script]);
             command
         }

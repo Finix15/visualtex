@@ -23,6 +23,13 @@ pub struct BundleFileRecord {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WindowsWheelhouseManifest {
+    pub lock: BundleFileRecord,
+    pub files: Vec<BundleFileRecord>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WindowsPythonBundleManifest {
     pub schema_version: u32,
     pub platform: String,
@@ -30,6 +37,14 @@ pub struct WindowsPythonBundleManifest {
     pub python_version: String,
     pub pip_version: String,
     pub archive: BundleFileRecord,
+    pub wheelhouse: WindowsWheelhouseManifest,
+}
+
+#[derive(Debug, Clone)]
+pub struct WindowsOfflineInstallAssets {
+    pub wheelhouse: PathBuf,
+    pub lockfile: PathBuf,
+    pub manifest: WindowsPythonBundleManifest,
 }
 
 #[derive(Debug, Clone)]
@@ -55,7 +70,7 @@ fn parse_manifest(path: &Path) -> Result<WindowsPythonBundleManifest, String> {
     })?;
     let manifest: WindowsPythonBundleManifest = serde_json::from_slice(&content)
         .map_err(|error| format!("Bundled Python manifest is invalid: {error}"))?;
-    if manifest.schema_version != 1 {
+    if manifest.schema_version != 2 {
         return Err(format!(
             "Unsupported bundled Python manifest schema: {}",
             manifest.schema_version
@@ -73,16 +88,29 @@ fn parse_manifest(path: &Path) -> Result<WindowsPythonBundleManifest, String> {
             manifest.python_version
         ));
     }
-    if manifest.archive.name.is_empty()
-        || manifest.archive.name.contains('/')
-        || manifest.archive.name.contains('\\')
-    {
-        return Err(format!(
-            "Unsafe bundled Python archive name: {}",
-            manifest.archive.name
-        ));
+    validate_resource_name(&manifest.archive.name, "bundled Python archive")?;
+    validate_resource_name(&manifest.wheelhouse.lock.name, "OCR dependency lock")?;
+    if manifest.wheelhouse.files.is_empty() {
+        return Err("Bundled OCR wheelhouse manifest contains no wheels".to_string());
+    }
+    let mut names = std::collections::BTreeSet::new();
+    for record in &manifest.wheelhouse.files {
+        validate_resource_name(&record.name, "OCR dependency wheel")?;
+        if !record.name.to_ascii_lowercase().ends_with(".whl") {
+            return Err(format!("Bundled OCR dependency is not a wheel: {}", record.name));
+        }
+        if !names.insert(record.name.to_ascii_lowercase()) {
+            return Err(format!("Bundled OCR wheelhouse contains a duplicate: {}", record.name));
+        }
     }
     Ok(manifest)
+}
+
+fn validate_resource_name(name: &str, label: &str) -> Result<(), String> {
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name == "." || name == ".." {
+        return Err(format!("Unsafe {label} name: {name}"));
+    }
+    Ok(())
 }
 
 pub fn locate_bundle(app: &AppHandle) -> Result<WindowsPythonBundle, String> {
@@ -131,30 +159,59 @@ fn sha256_file(path: &Path) -> Result<String, String> {
     Ok(hex::encode_upper(digest.finalize()))
 }
 
+fn verify_file_record(root: &Path, record: &BundleFileRecord, label: &str) -> Result<PathBuf, String> {
+    let path = root.join(&record.name);
+    let metadata = fs::metadata(&path)
+        .map_err(|error| format!("Bundled {label} is missing {}: {error}", path.display()))?;
+    if !metadata.is_file() || metadata.len() != record.size {
+        return Err(format!("Bundled {label} size mismatch: {}", path.display()));
+    }
+    let actual = sha256_file(&path)?;
+    if !actual.eq_ignore_ascii_case(&record.sha256) {
+        return Err(format!(
+            "Bundled {label} checksum mismatch for {}. Expected {}, actual {}",
+            path.display(), record.sha256, actual
+        ));
+    }
+    Ok(path)
+}
+
 fn verify_archive(bundle: &WindowsPythonBundle) -> Result<PathBuf, String> {
-    let archive = bundle.root.join(&bundle.manifest.archive.name);
-    let metadata = fs::metadata(&archive).map_err(|error| {
-        format!(
-            "Bundled Python archive is missing {}: {error}",
-            archive.display()
-        )
-    })?;
-    if !metadata.is_file() || metadata.len() != bundle.manifest.archive.size {
+    verify_file_record(&bundle.root, &bundle.manifest.archive, "Python archive")
+}
+
+fn verify_wheelhouse(bundle: &WindowsPythonBundle) -> Result<WindowsOfflineInstallAssets, String> {
+    let wheelhouse = bundle.root.join("wheelhouse");
+    if !wheelhouse.is_dir() {
         return Err(format!(
-            "Bundled Python archive size mismatch: {}",
-            archive.display()
+            "Bundled OCR wheelhouse directory is missing: {}",
+            wheelhouse.display()
         ));
     }
-    let actual = sha256_file(&archive)?;
-    if !actual.eq_ignore_ascii_case(&bundle.manifest.archive.sha256) {
-        return Err(format!(
-            "Bundled Python archive checksum mismatch for {}. Expected {}, actual {}",
-            archive.display(),
-            bundle.manifest.archive.sha256,
-            actual
-        ));
+    let lockfile = verify_file_record(
+        &bundle.root,
+        &bundle.manifest.wheelhouse.lock,
+        "OCR dependency lock",
+    )?;
+    let mut expected = std::collections::BTreeSet::new();
+    for record in &bundle.manifest.wheelhouse.files {
+        verify_file_record(&wheelhouse, record, "OCR dependency wheel")?;
+        expected.insert(record.name.to_ascii_lowercase());
     }
-    Ok(archive)
+    let actual = fs::read_dir(&wheelhouse)
+        .map_err(|error| format!("Unable to enumerate bundled OCR wheelhouse: {error}"))?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+        .map(|entry| entry.file_name().to_string_lossy().to_ascii_lowercase())
+        .collect::<std::collections::BTreeSet<_>>();
+    if actual != expected {
+        return Err("Bundled OCR wheelhouse contains missing or unexpected files".to_string());
+    }
+    Ok(WindowsOfflineInstallAssets {
+        wheelhouse,
+        lockfile,
+        manifest: bundle.manifest.clone(),
+    })
 }
 
 fn extract_archive(archive_path: &Path, destination: &Path) -> Result<(), String> {
@@ -299,6 +356,29 @@ fn install_resolved_bundle(
     }
     result?;
     Ok(bundle.manifest)
+}
+
+pub fn bundle_available(app: &AppHandle) -> bool {
+    locate_bundle(app).is_ok()
+}
+
+pub fn offline_install_assets_from_root(
+    root: &Path,
+) -> Result<WindowsOfflineInstallAssets, String> {
+    let bundle = WindowsPythonBundle {
+        manifest: parse_manifest(&root.join("manifest.json"))?,
+        root: root.to_path_buf(),
+    };
+    verify_archive(&bundle)?;
+    verify_wheelhouse(&bundle)
+}
+
+pub fn locate_offline_install_assets(
+    app: &AppHandle,
+) -> Result<WindowsOfflineInstallAssets, String> {
+    let bundle = locate_bundle(app)?;
+    verify_archive(&bundle)?;
+    verify_wheelhouse(&bundle)
 }
 
 pub fn install_bundle(

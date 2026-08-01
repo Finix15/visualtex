@@ -3916,7 +3916,9 @@ async function main() {
 
       const readInsertedAccentState = (expectedCommand) =>
         waitForEvaluation(`(() => {
-          const field = document.querySelector(".formula-line.is-active math-field");
+          const field =
+            document.querySelector(".formula-line.is-active math-field") ??
+            document.querySelector("math-field");
           const root = field?.shadowRoot;
           const symbol = field?.placeholderSymbol || "▢";
           const placeholders = [...(root?.querySelectorAll(

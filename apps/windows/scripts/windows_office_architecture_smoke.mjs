@@ -920,10 +920,21 @@ assert.ok(certificateInstaller.includes("-LiteralPath"));
 assert.ok(certificateInstaller.includes("explicitly supplied VisualTeX executable"));
 
 const platformBundle = await source("scripts/build_platform_bundle.mjs");
+const tauriBuild = await source("scripts/tauri_build.mjs");
+const windowsPowerShell = await source("scripts/windows_powershell.mjs");
+const officeLifecycle = await source("src-tauri/src/office/lifecycle.rs");
 const windowsBundle = await source("src-tauri/tauri.windows.conf.json");
 const installerHooks = await source("src-tauri/windows/hooks.nsh");
 const nsisPatch = await source("scripts/patch_generated_nsis.ps1");
 assert.ok(platformBundle.includes('"scripts/build_windows_office.ps1"'));
+assert.ok(platformBundle.includes("windowsPowerShellPath"));
+assert.ok(!platformBundle.includes('run("powershell.exe"'));
+assert.ok(tauriBuild.includes("windowsPowerShellPath"));
+assert.ok(!tauriBuild.includes('run("powershell.exe"'));
+assert.ok(windowsPowerShell.includes('"System32"'));
+assert.ok(windowsPowerShell.includes('"WindowsPowerShell"'));
+assert.ok(officeLifecycle.includes("windows_powershell_executable"));
+assert.ok(!officeLifecycle.includes('hidden_windows_command("powershell.exe")'));
 assert.ok(platformBundle.includes('"scripts/prepare_windows_vsto_runtime.ps1"'));
 assert.ok(platformBundle.includes('"-SkipTests"'));
 assert.ok(!platformBundle.includes('"scripts/build_windows_ole_bridge.ps1"'));
@@ -941,6 +952,11 @@ for (const bundledOfficeResource of [
   assert.ok(windowsBundle.includes(bundledOfficeResource));
 }
 assert.ok(installerHooks.includes("${NSD_Check} $VisualTeXOfficeNativeRadio"));
+assert.ok(installerHooks.includes("bundled private Python 3.12.10 x64 runtime"));
+assert.ok(!installerHooks.includes("VisualTeXProbeLauncher"));
+assert.ok(!installerHooks.includes("VisualTeXProbeCommand"));
+assert.ok(!installerHooks.includes('`powershell.exe '));
+assert.ok(installerHooks.includes('$WINDIR\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'));
 assert.ok(!installerHooks.includes("MUI_CUSTOMFUNCTION_GUIINIT"));
 assert.ok(!installerHooks.includes("VisualTeXDefaultMaintenanceUninstall"));
 assert.ok(installerHooks.includes("generated Tauri PageReinstall function is patched"));

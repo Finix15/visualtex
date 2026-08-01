@@ -18,8 +18,12 @@ import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-# BOS is generally more reliable in regions where Hugging Face access is limited.
-os.environ.setdefault("PADDLE_PDX_MODEL_SOURCE", "BOS")
+# VisualTeX owns model acquisition. The worker must never invoke PaddleX model
+# discovery or network downloads; it only loads an already verified model_dir.
+os.environ.setdefault("VISUALTEX_OFFLINE_OCR", "1")
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+os.environ.setdefault("MODELSCOPE_OFFLINE", "1")
 os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
 os.environ.setdefault("GLOG_minloglevel", "2")
 
@@ -140,17 +144,16 @@ def _watch_parent_process() -> None:
 
 
 def _cached_model_dir(model_name: str) -> Optional[Path]:
-    candidates = [Path.home() / ".paddlex" / "official_models" / model_name]
     cache_home = os.environ.get("PADDLE_PDX_CACHE_HOME", "").strip()
-    if cache_home:
-        candidates.insert(0, Path(cache_home) / "official_models" / model_name)
-    for directory in candidates:
-        if (
-            (directory / "inference.json").is_file()
-            and (directory / "inference.pdiparams").is_file()
-            and (directory / "inference.yml").is_file()
-        ):
-            return directory
+    if not cache_home:
+        return None
+    directory = Path(cache_home) / "official_models" / model_name
+    if (
+        (directory / "inference.json").is_file()
+        and (directory / "inference.pdiparams").is_file()
+        and (directory / "inference.yml").is_file()
+    ):
+        return directory
     return None
 
 
@@ -322,10 +325,10 @@ def _preprocess_image(
 def _load_model(model_name: str, device: str) -> Any:
     global _CURRENT_MODEL, _CURRENT_MODEL_NAME, _CURRENT_DEVICE
 
-    if os.environ.get("VISUALTEX_OFFLINE_OCR") == "1" and not _model_is_cached(model_name):
+    if not _model_is_cached(model_name):
         raise RuntimeError(
-            f"The offline model pack for {model_name} is not installed. "
-            "The bundled M model works without a network connection; install the optional S or L pack before selecting it."
+            f"The verified local model {model_name} is not installed. "
+            "Import a .vtxocrmodel package or explicitly download it in VisualTeX before warmup or recognition."
         )
 
     if (
@@ -343,28 +346,22 @@ def _load_model(model_name: str, device: str) -> Any:
         gc.collect()
 
     cached_model_dir = _cached_model_dir(model_name)
-    if cached_model_dir is not None:
-        _log(
-            f"Loading {model_name} directly from local model_dir "
-            f"{cached_model_dir} on {device}"
-        )
-    else:
-        _log(f"Loading {model_name} through the PaddleX model registry on {device}")
+    if cached_model_dir is None:
+        raise RuntimeError(f"Verified local model_dir is unavailable for {model_name}")
+    _log(
+        f"Loading {model_name} directly from local model_dir "
+        f"{cached_model_dir} on {device}"
+    )
     with contextlib.redirect_stdout(sys.stderr):
         from paddleocr import FormulaRecognition
 
-        if cached_model_dir is not None:
-            # Passing model_dir bypasses PaddleX host connectivity checks and
-            # repository metadata downloads. The three inference artifacts are
-            # sufficient for local prediction and reduce a cached Windows M
-            # model startup from roughly one minute to a few seconds.
-            model = FormulaRecognition(
-                model_name=model_name,
-                model_dir=str(cached_model_dir),
-                device=device,
-            )
-        else:
-            model = FormulaRecognition(model_name=model_name, device=device)
+        # Passing model_dir is mandatory. This bypasses PaddleX host checks,
+        # registry metadata and every implicit model download path.
+        model = FormulaRecognition(
+            model_name=model_name,
+            model_dir=str(cached_model_dir),
+            device=device,
+        )
 
     _CURRENT_MODEL = model
     _CURRENT_MODEL_NAME = model_name
@@ -419,14 +416,8 @@ def _recognize(request: Dict[str, Any]) -> Dict[str, Any]:
         model_message = "正在复用已加载的模型"
     elif _model_is_cached(model_name):
         model_message = f"正在从本地缓存加载 {model_name}"
-    elif os.environ.get("VISUALTEX_OFFLINE_OCR") == "1":
-        model_message = f"正在检查 {model_name} 离线模型包"
-    elif download_mb is not None:
-        model_message = (
-            f"正在下载并加载 {model_name}；下载量约 {download_mb:.1f} MB"
-        )
     else:
-        model_message = f"正在准备 {model_name}"
+        model_message = f"正在检查 {model_name} 的本地已校验模型目录"
     _emit_progress(request_id, "model", model_message, model_name)
     model = _load_model(model_name, device)
 

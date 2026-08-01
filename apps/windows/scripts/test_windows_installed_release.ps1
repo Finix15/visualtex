@@ -11,6 +11,15 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+$windowsRoot = if (-not [string]::IsNullOrWhiteSpace($env:SystemRoot)) { $env:SystemRoot } else { $env:WINDIR }
+if ([string]::IsNullOrWhiteSpace($windowsRoot)) {
+    throw "SystemRoot/WINDIR is unavailable; cannot locate Windows PowerShell"
+}
+$powerShellExe = Join-Path $windowsRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+if (-not (Test-Path -LiteralPath $powerShellExe -PathType Leaf)) {
+    throw "Windows PowerShell is missing: $powerShellExe"
+}
+
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 if ([string]::IsNullOrWhiteSpace($InstallerPath)) {
     $InstallerPath = Join-Path $root "src-tauri\target\release\bundle\nsis\VisualTeX_${ExpectedAppVersion}_x64-setup.exe"
@@ -358,7 +367,7 @@ try {
             "-VisualTeXPath", $script:installedExe
         )
         if ($ForceCloseOffice) { $runtimeArguments += "-ForceCloseOffice" }
-        & powershell.exe @runtimeArguments
+        & $powerShellExe @runtimeArguments
         if ($LASTEXITCODE -ne 0) { throw "Installed Office runtime verification failed with exit code $LASTEXITCODE" }
         $report.officeRuntimeVerified = $true
     } elseif ($VerifyOfficeReadonly) {
@@ -366,7 +375,7 @@ try {
         if (-not (Test-Path -LiteralPath $runtimeScript -PathType Leaf)) {
             throw "Non-destructive Office connection verifier is missing: $runtimeScript"
         }
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runtimeScript -VisualTeXPath $script:installedExe
+        & $powerShellExe -NoProfile -ExecutionPolicy Bypass -File $runtimeScript -VisualTeXPath $script:installedExe
         if ($LASTEXITCODE -ne 0) { throw "Installed Office connection verification failed with exit code $LASTEXITCODE" }
         $report.officeRuntimeVerified = $true
     }

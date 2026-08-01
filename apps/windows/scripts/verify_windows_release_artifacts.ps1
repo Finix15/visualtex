@@ -15,7 +15,23 @@ $vstoRuntime = Join-Path $root "src-tauri\resources\windows-office\vstor_redist.
 $vstoRuntimeManifest = Join-Path $root "src-tauri\resources\windows-office\vstor_redist.sha256.json"
 $buildX64 = Join-Path $root "src-windows\VisualTeX.WindowsOffice.Installer\bin\x64\Release\VisualTeX-WindowsOffice-VSTO-x64.msi"
 $buildX86 = Join-Path $root "src-windows\VisualTeX.WindowsOffice.Installer\bin\x86\Release\VisualTeX-WindowsOffice-VSTO-x86.msi"
-$paths = @($installerPath, $resourceX64, $resourceX86, $manifestX64, $manifestX86, $vstoRuntime, $vstoRuntimeManifest, $buildX64, $buildX86)
+$ocrPythonRoot = Join-Path $root "src-tauri\resources\ocr-python\windows-x64"
+$ocrPythonManifestPath = Join-Path $ocrPythonRoot "manifest.json"
+$ocrModelRoot = Join-Path $root "src-tauri\resources\ocr-models\windows-x64"
+$ocrModelCatalogPath = Join-Path $ocrModelRoot "catalog.json"
+$paths = @(
+    $installerPath,
+    $resourceX64,
+    $resourceX86,
+    $manifestX64,
+    $manifestX86,
+    $vstoRuntime,
+    $vstoRuntimeManifest,
+    $buildX64,
+    $buildX86,
+    $ocrPythonManifestPath,
+    $ocrModelCatalogPath
+)
 
 foreach ($path in $paths) {
     if (-not (Test-Path -LiteralPath $path)) { throw "Release artifact is missing: $path" }
@@ -23,6 +39,111 @@ foreach ($path in $paths) {
     $hash = Get-FileHash -LiteralPath $path -Algorithm SHA256
     Write-Host ("{0} | {1} bytes | SHA256 {2}" -f $item.FullName, $item.Length, $hash.Hash)
 }
+
+function Assert-ManifestFileRecord {
+    param(
+        [string]$Root,
+        [object]$Record,
+        [string]$Label
+    )
+    $path = Join-Path $Root ([string]$Record.name)
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        throw "$Label is missing: $path"
+    }
+    $item = Get-Item -LiteralPath $path
+    if ([int64]$item.Length -ne [int64]$Record.size) {
+        throw "$Label has the wrong size: $path; expected $($Record.size), actual $($item.Length)."
+    }
+    $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+    if (-not [string]::Equals($hash, [string]$Record.sha256, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "$Label has the wrong SHA256: $path; expected $($Record.sha256), actual $hash."
+    }
+}
+
+$ocrPythonManifest = Get-Content -LiteralPath $ocrPythonManifestPath -Raw | ConvertFrom-Json
+if ([int]$ocrPythonManifest.schemaVersion -ne 2 -or
+    [string]$ocrPythonManifest.platform -ne "windows" -or
+    [string]$ocrPythonManifest.architecture -ne "x64" -or
+    [string]$ocrPythonManifest.pythonVersion -ne "3.12.10" -or
+    [string]$ocrPythonManifest.pipVersion -ne "25.1.1") {
+    throw "Unexpected private OCR Python manifest metadata: $ocrPythonManifestPath"
+}
+Assert-ManifestFileRecord $ocrPythonRoot $ocrPythonManifest.archive "Private Python archive"
+Assert-ManifestFileRecord $ocrPythonRoot $ocrPythonManifest.wheelhouse.lock "Hash-locked OCR requirements"
+$wheelhouseRoot = Join-Path $ocrPythonRoot "wheelhouse"
+$manifestWheels = @($ocrPythonManifest.wheelhouse.files)
+if ($manifestWheels.Count -ne 68) {
+    throw "The fixed Windows OCR wheelhouse must contain exactly 68 wheels; manifest contains $($manifestWheels.Count)."
+}
+$manifestWheelNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+foreach ($wheel in $manifestWheels) {
+    if (-not $manifestWheelNames.Add([string]$wheel.name)) {
+        throw "Duplicate wheel in OCR manifest: $($wheel.name)"
+    }
+    Assert-ManifestFileRecord $wheelhouseRoot $wheel "OCR wheel"
+}
+$actualWheels = @(Get-ChildItem -LiteralPath $wheelhouseRoot -File -Filter "*.whl")
+if ($actualWheels.Count -ne $manifestWheels.Count) {
+    throw "OCR wheelhouse contains unexpected or missing files. Manifest=$($manifestWheels.Count); Actual=$($actualWheels.Count)."
+}
+foreach ($wheel in $actualWheels) {
+    if (-not $manifestWheelNames.Contains($wheel.Name)) {
+        throw "Unexpected wheel outside the fixed manifest: $($wheel.FullName)"
+    }
+}
+foreach ($requiredWheelPattern in @(
+    "paddlepaddle-3.3.1-*.whl",
+    "paddleocr-3.7.0-*.whl",
+    "tokenizers-0.19.1-*.whl"
+)) {
+    if (@(Get-ChildItem -LiteralPath $wheelhouseRoot -File -Filter $requiredWheelPattern).Count -ne 1) {
+        throw "The fixed OCR wheelhouse is missing pinned package $requiredWheelPattern"
+    }
+}
+$lockText = Get-Content -LiteralPath (Join-Path $ocrPythonRoot ([string]$ocrPythonManifest.wheelhouse.lock.name)) -Raw
+foreach ($requiredLockMarker in @("paddlepaddle==3.3.1", "paddleocr==3.7.0", "tokenizers==0.19.1")) {
+    if (-not $lockText.Contains($requiredLockMarker)) {
+        throw "OCR requirements lock is missing $requiredLockMarker"
+    }
+}
+Write-Host "Private OCR Python 3.12.10 x64 archive and exact 68-wheel offline closure verified."
+
+$ocrModelCatalog = Get-Content -LiteralPath $ocrModelCatalogPath -Raw | ConvertFrom-Json
+if ([int]$ocrModelCatalog.schemaVersion -ne 1 -or
+    [string]$ocrModelCatalog.platform -ne "windows" -or
+    [string]$ocrModelCatalog.architecture -ne "x64") {
+    throw "Unexpected OCR model catalog metadata: $ocrModelCatalogPath"
+}
+$expectedModels = @("PP-FormulaNet_plus-S", "PP-FormulaNet_plus-M", "PP-FormulaNet_plus-L")
+$expectedModelBaseUrl = "https://download.visualtex.pauljianliao.com/ppformula-model"
+$expectedModelPackages = @{
+    "PP-FormulaNet_plus-S" = "VisualTeX_PP-FormulaNet_plus-S_windows-x64.vtxocrmodel"
+    "PP-FormulaNet_plus-M" = "VisualTeX_PP-FormulaNet_plus-M_windows-x64.vtxocrmodel"
+    "PP-FormulaNet_plus-L" = "VisualTeX_PP-FormulaNet_plus-L_windows-x64.vtxocrmodel"
+}
+$modelEntries = @($ocrModelCatalog.entries)
+if ($modelEntries.Count -ne $expectedModels.Count) {
+    throw "OCR model catalog must contain S, M and L exactly once."
+}
+foreach ($model in $expectedModels) {
+    $entry = @($modelEntries | Where-Object { [string]$_.model -eq $model })
+    if ($entry.Count -ne 1 -or [int64]$entry[0].size -le 0 -or [string]$entry[0].sha256 -notmatch '^[0-9a-fA-F]{64}$') {
+        throw "OCR model catalog entry is invalid or duplicated: $model"
+    }
+    $expectedUrl = "$expectedModelBaseUrl/$($expectedModelPackages[$model])"
+    if ([string]$entry[0].url -ne $expectedUrl) {
+        throw "OCR model catalog URL does not match the deployed VisualTeX web download path for ${model}: $($entry[0].url)"
+    }
+}
+$bundledModelPacks = @(Get-ChildItem -LiteralPath (Join-Path $root "src-tauri\resources") -Recurse -File -Filter "*.vtxocrmodel")
+if ($bundledModelPacks.Count -ne 0) {
+    throw "OCR model packages must not be embedded in the NSIS resources: $($bundledModelPacks.FullName -join ', ')"
+}
+$unexpectedModelResourceFiles = @(Get-ChildItem -LiteralPath $ocrModelRoot -Recurse -File | Where-Object { $_.FullName -ne $ocrModelCatalogPath })
+if ($unexpectedModelResourceFiles.Count -ne 0) {
+    throw "The bundled OCR model resource directory must contain only catalog.json: $($unexpectedModelResourceFiles.FullName -join ', ')"
+}
+Write-Host "OCR model catalog verified; S/M/L model packages are excluded from bundled resources."
 
 function Assert-MsiComponentBitness {
     param(
@@ -149,19 +270,23 @@ foreach ($entry in @(
     }
 }
 
-$generatedNsis = Join-Path $root "src-tauri\target\release\nsis\x64\installer.nsi"
-if (-not (Test-Path -LiteralPath $generatedNsis -PathType Leaf)) {
-    throw "Generated patched NSIS source is missing: $generatedNsis"
+$customNsisTemplate = Join-Path $root "src-tauri\target\nsis-template\visualtex-installer.nsi"
+if (-not (Test-Path -LiteralPath $customNsisTemplate -PathType Leaf)) {
+    throw "Verified custom NSIS template is missing: $customNsisTemplate"
 }
-$generatedNsisSource = Get-Content -LiteralPath $generatedNsis -Raw
+$customNsisSource = Get-Content -LiteralPath $customNsisTemplate -Raw
 foreach ($requiredMarker in @(
     "Same-version maintenance defaults to the second option",
     'StrCpy $ReinstallPageCheck 2',
     '/VISUALTEXACCEPTANCE'
 )) {
-    if (-not $generatedNsisSource.Contains($requiredMarker)) {
-        throw "Generated NSIS source is missing verified release marker: $requiredMarker"
+    if (-not $customNsisSource.Contains($requiredMarker)) {
+        throw "Custom NSIS template is missing verified release marker: $requiredMarker"
     }
+}
+$tauriConfig = Get-Content -LiteralPath (Join-Path $root "src-tauri\tauri.conf.json") -Raw | ConvertFrom-Json
+if ([string]$tauriConfig.bundle.windows.nsis.template -ne "./target/nsis-template/visualtex-installer.nsi") {
+    throw "Tauri is not configured to bundle with the verified custom NSIS template."
 }
 
 & node.exe (Join-Path $root "scripts\verify_embedded_frontend_assets.mjs") `
@@ -170,4 +295,4 @@ if ($LASTEXITCODE -ne 0) {
     throw "The release VisualTeX.exe failed embedded frontend verification."
 }
 
-Write-Host "VisualTeX Windows release artifacts passed static verification, including the embedded main frontend and patched maintenance flow."
+Write-Host "VisualTeX Windows release artifacts passed static verification, including the private offline OCR runtime, model-package exclusion, embedded main frontend and patched maintenance flow."

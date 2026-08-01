@@ -29,6 +29,8 @@ globalThis.fetch = async (input, init = {}) => {
         paddleVersion: "3.3.1",
         paddleocrVersion: "3.7.0",
         runtimePath: "/opt/visualtex/ocr",
+        installedModels: ["PP-FormulaNet_plus-M"],
+        damagedModels: [],
         message: "ready",
       }),
       { status: 200, headers: { "Content-Type": "application/json" } },
@@ -97,6 +99,8 @@ const status = await invoke("get_ocr_runtime_status", {
   forceRefresh: true,
 });
 assert.equal(status.installed, true);
+assert.deepEqual(status.installedModels, ["PP-FormulaNet_plus-M"]);
+assert.equal(status.runtimePath, "/opt/visualtex/ocr");
 assert.equal(calls[0].url, "/api/v1/ocr/status?forceRefresh=true");
 assert.equal(
   calls[0].init.headers["X-VisualTeX-Install-Token"],
@@ -137,6 +141,16 @@ assert.ok(warmupCall);
 assert.equal(
   warmupCall.init.headers["X-VisualTeX-Ocr-Model"],
   "PP-FormulaNet_plus-S",
+);
+
+await assert.rejects(
+  invoke("download_ocr_model", { model: "PP-FormulaNet_plus-L" }),
+  /Unsupported Office OCR command: download_ocr_model/,
+);
+assert.equal(
+  calls.some((call) => call.url.includes("/ocr/model") || call.url.includes("/ocr/download")),
+  false,
+  "Office transport must never start a model download implicitly",
 );
 
 const received = [];

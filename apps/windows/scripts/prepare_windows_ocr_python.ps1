@@ -13,19 +13,35 @@ $PipVersion = "25.1.1"
 $PipWheelName = "pip-$PipVersion-py3-none-any.whl"
 $PipWheelUrl = "https://files.pythonhosted.org/packages/29/a2/d40fb2460e883eca5199c62cfc2463fd261f760556ae6290f88488c362c0/$PipWheelName"
 $PipWheelSha256 = "2913A38A2ABF4EA6B64AB507BD9E967F3B53DC1EDE74B01B0931E1CE548751AF"
+$PaddleVersion = "3.3.1"
+$PaddleOcrVersion = "3.7.0"
+$TokenizersVersion = "0.19.1"
 
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$RequirementsSource = Join-Path $ProjectRoot "ocr\requirements.txt"
 $SiteCustomizeSource = Join-Path $ProjectRoot "src-tauri\ocr\private_sitecustomize.py"
 $ResourceRoot = Join-Path $ProjectRoot "src-tauri\resources\ocr-python\windows-x64"
 $OutputArchiveName = "visualtex-python-$PythonVersion-windows-x64.zip"
 $OutputArchive = Join-Path $ResourceRoot $OutputArchiveName
 $OutputManifest = Join-Path $ResourceRoot "manifest.json"
+$OutputWheelhouse = Join-Path $ResourceRoot "wheelhouse"
+$OutputLockName = "requirements-windows-x64-py312.lock"
+$OutputLock = Join-Path $ResourceRoot $OutputLockName
 $CacheRoot = Join-Path $env:LOCALAPPDATA "VisualTeXBuildCache\ocr-python"
 $PythonArchive = Join-Path $CacheRoot $PythonArchiveName
 $PipWheel = Join-Path $CacheRoot $PipWheelName
 
 function Get-Sha256([string]$Path) {
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToUpperInvariant()
+}
+
+function Get-FileRecord([string]$Path) {
+    $item = Get-Item -LiteralPath $Path
+    return [ordered]@{
+        name = $item.Name
+        size = $item.Length
+        sha256 = Get-Sha256 $item.FullName
+    }
 }
 
 function Write-Utf8NoBom([string]$Path, [string]$Content) {
@@ -60,80 +76,52 @@ function Get-VerifiedDownload(
     Move-Item -LiteralPath $temporary -Destination $Path -Force
 }
 
-function Test-PreparedRuntime([string]$RuntimeRoot) {
-    $python = Join-Path $RuntimeRoot "python.exe"
-    if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
-        throw "Prepared OCR Python is missing python.exe"
+function Invoke-PrivatePython(
+    [string]$Python,
+    [string[]]$Arguments,
+    [string]$Label,
+    [hashtable]$ExtraEnvironment = @{}
+) {
+    $saved = @{}
+    $baseEnvironment = @{
+        PYTHONNOUSERSITE = "1"
+        PYTHONSAFEPATH = "1"
+        PYTHONUTF8 = "1"
+        PYTHONIOENCODING = "utf-8"
+        PIP_DISABLE_PIP_VERSION_CHECK = "1"
+        PIP_NO_INPUT = "1"
     }
-    $probeScript = Join-Path $RuntimeRoot "_visualtex_runtime_probe.py"
-    @'
-import importlib.metadata as metadata
-import json
-import os
-import platform
-import site
-import sys
-user_site = site.getusersitepackages()
-user_sites = [user_site] if isinstance(user_site, str) else list(user_site)
-normalized = lambda value: os.path.normcase(os.path.abspath(value))
-user_site_on_path = any(
-    normalized(path) == normalized(candidate)
-    for path in sys.path
-    for candidate in user_sites
-    if candidate
-)
-print(json.dumps({
-    "pythonVersion": platform.python_version(),
-    "pipVersion": metadata.version("pip"),
-    "executable": sys.executable,
-    "prefix": sys.prefix,
-    "userSiteEnabled": bool(site.ENABLE_USER_SITE),
-    "userSiteOnPath": user_site_on_path,
-}))
-'@ | Set-Content -LiteralPath $probeScript -Encoding UTF8
+    foreach ($entry in $ExtraEnvironment.GetEnumerator()) {
+        $baseEnvironment[$entry.Key] = [string]$entry.Value
+    }
     try {
-        $probe = & $python $probeScript
+        foreach ($entry in $baseEnvironment.GetEnumerator()) {
+            $saved[$entry.Key] = [Environment]::GetEnvironmentVariable($entry.Key, "Process")
+            [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, "Process")
+        }
+        Write-Host "+ $Python $($Arguments -join ' ')"
+        & $Python @Arguments
         if ($LASTEXITCODE -ne 0) {
-            throw "Prepared OCR Python validation failed with exit code $LASTEXITCODE"
+            throw "$Label failed with exit code $LASTEXITCODE"
         }
     } finally {
-        Remove-Item -LiteralPath $probeScript -Force -ErrorAction SilentlyContinue
-    }
-    $parsed = $probe | Select-Object -Last 1 | ConvertFrom-Json
-    if ($parsed.pythonVersion -ne $PythonVersion) {
-        throw "Prepared OCR Python version is $($parsed.pythonVersion), expected $PythonVersion"
-    }
-    if ($parsed.pipVersion -ne $PipVersion) {
-        throw "Prepared OCR pip version is $($parsed.pipVersion), expected $PipVersion"
-    }
-    if ($parsed.userSiteEnabled -or $parsed.userSiteOnPath) {
-        throw "Prepared OCR Python is not isolated from user site-packages"
-    }
-    $pipOutput = & $python -m pip --version
-    if ($LASTEXITCODE -ne 0 -or -not ($pipOutput -match [regex]::Escape($RuntimeRoot))) {
-        throw "python -m pip did not resolve inside the prepared private runtime: $pipOutput"
+        foreach ($entry in $saved.GetEnumerator()) {
+            [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, "Process")
+        }
     }
 }
 
-New-Item -ItemType Directory -Path $ResourceRoot -Force | Out-Null
-New-Item -ItemType Directory -Path $CacheRoot -Force | Out-Null
-Get-VerifiedDownload $PythonArchiveUrl $PythonArchive $PythonArchiveSha256
-Get-VerifiedDownload $PipWheelUrl $PipWheel $PipWheelSha256
+function Initialize-PrivateRuntime([string]$RuntimeRoot, [string]$WorkRoot) {
+    New-Item -ItemType Directory -Path $RuntimeRoot -Force | Out-Null
+    Expand-Archive -LiteralPath $PythonArchive -DestinationPath $RuntimeRoot -Force
 
-$workRoot = Join-Path $env:TEMP ("visualtex-ocr-python-build-" + [guid]::NewGuid().ToString("N"))
-$runtimeRoot = Join-Path $workRoot "runtime"
-$validationRoot = Join-Path $workRoot "validation"
-try {
-    New-Item -ItemType Directory -Path $runtimeRoot -Force | Out-Null
-    Expand-Archive -LiteralPath $PythonArchive -DestinationPath $runtimeRoot -Force
-
-    $sitePackages = Join-Path $runtimeRoot "Lib\site-packages"
+    $sitePackages = Join-Path $RuntimeRoot "Lib\site-packages"
     New-Item -ItemType Directory -Path $sitePackages -Force | Out-Null
-    $pipWheelZip = Join-Path $workRoot "pip-wheel.zip"
+    $pipWheelZip = Join-Path $WorkRoot "pip-wheel.zip"
     Copy-Item -LiteralPath $PipWheel -Destination $pipWheelZip -Force
     Expand-Archive -LiteralPath $pipWheelZip -DestinationPath $sitePackages -Force
 
-    $pthPath = Join-Path $runtimeRoot "python312._pth"
+    $pthPath = Join-Path $RuntimeRoot "python312._pth"
     @(
         "python312.zip",
         ".",
@@ -154,67 +142,328 @@ try {
         distribution = "python.org embeddable"
         pipVersion = $PipVersion
     }
-    Write-Utf8NoBom (Join-Path $runtimeRoot "visualtex-python.json") ($runtimeMetadata | ConvertTo-Json -Depth 4)
+    Write-Utf8NoBom (Join-Path $RuntimeRoot "visualtex-python.json") ($runtimeMetadata | ConvertTo-Json -Depth 4)
+}
 
-    Test-PreparedRuntime $runtimeRoot
+function Test-PreparedBaseRuntime([string]$RuntimeRoot) {
+    $python = Join-Path $RuntimeRoot "python.exe"
+    if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
+        throw "Prepared OCR Python is missing python.exe"
+    }
+    $probeScript = Join-Path $RuntimeRoot "_visualtex_runtime_probe.py"
+    @'
+import importlib.metadata as metadata
+import json
+import os
+import platform
+import site
+import struct
+import sys
+user_site = site.getusersitepackages()
+user_sites = [user_site] if isinstance(user_site, str) else list(user_site)
+normalized = lambda value: os.path.normcase(os.path.abspath(value))
+user_site_on_path = any(
+    normalized(path) == normalized(candidate)
+    for path in sys.path
+    for candidate in user_sites
+    if candidate
+)
+print(json.dumps({
+    "pythonVersion": platform.python_version(),
+    "pipVersion": metadata.version("pip"),
+    "bits": struct.calcsize("P") * 8,
+    "machine": platform.machine(),
+    "executable": sys.executable,
+    "prefix": sys.prefix,
+    "userSiteEnabled": bool(site.ENABLE_USER_SITE),
+    "userSiteOnPath": user_site_on_path,
+}))
+'@ | Set-Content -LiteralPath $probeScript -Encoding UTF8
+    try {
+        $probe = & $python -I -X utf8 $probeScript
+        if ($LASTEXITCODE -ne 0) {
+            throw "Prepared OCR Python validation failed with exit code $LASTEXITCODE"
+        }
+    } finally {
+        Remove-Item -LiteralPath $probeScript -Force -ErrorAction SilentlyContinue
+    }
+    $parsed = $probe | Select-Object -Last 1 | ConvertFrom-Json
+    if ($parsed.pythonVersion -ne $PythonVersion) {
+        throw "Prepared OCR Python version is $($parsed.pythonVersion), expected $PythonVersion"
+    }
+    if ($parsed.pipVersion -ne $PipVersion) {
+        throw "Prepared OCR pip version is $($parsed.pipVersion), expected $PipVersion"
+    }
+    if ($parsed.bits -ne 64 -or $parsed.machine -notmatch "^(AMD64|x86_64|x64)$") {
+        throw "Prepared OCR Python architecture is invalid: $($parsed.bits)-bit $($parsed.machine)"
+    }
+    if ($parsed.userSiteEnabled -or $parsed.userSiteOnPath) {
+        throw "Prepared OCR Python is not isolated from user site-packages"
+    }
+    $pipOutput = & $python -I -X utf8 -m pip --version
+    if ($LASTEXITCODE -ne 0 -or -not ($pipOutput -match [regex]::Escape($RuntimeRoot))) {
+        throw "python -m pip did not resolve inside the prepared private runtime: $pipOutput"
+    }
+}
 
-    # Build and validate a unique staged archive before replacing the bundled
-    # runtime. Compress-Archive can observe a just-deleted destination on Windows
-    # (for example while Defender still has the old ZIP open) and incorrectly
-    # report that the file already exists. Staging also preserves the last known
-    # good bundle if compression or validation fails.
-    $stagedArchive = Join-Path $workRoot $OutputArchiveName
-    Compress-Archive -Path (Join-Path $runtimeRoot "*") -DestinationPath $stagedArchive -CompressionLevel Optimal
+function New-FixedWheelhouseLock(
+    [string]$Python,
+    [string]$Wheelhouse,
+    [string]$LockPath,
+    [string]$ScriptPath
+) {
+    @'
+from __future__ import annotations
+
+import hashlib
+import pathlib
+import sys
+from pip._vendor.packaging.utils import canonicalize_name, parse_wheel_filename
+
+wheelhouse = pathlib.Path(sys.argv[1])
+lock_path = pathlib.Path(sys.argv[2])
+records = []
+seen = set()
+for wheel in sorted(wheelhouse.glob("*.whl"), key=lambda path: path.name.lower()):
+    name, version, _build, _tags = parse_wheel_filename(wheel.name)
+    canonical = canonicalize_name(name)
+    if canonical in seen:
+        raise SystemExit(f"duplicate distribution in wheelhouse: {canonical}")
+    seen.add(canonical)
+    digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
+    records.append(f"{canonical}=={version} --hash=sha256:{digest}")
+if not records:
+    raise SystemExit("wheelhouse is empty")
+lock_path.write_text(
+    "# VisualTeX Windows OCR fixed offline dependency closure\n"
+    "# Generated from binary wheels for CPython 3.12 x64.\n"
+    + "\n".join(records)
+    + "\n",
+    encoding="utf-8",
+    newline="\n",
+)
+'@ | Set-Content -LiteralPath $ScriptPath -Encoding UTF8
+    Invoke-PrivatePython $Python @("-I", "-X", "utf8", $ScriptPath, $Wheelhouse, $LockPath) "Generate fixed OCR wheelhouse lock"
+}
+
+function Test-FullOfflineRuntime(
+    [string]$RuntimeRoot,
+    [string]$Wheelhouse,
+    [string]$LockPath,
+    [string]$WorkRoot
+) {
+    $python = Join-Path $RuntimeRoot "python.exe"
+    Invoke-PrivatePython $python @(
+        "-I", "-X", "utf8", "-m", "pip", "install",
+        "--isolated",
+        "--no-index",
+        "--find-links", $Wheelhouse,
+        "--only-binary=:all:",
+        "--require-hashes",
+        "--disable-pip-version-check",
+        "--no-input",
+        "--requirement", $LockPath
+    ) "Offline OCR wheelhouse installation" @{
+        PIP_NO_INDEX = "1"
+        PIP_FIND_LINKS = $Wheelhouse
+    }
+    Invoke-PrivatePython $python @("-I", "-X", "utf8", "-m", "pip", "check") "Offline OCR dependency closure check" @{
+        PIP_NO_INDEX = "1"
+    }
+
+    $probeScript = Join-Path $WorkRoot "full-runtime-probe.py"
+    @'
+import importlib.metadata as metadata
+import json
+import os
+import platform
+import site
+import struct
+import sys
+import paddle
+import paddleocr
+import tokenizers
+import imagesize
+import ftfy
+import wand
+from paddleocr import FormulaRecognition
+
+user_site = site.getusersitepackages()
+user_sites = [user_site] if isinstance(user_site, str) else list(user_site)
+normalized = lambda value: os.path.normcase(os.path.abspath(value))
+user_site_on_path = any(
+    normalized(path) == normalized(candidate)
+    for path in sys.path
+    for candidate in user_sites
+    if candidate
+)
+print(json.dumps({
+    "pythonVersion": platform.python_version(),
+    "bits": struct.calcsize("P") * 8,
+    "machine": platform.machine(),
+    "paddleVersion": paddle.__version__,
+    "paddleocrVersion": metadata.version("paddleocr"),
+    "tokenizersVersion": metadata.version("tokenizers"),
+    "formulaRecognition": FormulaRecognition.__name__,
+    "executable": sys.executable,
+    "userSiteEnabled": bool(site.ENABLE_USER_SITE),
+    "userSiteOnPath": user_site_on_path,
+}))
+'@ | Set-Content -LiteralPath $probeScript -Encoding UTF8
+    $probe = & $python -I -X utf8 $probeScript
+    if ($LASTEXITCODE -ne 0) {
+        throw "Full offline OCR runtime interface validation failed with exit code $LASTEXITCODE"
+    }
+    $parsed = $probe | Select-Object -Last 1 | ConvertFrom-Json
+    if ($parsed.pythonVersion -ne $PythonVersion -or $parsed.bits -ne 64) {
+        throw "Offline OCR Python version or architecture mismatch"
+    }
+    if ($parsed.paddleVersion -ne $PaddleVersion) {
+        throw "Offline OCR PaddlePaddle version is $($parsed.paddleVersion), expected $PaddleVersion"
+    }
+    if ($parsed.paddleocrVersion -ne $PaddleOcrVersion) {
+        throw "Offline OCR PaddleOCR version is $($parsed.paddleocrVersion), expected $PaddleOcrVersion"
+    }
+    if ($parsed.tokenizersVersion -ne $TokenizersVersion) {
+        throw "Offline OCR tokenizers version is $($parsed.tokenizersVersion), expected $TokenizersVersion"
+    }
+    if ($parsed.formulaRecognition -ne "FormulaRecognition") {
+        throw "PaddleOCR FormulaRecognition interface is unavailable"
+    }
+    if ($parsed.userSiteEnabled -or $parsed.userSiteOnPath) {
+        throw "Full offline OCR runtime used user site-packages"
+    }
+    if (-not ([string]$parsed.executable).StartsWith($RuntimeRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Full offline OCR runtime resolved the wrong interpreter: $($parsed.executable)"
+    }
+}
+
+function Install-StagedDirectory(
+    [string]$Staged,
+    [string]$Target,
+    [string]$Backup
+) {
+    Remove-Item -LiteralPath $Backup -Recurse -Force -ErrorAction SilentlyContinue
+    $hadTarget = Test-Path -LiteralPath $Target
+    if ($hadTarget) {
+        Move-Item -LiteralPath $Target -Destination $Backup -Force
+    }
+    try {
+        Move-Item -LiteralPath $Staged -Destination $Target -Force
+        Remove-Item -LiteralPath $Backup -Recurse -Force -ErrorAction SilentlyContinue
+    } catch {
+        Remove-Item -LiteralPath $Target -Recurse -Force -ErrorAction SilentlyContinue
+        if ($hadTarget -and (Test-Path -LiteralPath $Backup)) {
+            Move-Item -LiteralPath $Backup -Destination $Target -Force
+        }
+        throw
+    }
+}
+
+if (-not (Test-Path -LiteralPath $RequirementsSource -PathType Leaf)) {
+    throw "OCR requirements file is missing: $RequirementsSource"
+}
+New-Item -ItemType Directory -Path $ResourceRoot -Force | Out-Null
+New-Item -ItemType Directory -Path $CacheRoot -Force | Out-Null
+Get-VerifiedDownload $PythonArchiveUrl $PythonArchive $PythonArchiveSha256
+Get-VerifiedDownload $PipWheelUrl $PipWheel $PipWheelSha256
+
+$workRoot = Join-Path $env:TEMP ("visualtex-ocr-python-build-" + [guid]::NewGuid().ToString("N"))
+$runtimeRoot = Join-Path $workRoot "runtime"
+$validationRoot = Join-Path $workRoot "validation"
+$stagedWheelhouse = Join-Path $workRoot "wheelhouse"
+$stagedLock = Join-Path $workRoot $OutputLockName
+try {
+    Initialize-PrivateRuntime $runtimeRoot $workRoot
+    Test-PreparedBaseRuntime $runtimeRoot
+    $python = Join-Path $runtimeRoot "python.exe"
+
+    New-Item -ItemType Directory -Path $stagedWheelhouse -Force | Out-Null
+    Invoke-PrivatePython $python @(
+        "-I", "-X", "utf8", "-m", "pip", "download",
+        "--dest", $stagedWheelhouse,
+        "--only-binary=:all:",
+        "--disable-pip-version-check",
+        "--no-input",
+        "--requirement", $RequirementsSource
+    ) "Download complete fixed Windows OCR wheelhouse"
+
+    $lockScript = Join-Path $workRoot "generate-wheelhouse-lock.py"
+    New-FixedWheelhouseLock $python $stagedWheelhouse $stagedLock $lockScript
 
     Remove-Item -LiteralPath $validationRoot -Recurse -Force -ErrorAction SilentlyContinue
-    New-Item -ItemType Directory -Path $validationRoot -Force | Out-Null
-    Expand-Archive -LiteralPath $stagedArchive -DestinationPath $validationRoot -Force
-    Test-PreparedRuntime $validationRoot
+    Copy-Item -LiteralPath $runtimeRoot -Destination $validationRoot -Recurse -Force
+    Test-FullOfflineRuntime $validationRoot $stagedWheelhouse $stagedLock $workRoot
 
-    $archiveInstalled = $false
-    for ($attempt = 1; $attempt -le 5; $attempt++) {
-        try {
-            if (Test-Path -LiteralPath $OutputArchive) {
-                Remove-Item -LiteralPath $OutputArchive -Force -ErrorAction Stop
-            }
-            Move-Item -LiteralPath $stagedArchive -Destination $OutputArchive -Force -ErrorAction Stop
-            $archiveInstalled = $true
-            break
-        } catch {
-            if ($attempt -eq 5) {
-                throw "Unable to replace bundled OCR Python after $attempt attempts: $($_.Exception.Message)"
-            }
-            Start-Sleep -Milliseconds (200 * $attempt)
+    # Archive only the private Python bootstrap. The fixed wheelhouse remains a
+    # separate installer resource so runtime installation can use --find-links.
+    $stagedArchive = Join-Path $workRoot $OutputArchiveName
+    Compress-Archive -Path (Join-Path $runtimeRoot "*") -DestinationPath $stagedArchive -CompressionLevel Optimal
+    $archiveValidation = Join-Path $workRoot "archive-validation"
+    New-Item -ItemType Directory -Path $archiveValidation -Force | Out-Null
+    Expand-Archive -LiteralPath $stagedArchive -DestinationPath $archiveValidation -Force
+    Test-PreparedBaseRuntime $archiveValidation
+
+    $archiveBackup = "$OutputArchive.backup"
+    Remove-Item -LiteralPath $archiveBackup -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $OutputArchive) {
+        Move-Item -LiteralPath $OutputArchive -Destination $archiveBackup -Force
+    }
+    try {
+        Move-Item -LiteralPath $stagedArchive -Destination $OutputArchive -Force
+        Remove-Item -LiteralPath $archiveBackup -Force -ErrorAction SilentlyContinue
+    } catch {
+        Remove-Item -LiteralPath $OutputArchive -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $archiveBackup) {
+            Move-Item -LiteralPath $archiveBackup -Destination $OutputArchive -Force
         }
-    }
-    if (-not $archiveInstalled -or -not (Test-Path -LiteralPath $OutputArchive -PathType Leaf)) {
-        throw "Bundled OCR Python archive was not installed: $OutputArchive"
+        throw
     }
 
-    $archiveInfo = Get-Item -LiteralPath $OutputArchive
+    Install-StagedDirectory $stagedWheelhouse $OutputWheelhouse "$OutputWheelhouse.backup"
+    Copy-Item -LiteralPath $stagedLock -Destination $OutputLock -Force
+
+    $wheelRecords = @(
+        Get-ChildItem -LiteralPath $OutputWheelhouse -File -Filter "*.whl" |
+            Sort-Object Name |
+            ForEach-Object { Get-FileRecord $_.FullName }
+    )
+    if ($wheelRecords.Count -eq 0) {
+        throw "Bundled OCR wheelhouse is empty after activation"
+    }
     $manifest = [ordered]@{
-        schemaVersion = 1
+        schemaVersion = 2
         platform = "windows"
         architecture = "x64"
         pythonVersion = $PythonVersion
         pipVersion = $PipVersion
-        archive = [ordered]@{
-            name = $OutputArchiveName
-            size = $archiveInfo.Length
-            sha256 = Get-Sha256 $OutputArchive
+        archive = Get-FileRecord $OutputArchive
+        wheelhouse = [ordered]@{
+            lock = Get-FileRecord $OutputLock
+            files = $wheelRecords
+        }
+        expected = [ordered]@{
+            paddlepaddle = $PaddleVersion
+            paddleocr = $PaddleOcrVersion
+            tokenizers = $TokenizersVersion
+            formulaRecognition = "paddleocr.FormulaRecognition"
         }
         upstream = [ordered]@{
             pythonArchive = $PythonArchiveName
             pythonArchiveSha256 = $PythonArchiveSha256
             pipWheel = $PipWheelName
             pipWheelSha256 = $PipWheelSha256
+            requirements = (Split-Path -Leaf $RequirementsSource)
+            requirementsSha256 = Get-Sha256 $RequirementsSource
         }
     }
-    Write-Utf8NoBom $OutputManifest ($manifest | ConvertTo-Json -Depth 6)
+    Write-Utf8NoBom $OutputManifest ($manifest | ConvertTo-Json -Depth 8)
 
     Write-Host "Prepared bundled OCR Python: $OutputArchive"
-    Write-Host "SHA-256: $($manifest.archive.sha256)"
-    Write-Host "Size: $($manifest.archive.size) bytes"
+    Write-Host "Runtime SHA-256: $($manifest.archive.sha256)"
+    Write-Host "Wheelhouse files: $($wheelRecords.Count)"
+    Write-Host "Wheelhouse bytes: $((Get-ChildItem -LiteralPath $OutputWheelhouse -File | Measure-Object Length -Sum).Sum)"
+    Write-Host "Offline validation: Python $PythonVersion x64, PaddlePaddle $PaddleVersion, PaddleOCR $PaddleOcrVersion, tokenizers $TokenizersVersion, FormulaRecognition available"
 } finally {
     Remove-Item -LiteralPath $workRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

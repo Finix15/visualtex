@@ -2556,6 +2556,38 @@ kbd {
   color: var(--danger);
 }
 
+.ocr-model-drop-zone {
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
+}
+
+.ocr-model-drop-zone.is-dragging {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-elevated));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+  transform: translateY(-1px);
+}
+
+.ocr-model-drop-zone.is-dragging svg {
+  color: var(--accent);
+}
+
+.ocr-model-drop-hint {
+  display: block;
+  margin-top: 6px;
+  color: var(--text-faint);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.ocr-model-drop-zone.is-dragging .ocr-model-drop-hint {
+  color: var(--accent);
+  font-weight: 650;
+}
+
 .ocr-input-tip {
   align-items: flex-start;
   gap: 7px;

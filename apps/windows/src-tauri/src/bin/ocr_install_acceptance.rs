@@ -3,8 +3,8 @@ mod ocr_install;
 
 use ocr_install::{
     active_process_path, decode_process_output, install_log_path, load_snapshot,
-    run_logged_command, save_snapshot, CommandLimits, InstallControl, InstallSnapshot,
-    InstallState,
+    run_logged_command, save_snapshot, windows_powershell_executable, CommandLimits,
+    InstallControl, InstallSnapshot, InstallState,
 };
 use std::fs;
 use std::process::Command;
@@ -24,7 +24,9 @@ fn acceptance_root() -> std::path::PathBuf {
 }
 
 fn powershell(script: &str) -> Command {
-    let mut command = Command::new("powershell.exe");
+    let mut command = Command::new(
+        windows_powershell_executable().expect("absolute Windows PowerShell executable"),
+    );
     command.args(["-NoProfile", "-Command", script]);
     command
 }
@@ -176,7 +178,7 @@ fn main() -> Result<(), String> {
     let cancel_runner_control = cancel_control.clone();
     let cancel_thread = thread::spawn(move || {
         let mut command = powershell(
-            "[Console]::OutputEncoding=[Text.UTF8Encoding]::new(); Write-Output 'cancel-start'; Start-Process -FilePath powershell.exe -ArgumentList '-NoProfile','-Command','Start-Sleep -Seconds 30' -Wait",
+            "[Console]::OutputEncoding=[Text.UTF8Encoding]::new(); Write-Output 'cancel-start'; $childPowerShell = Join-Path $PSHOME 'powershell.exe'; Start-Process -FilePath $childPowerShell -ArgumentList '-NoProfile','-Command','Start-Sleep -Seconds 30' -Wait",
         );
         run_logged_command(
             &mut command,
