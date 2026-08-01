@@ -168,36 +168,48 @@ end launchVisualTeXURL
 
 on runningVisualTeXExecutable()
     set executableSuffix to "/VisualTeX.app/Contents/MacOS/visualtex"
+    set standardExecutable to "/Applications/VisualTeX.app/Contents/MacOS/visualtex"
+    set runningExecutable to my firstRunningVisualTeXExecutable(executableSuffix)
+    if runningExecutable is not "" then return runningExecutable
+    try
+        do shell script "/bin/test -x " & quoted form of standardExecutable
+        return standardExecutable
+    end try
     repeat with attemptIndex from 1 to 40
-        set processIds to ""
-        try
-            set processIds to do shell script "/usr/bin/pgrep -x " & quoted form of "visualtex"
-        end try
-        if processIds is not "" then
-            set previousDelimiters to AppleScript's text item delimiters
-            set AppleScript's text item delimiters to linefeed
-            set processIdItems to text items of processIds
-            set AppleScript's text item delimiters to previousDelimiters
-            repeat with processIdItem in processIdItems
-                set processId to processIdItem as text
-                if my isDecimalProcessId(processId) then
-                    try
-                        set candidatePath to do shell script "/bin/ps -p " & quoted form of processId & " -o comm="
-                        if candidatePath ends with executableSuffix then
-                            do shell script "/bin/test -x " & quoted form of candidatePath
-                            return candidatePath
-                        end if
-                    end try
-                end if
-            end repeat
-        end if
         if attemptIndex is 1 then
             do shell script "/usr/bin/open -gj -b " & quoted form of "com.visualtex.studio" & " --args --office-background"
         end if
         delay 0.05
+        set runningExecutable to my firstRunningVisualTeXExecutable(executableSuffix)
+        if runningExecutable is not "" then return runningExecutable
     end repeat
     error "The prewarmed VisualTeX executable is not running" number 7128
 end runningVisualTeXExecutable
+
+on firstRunningVisualTeXExecutable(executableSuffix)
+    set processIds to ""
+    try
+        set processIds to do shell script "/usr/bin/pgrep -x " & quoted form of "visualtex"
+    end try
+    if processIds is "" then return ""
+    set previousDelimiters to AppleScript's text item delimiters
+    set AppleScript's text item delimiters to linefeed
+    set processIdItems to text items of processIds
+    set AppleScript's text item delimiters to previousDelimiters
+    repeat with processIdItem in processIdItems
+        set processId to processIdItem as text
+        if my isDecimalProcessId(processId) then
+            try
+                set candidatePath to do shell script "/bin/ps -p " & quoted form of processId & " -o comm="
+                if candidatePath ends with executableSuffix then
+                    do shell script "/bin/test -x " & quoted form of candidatePath
+                    return candidatePath
+                end if
+            end try
+        end if
+    end repeat
+    return ""
+end firstRunningVisualTeXExecutable
 
 on isDecimalProcessId(candidate)
     set candidate to candidate as text

@@ -137,7 +137,17 @@ function acquireBuildLock() {
       bestEffort("/bin/cat", [buildLockOwnerPath]).trim(),
       10,
     );
-    if (processIsAlive(ownerPid)) {
+    const ownerCommand = bestEffort("/bin/ps", [
+      "-p",
+      String(ownerPid),
+      "-o",
+      "command=",
+    ]).trim();
+    if (
+      ownerPid !== process.pid &&
+      processIsAlive(ownerPid) &&
+      ownerCommand.includes("rebuild_macos_word_addin.mjs")
+    ) {
       throw new Error(
         `Another Word VBE build is already running (pid ${ownerPid}).`,
       );
@@ -863,7 +873,7 @@ function verifyBuiltVba(path) {
     "VisualTeX_EditImageField",
     "VisualTeX_EditSelectedImageFromNativeMonitor",
     "VTEnsureVisualTeXImageMacroButton",
-    "word-image-metadata-format-routing-20260801-r66",
+    "word-office-performance-20260801-r77",
   ];
   for (const value of required) {
     const utf8 = Buffer.from(value, "utf8");

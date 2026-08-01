@@ -467,7 +467,10 @@ fn native_word_document_path(formula_id: &str) -> Result<PathBuf, String> {
     Ok(directory.join(format!("{formula_id}.docx")))
 }
 
-fn cleanup_session_files_at(directory: &Path) -> Result<(), String> {
+fn cleanup_session_files_at(
+    directory: &Path,
+    remove_document_formula_files: bool,
+) -> Result<(), String> {
     for name in [
         REQUEST_FILE,
         DISPATCH_FILE,
@@ -484,14 +487,16 @@ fn cleanup_session_files_at(directory: &Path) -> Result<(), String> {
             Err(error) => return Err(format!("Unable to remove {}: {error}", path.display())),
         }
     }
-    if let Ok(entries) = fs::read_dir(directory) {
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if name.starts_with("document-formula-") {
-                let path = entry.path();
-                if path.is_file() {
-                    let _ = fs::remove_file(path);
+    if remove_document_formula_files {
+        if let Ok(entries) = fs::read_dir(directory) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if name.starts_with("document-formula-") {
+                    let path = entry.path();
+                    if path.is_file() {
+                        let _ = fs::remove_file(path);
+                    }
                 }
             }
         }
@@ -508,7 +513,10 @@ fn cleanup_session_files_at(directory: &Path) -> Result<(), String> {
 }
 
 fn cleanup_session_files(host: OfficeHost, session_id: &str) -> Result<(), String> {
-    cleanup_session_files_at(&session_directory(host, session_id)?)
+    cleanup_session_files_at(
+        &session_directory(host, session_id)?,
+        host == OfficeHost::Word,
+    )
 }
 
 fn pointer_path(host: OfficeHost) -> Result<PathBuf, String> {
@@ -2114,7 +2122,12 @@ fn set_mode(_path: &Path, _mode: u32) -> Result<(), String> {
     Ok(())
 }
 
-fn atomic_write(path: &Path, bytes: &[u8], mode: u32) -> Result<(), String> {
+fn atomic_write_with_durability(
+    path: &Path,
+    bytes: &[u8],
+    mode: u32,
+    durable: bool,
+) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| format!("Path has no parent: {}", path.display()))?;
@@ -2135,14 +2148,27 @@ fn atomic_write(path: &Path, bytes: &[u8], mode: u32) -> Result<(), String> {
         .map_err(|error| format!("Unable to create {}: {error}", temporary.display()))?;
     file.write_all(bytes)
         .map_err(|error| format!("Unable to write {}: {error}", temporary.display()))?;
-    file.sync_all()
-        .map_err(|error| format!("Unable to sync {}: {error}", temporary.display()))?;
+    if durable {
+        file.sync_all()
+            .map_err(|error| format!("Unable to sync {}: {error}", temporary.display()))?;
+    }
     set_mode(&temporary, mode)?;
     fs::rename(&temporary, path).map_err(|error| {
         let _ = fs::remove_file(&temporary);
         format!("Unable to replace {}: {error}", path.display())
     })?;
     set_mode(path, mode)
+}
+
+fn atomic_write(path: &Path, bytes: &[u8], mode: u32) -> Result<(), String> {
+    atomic_write_with_durability(path, bytes, mode, true)
+}
+
+fn atomic_write_runtime(path: &Path, bytes: &[u8], mode: u32) -> Result<(), String> {
+    // Session artifacts are consumed only after the atomic rename completes.
+    // They do not need crash-durable fsync before a synchronous Office callback,
+    // and skipping it removes several full storage barriers from every Apply.
+    atomic_write_with_durability(path, bytes, mode, false)
 }
 
 fn sanitize_dispatch_value(value: &str, label: &str) -> Result<String, String> {
@@ -2255,7 +2281,7 @@ fn with_dispatch_pointer<T>(
         .lock()
         .map_err(|_| "VisualTeX Office dispatch lock is unavailable".to_string())?;
     let pointer = pointer_path(host)?;
-    atomic_write(&pointer, session_id.as_bytes(), 0o600)?;
+    atomic_write_runtime(&pointer, session_id.as_bytes(), 0o600)?;
     let result = operation();
     let _ = fs::remove_file(pointer);
     result
@@ -2502,7 +2528,7 @@ fn materialize_result_png(session: &OfficeFormulaSession) -> Result<PathBuf, Str
         .ok_or_else(|| "Offline Office Session requires a PNG export".to_string())
         .and_then(decode_png)?;
     let path = result_png_path(session.host, &session.id)?;
-    atomic_write(&path, &png, 0o600)?;
+    atomic_write_runtime(&path, &png, 0o600)?;
     Ok(path)
 }
 
@@ -2548,7 +2574,7 @@ fn materialize_result_svg(session: &OfficeFormulaSession) -> Result<PathBuf, Str
         .ok_or_else(|| "Office Session has no formula export".to_string())?;
     let svg = decode_svg(&export.svg_base64)?;
     let path = result_svg_path(session.host, &session.id)?;
-    atomic_write(&path, &svg, 0o600)?;
+    atomic_write_runtime(&path, &svg, 0o600)?;
     Ok(path)
 }
 
@@ -2765,10 +2791,10 @@ fn materialize_word_svg_package(
     let svg_path = result_svg_path(OfficeHost::Word, &session.id)?;
     let png_path = result_png_path(OfficeHost::Word, &session.id)?;
     let document_path = result_word_svg_docx_path(&session.id)?;
-    atomic_write(&svg_path, &svg, 0o600)?;
-    atomic_write(&png_path, &png, 0o600)?;
+    atomic_write_runtime(&svg_path, &svg, 0o600)?;
+    atomic_write_runtime(&png_path, &png, 0o600)?;
     let package = build_word_svg_docx(&svg, &png, geometry.width, geometry.height)?;
-    atomic_write(&document_path, &package, 0o600)?;
+    atomic_write_runtime(&document_path, &package, 0o600)?;
     Ok((svg_path, document_path, png_path))
 }
 
@@ -2786,6 +2812,7 @@ fn commit_word(
     canonical_latex: &str,
     geometry: WordGeometry,
 ) -> Result<(), String> {
+    let commit_started = Instant::now();
     let export = session
         .export_result
         .as_ref()
@@ -2809,28 +2836,43 @@ fn commit_word(
     {
         return Err("Word formula OMML payload is not a safe Office Math fragment".to_string());
     }
-    let omml_docx_base64 = export
-        .omml_docx_base64
-        .as_deref()
-        .ok_or_else(|| "Word formula export has no native DOCX payload".to_string())?;
-    let omml_docx = URL_SAFE_NO_PAD
-        .decode(omml_docx_base64)
-        .map_err(|_| "Word formula native DOCX payload is not valid Base64URL".to_string())?;
-    if omml_docx.len() < 128
-        || omml_docx.len() > MAX_OMML_BYTES * 8
-        || !omml_docx.starts_with(b"PK\x03\x04")
-    {
-        return Err("Word formula native DOCX payload is invalid or too large".to_string());
-    }
-    let native_document_path = native_word_document_path(&session.formula_id)?;
-    atomic_write(&native_document_path, &omml_docx, 0o600)?;
+    let native_document_path = if request.native_equation {
+        let omml_docx_base64 = export
+            .omml_docx_base64
+            .as_deref()
+            .ok_or_else(|| "Word formula export has no native DOCX payload".to_string())?;
+        let omml_docx = URL_SAFE_NO_PAD
+            .decode(omml_docx_base64)
+            .map_err(|_| "Word formula native DOCX payload is not valid Base64URL".to_string())?;
+        if omml_docx.len() < 128
+            || omml_docx.len() > MAX_OMML_BYTES * 8
+            || !omml_docx.starts_with(b"PK\x03\x04")
+        {
+            return Err("Word formula native DOCX payload is invalid or too large".to_string());
+        }
+        let path = native_word_document_path(&session.formula_id)?;
+        atomic_write(&path, &omml_docx, 0o600)?;
+        Some(path)
+    } else {
+        None
+    };
 
-    // Word for Mac exposes SVG in the document format but its VBA
-    // InlineShapes.AddPicture API rejects a raw .svg file. Materialize a tiny
-    // DOCX containing an SVG blip plus a PNG compatibility preview, then let
-    // Word import its already-parsed InlineShape through FormattedText.
-    let (image_path, vector_document_path, fallback_image_path) =
-        materialize_word_svg_package(session, geometry)?;
+    // Native Word equations consume only the native DOCX. Image equations
+    // consume only the SVG staging package. Avoid decoding, packaging and
+    // writing the unused representation on every Apply.
+    let image_artifacts = if request.native_equation {
+        None
+    } else {
+        Some(materialize_word_svg_package(session, geometry)?)
+    };
+    queue_editor_performance(
+        OfficeHost::Word,
+        &session.id,
+        "apply-word-artifacts-ready",
+        commit_started.elapsed().as_secs_f64() * 1000.0,
+        None,
+        json!({ "nativeEquation": request.native_equation }),
+    );
     let source_marker = request
         .source_object_id
         .clone()
@@ -2858,21 +2900,36 @@ fn commit_word(
             "nativeEquation",
             if request.native_equation { "1" } else { "0" }.to_string(),
         ),
-        ("imagePath", image_path.to_string_lossy().to_string()),
+        (
+            "imagePath",
+            image_artifacts
+                .as_ref()
+                .map(|artifacts| artifacts.0.to_string_lossy().to_string())
+                .unwrap_or_default(),
+        ),
         (
             "vectorDocumentPath",
-            vector_document_path.to_string_lossy().to_string(),
+            image_artifacts
+                .as_ref()
+                .map(|artifacts| artifacts.1.to_string_lossy().to_string())
+                .unwrap_or_default(),
         ),
         (
             "fallbackImagePath",
-            fallback_image_path.to_string_lossy().to_string(),
+            image_artifacts
+                .as_ref()
+                .map(|artifacts| artifacts.2.to_string_lossy().to_string())
+                .unwrap_or_default(),
         ),
         ("metadata", metadata.to_string()),
         ("latexBase64", latex_base64),
         ("ommlBase64", omml_base64.to_string()),
         (
             "nativeDocumentPath",
-            native_document_path.to_string_lossy().to_string(),
+            native_document_path
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string())
+                .unwrap_or_default(),
         ),
         ("pendingMarker", pending_marker),
         ("sourceMarker", source_marker),
@@ -2897,14 +2954,30 @@ fn commit_word(
             format!("{:.6}", geometry.reference_baseline_pt),
         ),
     ])?;
-    atomic_write(
+    atomic_write_runtime(
         &dispatch_path(OfficeHost::Word, &session.id)?,
         dispatch.as_bytes(),
         0o600,
     )?;
+    queue_editor_performance(
+        OfficeHost::Word,
+        &session.id,
+        "apply-word-dispatch-ready",
+        commit_started.elapsed().as_secs_f64() * 1000.0,
+        None,
+        json!({}),
+    );
     with_dispatch_pointer(OfficeHost::Word, &session.id, || {
         run_vba_callback(OfficeHost::Word)
     })?;
+    queue_editor_performance(
+        OfficeHost::Word,
+        &session.id,
+        "apply-word-vba-complete",
+        commit_started.elapsed().as_secs_f64() * 1000.0,
+        None,
+        json!({}),
+    );
     Ok(())
 }
 
@@ -2970,7 +3043,7 @@ fn commit_powerpoint(
         ("slideIndex", powerpoint.slide_index.to_string()),
         ("slideId", powerpoint.slide_id.to_string()),
     ])?;
-    atomic_write(
+    atomic_write_runtime(
         &dispatch_path(OfficeHost::Powerpoint, &session.id)?,
         dispatch.as_bytes(),
         0o600,
@@ -3579,11 +3652,20 @@ fn commit_session_blocking(
     state: OfficeCompanionState,
     session_id: String,
 ) -> Result<OfficeFormulaSession, String> {
+    let commit_started = Instant::now();
     validate_uuid(&session_id, "Session id")?;
     let session = state
         .session_store
         .get(&session_id)
         .map_err(|error| error.to_string())?;
+    queue_editor_performance(
+        session.host,
+        &session_id,
+        "apply-backend-start",
+        0.0,
+        None,
+        json!({ "mode": session.mode, "dirty": session.dirty }),
+    );
     if session.status == OfficeSessionStatus::Completed {
         let _ = cleanup_session_files(session.host, &session_id);
         return Ok(session);
@@ -3604,6 +3686,14 @@ fn commit_session_blocking(
         && !word_format_conversion_requested
     {
         let completed = complete_session(&state, &session_id)?;
+        queue_editor_performance(
+            session.host,
+            &session_id,
+            "apply-noop-complete",
+            commit_started.elapsed().as_secs_f64() * 1000.0,
+            None,
+            json!({}),
+        );
         let _ = cleanup_session_files(session.host, &session_id);
         return Ok(completed);
     }
@@ -3637,13 +3727,37 @@ fn commit_session_blocking(
         fail_session(&state, &session_id, &error);
         return Err(error);
     }
-    if let Err(error) = state.formula_cache.put(&session.formula_id, metadata) {
-        let message = format!("Formula metadata could not be saved: {error}");
-        fail_session(&state, &session_id, &message);
-        return Err(message);
-    }
+    queue_editor_performance(
+        session.host,
+        &session_id,
+        "apply-office-callback-complete",
+        commit_started.elapsed().as_secs_f64() * 1000.0,
+        None,
+        json!({}),
+    );
     let completed = complete_session(&state, &session_id)?;
-    let _ = cleanup_session_files(session.host, &session_id);
+    queue_editor_performance(
+        session.host,
+        &session_id,
+        "apply-backend-complete",
+        commit_started.elapsed().as_secs_f64() * 1000.0,
+        None,
+        json!({}),
+    );
+
+    // The Office document already contains the durable edit metadata. Cache
+    // refresh and ephemeral Session cleanup must not extend the user's Apply
+    // wait after the host callback has succeeded.
+    let maintenance_state = state.clone();
+    let maintenance_session_id = session_id.clone();
+    let maintenance_host = session.host;
+    let formula_id = session.formula_id.clone();
+    std::thread::spawn(move || {
+        if let Err(error) = maintenance_state.formula_cache.put(&formula_id, metadata) {
+            eprintln!("Unable to refresh the VisualTeX formula cache after Apply: {error}");
+        }
+        let _ = cleanup_session_files(maintenance_host, &maintenance_session_id);
+    });
     Ok(completed)
 }
 
@@ -3816,12 +3930,22 @@ pub fn delete_macos_offline_office_session(
 #[tauri::command]
 pub async fn commit_macos_offline_office_session(
     session_id: String,
+    patch: Option<Value>,
     state: tauri::State<'_, OfficeCompanionState>,
 ) -> Result<OfficeFormulaSession, String> {
     let state = state.inner().clone();
-    tokio::task::spawn_blocking(move || commit_session_blocking(state, session_id))
-        .await
-        .map_err(|error| format!("Offline Office commit task failed: {error}"))?
+    tokio::task::spawn_blocking(move || {
+        validate_uuid(&session_id, "Session id")?;
+        if let Some(patch) = patch {
+            state
+                .session_store
+                .patch(&session_id, patch)
+                .map_err(|error| error.to_string())?;
+        }
+        commit_session_blocking(state, session_id)
+    })
+    .await
+    .map_err(|error| format!("Offline Office commit task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -4145,7 +4269,7 @@ mod tests {
         }
         fs::write(directory.join("keep.txt"), b"keep").expect("unknown file should exist");
 
-        cleanup_session_files_at(&directory).expect("known files should be cleaned");
+        cleanup_session_files_at(&directory, false).expect("known files should be cleaned");
         for name in [
             REQUEST_FILE,
             DISPATCH_FILE,
@@ -4158,7 +4282,8 @@ mod tests {
         assert!(directory.is_dir());
 
         fs::remove_file(directory.join("keep.txt")).unwrap();
-        cleanup_session_files_at(&directory).expect("empty Session directory should be removed");
+        cleanup_session_files_at(&directory, false)
+            .expect("empty Session directory should be removed");
         assert!(!directory.exists());
     }
 

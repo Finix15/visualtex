@@ -4,7 +4,7 @@ Option Explicit
 Private Const VT_POWERPOINT_HOST As String = "powerpoint"
 Private Const VT_POWERPOINT_STATUS_FILE As String = "/OfficePluginStatus/powerpoint.json"
 Private Const VT_POWERPOINT_SOURCE_REVISION As String = _
-    "powerpoint-svg-font-size-dropdown-unicode-20260727-r3"
+    "powerpoint-office-performance-20260801-r4"
 Private Const VT_SHAPE_PREFIX As String = "VisualTeX_"
 Private Const VT_DEFAULT_PLACEHOLDER_WIDTH As Single = 180!
 Private Const VT_DEFAULT_PLACEHOLDER_HEIGHT As Single = 42!
@@ -25,6 +25,7 @@ Private VT_POWERPOINT_RIBBON As IRibbonUI
 Public Sub Auto_Open()
     On Error Resume Next
     VTInitializePowerPointEvents
+    VTPrewarmApplication VT_POWERPOINT_HOST
     VTWritePowerPointHealth
     On Error GoTo 0
 End Sub
@@ -111,11 +112,9 @@ Public Sub VisualTeX_NewFormula()
         pendingMarker, _
         powerPointJson)
 
-    failureStage = "write request"
-    VTWriteRequest sessionId, requestJson
-
-    failureStage = "open VisualTeX editor"
-    VTLaunchSession VT_POWERPOINT_HOST, sessionId
+    failureStage = "write request and open VisualTeX editor"
+    Call VTWriteAndLaunchSession( _
+        VT_POWERPOINT_HOST, sessionId, requestJson)
     Exit Sub
 
 Failed:
@@ -223,8 +222,8 @@ Private Sub VTPowerPointEditShape(ByVal selectedShape As Shape)
         encodedMetadata, _
         "", _
         powerPointJson)
-    VTWriteRequest sessionId, requestJson
-    VTLaunchSession VT_POWERPOINT_HOST, sessionId
+    Call VTWriteAndLaunchSession( _
+        VT_POWERPOINT_HOST, sessionId, requestJson)
 End Sub
 
 Public Sub VisualTeX_DeleteSelected()
@@ -670,6 +669,7 @@ Private Sub VTEnsurePowerPointFormulaScaleState( _
     Dim hasReferenceWidth As Boolean
     Dim hasReferenceHeight As Boolean
     Dim observedFontSizePt As Double
+    Dim scaleStateNeedsWrite As Boolean
 
     If target Is Nothing Or Not VTIsVisualTeXPowerPointShape(target) Then
         Err.Raise vbObjectError + 7524, "VisualTeX", _
@@ -685,6 +685,7 @@ Private Sub VTEnsurePowerPointFormulaScaleState( _
     If Not hasFontSize Or _
        Not VTValidPowerPointFormulaFontSize(fontSizePt) Then
         fontSizePt = VT_POWERPOINT_DEFAULT_FONT_SIZE_PT
+        scaleStateNeedsWrite = True
     End If
     If Not hasReferenceWidth Or Not hasReferenceHeight Or _
        referenceWidthPt <= 0# Or referenceHeightPt <= 0# Then
@@ -692,15 +693,21 @@ Private Sub VTEnsurePowerPointFormulaScaleState( _
             VT_POWERPOINT_REFERENCE_FONT_SIZE_PT / fontSizePt
         referenceHeightPt = target.Height * _
             VT_POWERPOINT_REFERENCE_FONT_SIZE_PT / fontSizePt
+        scaleStateNeedsWrite = True
     Else
         observedFontSizePt = target.Height / referenceHeightPt * _
             VT_POWERPOINT_REFERENCE_FONT_SIZE_PT
         If VTValidPowerPointFormulaFontSize(observedFontSizePt) Then
-            fontSizePt = observedFontSizePt
+            If Abs(observedFontSizePt - fontSizePt) > 0.05 Then
+                fontSizePt = observedFontSizePt
+                scaleStateNeedsWrite = True
+            End If
         End If
     End If
-    VTSetPowerPointFormulaScaleState _
-        target, fontSizePt, referenceWidthPt, referenceHeightPt
+    If scaleStateNeedsWrite Then
+        VTSetPowerPointFormulaScaleState _
+            target, fontSizePt, referenceWidthPt, referenceHeightPt
+    End If
 End Sub
 
 Private Function VTPreferredPowerPointFormulaFontSize() As Double

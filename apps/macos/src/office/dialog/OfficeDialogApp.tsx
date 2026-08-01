@@ -56,6 +56,7 @@ import {
   saveOfficeSessionKeepalive,
   type OfficeExportResult,
   type OfficeHost,
+  type UpdateOfficeSessionInput,
 } from "../api/sessionClient";
 import { useOfficeSession } from "./useOfficeSession";
 import { messageOfficeParent } from "./dialogMessages";
@@ -153,6 +154,10 @@ export function OfficeDialogApp() {
     fingerprint: string;
     exportResult: OfficeExportResult;
   } | null>(null);
+  const completeExportInFlightRef = useRef<{
+    fingerprint: string;
+    promise: Promise<OfficeExportResult | null>;
+  } | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 1040);
   const [historyBusy, setHistoryBusy] = useState(false);
   const [autoCommitOnClose, setAutoCommitOnClose] = useState(true);
@@ -217,6 +222,7 @@ export function OfficeDialogApp() {
     nativeCloseRequestInFlightRef.current = false;
     exportRunIdRef.current += 1;
     latestCompleteExportRef.current = null;
+    completeExportInFlightRef.current = null;
     historyManager.clear();
     setHydratedSessionKey("");
     setHydratedPerformanceMs(0);
@@ -463,19 +469,28 @@ export function OfficeDialogApp() {
                 contentReadyMs,
               },
             },
-          ).catch((reason) => {
-            if (activeSessionKeyRef.current !== sessionKey) return;
-            document.body.style.opacity = "0";
-            readyReportedSessionKeyRef.current = "";
-            setToast(
-              errorMessage(
-                reason,
-                isEn
-                  ? "Unable to reveal the Office formula editor"
-                  : "无法显示 Office 公式编辑器",
-              ),
-            );
-          });
+          )
+            .then(() => {
+              if (activeSessionKeyRef.current !== sessionKey) return;
+              // A formula opened from Office is an editing action. Focus only
+              // after AppKit has made the resident window visible and key; an
+              // earlier MathLive focus can race its first connected frame and
+              // must never block the ready report.
+              window.requestAnimationFrame(() => editorRef.current?.focus());
+            })
+            .catch((reason) => {
+              if (activeSessionKeyRef.current !== sessionKey) return;
+              document.body.style.opacity = "0";
+              readyReportedSessionKeyRef.current = "";
+              setToast(
+                errorMessage(
+                  reason,
+                  isEn
+                    ? "Unable to reveal the Office formula editor"
+                    : "无法显示 Office 公式编辑器",
+                ),
+              );
+            });
         });
       });
     };
@@ -579,8 +594,11 @@ export function OfficeDialogApp() {
     };
   }, [latex, displayMode, lines, latexCodeFormat, session?.host]);
 
-  const generateExportResult = useCallback(async (): Promise<OfficeExportResult | null> => {
-    const base = generateSvgExportResult();
+  const generateExportResult = useCallback(async (
+    preparedBase?: OfficeExportResult | null,
+  ): Promise<OfficeExportResult | null> => {
+    const base =
+      preparedBase === undefined ? generateSvgExportResult() : preparedBase;
     if (!base) return null;
     let pngBase64: string | undefined;
     try {
@@ -602,6 +620,42 @@ export function OfficeDialogApp() {
     }
     return { ...base, pngBase64 };
   }, [generateSvgExportResult]);
+
+  const getCompleteExportResult = useCallback(
+    (
+      fingerprint: string,
+      preparedBase?: OfficeExportResult | null,
+    ): Promise<OfficeExportResult | null> => {
+      const cached = latestCompleteExportRef.current;
+      if (
+        cached?.fingerprint === fingerprint &&
+        cached.exportResult.pngBase64
+      ) {
+        return Promise.resolve(cached.exportResult);
+      }
+      const inFlight = completeExportInFlightRef.current;
+      if (inFlight?.fingerprint === fingerprint) return inFlight.promise;
+
+      const promise = generateExportResult(preparedBase)
+        .then((result) => {
+          if (result?.pngBase64) {
+            latestCompleteExportRef.current = {
+              fingerprint,
+              exportResult: result,
+            };
+          }
+          return result;
+        })
+        .finally(() => {
+          if (completeExportInFlightRef.current?.promise === promise) {
+            completeExportInFlightRef.current = null;
+          }
+        });
+      completeExportInFlightRef.current = { fingerprint, promise };
+      return promise;
+    },
+    [generateExportResult],
+  );
 
   useEffect(() => {
     if (!session || !sessionId || !sessionHydrated || finalizingRef.current) {
@@ -660,7 +714,7 @@ export function OfficeDialogApp() {
         exportResult &&
         !(session.host === "powerpoint" && USE_NATIVE_POWERPOINT_COMMIT)
       ) {
-        void generateExportResult()
+        void getCompleteExportResult(currentFingerprint, exportResult)
           .then((completeExport) => {
             if (
               !completeExport?.pngBase64 ||
@@ -669,10 +723,6 @@ export function OfficeDialogApp() {
             ) {
               return;
             }
-            latestCompleteExportRef.current = {
-              fingerprint: currentFingerprint,
-              exportResult: completeExport,
-            };
             return save({
               ...draftUpdate,
               exportResult: completeExport,
@@ -716,7 +766,7 @@ export function OfficeDialogApp() {
     save,
     isEn,
     generateSvgExportResult,
-    generateExportResult,
+    getCompleteExportResult,
   ]);
 
   useEffect(() => {
@@ -1056,19 +1106,21 @@ export function OfficeDialogApp() {
     }
   };
 
-  const saveCurrentSession = useCallback(
-    async (status: "editing" | "committing" | "cancelled") => {
+  const buildCurrentSessionUpdate = useCallback(
+    async (
+      status: "editing" | "committing" | "cancelled",
+    ): Promise<UpdateOfficeSessionInput> => {
       if (!session) throw new Error("Office Session 尚未加载。");
       const exportResult =
         status === "cancelled"
           ? session.exportResult
           : session.host === "powerpoint" && USE_NATIVE_POWERPOINT_COMMIT
             ? generateSvgExportResult()
-            : await generateExportResult();
+            : await getCompleteExportResult(currentFingerprint);
       if (status === "committing" && !exportResult) {
         throw new Error(isEn ? "Formula export is empty" : "公式导出结果为空");
       }
-      const next = await save({
+      return {
         title,
         lines,
         activeLineId,
@@ -1083,12 +1135,9 @@ export function OfficeDialogApp() {
         exportWidth: exportResult?.width ?? 0,
         exportHeight: exportResult?.height ?? 0,
         error: null,
-      });
-      lastSavedFingerprintRef.current = currentFingerprint;
-      return next;
+      };
     }, [
       session,
-      save,
       title,
       lines,
       activeLineId,
@@ -1099,9 +1148,19 @@ export function OfficeDialogApp() {
       autoCommitOnClose,
       currentFingerprint,
       generateSvgExportResult,
-      generateExportResult,
+      getCompleteExportResult,
       isEn,
     ],
+  );
+
+  const saveCurrentSession = useCallback(
+    async (status: "editing" | "committing" | "cancelled") => {
+      const update = await buildCurrentSessionUpdate(status);
+      const next = await save(update);
+      lastSavedFingerprintRef.current = currentFingerprint;
+      return next;
+    },
+    [buildCurrentSessionUpdate, currentFingerprint, save],
   );
 
   const closeOfficeEditorWindow = useCallback(async () => {
@@ -1135,10 +1194,11 @@ export function OfficeDialogApp() {
     const targetSessionKey = sessionKey;
     finalizingRef.current = true;
     try {
-      const next = await saveCurrentSession("committing");
-
       if (isMacosOfflineTauriTransport()) {
-        await commitMacosOfflineOfficeSession(next.id);
+        if (!session) throw new Error("Office Session 尚未加载。");
+        const update = await buildCurrentSessionUpdate("committing");
+        await commitMacosOfflineOfficeSession(session.id, update);
+        lastSavedFingerprintRef.current = currentFingerprint;
         if (activeSessionKeyRef.current !== targetSessionKey) return false;
         try {
           await closeOfficeEditorWindow();
@@ -1158,6 +1218,7 @@ export function OfficeDialogApp() {
         return true;
       }
 
+      const next = await saveCurrentSession("committing");
       messageOfficeParent({ type: "visualtex-commit", sessionId: next.id });
       // The parent bridge owns both Word and PowerPoint mutations. Keep the
       // action busy until the host confirms the durable final state; a failed
@@ -1177,7 +1238,35 @@ export function OfficeDialogApp() {
       );
       return false;
     }
-  }, [closeOfficeEditorWindow, isEn, latex, saveCurrentSession, sessionKey]);
+  }, [
+    buildCurrentSessionUpdate,
+    closeOfficeEditorWindow,
+    currentFingerprint,
+    isEn,
+    latex,
+    saveCurrentSession,
+    session,
+    sessionKey,
+  ]);
+
+  useEffect(() => {
+    const handleApplyShortcut = (event: KeyboardEvent) => {
+      if (
+        event.isComposing ||
+        event.key !== "Enter" ||
+        (!event.metaKey && !event.ctrlKey) ||
+        event.altKey ||
+        event.shiftKey
+      ) {
+        return;
+      }
+      event.preventDefault();
+      void handleCommit();
+    };
+    window.addEventListener("keydown", handleApplyShortcut, true);
+    return () =>
+      window.removeEventListener("keydown", handleApplyShortcut, true);
+  }, [handleCommit]);
 
   const handleCancel = useCallback(async () => {
     if (finalizingRef.current) return;

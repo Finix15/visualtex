@@ -230,10 +230,13 @@ export function deleteOfficeSession(sessionId: string) {
   );
 }
 
-export function commitMacosOfflineOfficeSession(sessionId: string) {
+export function commitMacosOfflineOfficeSession(
+  sessionId: string,
+  update?: UpdateOfficeSessionInput,
+) {
   return invokeTauri<OfficeFormulaSession>(
     "commit_macos_offline_office_session",
-    { sessionId },
+    { sessionId, patch: update },
   );
 }
 

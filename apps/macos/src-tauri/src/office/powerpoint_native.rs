@@ -921,7 +921,7 @@ where
     // a pasted SVG to `Graphic N`; the Office.js command page can still verify
     // durable VisualTeX tags and silently ignore an ordinary picture.
     let mut last_selection = None;
-    for delay in [120_u64, 120, 220] {
+    for delay in [25_u64, 35, 60, 100] {
         wait(Duration::from_millis(delay));
         let Ok(selection) = read_selection() else {
             continue;
@@ -1100,7 +1100,7 @@ pub fn start_double_click_monitor(
                 // skipped the VBA event, use the same strict metadata-only image
                 // edit entry that also supports legacy bare InlineShapes.
                 if selection.macro_button_wrapped {
-                    for delay_ms in [80_u64, 120, 180] {
+                    for delay_ms in [35_u64, 55, 85] {
                         std::thread::sleep(Duration::from_millis(delay_ms));
                         if crate::office::macos_offline::focus_open_office_editor(&app) {
                             let _ = pane_cleanup.join();

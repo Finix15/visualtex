@@ -131,7 +131,7 @@ function validateMacroContainer(path, kind, options = {}) {
       packageVersion,
       ...(kind === "Word"
         ? [
-            "word-image-metadata-format-routing-20260801-r66",
+            "word-office-performance-20260801-r77",
             "VTTraceWordDoubleClick",
             "App_WindowSelectionChange",
             "VisualTeX_StabilizeImageEquationNumberSelection",
@@ -144,7 +144,7 @@ function validateMacroContainer(path, kind, options = {}) {
             "VTPrewarmApplication",
           ]
         : [
-            "powerpoint-svg-font-size-dropdown-unicode-20260727-r3",
+            "powerpoint-office-performance-20260801-r4",
             "App_WindowSelectionChange",
             "VTPowerPointRibbonApplyFormulaFontSizePreset",
           ]),

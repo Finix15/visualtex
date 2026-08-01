@@ -104,6 +104,10 @@ const finalBinaryPhysicalStatusPath = join(
   officeScratchRoot,
   "final-binary-physical-double-click.json",
 );
+const wordPhysicalPerformanceStatusPath = join(
+  officeScratchRoot,
+  "word-physical-performance.json",
+);
 const pictureRoutingFixturePng = join(
   officeScratchRoot,
   "picture-routing-fixture.png",
@@ -115,6 +119,9 @@ const pictureRoutingBrowserArtifactsPath = join(
 const sessionsRoot = join(runtimeRoot, "OfficeSessions");
 const nativeRoot = join(runtimeRoot, "NativeDocuments");
 const physicalDoubleClick = process.argv.includes("--physical-double-click");
+const physicalApplyPerformance = process.argv.includes(
+  "--physical-apply-performance",
+);
 const createSourceFormattedEquationRegression = process.argv.includes(
   "--create-source-formatted-equation",
 );
@@ -204,6 +211,16 @@ if (physicalDoubleClick && !physicalTargets.has(physicalTarget)) {
 if (!physicalDoubleClick && physicalTarget) {
   throw new Error("--physical-target requires --physical-double-click");
 }
+if (physicalApplyPerformance && !physicalDoubleClick) {
+  throw new Error(
+    "--physical-apply-performance requires --physical-double-click",
+  );
+}
+if (physicalApplyPerformance && physicalTarget !== "image-inline") {
+  throw new Error(
+    "--physical-apply-performance currently requires --physical-target image-inline",
+  );
+}
 if (createImageRegression && physicalDoubleClick) {
   throw new Error("--create-image cannot be combined with --physical-double-click");
 }
@@ -245,6 +262,40 @@ const transparentPng = Buffer.from(
   "base64",
 );
 const sleep = (ms) => new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
+
+async function waitForWordAutomationReady(timeoutMs = 30_000) {
+  spawnSync("/usr/bin/open", ["-a", "Microsoft Word"], {
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  const deadline = Date.now() + timeoutMs;
+  let lastError = "";
+  while (Date.now() < deadline) {
+    try {
+      const state = runAppleScript([
+        'tell application "Microsoft Word"',
+        "activate",
+        "if not (exists active document) then make new document",
+        "end tell",
+        'tell application "System Events"',
+        'tell process "Microsoft Word"',
+        "set visible to true",
+        "set frontmost to true",
+        'if (count of menu bars) = 0 or (count of windows) = 0 then error "Word UI is not ready"',
+        'return "READY"',
+        "end tell",
+        "end tell",
+      ], 5_000);
+      if (state.trim() === "READY") return;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      await sleep(500);
+    }
+  }
+  throw new Error(
+    `Microsoft Word did not become automation-ready after startup: ${lastError}`,
+  );
+}
 
 function wordPictureFormatUiSnapshot() {
   const snapshot = JSON.parse(
@@ -565,6 +616,100 @@ async function startVisualTeXForPhysicalRegression() {
   });
   child.unref();
   await sleep(4_000);
+}
+
+function visualTeXEditorWindowBounds() {
+  const raw = runAppleScript([
+    'tell application "System Events"',
+    'tell process "visualtex"',
+    'if (count of windows) is 0 then error "VisualTeX editor window is missing"',
+    "set windowPosition to position of window 1",
+    "set windowSize to size of window 1",
+    'return (item 1 of windowPosition as text) & "|" & (item 2 of windowPosition as text) & "|" & (item 1 of windowSize as text) & "|" & (item 2 of windowSize as text)',
+    "end tell",
+    "end tell",
+  ]);
+  const [left, top, width, height] = raw.split("|").map(Number);
+  if (
+    [left, top, width, height].some((value) => !Number.isFinite(value)) ||
+    width < 600 ||
+    height < 500
+  ) {
+    throw new Error(`VisualTeX returned invalid editor bounds: ${raw}`);
+  }
+  return { left, top, width, height };
+}
+
+async function replaceActiveVisualTeXFormula(latex) {
+  const clipboard = spawnSync("/usr/bin/pbcopy", [], {
+    input: latex,
+    encoding: "utf8",
+    timeout: 5_000,
+  });
+  if (clipboard.status !== 0) {
+    throw new Error(clipboard.stderr || "Unable to prepare formula clipboard");
+  }
+  const bounds = visualTeXEditorWindowBounds();
+  runAppleScript([
+    'tell application "System Events"',
+    'tell process "visualtex"',
+    "set frontmost to true",
+    "delay 0.1",
+    'keystroke "a" using {command down}',
+    "delay 0.05",
+    'keystroke "v" using {command down}',
+    "end tell",
+    "end tell",
+  ]);
+  await sleep(80);
+  return { ...bounds, latex };
+}
+
+async function applyActiveVisualTeXFormula(sessionId, timeoutMs = 10_000) {
+  const startedEpochMs = Date.now();
+  runAppleScript([
+    'tell application "System Events"',
+    'tell process "visualtex"',
+    "set frontmost to true",
+    "key code 36 using {command down}",
+    "end tell",
+    "end tell",
+  ]);
+  const started = Date.now();
+  let backendComplete = null;
+  while (Date.now() - started < timeoutMs) {
+    const records = editorPerformanceRecords(sessionId);
+    backendComplete = records.find(
+      (record) => record.stage === "apply-backend-complete",
+    );
+    if (backendComplete) break;
+    await sleep(20);
+  }
+  if (!backendComplete) {
+    throw new Error(
+      `VisualTeX Apply did not complete for ${sessionId}: ${JSON.stringify(editorPerformanceRecords(sessionId))}`,
+    );
+  }
+  const completedEpochMs = Number(backendComplete.epochMs);
+  const clickToOfficeCompleteMs = completedEpochMs - startedEpochMs;
+  if (
+    !Number.isFinite(clickToOfficeCompleteMs) ||
+    clickToOfficeCompleteMs < 0 ||
+    clickToOfficeCompleteMs > timeoutMs
+  ) {
+    throw new Error(
+      `VisualTeX Apply returned invalid timing: ${JSON.stringify({ startedEpochMs, backendComplete })}`,
+    );
+  }
+  return {
+    startedEpochMs,
+    completedEpochMs,
+    clickToOfficeCompleteMs,
+    backendElapsedMs: backendComplete.elapsedMs,
+    records: editorPerformanceRecords(sessionId).filter((record) =>
+      String(record.stage).startsWith("apply-"),
+    ),
+  };
 }
 
 function physicallyDoubleClickSelectedWordFormula(
@@ -1494,7 +1639,7 @@ function runFormulaRegressionReport(testDocumentName, formulas) {
   );
   if (
     report.revision !==
-    "word-image-metadata-format-routing-20260801-r66"
+    "word-office-performance-20260801-r77"
   ) {
     throw new Error(`Word loaded the wrong VisualTeX source revision: ${report.revision}`);
   }
@@ -3591,7 +3736,7 @@ p(\mathbf{x},t)\,
       JSON.stringify(
         {
           status: "PASS",
-          revision: "word-image-metadata-format-routing-20260801-r66",
+          revision: "word-office-performance-20260801-r77",
           ...physicalDoubleClickResult,
         },
         null,
@@ -3668,6 +3813,7 @@ try {
     throw new Error(`The requested Word add-in does not exist: ${activeTemplatePath}`);
   }
   copyFileSync(activeTemplatePath, installedWordAddinPath);
+  await waitForWordAutomationReady();
   if (pictureRoutingPerformance) {
     await runPictureRoutingPerformanceRegression();
   } else if (pictureRoutingTarget) {
@@ -4813,6 +4959,66 @@ try {
       physicalEditSessionId,
       physicalFormula.formulaId,
     );
+    let physicalApply = null;
+    if (physicalApplyPerformance) {
+      rmSync(wordPhysicalPerformanceStatusPath, { force: true });
+      const replacementLatex = "101=303";
+      const editInteraction = await replaceActiveVisualTeXFormula(
+        replacementLatex,
+      );
+      const timing = await applyActiveVisualTeXFormula(
+        physicalEditSessionId,
+      );
+      if (timing.clickToOfficeCompleteMs > 1_500) {
+        throw new Error(
+          `Word physical Apply missed the accepted 1500 ms limit: ${JSON.stringify(timing)}`,
+        );
+      }
+      await sleep(100);
+      const encodedMetadata = runAppleScript([
+        'tell application "Microsoft Word"',
+        `set documentObject to document ${JSON.stringify(testDocumentName)}`,
+        `return alternative text of inline shape ${physicalFormulaIndex + 1} of documentObject`,
+        "end tell",
+      ]);
+      const updatedMetadata = decodeFormulaMetadata(encodedMetadata);
+      const updatedDocument = updatedMetadata
+        ? normalizeFormulaEditorDocument(
+            updatedMetadata.lines,
+            updatedMetadata.codeFormat,
+          )
+        : null;
+      if (
+        updatedMetadata?.formulaId !== physicalFormula.formulaId ||
+        updatedDocument?.lines[0]?.latex !== replacementLatex
+      ) {
+        throw new Error(
+          `Word physical Apply did not persist the edited formula: ${JSON.stringify({ replacementLatex, updatedMetadata, updatedDocument })}`,
+        );
+      }
+      physicalApply = {
+        replacementLatex,
+        editInteraction,
+        timing,
+        persistedLatex: updatedDocument.lines[0].latex,
+      };
+      writeFileSync(
+        wordPhysicalPerformanceStatusPath,
+        JSON.stringify(
+          {
+            status: "PASS",
+            revision: "word-office-performance-20260801-r77",
+            sessionId: physicalEditSessionId,
+            formulaId: physicalFormula.formulaId,
+            editorReadiness,
+            physicalApply,
+          },
+          null,
+          2,
+        ),
+        { mode: 0o600 },
+      );
+    }
     const pictureFormatUi = wordPictureFormatUiSnapshot();
     if (outputKind === "image" && pictureFormatUi.pictureFormatVisible) {
       throw new Error(
@@ -4828,6 +5034,7 @@ try {
       lines: physicalEditSession.normalized.lines.map((line) => line.latex),
       physicalClick,
       editorReadiness,
+      physicalApply,
       pictureFormatUi,
     });
   }
@@ -4979,7 +5186,7 @@ try {
         JSON.stringify(
           {
             status: "FAIL",
-            revision: "word-image-metadata-format-routing-20260801-r66",
+            revision: "word-office-performance-20260801-r77",
             error: error instanceof Error ? error.message : String(error),
           },
           null,

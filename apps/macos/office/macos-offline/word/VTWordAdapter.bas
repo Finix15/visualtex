@@ -4,7 +4,7 @@ Option Explicit
 Private Const VT_WORD_HOST As String = "word"
 Private Const VT_WORD_STATUS_FILE As String = "/OfficePluginStatus/word.json"
 Private Const VT_WORD_SOURCE_REVISION As String = _
-    "word-image-metadata-format-routing-20260801-r66"
+    "word-office-performance-20260801-r77"
 Private Const VT_WORD_EQUATION_NUMBER_FONT_NAME As String = "Cambria Math"
 Private Const VT_WORD_BOOKMARK_PREFIX As String = "VT_Pending_"
 Private Const VT_WORD_DOCUMENT_IMPORT_BOOKMARK_PREFIX As String = "VT_D_"
@@ -7565,9 +7565,24 @@ Private Function VTTryResolveVisualTeXInlineShapeReference( _
     metadataNeedsWrite = False
     formatNeedsWrite = False
     If selectedShape Is Nothing Then Exit Function
-    Set documentObject = selectedShape.Range.Document
     titleValue = selectedShape.Title
     alternativeValue = selectedShape.AlternativeText
+
+    ' The normal committed representation is self-contained: a compact,
+    ' validated formula reference in Title and compressed metadata in
+    ' AlternativeText. Avoid re-reading chunked document Variables and writing
+    ' the same shape properties on every double-click; keep the slower recovery
+    ' path below only for legacy, swapped or damaged Office objects.
+    If VTIsEncodedMetadata(alternativeValue) Then
+        If VTTryParseFormulaReference( _
+           titleValue, formulaId, displayMode, numbered) Then
+            encodedMetadata = alternativeValue
+            VTTryResolveVisualTeXInlineShapeReference = True
+            Exit Function
+        End If
+    End If
+
+    Set documentObject = selectedShape.Range.Document
     If VTIsEncodedMetadata(alternativeValue) Then
         encodedMetadata = alternativeValue
     ElseIf VTIsEncodedMetadata(titleValue) Then
@@ -7932,8 +7947,7 @@ Private Sub VTWordOpenResolvedInlineShape( _
     End If
     On Error GoTo OpenFailed
     Set documentObject = selectedShape.Range.Document
-    VTSynchronizeWordImageFormulaShape selectedShape
-    VTEnsureWordImageScaleState _
+    VTPrepareWordImageFormulaState _
         selectedShape, formulaId, displayMode, numbered, fontSizePt, _
         referenceWidthPt, referenceHeightPt, referenceBaselinePt, _
         observedWordFontSizePt
@@ -10225,7 +10239,6 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
     Dim transactionErrorDescription As String
     Dim transactionStage As String
     Dim internalMutationStarted As Boolean
-
     transactionStage = "validate-document"
     committedImageStart = -1
     VTRequireWritableWordDocument
@@ -10234,9 +10247,7 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
     VTRequireDispatchValue dispatch, "formulaId"
     VTRequireDispatchValue dispatch, "displayMode"
     VTRequireDispatchValue dispatch, "numbered"
-    VTRequireDispatchValue dispatch, "imagePath"
-    VTRequireDispatchValue dispatch, "vectorDocumentPath"
-    VTRequireDispatchValue dispatch, "fallbackImagePath"
+    VTRequireDispatchValue dispatch, "nativeEquation"
     VTRequireDispatchValue dispatch, "metadata"
     VTRequireDispatchValue dispatch, "latexBase64"
     VTRequireDispatchValue dispatch, "ommlBase64"
@@ -10246,10 +10257,19 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
     formulaId = CStr(dispatch("formulaId"))
     displayMode = CStr(dispatch("displayMode"))
     numbered = (CStr(dispatch("numbered")) = "1")
-    nativeEquation = (VTDispatchOptional(dispatch, "nativeEquation") = "1")
-    imagePath = CStr(dispatch("imagePath"))
-    vectorDocumentPath = CStr(dispatch("vectorDocumentPath"))
-    fallbackImagePath = CStr(dispatch("fallbackImagePath"))
+    nativeEquation = (CStr(dispatch("nativeEquation")) = "1")
+    If nativeEquation Then
+        VTRequireDispatchValue dispatch, "nativeDocumentPath"
+    Else
+        VTRequireDispatchValue dispatch, "imagePath"
+        VTRequireDispatchValue dispatch, "vectorDocumentPath"
+        VTRequireDispatchValue dispatch, "fallbackImagePath"
+    End If
+    imagePath = VTDispatchOptional(dispatch, "imagePath")
+    vectorDocumentPath = VTDispatchOptional( _
+        dispatch, "vectorDocumentPath")
+    fallbackImagePath = VTDispatchOptional( _
+        dispatch, "fallbackImagePath")
     metadata = CStr(dispatch("metadata"))
     latexBase64 = CStr(dispatch("latexBase64"))
     ommlBase64 = CStr(dispatch("ommlBase64"))
@@ -10295,20 +10315,28 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
 
     formulaReference = VTFormulaReference(formulaId, displayMode, numbered)
     captionText = VTEquationCrossReferenceText(latexBase64)
-    VTValidateAbsoluteVisualTeXPath imagePath
-    VTValidateAbsoluteVisualTeXPath vectorDocumentPath
-    VTValidateAbsoluteVisualTeXPath fallbackImagePath
-    If Not VTPathFileExists(imagePath) Then
-        Err.Raise vbObjectError + 7406, "VisualTeX", _
-            "VisualTeX Word SVG result is missing."
-    End If
-    If Not VTPathFileExists(vectorDocumentPath) Then
-        Err.Raise vbObjectError + 7406, "VisualTeX", _
-            "VisualTeX Word SVG staging document is missing."
-    End If
-    If Not VTPathFileExists(fallbackImagePath) Then
-        Err.Raise vbObjectError + 7406, "VisualTeX", _
-            "VisualTeX Word PNG compatibility preview is missing."
+    If nativeEquation Then
+        VTValidateAbsoluteVisualTeXPath nativeDocumentPath
+        If Not VTPathFileExists(nativeDocumentPath) Then
+            Err.Raise vbObjectError + 7406, "VisualTeX", _
+                "VisualTeX Word native DOCX result is missing."
+        End If
+    Else
+        VTValidateAbsoluteVisualTeXPath imagePath
+        VTValidateAbsoluteVisualTeXPath vectorDocumentPath
+        VTValidateAbsoluteVisualTeXPath fallbackImagePath
+        If Not VTPathFileExists(imagePath) Then
+            Err.Raise vbObjectError + 7406, "VisualTeX", _
+                "VisualTeX Word SVG result is missing."
+        End If
+        If Not VTPathFileExists(vectorDocumentPath) Then
+            Err.Raise vbObjectError + 7406, "VisualTeX", _
+                "VisualTeX Word SVG staging document is missing."
+        End If
+        If Not VTPathFileExists(fallbackImagePath) Then
+            Err.Raise vbObjectError + 7406, "VisualTeX", _
+                "VisualTeX Word PNG compatibility preview is missing."
+        End If
     End If
 
     transactionStage = "resolve-target"
@@ -10709,7 +10737,6 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
         candidate.Select
     End If
     On Error GoTo RollbackCandidate
-
 CommitSucceeded:
     If internalMutationStarted Then
         VTEndWordInternalMutation
@@ -18207,10 +18234,56 @@ Private Sub VTDeleteDocumentVariable(ByVal documentObject As Document, ByVal var
     On Error GoTo 0
 End Sub
 
+Private Function VTStoredPayloadChunkCount( _
+    ByVal documentObject As Document, _
+    ByVal countVariableName As String, _
+    ByVal firstChunkVariableName As String, _
+    ByVal maximumChunks As Long) As Long
+
+    Dim countText As String
+    Dim ignoredChunk As String
+    Dim parsedCount As Long
+
+    If documentObject Is Nothing Or maximumChunks < 1 Then Exit Function
+    If VTTryGetDocumentVariable( _
+       documentObject, countVariableName, countText) Then
+        If Len(countText) > 0 And IsNumeric(countText) Then
+            On Error GoTo InvalidCount
+            parsedCount = CLng(countText)
+            On Error GoTo 0
+            If parsedCount >= 1 And parsedCount <= maximumChunks Then
+                VTStoredPayloadChunkCount = parsedCount
+                Exit Function
+            End If
+        End If
+        ' A corrupt published count requires a complete cleanup, but this slow
+        ' path is never used by a healthy formula edit.
+        VTStoredPayloadChunkCount = maximumChunks
+        Exit Function
+    End If
+    If VTTryGetDocumentVariable( _
+       documentObject, firstChunkVariableName, ignoredChunk) Then
+        ' Recover orphan chunks left by an interrupted legacy write.
+        VTStoredPayloadChunkCount = maximumChunks
+    End If
+    Exit Function
+
+InvalidCount:
+    Err.Clear
+    On Error GoTo 0
+    VTStoredPayloadChunkCount = maximumChunks
+End Function
+
 Private Sub VTDeleteWordLatexPayload(ByVal documentObject As Document, ByVal formulaId As String)
     Dim index As Long
+    Dim chunkCount As Long
 
-    For index = 1 To VT_WORD_LATEX_MAX_CHUNKS
+    chunkCount = VTStoredPayloadChunkCount( _
+        documentObject, _
+        VTWordLatexCountVariableName(formulaId), _
+        VTWordLatexChunkVariableName(formulaId, 1), _
+        VT_WORD_LATEX_MAX_CHUNKS)
+    For index = 1 To chunkCount
         VTDeleteDocumentVariable documentObject, VTWordLatexChunkVariableName(formulaId, index)
     Next index
     VTDeleteDocumentVariable documentObject, VTWordLatexCountVariableName(formulaId)
@@ -18222,6 +18295,7 @@ Private Sub VTSetWordLatexPayload( _
     ByVal latexBase64 As String)
 
     Dim chunkCount As Long
+    Dim previousChunkCount As Long
     Dim index As Long
     Dim chunkValue As String
     Dim storageErrorNumber As Long
@@ -18235,7 +18309,11 @@ Private Sub VTSetWordLatexPayload( _
         Err.Raise vbObjectError + 7437, "VisualTeX", "VisualTeX Word LaTeX metadata requires too many chunks."
     End If
 
-    VTDeleteWordLatexPayload documentObject, formulaId
+    previousChunkCount = VTStoredPayloadChunkCount( _
+        documentObject, _
+        VTWordLatexCountVariableName(formulaId), _
+        VTWordLatexChunkVariableName(formulaId, 1), _
+        VT_WORD_LATEX_MAX_CHUNKS)
     On Error GoTo StorageFailed
     For index = 1 To chunkCount
         chunkValue = Mid$( _
@@ -18246,6 +18324,10 @@ Private Sub VTSetWordLatexPayload( _
             documentObject, _
             VTWordLatexChunkVariableName(formulaId, index), _
             chunkValue
+    Next index
+    For index = chunkCount + 1 To previousChunkCount
+        VTDeleteDocumentVariable _
+            documentObject, VTWordLatexChunkVariableName(formulaId, index)
     Next index
     ' Publish the count last so readers never accept a partially written payload.
     VTSetDocumentVariable _
@@ -18323,7 +18405,14 @@ Private Sub VTDeleteWordOmmlPayload( _
     ByVal formulaId As String)
 
     Dim index As Long
-    For index = 1 To VT_WORD_OMML_MAX_CHUNKS
+    Dim chunkCount As Long
+
+    chunkCount = VTStoredPayloadChunkCount( _
+        documentObject, _
+        VTWordOmmlCountVariableName(formulaId), _
+        VTWordOmmlChunkVariableName(formulaId, 1), _
+        VT_WORD_OMML_MAX_CHUNKS)
+    For index = 1 To chunkCount
         VTDeleteDocumentVariable _
             documentObject, VTWordOmmlChunkVariableName(formulaId, index)
     Next index
@@ -18336,6 +18425,7 @@ Private Sub VTSetWordOmmlPayload( _
     ByVal ommlBase64 As String)
 
     Dim chunkCount As Long
+    Dim previousChunkCount As Long
     Dim index As Long
     Dim chunkValue As String
     Dim storageErrorNumber As Long
@@ -18351,7 +18441,11 @@ Private Sub VTSetWordOmmlPayload( _
         Err.Raise vbObjectError + 7473, "VisualTeX", "VisualTeX Word OMML metadata requires too many chunks."
     End If
 
-    VTDeleteWordOmmlPayload documentObject, formulaId
+    previousChunkCount = VTStoredPayloadChunkCount( _
+        documentObject, _
+        VTWordOmmlCountVariableName(formulaId), _
+        VTWordOmmlChunkVariableName(formulaId, 1), _
+        VT_WORD_OMML_MAX_CHUNKS)
     On Error GoTo StorageFailed
     For index = 1 To chunkCount
         chunkValue = Mid$( _
@@ -18362,6 +18456,10 @@ Private Sub VTSetWordOmmlPayload( _
             documentObject, _
             VTWordOmmlChunkVariableName(formulaId, index), _
             chunkValue
+    Next index
+    For index = chunkCount + 1 To previousChunkCount
+        VTDeleteDocumentVariable _
+            documentObject, VTWordOmmlChunkVariableName(formulaId, index)
     Next index
     VTSetDocumentVariable _
         documentObject, _
@@ -18441,7 +18539,14 @@ Private Sub VTDeleteWordMetadataPayload( _
     ByVal formulaId As String)
 
     Dim index As Long
-    For index = 1 To VT_WORD_PAYLOAD_MAX_CHUNKS
+    Dim chunkCount As Long
+
+    chunkCount = VTStoredPayloadChunkCount( _
+        documentObject, _
+        VTWordMetadataCountVariableName(formulaId), _
+        VTWordMetadataChunkVariableName(formulaId, 1), _
+        VT_WORD_PAYLOAD_MAX_CHUNKS)
+    For index = 1 To chunkCount
         VTDeleteDocumentVariable _
             documentObject, VTWordMetadataChunkVariableName(formulaId, index)
     Next index
@@ -18454,6 +18559,7 @@ Private Sub VTSetWordMetadataPayload( _
     ByVal encodedMetadata As String)
 
     Dim chunkCount As Long
+    Dim previousChunkCount As Long
     Dim index As Long
     Dim chunkValue As String
     Dim storageErrorNumber As Long
@@ -18469,7 +18575,11 @@ Private Sub VTSetWordMetadataPayload( _
         Err.Raise vbObjectError + 7465, "VisualTeX", "VisualTeX Word formula metadata requires too many chunks."
     End If
 
-    VTDeleteWordMetadataPayload documentObject, formulaId
+    previousChunkCount = VTStoredPayloadChunkCount( _
+        documentObject, _
+        VTWordMetadataCountVariableName(formulaId), _
+        VTWordMetadataChunkVariableName(formulaId, 1), _
+        VT_WORD_PAYLOAD_MAX_CHUNKS)
     On Error GoTo StorageFailed
     For index = 1 To chunkCount
         chunkValue = Mid$( _
@@ -18480,6 +18590,10 @@ Private Sub VTSetWordMetadataPayload( _
             documentObject, _
             VTWordMetadataChunkVariableName(formulaId, index), _
             chunkValue
+    Next index
+    For index = chunkCount + 1 To previousChunkCount
+        VTDeleteDocumentVariable _
+            documentObject, VTWordMetadataChunkVariableName(formulaId, index)
     Next index
     VTSetDocumentVariable _
         documentObject, _
@@ -18911,17 +19025,17 @@ ApplyFailed:
         applyErrorDescription
 End Sub
 
-Private Sub VTSynchronizeWordImageFormulaShape( _
-    ByVal formulaShape As InlineShape)
+Private Sub VTPrepareWordImageFormulaState( _
+    ByVal formulaShape As InlineShape, _
+    ByRef formulaId As String, _
+    ByRef displayMode As String, _
+    ByRef numbered As Boolean, _
+    ByRef storedFontSizePt As Double, _
+    ByRef referenceWidthPt As Double, _
+    ByRef referenceHeightPt As Double, _
+    ByRef referenceBaselinePt As Double, _
+    ByRef observedWordFontSizePt As Double)
 
-    Dim formulaId As String
-    Dim displayMode As String
-    Dim numbered As Boolean
-    Dim storedFontSizePt As Double
-    Dim referenceWidthPt As Double
-    Dim referenceHeightPt As Double
-    Dim referenceBaselinePt As Double
-    Dim observedWordFontSizePt As Double
     Dim currentWordFontSizePt As Double
     Dim normalFontSizePt As Double
     Dim expectedWidthPt As Double
@@ -18953,7 +19067,29 @@ Private Sub VTSynchronizeWordImageFormulaShape( _
            Abs(formulaShape.Width - expectedWidthPt) <= 0.5 And _
            Abs(formulaShape.Height - expectedHeightPt) <= 0.5 Then Exit Sub
         VTApplyWordImageFormulaFontSize formulaShape, currentWordFontSizePt
+        VTEnsureWordImageScaleState _
+            formulaShape, formulaId, displayMode, numbered, storedFontSizePt, _
+            referenceWidthPt, referenceHeightPt, referenceBaselinePt, _
+            observedWordFontSizePt
     End If
+End Sub
+
+Private Sub VTSynchronizeWordImageFormulaShape( _
+    ByVal formulaShape As InlineShape)
+
+    Dim formulaId As String
+    Dim displayMode As String
+    Dim numbered As Boolean
+    Dim storedFontSizePt As Double
+    Dim referenceWidthPt As Double
+    Dim referenceHeightPt As Double
+    Dim referenceBaselinePt As Double
+    Dim observedWordFontSizePt As Double
+
+    VTPrepareWordImageFormulaState _
+        formulaShape, formulaId, displayMode, numbered, storedFontSizePt, _
+        referenceWidthPt, referenceHeightPt, referenceBaselinePt, _
+        observedWordFontSizePt
 End Sub
 
 Public Sub VisualTeX_SynchronizeSelectedImageFormulaSize( _
@@ -19818,12 +19954,18 @@ Private Sub VTWriteWordFailureTrace( _
 End Sub
 
 Private Sub VTAddPendingBookmark(ByVal targetRange As Range, ByVal sessionId As String)
+    Dim documentObject As Document
     Dim name As String
+
+    If targetRange Is Nothing Then Exit Sub
+    Set documentObject = targetRange.Document
     name = VTWordBookmarkName(sessionId)
     On Error Resume Next
-    If ActiveDocument.Bookmarks.Exists(name) Then ActiveDocument.Bookmarks(name).Delete
+    If documentObject.Bookmarks.Exists(name) Then
+        documentObject.Bookmarks(name).Delete
+    End If
     On Error GoTo 0
-    ActiveDocument.Bookmarks.Add Name:=name, Range:=targetRange
+    documentObject.Bookmarks.Add Name:=name, Range:=targetRange
 End Sub
 
 Private Sub VTDeletePendingBookmark( _
