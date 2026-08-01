@@ -231,8 +231,8 @@ export function EditorWorkspace({
             </strong>
             <span>
               {isEn
-                ? "The document is updated only after you finish or close this window."
-                : "点击完成或关闭本窗口后，公式才会写入 Office 文档。"}
+                ? "Finish, press Ctrl+S, or close this window to update the Office document."
+                : "点击完成、按 Ctrl+S 或关闭本窗口后，公式才会写入 Office 文档。"}
             </span>
           </div>
           <div>
@@ -252,6 +252,8 @@ export function EditorWorkspace({
                 className="primary-button"
                 onClick={() => void runPrimaryAction()}
                 disabled={primaryBusy}
+                aria-keyshortcuts="Control+S"
+                title={isEn ? "Apply and close (Ctrl+S)" : "应用并关闭（Ctrl+S）"}
               >
                 {primaryBusy
                   ? isEn

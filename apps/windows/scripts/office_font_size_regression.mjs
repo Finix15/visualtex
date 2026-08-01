@@ -64,6 +64,8 @@ function createSession(host, fontSizePt) {
 
 let session = createSession("powerpoint", 20);
 const updates = [];
+let completeCommits = false;
+let closeRequests = 0;
 
 function writeJson(response, status, value) {
   response.writeHead(status, {
@@ -100,11 +102,19 @@ const server = createServer(async (request, response) => {
           ...update,
           updatedAt: Date.now(),
         };
+        if (completeCommits && update.status === "committing") {
+          session = {
+            ...session,
+            status: "completed",
+            updatedAt: Date.now(),
+          };
+        }
       }
       writeJson(response, 200, session);
       return;
     }
     if (url.pathname === `/api/v1/app/sessions/${sessionId}/close`) {
+      closeRequests += 1;
       writeJson(response, 200, { closed: true });
       return;
     }
@@ -251,6 +261,26 @@ async function setFontSize(client, fontSizePt) {
     setter.call(select, ${JSON.stringify(String(fontSizePt))});
     select.dispatchEvent(new Event('change', { bubbles: true }));
     return true;
+  })()`);
+}
+
+async function dispatchOfficeShortcut(client, overrides = {}) {
+  return client.evaluate(`(() => {
+    const target = document.querySelector('math-field') ?? document.body;
+    const event = new KeyboardEvent('keydown', {
+      key: 's',
+      code: 'KeyS',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+      ...${JSON.stringify(overrides)},
+    });
+    const dispatchResult = target.dispatchEvent(event);
+    return {
+      defaultPrevented: event.defaultPrevented,
+      dispatchResult,
+      lateCaptureCount: window.__visualtexLateSaveShortcutCount ?? 0,
+    };
   })()`);
 }
 
@@ -442,6 +472,74 @@ async function main() {
       "Word autosave should include selected font size",
     );
 
+    const shortcutMetadata = await client.evaluate(`(() => {
+      const primary = document.querySelector('.office-workspace-actions .primary-button');
+      window.__visualtexLateSaveShortcutCount = 0;
+      window.addEventListener('keydown', (event) => {
+        if (event.ctrlKey && (event.code === 'KeyS' || event.key.toLowerCase() === 's')) {
+          window.__visualtexLateSaveShortcutCount += 1;
+        }
+      }, true);
+      return {
+        ariaKeyShortcuts: primary?.getAttribute('aria-keyshortcuts') ?? '',
+        title: primary?.getAttribute('title') ?? '',
+        helperText: document.querySelector('.office-workspace-actions span')?.textContent ?? '',
+      };
+    })()`);
+    assert.equal(shortcutMetadata.ariaKeyShortcuts, "Control+S");
+    assert.ok(shortcutMetadata.title.includes("Ctrl+S"));
+    assert.ok(shortcutMetadata.helperText.includes("Ctrl+S"));
+
+    const shiftSave = await dispatchOfficeShortcut(client, { shiftKey: true });
+    assert.equal(shiftSave.defaultPrevented, false);
+    assert.equal(shiftSave.lateCaptureCount, 1);
+
+    const altSave = await dispatchOfficeShortcut(client, { altKey: true });
+    assert.equal(altSave.defaultPrevented, false);
+    assert.equal(altSave.lateCaptureCount, 2);
+
+    const metaSave = await dispatchOfficeShortcut(client, {
+      ctrlKey: false,
+      metaKey: true,
+    });
+    assert.equal(metaSave.defaultPrevented, false);
+    assert.equal(metaSave.lateCaptureCount, 2);
+
+    const composingSave = await dispatchOfficeShortcut(client, { isComposing: true });
+    assert.equal(composingSave.defaultPrevented, false);
+    assert.equal(composingSave.lateCaptureCount, 3);
+
+    const repeatedSave = await dispatchOfficeShortcut(client, { repeat: true });
+    assert.equal(repeatedSave.defaultPrevented, true);
+    assert.equal(repeatedSave.dispatchResult, false);
+    assert.equal(repeatedSave.lateCaptureCount, 3);
+    await sleep(150);
+    assert.ok(
+      !updates.some((update) => update.status === "committing"),
+      "Repeated Ctrl+S must be swallowed without starting a commit",
+    );
+
+    completeCommits = true;
+    const exactSave = await dispatchOfficeShortcut(client);
+    assert.equal(exactSave.defaultPrevented, true);
+    assert.equal(exactSave.dispatchResult, false);
+    assert.equal(exactSave.lateCaptureCount, 3);
+    for (
+      let attempt = 0;
+      attempt < 120 &&
+      !(session.status === "completed" && closeRequests === 1);
+      attempt += 1
+    ) {
+      await sleep(60);
+    }
+    assert.equal(session.status, "completed", "Ctrl+S should commit the Office Session");
+    assert.equal(closeRequests, 1, "Ctrl+S should close the Office editor after applying");
+    assert.equal(
+      updates.filter((update) => update.status === "committing").length,
+      1,
+      "One Ctrl+S press must enqueue exactly one commit",
+    );
+
     // Reproduce the hidden-converter race directly. The previous PowerPoint
     // page has already placed 20/28/31.5 pt values in the component lifecycle;
     // a Word converter must still render from its immutable 11 pt Session,
@@ -456,6 +554,7 @@ async function main() {
     await sleep(250);
     session = createSession("word", 11);
     session.autoCommitOnClose = false;
+    completeCommits = false;
     updates.length = 0;
     const converterTarget = await (
       await fetch(

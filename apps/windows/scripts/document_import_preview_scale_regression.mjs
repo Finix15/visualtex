@@ -262,6 +262,30 @@ async function main() {
       `Preview row still overflows horizontally: ${metrics.rowScrollWidth}px > ${metrics.rowClientWidth}px`,
     );
 
+    const bulkImportShortcut = await client.evaluate(`(() => {
+      let observed = 0;
+      window.addEventListener('keydown', (event) => {
+        if (event.ctrlKey && event.code === 'KeyS') observed += 1;
+      }, true);
+      const target = document.querySelector('textarea[aria-label="文档源码"]') ?? document.body;
+      const event = new KeyboardEvent('keydown', {
+        key: 's',
+        code: 'KeyS',
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      const dispatchResult = target.dispatchEvent(event);
+      return {
+        defaultPrevented: event.defaultPrevented,
+        dispatchResult,
+        observed,
+      };
+    })()`);
+    assert.equal(bulkImportShortcut.defaultPrevented, false);
+    assert.equal(bulkImportShortcut.dispatchResult, true);
+    assert.equal(bulkImportShortcut.observed, 1);
+
     const picker = await client.evaluate(`(() => {
       const input = document.querySelector('input[type="file"]');
       const button = document.querySelector('.doc-import-file-button');

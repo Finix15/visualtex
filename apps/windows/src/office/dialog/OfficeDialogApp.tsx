@@ -43,6 +43,7 @@ import {
 import { useOfficeSession } from "./useOfficeSession";
 import { attachFormulaEquationTag } from "../shared/formulaEquationTag";
 import { messageOfficeParent } from "./dialogMessages";
+import { registerOfficeApplyShortcut } from "./officeApplyShortcut";
 import {
   applyDocumentTheme,
   normalizeSynchronizedTheme,
@@ -213,6 +214,7 @@ export function OfficeDialogApp() {
   const lastSavedFingerprintRef = useRef("");
   const readyMessageSentRef = useRef(false);
   const finalizingRef = useRef(false);
+  const commitFromShortcutRef = useRef<() => void>(() => undefined);
   const exportRunIdRef = useRef(0);
   const conversionStartedRef = useRef(false);
   const initialEditorFocusSessionRef = useRef("");
@@ -1289,6 +1291,28 @@ export function OfficeDialogApp() {
       ));
     }
   };
+
+  commitFromShortcutRef.current = () => {
+    void handleCommit();
+  };
+
+  useEffect(() => {
+    if (
+      !session ||
+      loading ||
+      error ||
+      IS_VSTO_CONVERT_RUNTIME
+    ) {
+      return;
+    }
+    return registerOfficeApplyShortcut({
+      onApply: () => commitFromShortcutRef.current(),
+      isEnabled: () =>
+        !ocrOpen &&
+        !inlineOcrBusyRef.current &&
+        !historyState.isReplaying,
+    });
+  }, [error, historyState.isReplaying, loading, ocrOpen, session?.id]);
 
   const handleCancel = async () => {
     finalizingRef.current = true;
