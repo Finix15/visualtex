@@ -75,6 +75,18 @@ public interface IWordRibbonCallbacks
 
     [DispId(20)]
     void OnBulkImport(object control);
+
+    [DispId(21)]
+    void OnRedrawSelectionToOmml(object control);
+
+    [DispId(22)]
+    void OnRedrawSelectionToOle(object control);
+
+    [DispId(23)]
+    void OnRedrawDocumentToOmml(object control);
+
+    [DispId(24)]
+    void OnRedrawDocumentToOle(object control);
 }
 
 [ComVisible(true)]
@@ -105,6 +117,16 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
           <button id="VisualTeX.WordVsto.Delete" label="删除所选公式" imageMso="Delete" onAction="OnDeleteSelected" />
           <button id="VisualTeX.WordVsto.BulkImport" label="批量导入" size="large" screentip="批量导入 LaTeX / Markdown" supertip="将 Markdown 或 LaTeX 文档解析为 Word 原生文字，以及可单独编辑和调整字号的行内/行间公式。" tag="batchImport" getImage="GetRibbonImage" onAction="OnBulkImport" />
           <button id="VisualTeX.WordVsto.OpenDesktop" label="打开 VisualTeX" imageMso="FileOpen" onAction="OnOpenDesktop" />
+        </group>
+        <group id="VisualTeX.WordVsto.RedrawGroup" label="LaTeX 重绘">
+          <menu id="VisualTeX.WordVsto.RedrawSelection" label="重绘所选" size="large" screentip="重绘所选 LaTeX 代码" supertip="识别所选文字中的 $...$、$$...$$、\\(...\\)、\\[...\\] 和常见公式环境，并原位替换为可编辑公式。" tag="batchImport" getImage="GetRibbonImage">
+            <button id="VisualTeX.WordVsto.RedrawSelectionOmml" label="重绘为 Word OMML" screentip="原位替换为 Word 原生公式" onAction="OnRedrawSelectionToOmml" />
+            <button id="VisualTeX.WordVsto.RedrawSelectionOle" label="重绘为 VisualTeX OLE" screentip="原位替换为可双击编辑的 OLE" onAction="OnRedrawSelectionToOle" />
+          </menu>
+          <menu id="VisualTeX.WordVsto.RedrawDocument" label="重绘全文" size="large" screentip="重绘整个文档中的 LaTeX 代码" supertip="扫描当前文档并原位替换全部 LaTeX 公式；开始前会再次确认。" imageMso="RefreshAll">
+            <button id="VisualTeX.WordVsto.RedrawDocumentOmml" label="全文重绘为 Word OMML" onAction="OnRedrawDocumentToOmml" />
+            <button id="VisualTeX.WordVsto.RedrawDocumentOle" label="全文重绘为 VisualTeX OLE" onAction="OnRedrawDocumentToOle" />
+          </menu>
         </group>
         <group id="VisualTeX.WordVsto.FontSizeGroup" label="公式字号">
           <button id="VisualTeX.WordVsto.FontSizeDecrease" label="减小" imageMso="FontSizeDecrease" getEnabled="GetFormulaFontSizeEnabled" onAction="OnDecreaseFormulaFontSize" />
@@ -301,6 +323,14 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             conversionOnly: true);
     public void OnUpdateEquationNumbers(object control) => _ = UpdateEquationNumbersAsync();
     public void OnBulkImport(object control) => _ = BulkImportAsync();
+    public void OnRedrawSelectionToOmml(object control) =>
+        _ = RedrawLatexAsync(wholeDocument: false, FormulaOleContract.WordOmmlMode);
+    public void OnRedrawSelectionToOle(object control) =>
+        _ = RedrawLatexAsync(wholeDocument: false, FormulaOleContract.NativeOleMode);
+    public void OnRedrawDocumentToOmml(object control) =>
+        _ = RedrawLatexAsync(wholeDocument: true, FormulaOleContract.WordOmmlMode);
+    public void OnRedrawDocumentToOle(object control) =>
+        _ = RedrawLatexAsync(wholeDocument: true, FormulaOleContract.NativeOleMode);
     public void OnExportSelectedAsPicture(object control) => _ = ExportSelectedAsPictureAsync();
     public void OnDeleteSelected(object control) => _ = DeleteSelectedAsync();
     public void OnInsertEquationReference(object control) => _ = InsertEquationReferenceAsync();
@@ -576,6 +606,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         try
         {
             await client.EnsureHealthyAsync(cancellationToken).ConfigureAwait(false);
+            await client.PrewarmConverterAsync(cancellationToken).ConfigureAwait(false);
         }
         catch
         {
@@ -895,6 +926,213 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             metadata.EquationTag = null;
         metadata.Validate();
         return metadata;
+    }
+
+    private async Task RedrawLatexAsync(bool wholeDocument, string objectMode)
+    {
+        var dispatcher = _dispatcher;
+        var service = _formulaService;
+        var client = _sessionClient;
+        var lifetime = _lifetime;
+        if (dispatcher is null
+            || service is null
+            || client is null
+            || lifetime is null
+            || lifetime.IsCancellationRequested)
+            return;
+
+        if (!await _operationGate.WaitAsync(
+                TimeSpan.FromSeconds(2),
+                lifetime.Token).ConfigureAwait(false))
+        {
+            SetStatus("VisualTeX 正在执行其他 Word 操作，请稍候再试。");
+            return;
+        }
+
+        var rendered = new Dictionary<string, RenderedWordBulkFormulaTemplate>(
+            StringComparer.Ordinal);
+        var prepared = new Dictionary<string, PreparedWordBulkFormula>(
+            StringComparer.Ordinal);
+        var converterSessionIds = new List<string>();
+        var maxRenderMilliseconds = 0L;
+        var totalRenderMilliseconds = 0L;
+        try
+        {
+            var plan = await dispatcher.InvokeAsync(
+                    () => service.CaptureLatexRedrawPlan(wholeDocument))
+                .ConfigureAwait(false);
+            var modeLabel = string.Equals(
+                objectMode,
+                FormulaOleContract.NativeOleMode,
+                StringComparison.Ordinal)
+                ? "VisualTeX OLE"
+                : "Word OMML";
+            if (wholeDocument
+                && !string.Equals(
+                    Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE"),
+                    "1",
+                    StringComparison.Ordinal))
+            {
+                var confirmed = await dispatcher.InvokeAsync(() =>
+                    System.Windows.Forms.MessageBox.Show(
+                        $"将在整个文档中原位重绘 {plan.Targets.Count} 个 LaTeX 公式为 {modeLabel}。\r\n\r\n"
+                        + "该操作会保留正文并删除公式两侧的 LaTeX 定界符，可通过一次 Ctrl+Z 整体撤销。是否继续？",
+                        "VisualTeX LaTeX 重绘",
+                        System.Windows.Forms.MessageBoxButtons.YesNo,
+                        System.Windows.Forms.MessageBoxIcon.Question,
+                        System.Windows.Forms.MessageBoxDefaultButton.Button2)
+                    == System.Windows.Forms.DialogResult.Yes).ConfigureAwait(false);
+                if (!confirmed)
+                {
+                    SetStatus("已取消全文 LaTeX 重绘，Word 文档未修改。");
+                    return;
+                }
+            }
+
+            WriteRedrawAcceptanceLog(
+                $"redraw-start scope={(wholeDocument ? "document" : "selection")} "
+                + $"mode={objectMode} formulas={plan.Targets.Count}");
+            SetStatus($"正在准备重绘 {plan.Targets.Count} 个 LaTeX 公式为 {modeLabel}…");
+            await client.EnsureHealthyAsync(lifetime.Token).ConfigureAwait(false);
+            await client.PrewarmConverterAsync(lifetime.Token).ConfigureAwait(false);
+
+            for (var index = 0; index < plan.Targets.Count; index++)
+            {
+                lifetime.Token.ThrowIfCancellationRequested();
+                var target = plan.Targets[index];
+                var run = new WordBulkRun
+                {
+                    Id = target.Id,
+                    IsFormula = true,
+                    Latex = target.Latex,
+                    DisplayMode = target.DisplayMode,
+                };
+                var key = string.Join(
+                    "\u001F",
+                    objectMode,
+                    target.DisplayMode,
+                    target.FontSizePt.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    target.Latex);
+                if (!rendered.TryGetValue(key, out var template))
+                {
+                    SetStatus($"正在渲染公式 {index + 1}/{plan.Targets.Count}…");
+                    var stopwatch = Stopwatch.StartNew();
+                    template = await RenderBulkFormulaTemplateAsync(
+                            client,
+                            run,
+                            objectMode,
+                            plan.DocumentId,
+                            target.FontSizePt,
+                            lifetime.Token)
+                        .ConfigureAwait(false);
+                    stopwatch.Stop();
+                    totalRenderMilliseconds += stopwatch.ElapsedMilliseconds;
+                    maxRenderMilliseconds = Math.Max(
+                        maxRenderMilliseconds,
+                        stopwatch.ElapsedMilliseconds);
+                    WriteRedrawAcceptanceLog(
+                        $"render index={index + 1} elapsedMs={stopwatch.ElapsedMilliseconds} "
+                        + $"fontSizePt={target.FontSizePt:0.##} display={target.DisplayMode} "
+                        + $"latex={target.Latex}");
+                    rendered.Add(key, template);
+                    converterSessionIds.Add(template.Session.Id);
+                }
+                else
+                {
+                    WriteRedrawAcceptanceLog(
+                        $"render-cache-hit index={index + 1} display={target.DisplayMode} "
+                        + $"latex={target.Latex}");
+                }
+
+                var independentSession = CloneBulkFormulaSession(
+                    template.Session,
+                    run,
+                    plan.DocumentId,
+                    target.FontSizePt,
+                    objectMode);
+                prepared.Add(target.Id, new PreparedWordBulkFormula
+                {
+                    Run = run,
+                    Session = independentSession,
+                    MathMl = template.MathMl,
+                    PngPath = template.PngPath,
+                    EmfPath = template.EmfPath,
+                });
+            }
+
+            SetStatus("公式渲染完成，正在原位写入 Word…");
+            var result = await dispatcher.InvokeAsync(
+                    () => service.ApplyLatexRedrawPlan(plan, prepared))
+                .ConfigureAwait(false);
+            foreach (var sessionId in converterSessionIds)
+            {
+                try
+                {
+                    await client.CompleteAsync(sessionId, lifetime.Token)
+                        .ConfigureAwait(false);
+                }
+                catch { }
+            }
+            var uniqueRenderCount = Math.Max(1, rendered.Count);
+            var averageRenderMilliseconds = totalRenderMilliseconds / uniqueRenderCount;
+            WriteRedrawAcceptanceLog(
+                $"redraw-complete formulas={result.FormulaCount} unique={rendered.Count} "
+                + $"renderAverageMs={averageRenderMilliseconds} renderMaxMs={maxRenderMilliseconds} "
+                + $"insertTotalMs={result.TotalInsertMilliseconds} insertMaxMs={result.MaxInsertMilliseconds}");
+            var performanceSuffix = maxRenderMilliseconds <= 250
+                ? $"渲染最大 {maxRenderMilliseconds} ms/公式"
+                : $"渲染最大 {maxRenderMilliseconds} ms/公式（本机超过 250 ms 目标）";
+            SetStatus(
+                $"LaTeX 重绘完成：{result.FormulaCount} 个公式已转换为 {modeLabel}；{performanceSuffix}。");
+        }
+        catch (OperationCanceledException error)
+        {
+            WriteRedrawAcceptanceLog("redraw-cancelled " + error);
+            SetStatus("VisualTeX LaTeX 重绘已取消。");
+        }
+        catch (Exception error)
+        {
+            WriteRedrawAcceptanceLog("redraw-failed " + error);
+            foreach (var sessionId in converterSessionIds)
+            {
+                try
+                {
+                    await client.FailAsync(sessionId, error.Message, CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
+                catch { }
+            }
+            SetStatus($"VisualTeX LaTeX 重绘失败：{error.Message}");
+            if (!string.Equals(
+                    Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE"),
+                    "1",
+                    StringComparison.Ordinal))
+            {
+                try
+                {
+                    await dispatcher.InvokeAsync(() =>
+                    {
+                        System.Windows.Forms.MessageBox.Show(
+                            error.Message,
+                            "VisualTeX LaTeX 重绘",
+                            System.Windows.Forms.MessageBoxButtons.OK,
+                            System.Windows.Forms.MessageBoxIcon.Error);
+                        return true;
+                    }).ConfigureAwait(false);
+                }
+                catch { }
+            }
+        }
+        finally
+        {
+            foreach (var template in rendered.Values)
+            {
+                TryDeleteFile(template.EmfPath);
+                TryDeleteFile(template.SvgPath);
+                TryDeleteFile(template.PngPath);
+            }
+            _operationGate.Release();
+        }
     }
 
     private async Task BulkImportAsync()
@@ -1334,8 +1572,8 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             EquationTag = run.DisplayMode == "block" ? run.EquationTag : null,
             FontSizePt = FormulaFontSize.Normalize(fontSizePt),
             RenderFontSizePt = FormulaFontSize.Normalize(fontSizePt),
-            CreatedWithVersion = "1.2.3",
-            UpdatedWithVersion = "1.2.3",
+            CreatedWithVersion = "1.2.4",
+            UpdatedWithVersion = "1.2.4",
             CreatedAt = now,
             UpdatedAt = now,
         };
@@ -1377,6 +1615,26 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 fontSizePt),
             ExportResult = template.ExportResult,
         };
+    }
+
+    private static void WriteRedrawAcceptanceLog(string message)
+    {
+        var path = Environment.GetEnvironmentVariable(
+            "VISUALTEX_VSTO_REDRAW_ACCEPTANCE_LOG");
+        if (string.IsNullOrWhiteSpace(path)) return;
+        try
+        {
+            var directory = Path.GetDirectoryName(path);
+            if (!string.IsNullOrWhiteSpace(directory)) Directory.CreateDirectory(directory!);
+            lock (BulkAcceptanceLogGate)
+            {
+                File.AppendAllText(
+                    path!,
+                    $"{DateTimeOffset.Now:O} {message}{Environment.NewLine}",
+                    Encoding.UTF8);
+            }
+        }
+        catch { }
     }
 
     private static void WriteBulkAcceptanceLog(string message)

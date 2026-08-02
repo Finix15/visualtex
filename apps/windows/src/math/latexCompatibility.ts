@@ -13,6 +13,11 @@ export type VisualTexMathJaxMacro = string | readonly [replacement: string, argu
  */
 const STANDARD_COMPATIBILITY_MACROS = {
   bm: ["\\boldsymbol{#1}", 1] as const,
+  // Common aliases from the LaTeX physics package. Documents copied from
+  // lecture notes and papers frequently use \ip or \innerproduct without
+  // carrying the original package preamble into VisualTeX.
+  ip: ["\\left\\langle #1, #2 \\right\\rangle", 2] as const,
+  innerproduct: ["\\left\\langle #1, #2 \\right\\rangle", 2] as const,
 } satisfies Record<string, VisualTexMathJaxMacro>;
 
 export const VISUALTEX_MATHML_MACROS = {
@@ -56,6 +61,15 @@ export function assertResolvedMathJaxSvg(svg: string) {
     || /<g\b[^>]*(?:fill|stroke)=["']red["'][^>]*data-mml-node=["']mtext["']/i.test(svg)
     || /data-mml-node=["']merror["']/i.test(svg)
   ) {
-    throw new Error("MathJax left an unresolved LaTeX command in the rendered formula.");
+    const text = stripXmlMarkup(svg)
+      .replace(/&lt;/gi, "<")
+      .replace(/&gt;/gi, ">")
+      .replace(/&amp;/gi, "&");
+    const command = text.match(unresolvedCommand)?.[0];
+    throw new Error(
+      command
+        ? `MathJax did not resolve LaTeX command ${command}.`
+        : "MathJax left an unresolved LaTeX command in the rendered formula.",
+    );
   }
 }

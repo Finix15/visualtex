@@ -248,6 +248,8 @@ async fn reveal_desktop_app(State(context): State<ServerContext>) -> Response {
 
 #[cfg(target_os = "windows")]
 const OFFICE_EDITOR_WINDOW_LABEL: &str = "office-session-editor";
+#[cfg(target_os = "windows")]
+const OFFICE_CONVERTER_WINDOW_LABEL: &str = "office-session-converter";
 
 #[cfg(target_os = "windows")]
 fn bring_session_window_to_front(window: &WebviewWindow) -> Result<(), String> {
@@ -346,34 +348,69 @@ fn open_desktop_bulk_import_window(
 }
 
 #[cfg(target_os = "windows")]
+fn ensure_desktop_conversion_window(app: &tauri::AppHandle) -> Result<WebviewWindow, String> {
+    if let Some(window) = app.get_webview_window(OFFICE_CONVERTER_WINDOW_LABEL) {
+        return Ok(window);
+    }
+    let url = tauri::Url::parse(&format!(
+        "https://127.0.0.1:{}/dialog?runtime=vsto-convert",
+        crate::office::state::OFFICE_PORT,
+    ))
+    .map_err(|error| format!("Unable to construct the VisualTeX conversion URL: {error}"))?;
+    WebviewWindowBuilder::new(
+        app,
+        OFFICE_CONVERTER_WINDOW_LABEL,
+        WebviewUrl::External(url),
+    )
+    .title("VisualTeX · Office 格式转换")
+    .inner_size(1240.0, 820.0)
+    .resizable(false)
+    .focused(false)
+    .visible(false)
+    .build()
+    .map_err(|error| format!("Unable to create the reusable VisualTeX conversion window: {error}"))
+}
+
+#[cfg(target_os = "windows")]
 fn open_desktop_conversion_window(
     app: tauri::AppHandle,
     session_id: String,
 ) -> Result<(), String> {
-    let label = format!("office-convert-{}", session_id.replace('-', ""));
-    let url = tauri::Url::parse(&format!(
-        "https://127.0.0.1:{}/dialog/{}?runtime=vsto-convert",
-        crate::office::state::OFFICE_PORT,
-        session_id
-    ))
-    .map_err(|error| format!("Unable to construct the VisualTeX conversion URL: {error}"))?;
-
-    if let Some(window) = app.get_webview_window(&label) {
-        window
-            .navigate(url)
-            .map_err(|error| format!("Unable to navigate the VisualTeX conversion window: {error}"))?;
-        return Ok(());
+    if let Some(window) = app.get_webview_window(OFFICE_CONVERTER_WINDOW_LABEL) {
+        let encoded = serde_json::to_string(&session_id)
+            .map_err(|error| format!("Unable to encode the conversion Session id: {error}"))?;
+        let script = format!(
+            "window.__VISUALTEX_OFFICE_SESSION_ID__={encoded};history.replaceState(null,'','/dialog?runtime=vsto-convert&sessionId='+encodeURIComponent({encoded}));window.dispatchEvent(new CustomEvent('visualtex-office-session',{{detail:{{sessionId:{encoded}}}}}));"
+        );
+        return window
+            .eval(&script)
+            .map_err(|error| format!("Unable to switch the VisualTeX conversion Session: {error}"));
     }
 
-    WebviewWindowBuilder::new(&app, label, WebviewUrl::External(url))
-        .title("VisualTeX · Office 格式转换")
-        .inner_size(1240.0, 820.0)
-        .resizable(false)
-        .focused(false)
-        .visible(false)
-        .build()
-        .map(|_| ())
-        .map_err(|error| format!("Unable to create the hidden VisualTeX conversion window: {error}"))
+    let url = tauri::Url::parse(&format!(
+        "https://127.0.0.1:{}/dialog?runtime=vsto-convert&sessionId={}",
+        crate::office::state::OFFICE_PORT,
+        session_id,
+    ))
+    .map_err(|error| format!("Unable to construct the VisualTeX conversion URL: {error}"))?;
+    WebviewWindowBuilder::new(
+        &app,
+        OFFICE_CONVERTER_WINDOW_LABEL,
+        WebviewUrl::External(url),
+    )
+    .title("VisualTeX · Office 格式转换")
+    .inner_size(1240.0, 820.0)
+    .resizable(false)
+    .focused(false)
+    .visible(false)
+    .build()
+    .map(|_| ())
+    .map_err(|error| format!("Unable to create the reusable VisualTeX conversion window: {error}"))
+}
+
+#[cfg(target_os = "windows")]
+fn prewarm_desktop_conversion_window(app: tauri::AppHandle) -> Result<(), String> {
+    ensure_desktop_conversion_window(&app).map(|_| ())
 }
 
 async fn close_desktop_session(
@@ -424,10 +461,7 @@ async fn close_desktop_session(
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         };
         let suffix = session_id.replace('-', "");
-        let disposable_labels = [
-            format!("office-convert-{suffix}"),
-            format!("office-import-{suffix}"),
-        ];
+        let disposable_labels = [format!("office-import-{suffix}")];
         tauri::async_runtime::spawn(async move {
             // Return the HTTP response before closing the WebView that issued
             // the request; otherwise WebView2 can cancel the fetch and leave a
@@ -556,6 +590,35 @@ async fn open_desktop_bulk_import(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({
                     "error": format!("VisualTeX import window task failed: {error}")
+                })),
+            )
+                .into_response(),
+        }
+    }
+}
+
+async fn prewarm_desktop_conversion(State(context): State<ServerContext>) -> Response {
+    #[cfg(not(target_os = "windows"))]
+    {
+        return StatusCode::NO_CONTENT.into_response();
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let Some(app) = context.companion.app.clone() else {
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        };
+        match tokio::task::spawn_blocking(move || prewarm_desktop_conversion_window(app)).await {
+            Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+            Ok(Err(error)) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": error })),
+            )
+                .into_response(),
+            Err(error) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("VisualTeX conversion prewarm task failed: {error}")
                 })),
             )
                 .into_response(),
@@ -1675,6 +1738,10 @@ pub(crate) fn build_router(companion: OfficeCompanionState) -> Router {
         .route(
             "/app/sessions/{session_id}/open",
             post(open_desktop_session),
+        )
+        .route(
+            "/app/converter/prewarm",
+            post(prewarm_desktop_conversion),
         )
         .route(
             "/app/sessions/{session_id}/convert",

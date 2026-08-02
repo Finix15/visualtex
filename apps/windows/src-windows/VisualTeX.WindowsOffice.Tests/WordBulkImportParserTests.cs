@@ -526,6 +526,40 @@ public sealed class WordBulkImportParserTests
     }
 
     [Fact]
+    public void FindsExactLatexSpansForInPlaceWordRedraw()
+    {
+        const string source =
+            "紫外线 $UVI>2$，相邻公式 $a$$b$。\r"
+            + "\\(x+y\\)\r$$E=mc^2$$\r\\[k^2\\]\r"
+            + "\\begin{align}a&=b\\\\c&=d\\end{align}";
+
+        var spans = WordBulkImportParser.FindFormulaSpans(source);
+
+        Assert.Equal(7, spans.Count);
+        Assert.Equal(
+            new[] { "UVI>2", "a", "b", "x+y", "E=mc^2", "k^2", "\\begin{aligned}a&=b\\\\c&=d\\end{aligned}" },
+            spans.Select(span => span.Latex).ToArray());
+        Assert.Equal(
+            new[] { "inline", "inline", "inline", "inline", "block", "block", "block" },
+            spans.Select(span => span.DisplayMode).ToArray());
+        Assert.Equal("$UVI>2$", source.Substring(spans[0].Start, spans[0].Length));
+        Assert.Equal("$$E=mc^2$$", source.Substring(spans[4].Start, spans[4].Length));
+        Assert.Equal("\\[k^2\\]", source.Substring(spans[5].Start, spans[5].Length));
+    }
+
+    [Fact]
+    public void RedrawScannerIgnoresEscapedOrUnclosedDelimiters()
+    {
+        const string source = @"价格为 \$5，保留 $unclosed，只有 \(x\) 可转换。";
+
+        var spans = WordBulkImportParser.FindFormulaSpans(source);
+
+        var span = Assert.Single(spans);
+        Assert.Equal("x", span.Latex);
+        Assert.Equal("\\(x\\)", source.Substring(span.Start, span.Length));
+    }
+
+    [Fact]
     public void RejectsEmptyOrExcessivelyLargeInput()
     {
         Assert.Throws<InvalidDataException>(() => WordBulkImportParser.Parse(

@@ -524,7 +524,11 @@ async function main() {
           ready:
             buttons.length === 45 &&
             buttons[0]?.dataset.commandId === 'frac' &&
-            buttons.at(-1)?.dataset.commandId === 'leftarrow',
+            buttons.at(-1)?.dataset.commandId === 'exists' &&
+            buttons.some((button) => button.dataset.commandId === 'times') &&
+            buttons.some((button) => button.dataset.commandId === 'div') &&
+            !buttons.some((button) => button.dataset.commandId === 'notin') &&
+            !buttons.some((button) => button.dataset.commandId === 'leftarrow'),
           count: buttons.length,
           ids: buttons.map((button) => button.dataset.commandId ?? ''),
         };
@@ -533,7 +537,52 @@ async function main() {
     );
     assert.equal(commonBefore.count, 45);
     assert.equal(commonBefore.ids[0], "frac");
-    assert.equal(commonBefore.ids.at(-1), "leftarrow");
+    assert.equal(commonBefore.ids.at(-1), "exists");
+    assert.ok(commonBefore.ids.includes("times"));
+    assert.ok(commonBefore.ids.includes("div"));
+    assert.ok(!commonBefore.ids.includes("notin"));
+    assert.ok(!commonBefore.ids.includes("leftarrow"));
+
+    const arithmeticOperatorState = await waitForEvaluation(
+      client,
+      `(() => {
+        const field = document.querySelector("math-field");
+        if (!field?.isConnected) return { ready: false, value: "" };
+        if (!window.__visualtexArithmeticOperatorsStarted) {
+          window.__visualtexArithmeticOperatorsStarted = true;
+          field.setValue("", {
+            mode: "math",
+            format: "latex",
+            insertionMode: "replaceAll",
+            selectionMode: "after",
+            silenceNotifications: true,
+          });
+          field.position = field.lastOffset;
+          document.querySelector('[data-command-id="times"]')?.click();
+          document.querySelector('[data-command-id="div"]')?.click();
+        }
+        const value = field.value;
+        return {
+          ready: value.includes("\\\\times") && value.includes("\\\\div"),
+          value,
+        };
+      })()`,
+      "common multiplication and division insertion",
+    );
+    assert.match(arithmeticOperatorState.value, /\\times/);
+    assert.match(arithmeticOperatorState.value, /\\div/);
+    await client.evaluate(`(() => {
+      const field = document.querySelector("math-field");
+      field?.setValue("abc", {
+        mode: "math",
+        format: "latex",
+        insertionMode: "replaceAll",
+        selectionMode: "after",
+        silenceNotifications: true,
+      });
+      if (field) field.position = field.lastOffset;
+      return true;
+    })()`);
 
     await client.evaluate(`(() => {
       document.querySelector('[data-category="matrix"]')?.click();
@@ -583,20 +632,20 @@ async function main() {
           '.template-strip[data-active-category="common"] > [data-command-id]',
         )];
         const stored = JSON.parse(
-          localStorage.getItem('visualtex-common-toolbar-command-ids-v1') || '[]',
+          localStorage.getItem('visualtex-common-toolbar-command-ids-v2') || '[]',
         );
         return {
           ready:
             buttons.length === 45 &&
             buttons[0]?.dataset.commandId === 'blackboard-bold' &&
-            !buttons.some((button) => button.dataset.commandId === 'leftarrow') &&
+            !buttons.some((button) => button.dataset.commandId === 'exists') &&
             stored.length === 45 &&
             stored[0] === 'blackboard-bold',
           count: buttons.length,
           first: buttons[0]?.dataset.commandId ?? '',
           last: buttons.at(-1)?.dataset.commandId ?? '',
           includesEjectedDefault: buttons.some(
-            (button) => button.dataset.commandId === 'leftarrow',
+            (button) => button.dataset.commandId === 'exists',
           ),
           stored,
         };
@@ -714,40 +763,45 @@ async function main() {
         const field = document.querySelector('math-field');
         if (!field) return { ready: false };
         field.selection = { ranges: [[0, 3]], direction: 'forward' };
-        const selectionBold = field.queryStyle({ variantStyle: 'bolditalic' });
-        field.selection = {
-          ranges: [[field.lastOffset, field.lastOffset]],
-          direction: 'none',
-        };
-        field.position = field.lastOffset;
-        field.insert('f', {
-          mode: 'math',
-          format: 'latex',
-          insertionMode: 'insertAfter',
-          selectionMode: 'after',
-          focus: true,
-        });
-        const insertedEnd = field.lastOffset;
-        field.selection = {
-          ranges: [[insertedEnd - 1, insertedEnd]],
-          direction: 'forward',
-        };
+        const selectionBold = field.queryStyle({ variantStyle: 'bold' });
+        const boldValue = field.value.replace(/\s+/g, '');
         return {
           ready: selectionBold === 'all',
           selectionBold,
-          laterBold:
-            field.queryStyle({ variantStyle: 'bold' }) === 'all' ||
-            field.queryStyle({ variantStyle: 'bolditalic' }) === 'all'
-              ? 'all'
-              : 'none',
-          value: field.value,
+          boldValue,
         };
       })()`,
       "selection-only bold formatting",
     );
     assert.equal(selectedBold.selectionBold, "all");
+    assert.equal(selectedBold.boldValue, String.raw`\mathbf{abc}de`);
+    const laterBold = await client.evaluate(`(() => {
+      const field = document.querySelector('math-field');
+      if (!field) return 'missing';
+      field.selection = {
+        ranges: [[field.lastOffset, field.lastOffset]],
+        direction: 'none',
+      };
+      field.position = field.lastOffset;
+      field.insert('f', {
+        mode: 'math',
+        format: 'latex',
+        insertionMode: 'insertAfter',
+        selectionMode: 'after',
+        focus: true,
+      });
+      const insertedEnd = field.lastOffset;
+      field.selection = {
+        ranges: [[insertedEnd - 1, insertedEnd]],
+        direction: 'forward',
+      };
+      return field.queryStyle({ variantStyle: 'bold' }) === 'all' ||
+        field.queryStyle({ variantStyle: 'bolditalic' }) === 'all'
+          ? 'all'
+          : 'none';
+    })()`);
     assert.notEqual(
-      selectedBold.laterBold,
+      laterBold,
       "all",
       "Selection bold must not make later input persistently bold",
     );
@@ -755,17 +809,34 @@ async function main() {
     await client.evaluate(`(() => {
       const field = document.querySelector('math-field');
       if (!field) return false;
-      field.selection = { ranges: [[1, 4]], direction: 'forward' };
+      field.setValue('xyz', {
+        mode: 'math',
+        format: 'latex',
+        insertionMode: 'replaceAll',
+        selectionMode: 'after',
+      });
+      field.focus();
+      field.selection = { ranges: [[0, field.lastOffset]], direction: 'forward' };
+      return true;
+    })()`);
+    await clickSelectorWithPointer(client, '[data-formula-selection-italic]');
+    const selectedUpright = await client.evaluate(`(() => {
+      const field = document.querySelector('math-field');
+      return field?.value?.replace(/\s+/g, '') ?? '';
+    })()`);
+    assert.equal(selectedUpright, String.raw`\mathrm{xyz}`);
+    await client.evaluate(`(() => {
+      const field = document.querySelector('math-field');
+      if (!field) return false;
+      field.selection = { ranges: [[0, field.lastOffset]], direction: 'forward' };
       return true;
     })()`);
     await clickSelectorWithPointer(client, '[data-formula-selection-italic]');
     const selectedItalic = await client.evaluate(`(() => {
       const field = document.querySelector('math-field');
-      return {
-        italic: field?.queryStyle({ variantStyle: 'italic' }) ?? 'none',
-      };
+      return field?.value?.replace(/\s+/g, '') ?? '';
     })()`);
-    assert.equal(selectedItalic.italic, "all");
+    assert.equal(selectedItalic, "xyz");
 
     await client.evaluate(`(() => {
       const field = document.querySelector('math-field');

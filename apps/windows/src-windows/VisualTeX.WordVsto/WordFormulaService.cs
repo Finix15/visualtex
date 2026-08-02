@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Drawing;
 using System.Runtime.InteropServices;
+using System.Text;
 using Microsoft.Office.Interop.Word;
 using Application = Microsoft.Office.Interop.Word.Application;
 using VisualTeX.WindowsOffice.Contracts;
@@ -25,6 +26,16 @@ internal sealed class WordFormulaService
         internal int SelectionEnd { get; set; }
         internal int? VerticalPercentScrolled { get; set; }
         internal int? HorizontalPercentScrolled { get; set; }
+    }
+
+    private sealed class ResolvedLatexRedrawTarget
+    {
+        internal WordLatexRedrawTarget Target { get; set; } = new();
+        internal PreparedWordBulkFormula Formula { get; set; } = new();
+        internal Range SourceRange { get; set; } = null!;
+        internal int SourceStart { get; set; }
+        internal int SourceEnd { get; set; }
+        internal string ExpectedSource { get; set; } = string.Empty;
     }
 
     public WordFormulaService(Application application)
@@ -956,6 +967,620 @@ internal sealed class WordFormulaService
         }
     }
 
+    public WordLatexRedrawPlan CaptureLatexRedrawPlan(bool wholeDocument)
+    {
+        Document? document = null;
+        Selection? selection = null;
+        Range? scope = null;
+        try
+        {
+            document = _application.ActiveDocument
+                ?? throw new InvalidOperationException("No active Word document.");
+            EnsureWritable(document);
+            selection = _application.Selection;
+            scope = wholeDocument
+                ? document.Content.Duplicate
+                : selection.Range.Duplicate;
+            if (!wholeDocument && scope.Start == scope.End)
+                throw new InvalidOperationException("请先选择包含 LaTeX 代码的 Word 内容。");
+
+            var sourceText = scope.Text ?? string.Empty;
+            var spans = WordBulkImportParser.FindFormulaSpans(sourceText);
+            if (spans.Count == 0)
+                throw new InvalidDataException(
+                    wholeDocument
+                        ? "当前 Word 文档中没有找到 $...$、$$...$$、\\(...\\) 或 \\[...\\] 公式。"
+                        : "所选内容中没有找到 $...$、$$...$$、\\(...\\) 或 \\[...\\] 公式。");
+
+            var plan = new WordLatexRedrawPlan
+            {
+                DocumentId = DocumentIdentity(document),
+                ScopeStart = scope.Start,
+                ScopeEnd = scope.End,
+                SourceText = sourceText,
+                Targets = spans.Select(span => new WordLatexRedrawTarget
+                {
+                    Id = span.Id,
+                    RelativeStart = span.Start,
+                    SourceLength = span.Length,
+                    Latex = span.Latex,
+                    DisplayMode = span.DisplayMode,
+                }).ToList(),
+            };
+
+            // Resolve the exact Word story ranges before rendering. Word story
+            // coordinates can diverge from .NET UTF-16 offsets after supplementary
+            // Unicode characters. The exact ranges are also required to inherit the
+            // surrounding prose size instead of the deliberately smaller LaTeX source
+            // run used by many generated documents.
+            var resolvedForFormatting = new List<ResolvedLatexRedrawTarget>(plan.Targets.Count);
+            try
+            {
+                foreach (var target in plan.Targets.OrderBy(item => item.RelativeStart))
+                {
+                    var expectedSource = plan.SourceText.Substring(
+                        target.RelativeStart,
+                        target.SourceLength);
+                    var sourceRange = ResolveExactLatexSourceRange(
+                        document,
+                        plan,
+                        target,
+                        expectedSource,
+                        resolvedForFormatting);
+                    target.AbsoluteStart = sourceRange.Start;
+                    target.AbsoluteEnd = sourceRange.End;
+                    var display = string.Equals(
+                        target.DisplayMode,
+                        "block",
+                        StringComparison.Ordinal);
+                    target.PreserveDisplayParagraphBoundary =
+                        display && !HasVisibleSurroundingText(sourceRange);
+                    target.FontSizePt = ResolveSourceFormulaFontSize(
+                        document,
+                        sourceRange,
+                        display);
+                    resolvedForFormatting.Add(new ResolvedLatexRedrawTarget
+                    {
+                        Target = target,
+                        SourceRange = sourceRange,
+                        SourceStart = sourceRange.Start,
+                        SourceEnd = sourceRange.End,
+                        ExpectedSource = expectedSource,
+                    });
+                }
+            }
+            finally
+            {
+                foreach (var resolved in resolvedForFormatting)
+                    Release(resolved.SourceRange);
+            }
+
+            return plan;
+        }
+        finally
+        {
+            Release(scope);
+            Release(selection);
+            Release(document);
+        }
+    }
+
+    public WordLatexRedrawResult ApplyLatexRedrawPlan(
+        WordLatexRedrawPlan plan,
+        IReadOnlyDictionary<string, PreparedWordBulkFormula> prepared)
+    {
+        if (plan is null) throw new ArgumentNullException(nameof(plan));
+        if (prepared is null) throw new ArgumentNullException(nameof(prepared));
+        Document? document = null;
+        Selection? selection = null;
+        Range? validationRange = null;
+        UndoRecord? undoRecord = null;
+        WordViewState? viewState = null;
+        List<ResolvedLatexRedrawTarget>? resolvedTargets = null;
+        var insertedFormulaIds = new List<string>();
+        var totalInsertMilliseconds = 0L;
+        var maxInsertMilliseconds = 0L;
+        try
+        {
+            document = _application.ActiveDocument
+                ?? throw new InvalidOperationException("No active Word document.");
+            EnsureWritable(document);
+            EnsureSourceDocument(document, plan.DocumentId);
+            validationRange = document.Range(plan.ScopeStart, plan.ScopeEnd);
+            if (!string.Equals(validationRange.Text ?? string.Empty, plan.SourceText, StringComparison.Ordinal))
+                throw new InvalidOperationException(
+                    "渲染期间 Word 内容发生了变化。为避免替换错误位置，本次重绘已停止，请重新选择后再试。");
+
+            selection = _application.Selection;
+            viewState = CaptureViewState();
+            // Resolve and validate every Word Range before changing the document.
+            // Word story coordinates are not always a one-to-one mapping of .NET
+            // UTF-16 string offsets (for example after supplementary Unicode
+            // characters, tracked revisions or hidden story markers). Keeping the
+            // resolved live ranges also prevents a late locator failure after some
+            // formulas have already been replaced.
+            resolvedTargets = ResolveLatexRedrawTargets(document, plan, prepared);
+            undoRecord = BeginUndoRecord("VisualTeX 重绘 LaTeX 公式");
+            foreach (var resolved in resolvedTargets
+                         .OrderByDescending(item => item.SourceRange.Start))
+            {
+                Range? preservedDisplayParagraphRange = null;
+                try
+                {
+                    var targetRange = resolved.SourceRange;
+                    if (!string.Equals(
+                            targetRange.Text ?? string.Empty,
+                            resolved.ExpectedSource,
+                            StringComparison.Ordinal))
+                        throw new InvalidOperationException(
+                            $"渲染期间公式内容发生变化：{resolved.Target.Latex}");
+
+                    if (resolved.Target.PreserveDisplayParagraphBoundary)
+                        preservedDisplayParagraphRange =
+                            DuplicateContainingParagraphRange(targetRange);
+
+                    selection.SetRange(targetRange.Start, targetRange.End);
+                    selection.Text = string.Empty;
+                    selection.Collapse(WdCollapseDirection.wdCollapseStart);
+                    var stopwatch = Stopwatch.StartNew();
+                    InsertPreparedFormula(
+                        document,
+                        selection,
+                        resolved.Formula,
+                        display: string.Equals(
+                            resolved.Target.DisplayMode,
+                            "block",
+                            StringComparison.Ordinal),
+                        preserveExistingDisplayParagraphBoundary:
+                            resolved.Target.PreserveDisplayParagraphBoundary,
+                        preservedDisplayParagraphRange:
+                            preservedDisplayParagraphRange);
+                    stopwatch.Stop();
+                    totalInsertMilliseconds += stopwatch.ElapsedMilliseconds;
+                    maxInsertMilliseconds = Math.Max(
+                        maxInsertMilliseconds,
+                        stopwatch.ElapsedMilliseconds);
+                    insertedFormulaIds.Add(resolved.Formula.Session.FormulaId);
+                }
+                finally { Release(preservedDisplayParagraphRange); }
+            }
+
+            return new WordLatexRedrawResult
+            {
+                FormulaCount = insertedFormulaIds.Count,
+                TotalInsertMilliseconds = totalInsertMilliseconds,
+                MaxInsertMilliseconds = maxInsertMilliseconds,
+                FormulaIds = insertedFormulaIds,
+            };
+        }
+        finally
+        {
+            EndUndoRecord(undoRecord);
+            RestoreViewState(document, viewState, preferredSelection: null);
+            Release(undoRecord);
+            if (resolvedTargets is not null)
+            {
+                foreach (var resolved in resolvedTargets)
+                    Release(resolved.SourceRange);
+            }
+            Release(validationRange);
+            Release(selection);
+            Release(document);
+        }
+    }
+
+    private static List<ResolvedLatexRedrawTarget> ResolveLatexRedrawTargets(
+        Document document,
+        WordLatexRedrawPlan plan,
+        IReadOnlyDictionary<string, PreparedWordBulkFormula> prepared)
+    {
+        var resolved = new List<ResolvedLatexRedrawTarget>(plan.Targets.Count);
+        try
+        {
+            foreach (var target in plan.Targets.OrderBy(item => item.RelativeStart))
+            {
+                if (!prepared.TryGetValue(target.Id, out var formula))
+                    throw new InvalidDataException($"缺少公式 {target.Id} 的渲染结果。");
+                if (target.RelativeStart < 0
+                    || target.SourceLength <= 0
+                    || target.RelativeStart + target.SourceLength > plan.SourceText.Length)
+                    throw new InvalidDataException($"公式 {target.Id} 的源文本范围无效。");
+
+                var expectedSource = plan.SourceText.Substring(
+                    target.RelativeStart,
+                    target.SourceLength);
+                var sourceRange = ResolveExactLatexSourceRange(
+                    document,
+                    plan,
+                    target,
+                    expectedSource,
+                    resolved);
+                resolved.Add(new ResolvedLatexRedrawTarget
+                {
+                    Target = target,
+                    Formula = formula,
+                    SourceRange = sourceRange,
+                    SourceStart = sourceRange.Start,
+                    SourceEnd = sourceRange.End,
+                    ExpectedSource = expectedSource,
+                });
+            }
+            return resolved;
+        }
+        catch
+        {
+            foreach (var item in resolved)
+                Release(item.SourceRange);
+            throw;
+        }
+    }
+
+    private static Range ResolveExactLatexSourceRange(
+        Document document,
+        WordLatexRedrawPlan plan,
+        WordLatexRedrawTarget target,
+        string expectedSource,
+        IReadOnlyList<ResolvedLatexRedrawTarget> alreadyResolved)
+    {
+        var hasResolvedCoordinates =
+            target.AbsoluteStart >= plan.ScopeStart
+            && target.AbsoluteEnd > target.AbsoluteStart;
+        var approximateStart = hasResolvedCoordinates
+            ? target.AbsoluteStart
+            : plan.ScopeStart + target.RelativeStart;
+        var approximateEnd = hasResolvedCoordinates
+            ? target.AbsoluteEnd
+            : approximateStart + target.SourceLength;
+        Range? direct = null;
+        try
+        {
+            if (approximateStart >= plan.ScopeStart
+                && approximateEnd >= approximateStart
+                && approximateEnd <= plan.ScopeEnd)
+            {
+                direct = document.Range(approximateStart, approximateEnd);
+                if (string.Equals(
+                        direct.Text ?? string.Empty,
+                        expectedSource,
+                        StringComparison.Ordinal)
+                    && !OverlapsResolvedLatexRange(direct, alreadyResolved))
+                {
+                    var result = direct;
+                    direct = null;
+                    return result;
+                }
+            }
+        }
+        finally { Release(direct); }
+
+        const int localSearchRadius = 1024;
+        var localStart = Math.Max(plan.ScopeStart, approximateStart - localSearchRadius);
+        var localEnd = Math.Min(plan.ScopeEnd, approximateEnd + localSearchRadius);
+        var located = FindExactLatexSourceRange(
+            document,
+            localStart,
+            localEnd,
+            approximateStart,
+            expectedSource,
+            alreadyResolved);
+        if (located is not null) return located;
+
+        located = FindExactLatexSourceRange(
+            document,
+            plan.ScopeStart,
+            plan.ScopeEnd,
+            approximateStart,
+            expectedSource,
+            alreadyResolved);
+        if (located is not null) return located;
+
+        throw new InvalidOperationException(
+            $"无法在原位置附近重新定位公式：{target.Latex}。为避免替换错误内容，本次重绘已停止。");
+    }
+
+    private static Range? FindExactLatexSourceRange(
+        Document document,
+        int searchStart,
+        int searchEnd,
+        int approximateStart,
+        string expectedSource,
+        IReadOnlyList<ResolvedLatexRedrawTarget> alreadyResolved)
+    {
+        if (searchEnd <= searchStart || expectedSource.Length == 0) return null;
+        var findText = BuildWordFindAnchor(expectedSource);
+        if (findText.Length == 0) return null;
+
+        Range? search = null;
+        Range? best = null;
+        var bestDistance = int.MaxValue;
+        try
+        {
+            search = document.Range(searchStart, searchEnd);
+            while (search.Start < searchEnd)
+            {
+                Find? find = null;
+                var matched = false;
+                try
+                {
+                    find = search.Find;
+                    find.ClearFormatting();
+                    find.Text = findText;
+                    find.Forward = true;
+                    find.Wrap = WdFindWrap.wdFindStop;
+                    find.Format = false;
+                    find.MatchCase = true;
+                    find.MatchWholeWord = false;
+                    find.MatchWildcards = false;
+                    find.MatchSoundsLike = false;
+                    find.MatchAllWordForms = false;
+                    matched = find.Execute();
+                }
+                finally { Release(find); }
+                if (!matched) break;
+
+                var matchStart = search.Start;
+                var nextSearchStart = Math.Min(
+                    searchEnd,
+                    Math.Max(matchStart + 1, search.End));
+                var candidate = TryCreateExactLatexRangeAt(
+                    document,
+                    matchStart,
+                    searchEnd,
+                    expectedSource);
+                if (candidate is not null)
+                {
+                    if (!OverlapsResolvedLatexRange(candidate, alreadyResolved))
+                    {
+                        var distance = Math.Abs(candidate.Start - approximateStart);
+                        if (distance < bestDistance)
+                        {
+                            Release(best);
+                            best = candidate;
+                            candidate = null;
+                            bestDistance = distance;
+                        }
+                    }
+                    Release(candidate);
+                }
+                search.SetRange(nextSearchStart, searchEnd);
+            }
+
+            var result = best;
+            best = null;
+            return result;
+        }
+        finally
+        {
+            Release(best);
+            Release(search);
+        }
+    }
+
+    private static Range? TryCreateExactLatexRangeAt(
+        Document document,
+        int start,
+        int maximumEnd,
+        string expectedSource)
+    {
+        const int maximumCoordinateAdjustment = 256;
+        for (var adjustment = 0;
+             adjustment <= maximumCoordinateAdjustment;
+             adjustment++)
+        {
+            var deltas = adjustment == 0
+                ? new[] { 0 }
+                : new[] { -adjustment, adjustment };
+            foreach (var delta in deltas)
+            {
+                var end = start + expectedSource.Length + delta;
+                if (end <= start || end > maximumEnd) continue;
+                Range? candidate = null;
+                try
+                {
+                    candidate = document.Range(start, end);
+                    if (string.Equals(
+                            candidate.Text ?? string.Empty,
+                            expectedSource,
+                            StringComparison.Ordinal))
+                    {
+                        var result = candidate;
+                        candidate = null;
+                        return result;
+                    }
+                }
+                catch (COMException)
+                {
+                    // Keep trying nearby Word story coordinates.
+                }
+                finally { Release(candidate); }
+            }
+        }
+        return null;
+    }
+
+    private static bool OverlapsResolvedLatexRange(
+        Range candidate,
+        IReadOnlyList<ResolvedLatexRedrawTarget> alreadyResolved)
+    {
+        // Read the COM coordinates once. The previous implementation read
+        // Range.Start/End again for every earlier formula, which turns a
+        // 1000-formula document into hundreds of thousands of cross-process COM
+        // calls even though the overlap comparison itself is trivial.
+        var candidateStart = candidate.Start;
+        var candidateEnd = candidate.End;
+        foreach (var resolved in alreadyResolved)
+        {
+            if (candidateStart < resolved.SourceEnd
+                && resolved.SourceStart < candidateEnd)
+                return true;
+        }
+        return false;
+    }
+
+    private static string BuildWordFindAnchor(string source)
+    {
+        const int maximumFindTextLength = 180;
+        var builder = new StringBuilder(Math.Min(source.Length, maximumFindTextLength));
+        foreach (var character in source)
+        {
+            var token = character switch
+            {
+                '^' => "^^",
+                '\r' => "^p",
+                '\v' => "^l",
+                '\t' => "^t",
+                _ => character.ToString(),
+            };
+            if (builder.Length > 0
+                && builder.Length + token.Length > maximumFindTextLength)
+                break;
+            builder.Append(token);
+        }
+        return builder.ToString();
+    }
+
+    private static float ResolveSourceFormulaFontSize(
+        Document document,
+        Range source,
+        bool display)
+    {
+        Paragraphs? paragraphs = null;
+        Paragraph? paragraph = null;
+        Range? paragraphRange = null;
+        Microsoft.Office.Interop.Word.Font? font = null;
+        try
+        {
+            paragraphs = source.Paragraphs;
+            if (paragraphs.Count > 0)
+            {
+                paragraph = paragraphs[1];
+                paragraphRange = paragraph.Range.Duplicate;
+            }
+
+            var paragraphStart = paragraphRange?.Start ?? source.Start;
+            var paragraphBodyEnd = Math.Max(
+                paragraphStart,
+                (paragraphRange?.End ?? source.End) - 1);
+
+            // Inline formulas should inherit the prose beside them. Generated
+            // documents often deliberately make the raw $...$ source smaller than
+            // the surrounding text, so the source run itself is only a fallback.
+            if (!display || HasVisibleSurroundingText(source))
+            {
+                if (TryResolveNearbyVisibleFontSize(
+                        document,
+                        source.Start - 1,
+                        out var previousInline,
+                        minimumPosition: paragraphStart,
+                        step: -1))
+                    return previousInline;
+                if (TryResolveNearbyVisibleFontSize(
+                        document,
+                        source.End,
+                        out var nextInline,
+                        maximumPosition: paragraphBodyEnd,
+                        step: 1))
+                    return nextInline;
+            }
+
+            // A display formula normally occupies its own paragraph. In that case
+            // inherit from the nearest visible prose outside the source paragraph,
+            // preferring the preceding paragraph as Word users generally expect.
+            if (TryResolveNearbyVisibleFontSize(
+                    document,
+                    paragraphStart - 1,
+                    out var previousParagraph,
+                    minimumPosition: 0,
+                    step: -1))
+                return previousParagraph;
+            if (TryResolveNearbyVisibleFontSize(
+                    document,
+                    paragraphRange?.End ?? source.End,
+                    out var nextParagraph,
+                    maximumPosition: int.MaxValue,
+                    step: 1))
+                return nextParagraph;
+
+            font = source.Font;
+            if (TryResolveWordFontSize(font.Size, out var direct)) return direct;
+            Release(font);
+            font = null;
+
+            if (paragraphRange is not null)
+            {
+                if (paragraphRange.End > paragraphRange.Start)
+                    paragraphRange.End -= 1;
+                font = paragraphRange.Font;
+                if (TryResolveWordFontSize(font.Size, out var paragraphSize))
+                    return paragraphSize;
+            }
+            return FormulaFontSize.DefaultPt;
+        }
+        finally
+        {
+            Release(font);
+            Release(paragraphRange);
+            Release(paragraph);
+            Release(paragraphs);
+        }
+    }
+
+    private static bool TryResolveNearbyVisibleFontSize(
+        Document document,
+        int startPosition,
+        out float fontSizePt,
+        int minimumPosition = 0,
+        int maximumPosition = int.MaxValue,
+        int step = 1)
+    {
+        fontSizePt = FormulaFontSize.DefaultPt;
+        if (step is not (-1 or 1)) return false;
+
+        Range? content = null;
+        try
+        {
+            content = document.Content;
+            var contentStart = content.Start;
+            var contentEnd = Math.Max(contentStart, content.End - 1);
+            var lowerBound = Math.Max(contentStart, minimumPosition);
+            var upperBound = Math.Min(contentEnd, maximumPosition);
+            if (upperBound < lowerBound
+                || (step < 0 && startPosition < lowerBound)
+                || (step > 0 && startPosition > upperBound))
+                return false;
+            var position = startPosition;
+            const int maximumProbeCharacters = 256;
+            for (var probeIndex = 0;
+                 probeIndex < maximumProbeCharacters
+                 && position >= lowerBound
+                 && position <= upperBound;
+                 probeIndex++, position += step)
+            {
+                Range? probe = null;
+                Microsoft.Office.Interop.Word.Font? font = null;
+                try
+                {
+                    probe = document.Range(position, Math.Min(position + 1, content.End));
+                    if (!ContainsVisibleBodyText(probe.Text)) continue;
+                    font = probe.Font;
+                    if (TryResolveWordFontSize(font.Size, out fontSizePt))
+                        return true;
+                }
+                catch (COMException)
+                {
+                    // Keep probing neighboring Word story coordinates.
+                }
+                finally
+                {
+                    Release(font);
+                    Release(probe);
+                }
+            }
+            return false;
+        }
+        finally { Release(content); }
+    }
+
     public WordBulkInsertResult InsertBulkDocument(
         WordBulkImportDocument source,
         IReadOnlyDictionary<string, PreparedWordBulkFormula> prepared,
@@ -1102,7 +1727,9 @@ internal sealed class WordFormulaService
         Document document,
         Selection selection,
         PreparedWordBulkFormula prepared,
-        bool display)
+        bool display,
+        bool preserveExistingDisplayParagraphBoundary = false,
+        Range? preservedDisplayParagraphRange = null)
     {
         var session = prepared.Session;
         session.DisplayMode = display ? "block" : "inline";
@@ -1120,6 +1747,11 @@ internal sealed class WordFormulaService
         InlineShape? shape = null;
         try
         {
+            var usePreservedOleDisplayParagraph =
+                display
+                && !nativeOmml
+                && preserveExistingDisplayParagraphBoundary
+                && preservedDisplayParagraphRange is not null;
             if (display)
             {
                 if (!nativeOmml)
@@ -1127,15 +1759,27 @@ internal sealed class WordFormulaService
                     Range? spacingAnchor = null;
                     try
                     {
-                        spacingAnchor = selection.Range.Duplicate;
+                        spacingAnchor = usePreservedOleDisplayParagraph
+                            ? preservedDisplayParagraphRange!.Duplicate
+                            : selection.Range.Duplicate;
                         CompactParagraphBeforeOleDisplayFormula(document, spacingAnchor);
                     }
                     finally { Release(spacingAnchor); }
                 }
-                EnsureBlankDisplayParagraph(selection, preserveNativeOmmlSpacing: nativeOmml);
+                if (usePreservedOleDisplayParagraph)
+                    FormatExistingDisplayParagraph(
+                        preservedDisplayParagraphRange!,
+                        preserveNativeOmmlSpacing: false);
+                else
+                    EnsureBlankDisplayParagraph(
+                        selection,
+                        preserveNativeOmmlSpacing: nativeOmml);
             }
-            insertion = selection.Range.Duplicate;
-            insertion.Collapse(WdCollapseDirection.wdCollapseEnd);
+            insertion = usePreservedOleDisplayParagraph
+                ? preservedDisplayParagraphRange!.Duplicate
+                : selection.Range.Duplicate;
+            if (!usePreservedOleDisplayParagraph)
+                insertion.Collapse(WdCollapseDirection.wdCollapseEnd);
 
             if (nativeOmml)
             {
@@ -1167,7 +1811,8 @@ internal sealed class WordFormulaService
                 if (display)
                 {
                     TryReconcileOmml(document, bookmark, equationRange, metadata);
-                    MoveSelectionAfterDisplayFormula(selection, equationRange);
+                    if (!preserveExistingDisplayParagraphBoundary)
+                        MoveSelectionAfterDisplayFormula(selection, equationRange);
                 }
                 else
                 {
@@ -1200,13 +1845,16 @@ internal sealed class WordFormulaService
             if (display)
             {
                 TryReconcileShape(document, shape, metadata);
-                Range? shapeRange = null;
-                try
+                if (!preserveExistingDisplayParagraphBoundary)
                 {
-                    shapeRange = shape.Range;
-                    MoveSelectionAfterDisplayFormula(selection, shapeRange);
+                    Range? shapeRange = null;
+                    try
+                    {
+                        shapeRange = shape.Range;
+                        MoveSelectionAfterDisplayFormula(selection, shapeRange);
+                    }
+                    finally { Release(shapeRange); }
                 }
-                finally { Release(shapeRange); }
             }
             else
             {
@@ -1338,6 +1986,50 @@ internal sealed class WordFormulaService
             Release(paragraphs);
             Release(anchor);
         }
+    }
+
+    private static Range DuplicateContainingParagraphRange(Range sourceRange)
+    {
+        Paragraphs? paragraphs = null;
+        Paragraph? paragraph = null;
+        Range? paragraphRange = null;
+        try
+        {
+            paragraphs = sourceRange.Paragraphs;
+            if (paragraphs.Count == 0)
+                throw new InvalidDataException("Word 未能定位行间公式所在段落。");
+            paragraph = paragraphs[1];
+            paragraphRange = paragraph.Range.Duplicate;
+            var result = paragraphRange;
+            paragraphRange = null;
+            return result;
+        }
+        finally
+        {
+            Release(paragraphRange);
+            Release(paragraph);
+            Release(paragraphs);
+        }
+    }
+
+    private static void FormatExistingDisplayParagraph(
+        Range paragraphRange,
+        bool preserveNativeOmmlSpacing)
+    {
+        ParagraphFormat? format = null;
+        try
+        {
+            format = paragraphRange.ParagraphFormat;
+            format.Alignment = WdParagraphAlignment.wdAlignParagraphCenter;
+            if (!preserveNativeOmmlSpacing)
+            {
+                format.SpaceBefore = 0;
+                format.SpaceAfter = 0;
+                format.LineSpacingRule = WdLineSpacing.wdLineSpaceSingle;
+            }
+            try { paragraphRange.ListFormat.RemoveNumbers(); } catch { }
+        }
+        finally { Release(format); }
     }
 
     private static void EnsureBlankDisplayParagraph(

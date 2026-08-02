@@ -1008,7 +1008,7 @@ pub async fn download_and_install_model(
     }
 
     let client = Client::builder()
-        .user_agent("VisualTeX/1.2.3 OCR model manager")
+        .user_agent("VisualTeX/1.2.4 OCR model manager")
         .connect_timeout(Duration::from_secs(30))
         .timeout(Duration::from_secs(3 * 60 * 60))
         .build()

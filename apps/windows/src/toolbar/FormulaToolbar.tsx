@@ -94,7 +94,8 @@ interface SectionEditorState {
 }
 
 const customFormulaTilesStorageKey = "visualtex-custom-formula-tiles";
-const commonToolbarCommandsStorageKey = "visualtex-common-toolbar-command-ids-v1";
+const commonToolbarCommandsStorageKey = "visualtex-common-toolbar-command-ids-v2";
+const legacyCommonToolbarCommandsStorageKey = "visualtex-common-toolbar-command-ids-v1";
 const commonToolbarCommandLimit = 45;
 const defaultCustomSectionId = "default";
 const defaultCustomSectionName = "未命名分区";
@@ -138,11 +139,28 @@ function normalizeCommonToolbarCommandIds(value: unknown) {
   return result.slice(0, commonToolbarCommandLimit);
 }
 
+function migrateLegacyCommonToolbarCommandIds(value: unknown) {
+  if (!Array.isArray(value)) return value;
+  return value.map((id) => {
+    if (id === "notin") return "times";
+    if (id === "leftarrow") return "div";
+    return id;
+  });
+}
+
 function loadCommonToolbarCommandIds() {
   try {
-    return normalizeCommonToolbarCommandIds(
-      JSON.parse(localStorage.getItem(commonToolbarCommandsStorageKey) ?? "null"),
-    );
+    const current = localStorage.getItem(commonToolbarCommandsStorageKey);
+    if (current !== null) {
+      return normalizeCommonToolbarCommandIds(JSON.parse(current));
+    }
+    const legacy = localStorage.getItem(legacyCommonToolbarCommandsStorageKey);
+    if (legacy !== null) {
+      return normalizeCommonToolbarCommandIds(
+        migrateLegacyCommonToolbarCommandIds(JSON.parse(legacy)),
+      );
+    }
+    return normalizeCommonToolbarCommandIds(null);
   } catch {
     return normalizeCommonToolbarCommandIds(null);
   }

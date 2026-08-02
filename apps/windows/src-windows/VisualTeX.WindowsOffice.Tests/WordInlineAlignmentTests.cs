@@ -7,20 +7,20 @@ public sealed class WordInlineAlignmentTests
     [Fact]
     public void AlignsExportedFormulaBaselineWithWordTextBaseline()
     {
-        Assert.Equal(-4, WordInlineAlignment.CalculateFontPosition(15, 20, 15));
+        Assert.Equal(-3, WordInlineAlignment.CalculateFontPosition(15, 20, 15));
     }
 
     [Fact]
     public void RawGeometryAlignmentScalesWithTheObjectHeight()
     {
-        Assert.Equal(-8, WordInlineAlignment.CalculateFontPosition(30, 40, 30));
+        Assert.Equal(-7, WordInlineAlignment.CalculateFontPosition(30, 40, 30));
     }
 
     [Fact]
     public void CompleteMetadataKeepsTheStructureAwareScaledBaseline()
     {
         Assert.Equal(
-            -11,
+            -10,
             WordInlineAlignment.CalculateFontPositionWithLegacyFallback(
                 43,
                 18.9867f,

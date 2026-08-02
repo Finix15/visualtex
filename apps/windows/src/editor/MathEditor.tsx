@@ -66,6 +66,10 @@ import {
   nativeSuggestionPreviewHasVisibleInk,
   resolveNativeSuggestionPreview,
 } from "./nativeSuggestionPreviews";
+import {
+  toggleFormulaSelectionLatex,
+  type FormulaSelectionToggleKind,
+} from "./selectionStyleToggle";
 
 export interface MathEditorInsertionTarget {
   lineId: string;
@@ -2698,17 +2702,15 @@ function removePointerPlaceholderSnapshotStyle(field: MathfieldElement) {
     ?.remove();
 }
 
-function normalizeCompletedDifferentialDisplay(
-  field: MathfieldElement,
-  autoEscapeShortcuts = true,
-) {
+function normalizeCompletedDifferentialDisplay(field: MathfieldElement) {
   if (field.mode === "latex" || !field.selectionIsCollapsed) return false;
 
   const originalValue = field.value;
   const portableValue = normalizeMathLiveCanonicalUprightCommands(originalValue);
-  const contextualValue = autoEscapeShortcuts
-    ? normalizeContextualUprightSymbols(portableValue)
-    : portableValue;
+  // Contextual upright typography is a semantic normalization pass, not an
+  // inline-shortcut preference. It must remain active even when the user turns
+  // off "common math input auto-convert".
+  const contextualValue = normalizeContextualUprightSymbols(portableValue);
   if (contextualValue === originalValue) return false;
 
   const distanceFromEnd = Math.max(0, field.lastOffset - field.position);
@@ -4503,10 +4505,7 @@ function FormulaField(props: FormulaFieldProps) {
         );
       }
       clearPendingAutoExit();
-    normalizeCompletedDifferentialDisplay(
-      field,
-      propsRef.current.inputBehavior.autoEscapeShortcuts,
-    );
+    normalizeCompletedDifferentialDisplay(field);
     const inputType =
       event instanceof InputEvent ? event.inputType || "insertText" : "insertText";
     let postInputSnapshot = captureFieldSnapshot(field);
@@ -4550,10 +4549,7 @@ function FormulaField(props: FormulaFieldProps) {
           }
         }
         if (
-          normalizeCompletedDifferentialDisplay(
-            field,
-            propsRef.current.inputBehavior.autoEscapeShortcuts,
-          ) || autoExitMoved
+          normalizeCompletedDifferentialDisplay(field) || autoExitMoved
         ) {
           emitEdit(
             deferredBefore,
@@ -6245,10 +6241,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       }
       if (!changed) return false;
 
-      normalizeCompletedDifferentialDisplay(
-        field,
-        state.inputBehavior.autoEscapeShortcuts,
-      );
+      normalizeCompletedDifferentialDisplay(field);
       const after = captureFieldSnapshot(field);
       if (before.latex === after.latex) {
         field.resetUndo();
@@ -7442,38 +7435,135 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       if (!resolved.length) return false;
 
       historyManager.commitPendingTransaction();
-      for (const { field, selection } of resolved) {
-        field.selection = selection;
+      for (const entry of resolved) {
+        const { field, lineId } = entry;
+        field.selection = entry.selection;
+        if (style.kind === "bold" || style.kind === "italic") {
+          const original = captureFieldSnapshot(field);
+          const toggled = applyDiscreteFormulaMutation(
+            lineId,
+            field,
+            "toolbar",
+            () => {
+              const nextRanges: Array<[number, number]> = [];
+              let changed = false;
+              const ranges = [...entry.selection.ranges]
+                .map(([start, end]) => [Math.min(start, end), Math.max(start, end)] as [number, number])
+                .sort((left, right) => right[0] - left[0]);
+              for (const [start, end] of ranges) {
+                const singleSelection: MathSelectionSnapshot = {
+                  ranges: [[start, end]],
+                  direction: "forward",
+                };
+                field.selection = singleSelection;
+                const selectedLatex = field.getValue(singleSelection, "latex").trim();
+                if (!selectedLatex) continue;
+                const replacement = toggleFormulaSelectionLatex(
+                  selectedLatex,
+                  style.kind satisfies FormulaSelectionToggleKind,
+                  {
+                    allBold:
+                      field.queryStyle({ variantStyle: "bold" }) === "all",
+                    allBoldItalic:
+                      field.queryStyle({ variantStyle: "bolditalic" }) === "all",
+                    allItalic:
+                      field.queryStyle({ variantStyle: "italic" }) === "all",
+                    allUpright:
+                      field.queryStyle({ variantStyle: "up" }) === "all",
+                  },
+                );
+                if (!replacement || replacement === selectedLatex) {
+                  nextRanges.push([start, end]);
+                  continue;
+                }
+                const inserted = field.insert(replacement, {
+                  mode: "math",
+                  format: "latex",
+                  insertionMode: "replaceSelection",
+                  selectionMode: "after",
+                  style: {
+                    variant: "normal",
+                    variantStyle: undefined,
+                  },
+                  focus: true,
+                  scrollIntoView: false,
+                });
+                if (!inserted) {
+                  field.setValue(original.latex, {
+                    mode: "math",
+                    format: "latex",
+                    insertionMode: "replaceAll",
+                    selectionMode: "after",
+                    silenceNotifications: true,
+                  });
+                  field.selection = original.selection;
+                  return false;
+                }
+                const nextEnd = field.position;
+                const delta = nextEnd - end;
+                for (const range of nextRanges) {
+                  if (range[0] >= end) {
+                    range[0] += delta;
+                    range[1] += delta;
+                  }
+                }
+                nextRanges.push([start, nextEnd]);
+                changed = true;
+              }
+              const nextSelection = clampSelection(
+                {
+                  ranges: nextRanges.sort((left, right) => left[0] - right[0]),
+                  direction: entry.selection.direction,
+                },
+                field.lastOffset,
+              );
+              field.selection = nextSelection;
+              return changed;
+            },
+          );
+          if (!toggled) field.selection = entry.selection;
+          entry.selection = captureSelection(field);
+          continue;
+        }
+
         let mathLiveStyle: Pick<
           Style,
           "variant" | "variantStyle" | "color" | "backgroundColor"
         >;
-        if (style.kind === "bold") {
-          const explicitlyUpright =
-            field.queryStyle({ variantStyle: "up" }) === "all";
-          const explicitlyItalic =
-            field.queryStyle({ variantStyle: "italic" }) === "all" ||
-            field.queryStyle({ variantStyle: "bolditalic" }) === "all";
-          mathLiveStyle = {
-            variant: "normal",
-            variantStyle:
-              explicitlyItalic || !explicitlyUpright ? "bolditalic" : "bold",
-          };
-        } else if (style.kind === "italic") {
-          const alreadyBold =
-            field.queryStyle({ variantStyle: "bold" }) === "all" ||
-            field.queryStyle({ variantStyle: "bolditalic" }) === "all";
-          mathLiveStyle = {
-            variant: "normal",
-            variantStyle: alreadyBold ? "bolditalic" : "italic",
-          };
-        } else if (style.kind === "color") {
+        if (style.kind === "color") {
           mathLiveStyle = { color: style.value };
         } else {
           mathLiveStyle = { backgroundColor: style.value };
         }
-        field.applyStyle(mathLiveStyle, { operation: "set" });
-        field.selection = selection;
+        for (const [start, end] of entry.selection.ranges) {
+          const range: [number, number] = [
+            Math.min(start, end),
+            Math.max(start, end),
+          ];
+          if (range[0] === range[1]) continue;
+          field.applyStyle(mathLiveStyle, {
+            range,
+            operation: "set",
+          });
+        }
+        // MathLive normally derives the implicit style for future input from
+        // the atom immediately before the caret. If the formatted selection
+        // includes the last atom, typing at the end would otherwise inherit
+        // its color/background even though these controls are selection-only.
+        const resetPosition = Math.max(
+          ...entry.selection.ranges.flatMap(([start, end]) => [start, end]),
+        );
+        field.selection = {
+          ranges: [[resetPosition, resetPosition]],
+          direction: "none",
+        };
+        field.applyStyle(
+          style.kind === "color"
+            ? { color: "none" }
+            : { backgroundColor: "none" },
+          { operation: "set" },
+        );
+        field.selection = entry.selection;
       }
       historyManager.commitPendingTransaction();
 

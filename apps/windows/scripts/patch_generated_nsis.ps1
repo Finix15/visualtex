@@ -2,7 +2,7 @@
 param(
     [string]$InstallerNsi,
     [string]$OutputInstaller,
-    [string]$AppVersion = "1.2.3"
+    [string]$AppVersion = "1.2.4"
 )
 
 $ErrorActionPreference = "Stop"

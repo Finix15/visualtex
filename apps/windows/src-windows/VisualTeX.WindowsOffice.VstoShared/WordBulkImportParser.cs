@@ -67,6 +67,15 @@ internal sealed class WordBulkImportDocument
         block.Runs.Where(run => !run.IsFormula).Sum(run => run.Text.Length));
 }
 
+internal sealed class WordLatexFormulaSpan
+{
+    internal string Id { get; set; } = Guid.NewGuid().ToString("D");
+    internal int Start { get; set; }
+    internal int Length { get; set; }
+    internal string Latex { get; set; } = string.Empty;
+    internal string DisplayMode { get; set; } = "inline";
+}
+
 internal static class WordBulkImportParser
 {
     private sealed class SerializedDocument
@@ -289,6 +298,150 @@ internal static class WordBulkImportParser
             Blocks = blocks,
             Warnings = warnings,
         };
+    }
+
+    /// <summary>
+    /// Finds LaTeX math delimiters without rewriting the surrounding Word text.
+    /// This intentionally shares the delimiter semantics used by batch import,
+    /// while preserving exact source offsets for in-place redraw.
+    /// </summary>
+    internal static List<WordLatexFormulaSpan> FindFormulaSpans(string source)
+    {
+        if (source is null) throw new ArgumentNullException(nameof(source));
+        if (source.Length > 5_000_000)
+            throw new InvalidDataException("LaTeX 重绘范围不能超过 5 MB。");
+
+        var spans = new List<WordLatexFormulaSpan>();
+        for (var index = 0; index < source.Length;)
+        {
+            if (source[index] == '$' && !IsEscaped(source, index))
+            {
+                if (index + 1 < source.Length && source[index + 1] == '$')
+                {
+                    var end = FindUnescapedSequence(source, "$$", index + 2);
+                    if (end >= index + 2)
+                    {
+                        AddFormulaSpan(
+                            spans,
+                            source,
+                            index,
+                            end + 2,
+                            index + 2,
+                            end,
+                            "block",
+                            normalizeDisplay: true);
+                        index = end + 2;
+                        continue;
+                    }
+                }
+                else
+                {
+                    var end = FindUnescaped(source, '$', index + 1);
+                    if (end > index + 1)
+                    {
+                        AddFormulaSpan(
+                            spans,
+                            source,
+                            index,
+                            end + 1,
+                            index + 1,
+                            end,
+                            "inline",
+                            normalizeDisplay: false);
+                        index = end + 1;
+                        continue;
+                    }
+                }
+            }
+
+            if (source[index] == '\\'
+                && index + 1 < source.Length
+                && (source[index + 1] == '(' || source[index + 1] == '[')
+                && !IsEscaped(source, index))
+            {
+                var display = source[index + 1] == '[';
+                var endToken = display ? "\\]" : "\\)";
+                var end = FindUnescapedSequence(source, endToken, index + 2);
+                if (end > index + 2)
+                {
+                    AddFormulaSpan(
+                        spans,
+                        source,
+                        index,
+                        end + endToken.Length,
+                        index + 2,
+                        end,
+                        display ? "block" : "inline",
+                        normalizeDisplay: display);
+                    index = end + endToken.Length;
+                    continue;
+                }
+            }
+
+            if (source[index] == '\\' && !IsEscaped(source, index))
+            {
+                var environment = Regex.Match(
+                    source.Substring(index),
+                    @"^\\begin\{(?<name>equation\*?|align\*?|gather\*?|multline\*?|displaymath)\}",
+                    RegexOptions.IgnoreCase);
+                if (environment.Success)
+                {
+                    var name = environment.Groups["name"].Value;
+                    var endToken = $"\\end{{{name}}}";
+                    var bodyStart = index + environment.Length;
+                    var end = FindUnescapedSequence(source, endToken, bodyStart);
+                    if (end >= bodyStart)
+                    {
+                        var latex = NormalizeDisplayEnvironmentLatex(
+                            name,
+                            source.Substring(bodyStart, end - bodyStart));
+                        if (!string.IsNullOrWhiteSpace(latex))
+                        {
+                            spans.Add(new WordLatexFormulaSpan
+                            {
+                                Start = index,
+                                Length = end + endToken.Length - index,
+                                Latex = latex,
+                                DisplayMode = "block",
+                            });
+                        }
+                        index = end + endToken.Length;
+                        continue;
+                    }
+                }
+            }
+
+            index++;
+        }
+
+        if (spans.Count > 1_000)
+            throw new InvalidDataException("LaTeX 重绘包含过多公式（上限 1000）。");
+        return spans;
+    }
+
+    private static void AddFormulaSpan(
+        ICollection<WordLatexFormulaSpan> spans,
+        string source,
+        int sourceStart,
+        int sourceEnd,
+        int bodyStart,
+        int bodyEnd,
+        string displayMode,
+        bool normalizeDisplay)
+    {
+        if (bodyEnd <= bodyStart) return;
+        var body = source.Substring(bodyStart, bodyEnd - bodyStart);
+        var latex = normalizeDisplay
+            ? NormalizeDelimitedDisplayLatex(body)
+            : body.Trim();
+        if (latex.Length == 0) return;
+        spans.Add(new WordLatexFormulaSpan
+        {
+            Start = sourceStart,
+            Length = sourceEnd - sourceStart,
+            Latex = latex,
+            DisplayMode = displayMode,
+        });
     }
 
     private static WordBulkSourceFormat DetectFormat(string source)

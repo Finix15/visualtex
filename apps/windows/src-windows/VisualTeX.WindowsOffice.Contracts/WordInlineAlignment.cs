@@ -5,6 +5,7 @@ namespace VisualTeX.WindowsOffice.Contracts;
 public static class WordInlineAlignment
 {
     public const float LegacyDescentRatio = 0.25f;
+    public const int OpticalBaselineLiftPoints = 1;
 
     public static int CalculateFontPositionWithLegacyFallback(
         float actualHeightPoints,
@@ -67,9 +68,14 @@ public static class WordInlineAlignment
         if (!(downwardShiftPoints > 0) || float.IsInfinity(downwardShiftPoints))
             return 0;
 
-        return -Math.Max(
+        // Word positions inline objects in whole points. Rounding the complete
+        // MathJax descent places OLE previews about one point below native OMML
+        // on ordinary text lines. Keep the geometric descent, but apply a small
+        // optical lift so the visible glyph baseline matches Word's math zone.
+        var roundedDescent = Math.Max(
             0,
             (int)Math.Round(downwardShiftPoints, MidpointRounding.AwayFromZero));
+        return -Math.Max(0, roundedDescent - OpticalBaselineLiftPoints);
     }
 
     private static bool HasValidExportedBaseline(

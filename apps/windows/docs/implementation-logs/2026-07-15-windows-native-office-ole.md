@@ -138,7 +138,7 @@ Results:
 ### C# tests
 
 ```powershell
-C:\Users\pojian_liao\AppData\Local\Microsoft\dotnet\dotnet.exe test src-windows\VisualTeX.WindowsOffice.Tests\VisualTeX.WindowsOffice.Tests.csproj --configuration Release
+C:\Users\<username>\AppData\Local\Microsoft\dotnet\dotnet.exe test src-windows\VisualTeX.WindowsOffice.Tests\VisualTeX.WindowsOffice.Tests.csproj --configuration Release
 ```
 
 Result: 61 passed, 0 failed, 0 skipped.

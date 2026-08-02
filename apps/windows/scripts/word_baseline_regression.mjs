@@ -8,6 +8,7 @@ import {
 const formulas = [
   String.raw`x`,
   String.raw`x_i`,
+  String.raw`a=\frac{dv}{dt}`,
   String.raw`x^2+y^2`,
   String.raw`\alpha+\beta=\gamma`,
   String.raw`\frac{x+1}{y-1}`,
@@ -50,12 +51,13 @@ const results = formulas.map((latex) => {
 
   assert.equal(sessionPosition, position, `${latex}: session and picture offsets differ`);
   assert.ok(position <= 0, `${latex}: Word baseline must never be raised`);
-  // Word's native Font.Position is integer-valued. Rounding the exact SVG
-  // descent is therefore allowed to leave at most half a point of residual.
+  // Word's native Font.Position is integer-valued. VisualTeX intentionally
+  // leaves the OLE glyph baseline one point above the raw geometric result so
+  // it optically matches native OMML on the same Word text line.
   const residualPt = -position - descentPt;
   assert.ok(
-    Math.abs(residualPt) <= 0.500_001,
-    `${latex}: baseline residual ${residualPt.toFixed(4)}pt exceeds rounding tolerance`,
+    Math.abs(residualPt + 1) <= 0.500_001,
+    `${latex}: optical baseline residual ${residualPt.toFixed(4)}pt is outside tolerance`,
   );
 
   return {

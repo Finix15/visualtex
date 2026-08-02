@@ -246,6 +246,21 @@ async function main() {
         "visualtex.office.macos.native-first-run.v1.2.0.completed",
         "true",
       );
+      if (${JSON.stringify(scenario)} === "toolbar-compact") {
+        localStorage.removeItem("visualtex-common-toolbar-command-ids-v2");
+        localStorage.setItem(
+          "visualtex-common-toolbar-command-ids-v1",
+          JSON.stringify([
+            "frac", "sqrt", "power", "subscript", "hat", "tilde",
+            "parentheses", "absolute", "intplain", "int", "iint", "oint",
+            "sum", "prod", "lim", "partial", "derivative", "nabla", "infty",
+            "matrix2", "cases", "vector", "alpha", "beta", "gamma", "theta",
+            "lambda", "mu", "pi", "sigma", "omega", "delta", "equal", "neq",
+            "approx", "leq", "geq", "propto", "in", "subset", "rightarrow",
+            "notin", "forall", "exists", "leftarrow",
+          ]),
+        );
+      }
       const storageKey = "visualtex-editor";
       const persisted = JSON.parse(localStorage.getItem(storageKey) || "{}");
       persisted.state = {
@@ -288,10 +303,11 @@ async function main() {
       persisted.state.activeLineId = persisted.state.lines[0].id;
       if (
         ${JSON.stringify(scenario)} === "native-input-popover" ||
-        ${JSON.stringify(scenario)} === "usage-ranking"
+        ${JSON.stringify(scenario)} === "usage-ranking" ||
+        ${JSON.stringify(scenario)} === "upright"
       ) {
         persisted.state.inputBehavior = {
-          autoEscapeShortcuts: true,
+          autoEscapeShortcuts: ${scenario === "upright" ? "false" : "true"},
           autoExitSuperscript: true,
           autoExitSubscript: true,
           autoExitAccent: true,
@@ -360,99 +376,122 @@ async function main() {
         }),
       }))()`, "desktop formula formatting controls");
 
-      await evaluate(`(() => {
-        const field = document.querySelector('math-field');
-        if (!field) return false;
-        field.setValue('abc', {
-          mode: 'math',
-          format: 'latex',
-          insertionMode: 'replaceAll',
-          selectionMode: 'after',
-          silenceNotifications: true,
-        });
-        field.focus();
-        field.selection = { ranges: [[0, 3]], direction: 'forward' };
-        field.shadowRoot?.querySelector('[part="keyboard-sink"]')?.focus({ preventScroll: true });
-        window.__visualtexBeforeSelectionBold = field.value;
-        window.__visualtexFormattingEvents = [];
-        const button = document.querySelector('[data-formula-selection-bold]');
-        button?.addEventListener('pointerdown', () =>
-          window.__visualtexFormattingEvents.push('pointerdown'),
-        );
-        button?.addEventListener('click', () =>
-          window.__visualtexFormattingEvents.push('click'),
-        );
-        const originalApplyStyle = field.applyStyle.bind(field);
-        field.applyStyle = (style, options) => {
-          window.__visualtexFormattingEvents.push({
-            kind: 'applyStyle',
-            style,
-            selection: JSON.parse(JSON.stringify(field.selection)),
-          });
-          return originalApplyStyle(style, options);
-        };
-        return true;
-      })()`);
-      await clickSelectorWithPointer('[data-formula-selection-bold]');
-      const selectionBold = await waitForEvaluation(`(() => {
-        const field = document.querySelector('math-field');
-        if (!field) return { ready: false };
-        field.selection = { ranges: [[0, field.lastOffset]], direction: 'forward' };
-        const style = field.queryStyle({ variantStyle: 'bolditalic' });
-        const value = field.value;
-        const visualBold = Boolean(
-          field.shadowRoot?.querySelector('.ML__mathbfit, .ML__mathbf, .ML__bold'),
-        );
-        return {
-          ready:
-            style === 'all' &&
-            value !== window.__visualtexBeforeSelectionBold &&
-            visualBold,
-          style,
-          value,
-          visualBold,
-          focused: field.hasFocus(),
-          events: window.__visualtexFormattingEvents ?? [],
-        };
-      })()`, "desktop selection bold applies visible math style");
+      const dispatchFormattingToggle = async (selector) => {
+        const encodedSelector = JSON.stringify(selector);
+        await evaluate(`(() => {
+          const field = document.querySelector('math-field');
+          const button = document.querySelector(${encodedSelector});
+          if (!field || !(button instanceof HTMLElement)) return false;
+          field.focus();
+          field.selection = {
+            ranges: [[0, field.lastOffset]],
+            direction: 'forward',
+          };
+          const pointerOptions = {
+            bubbles: true,
+            composed: true,
+            cancelable: true,
+            button: 0,
+            buttons: 1,
+            pointerId: 1,
+            pointerType: 'mouse',
+          };
+          button.dispatchEvent(new PointerEvent('pointerdown', pointerOptions));
+          button.dispatchEvent(new MouseEvent('mousedown', {
+            bubbles: true,
+            composed: true,
+            cancelable: true,
+            button: 0,
+            buttons: 1,
+          }));
+          button.dispatchEvent(new MouseEvent('mouseup', {
+            bubbles: true,
+            composed: true,
+            cancelable: true,
+            button: 0,
+            buttons: 0,
+          }));
+          button.dispatchEvent(new MouseEvent('click', {
+            bubbles: true,
+            composed: true,
+            cancelable: true,
+            button: 0,
+            buttons: 0,
+          }));
+          return true;
+        })()`);
+        await sleep(100);
+      };
 
-      await evaluate(`(() => {
+      const setFormattingValue = async (latex) => {
+        const encodedLatex = JSON.stringify(latex);
+        await evaluate(`(() => {
+          const field = document.querySelector('math-field');
+          if (!field) return false;
+          field.setValue(${encodedLatex}, {
+            mode: 'math',
+            format: 'latex',
+            insertionMode: 'replaceAll',
+            selectionMode: 'after',
+            silenceNotifications: true,
+          });
+          field.focus();
+          return true;
+        })()`);
+        await sleep(60);
+      };
+
+      const readFormattingValue = () => evaluate(`(() => {
         const field = document.querySelector('math-field');
-        if (!field) return false;
-        field.setValue('xyz', {
-          mode: 'math',
-          format: 'latex',
-          insertionMode: 'replaceAll',
-          selectionMode: 'after',
-          silenceNotifications: true,
-        });
-        field.focus();
-        field.selection = { ranges: [[0, 3]], direction: 'forward' };
-        field.shadowRoot?.querySelector('[part="keyboard-sink"]')?.focus({ preventScroll: true });
-        window.__visualtexBeforeSelectionItalic = field.value;
-        return true;
+        return field?.value?.replace(/\\s+/g, '') ?? '';
       })()`);
-      await clickSelectorWithPointer('[data-formula-selection-italic]');
-      const selectionItalic = await waitForEvaluation(`(() => {
-        const field = document.querySelector('math-field');
-        if (!field) return { ready: false };
-        field.selection = { ranges: [[0, field.lastOffset]], direction: 'forward' };
-        const style = field.queryStyle({ variantStyle: 'italic' });
-        const value = field.value;
-        const visualItalic = Boolean(
-          field.shadowRoot?.querySelector('.ML__mathit, .ML__it'),
-        );
-        return {
-          ready:
-            style === 'all' &&
-            value !== window.__visualtexBeforeSelectionItalic &&
-            visualItalic,
-          style,
-          value,
-          visualItalic,
-          focused: field.hasFocus(),
-        };
-      })()`, "desktop selection italic applies visible math style");
+
+      await setFormattingValue('abc');
+      await dispatchFormattingToggle('[data-formula-selection-bold]');
+      const boldApplied = await readFormattingValue();
+      if (boldApplied !== String.raw`\mathbf{abc}`) {
+        throw new Error(`Bold toggle must emit \\mathbf exactly; received ${boldApplied}`);
+      }
+      await dispatchFormattingToggle('[data-formula-selection-bold]');
+      const boldRemoved = await readFormattingValue();
+      if (boldRemoved !== 'abc') {
+        throw new Error(`Second bold toggle must restore ordinary math; received ${boldRemoved}`);
+      }
+
+      await setFormattingValue('xyz');
+      await dispatchFormattingToggle('[data-formula-selection-italic]');
+      const uprightApplied = await readFormattingValue();
+      if (uprightApplied !== String.raw`\mathrm{xyz}`) {
+        throw new Error(`Italic toggle must switch default math italic to \\mathrm; received ${uprightApplied}`);
+      }
+      await dispatchFormattingToggle('[data-formula-selection-italic]');
+      const italicRestored = await readFormattingValue();
+      if (italicRestored !== 'xyz') {
+        throw new Error(`Second italic toggle must restore default math italic; received ${italicRestored}`);
+      }
+
+      await setFormattingValue(String.raw`\mathbf{q}`);
+      await dispatchFormattingToggle('[data-formula-selection-italic]');
+      const boldItalicApplied = await readFormattingValue();
+      if (boldItalicApplied !== String.raw`\mathbfit{q}`) {
+        throw new Error(`Italic toggle must preserve bold as \\mathbfit; received ${boldItalicApplied}`);
+      }
+      await dispatchFormattingToggle('[data-formula-selection-italic]');
+      const boldUprightRestored = await readFormattingValue();
+      if (boldUprightRestored !== String.raw`\mathbf{q}`) {
+        throw new Error(`Second italic toggle must restore \\mathbf; received ${boldUprightRestored}`);
+      }
+
+      const selectionBold = {
+        applied: boldApplied,
+        removed: boldRemoved,
+      };
+      const selectionItalic = {
+        upright: uprightApplied,
+        restored: italicRestored,
+        boldItalic: boldItalicApplied,
+        boldRestored: boldUprightRestored,
+      };
 
       const removedPersistentControls = await evaluate(`(() => ({
         typingBold: Boolean(document.querySelector('[data-formula-typing-bold]')),
@@ -1302,31 +1341,57 @@ async function main() {
           "pi",
           "sigma",
           "omega",
+          "delta",
           "equal",
           "neq",
           "approx",
           "leq",
           "geq",
           "propto",
+          "times",
+          "div",
           "in",
           "subset",
           "rightarrow",
+          "forall",
+          "exists",
         ];
         const buttons = [...document.querySelectorAll(
           ".template-strip > .template-button",
         )];
         const actualIds = buttons.map((button) => button.dataset.commandId ?? "");
+        const storedIds = JSON.parse(
+          localStorage.getItem("visualtex-common-toolbar-command-ids-v2") || "[]",
+        );
         const missingIds = expectedIds.filter((id) => !actualIds.includes(id));
         return {
           ready:
-            actualIds.length === expectedIds.length &&
+            actualIds.length === 45 &&
             JSON.stringify(actualIds) === JSON.stringify(expectedIds) &&
-            missingIds.length === 0,
+            JSON.stringify(storedIds) === JSON.stringify(expectedIds) &&
+            missingIds.length === 0 &&
+            !actualIds.includes("notin") &&
+            !actualIds.includes("leftarrow"),
           count: actualIds.length,
           actualIds,
+          storedIds,
           missingIds,
         };
       })()`, "expanded common formula collection");
+
+      await clearField();
+      await evaluate(`(() => {
+        document.querySelector('[data-command-id="times"]')?.click();
+        document.querySelector('[data-command-id="div"]')?.click();
+        return true;
+      })()`);
+      const arithmeticOperatorState = await waitForEvaluation(`(() => {
+        const value = document.querySelector("math-field")?.value ?? "";
+        return {
+          ready: value.includes("\\\\times") && value.includes("\\\\div"),
+          value,
+        };
+      })()`, "common multiplication and division insertion");
 
       console.log(
         JSON.stringify(
@@ -1338,6 +1403,7 @@ async function main() {
             physicsExceptionState,
             calculusPreviewState,
             commonContentsState,
+            arithmeticOperatorState,
           },
           null,
           2,
@@ -5834,7 +5900,36 @@ async function main() {
         };
       })()`, "slash derivative uses two upright differential operators");
 
-      console.log(JSON.stringify({ identifierState, differentialState }, null, 2));
+      await clearField();
+      await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        if (!field) return false;
+        field.setValue("e^{i\\\\theta}", {
+          mode: "math",
+          format: "latex",
+          insertionMode: "replaceAll",
+          selectionMode: "after",
+          silenceNotifications: true,
+        });
+        field.dispatchEvent(new InputEvent("input", {
+          bubbles: true,
+          composed: true,
+          inputType: "insertText",
+        }));
+        return true;
+      })()`);
+      const exponentialState = await waitForEvaluation(`(() => {
+        const value = document.querySelector("math-field")?.value ?? "";
+        return {
+          ready:
+            /\\\\mathrm\\{e\\}/.test(value) &&
+            /\\\\mathrm\\{i\\}/.test(value) &&
+            /\\\\theta/.test(value),
+          value,
+        };
+      })()`, "Euler constant and imaginary unit remain upright with shortcuts disabled");
+
+      console.log(JSON.stringify({ identifierState, differentialState, exponentialState }, null, 2));
       console.log("Targeted contextual upright differential regression passed");
       return;
     }

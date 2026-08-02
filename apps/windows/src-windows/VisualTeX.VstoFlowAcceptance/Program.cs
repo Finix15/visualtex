@@ -298,6 +298,10 @@ internal static partial class Program
             {
                 RunWordHundredFormulaPerformance(client, artifactRoot);
             }
+            else if (string.Equals(mode, "word-latex-redraw", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordLatexRedraw(client, artifactRoot);
+            }
             else if (string.Equals(mode, "targeted-2364", StringComparison.OrdinalIgnoreCase))
             {
                 RunTargetedWord2364(client, artifactRoot);

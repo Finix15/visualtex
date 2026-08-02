@@ -127,11 +127,13 @@ public sealed class VisualTeXSessionClient : IDisposable
     private readonly CompanionConfiguration _configuration;
     private readonly VisualTeXCompanionException? _configurationException;
     private readonly HttpClient _http;
+    private readonly SemaphoreSlim _converterPrewarmGate = new(1, 1);
     private string? _installToken;
     private static readonly object ClientLogLock = new();
     private string _lastServerCertificateThumbprint = string.Empty;
     private string _lastTlsPolicyErrors = string.Empty;
     private bool _hasValidatedServerCertificate;
+    private bool _converterPrewarmed;
     private bool _disposed;
     private long _lastHealthyUtcTicks;
     // Word can spend tens of seconds building or scanning a large document
@@ -318,6 +320,31 @@ public sealed class VisualTeXSessionClient : IDisposable
             new StringContent("{}", Encoding.UTF8, "application/json"),
             cancellationToken)).ConfigureAwait(false);
         await EnsureSuccessAsync(response).ConfigureAwait(false);
+    }
+
+    public async Task PrewarmConverterAsync(CancellationToken cancellationToken)
+    {
+        if (_converterPrewarmed) return;
+        await _converterPrewarmGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_converterPrewarmed) return;
+            EnsureAuthorizationHeader();
+            using var response = await SendTrackedAsync(() => _http.PostAsync(
+                "/api/v1/app/converter/prewarm",
+                new StringContent("{}", Encoding.UTF8, "application/json"),
+                cancellationToken)).ConfigureAwait(false);
+            await EnsureSuccessAsync(response).ConfigureAwait(false);
+            // WebView creation returns before React and MathJax finish loading.
+            // Pay this one-time warm-up cost at add-in startup so the first
+            // actual redraw Session cannot race the custom Session event.
+            await Task.Delay(500, cancellationToken).ConfigureAwait(false);
+            _converterPrewarmed = true;
+        }
+        finally
+        {
+            _converterPrewarmGate.Release();
+        }
     }
 
     public async Task OpenConverterAsync(
@@ -1204,6 +1231,7 @@ public sealed class VisualTeXSessionClient : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        _converterPrewarmGate.Dispose();
         _http.Dispose();
     }
 }
