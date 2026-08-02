@@ -12,9 +12,17 @@
     <a href="https://github.com/paulhe666/visualtex/stargazers"><img src="https://img.shields.io/github/stars/paulhe666/visualtex?style=for-the-badge&logo=github&label=STARS" alt="GitHub Stars" /></a>
     <a href="https://github.com/paulhe666/visualtex/releases/latest"><img src="https://img.shields.io/github/v/release/paulhe666/visualtex?style=for-the-badge&logo=github&label=RELEASE" alt="Latest Release" /></a>
     <a href="https://github.com/paulhe666/visualtex/releases"><img src="https://img.shields.io/github/downloads/paulhe666/visualtex/total?style=for-the-badge&logo=github&label=DOWNLOADS" alt="Total Downloads" /></a>
-    <a href="LICENSE"><img src="https://img.shields.io/github/license/paulhe666/visualtex?style=for-the-badge&label=LICENSE" alt="License" /></a>
     <a href="https://visualtex.pauljianliao.com/"><img src="https://img.shields.io/badge/WEBSITE-visualtex.pauljianliao.com-0A84FF?style=for-the-badge&logo=googlechrome&logoColor=white" alt="VisualTeX Website" /></a>
   </p>
+  <p align="center">
+  <img src="https://img.shields.io/badge/Word-555555?style=flat" alt="Word">
+  <img src="https://img.shields.io/badge/PowerPoint-555555?style=flat" alt="PowerPoint">
+  <img src="https://img.shields.io/badge/LaTeX-555555?style=flat" alt="LaTeX">
+  <img src="https://img.shields.io/badge/OMML-555555?style=flat" alt="OMML">
+  <img src="https://img.shields.io/badge/Open%20Source-555555?style=flat" alt="Open Source">
+  <img src="https://img.shields.io/badge/WYSIWYG-555555?style=flat" alt="WYSIWYG">
+     <a href="LICENSE"><img src="https://img.shields.io/github/license/paulhe666/visualtex?style=for-the-badge&label=LICENSE" alt="License" /></a>
+</p>
 </div>
 
 ---
