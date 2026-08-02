@@ -425,14 +425,24 @@ pub fn uninstall_launch_agent() -> Result<OfficeBackgroundStatus, String> {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn activate_foreground_app(app: &AppHandle) -> Result<(), String> {
+pub(crate) fn prepare_foreground_app(app: &AppHandle) -> Result<(), String> {
     // Every Accessory-to-Regular transition must have the real bundle icon in
-    // place before macOS creates or refreshes the Dock tile. Setup normally
-    // installs it already; this idempotent guard keeps later Office entry points
-    // from regressing to an empty or generic application icon.
+    // place before macOS creates or refreshes the Dock tile. Changing policy is
+    // intentionally separate from activating the process: hidden Office editor
+    // hydration must never raise the desktop main window.
     install_application_icon(app)?;
     app.set_activation_policy(tauri::ActivationPolicy::Regular)
-        .map_err(|error| format!("Unable to activate VisualTeX: {error}"))?;
+        .map_err(|error| format!("Unable to prepare VisualTeX for foreground use: {error}"))
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn prepare_foreground_app(_app: &AppHandle) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn activate_foreground_app(app: &AppHandle) -> Result<(), String> {
+    prepare_foreground_app(app)?;
     let running = NSRunningApplication::currentApplication();
     // Do not use ActivateAllWindows here. Formula editing should activate only
     // the dedicated key window; raising every VisualTeX window also pulls the
@@ -465,6 +475,10 @@ pub(crate) fn activate_application_by_bundle_identifier(bundle_identifier: &str)
     let identifier = NSString::from_str(bundle_identifier);
     let applications = NSRunningApplication::runningApplicationsWithBundleIdentifier(&identifier);
     applications.firstObject().is_some_and(|application| {
+        if let Some(main_thread) = MainThreadMarker::new() {
+            let current = NSApplication::sharedApplication(main_thread);
+            current.yieldActivationToApplication(&application);
+        }
         application.activateWithOptions(NSApplicationActivationOptions::empty())
     })
 }

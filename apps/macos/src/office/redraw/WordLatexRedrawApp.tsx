@@ -6,6 +6,7 @@ import {
   commitMacosDocumentImport,
   focusMacosDocumentImportTarget,
   getMacosDocumentImportRequest,
+  reportMacosLatexRedrawStage,
   resolveMacosLatexRedrawFontSizes,
   restoreMacosDocumentImportWindow,
 } from "../documentImport/documentImportClient";
@@ -28,8 +29,17 @@ export function WordLatexRedrawApp() {
     startedRef.current = true;
 
     void (async () => {
+      const workflowStarted = performance.now();
+      const reportStage = (stage: string, itemCount: number) =>
+        reportMacosLatexRedrawStage(
+          sessionId,
+          stage,
+          performance.now() - workflowStarted,
+          itemCount,
+        ).catch(() => undefined);
       try {
         const request = await getMacosDocumentImportRequest(sessionId);
+        await reportStage("latex-redraw-request-ready", 0);
         if (request.operation !== "latexRedraw") {
           throw new Error("The current Office session is not a Word LaTeX redraw request.");
         }
@@ -41,6 +51,7 @@ export function WordLatexRedrawApp() {
         }
 
         const spans = findWindowsWordLatexRedrawSpans(source);
+        await reportStage("latex-redraw-parse-complete", spans.length);
         if (!spans.length) {
           throw new Error(
             request.redrawScope === "document"
@@ -57,11 +68,13 @@ export function WordLatexRedrawApp() {
             sourceStart: span.start,
             sourceEnd: span.end,
             sourceText: span.sourceText,
+            displayMode: span.displayMode,
           })),
         );
         if (fontSizes.length !== spans.length) {
           throw new Error("Word returned an incomplete LaTeX redraw font plan.");
         }
+        await reportStage("latex-redraw-font-preflight-complete", spans.length);
         const targets = spans.map((span, index) => ({
           ...span,
           fontSizePt: fontSizes[index],
@@ -72,8 +85,10 @@ export function WordLatexRedrawApp() {
           outputKind,
           (current, total) => setStatus(`Rendering ${current}/${total} formulas…`),
         );
+        await reportStage("latex-redraw-render-complete", items.length);
         setStatus(`Writing ${items.length} formulas back to Word…`);
         await commitMacosDocumentImport(sessionId, { outputKind, items });
+        await reportStage("latex-redraw-commit-complete", items.length);
         await closeMacosDocumentImportWindow();
       } catch (reason) {
         setError(documentImportErrorMessage(reason, "Word LaTeX redraw failed."));

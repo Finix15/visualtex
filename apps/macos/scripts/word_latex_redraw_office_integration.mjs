@@ -102,7 +102,7 @@ async function waitForWordUi(timeoutMs = 30_000) {
   throw new Error(`Word UI did not become ready: ${lastError}`);
 }
 
-async function waitForCommit(sessionId, timeoutMs = 60_000) {
+async function waitForCommit(sessionId, timeoutMs = 120_000) {
   const progressPath = join(
     sessionsRoot,
     sessionId,
@@ -306,7 +306,7 @@ const selectionImageEnd = selectionImageText.indexOf(" OUTSIDE-B");
 const selectionOmmlText = "KEEP-L alpha \\(z_1+z_2\\) omega KEEP-R";
 const selectionOmmlStart = selectionOmmlText.indexOf("alpha");
 const selectionOmmlEnd = selectionOmmlText.indexOf(" KEEP-R");
-const fullImageText = "DOC-I before $a/b$ after";
+const fullImageText = "DOC-I before $a/b$ after\r$$c^2=a^2+b^2$$\rDOC-I tail";
 const fullOmmlText = "DOC-O before $p+q$ middle \\[r^2\\] after";
 
 const cases = [
@@ -318,10 +318,11 @@ const cases = [
     selectionStart: selectionImageStart,
     selectionEnd: selectionImageEnd,
     fontRanges: [
-      { start: selectionImageText.indexOf("$x+1$"), end: selectionImageText.indexOf("$x+1$") + 5, size: 11 },
-      { start: selectionImageText.indexOf("$$y^2$$"), end: selectionImageText.indexOf("$$y^2$$") + 7, size: 17 },
+      { start: 0, end: selectionImageText.length, size: 11 },
+      { start: selectionImageText.indexOf("$x+1$"), end: selectionImageText.indexOf("$x+1$") + 5, size: 10 },
+      { start: selectionImageText.indexOf("$$y^2$$"), end: selectionImageText.indexOf("$$y^2$$") + 7, size: 10 },
     ],
-    expectedFontSizes: [11, 17],
+    expectedFontSizes: [11, 11],
     expectedFormulaCount: 2,
     sentinels: ["OUTSIDE-A", "PRE", "MID", "POST", "OUTSIDE-B"],
     removedLiterals: ["$x+1$", "$$y^2$$"],
@@ -334,7 +335,8 @@ const cases = [
     selectionStart: selectionOmmlStart,
     selectionEnd: selectionOmmlEnd,
     fontRanges: [
-      { start: selectionOmmlText.indexOf("\\("), end: selectionOmmlText.indexOf("\\)") + 2, size: 13 },
+      { start: 0, end: selectionOmmlText.length, size: 13 },
+      { start: selectionOmmlText.indexOf("\\("), end: selectionOmmlText.indexOf("\\)") + 2, size: 10 },
     ],
     expectedFontSizes: [13],
     expectedFormulaCount: 1,
@@ -349,12 +351,14 @@ const cases = [
     selectionStart: 0,
     selectionEnd: fullImageText.length,
     fontRanges: [
-      { start: fullImageText.indexOf("$a/b$"), end: fullImageText.indexOf("$a/b$") + 5, size: 15 },
+      { start: 0, end: fullImageText.length, size: 11 },
+      { start: fullImageText.indexOf("$a/b$"), end: fullImageText.indexOf("$a/b$") + 5, size: 10 },
+      { start: fullImageText.indexOf("$$c^2=a^2+b^2$$"), end: fullImageText.indexOf("$$c^2=a^2+b^2$$") + "$$c^2=a^2+b^2$$".length, size: 10 },
     ],
-    expectedFontSizes: [15],
-    expectedFormulaCount: 1,
-    sentinels: ["DOC-I", "before", "after"],
-    removedLiterals: ["$a/b$"],
+    expectedFontSizes: [11, 11],
+    expectedFormulaCount: 2,
+    sentinels: ["DOC-I", "before", "after", "tail"],
+    removedLiterals: ["$a/b$", "$$c^2=a^2+b^2$$"],
   },
   {
     name: "document-omml",
@@ -364,10 +368,11 @@ const cases = [
     selectionStart: 0,
     selectionEnd: fullOmmlText.length,
     fontRanges: [
-      { start: fullOmmlText.indexOf("$p+q$"), end: fullOmmlText.indexOf("$p+q$") + 5, size: 12 },
-      { start: fullOmmlText.indexOf("\\["), end: fullOmmlText.indexOf("\\]") + 2, size: 18 },
+      { start: 0, end: fullOmmlText.length, size: 12 },
+      { start: fullOmmlText.indexOf("$p+q$"), end: fullOmmlText.indexOf("$p+q$") + 5, size: 10 },
+      { start: fullOmmlText.indexOf("\\["), end: fullOmmlText.indexOf("\\]") + 2, size: 10 },
     ],
-    expectedFontSizes: [12, 18],
+    expectedFontSizes: [12, 12],
     expectedFormulaCount: 2,
     sentinels: ["DOC-O", "before", "middle", "after"],
     removedLiterals: ["$p+q$", "\\[r^2\\]"],

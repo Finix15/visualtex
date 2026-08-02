@@ -16,6 +16,7 @@ import type { WordLatexRedrawSpan } from "./wordLatexRedrawParser";
 
 const MAX_WORD_REFERENCE_WIDTH_PT = 500;
 const WORD_IMAGE_VISUAL_SCALE = 1.1;
+const WORD_LATEX_REDRAW_RENDER_CONCURRENCY = 4;
 
 export type WordLatexRedrawOutputKind = "omml" | "image";
 export type WordLatexRedrawRenderTarget = WordLatexRedrawSpan & {
@@ -162,25 +163,37 @@ export async function prepareWindowsStyleWordLatexRedrawItems(
   onProgress?: (current: number, total: number) => void,
 ): Promise<DocumentImportFormulaCommitItem[]> {
   const templates = new Map<string, RenderTemplate>();
-  const items: DocumentImportFormulaCommitItem[] = [];
+  const spanKeys = spans.map((span) =>
+    [outputKind, span.displayMode, String(span.fontSizePt), span.latex].join("\x1f"),
+  );
+  const uniqueTargets = new Map<string, WordLatexRedrawRenderTarget>();
+  spans.forEach((span, index) => {
+    if (!uniqueTargets.has(spanKeys[index])) uniqueTargets.set(spanKeys[index], span);
+  });
+  const pendingTemplates = [...uniqueTargets.entries()];
+  let nextTemplateIndex = 0;
+  const workerCount = Math.min(
+    WORD_LATEX_REDRAW_RENDER_CONCURRENCY,
+    pendingTemplates.length,
+  );
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (true) {
+        const templateIndex = nextTemplateIndex;
+        nextTemplateIndex += 1;
+        if (templateIndex >= pendingTemplates.length) return;
+        const [key, span] = pendingTemplates[templateIndex];
+        templates.set(key, await renderTemplate(span, outputKind));
+      }
+    }),
+  );
 
-  for (let index = 0; index < spans.length; index += 1) {
-    const span = spans[index];
-    const key = [
-      outputKind,
-      span.displayMode,
-      String(span.fontSizePt),
-      span.latex,
-    ].join("\x1f");
-    let template = templates.get(key);
-    if (!template) {
-      template = await renderTemplate(span, outputKind);
-      templates.set(key, template);
-    }
-
+  return spans.map((span, index) => {
+    const template = templates.get(spanKeys[index]);
+    if (!template) throw new Error("A cached Word redraw render is missing.");
     const formulaId = createUuid();
     const metadata = createMetadata(formulaId, span, template);
-    items.push({
+    const item: DocumentImportFormulaCommitItem = {
       kind: "formula",
       formulaId,
       latex: template.canonicalLatex,
@@ -198,9 +211,8 @@ export async function prepareWindowsStyleWordLatexRedrawItems(
       sourceStart: span.start,
       sourceEnd: span.end,
       sourceText: span.sourceText,
-    });
+    };
     onProgress?.(index + 1, spans.length);
-  }
-
-  return items;
+    return item;
+  });
 }

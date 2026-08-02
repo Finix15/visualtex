@@ -29,6 +29,7 @@ const RESULT_SVG_FILE: &str = "formula.svg";
 const RESULT_WORD_SVG_DOCX_FILE: &str = "formula-svg.docx";
 const DOCUMENT_IMPORT_MANIFEST_FILE: &str = "document-import.txt";
 const DOCUMENT_IMPORT_PROGRESS_FILE: &str = "document-import-progress.txt";
+const LATEX_REDRAW_VECTOR_BATCH_FILE: &str = "latex-redraw-vectors.docx";
 const LATEX_REDRAW_SOURCE_FILE: &str = "latex-redraw-source.txt";
 const LATEX_REDRAW_PREFLIGHT_MANIFEST_FILE: &str = "latex-redraw-preflight.txt";
 const LATEX_REDRAW_FONT_SIZES_FILE: &str = "latex-redraw-font-sizes.txt";
@@ -166,6 +167,7 @@ pub struct MacOfflineLatexRedrawFontRangeInput {
     source_start: usize,
     source_end: usize,
     source_text: String,
+    display_mode: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -481,6 +483,10 @@ fn document_import_manifest_path(session_id: &str) -> Result<PathBuf, String> {
     Ok(session_directory(OfficeHost::Word, session_id)?.join(DOCUMENT_IMPORT_MANIFEST_FILE))
 }
 
+fn latex_redraw_vector_batch_path(session_id: &str) -> Result<PathBuf, String> {
+    Ok(session_directory(OfficeHost::Word, session_id)?.join(LATEX_REDRAW_VECTOR_BATCH_FILE))
+}
+
 fn latex_redraw_preflight_manifest_path(session_id: &str) -> Result<PathBuf, String> {
     Ok(session_directory(OfficeHost::Word, session_id)?
         .join(LATEX_REDRAW_PREFLIGHT_MANIFEST_FILE))
@@ -522,6 +528,7 @@ fn cleanup_session_files_at(
         RESULT_SVG_FILE,
         RESULT_WORD_SVG_DOCX_FILE,
         DOCUMENT_IMPORT_MANIFEST_FILE,
+        LATEX_REDRAW_VECTOR_BATCH_FILE,
         LATEX_REDRAW_SOURCE_FILE,
         LATEX_REDRAW_PREFLIGHT_MANIFEST_FILE,
         LATEX_REDRAW_FONT_SIZES_FILE,
@@ -1552,7 +1559,13 @@ fn park_resident_editor_if_idle(window: &WebviewWindow, host: OfficeHost) -> Res
             native_window.setLevel(objc2_app_kit::NSNormalWindowLevel);
             native_window.orderOut(None);
         })
-        .map_err(|error| format!("Unable to park the resident Office editor: {error}"))
+        .map_err(|error| format!("Unable to park the resident Office editor: {error}"))?;
+    if active_editor_session(host).is_none() {
+        window
+            .hide()
+            .map_err(|error| format!("Unable to hide the resident Office editor: {error}"))?;
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -1594,26 +1607,55 @@ fn initialize_resident_editor_window(
 }
 
 #[cfg(target_os = "macos")]
-fn present_resident_editor_window(window: &WebviewWindow) -> Result<(), String> {
+fn order_main_window_behind_office_editor(app: &AppHandle) -> Result<(), String> {
+    let Some(main_window) = app.get_webview_window("main") else {
+        return Ok(());
+    };
+    if !main_window.is_visible().unwrap_or(false) {
+        return Ok(());
+    }
+    main_window
+        .with_webview(move |webview| unsafe {
+            let native_window: &objc2_app_kit::NSWindow = &*webview.ns_window().cast();
+            // Activating a macOS application can reorder all of its normal
+            // windows as one group. Explicitly send only the desktop workspace
+            // behind the Office host, while the dedicated editor becomes key.
+            native_window.orderBack(None);
+        })
+        .map_err(|error| format!("Unable to keep the VisualTeX main window behind Office: {error}"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn order_main_window_behind_office_editor(_app: &AppHandle) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn present_resident_editor_window(app: &AppHandle, window: &WebviewWindow) -> Result<(), String> {
+    crate::office::background::prepare_foreground_app(app)?;
     window
         .with_webview(move |webview| unsafe {
             let native_window: &objc2_app_kit::NSWindow = &*webview.ns_window().cast();
             // Hydration deliberately makes the resident window mouse-inert.
-            // Restoring only Tauri focus is not sufficient on macOS: an
-            // NSWindow can remain visible with ignoresMouseEvents=true, causing
-            // every click to pass through to Word. Reset the native state and
-            // explicitly make it the key normal-level window.
+            // Restore only this dedicated editor, activate the process once at
+            // the final presentation boundary, then make this NSWindow key.
+            // Do not use orderFrontRegardless: it bypasses normal application
+            // ordering and can drag the desktop main window above Word.
             native_window.setAlphaValue(1.0);
             native_window.setIgnoresMouseEvents(false);
             native_window.setLevel(objc2_app_kit::NSNormalWindowLevel);
-            native_window.orderFrontRegardless();
+            if let Some(main_thread) = objc2::MainThreadMarker::new() {
+                let application =
+                    objc2_app_kit::NSApplication::sharedApplication(main_thread);
+                application.activate();
+            }
             native_window.makeKeyAndOrderFront(None);
         })
         .map_err(|error| format!("Unable to present the resident Office editor window: {error}"))
 }
 
 #[cfg(not(target_os = "macos"))]
-fn present_resident_editor_window(window: &WebviewWindow) -> Result<(), String> {
+fn present_resident_editor_window(_app: &AppHandle, window: &WebviewWindow) -> Result<(), String> {
     window.show().map_err(|error| error.to_string())?;
     window.set_focus().map_err(|error| error.to_string())
 }
@@ -1695,6 +1737,22 @@ fn emit_office_editor_activation_with_retries(
     activation: &MacOfflineOfficeEditorActivation,
     received_at: Instant,
 ) -> Result<(), String> {
+    // A parked resident editor is removed from both AppKit ordering and Tauri's
+    // visible state. Wake only this dedicated WebView without activating the
+    // application: keep it almost transparent, mouse-inert, non-key, and behind
+    // the current Office host until React reports ready.
+    window
+        .with_webview(move |webview| unsafe {
+            let native_window: &objc2_app_kit::NSWindow = &*webview.ns_window().cast();
+            native_window.setLevel(objc2_app_kit::NSNormalWindowLevel);
+            native_window.setAlphaValue(0.01);
+            native_window.setIgnoresMouseEvents(true);
+        })
+        .map_err(|error| format!("Unable to prepare the Office editor hydration window: {error}"))?;
+    window
+        .show()
+        .map_err(|error| format!("Unable to wake the Office editor WebView: {error}"))?;
+
     let main_window = window.clone();
     let main_activation = activation.clone();
     window
@@ -1707,13 +1765,7 @@ fn emit_office_editor_activation_with_retries(
                 return;
             }
             let native_window: &objc2_app_kit::NSWindow = &*webview.ns_window().cast();
-            // Wake and emit in one AppKit callback. No older queued hide can
-            // run between these operations, and the body remains at opacity
-            // zero until the hydrated Session has painted.
-            native_window.setLevel(objc2_app_kit::NSNormalWindowLevel);
-            native_window.setAlphaValue(0.01);
-            native_window.setIgnoresMouseEvents(true);
-            native_window.orderFrontRegardless();
+            native_window.orderBack(None);
             if main_window
                 .emit(OFFICE_EDITOR_ACTIVATE_EVENT, main_activation.clone())
                 .is_ok()
@@ -1765,10 +1817,9 @@ fn open_editor_window(
     let label = editor_window_label(host);
     let reused = app.get_webview_window(label).is_some();
     let window = create_editor_window(app, host)?;
-    // Preserve an already visible desktop workspace. Activating VisualTeX with
-    // NSApplicationActivationOptions::empty() and focusing only this dedicated
-    // editor keeps the main window out of the Office z-order without hiding it
-    // or disturbing the application's Dock/app-switcher identity.
+    // Preserve an already visible desktop workspace. URL receipt and frontend
+    // hydration remain background work; only the final ready callback may
+    // activate the dedicated editor window.
     let activation = {
         let mut runtime = office_editor_runtime()
             .lock()
@@ -1805,10 +1856,9 @@ fn open_editor_window(
         Some(activation.generation),
         json!({ "windowLabel": label }),
     );
-    // Wake the initialized resident WebView and emit its activation in the same
-    // AppKit task. Reveal it at full opacity only after the frontend has painted
+    // Wake the initialized resident WebView and emit its activation without
+    // changing application focus. Reveal it only after the frontend has painted
     // the Session.
-    crate::office::background::activate_foreground_app(app)?;
     if let Err(error) =
         emit_office_editor_activation_with_retries(&window, &activation, received_at)
     {
@@ -1915,7 +1965,7 @@ pub fn report_macos_offline_office_editor_prewarmed(window: WebviewWindow) -> Re
     // call that reported prewarming. A cold Office URL owns presentation and
     // cancels the delayed hide through the active-Session check.
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(1));
+        std::thread::sleep(Duration::from_millis(100));
         // The main-thread task checks ownership at execution time, so a delayed
         // prewarm callback cannot hide a Session that arrived in the meantime.
         let _ = park_resident_editor_if_idle(&window, host);
@@ -2001,18 +2051,13 @@ pub fn report_macos_offline_office_editor_ready(
         }),
     );
 
-    crate::office::background::activate_foreground_app(&app)?;
     window.unminimize().map_err(|error| error.to_string())?;
     set_resident_editor_content_visible(&window, true)?;
     window.center().map_err(|error| error.to_string())?;
-    present_resident_editor_window(&window)?;
     window.show().map_err(|error| error.to_string())?;
-    crate::office::background::activate_foreground_app(&app)?;
+    present_resident_editor_window(&app, &window)?;
     window.set_focus().map_err(|error| error.to_string())?;
-    // Apply the native key/mouse state once more after Tauri focus. This closes
-    // a race where a queued hydration callback could otherwise restore the
-    // earlier mouse-inert state after the window became visible.
-    present_resident_editor_window(&window)?;
+    order_main_window_behind_office_editor(&app)?;
     let show_focus_ms = active.received_at.elapsed().as_secs_f64() * 1000.0;
     drop(runtime);
     let ready_epoch_ms = epoch_ms();
@@ -2158,10 +2203,10 @@ pub(crate) fn focus_open_office_editor(app: &AppHandle) -> bool {
             if !active.ready {
                 return true;
             }
-            let _ = crate::office::background::activate_foreground_app(app);
-            let _ = present_resident_editor_window(&window);
+            let _ = window.show();
+            let _ = present_resident_editor_window(app, &window);
             let _ = window.set_focus();
-            let _ = present_resident_editor_window(&window);
+            let _ = order_main_window_behind_office_editor(app);
             return true;
         }
     }
@@ -2354,10 +2399,12 @@ fn dynamic_dispatch_text(entries: &[(String, String)]) -> Result<String, String>
 fn run_vba_callback(host: OfficeHost) -> Result<(), String> {
     let script = match host {
         OfficeHost::Word => {
-            r#"tell application "Microsoft Word"
+            r#"with timeout of 1800 seconds
+tell application "Microsoft Word"
 if not (exists active document) then error "Microsoft Word has no active document"
 run VB macro macro name "VisualTeX_ApplyPendingResult"
-end tell"#
+end tell
+end timeout"#
         }
         OfficeHost::Powerpoint => {
             r#"tell application "Microsoft PowerPoint"
@@ -2773,13 +2820,19 @@ struct StoredZipEntry {
     offset: u32,
 }
 
-fn build_stored_zip(entries: &[(&str, &[u8])]) -> Result<Vec<u8>, String> {
+fn build_stored_zip<N, C>(entries: &[(N, C)]) -> Result<Vec<u8>, String>
+where
+    N: AsRef<str>,
+    C: AsRef<[u8]>,
+{
     let entry_count = u16::try_from(entries.len())
         .map_err(|_| "Word SVG staging package has too many ZIP entries".to_string())?;
     let mut output = Vec::new();
     let mut records = Vec::with_capacity(entries.len());
 
     for (name, contents) in entries {
+        let name = name.as_ref();
+        let contents = contents.as_ref();
         let name_bytes = name.as_bytes();
         let name_length = u16::try_from(name_bytes.len())
             .map_err(|_| "Word SVG staging package contains an overlong ZIP path".to_string())?;
@@ -2930,13 +2983,107 @@ fn build_word_svg_docx(
     );
 
     build_stored_zip(&[
-        ("[Content_Types].xml", content_types),
-        ("_rels/.rels", package_relationships),
+        ("[Content_Types].xml", content_types.as_slice()),
+        ("_rels/.rels", package_relationships.as_slice()),
         ("word/document.xml", document.as_bytes()),
-        ("word/_rels/document.xml.rels", document_relationships),
+        (
+            "word/_rels/document.xml.rels",
+            document_relationships.as_slice(),
+        ),
         ("word/media/formula.png", png),
         ("word/media/formula.svg", svg),
     ])
+}
+
+struct WordSvgBatchEntry {
+    svg: Vec<u8>,
+    png: Vec<u8>,
+    width_points: f64,
+    height_points: f64,
+}
+
+fn build_word_svg_batch_docx(entries: &[WordSvgBatchEntry]) -> Result<Vec<u8>, String> {
+    if entries.is_empty() || entries.len() > 1000 {
+        return Err("Word SVG redraw batch must contain 1 to 1000 drawings".to_string());
+    }
+    let content_types = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="png" ContentType="image/png"/>
+  <Default Extension="svg" ContentType="image/svg+xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>"#;
+    let package_relationships = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>"#;
+    let mut document_relationships = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n",
+    );
+    let mut document = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\" xmlns:asvg=\"http://schemas.microsoft.com/office/drawing/2016/SVG/main\">\n  <w:body>\n",
+    );
+    let mut zip_entries = vec![
+        ("[Content_Types].xml".to_string(), content_types.to_vec()),
+        ("_rels/.rels".to_string(), package_relationships.to_vec()),
+    ];
+
+    for (index, entry) in entries.iter().enumerate() {
+        let width_emu = (entry.width_points * 12_700.0).round();
+        let height_emu = (entry.height_points * 12_700.0).round();
+        if !width_emu.is_finite()
+            || !height_emu.is_finite()
+            || width_emu <= 0.0
+            || height_emu <= 0.0
+            || width_emu > i64::MAX as f64
+            || height_emu > i64::MAX as f64
+        {
+            return Err("Word SVG redraw batch dimensions are invalid".to_string());
+        }
+        let item_number = index + 1;
+        let png_rel = format!("rIdPng{item_number}");
+        let svg_rel = format!("rIdSvg{item_number}");
+        let png_name = format!("formula-{item_number}.png");
+        let svg_name = format!("formula-{item_number}.svg");
+        document_relationships.push_str(&format!(
+            "  <Relationship Id=\"{png_rel}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"media/{png_name}\"/>\n  <Relationship Id=\"{svg_rel}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"media/{svg_name}\"/>\n",
+        ));
+        document.push_str(&format!(
+            r#"    <w:p><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="{}" cy="{}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:docPr id="{}" name="VisualTeX Formula {}" descr="VisualTeX SVG formula"/><wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="0" name="{}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="{}" cstate="print"><a:extLst><a:ext uri="{{96DAC541-7B7A-43D3-8B79-37D633B846F1}}"><asvg:svgBlip r:embed="{}"/></a:ext></a:extLst></a:blip><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{}" cy="{}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln><a:noFill/></a:ln></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>
+"#,
+            width_emu as i64,
+            height_emu as i64,
+            item_number,
+            item_number,
+            svg_name,
+            png_rel,
+            svg_rel,
+            width_emu as i64,
+            height_emu as i64,
+        ));
+        zip_entries.push((
+            format!("word/media/{png_name}"),
+            entry.png.clone(),
+        ));
+        zip_entries.push((
+            format!("word/media/{svg_name}"),
+            entry.svg.clone(),
+        ));
+    }
+    document_relationships.push_str("</Relationships>");
+    document.push_str(
+        "    <w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"720\" w:footer=\"720\" w:gutter=\"0\"/></w:sectPr>\n  </w:body>\n</w:document>",
+    );
+    zip_entries.push((
+        "word/document.xml".to_string(),
+        document.into_bytes(),
+    ));
+    zip_entries.push((
+        "word/_rels/document.xml.rels".to_string(),
+        document_relationships.into_bytes(),
+    ));
+    build_stored_zip(&zip_entries)
 }
 
 fn materialize_word_svg_package(
@@ -3523,7 +3670,16 @@ fn resolve_latex_redraw_font_sizes_blocking(
     session_id: String,
     input: MacOfflineLatexRedrawFontQueryInput,
 ) -> Result<Vec<f64>, String> {
+    let preflight_started = Instant::now();
     validate_uuid(&session_id, "Session id")?;
+    queue_editor_performance(
+        OfficeHost::Word,
+        &session_id,
+        "latex-redraw-font-backend-start",
+        0.0,
+        None,
+        json!({ "itemCount": input.ranges.len() }),
+    );
     if input.ranges.is_empty() || input.ranges.len() > 1000 {
         return Err("LaTeX redraw font preflight must contain 1 to 1000 ranges".to_string());
     }
@@ -3546,6 +3702,9 @@ fn resolve_latex_redraw_font_sizes_blocking(
             range.source_end,
             &range.source_text,
         )?;
+        if !matches!(range.display_mode.as_str(), "inline" | "block") {
+            return Err("LaTeX redraw font preflight contains an invalid display mode".to_string());
+        }
     }
 
     let manifest_path = latex_redraw_preflight_manifest_path(&session_id)?;
@@ -3575,6 +3734,10 @@ fn resolve_latex_redraw_font_sizes_blocking(
         entries.push((
             format!("{prefix}sourceTextBase64"),
             URL_SAFE_NO_PAD.encode(range.source_text.as_bytes()),
+        ));
+        entries.push((
+            format!("{prefix}displayMode"),
+            range.display_mode.clone(),
         ));
     }
     let manifest = dynamic_dispatch_text(&entries)?;
@@ -3614,6 +3777,14 @@ fn resolve_latex_redraw_font_sizes_blocking(
     let result = fs::read_to_string(&result_path)
         .map_err(|error| format!("Unable to read Word LaTeX redraw font sizes: {error}"))?;
     let values = parse_latex_redraw_font_sizes(&result, input.ranges.len())?;
+    queue_editor_performance(
+        OfficeHost::Word,
+        &session_id,
+        "latex-redraw-font-backend-complete",
+        preflight_started.elapsed().as_secs_f64() * 1000.0,
+        None,
+        json!({ "itemCount": values.len() }),
+    );
     let _ = fs::remove_file(manifest_path);
     let _ = fs::remove_file(result_path);
     Ok(values)
@@ -3624,10 +3795,21 @@ fn commit_document_import_blocking(
     session_id: String,
     input: MacOfflineDocumentImportCommitInput,
 ) -> Result<(), String> {
+    let commit_started = Instant::now();
     validate_uuid(&session_id, "Session id")?;
     let request = read_request(&session_id)?;
     let public_request = document_import_request_data(&request)?;
     let is_redraw = public_request.operation == "latexRedraw";
+    if is_redraw {
+        queue_editor_performance(
+            OfficeHost::Word,
+            &session_id,
+            "latex-redraw-backend-start",
+            0.0,
+            None,
+            json!({ "itemCount": input.items.len(), "outputKind": input.output_kind }),
+        );
+    }
     if input.output_kind != "omml" && input.output_kind != "image" {
         return Err("Document formula output kind must be omml or image".to_string());
     }
@@ -3716,6 +3898,12 @@ fn commit_document_import_blocking(
         ),
         ("itemCount".to_string(), input.items.len().to_string()),
     ];
+    let redraw_vector_batch_path = if is_redraw && input.output_kind == "image" {
+        Some(latex_redraw_vector_batch_path(&session_id)?)
+    } else {
+        None
+    };
+    let mut redraw_vector_entries = Vec::new();
     let mut metadata_to_cache = Vec::new();
     let mut formula_count = 0usize;
     let mut text_bytes = 0usize;
@@ -3902,6 +4090,7 @@ fn commit_document_import_blocking(
 
                 let mut image_path = String::new();
                 let mut vector_document_path = String::new();
+                let mut vector_document_index = 0usize;
                 let mut fallback_image_path = String::new();
                 let geometry = if input.output_kind == "image" {
                     let svg_value = svg_base64
@@ -3918,14 +4107,27 @@ fn commit_document_import_blocking(
                         calculate_document_image_geometry(width, height, baseline, *font_size_pt)?;
                     let svg_path = document_formula_file_path(&session_id, formula_id, "svg")?;
                     let png_path = document_formula_file_path(&session_id, formula_id, "png")?;
-                    let vector_path = document_formula_file_path(&session_id, formula_id, "docx")?;
                     atomic_write(&svg_path, &svg, 0o600)?;
                     atomic_write(&png_path, &png, 0o600)?;
-                    let package = build_word_svg_docx(&svg, &png, geometry.width, geometry.height)?;
-                    atomic_write(&vector_path, &package, 0o600)?;
+                    if let Some(batch_path) = redraw_vector_batch_path.as_ref() {
+                        vector_document_index = redraw_vector_entries.len() + 1;
+                        redraw_vector_entries.push(WordSvgBatchEntry {
+                            svg,
+                            png,
+                            width_points: geometry.width,
+                            height_points: geometry.height,
+                        });
+                        vector_document_path = batch_path.to_string_lossy().to_string();
+                    } else {
+                        let vector_path =
+                            document_formula_file_path(&session_id, formula_id, "docx")?;
+                        let package =
+                            build_word_svg_docx(&svg, &png, geometry.width, geometry.height)?;
+                        atomic_write(&vector_path, &package, 0o600)?;
+                        vector_document_path = vector_path.to_string_lossy().to_string();
+                    }
                     image_path = svg_path.to_string_lossy().to_string();
                     fallback_image_path = png_path.to_string_lossy().to_string();
-                    vector_document_path = vector_path.to_string_lossy().to_string();
                     resolved_metadata.render_width_px = Some(width);
                     resolved_metadata.render_height_px = Some(height);
                     resolved_metadata.reference_width_pt = Some(geometry.reference_width_pt);
@@ -3972,6 +4174,12 @@ fn commit_document_import_blocking(
                 ));
                 entries.push((format!("{prefix}imagePath"), image_path));
                 entries.push((format!("{prefix}vectorDocumentPath"), vector_document_path));
+                if vector_document_index > 0 {
+                    entries.push((
+                        format!("{prefix}vectorDocumentIndex"),
+                        vector_document_index.to_string(),
+                    ));
+                }
                 entries.push((format!("{prefix}fallbackImagePath"), fallback_image_path));
                 entries.push((
                     format!("{prefix}widthPoints"),
@@ -4028,6 +4236,10 @@ fn commit_document_import_blocking(
     if formula_count == 0 && text_bytes == 0 {
         return Err("Document import contains no visible content".to_string());
     }
+    if let Some(batch_path) = redraw_vector_batch_path.as_ref() {
+        let package = build_word_svg_batch_docx(&redraw_vector_entries)?;
+        atomic_write(batch_path, &package, 0o600)?;
+    }
 
     let manifest = dynamic_dispatch_text(&entries)?;
     if manifest.len() > MAX_DOCUMENT_IMPORT_MANIFEST_BYTES {
@@ -4065,9 +4277,37 @@ fn commit_document_import_blocking(
         dispatch.as_bytes(),
         0o600,
     )?;
+    if is_redraw {
+        queue_editor_performance(
+            OfficeHost::Word,
+            &session_id,
+            "latex-redraw-backend-prepared",
+            commit_started.elapsed().as_secs_f64() * 1000.0,
+            None,
+            json!({ "itemCount": input.items.len() }),
+        );
+        queue_editor_performance(
+            OfficeHost::Word,
+            &session_id,
+            "latex-redraw-word-callback-start",
+            commit_started.elapsed().as_secs_f64() * 1000.0,
+            None,
+            json!({ "itemCount": input.items.len() }),
+        );
+    }
     with_dispatch_pointer(OfficeHost::Word, &session_id, || {
         run_vba_callback(OfficeHost::Word)
     })?;
+    if is_redraw {
+        queue_editor_performance(
+            OfficeHost::Word,
+            &session_id,
+            "latex-redraw-word-callback-complete",
+            commit_started.elapsed().as_secs_f64() * 1000.0,
+            None,
+            json!({ "itemCount": input.items.len() }),
+        );
+    }
 
     for metadata in metadata_to_cache {
         let formula_id = metadata.formula_id.clone();
@@ -4263,6 +4503,34 @@ pub fn get_macos_offline_document_import_request(
     validate_uuid(&session_id, "Session id")?;
     let request = read_request(&session_id)?;
     document_import_request_data(&request)
+}
+
+#[tauri::command]
+pub fn report_macos_offline_latex_redraw_stage(
+    session_id: String,
+    stage: String,
+    elapsed_ms: f64,
+    item_count: usize,
+) -> Result<(), String> {
+    validate_uuid(&session_id, "Session id")?;
+    validate_bounded_text(&stage, 96, "LaTeX redraw timing stage")?;
+    if !stage.starts_with("latex-redraw-")
+        || !elapsed_ms.is_finite()
+        || elapsed_ms < 0.0
+        || elapsed_ms > 3_600_000.0
+        || item_count > 1000
+    {
+        return Err("LaTeX redraw timing report is invalid".to_string());
+    }
+    queue_editor_performance(
+        OfficeHost::Word,
+        &session_id,
+        &stage,
+        elapsed_ms,
+        None,
+        json!({ "itemCount": item_count }),
+    );
+    Ok(())
 }
 
 #[tauri::command]

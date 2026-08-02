@@ -77,6 +77,7 @@ export interface MacosLatexRedrawFontRangeInput {
   sourceStart: number;
   sourceEnd: number;
   sourceText: string;
+  displayMode: DocumentFormulaDisplayMode;
 }
 
 export function getMacosDocumentImportRequest(sessionId: string) {
@@ -84,6 +85,20 @@ export function getMacosDocumentImportRequest(sessionId: string) {
     "get_macos_offline_document_import_request",
     { sessionId },
   );
+}
+
+export function reportMacosLatexRedrawStage(
+  sessionId: string,
+  stage: string,
+  elapsedMs: number,
+  itemCount: number,
+) {
+  return invokeTauri<void>("report_macos_offline_latex_redraw_stage", {
+    sessionId,
+    stage,
+    elapsedMs,
+    itemCount,
+  });
 }
 
 export function resolveMacosLatexRedrawFontSizes(

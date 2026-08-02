@@ -9054,7 +9054,8 @@ Private Sub VTDocumentImportInsertFormula( _
     ByVal itemIndex As Long, _
     ByVal outputKind As String, _
     ByRef insertedFormulaIds As Collection, _
-    Optional ByVal overrideFontSizePt As Double = 0#)
+    Optional ByVal overrideFontSizePt As Double = 0#, _
+    Optional ByVal sharedVectorDocument As Variant)
 
     Dim targetDocument As Document
     Dim targetRange As Range
@@ -9070,6 +9071,7 @@ Private Sub VTDocumentImportInsertFormula( _
     Dim metadata As String
     Dim imagePath As String
     Dim vectorDocumentPath As String
+    Dim vectorDocumentIndex As Long
     Dim fallbackImagePath As String
     Dim captionText As String
     Dim formulaReference As String
@@ -9082,6 +9084,7 @@ Private Sub VTDocumentImportInsertFormula( _
     Dim referenceBaselinePt As Double
     Dim observedWordFontSizePt As Double
     Dim fontScale As Double
+    Dim candidateStart As Long
     Dim numberCreated As Boolean
     Dim nativeMath As OMath
     Dim formulaStage As String
@@ -9262,6 +9265,8 @@ Private Sub VTDocumentImportInsertFormula( _
         manifest, itemIndex, "imagePath")
     vectorDocumentPath = VTDocumentImportRequired( _
         manifest, itemIndex, "vectorDocumentPath")
+    vectorDocumentIndex = CLng(Val(VTDispatchOptional( _
+        manifest, VTDocumentImportItemKey(itemIndex, "vectorDocumentIndex"))))
     fallbackImagePath = VTDocumentImportRequired( _
         manifest, itemIndex, "fallbackImagePath")
     VTValidateAbsoluteVisualTeXPath imagePath
@@ -9276,7 +9281,8 @@ Private Sub VTDocumentImportInsertFormula( _
 
     Set candidate = VTAddWordFormulaPicture( _
         targetDocument, targetRange, vectorDocumentPath, _
-        fallbackImagePath)
+        fallbackImagePath, sharedVectorDocument, vectorDocumentIndex)
+    candidateStart = candidate.Range.Start
     candidate.LockAspectRatio = msoFalse
     candidate.Width = CSng(widthPoints)
     candidate.Height = CSng(heightPoints)
@@ -9310,11 +9316,17 @@ Private Sub VTDocumentImportInsertFormula( _
     ' Document.Variable updates can invalidate an InlineShape COM wrapper on
     ' Word for Mac even though the drawing remains in the document. Resolve the
     ' newly committed image from its durable metadata before field wrapping.
-    Set candidate = VTFindCommittedInlineShapeInDocument( _
-        targetDocument, metadata, formulaReference)
-    If candidate Is Nothing Then
+    Set targetRange = targetDocument.Range( _
+        Start:=candidateStart, End:=candidateStart + 1)
+    If targetRange.InlineShapes.Count <> 1 Then
         Err.Raise vbObjectError + 7584, "VisualTeX", _
             "Word could not re-resolve the imported formula image before MacroButton wrapping."
+    End If
+    Set candidate = targetRange.InlineShapes(1)
+    If candidate.AlternativeText <> metadata Or _
+       candidate.Title <> formulaReference Then
+        Err.Raise vbObjectError + 7584, "VisualTeX", _
+            "Word re-resolved the wrong imported formula image."
     End If
     Set candidate = VTEnsureVisualTeXImageMacroButton(candidate)
 
@@ -9501,6 +9513,215 @@ InvalidOffset:
         "A LaTeX redraw source range is invalid."
 End Function
 
+Private Function VTContainsVisibleWordBodyText( _
+    ByVal value As String) As Boolean
+
+    Dim characterIndex As Long
+    Dim currentCharacter As String
+
+    For characterIndex = 1 To Len(value)
+        currentCharacter = Mid$(value, characterIndex, 1)
+        If currentCharacter <> " " And _
+           currentCharacter <> vbTab And _
+           currentCharacter <> vbCr And _
+           currentCharacter <> vbLf And _
+           currentCharacter <> Chr$(7) And _
+           currentCharacter <> Chr$(11) And _
+           currentCharacter <> Chr$(12) And _
+           currentCharacter <> ChrW$(&HA0) Then
+            VTContainsVisibleWordBodyText = True
+            Exit Function
+        End If
+    Next characterIndex
+End Function
+
+Private Function VTPositionInsideLatexRedrawSource( _
+    ByVal absolutePosition As Long, _
+    ByVal redrawTargetStart As Long, _
+    ByRef redrawSourceStarts() As Long, _
+    ByRef redrawSourceEnds() As Long, _
+    ByVal redrawSourceCount As Long) As Boolean
+
+    Dim relativePosition As Long
+    Dim itemIndex As Long
+
+    relativePosition = absolutePosition - redrawTargetStart
+    If relativePosition < 0 Or redrawSourceCount <= 0 Then Exit Function
+    For itemIndex = 0 To redrawSourceCount - 1
+        If relativePosition < redrawSourceStarts(itemIndex) Then Exit Function
+        If relativePosition < redrawSourceEnds(itemIndex) Then
+            VTPositionInsideLatexRedrawSource = True
+            Exit Function
+        End If
+    Next itemIndex
+End Function
+
+Private Function VTTryResolveNearbyWordFontSize( _
+    ByVal documentObject As Document, _
+    ByVal startPosition As Long, _
+    ByVal minimumPosition As Long, _
+    ByVal maximumPosition As Long, _
+    ByVal stepValue As Long, _
+    ByVal redrawTargetStart As Long, _
+    ByRef redrawSourceStarts() As Long, _
+    ByRef redrawSourceEnds() As Long, _
+    ByVal redrawSourceCount As Long, _
+    ByRef fontSizePt As Double) As Boolean
+
+    Const VT_MAX_NEARBY_FONT_PROBES As Long = 256
+    Dim documentStart As Long
+    Dim documentEnd As Long
+    Dim lowerBound As Long
+    Dim upperBound As Long
+    Dim position As Long
+    Dim probeIndex As Long
+    Dim probeRange As Range
+    Dim probeSize As Double
+
+    fontSizePt = 0#
+    If documentObject Is Nothing Then Exit Function
+    If stepValue <> -1 And stepValue <> 1 Then Exit Function
+
+    documentStart = documentObject.Content.Start
+    documentEnd = documentObject.Content.End - 1
+    lowerBound = minimumPosition
+    If lowerBound < documentStart Then lowerBound = documentStart
+    upperBound = maximumPosition
+    If upperBound > documentEnd Then upperBound = documentEnd
+    If upperBound < lowerBound Then Exit Function
+    If stepValue < 0 And startPosition < lowerBound Then Exit Function
+    If stepValue > 0 And startPosition > upperBound Then Exit Function
+
+    position = startPosition
+    For probeIndex = 1 To VT_MAX_NEARBY_FONT_PROBES
+        If position < lowerBound Or position > upperBound Then Exit For
+        Set probeRange = Nothing
+        probeSize = 0#
+        If Not VTPositionInsideLatexRedrawSource( _
+           position, redrawTargetStart, redrawSourceStarts, _
+           redrawSourceEnds, redrawSourceCount) Then
+            On Error Resume Next
+            Set probeRange = documentObject.Range( _
+                Start:=position, End:=position + 1)
+            If Not probeRange Is Nothing Then
+                If VTContainsVisibleWordBodyText(probeRange.Text) Then
+                    probeSize = probeRange.Font.Size
+                End If
+            End If
+            Err.Clear
+            On Error GoTo 0
+        End If
+        If VTValidWordFormulaFontSize(probeSize) Then
+            fontSizePt = probeSize
+            VTTryResolveNearbyWordFontSize = True
+            Exit Function
+        End If
+        position = position + stepValue
+    Next probeIndex
+End Function
+
+Private Function VTHasVisibleWordTextBesideSource( _
+    ByVal sourceRange As Range) As Boolean
+
+    Dim paragraphRange As Range
+    Dim surroundingRange As Range
+    Dim paragraphBodyEnd As Long
+
+    If sourceRange Is Nothing Then Exit Function
+    Set paragraphRange = sourceRange.Paragraphs(1).Range.Duplicate
+    paragraphBodyEnd = paragraphRange.End - 1
+    If sourceRange.Start > paragraphRange.Start Then
+        Set surroundingRange = sourceRange.Document.Range( _
+            Start:=paragraphRange.Start, End:=sourceRange.Start)
+        If VTContainsVisibleWordBodyText(surroundingRange.Text) Then
+            VTHasVisibleWordTextBesideSource = True
+            Exit Function
+        End If
+    End If
+    If sourceRange.End < paragraphBodyEnd Then
+        Set surroundingRange = sourceRange.Document.Range( _
+            Start:=sourceRange.End, End:=paragraphBodyEnd)
+        If VTContainsVisibleWordBodyText(surroundingRange.Text) Then
+            VTHasVisibleWordTextBesideSource = True
+        End If
+    End If
+End Function
+
+Private Function VTInheritedLatexRedrawFontSize( _
+    ByVal sourceRange As Range, _
+    ByVal displayMode As String, _
+    ByVal redrawTargetStart As Long, _
+    ByRef redrawSourceStarts() As Long, _
+    ByRef redrawSourceEnds() As Long, _
+    ByVal redrawSourceCount As Long) As Double
+
+    Dim documentObject As Document
+    Dim paragraphRange As Range
+    Dim paragraphStart As Long
+    Dim paragraphBodyEnd As Long
+    Dim inheritedSize As Double
+    Dim styleSize As Double
+    Dim sourceSize As Double
+    Dim hasVisibleTextBesideSource As Boolean
+
+    If sourceRange Is Nothing Then Exit Function
+    Set documentObject = sourceRange.Document
+    Set paragraphRange = sourceRange.Paragraphs(1).Range.Duplicate
+    paragraphStart = paragraphRange.Start
+    paragraphBodyEnd = paragraphRange.End - 1
+    hasVisibleTextBesideSource = _
+        VTHasVisibleWordTextBesideSource(sourceRange)
+
+    If displayMode = "inline" Or hasVisibleTextBesideSource Then
+        If VTTryResolveNearbyWordFontSize( _
+           documentObject, sourceRange.Start - 1, _
+           paragraphStart, paragraphBodyEnd, -1, _
+           redrawTargetStart, redrawSourceStarts, redrawSourceEnds, _
+           redrawSourceCount, inheritedSize) Then
+            VTInheritedLatexRedrawFontSize = inheritedSize
+            Exit Function
+        End If
+        If VTTryResolveNearbyWordFontSize( _
+           documentObject, sourceRange.End, _
+           paragraphStart, paragraphBodyEnd, 1, _
+           redrawTargetStart, redrawSourceStarts, redrawSourceEnds, _
+           redrawSourceCount, inheritedSize) Then
+            VTInheritedLatexRedrawFontSize = inheritedSize
+            Exit Function
+        End If
+    End If
+
+    If VTTryResolveNearbyWordFontSize( _
+       documentObject, paragraphStart - 1, _
+       documentObject.Content.Start, documentObject.Content.End - 1, _
+       -1, redrawTargetStart, redrawSourceStarts, redrawSourceEnds, _
+       redrawSourceCount, inheritedSize) Then
+        VTInheritedLatexRedrawFontSize = inheritedSize
+        Exit Function
+    End If
+    If VTTryResolveNearbyWordFontSize( _
+       documentObject, paragraphRange.End, _
+       documentObject.Content.Start, documentObject.Content.End - 1, _
+       1, redrawTargetStart, redrawSourceStarts, redrawSourceEnds, _
+       redrawSourceCount, inheritedSize) Then
+        VTInheritedLatexRedrawFontSize = inheritedSize
+        Exit Function
+    End If
+
+    On Error Resume Next
+    styleSize = paragraphRange.Style.Font.Size
+    sourceSize = sourceRange.Font.Size
+    On Error GoTo 0
+    If VTValidWordFormulaFontSize(styleSize) Then
+        VTInheritedLatexRedrawFontSize = styleSize
+    ElseIf VTValidWordFormulaFontSize(sourceSize) Then
+        VTInheritedLatexRedrawFontSize = sourceSize
+    Else
+        VTInheritedLatexRedrawFontSize = _
+            VTPreferredWordFormulaFontSize(paragraphRange)
+    End If
+End Function
+
 Private Sub VTResolveWordLatexRedrawFontsDispatch( _
     ByVal sessionId As String, _
     ByVal dispatch As Object)
@@ -9515,6 +9736,11 @@ Private Sub VTResolveWordLatexRedrawFontsDispatch( _
     Dim sourceDocumentId As String
     Dim bookmarkName As String
     Dim sourceText As String
+    Dim displayMode As String
+    Dim sourceStarts() As Long
+    Dim sourceEnds() As Long
+    Dim sourceTexts() As String
+    Dim displayModes() As String
     Dim resultText As String
     Dim targetStart As Long
     Dim targetEnd As Long
@@ -9569,30 +9795,52 @@ Private Sub VTResolveWordLatexRedrawFontsDispatch( _
             "The LaTeX redraw target range is empty."
     End If
 
-    resultText = "itemCount=" & CStr(itemCount) & vbLf
+    ReDim sourceStarts(0 To itemCount - 1)
+    ReDim sourceEnds(0 To itemCount - 1)
+    ReDim sourceTexts(0 To itemCount - 1)
+    ReDim displayModes(0 To itemCount - 1)
     previousEnd = 0
     For itemIndex = 0 To itemCount - 1
-        sourceStart = VTDocumentImportSourceOffset( _
+        sourceStarts(itemIndex) = VTDocumentImportSourceOffset( _
             manifest, itemIndex, "sourceStart")
-        sourceEnd = VTDocumentImportSourceOffset( _
+        sourceEnds(itemIndex) = VTDocumentImportSourceOffset( _
             manifest, itemIndex, "sourceEnd")
-        If sourceStart < previousEnd Or _
-           sourceEnd <= sourceStart Or _
-           sourceEnd > targetEnd - targetStart Then
+        If sourceStarts(itemIndex) < previousEnd Or _
+           sourceEnds(itemIndex) <= sourceStarts(itemIndex) Or _
+           sourceEnds(itemIndex) > targetEnd - targetStart Then
             Err.Raise vbObjectError + 7594, "VisualTeX", _
                 "LaTeX redraw preflight ranges overlap or exceed the Word target."
         End If
-        sourceText = VTBase64UrlDecodeUtf8( _
+        sourceTexts(itemIndex) = VTBase64UrlDecodeUtf8( _
             VTDocumentImportRequired( _
                 manifest, itemIndex, "sourceTextBase64"))
+        displayModes(itemIndex) = VTDocumentImportRequired( _
+            manifest, itemIndex, "displayMode")
+        If displayModes(itemIndex) <> "inline" And _
+           displayModes(itemIndex) <> "block" Then
+            Err.Raise vbObjectError + 7594, "VisualTeX", _
+                "A LaTeX redraw preflight display mode is invalid."
+        End If
         Set sourceRange = targetDocument.Range( _
-            Start:=targetStart + sourceStart, _
-            End:=targetStart + sourceEnd)
-        If StrComp(sourceRange.Text, sourceText, vbBinaryCompare) <> 0 Then
+            Start:=targetStart + sourceStarts(itemIndex), _
+            End:=targetStart + sourceEnds(itemIndex))
+        If StrComp( _
+           sourceRange.Text, sourceTexts(itemIndex), _
+           vbBinaryCompare) <> 0 Then
             Err.Raise vbObjectError + 7594, "VisualTeX", _
                 "Word text changed before LaTeX redraw rendering."
         End If
-        fontSizePt = VTPreferredWordFormulaFontSize(sourceRange)
+        previousEnd = sourceEnds(itemIndex)
+    Next itemIndex
+
+    resultText = "itemCount=" & CStr(itemCount) & vbLf
+    For itemIndex = 0 To itemCount - 1
+        Set sourceRange = targetDocument.Range( _
+            Start:=targetStart + sourceStarts(itemIndex), _
+            End:=targetStart + sourceEnds(itemIndex))
+        fontSizePt = VTInheritedLatexRedrawFontSize( _
+            sourceRange, displayModes(itemIndex), targetStart, _
+            sourceStarts, sourceEnds, itemCount)
         If Not VTValidWordFormulaFontSize(fontSizePt) Then
             Err.Raise vbObjectError + 7594, "VisualTeX", _
                 "A LaTeX redraw source formula has an invalid Word font size."
@@ -9600,7 +9848,6 @@ Private Sub VTResolveWordLatexRedrawFontsDispatch( _
         resultText = resultText & _
             "item" & CStr(itemIndex) & "fontSizePt=" & _
             VTJsonNumber(fontSizePt) & vbLf
-        previousEnd = sourceEnd
     Next itemIndex
 
     VTWriteTextAtomic resultPath, resultText
@@ -9620,6 +9867,7 @@ Private Sub VTCommitWordLatexRedrawDispatch( _
     Dim sourceRange As Range
     Dim cursorRange As Range
     Dim rollbackRange As Range
+    Dim sharedVectorDocument As Document
     Dim undoRecord As Object
     Dim insertedFormulaIds As Collection
     Dim sourceStarts() As Long
@@ -9629,10 +9877,17 @@ Private Sub VTCommitWordLatexRedrawDispatch( _
     Dim sourceText As String
     Dim formulaId As String
     Dim itemKind As String
+    Dim sharedVectorDocumentPath As String
     Dim targetStart As Long
     Dim targetEnd As Long
     Dim previousEnd As Long
     Dim itemIndex As Long
+    Dim completedItems As Long
+    Dim progressInterval As Long
+    Dim previousDisplayAlerts As Long
+    Dim previousScreenUpdating As Boolean
+    Dim displayAlertsChanged As Boolean
+    Dim screenUpdatingChanged As Boolean
     Dim errorNumber As Long
     Dim errorDescription As String
     Dim transactionStage As String
@@ -9704,10 +9959,52 @@ Private Sub VTCommitWordLatexRedrawDispatch( _
                 "Word text changed after LaTeX redraw opened. " & _
                 "Please reopen redraw from the current selection."
         End If
-        sourceFontSizes(itemIndex) = _
-            VTPreferredWordFormulaFontSize(sourceRange)
+        sourceFontSizes(itemIndex) = VTDispatchPositiveDouble( _
+            manifest, VTDocumentImportItemKey(itemIndex, "fontSizePt"))
+        If Not VTValidWordFormulaFontSize(sourceFontSizes(itemIndex)) Then
+            Err.Raise vbObjectError + 7591, "VisualTeX", _
+                "A LaTeX redraw formula has an invalid inherited Word font size."
+        End If
         previousEnd = sourceEnds(itemIndex)
     Next itemIndex
+
+    transactionStage = "redraw-disable-ui"
+    On Error Resume Next
+    Err.Clear
+    previousScreenUpdating = Application.ScreenUpdating
+    Application.ScreenUpdating = False
+    screenUpdatingChanged = (Err.Number = 0)
+    Err.Clear
+    previousDisplayAlerts = Application.DisplayAlerts
+    Application.DisplayAlerts = wdAlertsNone
+    displayAlertsChanged = (Err.Number = 0)
+    Err.Clear
+    On Error GoTo Failed
+
+    If outputKind = "image" Then
+        sharedVectorDocumentPath = VTDocumentImportRequired( _
+            manifest, 0, "vectorDocumentPath")
+        If CLng(Val(VTDispatchOptional( _
+           manifest, VTDocumentImportItemKey(0, "vectorDocumentIndex")))) > 0 Then
+            transactionStage = "redraw-open-shared-vector-document"
+            VTValidateAbsoluteVisualTeXPath sharedVectorDocumentPath
+            If Not VTPathFileExists(sharedVectorDocumentPath) Then
+                Err.Raise vbObjectError + 7591, "VisualTeX", _
+                    "The shared LaTeX redraw vector document is missing."
+            End If
+            Set sharedVectorDocument = Documents.Open( _
+                FileName:=sharedVectorDocumentPath, _
+                ConfirmConversions:=False, _
+                ReadOnly:=True, _
+                AddToRecentFiles:=False, _
+                Visible:=False)
+            If sharedVectorDocument.InlineShapes.Count <> itemCount Then
+                Err.Raise vbObjectError + 7591, "VisualTeX", _
+                    "The shared LaTeX redraw vector document is incomplete."
+            End If
+            targetDocument.Activate
+        End If
+    End If
 
     transactionStage = "redraw-start-undo"
     Set undoRecord = CallByName(Application, "UndoRecord", VbGet)
@@ -9718,6 +10015,8 @@ Private Sub VTCommitWordLatexRedrawDispatch( _
     internalMutationStarted = True
     anchorBookmark.Delete
     VTUpdateDocumentImportProgress sessionId, 0, itemCount, "inserting"
+    progressInterval = itemCount \ 10
+    If progressInterval < 1 Then progressInterval = 1
 
     For itemIndex = itemCount - 1 To 0 Step -1
         transactionStage = "redraw-replace item " & CStr(itemIndex)
@@ -9729,20 +10028,44 @@ Private Sub VTCommitWordLatexRedrawDispatch( _
         Set cursorRange = targetDocument.Range( _
             Start:=targetStart + sourceStarts(itemIndex), _
             End:=targetStart + sourceStarts(itemIndex))
-        VTDocumentImportInsertFormula _
-            cursorRange, manifest, itemIndex, outputKind, _
-            insertedFormulaIds, sourceFontSizes(itemIndex)
-        VTUpdateDocumentImportProgress _
-            sessionId, itemCount - itemIndex, itemCount, "inserting"
+        If sharedVectorDocument Is Nothing Then
+            VTDocumentImportInsertFormula _
+                cursorRange, manifest, itemIndex, outputKind, _
+                insertedFormulaIds, sourceFontSizes(itemIndex)
+        Else
+            VTDocumentImportInsertFormula _
+                cursorRange, manifest, itemIndex, outputKind, _
+                insertedFormulaIds, sourceFontSizes(itemIndex), _
+                sharedVectorDocument
+        End If
+        completedItems = itemCount - itemIndex
+        If completedItems = itemCount Or _
+           completedItems Mod progressInterval = 0 Then
+            VTUpdateDocumentImportProgress _
+                sessionId, completedItems, itemCount, "inserting"
+        End If
     Next itemIndex
 
     If internalMutationStarted Then
         VTEndWordInternalMutation
         internalMutationStarted = False
     End If
+    If Not sharedVectorDocument Is Nothing Then
+        sharedVectorDocument.Close SaveChanges:=wdDoNotSaveChanges
+        Set sharedVectorDocument = Nothing
+        targetDocument.Activate
+    End If
     If undoRecordStarted Then
         undoRecord.EndCustomRecord
         undoRecordStarted = False
+    End If
+    If displayAlertsChanged Then
+        Application.DisplayAlerts = previousDisplayAlerts
+        displayAlertsChanged = False
+    End If
+    If screenUpdatingChanged Then
+        Application.ScreenUpdating = previousScreenUpdating
+        screenUpdatingChanged = False
     End If
     If Not cursorRange Is Nothing Then cursorRange.Select
     VTUpdateDocumentImportProgress _
@@ -9757,6 +10080,11 @@ Failed:
     VTUpdateDocumentImportProgress sessionId, 0, itemCount, "error"
     VTWriteWordFailureTrace _
         sessionId, transactionStage, errorNumber, errorDescription
+    If Not sharedVectorDocument Is Nothing Then
+        sharedVectorDocument.Close SaveChanges:=wdDoNotSaveChanges
+        Set sharedVectorDocument = Nothing
+        targetDocument.Activate
+    End If
     If undoRecordStarted Then
         undoRecord.EndCustomRecord
         undoRecordStarted = False
@@ -9790,6 +10118,14 @@ Failed:
     If internalMutationStarted Then
         VTEndWordInternalMutation
         internalMutationStarted = False
+    End If
+    If displayAlertsChanged Then
+        Application.DisplayAlerts = previousDisplayAlerts
+        displayAlertsChanged = False
+    End If
+    If screenUpdatingChanged Then
+        Application.ScreenUpdating = previousScreenUpdating
+        screenUpdatingChanged = False
     End If
     On Error GoTo 0
     If Not rollbackVerified Then
@@ -10598,7 +10934,9 @@ Private Function VTAddWordFormulaPicture( _
     ByVal documentObject As Document, _
     ByVal targetRange As Range, _
     ByVal vectorDocumentPath As String, _
-    ByVal fallbackImagePath As String) As InlineShape
+    ByVal fallbackImagePath As String, _
+    Optional ByVal sharedStagingDocument As Variant, _
+    Optional ByVal sharedStagingShapeIndex As Long = 0) As InlineShape
 
     Dim stagingDocument As Document
     Dim stagingShapeRange As Range
@@ -10612,6 +10950,7 @@ Private Function VTAddWordFormulaPicture( _
     Dim vectorErrorDescription As String
     Dim fallbackErrorNumber As Long
     Dim fallbackErrorDescription As String
+    Dim ownsStagingDocument As Boolean
 
     If documentObject Is Nothing Or targetRange Is Nothing Or _
        Len(vectorDocumentPath) = 0 Then
@@ -10627,35 +10966,45 @@ Private Function VTAddWordFormulaPicture( _
     ' through FormattedText. This preserves the SVG relationship and its PNG
     ' compatibility preview without clipboard or UI automation.
     On Error GoTo VectorFailed
-    Set stagingDocument = Documents.Open( _
-        FileName:=vectorDocumentPath, _
-        ConfirmConversions:=False, _
-        ReadOnly:=True, _
-        AddToRecentFiles:=False, _
-        Visible:=False)
-    If stagingDocument.InlineShapes.Count <> 1 Then
-        Err.Raise vbObjectError + 7570, "VisualTeX", _
-            "Word did not parse exactly one SVG drawing from the staging document."
+    If IsObject(sharedStagingDocument) Then
+        Set stagingDocument = sharedStagingDocument
+        If sharedStagingShapeIndex < 1 Or _
+           sharedStagingShapeIndex > stagingDocument.InlineShapes.Count Then
+            Err.Raise vbObjectError + 7570, "VisualTeX", _
+                "The shared Word SVG staging index is invalid."
+        End If
+    Else
+        Set stagingDocument = Documents.Open( _
+            FileName:=vectorDocumentPath, _
+            ConfirmConversions:=False, _
+            ReadOnly:=True, _
+            AddToRecentFiles:=False, _
+            Visible:=False)
+        ownsStagingDocument = True
+        sharedStagingShapeIndex = 1
+        If stagingDocument.InlineShapes.Count <> 1 Then
+            Err.Raise vbObjectError + 7570, "VisualTeX", _
+                "Word did not parse exactly one SVG drawing from the staging document."
+        End If
     End If
     Set stagingShapeRange = _
-        stagingDocument.InlineShapes(1).Range.Duplicate
+        stagingDocument.InlineShapes(sharedStagingShapeIndex).Range.Duplicate
     Set insertionRange = documentObject.Range( _
         Start:=targetStart, End:=targetEnd)
     insertionRange.FormattedText = stagingShapeRange.FormattedText
-    stagingDocument.Close SaveChanges:=wdDoNotSaveChanges
-    Set stagingDocument = Nothing
-    documentObject.Activate
+    If ownsStagingDocument Then
+        stagingDocument.Close SaveChanges:=wdDoNotSaveChanges
+        Set stagingDocument = Nothing
+        documentObject.Activate
+    End If
 
-    For Each probeShape In documentObject.InlineShapes
-        If probeShape.Range.Start = targetStart Then
-            matchCount = matchCount + 1
-            Set candidate = probeShape
-        End If
-    Next probeShape
-    If matchCount <> 1 Or candidate Is Nothing Then
+    Set insertionRange = documentObject.Range( _
+        Start:=targetStart, End:=targetStart + 1)
+    If insertionRange.InlineShapes.Count <> 1 Then
         Err.Raise vbObjectError + 7570, "VisualTeX", _
             "Word did not transfer exactly one SVG formula drawing."
     End If
+    Set candidate = insertionRange.InlineShapes(1)
     Set VTAddWordFormulaPicture = candidate
     Exit Function
 
@@ -10663,10 +11012,10 @@ VectorFailed:
     vectorErrorNumber = Err.Number
     vectorErrorDescription = Err.Description
     On Error Resume Next
-    If Not stagingDocument Is Nothing Then
+    If ownsStagingDocument And Not stagingDocument Is Nothing Then
         stagingDocument.Close SaveChanges:=wdDoNotSaveChanges
+        documentObject.Activate
     End If
-    documentObject.Activate
     Err.Clear
     On Error GoTo FallbackFailed
 
