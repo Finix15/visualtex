@@ -15,9 +15,6 @@
     <a href="https://visualtex.pauljianliao.com/"><img src="https://img.shields.io/badge/WEBSITE-visualtex.pauljianliao.com-0A84FF?style=for-the-badge&logo=googlechrome&logoColor=white" alt="VisualTeX Website" /></a>
   </p>
   <p>
-    <a href="https://github.com/paulhe666/visualtex/actions/workflows/windows.yml"><img src="https://img.shields.io/github/actions/workflow/status/paulhe666/visualtex/windows.yml?branch=main&style=for-the-badge&logo=windows&label=WINDOWS" alt="Windows CI" /></a>
-    <a href="https://github.com/paulhe666/visualtex/actions/workflows/macos.yml"><img src="https://img.shields.io/github/actions/workflow/status/paulhe666/visualtex/macos.yml?branch=main&style=for-the-badge&logo=apple&label=MACOS" alt="macOS CI" /></a>
-    <a href="https://github.com/paulhe666/visualtex/actions/workflows/repository.yml"><img src="https://img.shields.io/github/actions/workflow/status/paulhe666/visualtex/repository.yml?branch=main&style=for-the-badge&logo=githubactions&label=REPOSITORY" alt="Repository CI" /></a>
     <a href="LICENSE"><img src="https://img.shields.io/github/license/paulhe666/visualtex?style=for-the-badge&label=LICENSE" alt="License" /></a>
   </p>
 </div>
