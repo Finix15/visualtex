@@ -51,16 +51,22 @@ public sealed class FormulaOleContractTests
         metadata.RenderWidthPx = 320;
         metadata.RenderHeightPx = 80;
         metadata.Baseline = 62;
+        metadata.FontSizePt = 18;
+        metadata.RenderFontSizePt = 14;
 
         var decoded = FormulaMetadataCodec.Decode(FormulaMetadataCodec.Encode(metadata));
         Assert.NotNull(decoded);
         Assert.Equal(62, decoded!.Baseline);
+        Assert.Equal(18, decoded.FontSizePt);
+        Assert.Equal(14, decoded.RenderFontSizePt);
 
         var jsonDecoded = FormulaMetadataCodec.DeserializeJson(
             FormulaMetadataCodec.SerializeJson(metadata));
         Assert.NotNull(jsonDecoded);
         Assert.Equal(metadata.FormulaId, jsonDecoded!.FormulaId);
         Assert.Equal(62, jsonDecoded.Baseline);
+        Assert.Equal(18, jsonDecoded.FontSizePt);
+        Assert.Equal(14, jsonDecoded.RenderFontSizePt);
 
         metadata.Baseline = 81;
         Assert.Throws<InvalidOperationException>(() => metadata.Validate());

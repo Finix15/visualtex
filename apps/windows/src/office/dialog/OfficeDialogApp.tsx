@@ -17,6 +17,7 @@ import type {
 } from "../../history/historyTypes";
 import {
   joinFormulaLines,
+  normalizeEditorLayout,
   useEditorStore,
 } from "../../stores/editorStore";
 import {
@@ -28,9 +29,11 @@ import type {
   MathEditorHandle,
   MathEditorInsertionTarget,
 } from "../../editor/MathEditor";
+import { readErrorMessage } from "../../errors/readErrorMessage";
 import { latexToMathMl, latexToSvg } from "../../export/latexToSvg";
 import {
   closeOfficeSessionWindow,
+  getOfficePreferences,
   getOfficeSession,
   getOfficeTheme,
   saveOfficeSessionKeepalive,
@@ -38,7 +41,9 @@ import {
   type OfficeHost,
 } from "../api/sessionClient";
 import { useOfficeSession } from "./useOfficeSession";
+import { attachFormulaEquationTag } from "../shared/formulaEquationTag";
 import { messageOfficeParent } from "./dialogMessages";
+import { registerOfficeApplyShortcut } from "./officeApplyShortcut";
 import {
   applyDocumentTheme,
   normalizeSynchronizedTheme,
@@ -118,12 +123,78 @@ function normalizeOfficeCodeFormat(codeFormat: string): LatexCodeFormat {
   return "raw";
 }
 
+function normalizeOfficeFontSizePt(value: unknown, fallback: number) {
+  const numeric = typeof value === "number" ? value : Number(value);
+  const resolved = Number.isFinite(numeric) ? numeric : fallback;
+  return Math.round(Math.min(200, Math.max(5, resolved)) * 2) / 2;
+}
+
+function requireOfficeSessionFontSizePt(value: unknown, host: OfficeHost) {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric) || numeric < 5 || numeric > 200) {
+    throw new Error(
+      host === "word"
+        ? "Word 公式 Session 缺少当前正文位置的有效字号。"
+        : "PowerPoint 公式 Session 缺少有效字号。",
+    );
+  }
+  return Math.round(numeric * 2) / 2;
+}
+
+const OFFICE_CHINESE_FONT_SIZE_OPTIONS = [
+  { name: "初号", fontSizePt: 42 },
+  { name: "小初", fontSizePt: 36 },
+  { name: "一号", fontSizePt: 26 },
+  { name: "小一", fontSizePt: 24 },
+  { name: "二号", fontSizePt: 22 },
+  { name: "小二", fontSizePt: 18 },
+  { name: "三号", fontSizePt: 16 },
+  { name: "小三", fontSizePt: 15 },
+  { name: "四号", fontSizePt: 14 },
+  { name: "小四", fontSizePt: 12 },
+  { name: "五号", fontSizePt: 10.5 },
+  { name: "小五", fontSizePt: 9 },
+  { name: "六号", fontSizePt: 7.5 },
+  { name: "小六", fontSizePt: 6.5 },
+  { name: "七号", fontSizePt: 5.5 },
+  { name: "八号", fontSizePt: 5 },
+] as const;
+
+const OFFICE_CHINESE_FONT_SIZE_POINTS = new Set<number>(
+  OFFICE_CHINESE_FONT_SIZE_OPTIONS.map((option) => option.fontSizePt),
+);
+
+const OFFICE_FONT_SIZE_OPTIONS = [
+  ...Array.from({ length: 63 }, (_, index) => 5 + index * 0.5),
+  ...Array.from({ length: 18 }, (_, index) => 38 + index * 2),
+  80,
+  90,
+  96,
+  100,
+  120,
+  144,
+  160,
+  180,
+  200,
+].filter((fontSizePt) => !OFFICE_CHINESE_FONT_SIZE_POINTS.has(fontSizePt));
+
+function officePointFontSizeOptions(currentFontSizePt: number) {
+  const current = normalizeOfficeFontSizePt(currentFontSizePt, currentFontSizePt);
+  if (OFFICE_CHINESE_FONT_SIZE_POINTS.has(current)) {
+    return OFFICE_FONT_SIZE_OPTIONS;
+  }
+  return OFFICE_FONT_SIZE_OPTIONS.includes(current)
+    ? OFFICE_FONT_SIZE_OPTIONS
+    : [...OFFICE_FONT_SIZE_OPTIONS, current].sort((left, right) => left - right);
+}
+
 function documentFingerprint(
   title: string,
   lines: Array<{ id: string; latex: string }>,
   codeFormat: string,
   displayMode: "inline" | "block",
   numbered: boolean,
+  fontSizePt: number,
 ) {
   return JSON.stringify({
     title,
@@ -131,6 +202,7 @@ function documentFingerprint(
     codeFormat,
     displayMode,
     numbered,
+    fontSizePt: normalizeOfficeFontSizePt(fontSizePt, fontSizePt),
   });
 }
 
@@ -142,8 +214,10 @@ export function OfficeDialogApp() {
   const lastSavedFingerprintRef = useRef("");
   const readyMessageSentRef = useRef(false);
   const finalizingRef = useRef(false);
+  const commitFromShortcutRef = useRef<() => void>(() => undefined);
   const exportRunIdRef = useRef(0);
   const conversionStartedRef = useRef(false);
+  const initialEditorFocusSessionRef = useRef("");
   const latestCompleteExportRef = useRef<{
     fingerprint: string;
     exportResult: OfficeExportResult;
@@ -153,6 +227,14 @@ export function OfficeDialogApp() {
   const [autoCommitOnClose, setAutoCommitOnClose] = useState(true);
   const [displayMode, setDisplayMode] = useState<"inline" | "block">("inline");
   const [numbered, setNumbered] = useState(false);
+  // This is only a pre-Session UI placeholder. Word never uses it as a
+  // default: every Word Session must supply the font size read at the current
+  // document insertion point. PowerPoint's configured default is stored in a
+  // separate state below.
+  const [officeFontSizePt, setOfficeFontSizePt] = useState(14);
+  const [powerPointDefaultFontSizePt, setPowerPointDefaultFontSizePt] =
+    useState(20);
+  const [officePreferencesReady, setOfficePreferencesReady] = useState(false);
   const [toast, setToast] = useState("");
   const [ocrOpen, setOcrOpen] = useState(false);
   const [ocrModel, setOcrModel] = useState<OcrModelName>(() => {
@@ -169,17 +251,55 @@ export function OfficeDialogApp() {
   const inlineOcrClearTimerRef = useRef<number | null>(null);
   const { sessionId, session, loading, error, save } = useOfficeSession();
 
+  useEffect(() => {
+    loadedSessionIdRef.current = "";
+    skipAutosaveForSessionRef.current = "";
+    originalFingerprintRef.current = "";
+    lastSavedFingerprintRef.current = "";
+    readyMessageSentRef.current = false;
+    finalizingRef.current = false;
+    conversionStartedRef.current = false;
+    initialEditorFocusSessionRef.current = "";
+    latestCompleteExportRef.current = null;
+    exportRunIdRef.current += 1;
+  }, [sessionId]);
+
   const title = useEditorStore((state) => state.title);
   const lines = useEditorStore((state) => state.lines);
   const activeLineId = useEditorStore((state) => state.activeLineId);
   const language = useEditorStore((state) => state.language);
   const theme = useEditorStore((state) => state.theme);
   const setTheme = useEditorStore((state) => state.setTheme);
+  const setEditorLayout = useEditorStore((state) => state.setEditorLayout);
   const latexCodeFormat = useEditorStore((state) => state.latexCodeFormat);
   const addHistory = useEditorStore((state) => state.addHistory);
   const historyState = useHistorySnapshot();
   const isEn = language === "en";
   const latex = joinFormulaLines(lines);
+
+  useEffect(() => {
+    let disposed = false;
+    void getOfficePreferences()
+      .then((preferences) => {
+        if (!disposed) {
+          setPowerPointDefaultFontSizePt(
+            normalizeOfficeFontSizePt(
+              preferences.powerpointDefaultFontSizePt,
+              20,
+            ),
+          );
+        }
+      })
+      .catch(() => {
+        if (!disposed) setPowerPointDefaultFontSizePt(20);
+      })
+      .finally(() => {
+        if (!disposed) setOfficePreferencesReady(true);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, []);
 
   useEffect(() => {
     let disposed = false;
@@ -190,12 +310,21 @@ export function OfficeDialogApp() {
         setTheme(nextTheme);
       }
     };
+    const applyEditorLayout = (nextLayoutValue: unknown) => {
+      const nextLayout = normalizeEditorLayout(nextLayoutValue);
+      if (useEditorStore.getState().editorLayout !== nextLayout) {
+        setEditorLayout(nextLayout);
+      }
+    };
     const syncFromCompanion = async () => {
       try {
         const status = await getOfficeTheme();
-        if (!disposed) applyTheme(status.theme);
+        if (!disposed) {
+          applyTheme(status.theme);
+          applyEditorLayout(status.editorLayout);
+        }
       } catch {
-        // Keep the last applied theme while the companion is restarting.
+        // Keep the last applied appearance while the companion is restarting.
       }
     };
 
@@ -217,7 +346,7 @@ export function OfficeDialogApp() {
       window.removeEventListener("focus", handleFocus);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, [setTheme]);
+  }, [setEditorLayout, setTheme]);
 
   useEffect(() => {
     applyDocumentTheme(theme);
@@ -232,8 +361,23 @@ export function OfficeDialogApp() {
     inlineOcr?.status === "running" || inlineOcr?.status === "cancelling";
 
   const currentFingerprint = useMemo(
-    () => documentFingerprint(title, lines, latexCodeFormat, displayMode, numbered),
-    [title, lines, latexCodeFormat, displayMode, numbered],
+    () =>
+      documentFingerprint(
+        title,
+        lines,
+        latexCodeFormat,
+        displayMode,
+        numbered,
+        officeFontSizePt,
+      ),
+    [
+      title,
+      lines,
+      latexCodeFormat,
+      displayMode,
+      numbered,
+      officeFontSizePt,
+    ],
   );
   const dirty =
     Boolean(session) &&
@@ -242,6 +386,15 @@ export function OfficeDialogApp() {
 
   useEffect(() => {
     if (!session || loadedSessionIdRef.current === session.id) return;
+    if (
+      session.host === "powerpoint" &&
+      session.mode === "create" &&
+      session.status === "created" &&
+      !session.dirty &&
+      !officePreferencesReady
+    ) {
+      return;
+    }
     loadedSessionIdRef.current = session.id;
     skipAutosaveForSessionRef.current = session.id;
     const nextLines = session.lines.length
@@ -263,19 +416,92 @@ export function OfficeDialogApp() {
     setAutoCommitOnClose(session.autoCommitOnClose);
     setDisplayMode(session.displayMode);
     setNumbered(session.displayMode === "block" && Boolean(session.numbered));
+    const loadedFontSizePt =
+      session.host === "powerpoint" &&
+      session.mode === "create" &&
+      session.status === "created" &&
+      !session.dirty
+        ? powerPointDefaultFontSizePt
+        : requireOfficeSessionFontSizePt(
+            session.fontSizePt ??
+              session.originalMetadata?.fontSizePt ??
+              session.originalMetadata?.renderFontSizePt,
+            session.host,
+          );
+    setOfficeFontSizePt(loadedFontSizePt);
     const loadedFingerprint = documentFingerprint(
       session.title,
       nextLines,
       loadedCodeFormat,
       session.displayMode,
       session.displayMode === "block" && Boolean(session.numbered),
+      loadedFontSizePt,
     );
     originalFingerprintRef.current = loadedFingerprint;
     lastSavedFingerprintRef.current = loadedFingerprint;
     latestCompleteExportRef.current = session.exportResult?.pngBase64
       ? { fingerprint: loadedFingerprint, exportResult: session.exportResult }
       : null;
-  }, [session?.id, isEn]);
+  }, [
+    session?.id,
+    isEn,
+    officePreferencesReady,
+    powerPointDefaultFontSizePt,
+  ]);
+
+  useEffect(() => {
+    if (
+      IS_VSTO_CONVERT_RUNTIME ||
+      !session ||
+      loadedSessionIdRef.current !== session.id ||
+      initialEditorFocusSessionRef.current === session.id
+    ) {
+      return;
+    }
+    initialEditorFocusSessionRef.current = session.id;
+    const repairTimers: number[] = [];
+    let repairInterval = 0;
+    const focusFirstLine = () => {
+      window.focus();
+      editorRef.current?.focus({ target: "first", moveToEnd: true });
+      // MathLive can finish mounting its shadow input one frame after the
+      // editor imperative handle becomes available. Keep a direct custom-
+      // element fallback so the Office dialog does not leave focus on BODY.
+      const field = document.querySelector<HTMLElement>("math-field");
+      if (field && document.activeElement !== field) {
+        field.focus({ preventScroll: true });
+      }
+    };
+    const formulaHasFocus = () =>
+      document.activeElement?.tagName === "MATH-FIELD";
+    const focusWhenVisible = () => {
+      if (document.visibilityState === "visible") focusFirstLine();
+    };
+    const stopActivationRepair = () => {
+      window.clearInterval(repairInterval);
+      repairInterval = 0;
+      window.removeEventListener("focus", focusFirstLine);
+      document.removeEventListener("visibilitychange", focusWhenVisible);
+    };
+    const repairFocus = () => {
+      focusFirstLine();
+      if (formulaHasFocus()) stopActivationRepair();
+    };
+    const frame = window.requestAnimationFrame(() => {
+      repairFocus();
+      if (!formulaHasFocus()) {
+        repairInterval = window.setInterval(repairFocus, 60);
+        repairTimers.push(window.setTimeout(stopActivationRepair, 3000));
+      }
+    });
+    window.addEventListener("focus", focusFirstLine, { once: true });
+    document.addEventListener("visibilitychange", focusWhenVisible);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      repairTimers.forEach((timer) => window.clearTimeout(timer));
+      stopActivationRepair();
+    };
+  }, [session?.id]);
 
   const captureSnapshot = useCallback(
     (): DocumentSnapshot =>
@@ -337,29 +563,46 @@ export function OfficeDialogApp() {
   const generateSvgExportResult = useCallback((
     sourceLatex: string = latex,
     sourceDisplayMode: "inline" | "block" = displayMode,
+    sourceFontSizePt: number = officeFontSizePt,
   ): OfficeExportResult | null => {
     if (!sourceLatex.trim()) return null;
-    const svg = latexToSvg(sourceLatex, {
+    const renderedLatex = sourceDisplayMode === "block"
+      ? attachFormulaEquationTag(
+          sourceLatex,
+          session?.originalMetadata?.equationTag,
+        )
+      : sourceLatex;
+    const svg = latexToSvg(renderedLatex, {
       displayMode: sourceDisplayMode === "block",
-      fontSizePt: 14,
+      fontSizePt: sourceFontSizePt,
       paddingPx: sourceDisplayMode === "inline" ? 1 : 10,
       background: "transparent",
     });
     return {
       svg: svg.svg,
       svgBase64: svg.base64,
-      mathMl: latexToMathMl(sourceLatex, sourceDisplayMode === "block"),
+      mathMl: latexToMathMl(renderedLatex, sourceDisplayMode === "block"),
       width: svg.width,
       height: svg.height,
       baseline: svg.baseline,
     };
-  }, [latex, displayMode]);
+  }, [
+    latex,
+    displayMode,
+    officeFontSizePt,
+    session?.originalMetadata?.equationTag,
+  ]);
 
   const generateExportResult = useCallback(async (
     sourceLatex: string = latex,
     sourceDisplayMode: "inline" | "block" = displayMode,
+    sourceFontSizePt: number = officeFontSizePt,
   ): Promise<OfficeExportResult | null> => {
-    const base = generateSvgExportResult(sourceLatex, sourceDisplayMode);
+    const base = generateSvgExportResult(
+      sourceLatex,
+      sourceDisplayMode,
+      sourceFontSizePt,
+    );
     if (!base) return null;
     let pngBase64: string | undefined;
     try {
@@ -409,9 +652,20 @@ export function OfficeDialogApp() {
           conversionLines.some((line) => line.id === session.activeLineId)
             ? session.activeLineId
             : conversionLines[0]?.id ?? null;
+        // The hidden converter can run in the same React commit that loads a
+        // new Session. Rendering from component state here used the previous
+        // 20 pt PowerPoint value before Word's paragraph size had reached the
+        // state hook. Always render from the immutable Session value instead.
+        const conversionFontSizePt = requireOfficeSessionFontSizePt(
+          session.fontSizePt ??
+            session.originalMetadata?.fontSizePt ??
+            session.originalMetadata?.renderFontSizePt,
+          session.host,
+        );
         const exportResult = await generateExportResult(
           conversionLatex,
           conversionDisplayMode,
+          conversionFontSizePt,
         );
         if (!exportResult?.pngBase64 || !exportResult.mathMl) {
           throw new Error(
@@ -427,6 +681,7 @@ export function OfficeDialogApp() {
           codeFormat: normalizeOfficeCodeFormat(session.codeFormat),
           displayMode: conversionDisplayMode,
           numbered: conversionNumbered,
+          fontSizePt: conversionFontSizePt,
           dirty: false,
           status: "committing",
           autoCommitOnClose: false,
@@ -436,12 +691,17 @@ export function OfficeDialogApp() {
           error: null,
         });
       } catch (reason) {
-        const message =
-          reason instanceof Error
-            ? reason.message
-            : isEn
-              ? "Formula format conversion failed"
-              : "公式格式转换失败";
+        const detail = readErrorMessage(
+          reason,
+          isEn ? "Formula format conversion failed" : "公式格式转换失败",
+        );
+        const sourceFormula = joinFormulaLines(session.lines).trim();
+        const formulaPreview = sourceFormula.length <= 500
+          ? sourceFormula
+          : `${sourceFormula.slice(0, 500)}…`;
+        const message = isEn
+          ? `Formula rendering failed: ${detail}\nFormula: ${formulaPreview}`
+          : `公式渲染失败：${detail}\n公式：${formulaPreview}`;
         try {
           await save({ status: "failed", error: message });
         } catch {
@@ -460,8 +720,17 @@ export function OfficeDialogApp() {
   useEffect(() => {
     if (IS_VSTO_CONVERT_RUNTIME) return;
     if (!session || !sessionId || finalizingRef.current) return;
+    if (loadedSessionIdRef.current !== sessionId) return;
     if (skipAutosaveForSessionRef.current === sessionId) {
+      // Loading a Session updates the external editor store and several React
+      // states in the same effect. Intermediate renders can therefore contain
+      // the new LaTeX with the previous display mode or font size. Keep initial
+      // autosave suppressed until every field matches the immutable Session
+      // fingerprint; otherwise the half-loaded render is briefly persisted as
+      // a false dirty edit.
+      if (currentFingerprint !== originalFingerprintRef.current) return;
       skipAutosaveForSessionRef.current = "";
+      lastSavedFingerprintRef.current = currentFingerprint;
       return;
     }
     if (
@@ -484,6 +753,7 @@ export function OfficeDialogApp() {
         codeFormat: latexCodeFormat,
         displayMode,
         numbered: displayMode === "block" && numbered,
+        fontSizePt: officeFontSizePt,
         dirty,
         status: "editing",
         autoCommitOnClose,
@@ -565,6 +835,7 @@ export function OfficeDialogApp() {
     latexCodeFormat,
     displayMode,
     numbered,
+    officeFontSizePt,
     dirty,
     autoCommitOnClose,
     save,
@@ -592,6 +863,7 @@ export function OfficeDialogApp() {
         codeFormat: latexCodeFormat,
         displayMode,
         numbered: displayMode === "block" && numbered,
+        fontSizePt: officeFontSizePt,
         dirty,
         status,
         autoCommitOnClose,
@@ -664,6 +936,7 @@ export function OfficeDialogApp() {
     latexCodeFormat,
     displayMode,
     numbered,
+    officeFontSizePt,
     dirty,
     autoCommitOnClose,
     currentFingerprint,
@@ -676,6 +949,43 @@ export function OfficeDialogApp() {
     readyMessageSentRef.current = true;
     messageOfficeParent({ type: "visualtex-ready", sessionId: session.id });
   }, [session?.id]);
+
+  useEffect(() => {
+    if (
+      !IS_VSTO_DESKTOP_RUNTIME ||
+      !session ||
+      !sessionId ||
+      loadedSessionIdRef.current !== sessionId ||
+      skipAutosaveForSessionRef.current === sessionId ||
+      currentFingerprint !== originalFingerprintRef.current ||
+      session.status !== "created"
+    ) {
+      return;
+    }
+    let cancelled = false;
+    let attempt = 0;
+    const markEditorReady = () => {
+      if (cancelled) return;
+      const field = document.querySelector<HTMLElement>("math-field");
+      if (!field?.isConnected && attempt < 20) {
+        attempt += 1;
+        window.setTimeout(markEditorReady, 16);
+        return;
+      }
+      void save({ status: "editing", dirty: false }).catch(() => undefined);
+    };
+    const frame = window.requestAnimationFrame(markEditorReady);
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(frame);
+    };
+  }, [
+    session?.id,
+    session?.status,
+    sessionId,
+    currentFingerprint,
+    save,
+  ]);
 
   useEffect(() => {
     if (!toast) return;
@@ -917,6 +1227,7 @@ export function OfficeDialogApp() {
         codeFormat: latexCodeFormat,
         displayMode,
         numbered: displayMode === "block" && numbered,
+        fontSizePt: officeFontSizePt,
         dirty,
         status,
         autoCommitOnClose,
@@ -937,6 +1248,7 @@ export function OfficeDialogApp() {
       latexCodeFormat,
       displayMode,
       numbered,
+      officeFontSizePt,
       dirty,
       autoCommitOnClose,
       currentFingerprint,
@@ -973,15 +1285,34 @@ export function OfficeDialogApp() {
       window.close();
     } catch (error) {
       finalizingRef.current = false;
-      const message =
-        error instanceof Error
-          ? error.message
-          : isEn
-            ? "Unable to insert the PowerPoint formula"
-            : "无法插入 PowerPoint 公式";
-      setToast(message);
+      setToast(readErrorMessage(
+        error,
+        isEn ? "Unable to insert the Office formula" : "无法插入 Office 公式",
+      ));
     }
   };
+
+  commitFromShortcutRef.current = () => {
+    void handleCommit();
+  };
+
+  useEffect(() => {
+    if (
+      !session ||
+      loading ||
+      error ||
+      IS_VSTO_CONVERT_RUNTIME
+    ) {
+      return;
+    }
+    return registerOfficeApplyShortcut({
+      onApply: () => commitFromShortcutRef.current(),
+      isEnabled: () =>
+        !ocrOpen &&
+        !inlineOcrBusyRef.current &&
+        !historyState.isReplaying,
+    });
+  }, [error, historyState.isReplaying, loading, ocrOpen, session?.id]);
 
   const handleCancel = async () => {
     finalizingRef.current = true;
@@ -1012,7 +1343,14 @@ export function OfficeDialogApp() {
     setToast(isEn ? "LaTeX copied" : "LaTeX 已复制");
   };
 
-  if (loading) {
+  if (
+    loading ||
+    (session?.host === "powerpoint" &&
+      session.mode === "create" &&
+      session.status === "created" &&
+      !session.dirty &&
+      !officePreferencesReady)
+  ) {
     return (
       <div className="office-dialog-state">
         <LoaderCircle className="is-spinning" size={28} />
@@ -1068,6 +1406,47 @@ export function OfficeDialogApp() {
               </button>
             </div>
           ) : null}
+          <label
+            className="office-font-size-setting"
+            title={
+              session.host === "word" && session.mode === "create"
+                ? isEn
+                  ? "Starts from the current Word paragraph font size"
+                  : "默认读取当前 Word 段落正文的字号"
+                : isEn
+                  ? "Formula font size"
+                  : "公式字号"
+            }
+          >
+            <span>{isEn ? "Size" : "字号"}</span>
+            <select
+              value={officeFontSizePt}
+              data-office-font-size
+              aria-label={isEn ? "Formula font size" : "公式字号"}
+              onChange={(event) =>
+                setOfficeFontSizePt(
+                  normalizeOfficeFontSizePt(event.target.value, officeFontSizePt),
+                )
+              }
+            >
+              <optgroup label={isEn ? "Chinese sizes" : "中文字号"}>
+                {OFFICE_CHINESE_FONT_SIZE_OPTIONS.map((option) => (
+                  <option key={option.name} value={option.fontSizePt}>
+                    {isEn
+                      ? `${option.name} (${option.fontSizePt} pt)`
+                      : `${option.name}（${option.fontSizePt} 磅）`}
+                  </option>
+                ))}
+              </optgroup>
+              <optgroup label={isEn ? "Point sizes" : "磅值"}>
+                {officePointFontSizeOptions(officeFontSizePt).map((fontSizePt) => (
+                  <option key={fontSizePt} value={fontSizePt}>
+                    {isEn ? `${fontSizePt} pt` : `${fontSizePt} 磅`}
+                  </option>
+                ))}
+              </optgroup>
+            </select>
+          </label>
           {session.host === "word" && displayMode === "block" ? (
             <label className="office-auto-commit-setting">
               <input
@@ -1136,6 +1515,7 @@ export function OfficeDialogApp() {
         onPrimaryAction={handleCommit}
         onCancel={handleCancel}
         editorRef={editorRef}
+        editorInstanceKey={session.id}
         sidebarOpen={sidebarOpen}
         onSidebarOpenChange={setSidebarOpen}
         onHistoryBusyChange={setHistoryBusy}

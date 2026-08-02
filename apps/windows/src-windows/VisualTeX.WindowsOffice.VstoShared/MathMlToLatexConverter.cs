@@ -129,8 +129,8 @@ internal static class MathMlToLatexConverter
             "math" or "mrow" or "mstyle" or "mpadded" => ConvertChildren(element),
             "semantics" or "maction" => element.Elements().Select(ConvertElement).FirstOrDefault() ?? string.Empty,
             "annotation" or "annotation-xml" => string.Empty,
-            "mi" or "mn" or "mo" => ConvertToken(element.Value),
-            "mtext" => @"\text{" + EscapeText(element.Value) + "}",
+            "mi" or "mn" or "mo" => ConvertTokenElement(element),
+            "mtext" => ConvertTextElement(element),
             "mspace" => @"\,",
             "mfrac" => ConvertFraction(element),
             "msqrt" => @"\sqrt{" + ConvertChildren(element) + "}",
@@ -175,8 +175,8 @@ internal static class MathMlToLatexConverter
         var children = element.Elements().ToList();
         if (children.Count < 2) return ConvertChildren(element);
         var result = GroupBase(ConvertElement(children[0]));
-        if (subscript) result += "_{" + ConvertElement(children[1]) + "}";
-        if (superscript) result += "^{" + ConvertElement(children[1]) + "}";
+        if (subscript) result += "_{" + ScriptArgument(children[1]) + "}";
+        if (superscript) result += "^{" + ScriptArgument(children[1]) + "}";
         return result;
     }
 
@@ -185,9 +185,12 @@ internal static class MathMlToLatexConverter
         var children = element.Elements().ToList();
         if (children.Count < 3) return ConvertChildren(element);
         return GroupBase(ConvertElement(children[0]))
-            + "_{" + ConvertElement(children[1]) + "}"
-            + "^{" + ConvertElement(children[2]) + "}";
+            + "_{" + ScriptArgument(children[1]) + "}"
+            + "^{" + ScriptArgument(children[2]) + "}";
     }
+
+    private static string ScriptArgument(XElement element) =>
+        ConvertElement(element).TrimEnd();
 
     private static string ConvertOver(XElement element)
     {
@@ -219,8 +222,8 @@ internal static class MathMlToLatexConverter
         var children = element.Elements().ToList();
         if (children.Count < 3) return ConvertChildren(element);
         return GroupBase(ConvertElement(children[0]))
-            + "_{" + ConvertElement(children[1]) + "}"
-            + "^{" + ConvertElement(children[2]) + "}";
+            + "_{" + ScriptArgument(children[1]) + "}"
+            + "^{" + ScriptArgument(children[2]) + "}";
     }
 
     private static string ConvertFenced(XElement element)
@@ -269,6 +272,50 @@ internal static class MathMlToLatexConverter
         }
         return builder.ToString();
     }
+
+    private static string ConvertTextElement(XElement element)
+    {
+        var value = element.Value.Trim();
+        // Word exports one-character upright mathematical identifiers such as
+        // \mathrm{e}, \mathrm{i} and \mathrm{d} as mtext rather than mi.
+        // Preserve their mathematical upright semantics while keeping genuine
+        // prose and multi-character annotations as \text{...}.
+        if (value.Length == 1 && value[0] <= '\u024F' && char.IsLetter(value[0]))
+            return @"\mathrm{" + EscapeMathIdentifier(value) + "}";
+        return @"\text{" + EscapeText(element.Value) + "}";
+    }
+
+    private static string ConvertTokenElement(XElement element)
+    {
+        var token = element.Value.Trim();
+        var variant = ((string?)element.Attribute("mathvariant") ?? string.Empty).Trim();
+        var explicitlyUpright =
+            variant.IndexOf("normal", StringComparison.OrdinalIgnoreCase) >= 0
+            || variant.IndexOf("upright", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (element.Name.LocalName == "mi"
+            && explicitlyUpright
+            && IsLatinIdentifier(token))
+        {
+            return @"\mathrm{" + EscapeMathIdentifier(token) + "}";
+        }
+        return ConvertToken(token);
+    }
+
+    private static bool IsLatinIdentifier(string token) =>
+        token.Length > 0
+        && token.Any(char.IsLetter)
+        && token.All(character =>
+            (character <= '\u024F' && char.IsLetterOrDigit(character))
+            || character is '.' or ',');
+
+    private static string EscapeMathIdentifier(string value) =>
+        value.Replace("\\", @"\backslash ")
+            .Replace("{", @"\{")
+            .Replace("}", @"\}")
+            .Replace("#", @"\#")
+            .Replace("%", @"\%")
+            .Replace("&", @"\&")
+            .Replace("_", @"\_");
 
     private static string ConvertToken(string value)
     {

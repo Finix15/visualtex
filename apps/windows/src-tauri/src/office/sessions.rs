@@ -109,11 +109,19 @@ pub struct VisualTeXFormulaMetadata {
     #[serde(default)]
     pub numbered: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equation_tag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub render_width_px: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub render_height_px: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_size_pt: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_font_size_pt: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_omml_fingerprint: Option<String>,
     pub created_with_version: String,
     pub updated_with_version: String,
     pub created_at: String,
@@ -139,6 +147,8 @@ pub struct OfficeFormulaSession {
     pub object_mode: String,
     #[serde(default)]
     pub numbered: bool,
+    #[serde(default = "default_font_size_pt")]
+    pub font_size_pt: f64,
     pub export_width: f64,
     pub export_height: f64,
     pub export_result: Option<OfficeExportResult>,
@@ -168,6 +178,7 @@ pub struct CreateOfficeSessionInput {
     pub display_mode: Option<String>,
     pub object_mode: Option<String>,
     pub numbered: Option<bool>,
+    pub font_size_pt: Option<f64>,
     pub export_width: Option<f64>,
     pub export_height: Option<f64>,
     pub original_metadata: Option<VisualTeXFormulaMetadata>,
@@ -179,6 +190,20 @@ pub struct SessionStore {
     sessions_root: PathBuf,
     recovery_root: PathBuf,
     lock: Arc<Mutex<()>>,
+}
+
+fn default_font_size_pt() -> f64 {
+    14.0
+}
+
+fn normalize_font_size_pt(value: Option<f64>) -> Result<f64, SessionError> {
+    let resolved = value.unwrap_or_else(default_font_size_pt);
+    if !resolved.is_finite() || !(5.0..=200.0).contains(&resolved) {
+        return Err(SessionError::Invalid(
+            "Office Session fontSizePt must be between 5 and 200 points".to_string(),
+        ));
+    }
+    Ok((resolved * 2.0).round() / 2.0)
 }
 
 fn now_ms() -> u64 {
@@ -248,9 +273,9 @@ fn validate_lines(lines: &[FormulaLine]) -> Result<(), SessionError> {
                 "Office Session contains an invalid formula line id".to_string(),
             ));
         }
-        if line.latex.len() > 1_000_000 {
+        if line.latex.len() > 5_000_000 {
             return Err(SessionError::Invalid(
-                "A formula line exceeds the 1 MB LaTeX limit".to_string(),
+                "An Office Session line exceeds the 5 MB source limit".to_string(),
             ));
         }
     }
@@ -446,6 +471,7 @@ impl SessionStore {
                 "Only Word display formulas can use equation numbering".to_string(),
             ));
         }
+        let font_size_pt = normalize_font_size_pt(input.font_size_pt)?;
         let session = OfficeFormulaSession {
             id,
             mode: input.mode,
@@ -460,6 +486,7 @@ impl SessionStore {
             display_mode,
             object_mode,
             numbered,
+            font_size_pt,
             export_width: input.export_width.unwrap_or_default(),
             export_height: input.export_height.unwrap_or_default(),
             export_result: None,
@@ -504,6 +531,7 @@ impl SessionStore {
             "displayMode",
             "objectMode",
             "numbered",
+            "fontSizePt",
             "exportWidth",
             "exportHeight",
             "exportResult",
@@ -551,7 +579,7 @@ impl SessionStore {
             "expiresAt".to_string(),
             Value::Number(updated_at.saturating_add(SESSION_TTL_MS).into()),
         );
-        let next: OfficeFormulaSession =
+        let mut next: OfficeFormulaSession =
             serde_json::from_value(Value::Object(merged)).map_err(|error| {
                 SessionError::Invalid(format!("Invalid Office Session patch: {error}"))
             })?;
@@ -580,6 +608,7 @@ impl SessionStore {
                 "Only Word display formulas can use equation numbering".to_string(),
             ));
         }
+        next.font_size_pt = normalize_font_size_pt(Some(next.font_size_pt))?;
 
         if current.status == OfficeSessionStatus::Committing
             && matches!(
@@ -614,13 +643,22 @@ impl SessionStore {
         let unchanged_edit = next.mode == OfficeSessionMode::Edit
             && !next.dirty
             && next.original_metadata.is_some();
+        let document_import = matches!(
+            next.code_format.as_str(),
+            "auto-document"
+                | "markdown-document"
+                | "latex-document"
+                | "visualtex-document-json"
+        );
         if matches!(
             next.status,
             OfficeSessionStatus::Committing | OfficeSessionStatus::Completed
-        ) && (!has_formula(&next) || (!unchanged_edit && next.export_result.is_none()))
+        ) && (!has_formula(&next)
+            || (!document_import && !unchanged_edit && next.export_result.is_none()))
         {
             return Err(SessionError::Conflict(
-                "A changed or newly created Session cannot commit without a non-empty formula and export result".to_string(),
+                "A changed or newly created formula Session cannot commit without source and an export result"
+                    .to_string(),
             ));
         }
         self.write_locked(&next)?;
@@ -746,6 +784,7 @@ mod tests {
             display_mode: None,
             object_mode: None,
             numbered: None,
+            font_size_pt: None,
             export_width: None,
             export_height: None,
             original_metadata: None,
@@ -773,6 +812,7 @@ mod tests {
             display_mode: Some("inline".to_string()),
             object_mode: Some("nativeOle".to_string()),
             numbered: Some(false),
+            font_size_pt: Some(14.0),
             export_width: Some(100.0),
             export_height: Some(20.0),
             original_metadata: Some(VisualTeXFormulaMetadata {
@@ -788,9 +828,13 @@ mod tests {
                 code_format: "latex".to_string(),
                 display_mode: "inline".to_string(),
                 numbered: false,
+                equation_tag: None,
                 render_width_px: Some(100.0),
                 render_height_px: Some(20.0),
                 baseline: Some(15.0),
+                font_size_pt: Some(14.0),
+                render_font_size_pt: Some(14.0),
+                native_omml_fingerprint: None,
                 created_with_version: "1.1.4".to_string(),
                 updated_with_version: "1.1.4".to_string(),
                 created_at: "2026-07-16T00:00:00Z".to_string(),
@@ -923,9 +967,13 @@ mod tests {
             code_format: "raw".to_string(),
             display_mode: "block".to_string(),
             numbered: false,
+            equation_tag: None,
             render_width_px: None,
             render_height_px: None,
             baseline: None,
+            font_size_pt: None,
+            render_font_size_pt: None,
+            native_omml_fingerprint: None,
             created_with_version: "1.0.6".to_string(),
             updated_with_version: "1.0.6".to_string(),
             created_at: "2026-07-12T00:00:00Z".to_string(),
@@ -974,6 +1022,34 @@ mod tests {
             .unwrap();
         assert_eq!(completed.status, OfficeSessionStatus::Completed);
         assert!(completed.export_result.is_none());
+    }
+
+    #[test]
+    fn document_import_can_commit_source_without_formula_export() {
+        let temp = TempDir::new().unwrap();
+        let store = SessionStore::new(&paths(&temp)).unwrap();
+        let session = store.create(create_input()).unwrap();
+        let line_id = session.lines[0].id.clone();
+
+        let committing = store
+            .patch(
+                &session.id,
+                serde_json::json!({
+                    "status": "committing",
+                    "dirty": true,
+                    "codeFormat": "visualtex-document-json",
+                    "objectMode": "wordOmml",
+                    "lines": [{
+                        "id": line_id,
+                        "latex": "{\"format\":\"latex\",\"blocks\":[{\"kind\":\"display\",\"level\":0,\"runs\":[{\"kind\":\"formula\",\"latex\":\"x^2\",\"display\":true}]}],\"warnings\":[]}"
+                    }],
+                    "exportResult": null
+                }),
+            )
+            .unwrap();
+        assert_eq!(committing.status, OfficeSessionStatus::Committing);
+        assert_eq!(committing.code_format, "visualtex-document-json");
+        assert!(committing.export_result.is_none());
     }
 
     #[test]

@@ -720,7 +720,11 @@ async function main() {
     await evaluate(`document.querySelector(".cm-content").focus()`);
     await client.send("Input.insertText", { text: "c" });
     await sleep(150);
-    assertDeepEqual(await values(), ["a=b"], "CodeMirror draft must not update formulas");
+    assertDeepEqual(
+      await values(),
+      ["ca=b"],
+      "CodeMirror edit should update formulas immediately",
+    );
     await key("z", "KeyZ", 90, 2, false);
     await sleep(150);
     assertEqual(
@@ -728,10 +732,15 @@ async function main() {
       "a=b",
       "CodeMirror should keep its own draft undo",
     );
+    assertDeepEqual(
+      await values(),
+      ["a=b"],
+      "CodeMirror undo should update formulas immediately",
+    );
     assertEqual(
       await evaluate(`document.querySelector('button[aria-label="撤销"]').disabled`),
       true,
-      "CodeMirror draft undo must not create global history",
+      "A source edit fully reverted by CodeMirror must not leave global history",
     );
 
     await evaluate(`(() => {
@@ -745,9 +754,12 @@ async function main() {
     })()`);
     await client.send("Input.insertText", { text: "x=y\nz=w" });
     await sleep(180);
-    await click(".source-panel .primary-small-button");
-    assertDeepEqual(await values(), ["x=y", "z=w"], "source apply should replace document");
-    await sleep(300);
+    assertDeepEqual(
+      await values(),
+      ["x=y", "z=w"],
+      "live source editing should replace the document without Apply",
+    );
+    await sleep(1100);
     const checkpointCount = await evaluate(`new Promise((resolve, reject) => {
       const request = indexedDB.open("visualtex-history", 1);
       request.onerror = () => reject(request.error);

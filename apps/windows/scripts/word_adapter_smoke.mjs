@@ -426,8 +426,8 @@ const {
 } = await import("../src/office/adapters/WordAdapter.ts");
 const adapter = new WordAdapter();
 
-assert.equal(calculateInlineFormulaPosition(15, 20, 15), -4);
-assert.equal(calculateInlineFormulaPosition(30, 40, 30), -8);
+assert.equal(calculateInlineFormulaPosition(15, 20, 15), -3);
+assert.equal(calculateInlineFormulaPosition(30, 40, 30), -7);
 assert.equal(calculateInlineFormulaPosition(20, 20, 20), 0);
 assert.equal(calculateInlineFormulaPosition(20, 20, undefined), 0);
 assert.equal(equationNumberLabel(12), "(12)");
@@ -474,7 +474,7 @@ const lineId = crypto.randomUUID();
 const inlineSession = createSession(formulaId, lineId, "inline");
 assert.equal(
   calculateInlineSessionPosition(inlineSession),
-  -9,
+  -8,
   "native Word fallback must reuse the exact scaled Office.js offset",
 );
 const runsBeforeInlineCreate = wordRunCount;
@@ -492,7 +492,7 @@ assert.equal(picture.altTextTitle, `VisualTeX_${formulaId}`);
 assert.match(picture.altTextDescription, /^visualtex:v1:deflate:/);
 assert.equal(
   picture.fontPosition,
-  -9,
+  -8,
   "inline formula must align its exported mathematical baseline with Word text",
 );
 assert.equal(

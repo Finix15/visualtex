@@ -1,10 +1,25 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import {
+  mathLiveBrowserEntry,
+  visualTexMathLiveContourIntegralCompatibility,
+} from "./vite.mathliveIntegralCompatibility";
 
 const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [visualTexMathLiveContourIntegralCompatibility(), react()],
+  resolve: {
+    alias: [
+      {
+        find: /^mathlive$/,
+        replacement: mathLiveBrowserEntry,
+      },
+    ],
+  },
+  optimizeDeps: {
+    exclude: ["mathlive"],
+  },
   clearScreen: false,
   server: {
     port: 1420,

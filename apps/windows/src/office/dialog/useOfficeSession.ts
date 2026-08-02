@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { readErrorMessage } from "../../errors/readErrorMessage";
 import {
   getOfficeSession,
   updateOfficeSession,
@@ -6,7 +7,13 @@ import {
   type UpdateOfficeSessionInput,
 } from "../api/sessionClient";
 
+type OfficeSessionWindow = Window & {
+  __VISUALTEX_OFFICE_SESSION_ID__?: string;
+};
+
 function sessionIdFromLocation() {
+  const injected = (window as OfficeSessionWindow).__VISUALTEX_OFFICE_SESSION_ID__;
+  if (injected) return injected;
   const query = new URLSearchParams(window.location.search).get("sessionId");
   if (query) return query;
   const match = window.location.pathname.match(/\/dialog\/([^/?#]+)/);
@@ -14,11 +21,28 @@ function sessionIdFromLocation() {
 }
 
 export function useOfficeSession() {
-  const sessionId = useMemo(sessionIdFromLocation, []);
+  const [sessionId, setSessionId] = useState(sessionIdFromLocation);
   const [session, setSession] = useState<OfficeFormulaSession | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+
+  useEffect(() => {
+    const handleSessionChange = (event: Event) => {
+      const detail = (event as CustomEvent<{ sessionId?: string }>).detail;
+      const next = detail?.sessionId?.trim() ?? "";
+      (window as OfficeSessionWindow).__VISUALTEX_OFFICE_SESSION_ID__ = next || undefined;
+      saveQueueRef.current = Promise.resolve();
+      setSession(null);
+      setError("");
+      setLoading(Boolean(next));
+      setSessionId(next);
+    };
+    window.addEventListener("visualtex-office-session", handleSessionChange);
+    return () => {
+      window.removeEventListener("visualtex-office-session", handleSessionChange);
+    };
+  }, []);
 
   const reload = useCallback(async () => {
     if (!sessionId) {
@@ -33,8 +57,7 @@ export function useOfficeSession() {
       setError("");
       return next;
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Unable to load Office session.";
-      setError(message);
+      setError(readErrorMessage(reason, "Unable to load Office session."));
       return null;
     } finally {
       setLoading(false);

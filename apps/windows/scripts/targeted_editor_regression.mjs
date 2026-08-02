@@ -7,9 +7,9 @@ import {
 } from "./browser_test_runtime.mjs";
 
 const scenario = process.argv[2];
-if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "native-space-selection", "candidate-query-reset", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "accent-placeholder", "caret-probe", "scripts", "upright", "suggestions", "navigation", "geometry", "source-layout", "toolbar-compact", "formula-tiles", "cursor-placement", "settings", "layout", "delete", "export"]).has(scenario)) {
+if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "usage-ranking", "native-space-selection", "candidate-query-reset", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "direct-shortcut-placeholder", "toolbar-placeholder-overflow", "horizontal-overflow", "accent-placeholder", "caret-probe", "scripts", "upright", "context-style", "suggestions", "navigation", "geometry", "source-layout", "toolbar-compact", "toolbar-postfix", "formula-tiles", "formula-formatting", "cursor-placement", "settings", "layout", "multi-line-selection", "delete", "export"]).has(scenario)) {
   throw new Error(
-    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|native-space-selection|candidate-query-reset|raw-placeholder-visual|placeholder-selection|structural-placeholder|accent-placeholder|caret-probe|scripts|upright|suggestions|navigation|geometry|source-layout|toolbar-compact|formula-tiles|cursor-placement|settings|layout|delete|export>",
+    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|usage-ranking|native-space-selection|candidate-query-reset|raw-placeholder-visual|placeholder-selection|structural-placeholder|direct-shortcut-placeholder|toolbar-placeholder-overflow|horizontal-overflow|accent-placeholder|caret-probe|scripts|upright|context-style|suggestions|navigation|geometry|source-layout|toolbar-compact|toolbar-postfix|formula-tiles|formula-formatting|cursor-placement|settings|layout|multi-line-selection|delete|export>",
   );
 }
 
@@ -203,6 +203,36 @@ async function main() {
       }
     };
 
+    const clickSelectorWithPointer = async (selector) => {
+      const point = await waitForEvaluation(`(() => {
+        const element = document.querySelector(${JSON.stringify("__SELECTOR__")});
+        if (!(element instanceof HTMLElement)) return { ready: false };
+        const rect = element.getBoundingClientRect();
+        return {
+          ready: rect.width > 0 && rect.height > 0,
+          x: rect.left + rect.width / 2,
+          y: rect.top + rect.height / 2,
+        };
+      })()`.replace("__SELECTOR__", selector), `pointer target ${selector}`);
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: point.x,
+        y: point.y,
+        button: "left",
+        buttons: 1,
+        clickCount: 1,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: point.x,
+        y: point.y,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+      });
+      await sleep(80);
+    };
+
     await client.send("Page.navigate", { url: baseUrl });
     await sleep(650);
     await evaluate(`(() => {
@@ -216,16 +246,78 @@ async function main() {
         "visualtex.office.macos.native-first-run.v1.2.0.completed",
         "true",
       );
+      if (${JSON.stringify(scenario)} === "toolbar-compact") {
+        localStorage.removeItem("visualtex-common-toolbar-command-ids-v2");
+        localStorage.setItem(
+          "visualtex-common-toolbar-command-ids-v1",
+          JSON.stringify([
+            "frac", "sqrt", "power", "subscript", "hat", "tilde",
+            "parentheses", "absolute", "intplain", "int", "iint", "oint",
+            "sum", "prod", "lim", "partial", "derivative", "nabla", "infty",
+            "matrix2", "cases", "vector", "alpha", "beta", "gamma", "theta",
+            "lambda", "mu", "pi", "sigma", "omega", "delta", "equal", "neq",
+            "approx", "leq", "geq", "propto", "in", "subset", "rightarrow",
+            "notin", "forall", "exists", "leftarrow",
+          ]),
+        );
+      }
       const storageKey = "visualtex-editor";
       const persisted = JSON.parse(localStorage.getItem(storageKey) || "{}");
       persisted.state = {
         ...(persisted.state || {}),
         lines: [{ id: crypto.randomUUID(), latex: "" }],
         activeLineId: null,
-        ${scenario === "formula-tiles" ? 'editorLayout: "standard",\r\n        sidebarOpen: true,' : ""}
+        ${scenario === "formula-tiles" || scenario === "usage-ranking" || scenario === "toolbar-placeholder-overflow" ? 'editorLayout: "standard",\r\n        sidebarOpen: true,' : ""}
+        ${scenario === "toolbar-postfix" ? 'editorLayout: "classic",' : ""}
+        ${scenario === "usage-ranking" ? `personalize: true,
+        usage: {
+          sqrt: {
+            commandId: "sqrt",
+            useCount: 18,
+            lastUsedAt: 1800,
+            recentUses: [],
+            acceptedPrefixes: {},
+            contextCounts: { toolbar: 18 },
+            pinned: false,
+          },
+          "formula-tile-gaussian-integral": {
+            commandId: "formula-tile-gaussian-integral",
+            useCount: 12,
+            lastUsedAt: 1700,
+            recentUses: [],
+            acceptedPrefixes: {},
+            contextCounts: { toolbar: 12 },
+            pinned: false,
+          },
+          "mathlive-native:\\\\beth": {
+            commandId: "mathlive-native:\\\\beth",
+            useCount: 25,
+            lastUsedAt: 1900,
+            recentUses: [],
+            acceptedPrefixes: { be: 25 },
+            contextCounts: { candidate: 25 },
+            pinned: false,
+          },
+        },` : ""}
       };
       persisted.state.activeLineId = persisted.state.lines[0].id;
-      delete persisted.state.inputBehavior;
+      if (
+        ${JSON.stringify(scenario)} === "native-input-popover" ||
+        ${JSON.stringify(scenario)} === "usage-ranking" ||
+        ${JSON.stringify(scenario)} === "upright"
+      ) {
+        persisted.state.inputBehavior = {
+          autoEscapeShortcuts: ${scenario === "upright" ? "false" : "true"},
+          autoExitSuperscript: true,
+          autoExitSubscript: true,
+          autoExitAccent: true,
+          autoExitWrapperCommand: true,
+          showStructuredCommandSuggestions: false,
+          showOtherCommandSuggestions: false,
+        };
+      } else {
+        delete persisted.state.inputBehavior;
+      }
       localStorage.setItem(storageKey, JSON.stringify(persisted));
     })()`);
     await client.send("Page.reload", { ignoreCache: true });
@@ -268,6 +360,526 @@ async function main() {
       await sleep(100);
       await focusField();
     };
+
+    if (scenario === "formula-formatting") {
+      await waitForEvaluation(`(() => ({
+        ready: [
+          '[data-formula-selection-bold]',
+          '[data-formula-selection-italic]',
+          '[data-formula-selection-color]',
+          '[data-formula-selection-background]',
+        ].every((selector) => {
+          const button = document.querySelector(selector);
+          if (!(button instanceof HTMLElement)) return false;
+          const rect = button.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        }),
+      }))()`, "desktop formula formatting controls");
+
+      const dispatchFormattingToggle = async (selector) => {
+        const encodedSelector = JSON.stringify(selector);
+        await evaluate(`(() => {
+          const field = document.querySelector('math-field');
+          const button = document.querySelector(${encodedSelector});
+          if (!field || !(button instanceof HTMLElement)) return false;
+          field.focus();
+          field.selection = {
+            ranges: [[0, field.lastOffset]],
+            direction: 'forward',
+          };
+          const pointerOptions = {
+            bubbles: true,
+            composed: true,
+            cancelable: true,
+            button: 0,
+            buttons: 1,
+            pointerId: 1,
+            pointerType: 'mouse',
+          };
+          button.dispatchEvent(new PointerEvent('pointerdown', pointerOptions));
+          button.dispatchEvent(new MouseEvent('mousedown', {
+            bubbles: true,
+            composed: true,
+            cancelable: true,
+            button: 0,
+            buttons: 1,
+          }));
+          button.dispatchEvent(new MouseEvent('mouseup', {
+            bubbles: true,
+            composed: true,
+            cancelable: true,
+            button: 0,
+            buttons: 0,
+          }));
+          button.dispatchEvent(new MouseEvent('click', {
+            bubbles: true,
+            composed: true,
+            cancelable: true,
+            button: 0,
+            buttons: 0,
+          }));
+          return true;
+        })()`);
+        await sleep(100);
+      };
+
+      const setFormattingValue = async (latex) => {
+        const encodedLatex = JSON.stringify(latex);
+        await evaluate(`(() => {
+          const field = document.querySelector('math-field');
+          if (!field) return false;
+          field.setValue(${encodedLatex}, {
+            mode: 'math',
+            format: 'latex',
+            insertionMode: 'replaceAll',
+            selectionMode: 'after',
+            silenceNotifications: true,
+          });
+          field.focus();
+          return true;
+        })()`);
+        await sleep(60);
+      };
+
+      const readFormattingValue = () => evaluate(`(() => {
+        const field = document.querySelector('math-field');
+        return field?.value?.replace(/\\s+/g, '') ?? '';
+      })()`);
+
+      await setFormattingValue('abc');
+      await dispatchFormattingToggle('[data-formula-selection-bold]');
+      const boldApplied = await readFormattingValue();
+      if (boldApplied !== String.raw`\mathbf{abc}`) {
+        throw new Error(`Bold toggle must emit \\mathbf exactly; received ${boldApplied}`);
+      }
+      await dispatchFormattingToggle('[data-formula-selection-bold]');
+      const boldRemoved = await readFormattingValue();
+      if (boldRemoved !== 'abc') {
+        throw new Error(`Second bold toggle must restore ordinary math; received ${boldRemoved}`);
+      }
+
+      await setFormattingValue('xyz');
+      await dispatchFormattingToggle('[data-formula-selection-italic]');
+      const uprightApplied = await readFormattingValue();
+      if (uprightApplied !== String.raw`\mathrm{xyz}`) {
+        throw new Error(`Italic toggle must switch default math italic to \\mathrm; received ${uprightApplied}`);
+      }
+      await dispatchFormattingToggle('[data-formula-selection-italic]');
+      const italicRestored = await readFormattingValue();
+      if (italicRestored !== 'xyz') {
+        throw new Error(`Second italic toggle must restore default math italic; received ${italicRestored}`);
+      }
+
+      await setFormattingValue(String.raw`\mathbf{q}`);
+      await dispatchFormattingToggle('[data-formula-selection-italic]');
+      const boldItalicApplied = await readFormattingValue();
+      if (boldItalicApplied !== String.raw`\mathbfit{q}`) {
+        throw new Error(`Italic toggle must preserve bold as \\mathbfit; received ${boldItalicApplied}`);
+      }
+      await dispatchFormattingToggle('[data-formula-selection-italic]');
+      const boldUprightRestored = await readFormattingValue();
+      if (boldUprightRestored !== String.raw`\mathbf{q}`) {
+        throw new Error(`Second italic toggle must restore \\mathbf; received ${boldUprightRestored}`);
+      }
+
+      const selectionBold = {
+        applied: boldApplied,
+        removed: boldRemoved,
+      };
+      const selectionItalic = {
+        upright: uprightApplied,
+        restored: italicRestored,
+        boldItalic: boldItalicApplied,
+        boldRestored: boldUprightRestored,
+      };
+
+      const removedPersistentControls = await evaluate(`(() => ({
+        typingBold: Boolean(document.querySelector('[data-formula-typing-bold]')),
+        typingItalic: Boolean(document.querySelector('[data-formula-typing-italic]')),
+      }))()`);
+      if (removedPersistentControls.typingBold || removedPersistentControls.typingItalic) {
+        throw new Error(`Persistent typing controls must stay removed: ${JSON.stringify(removedPersistentControls)}`);
+      }
+
+      console.log(JSON.stringify({
+        selectionBold,
+        selectionItalic,
+        removedPersistentControls,
+      }, null, 2));
+      console.log("Targeted desktop formula formatting regression passed");
+      return;
+    }
+
+    if (scenario === "multi-line-selection") {
+      await evaluate(`(() => {
+        const storageKey = "visualtex-editor";
+        const persisted = JSON.parse(localStorage.getItem(storageKey) || "{}");
+        const lines = [
+          { id: crypto.randomUUID(), latex: "abcdefghij" },
+          { id: crypto.randomUUID(), latex: "klmnopqrst" },
+          { id: crypto.randomUUID(), latex: "uvwxyzabcd" },
+          { id: crypto.randomUUID(), latex: "efghijklmn" },
+        ];
+        persisted.state = {
+          ...(persisted.state || {}),
+          lines,
+          activeLineId: lines[0].id,
+          editorLayout: "standard",
+          sidebarOpen: false,
+        };
+        localStorage.setItem(storageKey, JSON.stringify(persisted));
+      })()`);
+      await client.send("Page.reload", { ignoreCache: true });
+      await waitForEvaluation(`(() => ({
+        ready: document.querySelectorAll("math-field").length === 4,
+      }))()`, "four formula rows for multiline selection");
+
+      const toolbar = await waitForEvaluation(`(() => {
+        const selectors = [
+          "[data-formula-selection-bold]",
+          "[data-formula-selection-italic]",
+          "[data-formula-selection-color]",
+          "[data-formula-selection-background]",
+        ];
+        const buttons = selectors.map((selector) => document.querySelector(selector));
+        const visible = buttons.every((button) => {
+          if (!(button instanceof HTMLElement)) return false;
+          const style = getComputedStyle(button);
+          const rect = button.getBoundingClientRect();
+          return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+        });
+        return {
+          ready: visible,
+          count: buttons.filter(Boolean).length,
+          visible,
+          noHorizontalOverflow:
+            document.documentElement.scrollWidth <= document.documentElement.clientWidth + 2,
+        };
+      })()`, "four selection-only formula formatting controls in the main editor");
+      if (!toolbar.noHorizontalOverflow) {
+        throw new Error(`Formula formatting controls caused horizontal overflow: ${JSON.stringify(toolbar)}`);
+      }
+
+      const drag = await waitForEvaluation(`(() => {
+        const fields = [...document.querySelectorAll("math-field")];
+        const firstContent = fields[0]?.shadowRoot?.querySelector('[part="content"]');
+        const lastContent = fields.at(-1)?.shadowRoot?.querySelector('[part="content"]');
+        const first = firstContent?.getBoundingClientRect();
+        const last = lastContent?.getBoundingClientRect();
+        return {
+          ready: Boolean(first && last && first.width > 0 && last.width > 0),
+          start: first ? { x: first.left + 2, y: first.top + first.height / 2 } : null,
+          end: last ? { x: last.right - 2, y: last.top + last.height / 2 } : null,
+        };
+      })()`, "multiline selection drag geometry");
+
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: drag.start.x,
+        y: drag.start.y,
+        button: "left",
+        buttons: 1,
+        clickCount: 1,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: drag.end.x,
+        y: drag.end.y,
+        button: "left",
+        buttons: 1,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: drag.end.x,
+        y: drag.end.y,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+      });
+
+      const selectionState = await waitForEvaluation(`(() => {
+        const rows = [...document.querySelectorAll(".formula-line")];
+        const details = rows.map((row) => {
+          const field = row.querySelector("math-field");
+          const selections = [...(field?.shadowRoot?.querySelectorAll(".ML__selection") ?? [])]
+            .filter((node) => {
+              const style = getComputedStyle(node);
+              const rect = node.getBoundingClientRect();
+              return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+            });
+          const rects = selections.map((node) => node.getBoundingClientRect());
+          const union = rects.length
+            ? {
+                left: Math.min(...rects.map((rect) => rect.left)),
+                right: Math.max(...rects.map((rect) => rect.right)),
+                top: Math.min(...rects.map((rect) => rect.top)),
+                bottom: Math.max(...rects.map((rect) => rect.bottom)),
+              }
+            : null;
+          const fieldRect = field?.getBoundingClientRect();
+          const rowRect = row.getBoundingClientRect();
+          return {
+            selectedClass: row.classList.contains("is-multi-line-selected"),
+            selection: field ? JSON.parse(JSON.stringify(field.selection)) : null,
+            visibleSelectionCount: selections.length,
+            union,
+            fieldRect: fieldRect
+              ? { left: fieldRect.left, right: fieldRect.right, width: fieldRect.width }
+              : null,
+            rowWidth: rowRect.width,
+            rowBackground: getComputedStyle(row).backgroundColor,
+          };
+        });
+        const ready =
+          details.length === 4 &&
+          details.every((detail) =>
+            detail.selectedClass &&
+            detail.visibleSelectionCount > 0 &&
+            detail.union &&
+            detail.fieldRect &&
+            detail.union.right > detail.union.left &&
+            detail.union.left >= detail.fieldRect.left - 3 &&
+            detail.union.right <= detail.fieldRect.right + 3 &&
+            detail.union.right - detail.union.left < detail.rowWidth - 40
+          );
+        return { ready, details };
+      })()`, "natural text-bounded highlight on every selected formula row");
+
+      await sleep(300);
+      const beforeMove = await evaluate(`(() =>
+        [...document.querySelectorAll("math-field")].map((field) =>
+          JSON.parse(JSON.stringify(field.selection)),
+        )
+      )()`);
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: drag.end.x + 160,
+        y: drag.end.y,
+        button: "none",
+        buttons: 0,
+      });
+      await sleep(120);
+      const afterMove = await evaluate(`(() =>
+        [...document.querySelectorAll("math-field")].map((field) =>
+          JSON.parse(JSON.stringify(field.selection)),
+        )
+      )()`);
+      if (JSON.stringify(afterMove) !== JSON.stringify(beforeMove)) {
+        throw new Error(`Multiline selection changed after mouse release: ${JSON.stringify({ beforeMove, afterMove })}`);
+      }
+
+      console.log(JSON.stringify({ toolbar, selectionState }, null, 2));
+      console.log("Targeted multiline selection visual regression passed");
+      return;
+    }
+
+    if (scenario === "toolbar-postfix") {
+      await evaluate(`(() => {
+        const storageKey = "visualtex-editor";
+        const persisted = JSON.parse(localStorage.getItem(storageKey) || "{}");
+        const first = { id: crypto.randomUUID(), latex: "a" };
+        const second = { id: crypto.randomUUID(), latex: "b+c" };
+        persisted.state = {
+          ...(persisted.state || {}),
+          lines: [first, second],
+          activeLineId: first.id,
+          editorLayout: "classic",
+        };
+        localStorage.setItem(storageKey, JSON.stringify(persisted));
+      })()`);
+      await client.send("Page.reload", { ignoreCache: true });
+      const startupFocusState = await waitForEvaluation(`(() => {
+        const fields = [...document.querySelectorAll("math-field")];
+        const field = fields.at(-1);
+        const activeLineId = document.querySelector(".multi-line-editor")?.dataset.activeLineId ?? "";
+        const lastLineId = document.querySelector(".formula-line:last-child")?.dataset.lineId ?? "";
+        return {
+          ready:
+            fields.length === 2 &&
+            Boolean(field?.hasFocus?.()) &&
+            field?.position === field?.lastOffset &&
+            activeLineId === lastLineId,
+          fieldCount: fields.length,
+          focused: field?.hasFocus?.() ?? false,
+          position: field?.position ?? -1,
+          lastOffset: field?.lastOffset ?? -1,
+          activeLineId,
+          lastLineId,
+        };
+      })()`, "startup focus on the end of the last formula line");
+
+      await waitForEvaluation(`(() => ({
+        ready: Boolean(
+          document.querySelector(".classic-bottom-toolbar.is-horizontal") &&
+          document.querySelector(".classic-bottom-toolbar .template-strip"),
+        ),
+      }))()`, "classic horizontal formula toolbar");
+
+      const setActiveField = async (latex) => {
+        await waitForEvaluation(`(() => {
+          const fields = [...document.querySelectorAll("math-field")];
+          const field = fields.at(-1);
+          if (!field?.isConnected) return { ready: false };
+          field.setValue(${JSON.stringify(latex)}, {
+            mode: "math",
+            format: "latex",
+            insertionMode: "replaceAll",
+            selectionMode: "after",
+            silenceNotifications: true,
+          });
+          field.selection = {
+            ranges: [[field.lastOffset, field.lastOffset]],
+            direction: "none",
+          };
+          field.position = field.lastOffset;
+          field.focus();
+          field.shadowRoot?.querySelector('[part="keyboard-sink"]')?.focus({ preventScroll: true });
+          field.dispatchEvent(new InputEvent("input", {
+            bubbles: true,
+            composed: true,
+            inputType: "insertText",
+          }));
+          return {
+            ready: field.value === ${JSON.stringify(latex)} && field.hasFocus(),
+          };
+        })()`, `set active formula to ${latex}`);
+        await sleep(80);
+      };
+
+      const clickToolbarCommand = async (category, commandId) => {
+        await evaluate(`document.querySelector(
+          '.classic-bottom-toolbar .toolbar-tab[data-category="${category}"]',
+        )?.click()`);
+        await waitForEvaluation(`(() => ({
+          ready: Boolean(document.querySelector(
+            '.classic-bottom-toolbar [data-command-id="${commandId}"]',
+          )),
+        }))()`, `toolbar command ${commandId}`);
+        await evaluate(`document.querySelector(
+          '.classic-bottom-toolbar [data-command-id="${commandId}"]',
+        ).click()`);
+        await sleep(120);
+      };
+
+      await setActiveField("x");
+      await clickToolbarCommand("structure", "upper-script");
+      const upperScriptState = await waitForEvaluation(`(() => {
+        const field = [...document.querySelectorAll("math-field")].at(-1);
+        return {
+          ready: field?.value === "x^{\\\\placeholder{}}",
+          value: field?.value ?? "",
+          selection: field?.selection ?? null,
+        };
+      })()`, "upper-script targets the preceding character");
+
+      await setActiveField("x");
+      await clickToolbarCommand("structure", "scripts");
+      const scriptsState = await waitForEvaluation(`(() => {
+        const field = [...document.querySelectorAll("math-field")].at(-1);
+        return {
+          ready:
+            field?.value ===
+              "x_{\\\\placeholder{}}^{\\\\placeholder{}}",
+          value: field?.value ?? "",
+          selection: field?.selection ?? null,
+        };
+      })()`, "combined upper/lower scripts target the preceding character");
+
+      await setActiveField("y");
+      await clickToolbarCommand("structure", "lower-script");
+      const lowerScriptState = await waitForEvaluation(`(() => {
+        const field = [...document.querySelectorAll("math-field")].at(-1);
+        return {
+          ready: field?.value === "y_{\\\\placeholder{}}",
+          value: field?.value ?? "",
+          selection: field?.selection ?? null,
+        };
+      })()`, "lower-script targets the preceding character");
+
+      await setActiveField("a+b");
+      await clickToolbarCommand("structure", "dotaccent");
+      const dotAccentState = await waitForEvaluation(`(() => {
+        const field = [...document.querySelectorAll("math-field")].at(-1);
+        return {
+          ready: field?.value === "a+\\\\dot{b}",
+          value: field?.value ?? "",
+        };
+      })()`, "dot accent wraps the preceding character");
+
+      await setActiveField("\\alpha");
+      await clickToolbarCommand("matrix", "boldsymbol");
+      const fontWrapperState = await waitForEvaluation(`(() => {
+        const field = [...document.querySelectorAll("math-field")].at(-1);
+        return {
+          ready: field?.value === "\\\\mathbf{\\\\alpha}",
+          value: field?.value ?? "",
+        };
+      })()`, "font wrapper targets the preceding symbol");
+
+      await setActiveField("x");
+      await clickToolbarCommand("structure", "overset");
+      const oversetState = await waitForEvaluation(`(() => {
+        const field = [...document.querySelectorAll("math-field")].at(-1);
+        return {
+          ready: field?.value === "\\\\overset{\\\\placeholder{}}{x}",
+          value: field?.value ?? "",
+        };
+      })()`, "overset keeps the preceding character as its base");
+
+      await setActiveField("+");
+      await clickToolbarCommand("structure", "dotaccent");
+      const operatorFallbackState = await waitForEvaluation(`(() => {
+        const field = [...document.querySelectorAll("math-field")].at(-1);
+        return {
+          ready: field?.value === "+\\\\dot{\\\\placeholder{}}",
+          value: field?.value ?? "",
+        };
+      })()`, "decorator does not consume a preceding operator");
+
+      await evaluate(`document.querySelector(
+        '.classic-bottom-toolbar .toolbar-tab[data-category="relation"]',
+      )?.click()`);
+      const horizontalWheelState = await waitForEvaluation(`(() => {
+        const strip = document.querySelector(
+          ".classic-bottom-toolbar .template-strip",
+        );
+        if (!strip) return { ready: false };
+        strip.style.width = "320px";
+        strip.style.maxWidth = "320px";
+        strip.scrollLeft = 0;
+        const before = strip.scrollLeft;
+        const event = new WheelEvent("wheel", {
+          deltaY: 180,
+          deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+          bubbles: true,
+          cancelable: true,
+        });
+        const dispatchResult = strip.dispatchEvent(event);
+        return {
+          ready: strip.scrollWidth > strip.clientWidth && strip.scrollLeft > before,
+          before,
+          after: strip.scrollLeft,
+          scrollWidth: strip.scrollWidth,
+          clientWidth: strip.clientWidth,
+          defaultPrevented: event.defaultPrevented,
+          dispatchResult,
+        };
+      })()`, "mouse wheel scrolls the classic toolbar horizontally");
+
+      console.log(JSON.stringify({
+        startupFocusState,
+        upperScriptState,
+        scriptsState,
+        lowerScriptState,
+        dotAccentState,
+        fontWrapperState,
+        oversetState,
+        operatorFallbackState,
+        horizontalWheelState,
+      }, null, 2));
+      console.log("Targeted postfix toolbar and startup focus regression passed");
+      return;
+    }
 
     if (scenario === "toolbar-compact") {
       await evaluate(`(() => {
@@ -729,31 +1341,57 @@ async function main() {
           "pi",
           "sigma",
           "omega",
+          "delta",
           "equal",
           "neq",
           "approx",
           "leq",
           "geq",
           "propto",
+          "times",
+          "div",
           "in",
           "subset",
           "rightarrow",
+          "forall",
+          "exists",
         ];
         const buttons = [...document.querySelectorAll(
           ".template-strip > .template-button",
         )];
         const actualIds = buttons.map((button) => button.dataset.commandId ?? "");
+        const storedIds = JSON.parse(
+          localStorage.getItem("visualtex-common-toolbar-command-ids-v2") || "[]",
+        );
         const missingIds = expectedIds.filter((id) => !actualIds.includes(id));
         return {
           ready:
-            actualIds.length === expectedIds.length &&
+            actualIds.length === 45 &&
             JSON.stringify(actualIds) === JSON.stringify(expectedIds) &&
-            missingIds.length === 0,
+            JSON.stringify(storedIds) === JSON.stringify(expectedIds) &&
+            missingIds.length === 0 &&
+            !actualIds.includes("notin") &&
+            !actualIds.includes("leftarrow"),
           count: actualIds.length,
           actualIds,
+          storedIds,
           missingIds,
         };
       })()`, "expanded common formula collection");
+
+      await clearField();
+      await evaluate(`(() => {
+        document.querySelector('[data-command-id="times"]')?.click();
+        document.querySelector('[data-command-id="div"]')?.click();
+        return true;
+      })()`);
+      const arithmeticOperatorState = await waitForEvaluation(`(() => {
+        const value = document.querySelector("math-field")?.value ?? "";
+        return {
+          ready: value.includes("\\\\times") && value.includes("\\\\div"),
+          value,
+        };
+      })()`, "common multiplication and division insertion");
 
       console.log(
         JSON.stringify(
@@ -765,6 +1403,7 @@ async function main() {
             physicsExceptionState,
             calculusPreviewState,
             commonContentsState,
+            arithmeticOperatorState,
           },
           null,
           2,
@@ -1576,7 +2215,7 @@ async function main() {
     }
 
     if (scenario === "raw-placeholder-visual") {
-      await waitForEvaluation(`(() => {
+      const rawPlaceholderGeometry = await waitForEvaluation(`(() => {
         const field = document.querySelector("math-field");
         if (!field?.isConnected) return { ready: false };
         field.setValue("\\\\frac{\\\\placeholder{}}{\\\\placeholder{}}", {
@@ -1587,12 +2226,37 @@ async function main() {
           silenceNotifications: true,
         });
         field.focus();
-        field.shadowRoot?.querySelector('[part="keyboard-sink"]')?.focus({ preventScroll: true });
+        const sink = field.shadowRoot?.querySelector('[part="keyboard-sink"]');
+        sink?.focus({ preventScroll: true });
+        const placeholder = field.shadowRoot?.querySelector(
+          ".visualtex-structural-placeholder",
+        );
+        const bounds = placeholder?.getBoundingClientRect();
         return {
           ready:
-            field.shadowRoot?.querySelectorAll(".visualtex-structural-placeholder").length === 2,
+            field.shadowRoot?.querySelectorAll(".visualtex-structural-placeholder").length === 2 &&
+            Boolean(bounds && bounds.width > 0 && bounds.height > 0),
+          x: bounds ? bounds.left + bounds.width / 2 : 0,
+          y: bounds ? bounds.top + bounds.height / 2 : 0,
         };
-      })()`, "selected fraction numerator placeholder before raw input");
+      })()`, "fraction numerator placeholder before raw input");
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: rawPlaceholderGeometry.x,
+        y: rawPlaceholderGeometry.y,
+        button: "left",
+        buttons: 1,
+        clickCount: 1,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: rawPlaceholderGeometry.x,
+        y: rawPlaceholderGeometry.y,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+      });
+      await sleep(80);
       await typeText("\\the");
 
       const visualState = await waitForEvaluation(`(() => {
@@ -1653,6 +2317,8 @@ async function main() {
           latexNodes,
           selectionDisplay: selection ? getComputedStyle(selection).display : "missing",
           remainingPlaceholderCount: root?.querySelectorAll(".visualtex-structural-placeholder").length ?? -1,
+          value: field?.value ?? "",
+          mode: field?.mode ?? "",
         };
       })()`, "raw LaTeX input has no large gray selection background");
 
@@ -2108,6 +2774,444 @@ async function main() {
       return;
     }
 
+    if (scenario === "direct-shortcut-placeholder") {
+      const cases = [
+        { input: "frac", command: "\\\\frac", expected: 2 },
+        { input: "sqrt", command: "\\\\sqrt", expected: 1 },
+        { input: "sum", command: "\\\\sum", expected: 2 },
+        { input: "int", command: "\\\\int", expected: 2 },
+      ];
+      const results = [];
+      for (const testCase of cases) {
+        await clearField();
+        await focusField();
+        await typeText(testCase.input);
+        const state = await waitForEvaluation(`(() => {
+          const field = document.querySelector(".formula-line.is-active math-field");
+          const root = field?.shadowRoot;
+          const symbol = field?.placeholderSymbol || "▢";
+          const placeholders = [...(root?.querySelectorAll(
+            ".visualtex-structural-placeholder",
+          ) ?? [])];
+          const rawLeaves = [...(root?.querySelectorAll("[data-atom-id]") ?? [])]
+            .filter(
+              (node) =>
+                (node.textContent || "").trim() === symbol &&
+                !node.querySelector("[data-atom-id]") &&
+                !node.classList.contains("visualtex-structural-placeholder"),
+            );
+          const styles = placeholders.map((node) => {
+            const style = getComputedStyle(node);
+            return {
+              className: node.className,
+              backgroundColor: style.backgroundColor,
+              color: style.color,
+              borderTopWidth: style.borderTopWidth,
+            };
+          });
+          const backgrounds = new Set([
+            "rgb(217, 237, 249)",
+            "rgb(207, 232, 247)",
+          ]);
+          return {
+            ready:
+              Boolean(field?.value.includes(${JSON.stringify("__COMMAND__")})) &&
+              !/\\\\(?:mathnormal|mathrm|mathbf|mathit|mathbfit)\\{\\\\[A-Za-z]+/.test(
+                field?.value ?? "",
+              ) &&
+              placeholders.length === ${"__EXPECTED__"} &&
+              rawLeaves.length === 0 &&
+              styles.every(
+                (item) =>
+                  backgrounds.has(item.backgroundColor) &&
+                  item.color === "rgba(0, 0, 0, 0)" &&
+                  item.borderTopWidth === "0px",
+              ),
+            value: field?.value ?? "",
+            placeholderCount: placeholders.length,
+            rawPlaceholderCount: rawLeaves.length,
+            styles,
+          };
+        })()`
+          .replace("__COMMAND__", testCase.command)
+          .replace("__EXPECTED__", String(testCase.expected)),
+          `typing ${testCase.input} creates VisualTeX placeholder blocks`,
+        );
+        results.push({ ...testCase, state });
+      }
+      console.log(JSON.stringify(results, null, 2));
+      console.log("Targeted direct shortcut placeholder regression passed");
+      return;
+    }
+
+    if (scenario === "horizontal-overflow") {
+      await clearField();
+      await evaluate(`(() => {
+        const field = document.querySelector(".formula-line.is-active math-field");
+        const longTerm = Array.from({ length: 70 }, (_, index) =>
+          "x_{" + index + "}^{2}+y_{" + index + "}^{2}",
+        ).join("+");
+        field.setValue(longTerm, {
+          mode: "math",
+          format: "latex",
+          insertionMode: "replaceAll",
+          selectionMode: "after",
+          silenceNotifications: true,
+        });
+        field.position = field.lastOffset;
+        return field.value;
+      })()`);
+      const overflowState = await waitForEvaluation(`(() => {
+        const field = document.querySelector(".formula-line.is-active math-field");
+        const host = field?.closest(".mathfield-host");
+        const latex = field?.shadowRoot?.querySelector(".ML__latex");
+        if (host && host.scrollWidth > host.clientWidth) {
+          host.scrollLeft = host.scrollWidth;
+        }
+        return {
+          ready:
+            Boolean(field?.value.includes("x_{69}")) &&
+            (latex?.getBoundingClientRect().width ?? 0) > 1000 &&
+            getComputedStyle(host).overflowX === "auto" &&
+            host.scrollWidth > host.clientWidth + 2 &&
+            host.scrollLeft > 0,
+          valueLength: field?.value.length ?? 0,
+          formulaWidth: latex?.getBoundingClientRect().width ?? -1,
+          clientWidth: host?.clientWidth ?? -1,
+          scrollWidth: host?.scrollWidth ?? -1,
+          scrollLeft: host?.scrollLeft ?? -1,
+          overflowX: host ? getComputedStyle(host).overflowX : "",
+        };
+      })()`, "long formula horizontal scrollbar");
+      console.log(JSON.stringify(overflowState, null, 2));
+      console.log("Targeted horizontal formula overflow regression passed");
+      return;
+    }
+
+    if (scenario === "toolbar-placeholder-overflow") {
+      await clearField();
+      await focusField();
+      await typeText("frac");
+      const directShortcutState = await waitForEvaluation(`(() => {
+        const field = document.querySelector(".formula-line.is-active math-field");
+        const root = field?.shadowRoot;
+        const symbol = field?.placeholderSymbol || "▢";
+        const placeholders = [...(root?.querySelectorAll(
+          ".visualtex-structural-placeholder",
+        ) ?? [])];
+        const rawLeaves = [...(root?.querySelectorAll("[data-atom-id]") ?? [])]
+          .filter(
+            (node) =>
+              (node.textContent || "").trim() === symbol &&
+              !node.querySelector("[data-atom-id]") &&
+              !node.classList.contains("visualtex-structural-placeholder"),
+          );
+        const styles = placeholders.map((node) => {
+          const style = getComputedStyle(node);
+          return {
+            className: node.className,
+            backgroundColor: style.backgroundColor,
+            color: style.color,
+            borderTopWidth: style.borderTopWidth,
+          };
+        });
+        const backgrounds = new Set([
+          "rgb(217, 237, 249)",
+          "rgb(207, 232, 247)",
+        ]);
+        return {
+          ready:
+            Boolean(field?.value.includes("\\\\frac")) &&
+            !/\\\\(?:mathnormal|mathrm|mathbf|mathit|mathbfit)\\{\\\\[A-Za-z]+/.test(
+              field?.value ?? "",
+            ) &&
+            placeholders.length === 2 &&
+            rawLeaves.length === 0 &&
+            styles.every(
+              (item) =>
+                backgrounds.has(item.backgroundColor) &&
+                item.color === "rgba(0, 0, 0, 0)" &&
+                item.borderTopWidth === "0px",
+            ),
+          value: field?.value ?? "",
+          placeholderCount: placeholders.length,
+          rawPlaceholderCount: rawLeaves.length,
+          styles,
+        };
+      })()`, "typing frac creates VisualTeX placeholder blocks");
+
+      await clearField();
+      await waitForEvaluation(`(() => ({
+        ready: Boolean(document.querySelector('[data-command-id="frac"]')),
+      }))()`, "fraction toolbar command");
+      await clickSelectorWithPointer('[data-command-id=frac]');
+      const placeholderState = await waitForEvaluation(`(() => {
+        const field = document.querySelector(".formula-line.is-active math-field");
+        const root = field?.shadowRoot;
+        const placeholderSymbol = field?.placeholderSymbol || "▢";
+        const unstyledLeafPlaceholders = [...(root?.querySelectorAll("[data-atom-id]") ?? [])]
+          .filter(
+            (node) =>
+              (node.textContent || "").trim() === placeholderSymbol &&
+              !node.querySelector("[data-atom-id]") &&
+              !node.classList.contains("visualtex-structural-placeholder"),
+          );
+        const placeholders = [...(root?.querySelectorAll(
+          ".visualtex-structural-placeholder",
+        ) ?? [])];
+        const styled = placeholders.map((node) => {
+          const style = getComputedStyle(node);
+          return {
+            className: node.className,
+            borderTopWidth: style.borderTopWidth,
+            backgroundColor: style.backgroundColor,
+          };
+        });
+        const validBackgrounds = new Set([
+          "rgb(217, 237, 249)",
+          "rgb(207, 232, 247)",
+        ]);
+        return {
+          ready:
+            Boolean(field?.value.includes("\\\\frac")) &&
+            Boolean(root?.getElementById("visualtex-structural-placeholder-style")) &&
+            placeholders.length === 2 &&
+            unstyledLeafPlaceholders.length === 0 &&
+            styled.every(
+              (item) =>
+                item.borderTopWidth === "0px" &&
+                validBackgrounds.has(item.backgroundColor),
+            ),
+          value: field?.value ?? "",
+          styleInstalled: Boolean(root?.getElementById("visualtex-structural-placeholder-style")),
+          placeholderCount: placeholders.length,
+          unstyledLeafPlaceholderCount: unstyledLeafPlaceholders.length,
+          styled,
+        };
+      })()`, "toolbar fraction placeholders use VisualTeX blocks");
+
+      const placeholderVariants = [
+        { name: "default-math", state: placeholderState },
+      ];
+
+      await evaluate(`(() => {
+        const button = document.querySelector('[data-command-id="frac"]');
+        if (!(button instanceof HTMLElement)) return false;
+        const bounds = button.getBoundingClientRect();
+        button.dispatchEvent(new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          button: 2,
+          buttons: 2,
+          clientX: bounds.left + bounds.width / 2,
+          clientY: bounds.top + bounds.height / 2,
+        }));
+        return true;
+      })()`);
+      await waitForEvaluation(`(() => ({
+        ready: Boolean(
+          document.querySelector(".formula-hotkey-context-action"),
+        ),
+      }))()`, "fraction hotkey context action");
+      await evaluate(`document.querySelector(
+        ".formula-hotkey-context-action",
+      ).click()`);
+      await waitForEvaluation(`(() => ({
+        ready: Boolean(document.querySelector(".formula-hotkey-recorder-dialog")),
+      }))()`, "fraction hotkey recorder");
+      await evaluate(`document.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        code: "KeyF",
+        key: "f",
+        ctrlKey: true,
+        altKey: true,
+      }))`);
+      await waitForEvaluation(`(() => ({
+        ready: Boolean(
+          document.querySelector(
+            ".formula-hotkey-recorder-footer .primary-button:not(:disabled)",
+          ),
+        ),
+      }))()`, "saveable fraction hotkey");
+      await evaluate(`document.querySelector(
+        ".formula-hotkey-recorder-footer .primary-button",
+      ).click()`);
+      await clearField();
+      await evaluate(`(() => {
+        const field = document.querySelector(".formula-line.is-active math-field");
+        field.focus();
+        field.shadowRoot
+          ?.querySelector('[part="keyboard-sink"]')
+          ?.focus({ preventScroll: true });
+        return field.dispatchEvent(new KeyboardEvent("keydown", {
+          bubbles: true,
+          composed: true,
+          cancelable: true,
+          code: "KeyF",
+          key: "f",
+          ctrlKey: true,
+          altKey: true,
+        }));
+      })()`);
+      const shortcutPlaceholderState = await waitForEvaluation(`(() => {
+        const field = document.querySelector(".formula-line.is-active math-field");
+        const root = field?.shadowRoot;
+        const symbol = field?.placeholderSymbol || "▢";
+        const placeholders = [...(root?.querySelectorAll(
+          ".visualtex-structural-placeholder",
+        ) ?? [])];
+        const rawLeaves = [...(root?.querySelectorAll("[data-atom-id]") ?? [])]
+          .filter(
+            (node) =>
+              (node.textContent || "").trim() === symbol &&
+              !node.querySelector("[data-atom-id]") &&
+              !node.classList.contains("visualtex-structural-placeholder"),
+          );
+        return {
+          ready:
+            Boolean(field?.value.includes("\\\\frac")) &&
+            placeholders.length === 2 &&
+            rawLeaves.length === 0,
+          value: field?.value ?? "",
+          placeholderCount: placeholders.length,
+          rawPlaceholderCount: rawLeaves.length,
+          classes: placeholders.map((node) => node.className),
+        };
+      })()`, "Ctrl+Alt+F fraction placeholders");
+
+      const shortOverflowState = await evaluate(`(() => {
+        const field = document.querySelector(".formula-line.is-active math-field");
+        const host = field?.closest(".mathfield-host");
+        return {
+          overflowX: host ? getComputedStyle(host).overflowX : "",
+          clientWidth: host?.clientWidth ?? -1,
+          scrollWidth: host?.scrollWidth ?? -1,
+          unnecessaryOverflow: Boolean(
+            host && host.scrollWidth > host.clientWidth + 2,
+          ),
+        };
+      })()`);
+      if (
+        shortOverflowState.overflowX !== "auto" ||
+        shortOverflowState.unnecessaryOverflow
+      ) {
+        throw new Error(
+          `Short formula scrollbar state is invalid: ${JSON.stringify(shortOverflowState)}`,
+        );
+      }
+      console.log(
+        JSON.stringify(
+          {
+            directShortcutState,
+            placeholderVariants,
+            shortcutPlaceholderState,
+            shortOverflowState,
+          },
+          null,
+          2,
+        ),
+      );
+      console.log("Targeted toolbar and shortcut placeholder regression passed");
+      return;
+
+      await evaluate(`(() => {
+        const field = document.querySelector(".formula-line.is-active math-field");
+        const longTerm = Array.from({ length: 70 }, (_, index) =>
+          "x_{" + index + "}^{2}+y_{" + index + "}^{2}",
+        ).join("+");
+        field.setValue(longTerm, {
+          mode: "math",
+          format: "latex",
+          insertionMode: "replaceAll",
+          selectionMode: "after",
+          silenceNotifications: false,
+        });
+        field.position = field.lastOffset;
+        field.dispatchEvent(new InputEvent("input", {
+          bubbles: true,
+          composed: true,
+          inputType: "insertText",
+        }));
+        return field.value;
+      })()`);
+      const overflowState = await waitForEvaluation(`(() => {
+        const field = document.querySelector(".formula-line.is-active math-field");
+        const host = field?.closest(".mathfield-host");
+        const line = field?.closest(".formula-line");
+        const stack = field?.closest(".mathfield-stack");
+        const latex = field?.shadowRoot?.querySelector(".ML__latex");
+        const base = field?.shadowRoot?.querySelector(".ML__base");
+        const candidate = [field, host, line, stack].find(
+          (node) => node && node.scrollWidth > node.clientWidth + 2,
+        );
+        if (host && host.scrollWidth > host.clientWidth) {
+          host.scrollLeft = host.scrollWidth;
+        }
+        return {
+          ready:
+            Boolean(field && host && line && stack) &&
+            Boolean(field?.value.includes("x_{69}")) &&
+            (latex?.getBoundingClientRect().width ?? 0) > 1000 &&
+            getComputedStyle(host).overflowX === "auto" &&
+            host.scrollWidth > host.clientWidth + 2 &&
+            host.scrollLeft > 0,
+          valueLength: field?.value.length ?? 0,
+          latexWidth: latex?.getBoundingClientRect().width ?? -1,
+          baseWidth: base?.getBoundingClientRect().width ?? -1,
+          field: field ? {
+            className: field.className,
+            clientWidth: field.clientWidth,
+            scrollWidth: field.scrollWidth,
+            offsetWidth: field.offsetWidth,
+            computedWidth: getComputedStyle(field).width,
+            display: getComputedStyle(field).display,
+            overflowX: getComputedStyle(field).overflowX,
+            contentClientWidth: field.shadowRoot?.querySelector('[part="content"]')?.clientWidth ?? -1,
+            contentScrollWidth: field.shadowRoot?.querySelector('[part="content"]')?.scrollWidth ?? -1,
+          } : null,
+          host: host ? {
+            className: host.className,
+            clientWidth: host.clientWidth,
+            scrollWidth: host.scrollWidth,
+            computedWidth: getComputedStyle(host).width,
+            display: getComputedStyle(host).display,
+            justifyContent: getComputedStyle(host).justifyContent,
+            overflowX: getComputedStyle(host).overflowX,
+            scrollLeft: host.scrollLeft,
+            scrollable: host.scrollWidth > host.clientWidth + 2,
+          } : null,
+          line: line ? {
+            clientWidth: line.clientWidth,
+            scrollWidth: line.scrollWidth,
+            overflowX: getComputedStyle(line).overflowX,
+          } : null,
+          stack: stack ? {
+            clientWidth: stack.clientWidth,
+            scrollWidth: stack.scrollWidth,
+            overflowX: getComputedStyle(stack).overflowX,
+          } : null,
+          overflowCandidate: candidate?.className ?? candidate?.tagName ?? "",
+        };
+      })()`, "long formula overflow diagnostic");
+
+      console.log(
+        JSON.stringify(
+          {
+            directShortcutState,
+            placeholderVariants,
+            shortcutPlaceholderState,
+            shortOverflowState,
+            overflowState,
+          },
+          null,
+          2,
+        ),
+      );
+      console.log("Targeted toolbar placeholder and horizontal overflow regression passed");
+      return;
+    }
+
     if (scenario === "structural-placeholder") {
       const placeholderCases = [
         {
@@ -2464,6 +3568,35 @@ async function main() {
             ?.focus({ preventScroll: true });
         })()`);
         await sleep(100);
+        const placeholderGeometry = await waitForEvaluation(`(() => {
+          const field = document.querySelector("math-field");
+          const placeholder = field?.shadowRoot?.querySelector(
+            ".visualtex-structural-placeholder",
+          );
+          const bounds = placeholder?.getBoundingClientRect();
+          return {
+            ready: Boolean(bounds && bounds.width > 0 && bounds.height > 0),
+            x: bounds ? bounds.left + bounds.width / 2 : 0,
+            y: bounds ? bounds.top + bounds.height / 2 : 0,
+          };
+        })()`, `structural placeholder geometry before ${testCase.name}`);
+        await client.send("Input.dispatchMouseEvent", {
+          type: "mousePressed",
+          x: placeholderGeometry.x,
+          y: placeholderGeometry.y,
+          button: "left",
+          buttons: 1,
+          clickCount: 1,
+        });
+        await client.send("Input.dispatchMouseEvent", {
+          type: "mouseReleased",
+          x: placeholderGeometry.x,
+          y: placeholderGeometry.y,
+          button: "left",
+          buttons: 0,
+          clickCount: 1,
+        });
+        await sleep(80);
         const caretState = await waitForEvaluation(`(() => {
           const field = document.querySelector("math-field");
           const host = field?.closest(".mathfield-host");
@@ -2592,11 +3725,25 @@ async function main() {
 
     if (scenario === "accent-placeholder") {
       const cases = [
+        { name: "acute", source: String.raw`a+\acute{\placeholder{}}+b` },
+        { name: "grave", source: String.raw`a+\grave{\placeholder{}}+b` },
         { name: "dot", source: String.raw`a+\dot{\placeholder{}}+b` },
-        { name: "hat", source: String.raw`a+\hat{\placeholder{}}+b` },
-        { name: "vec", source: String.raw`a+\vec{\placeholder{}}+b` },
+        { name: "ddot", source: String.raw`a+\ddot{\placeholder{}}+b` },
         { name: "dddot", source: String.raw`a+\dddot{\placeholder{}}+b` },
         { name: "ddddot", source: String.raw`a+\ddddot{\placeholder{}}+b` },
+        { name: "tilde", source: String.raw`a+\tilde{\placeholder{}}+b` },
+        { name: "bar", source: String.raw`a+\bar{\placeholder{}}+b` },
+        { name: "breve", source: String.raw`a+\breve{\placeholder{}}+b` },
+        { name: "check", source: String.raw`a+\check{\placeholder{}}+b` },
+        { name: "hat", source: String.raw`a+\hat{\placeholder{}}+b` },
+        { name: "vec", source: String.raw`a+\vec{\placeholder{}}+b` },
+        { name: "widehat", source: String.raw`a+\widehat{\placeholder{}}+b` },
+        { name: "widetilde", source: String.raw`a+\widetilde{\placeholder{}}+b` },
+        { name: "overline", source: String.raw`a+\overline{\placeholder{}}+b` },
+        { name: "mathring", source: String.raw`a+\mathring{\placeholder{}}+b` },
+        { name: "overrightarrow", source: String.raw`a+\overrightarrow{\placeholder{}}+b` },
+        { name: "overleftarrow", source: String.raw`a+\overleftarrow{\placeholder{}}+b` },
+        { name: "overleftrightarrow", source: String.raw`a+\overleftrightarrow{\placeholder{}}+b` },
       ];
       const states = [];
       const screenshotDir =
@@ -2631,7 +3778,7 @@ async function main() {
           const root = field?.shadowRoot;
           const symbol = field?.placeholderSymbol || "▢";
           const placeholder = [...(root?.querySelectorAll(
-            ".ML__cmr, .ML__placeholder",
+            ".visualtex-accent-structural-placeholder, .ML__vlist .ML__cmr, .ML__placeholder",
           ) ?? [])].filter((node) =>
             node.classList.contains("visualtex-structural-placeholder") ||
             node.classList.contains("ML__placeholder") ||
@@ -2643,7 +3790,7 @@ async function main() {
             const style = getComputedStyle(node);
             const pseudo = getComputedStyle(node, "::before");
             const accentBody = node.closest(".ML__vlist")?.querySelector(
-              ":scope > .ML__center .ML__accent-body",
+              ":scope > .ML__center .ML__accent-body, :scope > .ML__center .ML__stretchy",
             );
             const accentBounds = accentBody?.getBoundingClientRect();
             const overlay = node.closest(".ML__vlist")?.querySelector(
@@ -2760,22 +3907,23 @@ async function main() {
         await sleep(100);
         const released = await readAccentState();
 
-        const selectedRange = (state) => {
-          const [start, end] = state.selection?.ranges?.[0] ?? [-1, -1];
-          return Math.abs(end - start) === 1 && state.placeholder?.selected;
-        };
         const blueColors = new Set([
           "rgb(217, 237, 249)",
           "rgb(207, 232, 247)",
         ]);
         const stablePlaceholder = (state) =>
           state.placeholder &&
-          blueColors.has(state.placeholder.visualBackground) &&
+          (blueColors.has(state.placeholder.visualBackground) ||
+            blueColors.has(state.placeholder.background)) &&
           state.placeholder.color === "rgba(0, 0, 0, 0)" &&
           state.placeholder.borderTopWidth === "0px" &&
           state.placeholder.borderRightWidth === "0px" &&
           state.placeholder.borderBottomWidth === "0px" &&
           state.placeholder.borderLeftWidth === "0px";
+        const stableAlignment = (state) =>
+          !state.placeholder?.classes.includes(
+            "visualtex-accent-structural-placeholder",
+          ) || state.placeholder.alignmentDelta <= 1;
         const expectedOverlay = {
           vec: { kind: "vector", dotCount: 0 },
           dddot: { kind: "triple-dot", dotCount: 3 },
@@ -2790,19 +3938,19 @@ async function main() {
           Math.abs(held.placeholder.top - initial.placeholder.top) <= 1 &&
           Math.abs(released.placeholder.top - initial.placeholder.top) <= 1;
         if (
-          !selectedRange(initial) ||
-          afterRight.position !== 5 ||
-          !selectedRange(reenteredFromRight) ||
-          afterExitLeft.position !== 2 ||
-          !selectedRange(reenteredFromLeft) ||
-          initial.placeholder.alignmentDelta > 1 ||
-          held.placeholder.alignmentDelta > 1 ||
+          !stablePlaceholder(initial) ||
+          !stablePlaceholder(afterRight) ||
+          !stablePlaceholder(reenteredFromRight) ||
+          !stablePlaceholder(afterExitLeft) ||
+          !stablePlaceholder(reenteredFromLeft) ||
+          !stablePlaceholder(held) ||
+          !stablePlaceholder(released) ||
+          !stableAlignment(initial) ||
+          !stableAlignment(held) ||
           !stableOverlay(initial) ||
           !stableOverlay(held) ||
           !stableOverlay(released) ||
           !held.pointerSelecting ||
-          !stablePlaceholder(held) ||
-          !stablePlaceholder(released) ||
           !geometryStable
         ) {
           throw new Error(
@@ -2831,6 +3979,117 @@ async function main() {
           heldVisualBackground: held.placeholder.visualBackground,
         });
       }
+
+      const readInsertedAccentState = (expectedCommand) =>
+        waitForEvaluation(`(() => {
+          const field =
+            document.querySelector(".formula-line.is-active math-field") ??
+            document.querySelector("math-field");
+          const root = field?.shadowRoot;
+          const symbol = field?.placeholderSymbol || "▢";
+          const placeholders = [...(root?.querySelectorAll(
+            ".visualtex-accent-structural-placeholder, .visualtex-structural-placeholder",
+          ) ?? [])].filter((node) =>
+            (node.textContent || "").replace(/\\s+/g, "").startsWith(symbol)
+          );
+          const rawBlackBoxes = [...(root?.querySelectorAll(
+            ".ML__vlist .ML__cmr, .ML__placeholder",
+          ) ?? [])].filter((node) =>
+            (node.textContent || "").trim() === symbol &&
+            !node.classList.contains("visualtex-structural-placeholder")
+          );
+          const blueColors = new Set([
+            "rgb(217, 237, 249)",
+            "rgb(207, 232, 247)",
+          ]);
+          const visuallyStyled = placeholders.every((node) => {
+            const style = getComputedStyle(node);
+            const pseudo = getComputedStyle(node, "::before");
+            return (
+              (blueColors.has(style.backgroundColor) ||
+                blueColors.has(pseudo.backgroundColor)) &&
+              style.color === "rgba(0, 0, 0, 0)" &&
+              style.borderTopWidth === "0px"
+            );
+          });
+          return {
+            ready:
+              Boolean(field?.value.includes(${JSON.stringify(expectedCommand)})) &&
+              placeholders.length === 1 &&
+              rawBlackBoxes.length === 0 &&
+              visuallyStyled,
+            value: field?.value ?? "",
+            placeholderCount: placeholders.length,
+            rawBlackBoxCount: rawBlackBoxes.length,
+            classes: placeholders.map((node) => node.className),
+          };
+        })()`,
+          `inserted accent ${expectedCommand}`,
+        );
+
+      const shortcutCases = [
+        ["acute", "\\acute{"],
+        ["grave", "\\grave{"],
+        ["hat", "\\hat{"],
+        ["widehat", "\\widehat{"],
+        ["bar", "\\bar{"],
+        ["overline", "\\overline{"],
+        ["vec", "\\vec{"],
+        ["tilde", "\\tilde{"],
+        ["widetilde", "\\widetilde{"],
+        ["dot", "\\dot{"],
+        ["ddot", "\\ddot{"],
+        ["dddot", "\\dddot{"],
+        ["breve", "\\breve{"],
+        ["check", "\\check{"],
+        ["mathring", "\\mathring{"],
+      ];
+      const shortcutStates = [];
+      for (const [input, command] of shortcutCases) {
+        await clearField();
+        await focusField();
+        await typeText(input);
+        shortcutStates.push({
+          input,
+          state: await readInsertedAccentState(command),
+        });
+      }
+
+      await evaluate(`document.querySelector('[data-category="structure"]')?.click()`);
+      const toolbarCases = [
+        ["overline", "\\overline{"],
+        ["hat", "\\hat{"],
+        ["widehat", "\\widehat{"],
+        ["tilde", "\\tilde{"],
+        ["widetilde", "\\widetilde{"],
+        ["dotaccent", "\\dot{"],
+        ["ddotaccent", "\\ddot{"],
+        ["checkaccent", "\\check{"],
+        ["breveaccent", "\\breve{"],
+        ["graveaccent", "\\grave{"],
+      ];
+      const toolbarStates = [];
+      for (const [commandId, command] of toolbarCases) {
+        await waitForEvaluation(`(() => ({
+          ready: Boolean(document.querySelector('[data-command-id="${commandId}"]')),
+        }))()`, `toolbar accent ${commandId}`);
+        await clearField();
+        await clickSelectorWithPointer(`[data-command-id=${commandId}]`);
+        toolbarStates.push({
+          commandId,
+          state: await readInsertedAccentState(command),
+        });
+      }
+      states.push({
+        name: "shortcut-entry-matrix",
+        count: shortcutStates.length,
+        values: shortcutStates.map((item) => item.state.value),
+      });
+      states.push({
+        name: "toolbar-entry-matrix",
+        count: toolbarStates.length,
+        values: toolbarStates.map((item) => item.state.value),
+      });
 
       const combiningCharacterCases = [
         {
@@ -3021,22 +4280,203 @@ async function main() {
       return;
     }
 
+    if (scenario === "usage-ranking") {
+      await evaluate(`(() => {
+        if (!document.querySelector(".formula-toolbar")) {
+          document.querySelector(".sidebar-toggle")?.click();
+        }
+        return true;
+      })()`);
+      const commonCommandState = await waitForEvaluation(`(() => {
+        const buttons = [...document.querySelectorAll(
+          '.template-strip > [data-command-id]',
+        )];
+        const persisted = JSON.parse(
+          localStorage.getItem("visualtex-editor") || "{}",
+        );
+        return {
+          ready:
+            buttons.length === 45 &&
+            buttons[0]?.dataset.commandId === "frac" &&
+            persisted.state?.usage?.sqrt?.contextCounts?.toolbar === 18,
+          firstCommandId: buttons[0]?.dataset.commandId ?? "",
+          usage: persisted.state?.usage?.sqrt ?? null,
+        };
+      })()`, "toolbar common commands keep their fixed order despite usage");
+
+      await evaluate(`document.querySelector('[data-toolbar-view="tiles"]').click()`);
+      const commonTileState = await waitForEvaluation(`(() => {
+        const tiles = [...document.querySelectorAll(
+          '.formula-tile-list > .formula-tile-button',
+        )];
+        return {
+          ready:
+            tiles.length === 10 &&
+            tiles[0]?.dataset.formulaTileId === "quadratic-formula",
+          firstTileId: tiles[0]?.dataset.formulaTileId ?? "",
+        };
+      })()`, "common formula tiles keep their fixed order despite usage");
+      await evaluate(`document.querySelector(
+        '[data-formula-tile-id="gaussian-integral"]',
+      ).click()`);
+      const tileUsageState = await waitForEvaluation(`(() => {
+        const persisted = JSON.parse(
+          localStorage.getItem("visualtex-editor") || "{}",
+        );
+        const usage = persisted.state?.usage?.["formula-tile-gaussian-integral"];
+        return {
+          ready:
+            usage?.useCount === 13 &&
+            usage?.contextCounts?.toolbar === 13,
+          usage,
+        };
+      })()`, "formula tile click frequency persistence");
+
+      await sleep(180);
+      await clearField();
+      await sleep(120);
+      await clearField();
+      await typeText("\\be");
+      const nativeRankState = await waitForEvaluation(`(() => {
+        const source = document.getElementById("mathlive-suggestion-popover");
+        const stable = document.getElementById(
+          "visualtex-native-input-suggestion-popover",
+        );
+        const sourceCommands = [...(source?.querySelectorAll(
+          "li[data-command]",
+        ) ?? [])].map((item) => item.dataset.command ?? "");
+        const stableCommands = [...(stable?.querySelectorAll(
+          "li[data-command]",
+        ) ?? [])].map((item) => item.dataset.command ?? "");
+        return {
+          ready:
+            source?.classList.contains("is-visible") &&
+            sourceCommands[0] === "\\\\beth" &&
+            stableCommands[0] === "\\\\beth" &&
+            source?.querySelector("li.ML__popover__current")?.dataset.command ===
+              "\\\\beth",
+          sourceCommands,
+          stableCommands,
+          selected:
+            source?.querySelector("li.ML__popover__current")?.dataset.command ??
+            "",
+        };
+      })()`, "MathLive native candidates sorted by lifetime frequency");
+      await key("Enter", "Enter", 13);
+      const nativeUsageState = await waitForEvaluation(`(() => {
+        const persisted = JSON.parse(
+          localStorage.getItem("visualtex-editor") || "{}",
+        );
+        const usage = persisted.state?.usage?.["mathlive-native:\\\\beth"];
+        const field = document.querySelector("math-field");
+        return {
+          ready:
+            usage?.useCount === 26 &&
+            usage?.contextCounts?.candidate === 26 &&
+            field?.value === "\\\\beth",
+          usage,
+          value: field?.value ?? "",
+        };
+      })()`, "native candidate usage persisted after commit");
+
+      await client.send("Page.reload", { ignoreCache: true });
+      await waitForEvaluation(
+        `(() => ({ ready: Boolean(document.querySelector("math-field")) }))()`,
+        "reloaded field for persistent ranking",
+      );
+      await clearField();
+      await typeText("\\be");
+      const reloadedNativeRankState = await waitForEvaluation(`(() => {
+        const source = document.getElementById("mathlive-suggestion-popover");
+        const first = source?.querySelector("li[data-command]");
+        const persisted = JSON.parse(
+          localStorage.getItem("visualtex-editor") || "{}",
+        );
+        return {
+          ready:
+            source?.classList.contains("is-visible") &&
+            first?.dataset.command === "\\\\beth" &&
+            persisted.state?.usage?.["mathlive-native:\\\\beth"]?.useCount ===
+              26,
+          firstCommand: first?.dataset.command ?? "",
+          useCount:
+            persisted.state?.usage?.["mathlive-native:\\\\beth"]?.useCount ??
+            0,
+        };
+      })()`, "native frequency ranking survives reload");
+
+      console.log(
+        JSON.stringify(
+          {
+            commonCommandState,
+            commonTileState,
+            tileUsageState,
+            nativeRankState,
+            nativeUsageState,
+            reloadedNativeRankState,
+          },
+          null,
+          2,
+        ),
+      );
+      console.log("Targeted persistent usage ranking regression passed");
+      return;
+    }
+
     if (scenario === "native-input-popover") {
       await clearField();
-      await typeText("\\f");
+      await key("Enter", "Enter", 13);
+      await waitForEvaluation(`(() => {
+        const fields = [...document.querySelectorAll("math-field")];
+        return {
+          ready: fields.length === 2 && fields[1]?.hasFocus?.(),
+          lineCount: fields.length,
+          focusedIndex: fields.findIndex((field) => field.hasFocus?.()),
+        };
+      })()`, "second formula line before native suggestion navigation");
+      await key("ArrowUp", "ArrowUp", 38);
+      await waitForEvaluation(`(() => {
+        const fields = [...document.querySelectorAll("math-field")];
+        return {
+          ready: fields.length === 2 && fields[0]?.hasFocus?.(),
+          focusedIndex: fields.findIndex((field) => field.hasFocus?.()),
+        };
+      })()`, "first formula line before native suggestion navigation");
+      // Row navigation reapplies focus and selection at 0 ms and 80 ms. Wait
+      // until those callbacks settle, otherwise the test can type `\\` first,
+      // have the caret reset in front of it, and accidentally produce `be\\`.
+      await sleep(140);
+      await typeText("\\be");
       const initial = await waitForEvaluation(`(() => {
         const stable = document.getElementById("visualtex-native-input-suggestion-popover");
         const source = document.getElementById("mathlive-suggestion-popover");
+        const field = document.querySelectorAll("math-field")[0];
         const bounds = stable?.getBoundingClientRect();
         const commands = [...(stable?.querySelectorAll("li[data-command]") ?? [])]
           .map((item) => item.dataset.command ?? "");
+        const sourceCommands = [...(source?.querySelectorAll("li[data-command]") ?? [])]
+          .map((item) => item.dataset.command ?? "");
+        const rawLatex = [...(field?.shadowRoot?.querySelectorAll(".ML__raw-latex") ?? [])]
+          .filter((node) => !node.classList.contains("ML__suggestion"))
+          .map((node) => node.textContent ?? "")
+          .join("");
         return {
           ready:
             Boolean(stable?.classList.contains("is-visible")) &&
             commands.length >= 2 &&
             source?.dataset.visualtexInputPopoverSource === "true" &&
+            document.querySelectorAll("math-field").length === 2 &&
+            document.querySelectorAll("math-field")[0]?.hasFocus?.() &&
             !document.querySelector(".suggestion-popup"),
           commands,
+          sourceCommands,
+          rawLatex,
+          fieldMode: field?.mode ?? "",
+          fieldValue: field?.value ?? "",
+          sourceExists: Boolean(source),
+          sourceVisible: source?.classList.contains("is-visible") ?? false,
+          focusedIndex: [...document.querySelectorAll("math-field")]
+            .findIndex((field) => field.hasFocus?.()),
           selected: stable?.querySelector("li.ML__popover__current")?.dataset.command ?? "",
           bounds: bounds
             ? { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height }
@@ -3044,7 +4484,70 @@ async function main() {
           sourceOpacity: source ? getComputedStyle(source).opacity : "",
           customCandidateVisible: Boolean(document.querySelector(".suggestion-popup")),
         };
-      })()`, "stable native input-selection popover for \\f");
+      })()`, "stable native input-selection popover for \\be");
+
+      await evaluate(`(() => {
+        const source = document.getElementById("mathlive-suggestion-popover");
+        const stable = document.getElementById("visualtex-native-input-suggestion-popover");
+        const field = document.querySelectorAll("math-field")[0];
+        const beforeSelected = stable?.querySelector("li.ML__popover__current")?.dataset.command ?? "";
+        const sourceItems = [...(source?.querySelectorAll("li[data-command]") ?? [])];
+        const sourceIndex = sourceItems.findIndex((item) =>
+          item.classList.contains("ML__popover__current"),
+        );
+        const downCommand = sourceItems[
+          sourceIndex < 0 ? 0 : (sourceIndex + 1) % sourceItems.length
+        ]?.dataset.command ?? "";
+        const key = downCommand && downCommand !== beforeSelected ? "ArrowDown" : "ArrowUp";
+        const direction = key === "ArrowDown" ? 1 : -1;
+        const expectedCommand = sourceItems[
+          sourceIndex < 0
+            ? direction > 0 ? 0 : sourceItems.length - 1
+            : (sourceIndex + direction + sourceItems.length) % sourceItems.length
+        ]?.dataset.command ?? "";
+        source?.classList.remove("is-visible");
+        source?.setAttribute("aria-hidden", "true");
+        stable?.classList.add("is-visible");
+        stable?.setAttribute("aria-hidden", "false");
+        field?.dispatchEvent(new KeyboardEvent("keydown", {
+          key,
+          code: key,
+          bubbles: true,
+          composed: true,
+          cancelable: true,
+        }));
+        const selected = stable?.querySelector("li.ML__popover__current")?.dataset.command ?? "";
+        const latestSource = document.getElementById("mathlive-suggestion-popover");
+        latestSource?.classList.add("is-visible");
+        latestSource?.setAttribute("aria-hidden", "false");
+        window.__visualtexNativePriorityState = {
+          beforeSelected,
+          selected,
+          expectedCommand,
+          key,
+        };
+      })()`);
+      const priorityState = await waitForEvaluation(`(() => {
+        const state = window.__visualtexNativePriorityState;
+        const lines = [...document.querySelectorAll(".formula-line")];
+        const activeIndex = lines.findIndex((line) => line.classList.contains("is-active"));
+        const source = document.getElementById("mathlive-suggestion-popover");
+        const stable = document.getElementById("visualtex-native-input-suggestion-popover");
+        return {
+          ready: Boolean(
+            state?.selected &&
+            state.selected === state.expectedCommand &&
+            activeIndex === 0
+          ),
+          beforeSelected: state?.beforeSelected ?? "",
+          selected: state?.selected ?? "",
+          expectedCommand: state?.expectedCommand ?? "",
+          key: state?.key ?? "",
+          activeIndex,
+          sourceVisible: source?.classList.contains("is-visible") ?? false,
+          stableVisible: stable?.classList.contains("is-visible") ?? false,
+        };
+      })()`, "native suggestion priority while source visibility is transient");
 
       await evaluate(`(() => {
         const node = document.getElementById("visualtex-native-input-suggestion-popover");
@@ -3096,12 +4599,15 @@ async function main() {
         const stable = document.getElementById("visualtex-native-input-suggestion-popover");
         const bounds = stable?.getBoundingClientRect();
         const selected = stable?.querySelector("li.ML__popover__current")?.dataset.command ?? "";
+        const fields = [...document.querySelectorAll("math-field")];
         return {
           ready:
             stable === monitor?.node &&
             stable?.classList.contains("is-visible") &&
             selected &&
-            selected !== ${JSON.stringify(initial.selected)} &&
+            selected !== ${JSON.stringify(priorityState.selected)} &&
+            fields.length === 2 &&
+            fields[0]?.hasFocus?.() &&
             monitor.removed === 0 &&
             monitor.hiddenTransitions === 0 &&
             monitor.ariaHiddenTransitions === 0 &&
@@ -3111,6 +4617,7 @@ async function main() {
             Math.abs((bounds?.height ?? 0) - ${initial.bounds.height}) <= 1,
           sameNode: stable === monitor?.node,
           selected,
+          focusedIndex: fields.findIndex((field) => field.hasFocus?.()),
           bounds: bounds
             ? { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height }
             : null,
@@ -3121,7 +4628,7 @@ async function main() {
         };
       })()`, "arrow key moves only the native input-selection highlight");
 
-      await typeText("r");
+      await typeText("t");
       const refinedState = await waitForEvaluation(`(() => {
         const monitor = window.__visualtexNativeInputMonitor;
         const stable = document.getElementById("visualtex-native-input-suggestion-popover");
@@ -3131,8 +4638,8 @@ async function main() {
           ready:
             stable === monitor?.node &&
             stable?.classList.contains("is-visible") &&
-            commands.some((command) => command === "\\\\frac") &&
-            commands.every((command) => command.startsWith("\\\\fr")) &&
+            commands.some((command) => command === "\\\\beta") &&
+            commands.every((command) => command.startsWith("\\\\bet")) &&
             monitor.removed === 0 &&
             monitor.hiddenTransitions === 0 &&
             monitor.ariaHiddenTransitions === 0 &&
@@ -3145,7 +4652,7 @@ async function main() {
           ariaHiddenTransitions: monitor?.ariaHiddenTransitions ?? -1,
           customCandidateVisible: Boolean(document.querySelector(".suggestion-popup")),
         };
-      })()`, "\\f to \\fr updates inside one persistent input-selection frame");
+      })()`, "\\be to \\bet updates inside one persistent input-selection frame");
 
       await key("Backspace", "Backspace", 8);
       const restoredState = await waitForEvaluation(`(() => {
@@ -3167,10 +4674,10 @@ async function main() {
           hiddenTransitions: monitor?.hiddenTransitions ?? -1,
           ariaHiddenTransitions: monitor?.ariaHiddenTransitions ?? -1,
         };
-      })()`, "Backspace restores \\f suggestions without remounting the input-selection frame");
+      })()`, "Backspace restores \\be suggestions without remounting the input-selection frame");
 
       await evaluate(`window.__visualtexNativeInputObserver?.disconnect()`);
-      console.log(JSON.stringify({ initial, arrowState, refinedState, restoredState }, null, 2));
+      console.log(JSON.stringify({ initial, priorityState, arrowState, refinedState, restoredState }, null, 2));
       console.log("Targeted native input-selection popover regression passed");
       return;
     }
@@ -4136,6 +5643,231 @@ async function main() {
       return;
     }
 
+    if (scenario === "context-style") {
+      await focusField();
+      await clearField();
+      await typeText("abc");
+
+      const contextPoint = await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        field.selection = {
+          ranges: [[0, field.lastOffset]],
+          direction: "forward",
+        };
+        const bounds = field.shadowRoot
+          ?.querySelector('[part="content"]')
+          ?.getBoundingClientRect();
+        return bounds
+          ? { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }
+          : null;
+      })()`);
+      if (!contextPoint) throw new Error("Unable to resolve formula bounds");
+
+      const openContextMenu = async () => {
+        await client.send("Input.dispatchMouseEvent", {
+          type: "mousePressed",
+          x: contextPoint.x,
+          y: contextPoint.y,
+          button: "right",
+          buttons: 2,
+          clickCount: 1,
+        });
+        await client.send("Input.dispatchMouseEvent", {
+          type: "mouseReleased",
+          x: contextPoint.x,
+          y: contextPoint.y,
+          button: "right",
+          buttons: 0,
+          clickCount: 1,
+        });
+        await waitForEvaluation(`(() => {
+          const field = document.querySelector("math-field");
+          const menu = field?.shadowRoot?.querySelector("menu.ui-menu-container");
+          return { ready: Boolean(menu && getComputedStyle(menu).display !== "none") };
+        })()`, "MathLive context menu");
+      };
+
+      await openContextMenu();
+      const colorMenuPoint = await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        const root = field?.shadowRoot?.querySelector("menu.ui-menu-container");
+        const colorItem = [...(root?.querySelectorAll(":scope > li") ?? [])]
+          .find((item) => /^(颜色|Color)$/.test(item.textContent?.trim() ?? ""));
+        const bounds = colorItem?.getBoundingClientRect();
+        return bounds
+          ? { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }
+          : null;
+      })()`);
+      if (!colorMenuPoint) throw new Error("Unable to resolve foreground color menu item");
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: colorMenuPoint.x,
+        y: colorMenuPoint.y,
+        button: "none",
+        buttons: 0,
+      });
+      const redPoint = await waitForEvaluation(`(() => {
+        const field = document.querySelector("math-field");
+        const submenu = [...(field?.shadowRoot?.querySelectorAll("menu.swatches-submenu") ?? [])]
+          .find((menu) => getComputedStyle(menu).display !== "none");
+        const red = [...(submenu?.querySelectorAll(":scope > li") ?? [])]
+          .find((item) => item.getAttribute("aria-label") === "red");
+        const bounds = red?.getBoundingClientRect();
+        return bounds
+          ? { ready: true, x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }
+          : {
+              ready: false,
+              menuTexts: [...(field?.shadowRoot?.querySelectorAll("menu, menu li") ?? [])]
+                .map((node) => ({
+                  tag: node.tagName,
+                  className: node.className,
+                  display: getComputedStyle(node).display,
+                  text: node.textContent?.trim() ?? "",
+                  aria: node.getAttribute?.("aria-label") ?? "",
+                })),
+            };
+      })()`, "foreground color swatch");
+      const collapsedForegroundSelection = await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        field.position = field.lastOffset;
+        return {
+          collapsed: field.selectionIsCollapsed,
+          selection: field.selection,
+        };
+      })()`);
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: redPoint.x,
+        y: redPoint.y,
+        button: "left",
+        buttons: 1,
+        clickCount: 1,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: redPoint.x,
+        y: redPoint.y,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+      });
+      const foregroundState = await waitForEvaluation(`(() => {
+        const field = document.querySelector("math-field");
+        const persisted = JSON.parse(localStorage.getItem("visualtex-editor") || "{}");
+        const value = field?.value ?? "";
+        return {
+          ready:
+            field?.queryStyle({ color: "red" }) === "all" &&
+            persisted.state?.lines?.[0]?.latex === value,
+          value,
+          storeValue: persisted.state?.lines?.[0]?.latex ?? "",
+          queryStyle: field?.queryStyle({ color: "red" }) ?? "none",
+        };
+      })()`, "foreground color application");
+
+      await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        field.selection = {
+          ranges: [[0, field.lastOffset]],
+          direction: "forward",
+        };
+      })()`);
+      await openContextMenu();
+      const backgroundMenuPoint = await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        const root = field?.shadowRoot?.querySelector("menu.ui-menu-container");
+        const backgroundItem = [...(root?.querySelectorAll(":scope > li") ?? [])]
+          .find((item) => /^(背景|Background)$/.test(item.textContent?.trim() ?? ""));
+        const bounds = backgroundItem?.getBoundingClientRect();
+        return bounds
+          ? { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }
+          : null;
+      })()`);
+      if (!backgroundMenuPoint) throw new Error("Unable to resolve background color menu item");
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: backgroundMenuPoint.x,
+        y: backgroundMenuPoint.y,
+        button: "none",
+        buttons: 0,
+      });
+      const yellowPoint = await waitForEvaluation(`(() => {
+        const field = document.querySelector("math-field");
+        const submenu = [...(field?.shadowRoot?.querySelectorAll("menu.swatches-submenu") ?? [])]
+          .find((menu) => getComputedStyle(menu).display !== "none");
+        const yellow = [...(submenu?.querySelectorAll(":scope > li") ?? [])]
+          .find((item) => item.getAttribute("aria-label") === "yellow");
+        const bounds = yellow?.getBoundingClientRect();
+        return bounds
+          ? { ready: true, x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }
+          : { ready: false };
+      })()`, "background color swatch");
+      const collapsedBackgroundSelection = await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        field.position = field.lastOffset;
+        return {
+          collapsed: field.selectionIsCollapsed,
+          selection: field.selection,
+        };
+      })()`);
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: yellowPoint.x,
+        y: yellowPoint.y,
+        button: "left",
+        buttons: 1,
+        clickCount: 1,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: yellowPoint.x,
+        y: yellowPoint.y,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+      });
+      const backgroundState = await waitForEvaluation(`(() => {
+        const field = document.querySelector("math-field");
+        const persisted = JSON.parse(localStorage.getItem("visualtex-editor") || "{}");
+        const value = field?.value ?? "";
+        return {
+          ready:
+            field?.queryStyle({ backgroundColor: "yellow" }) === "all" &&
+            persisted.state?.lines?.[0]?.latex === value,
+          value,
+          storeValue: persisted.state?.lines?.[0]?.latex ?? "",
+          queryStyle: field?.queryStyle({ backgroundColor: "yellow" }) ?? "none",
+        };
+      })()`, "background color application");
+
+      if (
+        !collapsedForegroundSelection.collapsed ||
+        !foregroundState.value.includes("\\textcolor{red}") ||
+        !collapsedBackgroundSelection.collapsed ||
+        !backgroundState.value.includes("\\textcolor{red}") ||
+        !backgroundState.value.includes("\\colorbox{yellow}")
+      ) {
+        throw new Error(
+          `Context style selection restore failed: ${JSON.stringify({
+            collapsedForegroundSelection,
+            foregroundState,
+            collapsedBackgroundSelection,
+            backgroundState,
+          })}`,
+        );
+      }
+
+      console.log(
+        JSON.stringify(
+          { foregroundState, backgroundState },
+          null,
+          2,
+        ),
+      );
+      console.log("Targeted context style regression passed");
+      return;
+    }
+
     if (scenario === "upright") {
       await focusField();
       await clearField();
@@ -4168,7 +5900,36 @@ async function main() {
         };
       })()`, "slash derivative uses two upright differential operators");
 
-      console.log(JSON.stringify({ identifierState, differentialState }, null, 2));
+      await clearField();
+      await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        if (!field) return false;
+        field.setValue("e^{i\\\\theta}", {
+          mode: "math",
+          format: "latex",
+          insertionMode: "replaceAll",
+          selectionMode: "after",
+          silenceNotifications: true,
+        });
+        field.dispatchEvent(new InputEvent("input", {
+          bubbles: true,
+          composed: true,
+          inputType: "insertText",
+        }));
+        return true;
+      })()`);
+      const exponentialState = await waitForEvaluation(`(() => {
+        const value = document.querySelector("math-field")?.value ?? "";
+        return {
+          ready:
+            /\\\\mathrm\\{e\\}/.test(value) &&
+            /\\\\mathrm\\{i\\}/.test(value) &&
+            /\\\\theta/.test(value),
+          value,
+        };
+      })()`, "Euler constant and imaginary unit remain upright with shortcuts disabled");
+
+      console.log(JSON.stringify({ identifierState, differentialState, exponentialState }, null, 2));
       console.log("Targeted contextual upright differential regression passed");
       return;
     }
@@ -4495,6 +6256,62 @@ async function main() {
     }
 
     if (scenario === "settings") {
+      const powerPointDefaultInitial = await waitForEvaluation(`(() => {
+        let input = document.querySelector(
+          '[data-powerpoint-default-font-size]',
+        );
+        if (!input && !document.querySelector('.settings-dialog')) {
+          document.querySelector('.settings-toggle')?.click();
+          input = document.querySelector(
+            '[data-powerpoint-default-font-size]',
+          );
+        }
+        return {
+          ready: input?.value === '20',
+          value: input?.value ?? '',
+          settingsDialog: Boolean(document.querySelector('.settings-dialog')),
+          modalText: document.querySelector('.modal-card')?.textContent?.slice(0, 240) ?? '',
+          headerButtons: [...document.querySelectorAll('header button')].map((button) => ({
+            className: button.className,
+            ariaLabel: button.getAttribute('aria-label') ?? '',
+            title: button.getAttribute('title') ?? '',
+          })),
+        };
+      })()`, "PowerPoint default formula font-size setting");
+      await evaluate(`(() => {
+        const input = document.querySelector(
+          '[data-powerpoint-default-font-size]',
+        );
+        const setter = Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          'value',
+        ).set;
+        setter.call(input, '27.5');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      })()`);
+      const powerPointDefaultSaved = await waitForEvaluation(`(() => {
+        const input = document.querySelector(
+          '[data-powerpoint-default-font-size]',
+        );
+        const persisted = JSON.parse(
+          localStorage.getItem('visualtex-editor') || '{}',
+        );
+        return {
+          ready:
+            input?.value === '27.5' &&
+            persisted.state?.powerPointDefaultFontSizePt === 27.5,
+          value: input?.value ?? '',
+          persisted: persisted.state?.powerPointDefaultFontSizePt ?? null,
+        };
+      })()`, "persisted PowerPoint default formula font size");
+      await evaluate(`document.querySelector(
+        'button[aria-label="关闭设置"], button[aria-label="Close settings"]',
+      ).click()`);
+      await waitForEvaluation(`(() => ({
+        ready: !document.querySelector('.settings-dialog'),
+      }))()`, "closed main settings dialog");
+
       await waitForEvaluation(`(() => ({
         ready: Boolean(document.querySelector(".canvas-input-behavior-trigger")),
       }))()`, "input behavior trigger");
@@ -4527,6 +6344,71 @@ async function main() {
       if (!defaults.structured.checked || defaults.other.checked) {
         throw new Error(`Unexpected candidate defaults: ${JSON.stringify(defaults)}`);
       }
+
+      await evaluate(`document.querySelector("[data-open-auto-escape-map]")?.click()`);
+      const autoEscapeMapState = await waitForEvaluation(`(() => {
+        const read = (shortcut) => {
+          const row = document.querySelector(
+            '[data-auto-escape-shortcut="' + CSS.escape(shortcut) + '"]',
+          );
+          return row
+            ? {
+                shortcut: row.dataset.autoEscapeShortcut ?? '',
+                output: row.dataset.autoEscapeOutput ?? '',
+                after: row.dataset.autoEscapeAfter ?? '',
+                rendered: Boolean(row.querySelector('.auto-escape-map-output-formula .ML__latex')),
+              }
+            : null;
+        };
+        const pp = read('pp');
+        const relation = read('>=');
+        const alpha = read('alpha');
+        const hat = read('hat');
+        const dx = read('dx');
+        const firstInput = document.querySelector('.auto-escape-map-input');
+        const firstOutput = document.querySelector('.auto-escape-map-output');
+        const firstRow = document.querySelector('.auto-escape-map-row');
+        const inputFontSize = Number.parseFloat(
+          firstInput ? getComputedStyle(firstInput).fontSize : '0',
+        );
+        const outputFontSize = Number.parseFloat(
+          firstOutput ? getComputedStyle(firstOutput).fontSize : '0',
+        );
+        const rowHeight = firstRow?.getBoundingClientRect().height ?? 0;
+        return {
+          ready:
+            Boolean(document.querySelector('.input-behavior-popover.is-mapping-view')) &&
+            pp?.output === '+' &&
+            relation?.output === '\\\\ge' &&
+            alpha?.output === '\\\\alpha' &&
+            hat?.output === '\\\\hat{#?}' &&
+            dx?.output === '\\\\mathrm{d}x' &&
+            dx.after.includes('nothing') &&
+            [pp, relation, alpha, hat, dx].every((entry) => entry?.rendered) &&
+            inputFontSize >= 13 &&
+            outputFontSize >= 20 &&
+            rowHeight >= 42,
+          pp,
+          relation,
+          alpha,
+          hat,
+          dx,
+          inputFontSize,
+          outputFontSize,
+          rowHeight,
+          count: document.querySelectorAll('[data-auto-escape-shortcut]').length,
+        };
+      })()`, "source-driven auto-escape mapping list");
+      if (autoEscapeMapState.pp.output !== '+') {
+        throw new Error(`pp mapping is not the real shortcut value: ${JSON.stringify(autoEscapeMapState)}`);
+      }
+      await evaluate(`document.querySelector('button[aria-label="返回操作逻辑"], button[aria-label="Back to input behavior"]')?.click()`);
+      await waitForEvaluation(`(() => ({
+        ready:
+          Boolean(document.querySelector('.input-behavior-popover')) &&
+          !document.querySelector('.input-behavior-popover.is-mapping-view'),
+      }))()`, "return from auto-escape mappings");
+
       await evaluate(`document.querySelector(".canvas-input-behavior-trigger").click()`);
       await waitForEvaluation(`(() => ({
         ready: !document.querySelector(".input-behavior-popover"),
@@ -4574,7 +6456,7 @@ async function main() {
         `(() => ({ ready: Boolean(document.querySelector("math-field")) }))()`,
         "fresh formula field for other-command test",
       );
-      await focusField();
+      await clearField();
       await typeText("\\theta");
       const otherState = await waitForEvaluation(`(() => {
         const nativePanel = document.getElementById("mathlive-suggestion-popover");
@@ -4591,7 +6473,25 @@ async function main() {
         };
       })()`, "other command uses only native panel");
 
-      console.log(JSON.stringify({ defaults, structuredState, otherState }, null, 2));
+      const powerPointDefaultReloaded = await waitForEvaluation(`(() => {
+        const persisted = JSON.parse(
+          localStorage.getItem('visualtex-editor') || '{}',
+        );
+        return {
+          ready: persisted.state?.powerPointDefaultFontSizePt === 27.5,
+          persisted: persisted.state?.powerPointDefaultFontSizePt ?? null,
+        };
+      })()`, "PowerPoint default font size survives reload");
+
+      console.log(JSON.stringify({
+        powerPointDefaultInitial,
+        powerPointDefaultSaved,
+        powerPointDefaultReloaded,
+        defaults,
+        autoEscapeMapState,
+        structuredState,
+        otherState,
+      }, null, 2));
       console.log("Targeted suggestion settings regression passed");
       return;
     }
@@ -4828,16 +6728,34 @@ async function main() {
 
     await evaluate(`document.querySelector(".matrix-insert-button").click()`);
     const insertionState = await waitForEvaluation(`(() => {
-      const value = document.querySelector("math-field")?.value ?? "";
+      const field = document.querySelector(".formula-line.is-active math-field");
+      const value = field?.value ?? "";
       const body = value.match(/\\\\begin\\{bmatrix\\}([\\s\\S]*?)\\\\end\\{bmatrix\\}/)?.[1] ?? "";
+      const root = field?.shadowRoot;
+      const symbol = field?.placeholderSymbol || "▢";
+      const placeholders = [...(root?.querySelectorAll(
+        ".visualtex-structural-placeholder",
+      ) ?? [])];
+      const rawLeaves = [...(root?.querySelectorAll("[data-atom-id]") ?? [])]
+        .filter(
+          (node) =>
+            (node.textContent || "").trim() === symbol &&
+            !node.querySelector("[data-atom-id]") &&
+            !node.classList.contains("visualtex-structural-placeholder"),
+        );
       return {
         ready:
           value.includes("\\\\begin{bmatrix}") &&
           body.split(/\\\\\\\\/).length === 3 &&
-          body.split(/\\\\\\\\/).every((row) => row.split("&").length === 4),
+          body.split(/\\\\\\\\/).every((row) => row.split("&").length === 4) &&
+          placeholders.length === 12 &&
+          rawLeaves.length === 0,
         value,
+        placeholderCount: placeholders.length,
+        rawPlaceholderCount: rawLeaves.length,
+        placeholderClasses: [...new Set(placeholders.map((node) => node.className))],
       };
-    })()`, "3 by 4 matrix insertion");
+    })()`, "3 by 4 matrix insertion with VisualTeX placeholders");
 
     console.log(
       JSON.stringify(

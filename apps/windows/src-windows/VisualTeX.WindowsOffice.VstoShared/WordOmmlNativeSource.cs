@@ -15,8 +15,11 @@ internal static class WordOmmlNativeSource
         try
         {
             equationRange = WordOmmlFormulaStore.GetEquationRange(bookmark);
-            var fingerprint = WordOmmlConverter.ComputeOmmlFingerprint(
-                equationRange.WordOpenXML);
+            var wordOpenXml = ReadCompleteEquationWordOpenXml(
+                document,
+                equationRange,
+                stored.FormulaId);
+            var fingerprint = WordOmmlConverter.ComputeOmmlFingerprint(wordOpenXml);
             if (string.Equals(
                     stored.NativeOmmlFingerprint,
                     fingerprint,
@@ -24,7 +27,7 @@ internal static class WordOmmlNativeSource
                 return stored;
 
             var mathMl = WordOmmlConverter.TransformOmmlToMathMl(
-                equationRange.WordOpenXML,
+                wordOpenXml,
                 display: string.Equals(
                     stored.DisplayMode,
                     "block",
@@ -55,8 +58,63 @@ internal static class WordOmmlNativeSource
 
     internal static void StampFingerprint(FormulaMetadata metadata, Range equationRange)
     {
-        metadata.NativeOmmlFingerprint = WordOmmlConverter.ComputeOmmlFingerprint(
-            equationRange.WordOpenXML);
+        Document? document = null;
+        try
+        {
+            document = equationRange.Document;
+            metadata.NativeOmmlFingerprint = WordOmmlConverter.ComputeOmmlFingerprint(
+                ReadCompleteEquationWordOpenXml(
+                    document,
+                    equationRange,
+                    metadata.FormulaId));
+        }
+        finally { Release(document); }
+    }
+
+    private static string ReadCompleteEquationWordOpenXml(
+        Document document,
+        Range equationRange,
+        string formulaId)
+    {
+        Range? content = null;
+        Range? probe = null;
+        Bookmarks? bookmarks = null;
+        Bookmark? boundaryBookmark = null;
+        Range? boundaryRange = null;
+        try
+        {
+            content = document.Content;
+            var probeEnd = equationRange.End;
+            if (Guid.TryParse(formulaId, out var parsed))
+            {
+                bookmarks = document.Bookmarks;
+                var boundaryName = "VTBL_" + parsed.ToString("N");
+                if (bookmarks.Exists(boundaryName))
+                {
+                    boundaryBookmark = bookmarks[boundaryName];
+                    boundaryRange = boundaryBookmark.Range;
+                    probeEnd = Math.Max(probeEnd, boundaryRange.End);
+                }
+            }
+
+            // A field boundary can span dozens of Word structure characters.
+            // Include the complete field, not merely its first marker; otherwise
+            // Word may serialize only the leading fragment of a compound OMath.
+            object start = equationRange.Start;
+            object end = Math.Min(content.End, Math.Max(probeEnd, equationRange.End));
+            probe = document.Range(ref start, ref end);
+            var xml = probe.WordOpenXML;
+            WordOmmlConverter.ExtractSingleOMath(xml);
+            return xml;
+        }
+        finally
+        {
+            Release(boundaryRange);
+            Release(boundaryBookmark);
+            Release(bookmarks);
+            Release(probe);
+            Release(content);
+        }
     }
 
     private static FormulaMetadata Clone(FormulaMetadata metadata)

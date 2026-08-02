@@ -77,7 +77,7 @@ function normalizeFormulaAlignment(value: unknown): FormulaAlignment {
   return value === "center" || value === "right" ? value : "left";
 }
 
-function normalizeEditorLayout(value: unknown): EditorLayout {
+export function normalizeEditorLayout(value: unknown): EditorLayout {
   return value === "standard" ? "standard" : DEFAULT_EDITOR_LAYOUT;
 }
 
@@ -189,6 +189,7 @@ interface EditorState {
   personalize: boolean;
   suggestionCount: number;
   checkUpdatesOnStartup: boolean;
+  powerPointDefaultFontSizePt: number;
   usage: Record<string, CommandUsage>;
   history: FormulaHistoryItem[];
   setTitle: (title: string) => void;
@@ -212,6 +213,7 @@ interface EditorState {
   setPersonalize: (enabled: boolean) => void;
   setSuggestionCount: (count: number) => void;
   setCheckUpdatesOnStartup: (enabled: boolean) => void;
+  setPowerPointDefaultFontSizePt: (fontSizePt: number) => void;
   recordCommand: (commandId: string, prefix: string, source: CommandSource) => void;
   resetUsage: () => void;
   addHistory: (latex?: string) => void;
@@ -241,6 +243,7 @@ export const useEditorStore = create<EditorState>()(
       personalize: true,
       suggestionCount: 6,
       checkUpdatesOnStartup: true,
+      powerPointDefaultFontSizePt: 20,
       usage: {},
       history: [],
       setTitle: (title) => set({ title }),
@@ -318,7 +321,13 @@ export const useEditorStore = create<EditorState>()(
         set({ suggestionCount: Math.min(10, Math.max(3, suggestionCount)) }),
       setCheckUpdatesOnStartup: (checkUpdatesOnStartup) =>
         set({ checkUpdatesOnStartup }),
-      recordCommand: (commandId, prefix) =>
+      setPowerPointDefaultFontSizePt: (powerPointDefaultFontSizePt) =>
+        set({
+          powerPointDefaultFontSizePt:
+            Math.round(Math.min(200, Math.max(5, powerPointDefaultFontSizePt)) * 2) /
+            2,
+        }),
+      recordCommand: (commandId, prefix, source) =>
         set((state) => {
           const now = Date.now();
           const normalizedPrefix = prefix.replace(/^\\/, "").toLocaleLowerCase();
@@ -342,6 +351,10 @@ export const useEditorStore = create<EditorState>()(
                 acceptedPrefixes: {
                   ...previous.acceptedPrefixes,
                   [normalizedPrefix]: (previous.acceptedPrefixes[normalizedPrefix] ?? 0) + 1,
+                },
+                contextCounts: {
+                  ...(previous.contextCounts ?? {}),
+                  [source]: (previous.contextCounts?.[source] ?? 0) + 1,
                 },
               },
             },
@@ -429,6 +442,7 @@ export const useEditorStore = create<EditorState>()(
         personalize: state.personalize,
         suggestionCount: state.suggestionCount,
         checkUpdatesOnStartup: state.checkUpdatesOnStartup,
+        powerPointDefaultFontSizePt: state.powerPointDefaultFontSizePt,
         usage: state.usage,
         history: state.history,
       }),
@@ -462,6 +476,14 @@ export const useEditorStore = create<EditorState>()(
           inputBehavior: normalizeInputBehaviorSettings(
             persisted.inputBehavior,
           ),
+          powerPointDefaultFontSizePt:
+            typeof persisted.powerPointDefaultFontSizePt === "number" &&
+            Number.isFinite(persisted.powerPointDefaultFontSizePt)
+              ? Math.round(
+                  Math.min(200, Math.max(5, persisted.powerPointDefaultFontSizePt)) *
+                    2,
+                ) / 2
+              : 20,
         };
       },
     },

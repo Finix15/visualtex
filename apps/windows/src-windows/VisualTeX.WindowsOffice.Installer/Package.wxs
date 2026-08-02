@@ -4,14 +4,14 @@
     Name="VisualTeX Windows Office Integration"
     Manufacturer="VisualTeX"
     ProductCode="$(var.InstallerProductCode)"
-    Version="1.0.35.0"
+    Version="1.0.41.0"
     UpgradeCode="A81B4BF7-0E51-45CE-A5AA-5E28F6944F42"
-    Scope="perUser"
+    Scope="perMachine"
     Compressed="yes">
     <MajorUpgrade DowngradeErrorMessage="A newer VisualTeX Windows Office integration is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
-    <StandardDirectory Id="LocalAppDataFolder">
+    <StandardDirectory Id="ProgramFiles6432Folder">
       <Directory Id="VisualTeXLocalFolder" Name="VisualTeX">
         <Directory Id="VisualTeXOfficeFolder" Name="WindowsOffice">
           <Directory Id="INSTALLFOLDER" Name="VSTO" />
@@ -30,7 +30,7 @@
       <ComponentRef Id="ModeRegistration" />
     </Feature>
 
-    <Component Id="VstoFiles" Directory="INSTALLFOLDER" Guid="$(var.VstoFilesComponentGuid)">
+    <Component Id="VstoFiles" Directory="INSTALLFOLDER" Guid="$(var.VstoFilesComponentGuid)" Bitness="$(var.ComponentBitness)">
       <File Id="WordVstoAssembly" Source="$(WordOutput)\VisualTeX.WordVsto.dll" />
       <File Id="PowerPointVstoAssembly" Source="$(PowerPointOutput)\VisualTeX.PowerPointVsto.dll" />
       <File Id="ContractsAssembly" Source="$(WordOutput)\VisualTeX.WindowsOffice.Contracts.dll" />
@@ -46,7 +46,7 @@
       <File Id="WordInterop" Source="$(WordOutput)\Microsoft.Office.Interop.Word.dll" />
       <File Id="PowerPointInterop" Source="$(PowerPointOutput)\Microsoft.Office.Interop.PowerPoint.dll" />
       <RegistryValue
-        Root="HKCU"
+        Root="HKLM"
         Key="Software\VisualTeX\OfficeIntegration"
         Name="VstoFilesInstalled"
         Type="integer"
@@ -57,12 +57,12 @@
       <RemoveFolder Id="RemoveVisualTeXLocalFolder" Directory="VisualTeXLocalFolder" On="uninstall" />
     </Component>
 
-    <Component Id="NativeOleServerFiles" Directory="INSTALLFOLDER" Guid="$(var.OleServerFilesComponentGuid)">
+    <Component Id="NativeOleServerFiles" Directory="INSTALLFOLDER" Guid="$(var.OleServerFilesComponentGuid)" Bitness="$(var.ComponentBitness)">
       <File
         Id="FormulaOleServerExecutable"
         Source="$(OleServerOutput)\VisualTeX.FormulaOleServer.exe" />
       <RegistryValue
-        Root="HKCU"
+        Root="HKLM"
         Key="Software\VisualTeX\OfficeIntegration"
         Name="NativeOleServerInstalled"
         Type="integer"
@@ -70,14 +70,14 @@
         KeyPath="yes" />
     </Component>
 
-    <Component Id="NativeOleRegistration" Directory="INSTALLFOLDER" Guid="*">
-      <RegistryKey Root="HKCU" Key="Software\Classes\VisualTeX.Formula.1">
+    <Component Id="NativeOleRegistration" Directory="INSTALLFOLDER" Guid="*" Bitness="$(var.ComponentBitness)">
+      <RegistryKey Root="HKLM" Key="Software\Classes\VisualTeX.Formula.1">
         <RegistryValue Type="string" Value="VisualTeX Formula" />
         <RegistryKey Key="CLSID">
           <RegistryValue Type="string" Value="{8FF7F5AA-0D60-48D5-ADBD-65A64B4C827B}" />
         </RegistryKey>
       </RegistryKey>
-      <RegistryKey Root="HKCU" Key="Software\Classes\VisualTeX.Formula">
+      <RegistryKey Root="HKLM" Key="Software\Classes\VisualTeX.Formula">
         <RegistryValue Type="string" Value="VisualTeX Formula" />
         <RegistryKey Key="CLSID">
           <RegistryValue Type="string" Value="{8FF7F5AA-0D60-48D5-ADBD-65A64B4C827B}" />
@@ -86,7 +86,7 @@
           <RegistryValue Type="string" Value="VisualTeX.Formula.1" />
         </RegistryKey>
       </RegistryKey>
-      <RegistryKey Root="HKCU" Key="Software\Classes\CLSID\{8FF7F5AA-0D60-48D5-ADBD-65A64B4C827B}">
+      <RegistryKey Root="HKLM" Key="Software\Classes\CLSID\{8FF7F5AA-0D60-48D5-ADBD-65A64B4C827B}">
         <RegistryValue Type="string" Value="VisualTeX Formula" />
         <RegistryValue Name="AppID" Type="string" Value="{3C72FF7F-B04A-4FD0-AA7D-61D110D8B3C1}" />
         <RegistryKey Key="AuxUserType\2">
@@ -140,13 +140,13 @@
           </RegistryKey>
         </RegistryKey>
       </RegistryKey>
-      <RegistryKey Root="HKCU" Key="Software\Classes\AppID\{3C72FF7F-B04A-4FD0-AA7D-61D110D8B3C1}">
+      <RegistryKey Root="HKLM" Key="Software\Classes\AppID\{3C72FF7F-B04A-4FD0-AA7D-61D110D8B3C1}">
         <RegistryValue Type="string" Value="VisualTeX Formula OLE LocalServer" />
       </RegistryKey>
-      <RegistryKey Root="HKCU" Key="Software\Classes\AppID\VisualTeX.FormulaOleServer.exe">
+      <RegistryKey Root="HKLM" Key="Software\Classes\AppID\VisualTeX.FormulaOleServer.exe">
         <RegistryValue Type="string" Value="{3C72FF7F-B04A-4FD0-AA7D-61D110D8B3C1}" />
       </RegistryKey>
-      <RegistryKey Root="HKCU" Key="Software\Classes\Interface\{6C672AF0-7321-4D21-B325-868CB34592C2}">
+      <RegistryKey Root="HKLM" Key="Software\Classes\Interface\{6C672AF0-7321-4D21-B325-868CB34592C2}">
         <RegistryValue Type="string" Value="IVisualTeXFormulaObject" />
         <RegistryKey Key="ProxyStubClsid32">
           <RegistryValue Type="string" Value="{00020424-0000-0000-C000-000000000046}" />
@@ -159,7 +159,7 @@
           <RegistryValue Type="string" Value="1.0" />
         </RegistryKey>
       </RegistryKey>
-      <RegistryKey Root="HKCU" Key="Software\Classes\TypeLib\{DF66EC66-3B3A-4675-A7BE-30456A04EB96}\1.0">
+      <RegistryKey Root="HKLM" Key="Software\Classes\TypeLib\{DF66EC66-3B3A-4675-A7BE-30456A04EB96}\1.0">
         <RegistryValue Type="string" Value="VisualTeX Formula OLE Type Library" />
 <?if $(var.InstallerPlatform) = x64 ?>
         <RegistryKey Key="0\win64">
@@ -179,14 +179,14 @@
       </RegistryKey>
     </Component>
 
-    <Component Id="WordComRegistration" Directory="INSTALLFOLDER" Guid="*">
-      <RegistryKey Root="HKCU" Key="Software\Classes\VisualTeX.WordVsto">
+    <Component Id="WordComRegistration" Directory="INSTALLFOLDER" Guid="*" Bitness="$(var.ComponentBitness)">
+      <RegistryKey Root="HKLM" Key="Software\Classes\VisualTeX.WordVsto">
         <RegistryValue Type="string" Value="VisualTeX.WordVsto.ThisAddIn" />
         <RegistryKey Key="CLSID">
           <RegistryValue Type="string" Value="{F1B68342-F9C6-4E7D-A9C6-A2F64C3558A1}" />
         </RegistryKey>
       </RegistryKey>
-      <RegistryKey Root="HKCU" Key="Software\Classes\CLSID\{F1B68342-F9C6-4E7D-A9C6-A2F64C3558A1}">
+      <RegistryKey Root="HKLM" Key="Software\Classes\CLSID\{F1B68342-F9C6-4E7D-A9C6-A2F64C3558A1}">
         <RegistryValue Type="string" Value="VisualTeX Word VSTO" />
         <RegistryKey Key="InprocServer32">
           <RegistryValue Type="string" Value="mscoree.dll" />
@@ -209,14 +209,14 @@
       </RegistryKey>
     </Component>
 
-    <Component Id="PowerPointComRegistration" Directory="INSTALLFOLDER" Guid="*">
-      <RegistryKey Root="HKCU" Key="Software\Classes\VisualTeX.PowerPointVsto">
+    <Component Id="PowerPointComRegistration" Directory="INSTALLFOLDER" Guid="*" Bitness="$(var.ComponentBitness)">
+      <RegistryKey Root="HKLM" Key="Software\Classes\VisualTeX.PowerPointVsto">
         <RegistryValue Type="string" Value="VisualTeX.PowerPointVsto.ThisAddIn" />
         <RegistryKey Key="CLSID">
           <RegistryValue Type="string" Value="{7E586D2D-57B0-4D14-AB24-EBA9021A5E6D}" />
         </RegistryKey>
       </RegistryKey>
-      <RegistryKey Root="HKCU" Key="Software\Classes\CLSID\{7E586D2D-57B0-4D14-AB24-EBA9021A5E6D}">
+      <RegistryKey Root="HKLM" Key="Software\Classes\CLSID\{7E586D2D-57B0-4D14-AB24-EBA9021A5E6D}">
         <RegistryValue Type="string" Value="VisualTeX PowerPoint VSTO" />
         <RegistryKey Key="InprocServer32">
           <RegistryValue Type="string" Value="mscoree.dll" />
@@ -239,8 +239,8 @@
       </RegistryKey>
     </Component>
 
-    <Component Id="WordOfficeRegistration" Directory="INSTALLFOLDER" Guid="*">
-      <RegistryKey Root="HKCU" Key="Software\Microsoft\Office\Word\Addins\VisualTeX.WordVsto">
+    <Component Id="WordOfficeRegistration" Directory="INSTALLFOLDER" Guid="*" Bitness="$(var.ComponentBitness)">
+      <RegistryKey Root="HKLM" Key="Software\Microsoft\Office\Word\Addins\VisualTeX.WordVsto">
         <RegistryValue Name="FriendlyName" Type="string" Value="VisualTeX" />
         <RegistryValue Name="Description" Type="string" Value="VisualTeX native Word formula integration" />
         <RegistryValue Name="LoadBehavior" Type="integer" Value="3" KeyPath="yes" />
@@ -249,8 +249,8 @@
       </RegistryKey>
     </Component>
 
-    <Component Id="PowerPointOfficeRegistration" Directory="INSTALLFOLDER" Guid="*">
-      <RegistryKey Root="HKCU" Key="Software\Microsoft\Office\PowerPoint\Addins\VisualTeX.PowerPointVsto">
+    <Component Id="PowerPointOfficeRegistration" Directory="INSTALLFOLDER" Guid="*" Bitness="$(var.ComponentBitness)">
+      <RegistryKey Root="HKLM" Key="Software\Microsoft\Office\PowerPoint\Addins\VisualTeX.PowerPointVsto">
         <RegistryValue Name="FriendlyName" Type="string" Value="VisualTeX" />
         <RegistryValue Name="Description" Type="string" Value="VisualTeX native PowerPoint formula integration" />
         <RegistryValue Name="LoadBehavior" Type="integer" Value="3" KeyPath="yes" />
@@ -259,8 +259,8 @@
       </RegistryKey>
     </Component>
 
-    <Component Id="ModeRegistration" Directory="INSTALLFOLDER" Guid="*">
-      <RegistryKey Root="HKCU" Key="Software\VisualTeX\OfficeIntegration">
+    <Component Id="ModeRegistration" Directory="INSTALLFOLDER" Guid="*" Bitness="$(var.ComponentBitness)">
+      <RegistryKey Root="HKLM" Key="Software\VisualTeX\OfficeIntegration">
         <RegistryValue Name="Mode" Type="string" Value="vsto" KeyPath="yes" />
         <RegistryValue Name="NativeOleEnabled" Type="integer" Value="1" />
         <RegistryValue Name="FilesAndRegistryVerified" Type="integer" Value="0" />

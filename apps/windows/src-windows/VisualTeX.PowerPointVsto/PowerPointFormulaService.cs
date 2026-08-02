@@ -57,9 +57,15 @@ internal sealed class PowerPointFormulaService
                     objectId = shape.Name;
                     metadata = ReadMetadata(shape);
                     if (metadata is not null)
+                    {
+                        metadata.FontSizePt = FormulaFontSize.InferOleFontSize(
+                            shape.Width,
+                            shape.Height,
+                            metadata);
                         objectMode = IsNativeOle(shape)
                             ? "nativeOle"
                             : "crossPlatformPicture";
+                    }
                 }
             }
             return new OfficeSelection
@@ -82,6 +88,208 @@ internal sealed class PowerPointFormulaService
             Release(view);
             Release(window);
             Release(presentation);
+        }
+    }
+
+    public float ReadCurrentTypingFontSize()
+    {
+        object? mathRange = null;
+        object? font = null;
+        try
+        {
+            if (TryGetSelectedMathRange(out mathRange))
+            {
+                dynamic range = mathRange!;
+                font = range.Font;
+                var size = Convert.ToDouble(((dynamic)font).Size);
+                return FormulaFontSize.Normalize(size, 20f);
+            }
+
+            var window = _application.ActiveWindow;
+            if (window is null) return 20f;
+            Selection? selection = null;
+            try
+            {
+                selection = window.Selection;
+                dynamic selected = selection;
+                if (selection.Type == PpSelectionType.ppSelectionText)
+                {
+                    object textRange = selected.TextRange2;
+                    try
+                    {
+                        font = ((dynamic)textRange).Font;
+                        var size = Convert.ToDouble(((dynamic)font).Size);
+                        return FormulaFontSize.Normalize(size, 20f);
+                    }
+                    finally { Release(textRange); }
+                }
+            }
+            finally { Release(selection); Release(window); }
+            return 20f;
+        }
+        catch { return 20f; }
+        finally
+        {
+            Release(font);
+            Release(mathRange);
+        }
+    }
+
+    public float? GetSelectedFormulaFontSize()
+    {
+        try
+        {
+            var selected = ReadSelection();
+            if (selected.Metadata is not null)
+                return FormulaFontSize.ResolveSemanticFontSize(selected.Metadata);
+        }
+        catch { }
+
+        object? mathRange = null;
+        object? font = null;
+        try
+        {
+            if (!TryGetSelectedMathRange(out mathRange)) return null;
+            dynamic range = mathRange!;
+            font = range.Font;
+            var size = Convert.ToDouble(((dynamic)font).Size);
+            return FormulaFontSize.Normalize(size, 18f);
+        }
+        catch { return null; }
+        finally
+        {
+            Release(font);
+            Release(mathRange);
+        }
+    }
+
+    public float SetSelectedFormulaFontSize(double requestedFontSizePt)
+    {
+        var target = FormulaFontSize.Normalize(requestedFontSizePt);
+        var selected = ReadSelection();
+        if (selected.Metadata is null || string.IsNullOrWhiteSpace(selected.FormulaId))
+        {
+            if (SetSelectedMathZoneFontSize(target)) return target;
+            throw new InvalidOperationException("请先选择一个 VisualTeX 公式或 PowerPoint 原生公式。");
+        }
+
+        Presentation? presentation = null;
+        Slide? slide = null;
+        Shape? shape = null;
+        try
+        {
+            EnsureNotSlideShow();
+            StartNewUndoEntry();
+            presentation = _application.ActivePresentation
+                ?? throw new InvalidOperationException("No active PowerPoint presentation.");
+            EnsureWritable(presentation);
+            (slide, shape) = FindFormula(presentation, selected.FormulaId!, selected.ObjectId);
+            if (slide is null || shape is null)
+                throw new InvalidOperationException("The selected PowerPoint formula no longer exists.");
+
+            var metadata = selected.Metadata;
+            metadata.FontSizePt = target;
+            var size = FormulaFontSize.OleSizeAt(metadata, target, 600f, 400f);
+            var centerX = shape.Left + shape.Width / 2f;
+            var centerY = shape.Top + shape.Height / 2f;
+            shape.LockAspectRatio = MsoTriState.msoFalse;
+            shape.Width = size.Width;
+            shape.Height = size.Height;
+            shape.LockAspectRatio = MsoTriState.msoTrue;
+            shape.Left = centerX - size.Width / 2f;
+            shape.Top = centerY - size.Height / 2f;
+            Configure(shape, metadata);
+            return target;
+        }
+        finally
+        {
+            StartNewUndoEntry();
+            Release(shape);
+            Release(slide);
+            Release(presentation);
+        }
+    }
+
+    private bool SetSelectedMathZoneFontSize(float target)
+    {
+        object? mathRange = null;
+        object? font = null;
+        try
+        {
+            if (!TryGetSelectedMathRange(out mathRange)) return false;
+            StartNewUndoEntry();
+            dynamic range = mathRange!;
+            font = range.Font;
+            ((dynamic)font).Size = target;
+            return true;
+        }
+        finally
+        {
+            StartNewUndoEntry();
+            Release(font);
+            Release(mathRange);
+        }
+    }
+
+    private bool TryGetSelectedMathRange(out object? mathRange)
+    {
+        mathRange = null;
+        DocumentWindow? window = null;
+        Selection? selection = null;
+        ShapeRange? shapes = null;
+        Shape? shape = null;
+        object? textRange = null;
+        try
+        {
+            window = _application.ActiveWindow;
+            if (window is null) return false;
+            selection = window.Selection;
+            if (selection.Type == PpSelectionType.ppSelectionText)
+            {
+                dynamic selected = selection;
+                textRange = selected.TextRange2;
+            }
+            else if (selection.Type == PpSelectionType.ppSelectionShapes)
+            {
+                shapes = selection.ShapeRange;
+                if (shapes.Count != 1) return false;
+                shape = shapes[1];
+                if (shape.HasTextFrame != MsoTriState.msoTrue) return false;
+                dynamic textFrame = shape.TextFrame2;
+                textRange = textFrame.TextRange;
+                Release(textFrame);
+            }
+            else
+            {
+                return false;
+            }
+
+            dynamic range = textRange!;
+            object candidate;
+            try { candidate = range.MathZones(Type.Missing, Type.Missing); }
+            catch (COMException) { candidate = range.MathZones(); }
+            var length = Convert.ToInt32(((dynamic)candidate).Length);
+            if (length <= 0)
+            {
+                Release(candidate);
+                return false;
+            }
+            mathRange = candidate;
+            return true;
+        }
+        catch
+        {
+            Release(mathRange);
+            mathRange = null;
+            return false;
+        }
+        finally
+        {
+            Release(textRange);
+            Release(shape);
+            Release(shapes);
+            Release(selection);
+            Release(window);
         }
     }
 
@@ -347,7 +555,9 @@ internal sealed class PowerPointFormulaService
                         session.ExportResult?.Width ?? oldWidth / 0.75f,
                         session.ExportResult?.Height ?? oldHeight / 0.75f,
                         600f,
-                        400f);
+                        400f,
+                        originalMetadata?.FontSizePt,
+                        originalMetadata?.RenderFontSizePt);
             var newLeft = left + (oldWidth - editedSize.Width) / 2f;
             var newTop = top + (oldHeight - editedSize.Height) / 2f;
 
@@ -429,7 +639,9 @@ internal sealed class PowerPointFormulaService
                 session.ExportResult?.Width ?? oldWidth / 0.75f,
                 session.ExportResult?.Height ?? oldHeight / 0.75f,
                 600f,
-                400f);
+                400f,
+                originalMetadata?.FontSizePt,
+                originalMetadata?.RenderFontSizePt);
             var newLeft = left + (oldWidth - editedSize.Width) / 2f;
             var newTop = top + (oldHeight - editedSize.Height) / 2f;
 

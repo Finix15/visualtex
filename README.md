@@ -5,7 +5,20 @@
   <p><strong>Visual formula editor with native Microsoft Office integration</strong></p>
   <p>
     <a href="#中文">中文</a> · <a href="#english">English</a> ·
+    <a href="https://visualtex.pauljianliao.com/">Website</a> ·
     <a href="https://github.com/paulhe666/visualtex/releases">Releases</a>
+  </p>
+  <p>
+    <a href="https://github.com/paulhe666/visualtex/stargazers"><img src="https://img.shields.io/github/stars/paulhe666/visualtex?style=for-the-badge&logo=github&label=STARS" alt="GitHub Stars" /></a>
+    <a href="https://github.com/paulhe666/visualtex/releases/latest"><img src="https://img.shields.io/github/v/release/paulhe666/visualtex?style=for-the-badge&logo=github&label=RELEASE" alt="Latest Release" /></a>
+    <a href="https://github.com/paulhe666/visualtex/releases"><img src="https://img.shields.io/github/downloads/paulhe666/visualtex/total?style=for-the-badge&logo=github&label=DOWNLOADS" alt="Total Downloads" /></a>
+    <a href="https://visualtex.pauljianliao.com/"><img src="https://img.shields.io/badge/WEBSITE-visualtex.pauljianliao.com-0A84FF?style=for-the-badge&logo=googlechrome&logoColor=white" alt="VisualTeX Website" /></a>
+  </p>
+  <p>
+    <a href="https://github.com/paulhe666/visualtex/actions/workflows/windows.yml"><img src="https://img.shields.io/github/actions/workflow/status/paulhe666/visualtex/windows.yml?branch=main&style=for-the-badge&logo=windows&label=WINDOWS" alt="Windows CI" /></a>
+    <a href="https://github.com/paulhe666/visualtex/actions/workflows/macos.yml"><img src="https://img.shields.io/github/actions/workflow/status/paulhe666/visualtex/macos.yml?branch=main&style=for-the-badge&logo=apple&label=MACOS" alt="macOS CI" /></a>
+    <a href="https://github.com/paulhe666/visualtex/actions/workflows/repository.yml"><img src="https://img.shields.io/github/actions/workflow/status/paulhe666/visualtex/repository.yml?branch=main&style=for-the-badge&logo=githubactions&label=REPOSITORY" alt="Repository CI" /></a>
+    <a href="LICENSE"><img src="https://img.shields.io/github/license/paulhe666/visualtex?style=for-the-badge&label=LICENSE" alt="License" /></a>
   </p>
 </div>
 
@@ -19,7 +32,11 @@
   <img src="apps/macos/public/qq-group-card.svg" width="300" alt="VisualTeX QQ 交流群 1045801770" />
 </div>
 
-VisualTeX 是一款面向数学、物理、工程与科研写作的桌面公式编辑器。它提供结构化可视化输入、LaTeX 源码编辑、本地图片公式识别，以及 Word 和 PowerPoint 原生公式工作流。
+VisualTeX 是一款面向数学、物理、工程与科研写作的桌面公式编辑器。它提供结构化可视化输入、LaTeX 源码双向同步、本地图片公式识别，以及 Word 和 PowerPoint 原生公式工作流。Windows 版本还支持将 Word 选区或全文中的 LaTeX 代码批量重绘为 OMML 或可再次编辑的 VisualTeX OLE 公式。
+
+## 下载应用与 OCR 模型
+
+访问 **[VisualTeX 官网](https://visualtex.pauljianliao.com/)** 下载应用、Windows 安装包和 PP-FormulaNet OCR 模型。GitHub 版本也可从 [Releases](https://github.com/paulhe666/visualtex/releases) 获取。
 
 ## 实际界面
 
@@ -52,6 +69,8 @@ VisualTeX 是一款面向数学、物理、工程与科研写作的桌面公式�
 - “操作逻辑”可开关常用数学输入自动转义：`alpha` 输入希腊字母，`>=` 输入大于等于号，`pp`、`ss`、`mm`、`dd`、`eq` 分别输入加号、减号、乘号、除号和等号；关闭后所有无反斜杠快捷转义均停用，同时 `xx` 始终保留为普通变量；
 - 可分别控制上下标、重音和字体命令的自动跳出，以及不同类型的命令候选框；
 - `mathbb`、`mathbf`、`mathcal` 等字体命令通过反斜杠或工具栏输入，支持单字符自动跳出，也支持连续输入后按 Enter 确认；
+- 粗体按钮使用标准 `\mathbf{...}`，粗体、数学斜体与 `\mathrm{...}` 正体均支持再次点击恢复；
+- 自动识别微分元 `d`、自然常数 `e`、虚数单位 `i/j` 和常见算子并转换为规范正体，不依赖快捷转义开关；
 - 文档级撤销与重做会恢复公式内容、活动行、光标和选区；
 - 支持公式缩放、蓝白浅色、暖米色、深色、深紫色和深绿色主题，以及中文/英文界面、本地历史和 JSON 文档。
 
@@ -68,6 +87,13 @@ VisualTeX 是一款面向数学、物理、工程与科研写作的桌面公式�
 - 首次选择导出目录后自动记住路径，后续可直接导出当前公式文档；
 - Markdown 使用通用数学块语法保存多行公式，SVG 与 PNG 适合网页、笔记和演示文稿；
 - 支持启动时自动检查更新、中文/英文更新说明和手动检查更新。
+
+### Word 文档 LaTeX 重绘
+
+- 扫描 Word 当前选区或整个文档中的 `$...$`、`\(...\)`、`$$...$$` 与 `\[...\]`；
+- 可批量转换为 Word 原生 OMML 或可双击编辑的 VisualTeX OLE；
+- 行内公式继承左右正文的字号，行间公式继承相邻正文段落字号，并复用原行间段落避免额外空行；
+- 采用预热转换器、重复公式缓存和倒序原位替换，兼顾大文档安全性与性能。
 
 ### 本地图片公式识别
 
@@ -101,6 +127,7 @@ Windows 版本位于 [`apps/windows`](apps/windows)，使用 VSTO 与真正的 C
 - 专业模式插入真实的 `VisualTeX.Formula.1` OLE 对象；
 - OLE 对象保存公式元数据、EMF 矢量预览与 PNG 兼容预览；
 - Word 支持 OLE 与 OMML 行内/行间公式、格式转换、编号和引用；
+- Word Ribbon 支持批量导入，以及将选区或全文 LaTeX 重绘为 OMML/OLE，并按正文上下文继承字号；
 - PowerPoint 支持 OLE 公式的新建、编辑、删除与图片导出；
 - Office 原生双击可重新打开 VisualTeX 编辑器；
 - 兼容图片模式用于跨平台文档和旧公式迁移。
@@ -151,7 +178,11 @@ npm run tauri:build
 
 # English
 
-VisualTeX is a desktop formula editor for mathematics, physics, engineering, and scientific writing. It combines structured visual input, editable LaTeX source, local formula-image recognition, and native Word and PowerPoint workflows.
+VisualTeX is a desktop formula editor for mathematics, physics, engineering, and scientific writing. It combines structured visual input, two-way LaTeX source editing, local formula-image recognition, and native Word and PowerPoint workflows. On Windows, LaTeX found in a Word selection or the full document can be redrawn in bulk as native OMML or editable VisualTeX OLE formulas.
+
+## Application and OCR model downloads
+
+Visit the **[VisualTeX website](https://visualtex.pauljianliao.com/)** to download the application, Windows installer, and PP-FormulaNet OCR models. GitHub builds are also available from [Releases](https://github.com/paulhe666/visualtex/releases).
 
 ## Real application renders
 
@@ -184,6 +215,8 @@ The following images are real VisualTeX runtime captures, not mockups. The first
 - Optional plain-text conversion: `alpha` inserts a Greek letter, `>=` inserts greater-than-or-equal, and `pp`, `ss`, `mm`, `dd`, and `eq` insert plus, minus, multiplication, division, and equals; disabling it turns off every no-backslash shortcut, while `xx` always remains ordinary variable input;
 - Independent controls for automatic exits from scripts, accents, and font commands, plus separate command-suggestion panels;
 - Font wrappers such as `mathbb`, `mathbf`, and `mathcal` are entered with a backslash or toolbar button and can exit after one character or accept multiple characters and confirm with Enter;
+- Bold uses standard `\mathbf{...}` output, while bold, default math italic, and `\mathrm{...}` upright styles can all be toggled back;
+- Differential `d`, constants `e`, imaginary units `i/j`, and common operators are automatically normalized to upright forms independently of shortcut conversion settings;
 - Document-level undo and redo with active-row, caret, and selection restoration;
 - Formula zoom, blue-and-white light, warm beige, dark, deep purple, and deep green themes, Chinese and English UI, local history, and JSON documents.
 
@@ -200,6 +233,13 @@ The following images are real VisualTeX runtime captures, not mockups. The first
 - Remember the selected export directory after the first export;
 - Markdown uses common display-math blocks, while SVG and PNG are ready for web pages, notes, and presentations;
 - Automatic startup update checks, localized release notes, and manual update checks.
+
+### Word document LaTeX redraw
+
+- Scan `$...$`, `\(...\)`, `$$...$$`, and `\[...\]` in the current Word selection or the full document;
+- Convert formulas in bulk to native Word OMML or double-click-editable VisualTeX OLE;
+- Inline formulas inherit surrounding body text size, while display formulas inherit adjacent paragraph size and reuse their original paragraph without extra blank lines;
+- A warmed converter, duplicate-formula cache, and reverse-order replacement improve safety and performance on large documents.
 
 ### Local formula OCR
 
@@ -232,6 +272,7 @@ The Windows application lives in [`apps/windows`](apps/windows) and uses VSTO wi
 - Real `VisualTeX.Formula.1` OLE objects in professional mode;
 - Embedded formula metadata, EMF vector previews, and PNG compatibility previews;
 - Word OLE and OMML inline/display formulas, conversion, numbering, and references;
+- Word Ribbon batch import plus selection-wide or document-wide LaTeX redraw to OMML/OLE with context-aware font sizing;
 - PowerPoint OLE creation, editing, deletion, and picture export;
 - Native Office double-click activation;
 - A picture mode for cross-platform documents and legacy migration.

@@ -44,8 +44,8 @@ export const OCR_MODELS = [
     id: "PP-FormulaNet_plus-S",
     labelZh: "高速版 S",
     labelEn: "Fast S",
-    hintZh: "可选离线模型包，安装后约 248 MB；速度最快，主要适合英文公式",
-    hintEn: "Optional offline model pack, about 248 MB installed; fastest for English formulas",
+    hintZh: "独立模型包，安装后约 248 MB；速度最快，主要适合英文公式",
+    hintEn: "Separate model package, about 248 MB installed; fastest for English formulas",
     downloadMb: 259.6,
     storageMb: 248,
     cpuBenchmarkMs: 260.99,
@@ -54,8 +54,8 @@ export const OCR_MODELS = [
     id: "PP-FormulaNet_plus-M",
     labelZh: "均衡版 M（推荐）",
     labelEn: "Balanced M (recommended)",
-    hintZh: "随 VisualTeX 离线资源内置；兼顾中文、复杂公式与速度",
-    hintEn: "Included in the VisualTeX offline bundle; balanced for Chinese and complex formulas",
+    hintZh: "独立模型包；兼顾中文、复杂公式与速度，推荐首次安装",
+    hintEn: "Separate model package; balanced for Chinese and complex formulas, recommended first",
     downloadMb: 620.5,
     storageMb: 592,
     cpuBenchmarkMs: 1615.8,
@@ -64,8 +64,8 @@ export const OCR_MODELS = [
     id: "PP-FormulaNet_plus-L",
     labelZh: "高精度版 L",
     labelEn: "High accuracy L",
-    hintZh: "可选离线模型包，安装后约 698 MB；首次加载较久，并会占用数 GB 内存",
-    hintEn: "Optional offline model pack, about 698 MB installed; first load is slow and may use several GB of memory",
+    hintZh: "独立模型包，安装后约 698 MB；首次加载较久，并会占用数 GB 内存",
+    hintEn: "Separate model package, about 698 MB installed; first load is slow and may use several GB of memory",
     downloadMb: 731.5,
     storageMb: 698,
     cpuBenchmarkMs: 3125.58,
@@ -82,24 +82,19 @@ export interface OcrRuntimeStatus {
   paddleVersion: string | null;
   paddleocrVersion: string | null;
   runtimePath: string;
+  runtimeBundleAvailable: boolean;
   offlineBundleAvailable: boolean;
   installedModels: string[];
+  damagedModels: string[];
+  modelCatalogAvailable: boolean;
   defaultModel: string;
   message: string;
 }
 
 export function resolveAvailableOcrModel(
-  runtime: Pick<
-    OcrRuntimeStatus,
-    "installed" | "installedModels" | "defaultModel" | "offlineBundleAvailable"
-  >,
+  runtime: Pick<OcrRuntimeStatus, "installedModels" | "defaultModel">,
   requested: OcrModelName,
 ): OcrModelName {
-  // Windows keeps model downloads online, so an uncached S/M/L selection is
-  // still available and may be prepared by the persistent worker. The macOS
-  // offline bundle must continue to fall back to an actually installed pack.
-  if (runtime.installed && !runtime.offlineBundleAvailable) return requested;
-
   const installed = new Set(runtime.installedModels);
   if (installed.has(requested)) return requested;
   if (installed.has(runtime.defaultModel)) {
@@ -109,11 +104,72 @@ export function resolveAvailableOcrModel(
   return fallback?.id ?? requested;
 }
 
+export type OcrInstallState =
+  | "notInstalled"
+  | "installing"
+  | "installFailed"
+  | "dependenciesInstalled"
+  | "verifying"
+  | "verificationFailed"
+  | "complete"
+  | "cancelled";
+
 export interface OcrInstallProgress {
   stage: string;
+  state: OcrInstallState;
   percent: number;
   message: string;
   detail: string | null;
+  error: string | null;
+  logPath: string | null;
+}
+
+export interface OcrInstallStatus {
+  schemaVersion: number;
+  state: OcrInstallState;
+  currentStep: string | null;
+  completedSteps: string[];
+  percent: number;
+  message: string;
+  detail: string | null;
+  error: string | null;
+  logPath: string;
+  updatedAtMs: number;
+}
+
+export interface OcrModelCatalogEntry {
+  model: OcrModelName;
+  url: string;
+  size: number;
+  sha256: string;
+}
+
+export interface OcrModelCatalog {
+  schemaVersion: number;
+  platform: "windows";
+  architecture: "x64";
+  entries: OcrModelCatalogEntry[];
+}
+
+export type OcrModelDownloadState =
+  | "idle"
+  | "downloading"
+  | "verifying"
+  | "installing"
+  | "complete"
+  | "cancelled"
+  | "failed";
+
+export interface OcrModelDownloadSnapshot {
+  model: OcrModelName;
+  state: OcrModelDownloadState;
+  downloadedBytes: number;
+  totalBytes: number;
+  percent: number;
+  speedBytesPerSecond: number;
+  etaSeconds: number | null;
+  message: string;
+  error: string | null;
 }
 
 export interface OcrFormulaResult {
@@ -239,6 +295,21 @@ export async function installOcrRuntime(): Promise<OcrRuntimeStatus> {
   return invoke<OcrRuntimeStatus>("install_ocr_runtime");
 }
 
+export async function getOcrInstallStatus(): Promise<OcrInstallStatus> {
+  requireOcrEnvironment();
+  return invoke<OcrInstallStatus>("get_ocr_install_status");
+}
+
+export async function cancelOcrInstall(): Promise<void> {
+  requireOcrEnvironment();
+  return invoke("cancel_ocr_install");
+}
+
+export async function openOcrInstallLogs(): Promise<void> {
+  requireOcrEnvironment();
+  return invoke("open_ocr_install_logs");
+}
+
 export async function recognizeFormulaImage(
   request: OcrImageRequest,
 ): Promise<OcrRecognitionResult> {
@@ -280,6 +351,37 @@ export async function removeOptionalOcrModel(
 ): Promise<OcrRuntimeStatus> {
   requireDesktopOcrEnvironment();
   return invoke<OcrRuntimeStatus>("remove_optional_ocr_model", { model });
+}
+
+export async function getOcrModelCatalog(): Promise<OcrModelCatalog> {
+  requireDesktopOcrEnvironment();
+  return invoke<OcrModelCatalog>("get_ocr_model_catalog");
+}
+
+export async function getOcrModelDownloadStatus(): Promise<OcrModelDownloadSnapshot | null> {
+  requireDesktopOcrEnvironment();
+  return invoke<OcrModelDownloadSnapshot | null>("get_ocr_model_download_status");
+}
+
+export async function downloadOcrModel(
+  model: OcrModelName,
+): Promise<OcrRuntimeStatus> {
+  requireDesktopOcrEnvironment();
+  return invoke<OcrRuntimeStatus>("download_ocr_model", { model });
+}
+
+export async function cancelOcrModelDownload(): Promise<boolean> {
+  requireDesktopOcrEnvironment();
+  return invoke<boolean>("cancel_ocr_model_download");
+}
+
+export async function listenOcrModelDownloadProgress(
+  listener: (progress: OcrModelDownloadSnapshot) => void,
+): Promise<UnlistenFn> {
+  requireDesktopOcrEnvironment();
+  return listen<OcrModelDownloadSnapshot>("ocr-model-download-progress", (event) => {
+    listener(event.payload);
+  });
 }
 
 export async function listenOcrRecognitionProgress(

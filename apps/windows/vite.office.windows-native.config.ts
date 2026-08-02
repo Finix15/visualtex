@@ -2,6 +2,10 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import {
+  mathLiveBrowserEntry,
+  visualTexMathLiveContourIntegralCompatibility,
+} from "./vite.mathliveIntegralCompatibility";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 
@@ -23,7 +27,22 @@ const rejectLegacyOfficeJsImports = {
 };
 
 export default defineConfig({
-  plugins: [react(), rejectLegacyOfficeJsImports],
+  plugins: [
+    visualTexMathLiveContourIntegralCompatibility(),
+    react(),
+    rejectLegacyOfficeJsImports,
+  ],
+  resolve: {
+    alias: [
+      {
+        find: /^mathlive$/,
+        replacement: mathLiveBrowserEntry,
+      },
+    ],
+  },
+  optimizeDeps: {
+    exclude: ["mathlive"],
+  },
   base: "/",
   publicDir: false,
   clearScreen: false,

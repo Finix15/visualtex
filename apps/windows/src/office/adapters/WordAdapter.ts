@@ -190,7 +190,11 @@ export function calculateInlineFormulaPosition(
   if (!(downwardShiftPoints > 0) || !Number.isFinite(downwardShiftPoints)) {
     return 0;
   }
-  return -Math.max(0, Math.round(downwardShiftPoints));
+  // Word quantizes inline-object positions to whole points. Applying the full
+  // rounded MathJax descent makes OLE formulas sit about one point below native
+  // OMML, so retain the geometry while adding a one-point optical lift.
+  const roundedDescent = Math.max(0, Math.round(downwardShiftPoints));
+  return -Math.max(0, roundedDescent - 1);
 }
 
 /** Calculate the exact offset used after Word has scaled the exported image.

@@ -769,10 +769,16 @@ try {
             Assert-True (-not (Test-Path $legacyCatalogKey)) "Legacy Office.js Trusted Catalog remained registered: $legacyCatalogKey"
         }
         foreach ($key in @(
+            "HKLM:\Software\Microsoft\Office\Word\Addins\VisualTeX.WordVsto",
+            "HKLM:\Software\Microsoft\Office\PowerPoint\Addins\VisualTeX.PowerPointVsto"
+        )) {
+            Assert-True ((Get-ItemProperty $key -Name LoadBehavior).LoadBehavior -eq 3) "Machine-wide native Office add-in was not enabled: $key"
+        }
+        foreach ($legacyKey in @(
             "HKCU:\Software\Microsoft\Office\Word\Addins\VisualTeX.WordVsto",
             "HKCU:\Software\Microsoft\Office\PowerPoint\Addins\VisualTeX.PowerPointVsto"
         )) {
-            Assert-True ((Get-ItemProperty $key -Name LoadBehavior).LoadBehavior -eq 3) "Native Office add-in was not enabled: $key"
+            Assert-True (-not (Test-Path $legacyKey)) "Legacy per-user Office add-in still shadows HKLM: $legacyKey"
         }
         & (Join-Path $PSScriptRoot "test_windows_office_runtime.ps1")
     }

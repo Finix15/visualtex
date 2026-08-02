@@ -21,6 +21,20 @@ public sealed class MathMlToLatexConverterTests
     }
 
     [Fact]
+    public void PreservesExplicitUprightLatinIdentifiers()
+    {
+        const string mathMl =
+            "<math xmlns=\"http://www.w3.org/1998/Math/MathML\">"
+            + "<mi mathvariant=\"normal\">e</mi>"
+            + "<msup><mi mathvariant=\"normal\">i</mi><mi>π</mi></msup>"
+            + "<mi>x</mi></math>";
+
+        Assert.Equal(
+            @"\mathrm{e}\mathrm{i}^{\pi}x",
+            MathMlToLatexConverter.Convert(mathMl));
+    }
+
+    [Fact]
     public void ConvertsMatricesAndGreekSymbols()
     {
         const string mathMl =

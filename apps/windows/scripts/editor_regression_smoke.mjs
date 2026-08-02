@@ -227,7 +227,7 @@ async function main() {
       const selectAll = {
         key: "a",
         code: "KeyA",
-        modifiers: 4,
+        modifiers: process.platform === "darwin" ? 4 : 2,
         windowsVirtualKeyCode: 65,
         nativeVirtualKeyCode: 65,
       };
@@ -610,6 +610,10 @@ async function main() {
       );
     }
 
+    // Row navigation reinforces focus at 0 ms and 80 ms. Let the ArrowUp
+    // callbacks settle before testing the reverse direction, otherwise the
+    // delayed first-row focus can overwrite a valid ArrowDown transition.
+    await sleep(140);
     await key("ArrowDown", "ArrowDown", 40);
     const arrowDownLineState = await waitForEvaluation(`(() => {
       const rows = [...document.querySelectorAll(".formula-line")];
@@ -1077,10 +1081,25 @@ async function main() {
         left: rect.left,
         viewportWidth: window.innerWidth,
         viewportHeight: window.innerHeight,
+        frontmostAtHeader: menu.contains(
+          document.elementFromPoint(
+            Math.min(rect.right - 12, rect.left + 24),
+            Math.min(rect.bottom - 12, rect.top + 24),
+          ),
+        ),
+        frontmostAtFirstOption: firstOption
+          ? menu.contains(
+              document.elementFromPoint(
+                firstOption.getBoundingClientRect().left + 20,
+                firstOption.getBoundingClientRect().top +
+                  firstOption.getBoundingClientRect().height / 2,
+              ),
+            )
+          : false,
       };
     })()`);
-    if (formatMenuState.count !== 16) {
-      throw new Error(`Expected 16 LaTeX code formats, found ${formatMenuState.count}`);
+    if (formatMenuState.count !== 17) {
+      throw new Error(`Expected 17 LaTeX code formats, found ${formatMenuState.count}`);
     }
     if (
       formatMenuState.visibleTitleCount !== 0 ||
@@ -1097,6 +1116,9 @@ async function main() {
       formatMenuState.bottom > formatMenuState.viewportHeight + 1
     ) {
       throw new Error(`LaTeX code-format menu is outside the viewport: ${JSON.stringify(formatMenuState)}`);
+    }
+    if (!formatMenuState.frontmostAtHeader || !formatMenuState.frontmostAtFirstOption) {
+      throw new Error(`LaTeX code-format menu is covered by the workspace: ${JSON.stringify(formatMenuState)}`);
     }
 
     await evaluate(`document.querySelector('[data-format="align-star"]').click()`);
@@ -1161,14 +1183,78 @@ async function main() {
       "c=d",
       "\\end{equation}",
     ].join("\n");
+    const incompleteEquationSource = [
+      "\\begin{equation}",
+      "a+b+\\frac{a}{b}+\\mathbb{H}+\\p",
+      "\\end{equation}",
+      "",
+      "\\begin{equation}",
+      "c=d",
+      "\\end{equation}",
+    ].join("\n");
+    await evaluate(`document.querySelector(".source-panel .cm-content").focus()`);
+    await replaceFocusedText(incompleteEquationSource);
+    const incompleteSourceState = await waitForEvaluation(`(() => {
+      const editor = document.querySelector(
+        ".multi-line-editor.is-read-only-preview",
+      );
+      const fields = [...document.querySelectorAll("math-field")];
+      const first = fields[0];
+      const content = first?.shadowRoot?.querySelector('[part="content"]');
+      return {
+        ready:
+          Boolean(editor) &&
+          !document.querySelector(".source-draft-fallback") &&
+          editor?.getAttribute("data-source-draft-error") === "unknown-command" &&
+          Boolean(document.querySelector(".source-error-chip")) &&
+          fields.length === 2 &&
+          first?.value.includes("\\\\frac{a}{b}") &&
+          first?.value.includes("\\\\mathbb{H}") &&
+          first?.value.endsWith("+\\\\p") &&
+          content?.textContent?.includes("\\\\p") &&
+          Boolean(first?.shadowRoot?.querySelector(".ML__mfrac")),
+        value: first?.value ?? "",
+        contentText: content?.textContent ?? "",
+        error: editor?.getAttribute("data-source-draft-error") ?? "",
+        formulaCount: fields.length,
+        hasFraction: Boolean(first?.shadowRoot?.querySelector(".ML__mfrac")),
+        fallbackVisible: Boolean(document.querySelector(".source-draft-fallback")),
+      };
+    })()`, "incomplete command keeps the valid formula prefix rendered");
+
     await evaluate(`document.querySelector(".source-panel .cm-content").focus()`);
     await replaceFocusedText(editedEquationSource);
+    const liveSourceState = await waitForEvaluation(`(() => {
+      const formulas = [...document.querySelectorAll("math-field")].map((field) => field.value);
+      return {
+        ready:
+          !document.querySelector(".source-draft-fallback") &&
+          !document.querySelector(".source-error-chip") &&
+          formulas[0] === "a=q" &&
+          formulas[1] === "c=d",
+        formulas,
+        fallbackVisible: Boolean(document.querySelector(".source-draft-fallback")),
+      };
+    })()`, "valid source updates formulas without Apply");
     const dirtyBeforeFormatSwitch = await evaluate(`(() => ({
-      dirty: Boolean(document.querySelector(".source-panel .unsaved-chip")),
+      dirty: Boolean(
+        document.querySelector(
+          ".source-panel .unsaved-chip, .source-panel.has-dirty-actions",
+        ),
+      ),
       source: document.querySelector(".source-panel .cm-content")?.innerText ?? "",
+      formulas: [...document.querySelectorAll("math-field")].map((field) => field.value),
+      applyButtonVisible: [...document.querySelectorAll(".source-panel button")].some(
+        (button) => /同步到公式|Apply/.test(button.textContent ?? ""),
+      ),
     }))()`);
-    if (!dirtyBeforeFormatSwitch.dirty || !dirtyBeforeFormatSwitch.source.includes("a=q")) {
-      throw new Error(`CodeMirror draft edit was not registered: ${JSON.stringify(dirtyBeforeFormatSwitch)}`);
+    if (
+      !dirtyBeforeFormatSwitch.source.includes("a=q") ||
+      dirtyBeforeFormatSwitch.formulas[0] !== "a=q" ||
+      dirtyBeforeFormatSwitch.formulas[1] !== "c=d" ||
+      dirtyBeforeFormatSwitch.applyButtonVisible
+    ) {
+      throw new Error(`CodeMirror live edit was not synchronized: ${JSON.stringify(dirtyBeforeFormatSwitch)}`);
     }
 
     await evaluate(`document.querySelector(".code-format-primary").click()`);
@@ -1177,7 +1263,11 @@ async function main() {
     await sleep(420);
     const dirtyFormatSwitchState = await evaluate(`(() => ({
       source: document.querySelector(".source-panel .cm-content")?.innerText ?? "",
-      dirty: Boolean(document.querySelector(".source-panel .unsaved-chip")),
+      dirty: Boolean(
+        document.querySelector(
+          ".source-panel .unsaved-chip, .source-panel.has-dirty-actions",
+        ),
+      ),
       formulas: [...document.querySelectorAll("math-field")].map((field) => field.value),
     }))()`);
     if (
@@ -1190,6 +1280,49 @@ async function main() {
       throw new Error(`Unsynced source edits were lost during format switching: ${JSON.stringify(dirtyFormatSwitchState)}`);
     }
 
+    await evaluate(`document.querySelector(".code-format-primary").click()`);
+    await sleep(100);
+    await evaluate(`document.querySelector('[data-format="raw"]').click()`);
+    await sleep(260);
+    await evaluate(`document.querySelector(".source-panel .cm-content").focus()`);
+    await replaceFocusedText("a=");
+    await key("q", "KeyQ", 81);
+    const continuousSourceFocusState = await waitForEvaluation(`(() => {
+      const source = document.querySelector(".source-panel .cm-content")?.innerText ?? "";
+      const field = document.querySelector("math-field");
+      return {
+        ready:
+          source.trim() === "a=q" &&
+          field?.value === "a=q" &&
+          Boolean(document.querySelector(".source-panel .cm-editor.cm-focused")),
+        source,
+        value: field?.value ?? "",
+        sourceFocused: Boolean(document.querySelector(".source-panel .cm-editor.cm-focused")),
+      };
+    })()`, "source focus survives a valid live update");
+
+    const mixedFormula = String.raw`\text{速度}v=x^{\text{中文}}`;
+    await evaluate(`document.querySelector(".source-panel .cm-content").focus()`);
+    await replaceFocusedText(mixedFormula);
+    await evaluate(`document.querySelector(".code-format-primary").click()`);
+    await sleep(100);
+    await evaluate(`document.querySelector('[data-format="inline-text-double-dollar"]').click()`);
+    await sleep(320);
+    const inlineTextFormatState = await waitForEvaluation(`(() => {
+      const source = document.querySelector(".source-panel .cm-content")?.innerText ?? "";
+      const persisted = JSON.parse(localStorage.getItem("visualtex-editor") || "{}");
+      const value = document.querySelector("math-field")?.value ?? "";
+      return {
+        ready:
+          source.trim() === "速度$$v=x^{\\\\text{中文}}$$" &&
+          value === "\\\\text{速度}v=x^{\\\\text{中文}}" &&
+          persisted.state?.latexCodeFormat === "inline-text-double-dollar",
+        source,
+        value,
+        persistedFormat: persisted.state?.latexCodeFormat ?? "",
+      };
+    })()`, "inline text-outside-math format selection");
+
     await evaluate(`(() => {
       localStorage.removeItem("visualtex.onboarding.v3.completed");
       location.reload();
@@ -1199,7 +1332,11 @@ async function main() {
       const done = () => document.querySelector(".onboarding-dialog") ? resolve(true) : setTimeout(done, 30);
       done();
     })`);
-    for (let index = 0; index < 3; index += 1) {
+    for (let index = 0; index < 12; index += 1) {
+      const matrixStepVisible = await evaluate(
+        `Boolean(document.querySelector(".onboarding-matrix-font-demo"))`,
+      );
+      if (matrixStepVisible) break;
       await evaluate(`document.querySelector(".onboarding-actions .primary-button").click()`);
       await sleep(100);
     }
@@ -1275,7 +1412,7 @@ async function main() {
       throw new Error(`The onboarding export step is incomplete: ${JSON.stringify(onboardingExportStep)}`);
     }
 
-    console.log(JSON.stringify({
+    if (process.env.VISUALTEX_TEST_QUIET !== "1") console.log(JSON.stringify({
       defaultOtherSuggestionState,
       enterAfterCandidateState,
       nativePopover,
@@ -1291,8 +1428,12 @@ async function main() {
       alignFormatState,
       alignSelectedAfterReopen,
       equationFormatState,
+      incompleteSourceState,
+      liveSourceState,
       dirtyBeforeFormatSwitch,
       dirtyFormatSwitchState,
+      continuousSourceFocusState,
+      inlineTextFormatState,
       degreeBeforeCommit,
       degreeCommitState,
       degreeDeleteState,

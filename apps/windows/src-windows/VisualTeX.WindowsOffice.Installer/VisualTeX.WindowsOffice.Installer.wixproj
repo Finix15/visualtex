@@ -6,6 +6,8 @@
     <OutputType>Package</OutputType>
     <OleServerPlatform Condition="'$(Platform)' == 'x86'">Win32</OleServerPlatform>
     <OleServerPlatform Condition="'$(Platform)' != 'x86'">x64</OleServerPlatform>
+    <ComponentBitness Condition="'$(Platform)' == 'x86'">always32</ComponentBitness>
+    <ComponentBitness Condition="'$(Platform)' != 'x86'">always64</ComponentBitness>
     <InstallerProductCode Condition="'$(Platform)' == 'x86'">48ABC5AF-2963-4BE6-86E3-F03950ECD270</InstallerProductCode>
     <InstallerProductCode Condition="'$(Platform)' != 'x86'">8BF4D9CB-320D-4AEB-929F-7E04812795AF</InstallerProductCode>
     <VstoFilesComponentGuid Condition="'$(Platform)' == 'x86'">94AE021E-806D-41E2-A1D7-CE120B00A61E</VstoFilesComponentGuid>
@@ -16,6 +18,7 @@
       InstallerProductCode=$(InstallerProductCode);
       VstoFilesComponentGuid=$(VstoFilesComponentGuid);
       OleServerFilesComponentGuid=$(OleServerFilesComponentGuid);
+      ComponentBitness=$(ComponentBitness);
       WordOutput=$(MSBuildThisFileDirectory)..\VisualTeX.WordVsto\bin\$(Platform)\$(Configuration)\net48;
       PowerPointOutput=$(MSBuildThisFileDirectory)..\VisualTeX.PowerPointVsto\bin\$(Platform)\$(Configuration)\net48;
       ContractsOutput=$(MSBuildThisFileDirectory)..\VisualTeX.WindowsOffice.Contracts\bin\$(Platform)\$(Configuration)\netstandard2.0;

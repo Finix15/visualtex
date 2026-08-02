@@ -81,6 +81,8 @@ const baseCommandRegistry: LatexCommand[] = [
   { id: "leq", command: "\\leq", insertTemplate: "\\leq", previewLatex: "\\leq", labelZh: "小于等于", labelEn: "Less or equal", aliases: ["less equal"], keywords: ["小于等于"], category: "relation", defaultPriority: 90, supportedInMathMode: true },
   { id: "geq", command: "\\geq", insertTemplate: "\\geq", previewLatex: "\\geq", labelZh: "大于等于", labelEn: "Greater or equal", aliases: ["greater equal"], keywords: ["大于等于"], category: "relation", defaultPriority: 90, supportedInMathMode: true },
   { id: "propto", command: "\\propto", insertTemplate: "\\propto", previewLatex: "\\propto", labelZh: "正比于", labelEn: "Proportional to", aliases: ["proportional"], keywords: ["正比"], category: "relation", defaultPriority: 82, supportedInMathMode: true },
+  { id: "times", command: "\\times", insertTemplate: "\\times", previewLatex: "\\times", labelZh: "乘号", labelEn: "Multiplication", aliases: ["times", "multiply", "multiplication"], keywords: ["乘号", "乘法"], category: "relation", defaultPriority: 98, supportedInMathMode: true },
+  { id: "div", command: "\\div", insertTemplate: "\\div", previewLatex: "\\div", labelZh: "除号", labelEn: "Division", aliases: ["divide", "division"], keywords: ["除号", "除法"], category: "relation", defaultPriority: 97, supportedInMathMode: true },
 
   { id: "in", command: "\\in", insertTemplate: "\\in", previewLatex: "\\in", labelZh: "属于", labelEn: "Element of", aliases: ["element"], keywords: ["属于"], category: "set", defaultPriority: 100, supportedInMathMode: true },
   { id: "notin", command: "\\notin", insertTemplate: "\\notin", previewLatex: "\\notin", labelZh: "不属于", labelEn: "Not an element", aliases: ["not element"], keywords: ["不属于"], category: "set", defaultPriority: 92, supportedInMathMode: true },
@@ -164,15 +166,20 @@ export const commonCommandIds = [
   "pi",
   "sigma",
   "omega",
+  "delta",
   "equal",
   "neq",
   "approx",
   "leq",
   "geq",
   "propto",
+  "times",
+  "div",
   "in",
   "subset",
   "rightarrow",
+  "forall",
+  "exists",
 ];
 
 export const calculusCommandIds = [

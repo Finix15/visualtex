@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { windowsPowerShellPath } from "./windows_powershell.mjs";
 
 function run(command, args) {
   const isWindowsCmd =
@@ -18,10 +19,19 @@ function run(command, args) {
 }
 
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-run(npm, ["run", "build:desktop"]);
+const powershell = process.platform === "win32" ? windowsPowerShellPath() : "powershell";
 
+// Prepare only native/resource inputs consumed by Tauri. The main desktop
+// frontend is built exactly once by tauri_build.mjs before Tauri codegen.
 if (process.platform === "win32") {
-  run("powershell.exe", [
+  run(powershell, [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    "scripts/prepare_windows_ocr_python.ps1",
+  ]);
+  run(powershell, [
     "-NoProfile",
     "-ExecutionPolicy",
     "Bypass",
@@ -29,19 +39,14 @@ if (process.platform === "win32") {
     "scripts/prepare_windows_vsto_runtime.ps1",
   ]);
   run(npm, ["run", "build:office:windows-native"]);
-  // Tauri opens externalBin before running beforeBuildCommand. The top-level
-  // tauri_build wrapper prepares native artifacts first, then sets this flag
-  // so the nested build cannot try to overwrite an executable Tauri holds.
-  if (process.env.VISUALTEX_TAURI_NATIVE_PREBUILT !== "1") {
-    run("powershell.exe", [
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-File",
-      "scripts/build_windows_office.ps1",
-      "-Configuration",
-      "Release",
-      "-SkipTests",
-    ]);
-  }
+  run(powershell, [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    "scripts/build_windows_office.ps1",
+    "-Configuration",
+    "Release",
+    "-SkipTests",
+  ]);
 }

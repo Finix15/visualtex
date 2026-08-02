@@ -3,9 +3,11 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
 using System.Xml.Linq;
 using Extensibility;
 using Microsoft.Office.Core;
+using Microsoft.Win32;
 using VisualTeX.WindowsOffice.Contracts;
 using WinForms = System.Windows.Forms;
 using PowerPoint = Microsoft.Office.Interop.PowerPoint;
@@ -13,13 +15,125 @@ using Word = Microsoft.Office.Interop.Word;
 
 namespace VisualTeX.VstoFlowAcceptance;
 
-internal static class Program
+internal static partial class Program
 {
     private const float ExportWidth = 160f;
     private const float ExportHeight = 32f;
     private const float ExportBaseline = 24f;
     private const uint MouseLeftDown = 0x0002;
     private const uint MouseLeftUp = 0x0004;
+    private const double WordPerformanceLimitMilliseconds = 500.0;
+
+    private sealed class UserWordAddInAutoLoadSuppression : IDisposable
+    {
+        private const string KeyPath =
+            @"Software\Microsoft\Office\Word\Addins\VisualTeX.WordVsto";
+        private readonly bool _keyExisted;
+        private readonly bool _loadBehaviorExisted;
+        private readonly object? _loadBehavior;
+        private readonly RegistryValueKind _loadBehaviorKind;
+        private bool _disposed;
+
+        private UserWordAddInAutoLoadSuppression(
+            bool keyExisted,
+            bool loadBehaviorExisted,
+            object? loadBehavior,
+            RegistryValueKind loadBehaviorKind)
+        {
+            _keyExisted = keyExisted;
+            _loadBehaviorExisted = loadBehaviorExisted;
+            _loadBehavior = loadBehavior;
+            _loadBehaviorKind = loadBehaviorKind;
+        }
+
+        internal static UserWordAddInAutoLoadSuppression Create()
+        {
+            using var existingKey = Registry.CurrentUser.OpenSubKey(KeyPath);
+            var keyExisted = existingKey is not null;
+            using var key = Registry.CurrentUser.CreateSubKey(KeyPath, writable: true)
+                ?? throw new InvalidOperationException(
+                    "The per-user Word add-in acceptance override could not be created.");
+            var valueNames = key.GetValueNames();
+            var loadBehaviorExisted = valueNames.Any(name =>
+                string.Equals(name, "LoadBehavior", StringComparison.OrdinalIgnoreCase));
+            var loadBehavior = loadBehaviorExisted
+                ? key.GetValue("LoadBehavior", null, RegistryValueOptions.DoNotExpandEnvironmentNames)
+                : null;
+            var loadBehaviorKind = loadBehaviorExisted
+                ? key.GetValueKind("LoadBehavior")
+                : RegistryValueKind.DWord;
+            if (!keyExisted)
+            {
+                key.SetValue("FriendlyName", "VisualTeX", RegistryValueKind.String);
+                key.SetValue(
+                    "Description",
+                    "VisualTeX VSTO flow acceptance auto-load suppression",
+                    RegistryValueKind.String);
+            }
+            key.SetValue("LoadBehavior", 0, RegistryValueKind.DWord);
+            return new UserWordAddInAutoLoadSuppression(
+                keyExisted,
+                loadBehaviorExisted,
+                loadBehavior,
+                loadBehaviorKind);
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            if (!_keyExisted)
+            {
+                try { Registry.CurrentUser.DeleteSubKeyTree(KeyPath, throwOnMissingSubKey: false); }
+                catch { }
+                return;
+            }
+
+            try
+            {
+                using var key = Registry.CurrentUser.OpenSubKey(KeyPath, writable: true);
+                if (key is null) return;
+                if (_loadBehaviorExisted && _loadBehavior is not null)
+                    key.SetValue("LoadBehavior", _loadBehavior, _loadBehaviorKind);
+                else
+                    key.DeleteValue("LoadBehavior", throwOnMissingValue: false);
+            }
+            catch { }
+        }
+    }
+
+    private sealed class PerformanceFormulaEntry
+    {
+        public int Index { get; set; }
+        public string FormulaId { get; set; } = string.Empty;
+        public string ObjectMode { get; set; } = string.Empty;
+        public string DisplayMode { get; set; } = string.Empty;
+        public string Latex { get; set; } = string.Empty;
+    }
+
+    private sealed class PerformanceTimingEntry
+    {
+        public string Phase { get; set; } = string.Empty;
+        public int Index { get; set; }
+        public string FormulaId { get; set; } = string.Empty;
+        public string ObjectMode { get; set; } = string.Empty;
+        public string DisplayMode { get; set; } = string.Empty;
+        public double OpenMilliseconds { get; set; }
+        public double ApplyMilliseconds { get; set; }
+    }
+
+    private sealed class PerformanceSummary
+    {
+        public string Phase { get; set; } = string.Empty;
+        public int Count { get; set; }
+        public double OpenP50Milliseconds { get; set; }
+        public double OpenP95Milliseconds { get; set; }
+        public double OpenMaximumMilliseconds { get; set; }
+        public double ApplyP50Milliseconds { get; set; }
+        public double ApplyP95Milliseconds { get; set; }
+        public double ApplyMaximumMilliseconds { get; set; }
+    }
+
     private delegate bool EnumWindowsCallback(IntPtr windowHandle, IntPtr parameter);
 
     [DllImport("user32.dll")]
@@ -97,9 +211,13 @@ internal static class Program
     private static int Main(string[] args)
     {
         try { SetProcessDpiAwarenessContext(new IntPtr(-4)); } catch { }
+        var instanceMutexName = Environment.GetEnvironmentVariable(
+            "VISUALTEX_VSTO_ACCEPTANCE_MUTEX_NAME");
+        if (string.IsNullOrWhiteSpace(instanceMutexName))
+            instanceMutexName = @"Local\VisualTeX.VstoFlowAcceptance";
         using var instanceMutex = new Mutex(
             initiallyOwned: true,
-            name: @"Local\VisualTeX.VstoFlowAcceptance",
+            name: instanceMutexName,
             createdNew: out var createdNew);
         if (!createdNew)
         {
@@ -130,6 +248,11 @@ internal static class Program
         Console.SetOut(new TeeTextWriter(originalOut, log));
         Console.SetError(new TeeTextWriter(originalError, log));
         Console.WriteLine($"Acceptance mode: {mode}");
+
+        using var installedWordAutoLoadSuppression =
+            UserWordAddInAutoLoadSuppression.Create();
+        Console.WriteLine(
+            "Installed Word add-in auto-load is suppressed for this isolated acceptance process.");
 
         try
         {
@@ -170,6 +293,14 @@ internal static class Program
             else if (string.Equals(mode, "word-unchanged", StringComparison.OrdinalIgnoreCase))
             {
                 RunWord(client, artifactRoot, stopAfterUnchanged: true);
+            }
+            else if (string.Equals(mode, "word-100-performance", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordHundredFormulaPerformance(client, artifactRoot);
+            }
+            else if (string.Equals(mode, "word-latex-redraw", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordLatexRedraw(client, artifactRoot);
             }
             else if (string.Equals(mode, "targeted-2364", StringComparison.OrdinalIgnoreCase))
             {
@@ -525,11 +656,12 @@ internal static class Program
         VisualTeX.WordVsto.ThisAddIn? addIn = null;
         Array custom = Array.Empty<object>();
         var consoleWindow = GetConsoleWindow();
+        string? converterSessionId = null;
         var hookTracePath = Path.Combine(artifactRoot, "word-ole-hook-trace.log");
         Environment.SetEnvironmentVariable("VISUALTEX_WORD_HOOK_TRACE_PATH", hookTracePath);
         try
         {
-            Console.WriteLine("[Word real OLE 1/6] Starting visible Word...");
+            Console.WriteLine("[Word real OLE 1/8] Starting visible Word...");
             application = new Word.Application
             {
                 Visible = true,
@@ -554,34 +686,175 @@ internal static class Program
             }
 
             document = application.Documents.Add();
-            application.Selection.TypeText("Real OLE double-click: ");
+            application.Selection.TypeText("Real OLE contour-integral double-click:");
+            application.Selection.TypeParagraph();
             addIn = new VisualTeX.WordVsto.ThisAddIn();
             addIn.OnConnection(application, ext_ConnectMode.ext_cm_AfterStartup, addIn, ref custom);
 
-            Console.WriteLine("[Word real OLE 2/6] Creating a native OLE formula...");
+            const string contourLatex = "\\oiint_{\\Sigma}F\\,\\mathrm{d}S11";
+            Console.WriteLine("[Word real OLE 2/8] Rendering \\oiint through the production Office export path...");
+            var sourceExportFixturePath = Path.Combine(artifactRoot, "oiint-source-export.json");
+            OfficeExportDocument contourExport;
+            if (File.Exists(sourceExportFixturePath))
+            {
+                contourExport = JsonSerializer.Deserialize<OfficeExportDocument>(
+                        File.ReadAllText(sourceExportFixturePath, Encoding.UTF8),
+                        new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                    ?? throw new InvalidDataException(
+                        $"Source \\oiint export fixture is invalid: {sourceExportFixturePath}");
+                contourExport.PngBase64 ??= CreatePngDataUrl(
+                    contourLatex,
+                    contourExport.Width,
+                    contourExport.Height);
+                Console.WriteLine(
+                    $"  Using current-source export fixture: {sourceExportFixturePath}");
+            }
+            else
+            {
+                var converterLine = new FormulaLine
+                {
+                    Id = Guid.NewGuid().ToString("D"),
+                    Latex = contourLatex,
+                };
+                var converterSession = client.CreateSessionAsync(
+                        new CreateVstoSessionRequest
+                        {
+                            Mode = "create",
+                            Host = "word",
+                            Title = "OLE contour-integral acceptance renderer",
+                            Lines = new List<FormulaLine> { converterLine },
+                            ActiveLineId = converterLine.Id,
+                            CodeFormat = "latex",
+                            DisplayMode = "block",
+                            ObjectMode = FormulaOleContract.NativeOleMode,
+                            Numbered = false,
+                            FontSizePt = 14d,
+                            AutoCommitOnClose = false,
+                        },
+                        CancellationToken.None)
+                    .GetAwaiter().GetResult();
+                converterSessionId = converterSession.Id;
+                client.OpenConverterAsync(converterSessionId, CancellationToken.None)
+                    .GetAwaiter().GetResult();
+                converterSession = client.WaitForCommitAsync(
+                        converterSessionId,
+                        TimeSpan.FromMinutes(3),
+                        CancellationToken.None)
+                    .GetAwaiter().GetResult();
+                if (string.Equals(converterSession.Status, "failed", StringComparison.Ordinal))
+                    throw new InvalidDataException(
+                        converterSession.Error ?? "The production Office converter failed for \\oiint.");
+                contourExport = converterSession.ExportResult
+                    ?? throw new InvalidDataException(
+                        "The production Office converter returned no \\oiint export.");
+            }
+            var contourSvg = contourExport.Svg;
+            if (string.IsNullOrWhiteSpace(contourSvg)
+                && !string.IsNullOrWhiteSpace(contourExport.SvgBase64))
+            {
+                var comma = contourExport.SvgBase64.IndexOf(',');
+                if (comma >= 0)
+                    contourSvg = Encoding.UTF8.GetString(
+                        Convert.FromBase64String(contourExport.SvgBase64.Substring(comma + 1)));
+            }
+            if (string.IsNullOrWhiteSpace(contourSvg))
+                throw new InvalidDataException("The production Office converter returned no readable \\oiint SVG.");
+            AssertTrue(
+                contourSvg!.IndexOf(
+                    "data-visualtex-integral=\"oiint\"",
+                    StringComparison.Ordinal) >= 0,
+                "OLE \\oiint did not use the shared VisualTeX contour-integral vector glyph.");
+            AssertTrue(
+                contourSvg.IndexOf(">∯</text>", StringComparison.Ordinal) < 0,
+                "OLE \\oiint fell back to the old small system-font character.");
+            AssertTrue(
+                contourExport.Height > 30f,
+                $"OLE \\oiint did not retain display-integral height; exportHeight={contourExport.Height:0.###}.");
+            AssertTrue(
+                (contourExport.MathMl ?? string.Empty).IndexOf("\\oiint", StringComparison.Ordinal) < 0,
+                "OLE \\oiint leaked into MathML as unresolved command text.");
+
+            Console.WriteLine("[Word real OLE 3/8] Inserting the production vector as native OLE...");
             var existing = SnapshotSessionIds();
-            addIn.OnInsertInline(new object());
+            addIn.OnInsertDisplay(new object());
             var createSessionId = WaitForNewSession(existing, "word", TimeSpan.FromSeconds(30));
             var createSession = client.GetSessionAsync(createSessionId, CancellationToken.None)
                 .GetAwaiter().GetResult();
-            Commit(
-                client,
-                createSession,
-                "inline",
-                FormulaOleContract.NativeOleMode,
-                "\\int_0^1 x^2\\,dx");
+            var createLineId = createSession.Lines.First().Id;
+            client.PatchAsync(
+                    createSessionId,
+                    new Dictionary<string, object>
+                    {
+                        ["lines"] = new[]
+                        {
+                            new Dictionary<string, object>
+                            {
+                                ["id"] = createLineId,
+                                ["latex"] = contourLatex,
+                            },
+                        },
+                        ["activeLineId"] = createLineId,
+                        ["codeFormat"] = "latex",
+                        ["displayMode"] = "block",
+                        ["objectMode"] = FormulaOleContract.NativeOleMode,
+                        ["numbered"] = false,
+                        ["fontSizePt"] = 14d,
+                        ["exportWidth"] = contourExport.Width,
+                        ["exportHeight"] = contourExport.Height,
+                        ["exportResult"] = contourExport,
+                        ["dirty"] = true,
+                        ["status"] = "committing",
+                    },
+                    CancellationToken.None)
+                .GetAwaiter().GetResult();
             var created = WaitForTerminal(client, createSessionId, TimeSpan.FromSeconds(45));
             AssertEqual("completed", created.Status,
-                created.Error ?? "Real OLE fixture creation did not complete.");
+                created.Error ?? "Real OLE \\oiint fixture creation did not complete.");
             client.CloseEditorAsync(createSessionId, CancellationToken.None).GetAwaiter().GetResult();
+            if (!string.IsNullOrWhiteSpace(converterSessionId))
+            {
+                client.CompleteAsync(converterSessionId!, CancellationToken.None)
+                    .GetAwaiter().GetResult();
+                converterSessionId = null;
+            }
             WaitForAddInIdle(addIn, TimeSpan.FromSeconds(10));
 
-            Console.WriteLine("[Word real OLE 3/6] Resolving the formula screen rectangle...");
             AssertEqual(1, document.InlineShapes.Count,
-                "Real OLE fixture should contain exactly one inline shape.");
+                "Real OLE \\oiint fixture should contain exactly one inline shape.");
             shape = document.InlineShapes[1];
             AssertEqual(FormulaOleContract.ProgId, shape.OLEFormat.ProgID,
-                "Real OLE fixture has the wrong ProgID.");
+                "Real OLE \\oiint fixture has the wrong ProgID.");
+            AssertTrue(
+                shape.Height > 20f,
+                $"Word received a small OLE \\oiint preview; shapeHeight={shape.Height:0.###} pt.");
+
+            var path = Path.Combine(artifactRoot, "VisualTeX-Word-Real-OLE-OIINT-DoubleClick.docx");
+            document.SaveAs2(path, Word.WdSaveFormat.wdFormatXMLDocument);
+            Release(shape);
+            shape = null;
+            document.Close(Word.WdSaveOptions.wdSaveChanges);
+            Release(document);
+            document = application.Documents.Open(path, ReadOnly: false, Visible: true);
+
+            Console.WriteLine("[Word real OLE 4/8] Verifying save/reopen metadata and edit source...");
+            AssertEqual(1, document.InlineShapes.Count,
+                "Save/reopen changed the OLE \\oiint shape inventory.");
+            shape = document.InlineShapes[1];
+            shape.Range.Select();
+            var reopenedSource = new VisualTeX.WordVsto.WordFormulaService(application).ReadSelection();
+            AssertEqual(FormulaOleContract.NativeOleMode, reopenedSource.ObjectMode,
+                "Save/reopen changed the OLE \\oiint object mode.");
+            var reopenedLatex = reopenedSource.Metadata?.Latex ?? string.Empty;
+            AssertTrue(
+                reopenedLatex.IndexOf("\\oiint", StringComparison.Ordinal) >= 0,
+                $"Save/reopen lost the canonical \\oiint command; actual='{reopenedLatex}'.");
+            AssertTrue(
+                reopenedLatex.IndexOf('∯') < 0,
+                "Save/reopen serialized OLE \\oiint as raw Unicode instead of canonical LaTeX.");
+
+            Console.WriteLine("[Word real OLE 5/8] Resolving the reopened formula screen rectangle...");
+            AssertEqual(FormulaOleContract.ProgId, shape.OLEFormat.ProgID,
+                "Reopened OLE \\oiint fixture has the wrong ProgID.");
             range = shape.Range;
             range.Select();
             application.ActiveWindow.Activate();
@@ -617,7 +890,7 @@ internal static class Program
             if (width <= 0 || height <= 0)
                 throw new InvalidDataException("Word did not return a visible OLE formula rectangle.");
 
-            Console.WriteLine("[Word real OLE 4/6] Sending a real mouse double-click...");
+            Console.WriteLine("[Word real OLE 6/8] Sending a real mouse double-click...");
             existing = SnapshotSessionIds();
             if (consoleWindow != IntPtr.Zero) ShowWindow(consoleWindow, 0);
             var wordWindowHandle = new IntPtr(window.Hwnd);
@@ -656,10 +929,17 @@ internal static class Program
                 "Real OLE double-click did not create an edit Session.");
             AssertEqual(FormulaOleContract.NativeOleMode, editSession.ObjectMode,
                 "Real OLE double-click created the wrong object mode.");
+            var editLatex = string.Join("\n", editSession.Lines.Select(line => line.Latex));
+            AssertTrue(
+                editLatex.IndexOf("\\oiint", StringComparison.Ordinal) >= 0,
+                $"Real OLE double-click reopened unresolved/noncanonical source: '{editLatex}'.");
+            AssertTrue(
+                editLatex.IndexOf('∯') < 0,
+                "Real OLE double-click returned raw Unicode ∯ instead of \\oiint.");
             Console.WriteLine(
                 $"  Real mouse OLE Session={editSessionId}; rectangle={left},{top},{width},{height}.");
 
-            Console.WriteLine("[Word real OLE 5/6] Closing the unchanged editor...");
+            Console.WriteLine("[Word real OLE 7/8] Closing the unchanged editor...");
             var ready = WaitForUnchangedEditorReady(
                 client,
                 editSessionId,
@@ -672,14 +952,24 @@ internal static class Program
                 closed.Error ?? "Real OLE double-click editor did not close cleanly.");
             WaitForAddInIdle(addIn, TimeSpan.FromSeconds(10));
 
-            var path = Path.Combine(artifactRoot, "VisualTeX-Word-Real-OLE-DoubleClick.docx");
-            document.SaveAs2(path, Word.WdSaveFormat.wdFormatXMLDocument);
-            Console.WriteLine($"[Word real OLE 6/6] Saved {path}; real mouse interception passed.");
+            document.Save();
+            Console.WriteLine(
+                $"[Word real OLE 8/8] Saved {path}; production \\oiint vector, "
+                + "save/reopen metadata, and real mouse edit checks passed.");
         }
         finally
         {
             if (consoleWindow != IntPtr.Zero) ShowWindow(consoleWindow, 5);
             Environment.SetEnvironmentVariable("VISUALTEX_WORD_HOOK_TRACE_PATH", null);
+            if (!string.IsNullOrWhiteSpace(converterSessionId))
+            {
+                try
+                {
+                    client.CompleteAsync(converterSessionId!, CancellationToken.None)
+                        .GetAwaiter().GetResult();
+                }
+                catch { }
+            }
             if (addIn is not null)
             {
                 try { addIn.OnDisconnection(ext_DisconnectMode.ext_dm_UserClosed, ref custom); } catch { }
@@ -1131,13 +1421,29 @@ internal static class Program
                 }
             }
 
+            // Word can finish auto-loading the installed VSTO add-in after the
+            // initial COMAddIns.Connect check. This acceptance also hosts the
+            // current build in-process, so a late installed instance would add a
+            // second WindowBeforeDoubleClick handler and create a false duplicate
+            // Session. Disconnect it again immediately before the real mouse
+            // phase, after Word startup has fully settled.
+            if (installedAddIn is not null)
+            {
+                if (installedAddIn.Connect)
+                    installedAddIn.Connect = false;
+                Thread.Sleep(250);
+                if (installedAddIn.Connect)
+                    throw new InvalidDataException(
+                        "The installed Word add-in remained connected during the isolated OMML double-click acceptance.");
+            }
+
             var path = Path.Combine(artifactRoot, "VisualTeX-Word-OMML-DoubleClick-Fixtures.docx");
             document.SaveAs2(path, Word.WdSaveFormat.wdFormatXMLDocument);
             document.Close(Word.WdSaveOptions.wdSaveChanges);
             Release(document);
             document = null;
 
-            Console.WriteLine("[OMML fixtures 7/8] Reopening and exercising real native double-click editing...");
+            Console.WriteLine("[OMML fixtures 7/8] Reopening and exercising real VisualTeX double-click editing...");
             document = application.Documents.Open(path, ReadOnly: false, Visible: true);
             application.Visible = true;
             Word.Window? focusWindow = null;
@@ -1167,23 +1473,37 @@ internal static class Program
                 Release(focusWindow);
             }
 
+            var openedFormulaIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             for (var equationIndex = 1; equationIndex <= expectedEquationCount; equationIndex++)
             {
                 Word.OMaths? maths = null;
                 Word.OMath? math = null;
                 Word.Range? equationRange = null;
                 Word.Window? window = null;
-                Word.OMaths? selectedMaths = null;
                 try
                 {
                     maths = document.OMaths;
                     math = maths[equationIndex];
                     equationRange = math.Range;
                     var beforeXml = equationRange.WordOpenXML;
+                    var beforeMathXml = XDocument.Parse(beforeXml);
+                    var beforeMathText = string.Concat(
+                        beforeMathXml.Descendants(mathNamespace + "t").Select(text => text.Value));
+                    var beforeFractionCount = beforeMathXml.Descendants(mathNamespace + "f").Count();
+                    var beforeNaryCount = beforeMathXml.Descendants(mathNamespace + "nary").Count();
+                    var beforeMathCount = document.OMaths.Count;
+                    var beforeParagraphCount = document.Paragraphs.Count;
+                    var beforeStart = equationRange.Start;
+                    var beforeAlignment = equationRange.ParagraphFormat.Alignment;
+                    var beforeSpaceBefore = equationRange.ParagraphFormat.SpaceBefore;
+                    var beforeSpaceAfter = equationRange.ParagraphFormat.SpaceAfter;
+                    var beforeLineSpacingRule = equationRange.ParagraphFormat.LineSpacingRule;
                     equationRange.Select();
                     WinForms.Application.DoEvents();
                     Thread.Sleep(180);
                     window = application.ActiveWindow;
+                    var wordWindowHandle = new IntPtr(window.Hwnd);
+                    SetForegroundWindow(wordWindowHandle);
                     window.GetPoint(
                         out var left,
                         out var top,
@@ -1204,27 +1524,59 @@ internal static class Program
                         Thread.Sleep(90);
                     }
 
-                    var deadline = DateTime.UtcNow.AddSeconds(5);
-                    var nativeCaretEntered = false;
-                    while (DateTime.UtcNow < deadline)
-                    {
-                        Release(selectedMaths);
-                        selectedMaths = application.Selection.OMaths;
-                        if (selectedMaths.Count == 1)
-                        {
-                            nativeCaretEntered = true;
-                            break;
-                        }
-                        WinForms.Application.DoEvents();
-                        Thread.Sleep(60);
-                    }
-                    if (!nativeCaretEntered)
+                    var editSessionId = WaitForNewSession(
+                        sessionsBefore,
+                        "word",
+                        TimeSpan.FromSeconds(30));
+                    var editSession = WaitForUnchangedEditorReady(
+                        client,
+                        editSessionId,
+                        TimeSpan.FromSeconds(15));
+                    AssertEqual("edit", editSession.Mode,
+                        $"OMML equation {equationIndex} double-click did not create an edit Session.");
+                    AssertEqual(FormulaOleContract.WordOmmlMode, editSession.ObjectMode,
+                        $"OMML equation {equationIndex} double-click changed the object mode.");
+                    if (string.IsNullOrWhiteSpace(editSession.FormulaId)
+                        || !openedFormulaIds.Add(editSession.FormulaId))
                         throw new InvalidDataException(
-                            $"Real double-click did not enter Word's native editor for OMML equation {equationIndex}.");
+                            $"OMML equation {equationIndex} double-click did not resolve one unique persistent formulaId.");
 
-                    application.Selection.TypeText("q");
-                    WinForms.Application.DoEvents();
-                    Thread.Sleep(150);
+                    if (equationIndex == 2)
+                    {
+                        // The click target is intentionally inside the display
+                        // OMath. This reproduces Word's clipped OMath.Range bug:
+                        // replacement must use the bookmark-resolved full range,
+                        // otherwise the new formula is inserted into the old one.
+                        Commit(
+                            client,
+                            editSession,
+                            "block",
+                            FormulaOleContract.WordOmmlMode,
+                            "\\frac{a+b}{c+d}+1",
+                            numbered: false,
+                            mathMl:
+                                "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">"
+                                + "<mfrac><mrow><mi>a</mi><mo>+</mo><mi>b</mi></mrow>"
+                                + "<mrow><mi>c</mi><mo>+</mo><mi>d</mi></mrow></mfrac>"
+                                + "<mo>+</mo><mn>1</mn></math>");
+                    }
+                    else
+                    {
+                        client.CloseEditorAsync(editSessionId, CancellationToken.None)
+                            .GetAwaiter().GetResult();
+                    }
+
+                    var terminal = WaitForTerminal(
+                        client,
+                        editSessionId,
+                        TimeSpan.FromSeconds(45));
+                    AssertEqual("completed", terminal.Status,
+                        terminal.Error
+                            ?? $"OMML equation {equationIndex} double-click Session did not complete.");
+                    client.CloseEditorAsync(editSessionId, CancellationToken.None)
+                        .GetAwaiter().GetResult();
+                    WaitForAddInIdle(addIn, TimeSpan.FromSeconds(10));
+
                     Release(equationRange);
                     equationRange = null;
                     Release(math);
@@ -1233,23 +1585,64 @@ internal static class Program
                     maths = document.OMaths;
                     math = maths[equationIndex];
                     equationRange = math.Range;
-                    if (string.Equals(beforeXml, equationRange.WordOpenXML, StringComparison.Ordinal))
-                        throw new InvalidDataException(
-                            $"Typing after real double-click did not change OMML equation {equationIndex}.");
-                    document.Undo(1);
-                    WinForms.Application.DoEvents();
-                    Thread.Sleep(120);
 
-                    var sessionsAfter = SnapshotSessionIds();
-                    if (sessionsAfter.Except(sessionsBefore, StringComparer.OrdinalIgnoreCase).Any())
-                        throw new InvalidDataException(
-                            $"OMML equation {equationIndex} incorrectly opened a VisualTeX Session.");
+                    AssertEqual(beforeMathCount, document.OMaths.Count,
+                        $"OMML equation {equationIndex} double-click edit lost or duplicated an equation.");
+                    AssertEqual(beforeParagraphCount, document.Paragraphs.Count,
+                        $"OMML equation {equationIndex} double-click edit inserted or removed a paragraph.");
+                    AssertEqual(beforeStart, equationRange.Start,
+                        $"OMML equation {equationIndex} was not replaced in place.");
+                    AssertEqual(beforeAlignment, equationRange.ParagraphFormat.Alignment,
+                        $"OMML equation {equationIndex} changed paragraph alignment.");
+                    AssertNear(beforeSpaceBefore, equationRange.ParagraphFormat.SpaceBefore, 0.1f,
+                        $"OMML equation {equationIndex} changed paragraph space-before.");
+                    AssertNear(beforeSpaceAfter, equationRange.ParagraphFormat.SpaceAfter, 0.1f,
+                        $"OMML equation {equationIndex} changed paragraph space-after.");
+                    AssertEqual(beforeLineSpacingRule, equationRange.ParagraphFormat.LineSpacingRule,
+                        $"OMML equation {equationIndex} changed line-spacing rules.");
+
+                    if (equationIndex == 2)
+                    {
+                        var editedXml = XDocument.Parse(equationRange.WordOpenXML);
+                        AssertEqual(1, editedXml.Descendants(mathNamespace + "f").Count(),
+                            "Partial-range OMML edit left the old fraction behind the replacement.");
+                        AssertEqual(1, editedXml.Descendants(mathNamespace + "oMath").Count(),
+                            "Partial-range OMML edit nested or duplicated the native equation.");
+                        var editedMathText = string.Concat(
+                            editedXml.Descendants(mathNamespace + "t").Select(text => text.Value));
+                        if (editedMathText.IndexOf('1') < 0)
+                            throw new InvalidDataException(
+                                "Partial-range OMML edit did not persist the added digit. "
+                                + $"ActualMathText='{editedMathText}'.");
+                    }
+                    else
+                    {
+                        // Word may rewrite volatile run properties or rsid data
+                        // merely by entering/leaving an equation. Compare the
+                        // mathematical content and structure rather than the
+                        // byte-for-byte WordOpenXML wrapper.
+                        var unchangedXml = XDocument.Parse(equationRange.WordOpenXML);
+                        AssertEqual(
+                            beforeMathText,
+                            string.Concat(unchangedXml
+                                .Descendants(mathNamespace + "t")
+                                .Select(text => text.Value)),
+                            $"Unchanged OMML equation {equationIndex} changed visible math text.");
+                        AssertEqual(beforeFractionCount,
+                            unchangedXml.Descendants(mathNamespace + "f").Count(),
+                            $"Unchanged OMML equation {equationIndex} changed fraction structure.");
+                        AssertEqual(beforeNaryCount,
+                            unchangedXml.Descendants(mathNamespace + "nary").Count(),
+                            $"Unchanged OMML equation {equationIndex} changed n-ary structure.");
+                    }
+
                     Console.WriteLine(
-                        $"  OMML equation {equationIndex}: native caret entered, input changed OMML, undo passed.");
+                        equationIndex == 2
+                            ? "  OMML equation 2: VisualTeX opened and full-range in-place edit passed."
+                            : $"  OMML equation {equationIndex}: VisualTeX opened and unchanged close passed.");
                 }
                 finally
                 {
-                    Release(selectedMaths);
                     Release(window);
                     Release(equationRange);
                     Release(math);
@@ -1258,7 +1651,21 @@ internal static class Program
             }
 
             document.Save();
-            Console.WriteLine($"[OMML fixtures 8/8] Saved {path}; current-source real mouse checks passed.");
+            document.Close(Word.WdSaveOptions.wdSaveChanges);
+            Release(document);
+            document = application.Documents.Open(path, ReadOnly: false, Visible: true);
+            AssertEqual(expectedEquationCount, document.OMaths.Count,
+                "Save/reopen changed the OMML equation inventory after VisualTeX editing.");
+            var reopenedEditXml = XDocument.Parse(document.OMaths[2].Range.WordOpenXML);
+            AssertEqual(1, reopenedEditXml.Descendants(mathNamespace + "f").Count(),
+                "Save/reopen restored a duplicated fraction after in-place OMML editing.");
+            var reopenedEditMathText = string.Concat(
+                reopenedEditXml.Descendants(mathNamespace + "t").Select(text => text.Value));
+            if (reopenedEditMathText.IndexOf('1') < 0)
+                throw new InvalidDataException(
+                    "Save/reopen lost the digit added through the OMML VisualTeX editor. "
+                    + $"ActualMathText='{reopenedEditMathText}'.");
+            Console.WriteLine($"[OMML fixtures 8/8] Saved {path}; VisualTeX double-click and in-place edit checks passed.");
         }
         finally
         {
@@ -1682,6 +2089,24 @@ internal static class Program
             typedRange = document.Range(ref rangeStart, ref rangeEnd);
             AssertNear(0f, typedRange.Font.Position, 0.1f,
                 "Text typed after the formula inherited the formula baseline offset.");
+            Release(typedRange);
+            typedRange = null;
+
+            Console.WriteLine("[Word 4b/12] Re-clicking the formula tail and typing on the body-text baseline...");
+            var formulaTail = shape.Range.End;
+            application.Selection.SetRange(formulaTail, formulaTail);
+            System.Windows.Forms.Application.DoEvents();
+            Thread.Sleep(100);
+            System.Windows.Forms.Application.DoEvents();
+            AssertNear(0f, application.Selection.Font.Position, 0.1f,
+                "Word caret at the re-clicked formula tail kept the OLE baseline offset.");
+            var retypedStart = application.Selection.Start;
+            application.Selection.TypeText(" reclick");
+            object retypedRangeStart = retypedStart;
+            object retypedRangeEnd = application.Selection.Start;
+            typedRange = document.Range(ref retypedRangeStart, ref retypedRangeEnd);
+            AssertNear(0f, typedRange.Font.Position, 0.1f,
+                "Text typed after re-clicking the formula tail inherited the OLE baseline offset.");
             Release(typedRange);
             typedRange = null;
 
@@ -2950,6 +3375,11 @@ internal static class Program
         return maximumX < minimumX || maximumY < minimumY
             ? (0, 0, 0)
             : (count, maximumX - minimumX + 1, maximumY - minimumY + 1);
+    }
+
+    private static void AssertTrue(bool condition, string message)
+    {
+        if (!condition) throw new InvalidDataException(message);
     }
 
     private static void AssertNear(float expected, float actual, float tolerance, string message)

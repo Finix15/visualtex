@@ -10,9 +10,9 @@ internal static class WordDoubleClickRouting
             || string.IsNullOrWhiteSpace(selection.FormulaId))
             return false;
 
-        // Every VisualTeX-owned object, including Word-native OMML, reopens the
-        // VisualTeX Session editor. Ordinary Word equations have no VisualTeX
-        // metadata and therefore still keep Word's native equation editor.
+        // Every VisualTeX-managed formula reopens the same editor, including
+        // native Word OMML. Ordinary Word equations have no VisualTeX metadata
+        // and therefore continue to use Word's built-in double-click editor.
         return true;
     }
 }

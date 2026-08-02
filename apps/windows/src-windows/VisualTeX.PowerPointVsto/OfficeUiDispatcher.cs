@@ -14,6 +14,12 @@ internal sealed class OfficeUiDispatcher : IDisposable
         _control.CreateControl();
     }
 
+    public void Post(Action operation)
+    {
+        if (_control.IsDisposed || _control.Disposing) return;
+        try { _control.BeginInvoke(operation); } catch (InvalidOperationException) { }
+    }
+
     public Task<T> InvokeAsync<T>(Func<T> operation)
     {
         var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);

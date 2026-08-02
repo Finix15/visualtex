@@ -235,6 +235,9 @@ const wordVstoService = await source(
 const officeFormulaSizing = await source(
   "src-windows/VisualTeX.WindowsOffice.Contracts/OfficeFormulaSizing.cs",
 );
+const wordInlineAlignment = await source(
+  "src-windows/VisualTeX.WindowsOffice.Contracts/WordInlineAlignment.cs",
+);
 const powerpointVsto = await source(
   "src-windows/VisualTeX.PowerPointVsto/ThisAddIn.cs",
 );
@@ -252,6 +255,9 @@ const ribbonIconData = await source(
 );
 const ribbonIconProvider = await source(
   "src-windows/VisualTeX.WindowsOffice.VstoShared/RibbonIconProvider.cs",
+);
+const ribbonVectorIconRenderer = await source(
+  "src-windows/VisualTeX.WindowsOffice.VstoShared/RibbonVectorIconRenderer.cs",
 );
 const wordDoubleClickHook = await source(
   "src-windows/VisualTeX.WordVsto/WordDoubleClickHook.cs",
@@ -290,9 +296,22 @@ const vstoFlowAcceptance = await source(
   "src-windows/VisualTeX.VstoFlowAcceptance/Program.cs",
 );
 const officeServer = await source("src-tauri/src/office/server.rs");
+const officeState = await source("src-tauri/src/office/state.rs");
 const officeSessions = await source("src-tauri/src/office/sessions.rs");
 const officeDialogMain = await source("src/office/dialog/main.tsx");
 const officeDialogMessages = await source("src/office/dialog/dialogMessages.ts");
+const documentImportApp = await source(
+  "src/office/documentImport/DocumentImportApp.tsx",
+);
+const documentImportParser = await source(
+  "src/office/documentImport/documentImportParser.ts",
+);
+const documentImportFile = await source(
+  "src/office/documentImport/documentImportFile.ts",
+);
+const documentImportCss = await source(
+  "src/office/documentImport/documentImport.css",
+);
 assert.ok(!sessionClient.includes("_installToken = ReadInstallToken()"));
 assert.ok(sessionClient.includes("StartVisualTeXCompanion"));
 assert.ok(sessionClient.includes("timeout.CancelAfter(TimeSpan.FromSeconds(3))"));
@@ -305,6 +324,7 @@ assert.ok(sessionClient.includes("assembly.Location"));
 assert.ok(sessionClient.includes("tls-certificate-callback"));
 assert.ok(!sessionClient.includes("return sslPolicyErrors == SslPolicyErrors.None"));
 assert.ok(sessionClient.includes("OpenEditorAsync"));
+assert.ok(sessionClient.includes("OpenBulkImportAsync"));
 assert.ok(sessionClient.includes("CloseEditorAsync"));
 assert.ok(sessionClient.includes("/api/v1/app/sessions/"));
 assert.ok(sessionClient.includes('}/close"'));
@@ -317,19 +337,34 @@ assert.ok(officeServer.includes("set_always_on_top(true)"));
 assert.ok(officeServer.includes("request_user_attention"));
 assert.ok(officeServer.includes("WebviewWindowBuilder::new"));
 assert.ok(officeServer.includes('"/app/sessions/{session_id}/open"'));
+assert.ok(officeServer.includes('"/app/sessions/{session_id}/bulk-import"'));
+assert.ok(officeServer.includes("?runtime=vsto-bulk-import"));
+assert.ok(officeServer.includes("open_desktop_bulk_import_window"));
+assert.ok(officeServer.includes('format!("office-import-{suffix}")'));
 assert.ok(officeServer.includes('"/app/sessions/{session_id}/close"'));
 assert.ok(officeServer.includes("close_desktop_session"));
 assert.ok(officeServer.includes("WebviewUrl::External(url)"));
 assert.ok(officeServer.includes("?runtime=vsto-desktop"));
+assert.ok(officeServer.includes('visualtex-editor-layout'));
+assert.ok(officeServer.includes("current_editor_layout"));
 assert.ok(!officeServer.includes("remove_office_js"));
 assert.ok(!officeServer.includes('"<script src=\\\"/vendor/office-js/office.js\\\"></script>"'));
 assert.ok(officeServer.includes('#[cfg(not(target_os = "windows"))]'));
 assert.ok(officeDialogMain.includes("executes the Office.js runtime"));
+assert.ok(officeDialogMain.includes("DocumentImportApp"));
+assert.ok(officeDialogMain.includes('runtime === "vsto-bulk-import"'));
+assert.ok(officeDialogMain.includes('meta[name="visualtex-editor-layout"]'));
 assert.ok(!officeDialogMain.includes("Office.onReady"));
 assert.ok(officeDialogMessages.includes("no Office.context.ui parent"));
 assert.ok(officeDialogMessages.includes("return false"));
 assert.ok(!officeDialogMessages.includes("messageParent"));
 const officeDialogApp = await source("src/office/dialog/OfficeDialogApp.tsx");
+const officeApplyShortcut = await source("src/office/dialog/officeApplyShortcut.ts");
+const editorWorkspace = await source("src/workspace/EditorWorkspace.tsx");
+const settingsDialog = await source("src/components/SettingsDialog.tsx");
+const editorStore = await source("src/stores/editorStore.ts");
+const mathEditor = await source("src/editor/MathEditor.tsx");
+const formulaToolbar = await source("src/toolbar/FormulaToolbar.tsx");
 assert.ok(officeDialogApp.includes("closeOfficeSessionWindow"));
 assert.ok(officeDialogApp.includes("IS_VSTO_DESKTOP_RUNTIME"));
 assert.ok(officeDialogApp.includes("if (!delivered) window.close()"));
@@ -339,19 +374,130 @@ assert.ok(officeDialogApp.includes("originalFingerprintRef.current = loadedFinge
 assert.ok(officeDialogApp.includes("normalizeOfficeCodeFormat"));
 assert.ok(officeDialogApp.includes('return "raw"'));
 assert.ok(officeDialogApp.includes("setLatexCodeFormat(loadedCodeFormat)"));
+assert.ok(officeDialogApp.includes("getOfficePreferences"));
+assert.ok(officeDialogApp.includes("applyEditorLayout"));
+assert.ok(officeDialogApp.includes("status.editorLayout"));
+assert.ok(officeDialogApp.includes("data-office-font-size"));
+assert.ok(officeDialogApp.includes("<select"));
+assert.ok(officeDialogApp.includes("OFFICE_CHINESE_FONT_SIZE_OPTIONS"));
+assert.ok(officeDialogApp.includes('{ name: "小四", fontSizePt: 12 }'));
+assert.ok(officeDialogApp.includes('{ name: "五号", fontSizePt: 10.5 }'));
+assert.ok(officeDialogApp.includes("officePointFontSizeOptions(officeFontSizePt)"));
+assert.ok(officeDialogApp.includes('label={isEn ? "Chinese sizes" : "中文字号"}'));
+assert.ok(!officeDialogApp.includes("office-formula-font-size-presets"));
+assert.ok(officeDialogApp.includes("fontSizePt: officeFontSizePt"));
+assert.ok(officeDialogApp.includes("powerPointDefaultFontSizePt"));
+assert.ok(officeDialogApp.includes("registerOfficeApplyShortcut"));
+assert.ok(officeDialogApp.includes("commitFromShortcutRef"));
+assert.ok(officeDialogApp.includes("IS_VSTO_CONVERT_RUNTIME"));
+assert.ok(officeDialogApp.includes("!ocrOpen"));
+assert.ok(officeDialogApp.includes("!inlineOcrBusyRef.current"));
+assert.ok(officeApplyShortcut.includes('window.addEventListener("keydown", handleOfficeApplyShortcut, true)'));
+assert.ok(officeApplyShortcut.includes("event.preventDefault()"));
+assert.ok(officeApplyShortcut.includes("event.stopImmediatePropagation()"));
+assert.ok(officeApplyShortcut.includes("if (event.repeat) return"));
+assert.ok(officeApplyShortcut.includes("event.ctrlKey"));
+assert.ok(officeApplyShortcut.includes("!event.altKey"));
+assert.ok(officeApplyShortcut.includes("!event.shiftKey"));
+assert.ok(officeApplyShortcut.includes("!event.metaKey"));
+assert.ok(officeApplyShortcut.includes("!event.isComposing"));
+assert.ok(editorWorkspace.includes('aria-keyshortcuts="Control+S"'));
+assert.ok(editorWorkspace.includes("应用并关闭（Ctrl+S）"));
+assert.ok(officeServer.includes('"/preferences"'));
+assert.ok(officeServer.includes("powerpoint_default_font_size_pt"));
+assert.ok(officeState.includes('office-preferences.json'));
+assert.ok(officeState.includes("DEFAULT_POWERPOINT_FORMULA_FONT_SIZE_PT: f64 = 20.0"));
+assert.ok(officeState.includes("persist_powerpoint_default_font_size_pt"));
+assert.ok(officeState.includes("app_editor_layout"));
+assert.ok(officeState.includes("normalize_app_editor_layout"));
+assert.ok(settingsDialog.includes("data-powerpoint-default-font-size"));
+assert.ok(editorStore.includes("powerPointDefaultFontSizePt: 20"));
+assert.ok(editorStore.includes("contextCounts"));
+assert.ok(mathEditor.includes("rankNativeSuggestionItems"));
+assert.ok(mathEditor.includes("recordNativeSuggestionUsage"));
+assert.ok(formulaToolbar.includes("commonToolbarCommandLimit = 45"));
+assert.ok(formulaToolbar.includes("visualtex-common-toolbar-command-ids-v2"));
+assert.ok(formulaToolbar.includes("visualtex-common-toolbar-command-ids-v1"));
+assert.ok(formulaToolbar.includes('if (id === "notin") return "times"'));
+assert.ok(formulaToolbar.includes('if (id === "leftarrow") return "div"'));
+assert.ok(formulaToolbar.includes("addCommandToCommon"));
+assert.ok(formulaToolbar.includes("设为常用"));
+assert.ok(!formulaToolbar.includes("contextCounts.toolbar"));
+assert.ok(!editorWorkspace.includes("data-formula-typing-bold"));
+assert.ok(!editorWorkspace.includes("data-formula-typing-italic"));
+assert.ok(editorWorkspace.includes("data-formula-selection-bold"));
+assert.ok(editorWorkspace.includes("data-formula-selection-italic"));
+assert.ok(editorWorkspace.includes("data-formula-selection-color"));
+assert.ok(editorWorkspace.includes("data-formula-selection-background"));
+assert.ok(!editorWorkspace.includes("typingStyle={typingStyle}"));
+assert.ok(!mathEditor.includes("applyTypingStyleAtCollapsedSelection"));
+assert.ok(!mathEditor.includes("MathEditorTypingStyle"));
+assert.ok(mathEditor.includes("captureSelectionTarget"));
+assert.ok(mathEditor.includes("applySelectionStyle"));
+assert.ok(mathEditor.includes("MathLive owns pointer capture"));
+assert.ok(mathEditor.includes(":host(.has-visualtex-multi-line-selection)"));
+assert.ok(mathEditor.includes("multiLineSelectionRef.current && event.buttons === 0"));
+assert.ok(documentImportApp.includes("Word 结构预览"));
+assert.ok(documentImportApp.includes("doc-import-preview-stage"));
+assert.ok(documentImportApp.includes("doc-import-preview-counts"));
+assert.ok(documentImportApp.includes("applyDocumentTheme"));
+assert.ok(documentImportApp.includes("latexToSvg"));
+assert.ok(documentImportApp.includes("fontSizePt: 13"));
+assert.ok(documentImportApp.includes("parseDocumentImport"));
+assert.ok(documentImportApp.includes("readDocumentImportFile"));
+assert.ok(documentImportApp.includes("导入 .tex / .md"));
+assert.ok(documentImportApp.includes('accept=".tex,.md,.markdown,text/x-tex,text/markdown"'));
+assert.ok(documentImportApp.includes("importedFile.encoding"));
+assert.ok(documentImportApp.includes("已编辑"));
+assert.ok(documentImportApp.includes("JSON.stringify(preview.parsed)"));
+assert.ok(documentImportApp.includes('codeFormat: "visualtex-document-json"'));
+assert.ok(documentImportCss.includes("font-size: 13pt;"));
+assert.ok(documentImportCss.includes(".doc-import-formula.display"));
+assert.ok(documentImportCss.includes("width: 100%;\n  min-width: 0;"));
+assert.ok(documentImportParser.includes("findDisplayStart"));
+assert.ok(documentImportParser.includes('findUnescaped(text, "\\\\["'));
+assert.ok(documentImportParser.includes("normalizeDisplayEnvironment"));
+assert.ok(documentImportParser.includes("normalizeMarkdownSource"));
+assert.ok(documentImportParser.includes("normalizeLatexExtensions"));
+assert.ok(documentImportParser.includes("visibleMultiArgumentCommands"));
+assert.ok(documentImportFile.includes("readDocumentImportFile"));
+assert.ok(documentImportFile.includes("documentFormatFromFileName"));
+assert.ok(documentImportFile.includes('new TextDecoder("gb18030"'));
+assert.ok(documentImportFile.includes('new TextDecoder("utf-16le"'));
+assert.ok(documentImportFile.includes("DOCUMENT_IMPORT_MAX_FILE_BYTES"));
+assert.ok(documentImportCss.includes(".doc-import-file-button"));
+assert.ok(documentImportCss.includes(".doc-import-file-chip"));
+assert.ok(wordVsto.includes("ResolveBulkImportDocumentAsync"));
+assert.ok(wordVsto.includes("ParseSerialized"));
+assert.ok(wordVsto.includes('"visualtex-document-json"'));
+assert.ok(wordVsto.includes("OpenBulkImportAsync"));
 assert.ok(officeSessions.includes("unchanged_edit"));
+assert.ok(officeSessions.includes("document_import"));
+assert.ok(officeSessions.includes('"visualtex-document-json"'));
+assert.ok(officeSessions.includes("document_import_can_commit_source_without_formula_export"));
 assert.ok(officeSessions.includes("unchanged_edit_can_complete_without_new_export_result"));
 assert.ok(officeSessions.includes("changed_edit_still_requires_a_new_export_result"));
 assert.ok(wordVstoService.includes("shape.LockAspectRatio = Microsoft.Office.Core.MsoTriState.msoFalse"));
 assert.ok(wordVstoService.includes("shape.Height = height"));
-assert.ok(wordVstoService.includes("ApplyInlineBaseline(shape, shape.Height"));
+assert.ok(wordVstoService.includes("ApplyInlineBaseline("));
+assert.ok(wordVstoService.includes("ReadDefinedShapeFontPosition"));
+assert.ok(wordVstoService.includes("CalculateFontPositionWithLegacyFallback"));
+assert.ok(wordInlineAlignment.includes("HasValidExportedBaseline"));
+assert.ok(wordInlineAlignment.includes("dequantizedMagnitude"));
+assert.ok(wordInlineAlignment.includes("LegacyDescentRatio"));
 assert.ok(wordVstoService.includes("RestoreTypingBaselineAfter(shape)"));
+assert.ok(wordVstoService.includes("font.StrikeThrough = run.Strike"));
+assert.ok(wordVstoService.includes("font.Underline = run.Underline"));
+assert.ok(wordVstoService.includes("TryResolveWordFontSize"));
+assert.ok(wordVstoService.includes("selectionRange.Start - 1"));
+assert.ok(wordVstoService.includes("selectionRange.Start + 1"));
 assert.ok(wordVstoService.includes("font.Position = 0"));
 assert.ok(wordVstoService.includes("OfficeFormulaSizing.EditedSize"));
 assert.ok(officeFormulaSizing.includes("Formula height is the visual font-size reference"));
 assert.ok(powerpointVstoService.includes("ApplyOleSizeAndRefresh"));
 assert.ok(powerpointVstoService.includes("RestoreOlePosition"));
 assert.ok(powerpointVstoService.includes("OfficeFormulaSizing.EditedSize"));
+assert.ok(powerpointVstoService.includes("return 20f"));
 assert.ok(!powerpointVstoService.includes("format.DoVerb(-1)"));
 assert.ok(powerpointVstoService.includes("CF_METAFILEPICT"));
 assert.ok(powerpointVstoService.includes("shape.Type is not MsoShapeType.msoEmbeddedOLEObject"));
@@ -439,6 +585,7 @@ for (const binding of [
   ['VisualTeX.WordVsto.ConvertSelected"', 'tag="convertToOle"'],
   ['VisualTeX.WordVsto.ConvertSelectedToOmml', 'tag="convertToOmml"'],
   ['VisualTeX.WordVsto.UpdateNumbers', 'tag="updateNumbers"'],
+  ['VisualTeX.WordVsto.BulkImport', 'tag="batchImport"'],
 ]) {
   assert.ok(wordVsto.includes(`id="${binding[0]}`));
   assert.ok(wordVsto.includes(binding[1]));
@@ -454,7 +601,27 @@ for (const binding of [
 assert.ok(wordVsto.includes('getImage="GetRibbonImage"'));
 assert.ok(powerpointVsto.includes('getImage="GetRibbonImage"'));
 assert.ok(ribbonIconProvider.includes("GetIPictureDispFromPicture"));
-assert.ok(ribbonIconProvider.includes("RibbonIconData.OleDisplay"));
+assert.ok(ribbonIconProvider.includes("RibbonVectorIconRenderer.Keys"));
+assert.ok(ribbonIconProvider.includes("RibbonVectorIconRenderer.Create"));
+assert.ok(ribbonVectorIconRenderer.includes("internal const int PixelSize = 64"));
+assert.ok(ribbonVectorIconRenderer.includes("internal const float Dpi = 192f"));
+for (const iconKey of [
+  "oleDisplay",
+  "ommlDisplay",
+  "oleInline",
+  "ommlInline",
+  "insertFormula",
+  "updateNumbers",
+  "editSelected",
+  "convertToOmml",
+  "convertToOle",
+  "batchImport",
+]) {
+  assert.ok(
+    ribbonVectorIconRenderer.includes(`"${iconKey}"`),
+    `Vector Ribbon renderer is missing ${iconKey}`,
+  );
+}
 assert.ok(ribbonIconData.includes("internal const string OleDisplay"));
 assert.ok(ribbonIconData.includes("internal const string ConvertToOle"));
 assert.ok(wordVsto.includes("service.ReplaceOmml"));
@@ -501,7 +668,8 @@ assert.ok(vstoOlePngExtractor.includes("RegisterClipboardFormat(\"PNG\")"));
 assert.ok(vstoOlePngExtractor.includes("ReleaseStgMedium"));
 assert.ok(vstoOlePngExtractor.includes("MaxPngBytes"));
 assert.ok(wordVstoService.includes("ExportSelectedOleAsPicture"));
-assert.ok(powerpointVstoService.includes("ExportSelectedOleAsPicture"));
+assert.ok(powerpointVsto.includes("imagePath = client.MaterializeSvg(session)"));
+assert.ok(powerpointVsto.includes('BeginSelectedSession("crossPlatformPicture", conversionOnly: true)'));
 assert.ok(wordVstoService.includes("WordEquationNumbering.TryReconcile"));
 assert.ok(wordVstoService.includes("WordEquationNumbering.Reconcile"));
 assert.ok(wordEquationNumbering.includes("SEQ {nativeSequenceName}"));
@@ -516,6 +684,8 @@ assert.ok(wordEquationNumbering.includes("WdTabAlignmentRight"));
 assert.ok(wordEquationNumbering.includes("WordOmmlFormulaStore.FormulaIds"));
 assert.ok(wordEquationNumbering.includes("WordOmmlFormulaStore.FindByFormulaId"));
 assert.ok(wordEquationNumbering.includes("WordOmmlFormulaStore.GetEquationRange"));
+assert.ok(wordEquationNumbering.includes("FormulaFontSize.ResolveSemanticFontSize"));
+assert.ok(wordEquationNumbering.includes("font.Size = numberFontSize"));
 assert.ok(wordOmmlConverter.includes("MML2OMML.XSL"));
 assert.ok(wordOmmlConverter.includes("FormattedText"));
 assert.ok(wordOmmlConverter.includes("WdOMathType.wdOMathDisplay"));
@@ -566,6 +736,7 @@ const installVstoRuntime = await source("scripts/install_windows_vsto_runtime.ps
 const prepareVstoRuntime = await source("scripts/prepare_windows_vsto_runtime.ps1");
 const runtimeVerification = await source("scripts/test_windows_office_runtime.ps1");
 const certificateInstaller = await source("scripts/ensure_windows_office_certificate.ps1");
+const certificateUninstaller = await source("scripts/remove_windows_office_certificate.ps1");
 const uninstallVsto = await source("scripts/uninstall_windows_vsto.ps1");
 const buildWindowsOffice = await source("scripts/build_windows_office.ps1");
 const ribbonDispatchSmoke = await source(
@@ -576,6 +747,9 @@ const dependencyLoadingSmoke = await source(
 );
 const nativeMsi = await source(
   "src-windows/VisualTeX.WindowsOffice.Installer/Package.wxs",
+);
+const nativeMsiProject = await source(
+  "src-windows/VisualTeX.WindowsOffice.Installer/VisualTeX.WindowsOffice.Installer.wixproj",
 );
 assert.ok(installOle.includes("forwarding to the native Ribbon + OLE LocalServer installer"));
 assert.ok(!installVsto.includes("uninstall_windows_ole.ps1"));
@@ -598,6 +772,17 @@ assert.ok(installVsto.includes("Assert-NetFramework48Installed"));
 assert.ok(installVsto.includes("Assert-OfficeApplicationsInstalled"));
 assert.ok(installVsto.includes("Assert-MsiArchitecture"));
 assert.ok(installVsto.includes("Assert-OfficeAddinRegistration"));
+assert.ok(installVsto.includes("Resolve-MachineOfficeInstallRoot"));
+assert.ok(installVsto.includes("ProgramW6432"));
+assert.ok(installVsto.includes("Resolve-PowerShellExecutable"));
+assert.ok(installVsto.includes("Sysnative\\WindowsPowerShell"));
+assert.ok(installVsto.includes("ArchitectureRelaunched"));
+assert.ok(installVsto.includes("TargetProcessPlatform"));
+assert.ok(installVsto.includes("Remove-LegacyPerUserOfficeRegistration"));
+assert.ok(installVsto.includes("Assert-ManagedComActivation"));
+assert.ok(installVsto.includes("Stop-VisualTeXProcessesForRepair"));
+assert.ok(installVsto.includes('$startParameters.Verb = "RunAs"'));
+assert.ok(installVsto.includes("RegistryHive]::LocalMachine"));
 assert.ok(installVsto.includes("FilesAndRegistryVerified"));
 assert.ok(installVsto.includes("OfficeRuntimeVerified"));
 assert.ok(installVsto.includes("Diagnostic report"));
@@ -629,7 +814,26 @@ for (const required of [
 }
 assert.ok(uninstallVsto.includes("DF66EC66-3B3A-4675-A7BE-30456A04EB96"));
 assert.ok(uninstallVsto.includes('Name "NativeOleEnabled"'));
+assert.ok(uninstallVsto.includes("Resolve-PowerShellExecutable"));
+assert.ok(uninstallVsto.includes("ArchitectureRelaunched"));
+assert.ok(uninstallVsto.includes("Sysnative\\WindowsPowerShell"));
+assert.ok(uninstallVsto.includes("vsto-uninstall-bootstrap-$stamp.log"));
+assert.ok(uninstallVsto.includes("certificate-remove-$stamp.log"));
+assert.ok(uninstallVsto.includes("remove_windows_office_certificate.ps1"));
+assert.ok(uninstallVsto.includes("Get-Process visualtex"));
+assert.ok(uninstallVsto.includes("Stopping VisualTeX process"));
+assert.ok(uninstallVsto.includes("$process.WaitForExit()"));
+assert.ok(certificateUninstaller.includes("reg.exe"));
+assert.ok(certificateUninstaller.includes("SystemCertificates\\Root\\Certificates"));
+assert.ok(certificateUninstaller.includes("WaitForExit"));
+assert.ok(certificateUninstaller.includes("TimeoutSeconds"));
+assert.ok(certificateUninstaller.includes("Test-CertificatePresent"));
+assert.ok(!certificateUninstaller.includes("X509Store"));
+assert.ok(!certificateUninstaller.includes("certutil.exe"));
+assert.ok(!uninstallVsto.includes("Start-Process -FilePath \"powershell.exe\" `\n        -Verb RunAs"));
 assert.ok(buildWindowsOffice.includes("test_windows_formula_ole_server.ps1"));
+assert.ok(buildWindowsOffice.includes("Stop-BuildOleServerProcesses"));
+assert.ok(buildWindowsOffice.includes("acceptance-owned OLE Server"));
 assert.ok(buildWindowsOffice.includes("test_windows_vsto_ribbon_dispatch.ps1"));
 assert.ok(buildWindowsOffice.includes("test_windows_vsto_dependency_loading.ps1"));
 assert.ok(buildWindowsOffice.includes("dependencyEntries"));
@@ -645,6 +849,15 @@ assert.ok(dependencyLoadingSmoke.includes("System.Text.Json, Version=8.0.0.0"));
 assert.ok(nativeMsi.includes("3,1,32,1"));
 assert.ok(nativeMsi.includes('Name="CodeBase"'));
 assert.ok(nativeMsi.includes('Name="Mode" Type="string" Value="vsto"'));
+assert.ok(nativeMsi.includes('Scope="perMachine"'));
+assert.ok(nativeMsi.includes('<StandardDirectory Id="ProgramFiles6432Folder">'));
+assert.ok(nativeMsi.includes('Root="HKLM"'));
+assert.ok(!nativeMsi.includes('Root="HKCU"'));
+assert.ok(!nativeMsi.includes('LocalAppDataFolder'));
+assert.ok(nativeMsi.includes('Bitness="$(var.ComponentBitness)"'));
+assert.ok(nativeMsiProject.includes(">always32</ComponentBitness>"));
+assert.ok(nativeMsiProject.includes(">always64</ComponentBitness>"));
+assert.ok(nativeMsiProject.includes("ComponentBitness=$(ComponentBitness)"));
 assert.ok(!nativeMsi.includes("OleManifestEnabled"));
 assert.ok(dependencyLoadingSmoke.includes("System.Numerics.Vectors, Version=4.1.4.0"));
 assert.ok(dependencyLoadingSmoke.includes("SerializeJson"));
@@ -660,6 +873,11 @@ assert.ok(installVsto.includes("RegistryView]::Registry32"));
 assert.ok(installVsto.includes("RegistryView]::Registry64"));
 assert.ok(installVsto.includes("PackageDirectory"));
 assert.ok(installVsto.includes("MSI SHA-256 mismatch"));
+assert.ok(runtimeVerification.includes("Get-ManagedComRegistrationState"));
+assert.ok(runtimeVerification.includes("discoveredProgIds"));
+assert.ok(runtimeVerification.includes("enumerate-com-addins"));
+assert.ok(runtimeVerification.includes("connectAttempted"));
+assert.ok(!runtimeVerification.includes("COMAddIns.Item($ProgId)"));
 for (const msiRequirement of [
   "FormulaOleServerExecutable",
   "LocalServer32",
@@ -679,7 +897,20 @@ for (const msiRequirement of [
 }
 assert.ok(!nativeMsi.includes("CustomAction"));
 assert.ok(!installOle.includes("TrustedCatalog"));
-assert.ok(runtimeVerification.includes('COMAddIns.Item($ProgId)'));
+assert.ok(runtimeVerification.includes("Get-ComAddInItem"));
+assert.ok(runtimeVerification.includes("Resolve-OfficeExecutablePath"));
+assert.ok(runtimeVerification.includes("Resolve-PowerShellExecutable"));
+assert.ok(runtimeVerification.includes("Sysnative\\WindowsPowerShell"));
+assert.ok(runtimeVerification.includes("ArchitectureRelaunched"));
+assert.ok(runtimeVerification.includes("ProgramW6432"));
+assert.ok(runtimeVerification.includes("GetActiveObject"));
+assert.ok(runtimeVerification.includes("RuntimeVerificationPending"));
+assert.ok(runtimeVerification.includes("Start-CompanionAsInteractiveUser"));
+assert.ok(runtimeVerification.includes("must run in the interactive user's non-elevated session"));
+assert.ok(!runtimeVerification.includes("Shell.Application"));
+assert.ok(runtimeVerification.includes('startupMode = "desktop-executable-rot"'));
+assert.ok(runtimeVerification.includes("desktop application did not enumerate"));
+assert.ok(!runtimeVerification.includes("New-Object -ComObject $comType"));
 assert.ok(runtimeVerification.includes('"VisualTeX.WordVsto"'));
 assert.ok(runtimeVerification.includes('"VisualTeX.PowerPointVsto"'));
 assert.ok(runtimeVerification.includes("Get-DisabledItems"));
@@ -692,9 +923,21 @@ assert.ok(certificateInstaller.includes("-LiteralPath"));
 assert.ok(certificateInstaller.includes("explicitly supplied VisualTeX executable"));
 
 const platformBundle = await source("scripts/build_platform_bundle.mjs");
+const tauriBuild = await source("scripts/tauri_build.mjs");
+const windowsPowerShell = await source("scripts/windows_powershell.mjs");
+const officeLifecycle = await source("src-tauri/src/office/lifecycle.rs");
 const windowsBundle = await source("src-tauri/tauri.windows.conf.json");
 const installerHooks = await source("src-tauri/windows/hooks.nsh");
+const nsisPatch = await source("scripts/patch_generated_nsis.ps1");
 assert.ok(platformBundle.includes('"scripts/build_windows_office.ps1"'));
+assert.ok(platformBundle.includes("windowsPowerShellPath"));
+assert.ok(!platformBundle.includes('run("powershell.exe"'));
+assert.ok(tauriBuild.includes("windowsPowerShellPath"));
+assert.ok(!tauriBuild.includes('run("powershell.exe"'));
+assert.ok(windowsPowerShell.includes('"System32"'));
+assert.ok(windowsPowerShell.includes('"WindowsPowerShell"'));
+assert.ok(officeLifecycle.includes("windows_powershell_executable"));
+assert.ok(!officeLifecycle.includes('hidden_windows_command("powershell.exe")'));
 assert.ok(platformBundle.includes('"scripts/prepare_windows_vsto_runtime.ps1"'));
 assert.ok(platformBundle.includes('"-SkipTests"'));
 assert.ok(!platformBundle.includes('"scripts/build_windows_ole_bridge.ps1"'));
@@ -712,9 +955,43 @@ for (const bundledOfficeResource of [
   assert.ok(windowsBundle.includes(bundledOfficeResource));
 }
 assert.ok(installerHooks.includes("${NSD_Check} $VisualTeXOfficeNativeRadio"));
+assert.ok(installerHooks.includes("bundled private Python 3.12.10 x64 runtime"));
+assert.ok(!installerHooks.includes("VisualTeXProbeLauncher"));
+assert.ok(!installerHooks.includes("VisualTeXProbeCommand"));
+assert.ok(!installerHooks.includes('`powershell.exe '));
+assert.ok(installerHooks.includes('$WINDIR\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'));
+assert.ok(!installerHooks.includes("MUI_CUSTOMFUNCTION_GUIINIT"));
+assert.ok(!installerHooks.includes("VisualTeXDefaultMaintenanceUninstall"));
+assert.ok(installerHooks.includes("generated Tauri PageReinstall function is patched"));
+assert.ok(nsisPatch.includes("Same-version maintenance defaults to the second option"));
+assert.ok(nsisPatch.includes('SendMessage $R3 ${BM_SETCHECK} ${BST_CHECKED} 0'));
+assert.ok(nsisPatch.includes('StrCpy $ReinstallPageCheck 2'));
+assert.ok(nsisPatch.includes('${NSD_SetFocus} $R3'));
+assert.ok(installerHooks.includes("VisualTeXRepairMainUninstallRegistration"));
+assert.ok(installerHooks.includes('WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\VisualTeX"'));
+assert.ok(installerHooks.includes('$INSTDIR == "$PROFILE\\AppData\\VisualTeX"'));
+assert.ok(installerHooks.includes("vsto-uninstall-bootstrap"));
+assert.ok(installerHooks.includes("certificate-remove"));
+assert.ok(installerHooks.includes("NSIS_HOOK_POSTUNINSTALL"));
+assert.ok(installerHooks.includes('DeleteRegKey HKCU "Software\\visualtex\\VisualTeX"'));
+assert.ok(installerHooks.includes('RMDir /r "$INSTDIR"'));
+assert.ok(installerHooks.includes("OfficeSessions user data"));
+const postUninstallHook = installerHooks.slice(installerHooks.indexOf("!macro NSIS_HOOK_POSTUNINSTALL"));
+assert.ok(postUninstallHook.includes("GetCurrentProcessId"));
+assert.ok(postUninstallHook.includes("Wait-Process -Id $0"));
+assert.ok(postUninstallHook.includes("Remove-Item -LiteralPath '$INSTDIR'"));
+assert.ok(!postUninstallHook.includes('RMDir /r "$APPDATA\\VisualTeX"'));
+assert.ok(installerHooks.includes("SetErrorLevel 1"));
+assert.ok(!installerHooks.includes('ExecToLog `powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\\scripts\\remove_windows_office_certificate.ps1"'));
 assert.ok(installerHooks.includes('${If} $VisualTeXOfficeChoice == ""'));
 assert.ok(installerHooks.includes('StrCpy $VisualTeXOfficeChoice "native"'));
 assert.ok(installerHooks.includes("install_windows_vsto.ps1"));
+assert.ok(!installerHooks.includes("-CompanionOnly"));
+assert.ok(installerHooks.includes("visualtex_office_static_installed"));
+assert.ok(installerHooks.includes("RuntimeVerificationPending"));
+assert.ok(installerHooks.includes("without leaving a resident VisualTeX process"));
+assert.ok(installerHooks.includes("安装阶段不会启动常驻后台进程"));
+assert.ok(installerHooks.includes("Companion and Word/PowerPoint connection verification are deferred"));
 assert.ok(installerHooks.includes("install_windows_vsto_runtime.ps1"));
 assert.ok(installerHooks.includes("vstor_redist.exe"));
 assert.ok(installerHooks.includes("vstor_redist.sha256.json"));
@@ -744,10 +1021,10 @@ assert.ok(
   !installerHooks.includes('-File "$INSTDIR\\scripts\\install_windows_ole.ps1"'),
 );
 assert.ok(installerHooks.includes("companion"));
-assert.ok(installerHooks.includes("COMAddIn.Connect"));
-assert.ok(installerHooks.includes("visualtex_office_static_runtime_verified"));
+assert.ok(installerHooks.includes("Word/PowerPoint connection verification are deferred"));
+assert.ok(!installerHooks.includes("visualtex_office_static_runtime_verified"));
 assert.ok(installerHooks.includes("IfSilent visualtex_office_done 0"));
-assert.ok(installerHooks.includes("native Office static installation and companion runtime verification passed"));
+assert.ok(installerHooks.includes("Office bootstrap completed without leaving a resident VisualTeX process"));
 assert.ok(!installerHooks.includes("Office Add-ins dialogs"));
 assert.ok(!installerHooks.includes("Automatically configuring Word and PowerPoint"));
 

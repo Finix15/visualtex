@@ -8,6 +8,16 @@ import { STATE } from "mathjax-full/js/core/MathItem.js";
 import { SerializedMmlVisitor } from "mathjax-full/js/core/MmlTree/SerializedMmlVisitor.js";
 import type { MmlNode } from "mathjax-full/js/core/MmlTree/MmlNode.js";
 import { normalizeMathLiveCanonicalUprightCommands } from "../editor/normalizeChineseLatex.ts";
+import { normalizeExtendedIntegralLatexCommands } from "../math/extendedIntegralCompatibility.ts";
+import { applyVisualTexIntegralSvgGlyphs } from "../math/integralSvgExportCompatibility.ts";
+import { readErrorMessage } from "../errors/readErrorMessage.ts";
+import {
+  assertResolvedMathJaxSvg,
+  assertResolvedPresentationMathMl,
+  VISUALTEX_MATHML_MACROS,
+  VISUALTEX_SVG_MACROS,
+  type VisualTexMathJaxMacro,
+} from "../math/latexCompatibility.ts";
 import type {
   PngExportOptions,
   PngExportResult,
@@ -24,21 +34,38 @@ const DEFAULT_OPTIONS: SvgExportOptions = {
 
 const adaptor = liteAdaptor();
 RegisterHTMLHandler(adaptor);
-const texInput = new TeX({
-  packages: AllPackages,
-  formatError: (_jax: unknown, error: unknown) => {
-    throw error instanceof Error ? error : new Error(String(error));
-  },
+
+function createTexInput(macros: Record<string, VisualTexMathJaxMacro>) {
+  return new TeX({
+    packages: AllPackages,
+    macros,
+    formatError: (_jax: unknown, error: unknown) => {
+      const message = readErrorMessage(error, "MathJax 无法解析当前 LaTeX 公式。");
+      if (error instanceof Error && error.message.trim() === message) throw error;
+      throw new Error(message, { cause: error });
+    },
+  });
+}
+
+const mathMlTexInput = createTexInput(VISUALTEX_MATHML_MACROS);
+const svgTexInput = createTexInput(VISUALTEX_SVG_MACROS);
+const mathMlOutput = new SVG({
+  fontCache: "local",
+  internalSpeechTitles: false,
 });
 const svgOutput = new SVG({
   fontCache: "local",
   internalSpeechTitles: false,
 });
-const mathDocument = mathjax.document("", {
-  InputJax: texInput,
+const mathMlDocument = mathjax.document("", {
+  InputJax: mathMlTexInput,
+  OutputJax: mathMlOutput,
+});
+const svgDocument = mathjax.document("", {
+  InputJax: svgTexInput,
   OutputJax: svgOutput,
 });
-const serializedMmlVisitor = new SerializedMmlVisitor(mathDocument.mmlFactory);
+const serializedMmlVisitor = new SerializedMmlVisitor(mathMlDocument.mmlFactory);
 
 function positiveFinite(value: number, fallback: number) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
@@ -76,7 +103,7 @@ function isSingleCompleteEnvironment(source: string) {
 
 function prepareLatex(latex: string) {
   const normalized = normalizeMathLiveCanonicalUprightCommands(
-    latex.replace(/\r\n?/g, "\n"),
+    normalizeExtendedIntegralLatexCommands(latex.replace(/\r\n?/g, "\n")),
   ).trim();
   if (!normalized) throw new Error("Cannot export an empty formula.");
 
@@ -155,7 +182,7 @@ export function svgToBase64(svg: string) {
 
 export function latexToMathMl(latex: string, displayMode = true) {
   const source = prepareLatex(latex);
-  const root = mathDocument.convert(source, {
+  const root = mathMlDocument.convert(source, {
     display: displayMode,
     end: STATE.COMPILED,
   }) as unknown as MmlNode;
@@ -163,6 +190,7 @@ export function latexToMathMl(latex: string, displayMode = true) {
   if (!mathMl.startsWith("<math") || !mathMl.includes("MathML")) {
     throw new Error("MathJax did not produce valid Presentation MathML.");
   }
+  assertResolvedPresentationMathMl(mathMl);
   return mathMl;
 }
 
@@ -176,13 +204,14 @@ export function latexToSvg(
   const fontSizePx = fontSizePt * (96 / 72);
   const exPx = fontSizePx * 0.442;
 
-  const container = mathDocument.convert(source, {
+  const container = svgDocument.convert(source, {
     display: options.displayMode,
     em: fontSizePx,
     ex: exPx,
     containerWidth: 100_000,
   });
   let svg = extractSvg(adaptor.outerHTML(container));
+  svg = applyVisualTexIntegralSvgGlyphs(svg, options.displayMode);
   const viewBox = parseViewBox(svg);
 
   const unitsPerPx = 1000 / fontSizePx;
@@ -227,6 +256,7 @@ export function latexToSvg(
     svg = `${svg.slice(0, openingEnd + 1)}${hitTarget}${svg.slice(openingEnd + 1)}`;
   }
 
+  assertResolvedMathJaxSvg(svg);
   assertSelfContained(svg);
   return {
     svg,

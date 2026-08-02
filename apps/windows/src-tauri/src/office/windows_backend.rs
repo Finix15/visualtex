@@ -12,16 +12,33 @@ use std::sync::Mutex;
 use tauri::AppHandle;
 
 const WORD_VSTO_KEY: &str =
-    r"HKCU\Software\Microsoft\Office\Word\Addins\VisualTeX.WordVsto";
+    r"HKLM\Software\Microsoft\Office\Word\Addins\VisualTeX.WordVsto";
 const POWERPOINT_VSTO_KEY: &str =
-    r"HKCU\Software\Microsoft\Office\PowerPoint\Addins\VisualTeX.PowerPointVsto";
+    r"HKLM\Software\Microsoft\Office\PowerPoint\Addins\VisualTeX.PowerPointVsto";
 const OLE_LOCAL_SERVER_KEY: &str =
-    r"HKCU\Software\Classes\CLSID\{8FF7F5AA-0D60-48D5-ADBD-65A64B4C827B}\LocalServer32";
+    r"HKLM\Software\Classes\CLSID\{8FF7F5AA-0D60-48D5-ADBD-65A64B4C827B}\LocalServer32";
 const OFFICE_MODE_KEY: &str = r"HKCU\Software\VisualTeX\OfficeIntegration";
 const WORD_VSTO_CLSID_KEY: &str =
-    r"HKCU\Software\Classes\CLSID\{F1B68342-F9C6-4E7D-A9C6-A2F64C3558A1}\InprocServer32";
+    r"HKLM\Software\Classes\CLSID\{F1B68342-F9C6-4E7D-A9C6-A2F64C3558A1}\InprocServer32";
 const POWERPOINT_VSTO_CLSID_KEY: &str =
-    r"HKCU\Software\Classes\CLSID\{7E586D2D-57B0-4D14-AB24-EBA9021A5E6D}\InprocServer32";
+    r"HKLM\Software\Classes\CLSID\{7E586D2D-57B0-4D14-AB24-EBA9021A5E6D}\InprocServer32";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RegistryView {
+    Native,
+    Registry32,
+    Registry64,
+}
+
+impl RegistryView {
+    fn reg_flag(self) -> Option<&'static str> {
+        match self {
+            Self::Native => None,
+            Self::Registry32 => Some("/reg:32"),
+            Self::Registry64 => Some("/reg:64"),
+        }
+    }
+}
 const WINDOWS_RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
 const WINDOWS_RUN_VALUE: &str = "VisualTeXOffice";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -59,25 +76,40 @@ impl WindowsOfficeBackend {
 
     pub fn status(&self) -> OfficePlatformStatus {
         let mode = self.mode.lock().map(|value| *value).unwrap_or_default();
-        let word_load_enabled = registry_dword_equals(WORD_VSTO_KEY, "LoadBehavior", 3);
-        let powerpoint_load_enabled =
-            registry_dword_equals(POWERPOINT_VSTO_KEY, "LoadBehavior", 3);
-        let word_files_present = registered_addin_file_exists(WORD_VSTO_KEY);
-        let powerpoint_files_present = registered_addin_file_exists(POWERPOINT_VSTO_KEY);
+        let office_registry_view = resolve_office_registry_view();
+        let word_load_enabled = registry_dword_equals_in_view(
+            WORD_VSTO_KEY,
+            "LoadBehavior",
+            3,
+            office_registry_view,
+        );
+        let powerpoint_load_enabled = registry_dword_equals_in_view(
+            POWERPOINT_VSTO_KEY,
+            "LoadBehavior",
+            3,
+            office_registry_view,
+        );
+        let word_files_present =
+            registered_addin_file_exists(WORD_VSTO_KEY, office_registry_view);
+        let powerpoint_files_present =
+            registered_addin_file_exists(POWERPOINT_VSTO_KEY, office_registry_view);
         let word_registry_complete = addin_registry_complete(
             WORD_VSTO_KEY,
             WORD_VSTO_CLSID_KEY,
             "VisualTeX.WordVsto.ThisAddIn",
+            office_registry_view,
         );
         let powerpoint_registry_complete = addin_registry_complete(
             POWERPOINT_VSTO_KEY,
             POWERPOINT_VSTO_CLSID_KEY,
             "VisualTeX.PowerPointVsto.ThisAddIn",
+            office_registry_view,
         );
         let vsto_word = word_files_present && word_registry_complete && word_load_enabled;
         let vsto_powerpoint =
             powerpoint_files_present && powerpoint_registry_complete && powerpoint_load_enabled;
-        let ole_local_server_healthy = native_ole_local_server_healthy();
+        let ole_local_server_healthy =
+            native_ole_local_server_healthy(office_registry_view);
         let static_install_verified = registry_dword_equals(
             OFFICE_MODE_KEY,
             "FilesAndRegistryVerified",
@@ -243,6 +275,10 @@ pub fn write_shared_configuration(
     registry_set_dword(OFFICE_MODE_KEY, "ProtocolVersion", protocol_version)
 }
 
+pub fn background_start_enabled() -> bool {
+    registry_value_exists(WINDOWS_RUN_KEY, WINDOWS_RUN_VALUE)
+}
+
 pub fn set_background_start_enabled(enabled: bool) -> Result<(), String> {
     if !enabled {
         return registry_delete_value(WINDOWS_RUN_KEY, WINDOWS_RUN_VALUE);
@@ -280,9 +316,38 @@ fn write_mode(paths: &OfficePaths, mode: OfficeIntegrationMode) -> Result<(), St
         .map_err(|error| format!("Unable to save Office integration mode: {error}"))
 }
 
+fn resolve_office_registry_view() -> RegistryView {
+    let configured = match registry_string_value(OFFICE_MODE_KEY, "OfficePlatform")
+        .as_deref()
+        .map(str::trim)
+    {
+        Some("x86") => Some(RegistryView::Registry32),
+        Some("x64") => Some(RegistryView::Registry64),
+        _ => None,
+    };
+
+    if configured.is_some_and(office_registration_exists_in_view) {
+        return configured.unwrap_or(RegistryView::Native);
+    }
+    if office_registration_exists_in_view(RegistryView::Registry64) {
+        return RegistryView::Registry64;
+    }
+    if office_registration_exists_in_view(RegistryView::Registry32) {
+        return RegistryView::Registry32;
+    }
+    configured.unwrap_or(RegistryView::Native)
+}
+
+fn office_registration_exists_in_view(view: RegistryView) -> bool {
+    registry_key_exists_in_view(WORD_VSTO_KEY, view)
+        || registry_key_exists_in_view(POWERPOINT_VSTO_KEY, view)
+        || registry_key_exists_in_view(OLE_LOCAL_SERVER_KEY, view)
+}
+
 fn apply_mode_selection(mode: OfficeIntegrationMode) -> Result<(), String> {
-    let vsto_installed = registry_key_exists(WORD_VSTO_KEY)
-        && registry_key_exists(POWERPOINT_VSTO_KEY);
+    let office_registry_view = resolve_office_registry_view();
+    let vsto_installed = registry_key_exists_in_view(WORD_VSTO_KEY, office_registry_view)
+        && registry_key_exists_in_view(POWERPOINT_VSTO_KEY, office_registry_view);
 
     match mode {
         OfficeIntegrationMode::Vsto => {
@@ -292,45 +357,53 @@ fn apply_mode_selection(mode: OfficeIntegrationMode) -> Result<(), String> {
                         .to_string(),
                 );
             }
-            set_vsto_load_behavior(true)?;
+            set_vsto_load_behavior(true, office_registry_view)?;
         }
         OfficeIntegrationMode::Auto => {
             if vsto_installed {
-                set_vsto_load_behavior(true)?;
+                set_vsto_load_behavior(true, office_registry_view)?;
             }
         }
     }
     Ok(())
 }
 
-fn set_vsto_load_behavior(enabled: bool) -> Result<(), String> {
+fn set_vsto_load_behavior(enabled: bool, view: RegistryView) -> Result<(), String> {
     let value = if enabled { 3 } else { 0 };
     for key in [WORD_VSTO_KEY, POWERPOINT_VSTO_KEY] {
-        if registry_key_exists(key) {
-            registry_set_dword(key, "LoadBehavior", value)?;
+        if registry_key_exists_in_view(key, view)
+            && !registry_dword_equals_in_view(key, "LoadBehavior", value, view)
+        {
+            registry_set_dword_in_view(key, "LoadBehavior", value, view)?;
         }
     }
     Ok(())
 }
 
-fn addin_registry_complete(addin_key: &str, clsid_key: &str, expected_class: &str) -> bool {
-    registry_string_value(addin_key, "FriendlyName").is_some_and(|value| !value.trim().is_empty())
-        && registry_string_value(addin_key, "Description")
+fn addin_registry_complete(
+    addin_key: &str,
+    clsid_key: &str,
+    expected_class: &str,
+    view: RegistryView,
+) -> bool {
+    registry_string_value_in_view(addin_key, "FriendlyName", view)
+        .is_some_and(|value| !value.trim().is_empty())
+        && registry_string_value_in_view(addin_key, "Description", view)
             .is_some_and(|value| !value.trim().is_empty())
-        && (registry_string_value(addin_key, "Manifest").is_some()
-            || registry_string_value(addin_key, "CodeBase").is_some())
-        && registry_default_string_value(clsid_key)
+        && (registry_string_value_in_view(addin_key, "Manifest", view).is_some()
+            || registry_string_value_in_view(addin_key, "CodeBase", view).is_some())
+        && registry_default_string_value_in_view(clsid_key, view)
             .is_some_and(|value| value.eq_ignore_ascii_case("mscoree.dll"))
-        && registry_string_value(clsid_key, "Class")
+        && registry_string_value_in_view(clsid_key, "Class", view)
             .is_some_and(|value| value == expected_class)
-        && registry_string_value(clsid_key, "Assembly").is_some()
-        && registry_string_value(clsid_key, "RuntimeVersion").is_some()
-        && registry_string_value(clsid_key, "CodeBase").is_some()
+        && registry_string_value_in_view(clsid_key, "Assembly", view).is_some()
+        && registry_string_value_in_view(clsid_key, "RuntimeVersion", view).is_some()
+        && registry_string_value_in_view(clsid_key, "CodeBase", view).is_some()
 }
 
-fn registered_addin_file_exists(addin_key: &str) -> bool {
-    let value = registry_string_value(addin_key, "Manifest")
-        .or_else(|| registry_string_value(addin_key, "CodeBase"));
+fn registered_addin_file_exists(addin_key: &str, view: RegistryView) -> bool {
+    let value = registry_string_value_in_view(addin_key, "Manifest", view)
+        .or_else(|| registry_string_value_in_view(addin_key, "CodeBase", view));
     let Some(value) = value else {
         return false;
     };
@@ -347,9 +420,13 @@ fn registered_addin_file_exists(addin_key: &str) -> bool {
     PathBuf::from(path).is_file()
 }
 
-fn native_ole_local_server_healthy() -> bool {
-    let executable = registry_string_value(OLE_LOCAL_SERVER_KEY, "ServerExecutable")
-        .or_else(|| registry_default_string_value(OLE_LOCAL_SERVER_KEY));
+fn native_ole_local_server_healthy(view: RegistryView) -> bool {
+    let executable = registry_string_value_in_view(
+        OLE_LOCAL_SERVER_KEY,
+        "ServerExecutable",
+        view,
+    )
+    .or_else(|| registry_default_string_value_in_view(OLE_LOCAL_SERVER_KEY, view));
     let Some(executable) = executable else {
         return false;
     };
@@ -366,11 +443,20 @@ fn write_mode_registry(mode: OfficeIntegrationMode) -> Result<(), String> {
 }
 
 fn registry_set_string(key: &str, name: &str, value: &str) -> Result<(), String> {
-    registry_add(key, name, "REG_SZ", value)
+    registry_add_in_view(key, name, "REG_SZ", value, RegistryView::Native)
 }
 
 fn registry_set_dword(key: &str, name: &str, value: u32) -> Result<(), String> {
-    registry_add(key, name, "REG_DWORD", &value.to_string())
+    registry_set_dword_in_view(key, name, value, RegistryView::Native)
+}
+
+fn registry_set_dword_in_view(
+    key: &str,
+    name: &str,
+    value: u32,
+    view: RegistryView,
+) -> Result<(), String> {
+    registry_add_in_view(key, name, "REG_DWORD", &value.to_string(), view)
 }
 
 fn registry_delete_value(key: &str, name: &str) -> Result<(), String> {
@@ -391,9 +477,17 @@ fn registry_delete_value(key: &str, name: &str) -> Result<(), String> {
     }
 }
 
-fn registry_add(key: &str, name: &str, value_type: &str, value: &str) -> Result<(), String> {
-    let output = hidden_command("reg.exe")
-        .args(["add", key, "/v", name, "/t", value_type, "/d", value, "/f"])
+fn registry_add_in_view(
+    key: &str,
+    name: &str,
+    value_type: &str,
+    value: &str,
+    view: RegistryView,
+) -> Result<(), String> {
+    let mut command = hidden_command("reg.exe");
+    command.args(["add", key, "/v", name, "/t", value_type, "/d", value, "/f"]);
+    append_registry_view_flag(&mut command, view);
+    let output = command
         .output()
         .map_err(|error| format!("Unable to update Windows Office registry state: {error}"))?;
     if output.status.success() {
@@ -403,6 +497,12 @@ fn registry_add(key: &str, name: &str, value_type: &str, value: &str) -> Result<
             "Unable to update Windows Office registry state: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         ))
+    }
+}
+
+fn append_registry_view_flag(command: &mut Command, view: RegistryView) {
+    if let Some(flag) = view.reg_flag() {
+        command.arg(flag);
     }
 }
 
@@ -435,16 +535,27 @@ fn windows_certificate_trusted(paths: &OfficePaths) -> bool {
         .unwrap_or(false)
 }
 
-fn registry_default_string_value(key: &str) -> Option<String> {
-    let output = hidden_command("reg.exe").args(["query", key, "/ve"]).output().ok()?;
+fn registry_default_string_value_in_view(key: &str, view: RegistryView) -> Option<String> {
+    let mut command = hidden_command("reg.exe");
+    command.args(["query", key, "/ve"]);
+    append_registry_view_flag(&mut command, view);
+    let output = command.output().ok()?;
     parse_registry_string_output(&output.stdout, None)
 }
 
 fn registry_string_value(key: &str, value: &str) -> Option<String> {
-    let output = hidden_command("reg.exe")
-        .args(["query", key, "/v", value])
-        .output()
-        .ok()?;
+    registry_string_value_in_view(key, value, RegistryView::Native)
+}
+
+fn registry_string_value_in_view(
+    key: &str,
+    value: &str,
+    view: RegistryView,
+) -> Option<String> {
+    let mut command = hidden_command("reg.exe");
+    command.args(["query", key, "/v", value]);
+    append_registry_view_flag(&mut command, view);
+    let output = command.output().ok()?;
     parse_registry_string_output(&output.stdout, Some(value))
 }
 
@@ -463,27 +574,39 @@ fn parse_registry_string_output(bytes: &[u8], value: Option<&str>) -> Option<Str
     None
 }
 
-fn registry_key_exists(key: &str) -> bool {
-    hidden_command("reg.exe")
-        .args(["query", key])
+fn registry_key_exists_in_view(key: &str, view: RegistryView) -> bool {
+    let mut command = hidden_command("reg.exe");
+    command.args(["query", key]);
+    append_registry_view_flag(&mut command, view);
+    command
         .output()
         .map(|output| output.status.success())
         .unwrap_or(false)
 }
 
 fn registry_value_exists(key: &str, value: &str) -> bool {
-    hidden_command("reg.exe")
-        .args(["query", key, "/v", value])
+    let mut command = hidden_command("reg.exe");
+    command.args(["query", key, "/v", value]);
+    command
         .output()
         .map(|output| output.status.success())
         .unwrap_or(false)
 }
 
 fn registry_dword_equals(key: &str, value: &str, expected: u32) -> bool {
-    let output = match hidden_command("reg.exe")
-        .args(["query", key, "/v", value])
-        .output()
-    {
+    registry_dword_equals_in_view(key, value, expected, RegistryView::Native)
+}
+
+fn registry_dword_equals_in_view(
+    key: &str,
+    value: &str,
+    expected: u32,
+    view: RegistryView,
+) -> bool {
+    let mut command = hidden_command("reg.exe");
+    command.args(["query", key, "/v", value]);
+    append_registry_view_flag(&mut command, view);
+    let output = match command.output() {
         Ok(output) if output.status.success() => output,
         _ => return false,
     };

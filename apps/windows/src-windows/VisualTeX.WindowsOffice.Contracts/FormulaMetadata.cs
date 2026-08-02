@@ -33,6 +33,9 @@ public sealed class FormulaMetadata
     [JsonPropertyName("numbered")]
     public bool Numbered { get; set; }
 
+    [JsonPropertyName("equationTag")]
+    public string? EquationTag { get; set; }
+
     [JsonPropertyName("renderWidthPx")]
     public double? RenderWidthPx { get; set; }
 
@@ -41,6 +44,12 @@ public sealed class FormulaMetadata
 
     [JsonPropertyName("baseline")]
     public double? Baseline { get; set; }
+
+    [JsonPropertyName("fontSizePt")]
+    public double? FontSizePt { get; set; }
+
+    [JsonPropertyName("renderFontSizePt")]
+    public double? RenderFontSizePt { get; set; }
 
     [JsonPropertyName("nativeOmmlFingerprint")]
     public string? NativeOmmlFingerprint { get; set; }
@@ -67,6 +76,10 @@ public sealed class FormulaMetadata
             throw new InvalidOperationException("VisualTeX formula metadata requires at least one line.");
         if (Numbered && !string.Equals(DisplayMode, "block", StringComparison.Ordinal))
             throw new InvalidOperationException("Only display formulas can use equation numbering.");
+        if (!string.IsNullOrWhiteSpace(EquationTag)
+            && (!string.Equals(DisplayMode, "block", StringComparison.Ordinal)
+                || EquationTag!.Length > 256))
+            throw new InvalidOperationException("Equation tags are supported only for display formulas and must not exceed 256 characters.");
         if (RenderWidthPx is <= 0 || double.IsNaN(RenderWidthPx ?? 1) || double.IsInfinity(RenderWidthPx ?? 1))
             throw new InvalidOperationException("VisualTeX renderWidthPx must be a positive finite number.");
         if (RenderHeightPx is <= 0 || double.IsNaN(RenderHeightPx ?? 1) || double.IsInfinity(RenderHeightPx ?? 1))
@@ -77,6 +90,12 @@ public sealed class FormulaMetadata
                 || Baseline.Value < 0
                 || (RenderHeightPx.HasValue && Baseline.Value > RenderHeightPx.Value)))
             throw new InvalidOperationException("VisualTeX baseline must be within the rendered formula height.");
+        if (FontSizePt.HasValue
+            && FormulaFontSize.Normalize(FontSizePt.Value) != FontSizePt.Value)
+            throw new InvalidOperationException("VisualTeX fontSizePt must use a supported half-point value.");
+        if (RenderFontSizePt.HasValue
+            && FormulaFontSize.Normalize(RenderFontSizePt.Value) != RenderFontSizePt.Value)
+            throw new InvalidOperationException("VisualTeX renderFontSizePt must use a supported half-point value.");
     }
 }
 

@@ -270,7 +270,7 @@ export function UpdateDialog({
               <UserRound size={15} aria-hidden="true" />
               <span>
                 <small>{isEn ? "Author" : "作者"}</small>
-                <strong>{isEn ? "Liao Pojian (paulhe666)" : "廖珀健（paulhe666）"}</strong>
+                <strong>paulhe666</strong>
               </span>
             </div>
             <button

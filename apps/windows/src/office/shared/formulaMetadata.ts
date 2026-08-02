@@ -11,12 +11,20 @@ export interface VisualTeXFormulaMetadata {
   displayMode: "inline" | "block";
   /** Whether a Word display formula participates in document equation numbering. */
   numbered?: boolean;
+  /** A visual equation tag rendered with the formula but excluded from MathLive editing. */
+  equationTag?: string;
   /** Natural MathJax export bounds used to preserve PowerPoint's visual scale
    * when a formula is replaced with a longer or taller expression. */
   renderWidthPx?: number;
   renderHeightPx?: number;
   /** Mathematical baseline in natural render pixels. */
   baseline?: number;
+  /** Semantic Office math size in points. */
+  fontSizePt?: number;
+  /** Point size used to create the current cached SVG/EMF/PNG preview. */
+  renderFontSizePt?: number;
+  /** Fingerprint of the exact Word-native OMML source. */
+  nativeOmmlFingerprint?: string;
   createdWithVersion: string;
   updatedWithVersion: string;
   createdAt: string;
@@ -30,9 +38,12 @@ export interface CreateFormulaMetadataInput {
   codeFormat: string;
   displayMode?: "inline" | "block";
   numbered?: boolean;
+  equationTag?: string;
   renderWidthPx?: number;
   renderHeightPx?: number;
   baseline?: number;
+  fontSizePt?: number;
+  renderFontSizePt?: number;
   appVersion?: string;
   original?: VisualTeXFormulaMetadata | null;
 }
@@ -41,7 +52,7 @@ export const VISUALTEX_FORMULA_SCHEMA = "visualtex-formula" as const;
 export const VISUALTEX_FORMULA_SCHEMA_VERSION = 1 as const;
 export const VISUALTEX_FORMULA_XML_NAMESPACE = "urn:visualtex:formula:1";
 export const VISUALTEX_METADATA_PREFIX = "visualtex:v1:deflate:";
-export const CURRENT_VISUALTEX_VERSION = "1.2.3";
+export const CURRENT_VISUALTEX_VERSION = "1.2.4";
 
 function bytesToBase64Url(bytes: Uint8Array) {
   let binary = "";
@@ -107,6 +118,10 @@ export function isVisualTeXFormulaMetadata(
     typeof candidate.codeFormat === "string" &&
     (candidate.displayMode === "inline" || candidate.displayMode === "block") &&
     (candidate.numbered === undefined || typeof candidate.numbered === "boolean") &&
+    (candidate.equationTag === undefined ||
+      (typeof candidate.equationTag === "string" &&
+        candidate.equationTag.trim().length > 0 &&
+        candidate.equationTag.length <= 256)) &&
     (candidate.renderWidthPx === undefined ||
       (typeof candidate.renderWidthPx === "number" &&
         Number.isFinite(candidate.renderWidthPx) &&
@@ -121,6 +136,21 @@ export function isVisualTeXFormulaMetadata(
         candidate.baseline >= 0 &&
         (candidate.renderHeightPx === undefined ||
           candidate.baseline <= candidate.renderHeightPx))) &&
+    (candidate.fontSizePt === undefined ||
+      (typeof candidate.fontSizePt === "number" &&
+        Number.isFinite(candidate.fontSizePt) &&
+        candidate.fontSizePt >= 5 &&
+        candidate.fontSizePt <= 200 &&
+        Math.abs(candidate.fontSizePt * 2 - Math.round(candidate.fontSizePt * 2)) < 1e-6)) &&
+    (candidate.renderFontSizePt === undefined ||
+      (typeof candidate.renderFontSizePt === "number" &&
+        Number.isFinite(candidate.renderFontSizePt) &&
+        candidate.renderFontSizePt >= 5 &&
+        candidate.renderFontSizePt <= 200 &&
+        Math.abs(candidate.renderFontSizePt * 2 - Math.round(candidate.renderFontSizePt * 2)) < 1e-6)) &&
+    (candidate.nativeOmmlFingerprint === undefined ||
+      (typeof candidate.nativeOmmlFingerprint === "string" &&
+        /^[0-9a-f]{64}$/i.test(candidate.nativeOmmlFingerprint))) &&
     typeof candidate.createdWithVersion === "string" &&
     typeof candidate.updatedWithVersion === "string" &&
     typeof candidate.createdAt === "string" &&
@@ -135,9 +165,12 @@ export function createFormulaMetadata({
   codeFormat,
   displayMode = "block",
   numbered = false,
+  equationTag,
   renderWidthPx,
   renderHeightPx,
   baseline,
+  fontSizePt,
+  renderFontSizePt,
   appVersion = CURRENT_VISUALTEX_VERSION,
   original = null,
 }: CreateFormulaMetadataInput): VisualTeXFormulaMetadata {
@@ -163,6 +196,18 @@ export function createFormulaMetadata({
     (resolvedRenderHeight === undefined || baseline <= resolvedRenderHeight)
       ? baseline
       : original?.baseline;
+  const normalizeFontSize = (value: number | undefined, fallback: number) => {
+    const resolved = Number.isFinite(value) ? (value as number) : fallback;
+    return Math.round(Math.min(200, Math.max(5, resolved)) * 2) / 2;
+  };
+  const resolvedFontSize = normalizeFontSize(
+    fontSizePt,
+    original?.fontSizePt ?? original?.renderFontSizePt ?? 14,
+  );
+  const resolvedRenderFontSize = normalizeFontSize(
+    renderFontSizePt,
+    original?.renderFontSizePt ?? resolvedFontSize,
+  );
   return {
     schema: VISUALTEX_FORMULA_SCHEMA,
     schemaVersion: VISUALTEX_FORMULA_SCHEMA_VERSION,
@@ -173,9 +218,18 @@ export function createFormulaMetadata({
     codeFormat,
     displayMode,
     numbered,
+    ...(displayMode === "block" &&
+    (equationTag?.trim() || original?.equationTag?.trim())
+      ? { equationTag: equationTag?.trim() || original?.equationTag?.trim() }
+      : {}),
     ...(resolvedRenderWidth ? { renderWidthPx: resolvedRenderWidth } : {}),
     ...(resolvedRenderHeight ? { renderHeightPx: resolvedRenderHeight } : {}),
     ...(resolvedBaseline !== undefined ? { baseline: resolvedBaseline } : {}),
+    fontSizePt: resolvedFontSize,
+    renderFontSizePt: resolvedRenderFontSize,
+    ...(original?.nativeOmmlFingerprint
+      ? { nativeOmmlFingerprint: original.nativeOmmlFingerprint }
+      : {}),
     createdWithVersion: original?.createdWithVersion ?? appVersion,
     updatedWithVersion: appVersion,
     createdAt: original?.createdAt ?? now,

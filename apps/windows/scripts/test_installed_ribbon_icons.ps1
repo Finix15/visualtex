@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$ArtifactRoot = "src-windows/artifacts/installed-ribbon-icons"
 )
 
@@ -191,7 +191,8 @@ try {
         "编辑所选公式",
         "转为原生 OLE",
         "转为 Word OMML",
-        "更新公式编号"
+        "更新公式编号",
+        "批量导入"
     )
 
     $wordDocument.Close(0)

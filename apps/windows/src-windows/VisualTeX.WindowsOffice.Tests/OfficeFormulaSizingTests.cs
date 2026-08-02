@@ -14,6 +14,16 @@ public sealed class OfficeFormulaSizingTests
     }
 
     [Fact]
+    public void NaturalSizeDoesNotEnlargeNarrowInlineFormulaToTwelvePointBox()
+    {
+        var size = OfficeFormulaSizing.NaturalSize(5.8f, 9f);
+
+        Assert.Equal(4.35f, size.Width, 2);
+        Assert.Equal(6.75f, size.Height, 2);
+        Assert.InRange(size.Width / size.Height, 0.64f, 0.65f);
+    }
+
+    [Fact]
     public void EditedSizeAdoptsNewNaturalAspectRatio()
     {
         var size = OfficeFormulaSizing.EditedSize(
@@ -42,6 +52,23 @@ public sealed class OfficeFormulaSizingTests
 
         Assert.Equal(360f, size.Width, 3);
         Assert.Equal(36f, size.Height, 3);
+    }
+
+    [Fact]
+    public void EditedSizeDoesNotApplySemanticFontScaleTwice()
+    {
+        var size = OfficeFormulaSizing.EditedSize(
+            currentWidth: 450f,
+            currentHeight: 112.5f,
+            originalRenderWidth: 400d,
+            originalRenderHeight: 100d,
+            newRenderWidth: 600f,
+            newRenderHeight: 100f,
+            originalFontSizePt: 21d,
+            originalRenderFontSizePt: 14d);
+
+        Assert.Equal(450f, size.Width, 3);
+        Assert.Equal(75f, size.Height, 3);
     }
 
     [Fact]
@@ -75,6 +102,23 @@ public sealed class OfficeFormulaSizingTests
 
         Assert.Equal(480f, size.Width, 3);
         Assert.Equal(48f, size.Height, 3);
+    }
+
+    [Fact]
+    public void EditedSmallInlineFormulaUsesRawPreviewHeightInsteadOfTwelvePointFloor()
+    {
+        var size = OfficeFormulaSizing.EditedSize(
+            currentWidth: 19f,
+            currentHeight: 8.5f,
+            originalRenderWidth: 25d,
+            originalRenderHeight: 11d,
+            newRenderWidth: 49f,
+            newRenderHeight: 11f,
+            originalFontSizePt: 11d,
+            originalRenderFontSizePt: 11d);
+
+        Assert.Equal(37.864f, size.Width, 3);
+        Assert.True(size.Width > 36f);
     }
 
     [Fact]

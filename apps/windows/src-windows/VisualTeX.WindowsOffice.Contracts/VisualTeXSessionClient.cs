@@ -127,12 +127,20 @@ public sealed class VisualTeXSessionClient : IDisposable
     private readonly CompanionConfiguration _configuration;
     private readonly VisualTeXCompanionException? _configurationException;
     private readonly HttpClient _http;
+    private readonly SemaphoreSlim _converterPrewarmGate = new(1, 1);
     private string? _installToken;
     private static readonly object ClientLogLock = new();
     private string _lastServerCertificateThumbprint = string.Empty;
     private string _lastTlsPolicyErrors = string.Empty;
     private bool _hasValidatedServerCertificate;
+    private bool _converterPrewarmed;
     private bool _disposed;
+    private long _lastHealthyUtcTicks;
+    // Word can spend tens of seconds building or scanning a large document
+    // after the add-in's startup prewarm. Keep that successful validation long
+    // enough to cover the first formula edit; every tracked HTTP failure still
+    // invalidates the cache immediately.
+    private static readonly TimeSpan HealthCacheDuration = TimeSpan.FromMinutes(2);
 
     public VisualTeXSessionClient()
     {
@@ -193,6 +201,11 @@ public sealed class VisualTeXSessionClient : IDisposable
                 _configurationException.Diagnostic,
                 _configurationException);
         }
+        if (HasFreshHealth())
+        {
+            AppendClientLog("health-cache-hit", LastHealthDiagnostic, null);
+            return;
+        }
         var diagnostic = CreateDiagnostic("configuration");
         LastHealthDiagnostic = diagnostic;
         AppendClientLog("health-start", diagnostic, null);
@@ -206,6 +219,7 @@ public sealed class VisualTeXSessionClient : IDisposable
                 diagnostic.Stage = "complete";
                 diagnostic.FailureType = string.Empty;
                 diagnostic.Message = "VisualTeX companion is healthy.";
+                MarkHealthy();
                 AppendClientLog("health-passed", diagnostic, null);
                 return;
             }
@@ -248,6 +262,7 @@ public sealed class VisualTeXSessionClient : IDisposable
                     diagnostic.Stage = "complete";
                     diagnostic.FailureType = string.Empty;
                     diagnostic.Message = "VisualTeX companion started and passed all health checks.";
+                    MarkHealthy();
                     AppendClientLog("health-passed-after-start", diagnostic, null);
                     return;
                 }
@@ -262,11 +277,13 @@ public sealed class VisualTeXSessionClient : IDisposable
         }
         catch (VisualTeXCompanionException error)
         {
+            InvalidateHealth();
             AppendClientLog("health-failed", error.Diagnostic, error);
             throw;
         }
         catch (Exception error)
         {
+            InvalidateHealth();
             PopulateException(diagnostic, error);
             if (string.IsNullOrWhiteSpace(diagnostic.FailureType))
                 diagnostic.FailureType = error.GetType().Name;
@@ -283,10 +300,10 @@ public sealed class VisualTeXSessionClient : IDisposable
     {
         EnsureAuthorizationHeader();
         var json = JsonSerializer.Serialize(request, JsonOptions.Default);
-        using var response = await _http.PostAsync(
+        using var response = await SendTrackedAsync(() => _http.PostAsync(
             "/api/v1/sessions",
             new StringContent(json, Encoding.UTF8, "application/json"),
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken)).ConfigureAwait(false);
         await EnsureSuccessAsync(response).ConfigureAwait(false);
         return await DeserializeAsync<OfficeSessionDocument>(response).ConfigureAwait(false);
     }
@@ -298,11 +315,36 @@ public sealed class VisualTeXSessionClient : IDisposable
         if (!Guid.TryParse(sessionId, out _))
             throw new InvalidOperationException("VisualTeX Session id must be a UUID.");
         EnsureAuthorizationHeader();
-        using var response = await _http.PostAsync(
+        using var response = await SendTrackedAsync(() => _http.PostAsync(
             $"/api/v1/app/sessions/{Uri.EscapeDataString(sessionId)}/open",
             new StringContent("{}", Encoding.UTF8, "application/json"),
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken)).ConfigureAwait(false);
         await EnsureSuccessAsync(response).ConfigureAwait(false);
+    }
+
+    public async Task PrewarmConverterAsync(CancellationToken cancellationToken)
+    {
+        if (_converterPrewarmed) return;
+        await _converterPrewarmGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_converterPrewarmed) return;
+            EnsureAuthorizationHeader();
+            using var response = await SendTrackedAsync(() => _http.PostAsync(
+                "/api/v1/app/converter/prewarm",
+                new StringContent("{}", Encoding.UTF8, "application/json"),
+                cancellationToken)).ConfigureAwait(false);
+            await EnsureSuccessAsync(response).ConfigureAwait(false);
+            // WebView creation returns before React and MathJax finish loading.
+            // Pay this one-time warm-up cost at add-in startup so the first
+            // actual redraw Session cannot race the custom Session event.
+            await Task.Delay(500, cancellationToken).ConfigureAwait(false);
+            _converterPrewarmed = true;
+        }
+        finally
+        {
+            _converterPrewarmGate.Release();
+        }
     }
 
     public async Task OpenConverterAsync(
@@ -312,10 +354,24 @@ public sealed class VisualTeXSessionClient : IDisposable
         if (!Guid.TryParse(sessionId, out _))
             throw new InvalidOperationException("VisualTeX Session id must be a UUID.");
         EnsureAuthorizationHeader();
-        using var response = await _http.PostAsync(
+        using var response = await SendTrackedAsync(() => _http.PostAsync(
             $"/api/v1/app/sessions/{Uri.EscapeDataString(sessionId)}/convert",
             new StringContent("{}", Encoding.UTF8, "application/json"),
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken)).ConfigureAwait(false);
+        await EnsureSuccessAsync(response).ConfigureAwait(false);
+    }
+
+    public async Task OpenBulkImportAsync(
+        string sessionId,
+        CancellationToken cancellationToken)
+    {
+        if (!Guid.TryParse(sessionId, out _))
+            throw new InvalidOperationException("VisualTeX Session id must be a UUID.");
+        EnsureAuthorizationHeader();
+        using var response = await SendTrackedAsync(() => _http.PostAsync(
+            $"/api/v1/app/sessions/{Uri.EscapeDataString(sessionId)}/bulk-import",
+            new StringContent("{}", Encoding.UTF8, "application/json"),
+            cancellationToken)).ConfigureAwait(false);
         await EnsureSuccessAsync(response).ConfigureAwait(false);
     }
 
@@ -326,10 +382,10 @@ public sealed class VisualTeXSessionClient : IDisposable
         if (!Guid.TryParse(sessionId, out _))
             throw new InvalidOperationException("VisualTeX Session id must be a UUID.");
         EnsureAuthorizationHeader();
-        using var response = await _http.PostAsync(
+        using var response = await SendTrackedAsync(() => _http.PostAsync(
             $"/api/v1/app/sessions/{Uri.EscapeDataString(sessionId)}/close",
             new StringContent("{}", Encoding.UTF8, "application/json"),
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken)).ConfigureAwait(false);
         await EnsureSuccessAsync(response).ConfigureAwait(false);
     }
 
@@ -351,7 +407,11 @@ public sealed class VisualTeXSessionClient : IDisposable
                 case "failed":
                     return session;
             }
-            await Task.Delay(150, cancellationToken).ConfigureAwait(false);
+            // Formula commits are local Companion operations and normally finish
+            // within a few hundred milliseconds. A 150 ms poll interval added a
+            // visible delay larger than the actual Word update work; one frame
+            // keeps the UI responsive without busy-waiting.
+            await Task.Delay(16, cancellationToken).ConfigureAwait(false);
         }
         throw new TimeoutException("VisualTeX formula editing session timed out.");
     }
@@ -361,9 +421,9 @@ public sealed class VisualTeXSessionClient : IDisposable
         CancellationToken cancellationToken)
     {
         EnsureAuthorizationHeader();
-        using var response = await _http.GetAsync(
+        using var response = await SendTrackedAsync(() => _http.GetAsync(
             $"/api/v1/sessions/{Uri.EscapeDataString(sessionId)}",
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken)).ConfigureAwait(false);
         await EnsureSuccessAsync(response).ConfigureAwait(false);
         return await DeserializeAsync<OfficeSessionDocument>(response).ConfigureAwait(false);
     }
@@ -392,7 +452,8 @@ public sealed class VisualTeXSessionClient : IDisposable
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json"),
         };
-        using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        using var response = await SendTrackedAsync(() =>
+            _http.SendAsync(request, cancellationToken)).ConfigureAwait(false);
         await EnsureSuccessAsync(response).ConfigureAwait(false);
         return await DeserializeAsync<OfficeSessionDocument>(response).ConfigureAwait(false);
     }
@@ -1096,6 +1157,37 @@ public sealed class VisualTeXSessionClient : IDisposable
             diagnostic.InnerExceptions.Add(current.ToString());
     }
 
+    private bool HasFreshHealth()
+    {
+        var lastHealthyTicks = Interlocked.Read(ref _lastHealthyUtcTicks);
+        if (lastHealthyTicks <= 0) return false;
+        var elapsedTicks = DateTime.UtcNow.Ticks - lastHealthyTicks;
+        return elapsedTicks >= 0 && elapsedTicks <= HealthCacheDuration.Ticks;
+    }
+
+    private void MarkHealthy() =>
+        Interlocked.Exchange(ref _lastHealthyUtcTicks, DateTime.UtcNow.Ticks);
+
+    private void InvalidateHealth() =>
+        Interlocked.Exchange(ref _lastHealthyUtcTicks, 0);
+
+    private async Task<HttpResponseMessage> SendTrackedAsync(
+        Func<Task<HttpResponseMessage>> operation)
+    {
+        try
+        {
+            var response = await operation().ConfigureAwait(false);
+            if (response.IsSuccessStatusCode) MarkHealthy();
+            else InvalidateHealth();
+            return response;
+        }
+        catch
+        {
+            InvalidateHealth();
+            throw;
+        }
+    }
+
     private static async Task EnsureSuccessAsync(HttpResponseMessage response)
     {
         if (response.IsSuccessStatusCode) return;
@@ -1139,6 +1231,7 @@ public sealed class VisualTeXSessionClient : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        _converterPrewarmGate.Dispose();
         _http.Dispose();
     }
 }
@@ -1181,6 +1274,9 @@ public sealed class CreateVstoSessionRequest
 
     [JsonPropertyName("numbered")]
     public bool Numbered { get; set; }
+
+    [JsonPropertyName("fontSizePt")]
+    public double FontSizePt { get; set; } = FormulaFontSize.DefaultPt;
 
     [JsonPropertyName("originalMetadata")]
     public FormulaMetadata? OriginalMetadata { get; set; }
@@ -1227,6 +1323,9 @@ public sealed class OfficeSessionDocument
     [JsonPropertyName("numbered")]
     public bool Numbered { get; set; }
 
+    [JsonPropertyName("fontSizePt")]
+    public double FontSizePt { get; set; } = FormulaFontSize.DefaultPt;
+
     [JsonPropertyName("status")]
     public string Status { get; set; } = string.Empty;
 
@@ -1257,9 +1356,16 @@ public sealed class OfficeSessionDocument
             CodeFormat = CodeFormat,
             DisplayMode = DisplayMode,
             Numbered = Numbered,
+            EquationTag = string.Equals(DisplayMode, "block", StringComparison.Ordinal)
+                ? OriginalMetadata?.EquationTag
+                : null,
             RenderWidthPx = ExportResult?.Width > 0 ? ExportResult.Width : OriginalMetadata?.RenderWidthPx,
             RenderHeightPx = ExportResult?.Height > 0 ? ExportResult.Height : OriginalMetadata?.RenderHeightPx,
             Baseline = ExportResult?.Baseline ?? OriginalMetadata?.Baseline,
+            FontSizePt = FormulaFontSize.Normalize(FontSizePt),
+            RenderFontSizePt = ExportResult is not null
+                ? FormulaFontSize.Normalize(FontSizePt)
+                : OriginalMetadata?.RenderFontSizePt ?? FormulaFontSize.Normalize(FontSizePt),
             CreatedWithVersion = OriginalMetadata?.CreatedWithVersion ?? "1.0.18",
             UpdatedWithVersion = "1.0.18",
             CreatedAt = OriginalMetadata?.CreatedAt ?? now,

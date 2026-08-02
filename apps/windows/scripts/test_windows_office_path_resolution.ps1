@@ -2,6 +2,14 @@
 param()
 
 $ErrorActionPreference = "Stop"
+$windowsRoot = if (-not [string]::IsNullOrWhiteSpace($env:SystemRoot)) { $env:SystemRoot } else { $env:WINDIR }
+if ([string]::IsNullOrWhiteSpace($windowsRoot)) {
+    throw "SystemRoot/WINDIR is unavailable; cannot locate Windows PowerShell"
+}
+$powerShellExe = Join-Path $windowsRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+if (-not (Test-Path -LiteralPath $powerShellExe -PathType Leaf)) {
+    throw "Windows PowerShell is missing: $powerShellExe"
+}
 $sourceScript = Join-Path $PSScriptRoot "ensure_windows_office_certificate.ps1"
 if (-not (Test-Path -LiteralPath $sourceScript -PathType Leaf)) {
     throw "Certificate script is missing: $sourceScript"
@@ -55,7 +63,7 @@ function Invoke-Resolver {
     if (-not [string]::IsNullOrWhiteSpace($ExplicitPath)) {
         $arguments += @("-VisualTeXPath", $ExplicitPath)
     }
-    $output = & powershell.exe @arguments
+    $output = & $powerShellExe @arguments
     if ($LASTEXITCODE -ne 0) {
         throw "Resolver failed with exit code $LASTEXITCODE for expected path '$ExpectedPath'. Output: $($output -join [Environment]::NewLine)"
     }

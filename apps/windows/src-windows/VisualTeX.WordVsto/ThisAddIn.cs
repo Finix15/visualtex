@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text;
 using Microsoft.Office.Interop.Word;
 using Application = Microsoft.Office.Interop.Word.Application;
 using Extensibility;
@@ -55,6 +57,36 @@ public interface IWordRibbonCallbacks
 
     [DispId(14)]
     object? GetRibbonImage(Office.IRibbonControl control);
+
+    [DispId(15)]
+    string GetFormulaFontSizeText(Office.IRibbonControl control);
+
+    [DispId(16)]
+    bool GetFormulaFontSizeEnabled(Office.IRibbonControl control);
+
+    [DispId(17)]
+    void OnFormulaFontSizeChanged(Office.IRibbonControl control, string value);
+
+    [DispId(18)]
+    void OnDecreaseFormulaFontSize(object control);
+
+    [DispId(19)]
+    void OnIncreaseFormulaFontSize(object control);
+
+    [DispId(20)]
+    void OnBulkImport(object control);
+
+    [DispId(21)]
+    void OnRedrawSelectionToOmml(object control);
+
+    [DispId(22)]
+    void OnRedrawSelectionToOle(object control);
+
+    [DispId(23)]
+    void OnRedrawDocumentToOmml(object control);
+
+    [DispId(24)]
+    void OnRedrawDocumentToOle(object control);
 }
 
 [ComVisible(true)]
@@ -83,7 +115,55 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
           <button id="VisualTeX.WordVsto.InsertReference" label="插入公式引用" screentip="引用带编号公式" supertip="从当前文档的带编号公式中选择目标，并插入可自动更新的 Word REF 字段。" imageMso="HyperlinkInsert" onAction="OnInsertEquationReference" />
           <button id="VisualTeX.WordVsto.ExportPicture" label="导出所选为图片" imageMso="PictureInsertFromFile" onAction="OnExportSelectedAsPicture" />
           <button id="VisualTeX.WordVsto.Delete" label="删除所选公式" imageMso="Delete" onAction="OnDeleteSelected" />
+          <button id="VisualTeX.WordVsto.BulkImport" label="批量导入" size="large" screentip="批量导入 LaTeX / Markdown" supertip="将 Markdown 或 LaTeX 文档解析为 Word 原生文字，以及可单独编辑和调整字号的行内/行间公式。" tag="batchImport" getImage="GetRibbonImage" onAction="OnBulkImport" />
           <button id="VisualTeX.WordVsto.OpenDesktop" label="打开 VisualTeX" imageMso="FileOpen" onAction="OnOpenDesktop" />
+        </group>
+        <group id="VisualTeX.WordVsto.RedrawGroup" label="LaTeX 重绘">
+          <menu id="VisualTeX.WordVsto.RedrawSelection" label="重绘所选" size="large" screentip="重绘所选 LaTeX 代码" supertip="识别所选文字中的 $...$、$$...$$、\\(...\\)、\\[...\\] 和常见公式环境，并原位替换为可编辑公式。" tag="batchImport" getImage="GetRibbonImage">
+            <button id="VisualTeX.WordVsto.RedrawSelectionOmml" label="重绘为 Word OMML" screentip="原位替换为 Word 原生公式" onAction="OnRedrawSelectionToOmml" />
+            <button id="VisualTeX.WordVsto.RedrawSelectionOle" label="重绘为 VisualTeX OLE" screentip="原位替换为可双击编辑的 OLE" onAction="OnRedrawSelectionToOle" />
+          </menu>
+          <menu id="VisualTeX.WordVsto.RedrawDocument" label="重绘全文" size="large" screentip="重绘整个文档中的 LaTeX 代码" supertip="扫描当前文档并原位替换全部 LaTeX 公式；开始前会再次确认。" imageMso="RefreshAll">
+            <button id="VisualTeX.WordVsto.RedrawDocumentOmml" label="全文重绘为 Word OMML" onAction="OnRedrawDocumentToOmml" />
+            <button id="VisualTeX.WordVsto.RedrawDocumentOle" label="全文重绘为 VisualTeX OLE" onAction="OnRedrawDocumentToOle" />
+          </menu>
+        </group>
+        <group id="VisualTeX.WordVsto.FontSizeGroup" label="公式字号">
+          <button id="VisualTeX.WordVsto.FontSizeDecrease" label="减小" imageMso="FontSizeDecrease" getEnabled="GetFormulaFontSizeEnabled" onAction="OnDecreaseFormulaFontSize" />
+          <comboBox id="VisualTeX.WordVsto.FontSize" label="字号" sizeString="初号（42 磅）" getText="GetFormulaFontSizeText" getEnabled="GetFormulaFontSizeEnabled" onChange="OnFormulaFontSizeChanged">
+            <item id="VisualTeX.WordVsto.FontSizeChu" label="初号" />
+            <item id="VisualTeX.WordVsto.FontSizeXiaoChu" label="小初" />
+            <item id="VisualTeX.WordVsto.FontSizeYi" label="一号" />
+            <item id="VisualTeX.WordVsto.FontSizeXiaoYi" label="小一" />
+            <item id="VisualTeX.WordVsto.FontSizeEr" label="二号" />
+            <item id="VisualTeX.WordVsto.FontSizeXiaoEr" label="小二" />
+            <item id="VisualTeX.WordVsto.FontSizeSan" label="三号" />
+            <item id="VisualTeX.WordVsto.FontSizeXiaoSan" label="小三" />
+            <item id="VisualTeX.WordVsto.FontSizeSi" label="四号" />
+            <item id="VisualTeX.WordVsto.FontSizeXiaoSi" label="小四" />
+            <item id="VisualTeX.WordVsto.FontSizeWu" label="五号" />
+            <item id="VisualTeX.WordVsto.FontSizeXiaoWu" label="小五" />
+            <item id="VisualTeX.WordVsto.FontSizeLiu" label="六号" />
+            <item id="VisualTeX.WordVsto.FontSizeXiaoLiu" label="小六" />
+            <item id="VisualTeX.WordVsto.FontSizeQi" label="七号" />
+            <item id="VisualTeX.WordVsto.FontSizeBa" label="八号" />
+            <item id="VisualTeX.WordVsto.FontSize8" label="8" />
+            <item id="VisualTeX.WordVsto.FontSize9" label="9" />
+            <item id="VisualTeX.WordVsto.FontSize10" label="10" />
+            <item id="VisualTeX.WordVsto.FontSize10_5" label="10.5" />
+            <item id="VisualTeX.WordVsto.FontSize11" label="11" />
+            <item id="VisualTeX.WordVsto.FontSize12" label="12" />
+            <item id="VisualTeX.WordVsto.FontSize14" label="14" />
+            <item id="VisualTeX.WordVsto.FontSize16" label="16" />
+            <item id="VisualTeX.WordVsto.FontSize18" label="18" />
+            <item id="VisualTeX.WordVsto.FontSize20" label="20" />
+            <item id="VisualTeX.WordVsto.FontSize24" label="24" />
+            <item id="VisualTeX.WordVsto.FontSize28" label="28" />
+            <item id="VisualTeX.WordVsto.FontSize36" label="36" />
+            <item id="VisualTeX.WordVsto.FontSize48" label="48" />
+            <item id="VisualTeX.WordVsto.FontSize72" label="72" />
+          </comboBox>
+          <button id="VisualTeX.WordVsto.FontSizeIncrease" label="增大" imageMso="FontSizeIncrease" getEnabled="GetFormulaFontSizeEnabled" onAction="OnIncreaseFormulaFontSize" />
         </group>
       </tab>
     </tabs>
@@ -96,6 +176,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
     private OfficeUiDispatcher? _dispatcher;
     private VisualTeXSessionClient? _sessionClient;
     private WordDoubleClickHook? _doubleClickHook;
+    private static readonly object BulkAcceptanceLogGate = new();
     private readonly SemaphoreSlim _operationGate = new(1, 1);
     private readonly object _nativeOleTargetGate = new();
     private CancellationTokenSource? _lifetime;
@@ -107,7 +188,11 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
     private int _nativeOleTargetTop;
     private int _nativeOleTargetRight;
     private int _nativeOleTargetBottom;
+    private int _formulaFontInvalidationPending;
+    private int _normalizingTypingCaret;
+    private int _typingCaretNormalizationPending;
     private object? _ribbonUi;
+    private Office.COMAddIn? _comAddIn;
 
     public string GetCustomUI(string ribbonId) => RibbonXml;
 
@@ -117,11 +202,33 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         object addInInstance,
         ref Array custom)
     {
+        // Real VSTO-flow acceptances host the current source assembly manually
+        // while Word may also auto-load the installed COM add-in into the same
+        // application. Keep that installed instance inert only in acceptance so
+        // one physical double-click cannot be handled by two event subscribers.
+        // Production Word startup never sets this environment variable.
+        if (addInInstance is Office.COMAddIn
+            && string.Equals(
+                Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE"),
+                "1",
+                StringComparison.Ordinal))
+        {
+            WordDoubleClickHook.TraceMessage(
+                "installed-addin-suppressed-for-manual-acceptance");
+            return;
+        }
+
         _application = (Application)application;
+        _comAddIn = addInInstance as Office.COMAddIn;
+        if (_comAddIn is not null)
+        {
+            try { _comAddIn.Object = this; } catch { }
+        }
         _formulaService = new WordFormulaService(_application);
         _dispatcher = new OfficeUiDispatcher();
         _sessionClient = new VisualTeXSessionClient();
         _lifetime = new CancellationTokenSource();
+        _ = PrewarmCompanionAsync(_sessionClient, _lifetime.Token);
         _application.WindowBeforeDoubleClick += OnWindowBeforeDoubleClick;
         _application.WindowSelectionChange += OnWindowSelectionChange;
         string? doubleClickError = null;
@@ -148,9 +255,51 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
     public void OnStartupComplete(ref Array custom) { }
     public void OnBeginShutdown(ref Array custom) => Dispose();
 
-    public void OnRibbonLoad(object ribbonUi) => _ribbonUi = ribbonUi;
+    public void OnRibbonLoad(object ribbonUi)
+    {
+        _ribbonUi = ribbonUi;
+        InvalidateFormulaFontControls();
+    }
     public object? GetRibbonImage(Office.IRibbonControl control) =>
         RibbonIconProvider.GetImage(control?.Tag);
+    public string GetFormulaFontSizeText(Office.IRibbonControl control)
+    {
+        try
+        {
+            var size = _formulaService?.GetSelectedFormulaFontSize();
+            return size.HasValue
+                ? FormulaFontSize.FormatDisplay(size.Value)
+                : string.Empty;
+        }
+        catch { return string.Empty; }
+    }
+    public bool GetFormulaFontSizeEnabled(Office.IRibbonControl control)
+    {
+        try { return _formulaService?.GetSelectedFormulaFontSize().HasValue == true; }
+        catch { return false; }
+    }
+    public void OnFormulaFontSizeChanged(Office.IRibbonControl control, string value) =>
+        ApplyFormulaFontSize(ParseFontSize(value));
+    public void OnDecreaseFormulaFontSize(object control)
+    {
+        try
+        {
+            var current = _formulaService?.GetSelectedFormulaFontSize()
+                ?? throw new InvalidOperationException("请先选择一个 VisualTeX 公式。");
+            ApplyFormulaFontSize(FormulaFontSize.PreviousPreset(current));
+        }
+        catch (Exception error) { SetStatus($"无法设置公式字号：{error.Message}"); }
+    }
+    public void OnIncreaseFormulaFontSize(object control)
+    {
+        try
+        {
+            var current = _formulaService?.GetSelectedFormulaFontSize()
+                ?? throw new InvalidOperationException("请先选择一个 VisualTeX 公式。");
+            ApplyFormulaFontSize(FormulaFontSize.NextPreset(current));
+        }
+        catch (Exception error) { SetStatus($"无法设置公式字号：{error.Message}"); }
+    }
     public void OnInsertInline(object control) =>
         BeginSession("create", "inline", FormulaOleContract.NativeOleMode);
     public void OnInsertDisplay(object control) =>
@@ -173,6 +322,15 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             FormulaOleContract.WordOmmlMode,
             conversionOnly: true);
     public void OnUpdateEquationNumbers(object control) => _ = UpdateEquationNumbersAsync();
+    public void OnBulkImport(object control) => _ = BulkImportAsync();
+    public void OnRedrawSelectionToOmml(object control) =>
+        _ = RedrawLatexAsync(wholeDocument: false, FormulaOleContract.WordOmmlMode);
+    public void OnRedrawSelectionToOle(object control) =>
+        _ = RedrawLatexAsync(wholeDocument: false, FormulaOleContract.NativeOleMode);
+    public void OnRedrawDocumentToOmml(object control) =>
+        _ = RedrawLatexAsync(wholeDocument: true, FormulaOleContract.WordOmmlMode);
+    public void OnRedrawDocumentToOle(object control) =>
+        _ = RedrawLatexAsync(wholeDocument: true, FormulaOleContract.NativeOleMode);
     public void OnExportSelectedAsPicture(object control) => _ = ExportSelectedAsPictureAsync();
     public void OnDeleteSelected(object control) => _ = DeleteSelectedAsync();
     public void OnInsertEquationReference(object control) => _ = InsertEquationReferenceAsync();
@@ -190,8 +348,82 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         }
     }
 
+    private static double ParseFontSize(string value) => FormulaFontSize.Parse(value);
+
+    private void ApplyFormulaFontSize(double value)
+    {
+        try
+        {
+            var applied = (_formulaService
+                    ?? throw new InvalidOperationException("Word formula service is unavailable."))
+                .SetSelectedFormulaFontSize(value);
+            SetStatus($"公式字号已设置为 {FormulaFontSize.Describe(applied)}。");
+        }
+        catch (Exception error)
+        {
+            SetStatus($"无法设置公式字号：{error.Message}");
+        }
+        finally { InvalidateFormulaFontControls(); }
+    }
+
+    private void ScheduleFormulaFontControlsInvalidation()
+    {
+        var dispatcher = _dispatcher;
+        if (dispatcher is null
+            || Interlocked.Exchange(ref _formulaFontInvalidationPending, 1) != 0)
+            return;
+        dispatcher.Post(() =>
+        {
+            Interlocked.Exchange(ref _formulaFontInvalidationPending, 0);
+            InvalidateFormulaFontControls();
+        });
+    }
+
+    private void InvalidateFormulaFontControls()
+    {
+        var ribbon = _ribbonUi;
+        if (ribbon is null) return;
+        try
+        {
+            dynamic ui = ribbon;
+            ui.InvalidateControl("VisualTeX.WordVsto.FontSize");
+            ui.InvalidateControl("VisualTeX.WordVsto.FontSizeDecrease");
+            ui.InvalidateControl("VisualTeX.WordVsto.FontSizeIncrease");
+        }
+        catch { }
+    }
+
+    private void ScheduleTypingCaretNormalization()
+    {
+        var dispatcher = _dispatcher;
+        if (dispatcher is null
+            || Interlocked.Exchange(ref _typingCaretNormalizationPending, 1) != 0)
+            return;
+        dispatcher.Post(() =>
+        {
+            Interlocked.Exchange(ref _typingCaretNormalizationPending, 0);
+            var service = _formulaService;
+            var application = _application;
+            if (service is null || application is null) return;
+            Selection? currentSelection = null;
+            try
+            {
+                currentSelection = application.Selection;
+                if (Interlocked.CompareExchange(ref _normalizingTypingCaret, 1, 0) != 0)
+                    return;
+                try { service.NormalizeTypingCaretAfterInlineFormula(currentSelection); }
+                finally { Interlocked.Exchange(ref _normalizingTypingCaret, 0); }
+            }
+            catch { }
+            finally { ReleaseComObject(currentSelection); }
+        });
+    }
+
     private void OnWindowSelectionChange(Selection selection)
     {
+        // Defer Ribbon callbacks until Word finishes entering/leaving a native
+        // math zone. Synchronous OMML inspection here can disturb its caret.
+        ScheduleFormulaFontControlsInvalidation();
         var service = _formulaService;
         var application = _application;
         if (service is null || application is null)
@@ -204,6 +436,17 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         Window? window = null;
         try
         {
+            if (Interlocked.CompareExchange(ref _normalizingTypingCaret, 1, 0) == 0)
+            {
+                try { service.NormalizeTypingCaretAfterInlineFormula(selection); }
+                finally { Interlocked.Exchange(ref _normalizingTypingCaret, 0); }
+            }
+            // During a mouse click Word can raise SelectionChange while the OLE
+            // object is still selected, then collapse the caret at the object
+            // tail without raising a second event. Re-check on the Office UI
+            // queue after Word finishes that transition.
+            ScheduleTypingCaretNormalization();
+
             // Do not inspect OMML metadata here. Word fires SelectionChange while
             // entering its native equation editor, and touching the OMath at that
             // point can disturb the caret state. Only perform the heavier metadata
@@ -268,7 +511,12 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             if (selected?.Metadata is null || string.IsNullOrWhiteSpace(selected.FormulaId))
                 return;
 
-            if (!WordDoubleClickRouting.ShouldOpenVisualTeX(selected)) return;
+            var shouldOpenVisualTeX = WordDoubleClickRouting.ShouldOpenVisualTeX(selected);
+            WordDoubleClickHook.TraceMessage(
+                $"window-before-double-click formulaId={selected.FormulaId} "
+                + $"objectMode={selected.ObjectMode ?? "<null>"} "
+                + $"shouldOpenVisualTeX={shouldOpenVisualTeX}");
+            if (!shouldOpenVisualTeX) return;
 
             cancel = true;
             ClearNativeOleTarget();
@@ -351,6 +599,22 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         }
     }
 
+    private static async Task PrewarmCompanionAsync(
+        VisualTeXSessionClient client,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await client.EnsureHealthyAsync(cancellationToken).ConfigureAwait(false);
+            await client.PrewarmConverterAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Startup must remain non-blocking. The first explicit Office action
+            // retries the full diagnostic/startup path and reports any failure.
+        }
+    }
+
     private void BeginSession(
         string mode,
         string? displayMode,
@@ -402,6 +666,22 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             return;
         }
 
+        var openPerformance = string.Equals(
+            Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE"),
+            "1",
+            StringComparison.Ordinal)
+            ? Stopwatch.StartNew()
+            : null;
+        long openPerformanceCheckpoint = 0;
+        void TraceOpenPerformance(string stage)
+        {
+            if (openPerformance is null) return;
+            var elapsed = openPerformance.ElapsedMilliseconds;
+            Console.WriteLine(
+                $"    [perf] OpenSession.{stage}: +{elapsed - openPerformanceCheckpoint}ms ({elapsed}ms total)");
+            openPerformanceCheckpoint = elapsed;
+        }
+
         string? sessionId = null;
         string? imagePath = null;
         string? svgPath = null;
@@ -414,9 +694,11 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             var client = _sessionClient ?? throw new InvalidOperationException("VisualTeX Session client is unavailable.");
             SetStatus("正在连接 VisualTeX 本地服务…");
             await client.EnsureHealthyAsync(cancellationToken).ConfigureAwait(false);
+            TraceOpenPerformance("health");
             var selection = capturedSelection?.Metadata is not null
                 ? capturedSelection
                 : await dispatcher.InvokeAsync(service.ReadSelection).ConfigureAwait(false);
+            TraceOpenPerformance("read-selection");
             if (selection.ReadOnly)
                 throw new UnauthorizedAccessException("当前 Word 文档为只读状态。");
             if (mode == "edit" && selection.Metadata is null)
@@ -425,7 +707,9 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             // A create command may be invoked while the previous formula is
             // still selected. Only edit commands are allowed to seed the new
             // Session from that selection; every create Session starts blank.
-            var metadata = mode == "edit" ? selection.Metadata : null;
+            var metadata = mode == "edit"
+                ? NormalizeEditableMetadata(selection.Metadata)
+                : null;
             var targetObjectMode = requestedObjectMode
                 ?? (mode == "create" ? FormulaOleContract.NativeOleMode : selection.ObjectMode)
                 ?? FormulaOleContract.NativeOleMode;
@@ -438,6 +722,9 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             {
                 new() { Id = Guid.NewGuid().ToString(), Latex = string.Empty },
             };
+            var fontSizePt = metadata?.FontSizePt
+                ?? await dispatcher.InvokeAsync(service.ReadCurrentTypingFontSize)
+                    .ConfigureAwait(false);
             var request = new CreateVstoSessionRequest
             {
                 Mode = mode,
@@ -453,10 +740,13 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 ObjectMode = targetObjectMode,
                 Numbered = (requestedDisplayMode ?? metadata?.DisplayMode) == "block"
                     && (metadata?.Numbered ?? false),
+                FontSizePt = FormulaFontSize.Normalize(fontSizePt),
                 OriginalMetadata = metadata,
                 AutoCommitOnClose = true,
             };
+            TraceOpenPerformance("build-request");
             var session = await client.CreateSessionAsync(request, cancellationToken).ConfigureAwait(false);
+            TraceOpenPerformance("create-session");
             sessionId = session.Id;
             Volatile.Write(ref _activeSessionId, session.Id);
             if (conversionOnly)
@@ -469,6 +759,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             {
                 await client.OpenEditorAsync(session.Id, cancellationToken)
                     .ConfigureAwait(false);
+                TraceOpenPerformance("open-editor-window");
                 SetStatus("VisualTeX 编辑器已打开。");
             }
             session = await client.WaitForCommitAsync(
@@ -524,9 +815,9 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             }
             await dispatcher.InvokeAsync(() =>
             {
-                var current = service.ReadSelection();
+                var activeDocumentId = service.ReadActiveDocumentId();
                 if (!string.Equals(
-                        current.DocumentId,
+                        activeDocumentId,
                         session.SourceDocumentId,
                         StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("活动 Word 文档已切换，未写入公式。");
@@ -616,6 +907,760 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 Volatile.Write(ref _activeSessionId, null);
             _operationGate.Release();
         }
+    }
+
+    private static FormulaMetadata? NormalizeEditableMetadata(FormulaMetadata? source)
+    {
+        if (source is null) return null;
+        var metadata = FormulaMetadataCodec.Decode(FormulaMetadataCodec.Encode(source))
+            ?? throw new InvalidDataException("Unable to clone VisualTeX formula metadata.");
+        if (metadata.Lines.Count == 0) return metadata;
+
+        var last = metadata.Lines[metadata.Lines.Count - 1];
+        var split = FormulaEquationTag.Extract(last.Latex);
+        if (!string.Equals(last.Latex, split.Latex, StringComparison.Ordinal))
+            last.Latex = split.Latex;
+        metadata.EquationTag ??= split.EquationTag;
+        metadata.Latex = string.Join("\n", metadata.Lines.Select(line => line.Latex));
+        if (!string.Equals(metadata.DisplayMode, "block", StringComparison.Ordinal))
+            metadata.EquationTag = null;
+        metadata.Validate();
+        return metadata;
+    }
+
+    private async Task RedrawLatexAsync(bool wholeDocument, string objectMode)
+    {
+        var dispatcher = _dispatcher;
+        var service = _formulaService;
+        var client = _sessionClient;
+        var lifetime = _lifetime;
+        if (dispatcher is null
+            || service is null
+            || client is null
+            || lifetime is null
+            || lifetime.IsCancellationRequested)
+            return;
+
+        if (!await _operationGate.WaitAsync(
+                TimeSpan.FromSeconds(2),
+                lifetime.Token).ConfigureAwait(false))
+        {
+            SetStatus("VisualTeX 正在执行其他 Word 操作，请稍候再试。");
+            return;
+        }
+
+        var rendered = new Dictionary<string, RenderedWordBulkFormulaTemplate>(
+            StringComparer.Ordinal);
+        var prepared = new Dictionary<string, PreparedWordBulkFormula>(
+            StringComparer.Ordinal);
+        var converterSessionIds = new List<string>();
+        var maxRenderMilliseconds = 0L;
+        var totalRenderMilliseconds = 0L;
+        try
+        {
+            var plan = await dispatcher.InvokeAsync(
+                    () => service.CaptureLatexRedrawPlan(wholeDocument))
+                .ConfigureAwait(false);
+            var modeLabel = string.Equals(
+                objectMode,
+                FormulaOleContract.NativeOleMode,
+                StringComparison.Ordinal)
+                ? "VisualTeX OLE"
+                : "Word OMML";
+            if (wholeDocument
+                && !string.Equals(
+                    Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE"),
+                    "1",
+                    StringComparison.Ordinal))
+            {
+                var confirmed = await dispatcher.InvokeAsync(() =>
+                    System.Windows.Forms.MessageBox.Show(
+                        $"将在整个文档中原位重绘 {plan.Targets.Count} 个 LaTeX 公式为 {modeLabel}。\r\n\r\n"
+                        + "该操作会保留正文并删除公式两侧的 LaTeX 定界符，可通过一次 Ctrl+Z 整体撤销。是否继续？",
+                        "VisualTeX LaTeX 重绘",
+                        System.Windows.Forms.MessageBoxButtons.YesNo,
+                        System.Windows.Forms.MessageBoxIcon.Question,
+                        System.Windows.Forms.MessageBoxDefaultButton.Button2)
+                    == System.Windows.Forms.DialogResult.Yes).ConfigureAwait(false);
+                if (!confirmed)
+                {
+                    SetStatus("已取消全文 LaTeX 重绘，Word 文档未修改。");
+                    return;
+                }
+            }
+
+            WriteRedrawAcceptanceLog(
+                $"redraw-start scope={(wholeDocument ? "document" : "selection")} "
+                + $"mode={objectMode} formulas={plan.Targets.Count}");
+            SetStatus($"正在准备重绘 {plan.Targets.Count} 个 LaTeX 公式为 {modeLabel}…");
+            await client.EnsureHealthyAsync(lifetime.Token).ConfigureAwait(false);
+            await client.PrewarmConverterAsync(lifetime.Token).ConfigureAwait(false);
+
+            for (var index = 0; index < plan.Targets.Count; index++)
+            {
+                lifetime.Token.ThrowIfCancellationRequested();
+                var target = plan.Targets[index];
+                var run = new WordBulkRun
+                {
+                    Id = target.Id,
+                    IsFormula = true,
+                    Latex = target.Latex,
+                    DisplayMode = target.DisplayMode,
+                };
+                var key = string.Join(
+                    "\u001F",
+                    objectMode,
+                    target.DisplayMode,
+                    target.FontSizePt.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    target.Latex);
+                if (!rendered.TryGetValue(key, out var template))
+                {
+                    SetStatus($"正在渲染公式 {index + 1}/{plan.Targets.Count}…");
+                    var stopwatch = Stopwatch.StartNew();
+                    template = await RenderBulkFormulaTemplateAsync(
+                            client,
+                            run,
+                            objectMode,
+                            plan.DocumentId,
+                            target.FontSizePt,
+                            lifetime.Token)
+                        .ConfigureAwait(false);
+                    stopwatch.Stop();
+                    totalRenderMilliseconds += stopwatch.ElapsedMilliseconds;
+                    maxRenderMilliseconds = Math.Max(
+                        maxRenderMilliseconds,
+                        stopwatch.ElapsedMilliseconds);
+                    WriteRedrawAcceptanceLog(
+                        $"render index={index + 1} elapsedMs={stopwatch.ElapsedMilliseconds} "
+                        + $"fontSizePt={target.FontSizePt:0.##} display={target.DisplayMode} "
+                        + $"latex={target.Latex}");
+                    rendered.Add(key, template);
+                    converterSessionIds.Add(template.Session.Id);
+                }
+                else
+                {
+                    WriteRedrawAcceptanceLog(
+                        $"render-cache-hit index={index + 1} display={target.DisplayMode} "
+                        + $"latex={target.Latex}");
+                }
+
+                var independentSession = CloneBulkFormulaSession(
+                    template.Session,
+                    run,
+                    plan.DocumentId,
+                    target.FontSizePt,
+                    objectMode);
+                prepared.Add(target.Id, new PreparedWordBulkFormula
+                {
+                    Run = run,
+                    Session = independentSession,
+                    MathMl = template.MathMl,
+                    PngPath = template.PngPath,
+                    EmfPath = template.EmfPath,
+                });
+            }
+
+            SetStatus("公式渲染完成，正在原位写入 Word…");
+            var result = await dispatcher.InvokeAsync(
+                    () => service.ApplyLatexRedrawPlan(plan, prepared))
+                .ConfigureAwait(false);
+            foreach (var sessionId in converterSessionIds)
+            {
+                try
+                {
+                    await client.CompleteAsync(sessionId, lifetime.Token)
+                        .ConfigureAwait(false);
+                }
+                catch { }
+            }
+            var uniqueRenderCount = Math.Max(1, rendered.Count);
+            var averageRenderMilliseconds = totalRenderMilliseconds / uniqueRenderCount;
+            WriteRedrawAcceptanceLog(
+                $"redraw-complete formulas={result.FormulaCount} unique={rendered.Count} "
+                + $"renderAverageMs={averageRenderMilliseconds} renderMaxMs={maxRenderMilliseconds} "
+                + $"insertTotalMs={result.TotalInsertMilliseconds} insertMaxMs={result.MaxInsertMilliseconds}");
+            var performanceSuffix = maxRenderMilliseconds <= 250
+                ? $"渲染最大 {maxRenderMilliseconds} ms/公式"
+                : $"渲染最大 {maxRenderMilliseconds} ms/公式（本机超过 250 ms 目标）";
+            SetStatus(
+                $"LaTeX 重绘完成：{result.FormulaCount} 个公式已转换为 {modeLabel}；{performanceSuffix}。");
+        }
+        catch (OperationCanceledException error)
+        {
+            WriteRedrawAcceptanceLog("redraw-cancelled " + error);
+            SetStatus("VisualTeX LaTeX 重绘已取消。");
+        }
+        catch (Exception error)
+        {
+            WriteRedrawAcceptanceLog("redraw-failed " + error);
+            foreach (var sessionId in converterSessionIds)
+            {
+                try
+                {
+                    await client.FailAsync(sessionId, error.Message, CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
+                catch { }
+            }
+            SetStatus($"VisualTeX LaTeX 重绘失败：{error.Message}");
+            if (!string.Equals(
+                    Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE"),
+                    "1",
+                    StringComparison.Ordinal))
+            {
+                try
+                {
+                    await dispatcher.InvokeAsync(() =>
+                    {
+                        System.Windows.Forms.MessageBox.Show(
+                            error.Message,
+                            "VisualTeX LaTeX 重绘",
+                            System.Windows.Forms.MessageBoxButtons.OK,
+                            System.Windows.Forms.MessageBoxIcon.Error);
+                        return true;
+                    }).ConfigureAwait(false);
+                }
+                catch { }
+            }
+        }
+        finally
+        {
+            foreach (var template in rendered.Values)
+            {
+                TryDeleteFile(template.EmfPath);
+                TryDeleteFile(template.SvgPath);
+                TryDeleteFile(template.PngPath);
+            }
+            _operationGate.Release();
+        }
+    }
+
+    private async Task BulkImportAsync()
+    {
+        WriteBulkAcceptanceLog("bulk-import-start");
+        var dispatcher = _dispatcher;
+        var service = _formulaService;
+        var client = _sessionClient;
+        var application = _application;
+        var lifetime = _lifetime;
+        if (dispatcher is null
+            || service is null
+            || client is null
+            || application is null
+            || lifetime is null
+            || lifetime.IsCancellationRequested)
+            return;
+
+        if (!await _operationGate.WaitAsync(
+                TimeSpan.FromSeconds(2),
+                lifetime.Token).ConfigureAwait(false))
+        {
+            SetStatus("VisualTeX 正在执行其他 Word 操作，请稍候再试。");
+            return;
+        }
+
+        var rendered = new Dictionary<string, RenderedWordBulkFormulaTemplate>(
+            StringComparer.Ordinal);
+        var prepared = new Dictionary<string, PreparedWordBulkFormula>(
+            StringComparer.Ordinal);
+        var converterSessionIds = new List<string>();
+        string? bulkImportSessionId = null;
+        try
+        {
+            var selection = await dispatcher.InvokeAsync(service.ReadSelection)
+                .ConfigureAwait(false);
+            if (selection.ReadOnly)
+                throw new UnauthorizedAccessException("当前 Word 文档为只读状态。");
+            var sourceDocumentId = selection.DocumentId;
+            var fontSizePt = FormulaFontSize.Normalize(
+                await dispatcher.InvokeAsync(service.ReadCurrentTypingFontSize)
+                    .ConfigureAwait(false));
+            var resolvedImport = await ResolveBulkImportDocumentAsync(
+                    client,
+                    sourceDocumentId,
+                    selection.ObjectId,
+                    fontSizePt,
+                    lifetime.Token)
+                .ConfigureAwait(false);
+            bulkImportSessionId = resolvedImport.SessionId;
+            var document = resolvedImport.Document;
+            if (document is null)
+            {
+                WriteBulkAcceptanceLog("bulk-import-cancelled-no-document");
+                SetStatus("已取消批量导入，Word 文档未修改。");
+                return;
+            }
+
+            WriteBulkAcceptanceLog(
+                $"parsed blocks={document.Blocks.Count} formulas={document.FormulaCount} "
+                + $"mode={document.FormulaObjectMode} fontSizePt={fontSizePt:0.##}");
+            SetStatus(
+                $"正在准备批量导入：{document.Blocks.Count} 个块，{document.FormulaCount} 个公式…");
+            await client.EnsureHealthyAsync(lifetime.Token).ConfigureAwait(false);
+            var formulaRuns = document.Blocks
+                .SelectMany(block => block.Runs)
+                .Where(run => run.IsFormula)
+                .ToList();
+            var objectMode = document.FormulaObjectMode == WordBulkFormulaObjectMode.Ole
+                ? FormulaOleContract.NativeOleMode
+                : FormulaOleContract.WordOmmlMode;
+
+            for (var index = 0; index < formulaRuns.Count; index++)
+            {
+                lifetime.Token.ThrowIfCancellationRequested();
+                var run = formulaRuns[index];
+                var key = string.Join(
+                    "\u001F",
+                    objectMode,
+                    run.DisplayMode,
+                    fontSizePt.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    run.Latex,
+                    run.EquationTag ?? string.Empty);
+                if (!rendered.TryGetValue(key, out var template))
+                {
+                    WriteBulkAcceptanceLog(
+                        $"render-start index={index + 1}/{formulaRuns.Count} "
+                        + $"display={run.DisplayMode} latex={run.Latex}");
+                    SetStatus($"正在渲染公式 {index + 1}/{formulaRuns.Count}…");
+                    template = await RenderBulkFormulaTemplateAsync(
+                            client,
+                            run,
+                            objectMode,
+                            sourceDocumentId,
+                            fontSizePt,
+                            lifetime.Token)
+                        .ConfigureAwait(false);
+                    WriteBulkAcceptanceLog(
+                        $"render-complete index={index + 1}/{formulaRuns.Count} "
+                        + $"sessionId={template.Session.Id} status={template.Session.Status}");
+                    rendered.Add(key, template);
+                    converterSessionIds.Add(template.Session.Id);
+                }
+
+                var independentSession = CloneBulkFormulaSession(
+                    template.Session,
+                    run,
+                    sourceDocumentId,
+                    fontSizePt,
+                    objectMode);
+                prepared.Add(run.Id, new PreparedWordBulkFormula
+                {
+                    Run = run,
+                    Session = independentSession,
+                    MathMl = template.MathMl,
+                    PngPath = template.PngPath,
+                    EmfPath = template.EmfPath,
+                });
+            }
+
+            SetStatus("公式渲染完成，正在写入 Word…");
+            var result = await dispatcher.InvokeAsync(() =>
+                    service.InsertBulkDocument(
+                        document,
+                        prepared,
+                        sourceDocumentId,
+                        selection.ObjectId))
+                .ConfigureAwait(false);
+            foreach (var sessionId in converterSessionIds)
+            {
+                try
+                {
+                    await client.CompleteAsync(sessionId, lifetime.Token)
+                        .ConfigureAwait(false);
+                }
+                catch { }
+            }
+            if (!string.IsNullOrWhiteSpace(bulkImportSessionId))
+            {
+                try
+                {
+                    await client.CompleteAsync(bulkImportSessionId!, lifetime.Token)
+                        .ConfigureAwait(false);
+                }
+                catch { }
+            }
+            WriteBulkAcceptanceLog(
+                $"bulk-import-complete blocks={result.BlockCount} formulas={result.FormulaCount}");
+            SetStatus(
+                $"批量导入完成：{result.BlockCount} 个内容块，{result.FormulaCount} 个独立公式。");
+        }
+        catch (OperationCanceledException error)
+        {
+            WriteBulkAcceptanceLog("bulk-import-cancelled " + error);
+            SetStatus("VisualTeX 批量导入已取消。");
+        }
+        catch (Exception error)
+        {
+            WriteBulkAcceptanceLog("bulk-import-failed " + error);
+            foreach (var sessionId in converterSessionIds)
+            {
+                try
+                {
+                    await client.FailAsync(sessionId, error.Message, CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
+                catch { }
+            }
+            if (!string.IsNullOrWhiteSpace(bulkImportSessionId))
+            {
+                try
+                {
+                    await client.FailAsync(bulkImportSessionId!, error.Message, CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
+                catch { }
+            }
+            SetStatus($"VisualTeX 批量导入失败：{error.Message}");
+            if (!string.Equals(
+                    Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE"),
+                    "1",
+                    StringComparison.Ordinal))
+            {
+                try
+                {
+                    await dispatcher.InvokeAsync(() =>
+                    {
+                        System.Windows.Forms.MessageBox.Show(
+                            error.Message,
+                            "VisualTeX 批量导入",
+                            System.Windows.Forms.MessageBoxButtons.OK,
+                            System.Windows.Forms.MessageBoxIcon.Error);
+                        return true;
+                    }).ConfigureAwait(false);
+                }
+                catch { }
+            }
+        }
+        finally
+        {
+            foreach (var template in rendered.Values)
+            {
+                TryDeleteFile(template.EmfPath);
+                TryDeleteFile(template.SvgPath);
+                TryDeleteFile(template.PngPath);
+            }
+            _operationGate.Release();
+        }
+    }
+
+    private async Task<(WordBulkImportDocument? Document, string? SessionId)>
+        ResolveBulkImportDocumentAsync(
+            VisualTeXSessionClient client,
+            string? sourceDocumentId,
+            string? sourceObjectId,
+            double fontSizePt,
+            CancellationToken cancellationToken)
+    {
+        if (string.Equals(
+                Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE"),
+                "1",
+                StringComparison.Ordinal))
+        {
+            var sourcePath = Environment.GetEnvironmentVariable(
+                "VISUALTEX_VSTO_BULK_SOURCE_PATH");
+            WriteBulkAcceptanceLog(
+                $"resolve-acceptance-source path={sourcePath ?? "<null>"} "
+                + $"format={Environment.GetEnvironmentVariable("VISUALTEX_VSTO_BULK_FORMAT") ?? "<null>"} "
+                + $"mode={Environment.GetEnvironmentVariable("VISUALTEX_VSTO_BULK_OBJECT_MODE") ?? "<null>"}");
+            var acceptanceSource = !string.IsNullOrWhiteSpace(sourcePath)
+                ? File.ReadAllText(sourcePath!, Encoding.UTF8)
+                : Environment.GetEnvironmentVariable("VISUALTEX_VSTO_BULK_SOURCE")
+                  ?? throw new InvalidOperationException(
+                      "Acceptance bulk import requires VISUALTEX_VSTO_BULK_SOURCE_PATH or VISUALTEX_VSTO_BULK_SOURCE.");
+            var acceptanceFormat = Environment.GetEnvironmentVariable("VISUALTEX_VSTO_BULK_FORMAT")
+                ?.Trim().ToLowerInvariant() switch
+            {
+                "markdown" => WordBulkSourceFormat.Markdown,
+                "latex" => WordBulkSourceFormat.Latex,
+                _ => WordBulkSourceFormat.Auto,
+            };
+            var acceptanceObjectMode = string.Equals(
+                Environment.GetEnvironmentVariable("VISUALTEX_VSTO_BULK_OBJECT_MODE"),
+                "ole",
+                StringComparison.OrdinalIgnoreCase)
+                ? WordBulkFormulaObjectMode.Ole
+                : WordBulkFormulaObjectMode.Omml;
+            return (
+                WordBulkImportParser.Parse(
+                    acceptanceSource,
+                    acceptanceFormat,
+                    acceptanceObjectMode),
+                null);
+        }
+
+        await client.EnsureHealthyAsync(cancellationToken).ConfigureAwait(false);
+        var line = new FormulaLine
+        {
+            Id = Guid.NewGuid().ToString("D"),
+            Latex = string.Empty,
+        };
+        var session = await client.CreateSessionAsync(
+            new CreateVstoSessionRequest
+            {
+                Mode = "create",
+                Host = "word",
+                SourceDocumentId = sourceDocumentId,
+                SourceObjectId = sourceObjectId,
+                Title = "Word 文档批量导入",
+                Lines = new List<FormulaLine> { line },
+                ActiveLineId = line.Id,
+                CodeFormat = "auto-document",
+                DisplayMode = "block",
+                ObjectMode = FormulaOleContract.WordOmmlMode,
+                Numbered = false,
+                FontSizePt = fontSizePt,
+                AutoCommitOnClose = false,
+            },
+            cancellationToken).ConfigureAwait(false);
+        WriteBulkAcceptanceLog($"bulk-import-ui-created sessionId={session.Id}");
+        await client.OpenBulkImportAsync(session.Id, cancellationToken)
+            .ConfigureAwait(false);
+        WriteBulkAcceptanceLog($"bulk-import-ui-opened sessionId={session.Id}");
+        session = await client.WaitForCommitAsync(
+                session.Id,
+                TimeSpan.FromHours(1),
+                cancellationToken)
+            .ConfigureAwait(false);
+        WriteBulkAcceptanceLog(
+            $"bulk-import-ui-finished sessionId={session.Id} status={session.Status} "
+            + $"error={session.Error ?? "<null>"}");
+        if (session.Status == "cancelled" || session.ExplicitCancel)
+            return (null, session.Id);
+        if (session.Status == "failed")
+            throw new InvalidOperationException(
+                session.Error ?? "VisualTeX 文档导入窗口返回失败状态。");
+        if (session.Status is not ("committing" or "completed"))
+            throw new InvalidOperationException(
+                $"VisualTeX 文档导入窗口返回了意外状态：{session.Status}。");
+
+        var source = string.Join("\n", session.Lines.Select(item => item.Latex));
+        var objectMode = string.Equals(
+            session.ObjectMode,
+            FormulaOleContract.NativeOleMode,
+            StringComparison.Ordinal)
+            ? WordBulkFormulaObjectMode.Ole
+            : WordBulkFormulaObjectMode.Omml;
+        if (string.Equals(
+                session.CodeFormat,
+                "visualtex-document-json",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return (
+                WordBulkImportParser.ParseSerialized(source, objectMode),
+                session.Id);
+        }
+        var format = session.CodeFormat.Trim().ToLowerInvariant() switch
+        {
+            "markdown-document" => WordBulkSourceFormat.Markdown,
+            "latex-document" => WordBulkSourceFormat.Latex,
+            _ => WordBulkSourceFormat.Auto,
+        };
+        return (
+            WordBulkImportParser.Parse(source, format, objectMode),
+            session.Id);
+    }
+
+    private static async Task<RenderedWordBulkFormulaTemplate> RenderBulkFormulaTemplateAsync(
+        VisualTeXSessionClient client,
+        WordBulkRun run,
+        string objectMode,
+        string? sourceDocumentId,
+        double fontSizePt,
+        CancellationToken cancellationToken)
+    {
+        var formulaId = Guid.NewGuid().ToString("D");
+        var line = new FormulaLine
+        {
+            Id = Guid.NewGuid().ToString("D"),
+            Latex = run.Latex,
+        };
+        var originalMetadata = CreateBulkFormulaMetadata(
+            formulaId,
+            line,
+            run,
+            fontSizePt);
+        WriteBulkAcceptanceLog(
+            $"converter-create display={run.DisplayMode} mode={objectMode} latex={run.Latex}");
+        var session = await client.CreateSessionAsync(
+            new CreateVstoSessionRequest
+            {
+                Mode = "create",
+                Host = "word",
+                FormulaId = formulaId,
+                SourceDocumentId = sourceDocumentId,
+                Title = "Bulk imported Word formula",
+                Lines = new List<FormulaLine> { line },
+                ActiveLineId = line.Id,
+                CodeFormat = "latex",
+                DisplayMode = run.DisplayMode,
+                ObjectMode = objectMode,
+                Numbered = false,
+                FontSizePt = fontSizePt,
+                OriginalMetadata = originalMetadata,
+                AutoCommitOnClose = false,
+            },
+            cancellationToken).ConfigureAwait(false);
+        WriteBulkAcceptanceLog($"converter-created sessionId={session.Id}");
+        await client.OpenConverterAsync(session.Id, cancellationToken)
+            .ConfigureAwait(false);
+        WriteBulkAcceptanceLog($"converter-opened sessionId={session.Id}");
+        session = await client.WaitForCommitAsync(
+                session.Id,
+                TimeSpan.FromMinutes(3),
+                cancellationToken)
+            .ConfigureAwait(false);
+        WriteBulkAcceptanceLog(
+            $"converter-finished sessionId={session.Id} status={session.Status} "
+            + $"error={session.Error ?? "<null>"}");
+        if (session.Status == "failed")
+        {
+            var detail = string.IsNullOrWhiteSpace(session.Error)
+                || string.Equals(session.Error, "[object Object]", StringComparison.Ordinal)
+                ? "MathJax 无法解析该公式，转换窗口没有返回有效错误文本。"
+                : session.Error!.Trim();
+            var formula = run.Latex.Length <= 500
+                ? run.Latex
+                : run.Latex.Substring(0, 500) + "…";
+            throw new InvalidOperationException(
+                $"公式渲染失败：{formula}\r\n原因：{detail}");
+        }
+        if (session.Status == "cancelled")
+            throw new OperationCanceledException("批量公式渲染已取消。" );
+        var export = session.ExportResult
+            ?? throw new InvalidOperationException(
+                $"公式 {run.Latex} 没有生成导出结果。" );
+        if (string.IsNullOrWhiteSpace(export.MathMl))
+            throw new InvalidDataException(
+                $"公式 {run.Latex} 没有生成 MathML。" );
+
+        var template = new RenderedWordBulkFormulaTemplate
+        {
+            Session = session,
+            MathMl = export.MathMl,
+        };
+        if (string.Equals(
+                objectMode,
+                FormulaOleContract.NativeOleMode,
+                StringComparison.Ordinal))
+        {
+            template.PngPath = client.MaterializePng(session);
+            template.SvgPath = client.MaterializeSvg(session);
+            template.EmfPath = OfficeOlePreview.CreateVectorEmfFromSvg(
+                template.SvgPath,
+                export.Width,
+                export.Height);
+        }
+        return template;
+    }
+
+    private static FormulaMetadata CreateBulkFormulaMetadata(
+        string formulaId,
+        FormulaLine line,
+        WordBulkRun run,
+        double fontSizePt)
+    {
+        var now = DateTimeOffset.UtcNow.ToString("O");
+        return new FormulaMetadata
+        {
+            FormulaId = formulaId,
+            Title = "Bulk imported Word formula",
+            Latex = line.Latex,
+            Lines = new List<FormulaLine> { line },
+            CodeFormat = "latex",
+            DisplayMode = run.DisplayMode,
+            Numbered = false,
+            EquationTag = run.DisplayMode == "block" ? run.EquationTag : null,
+            FontSizePt = FormulaFontSize.Normalize(fontSizePt),
+            RenderFontSizePt = FormulaFontSize.Normalize(fontSizePt),
+            CreatedWithVersion = "1.2.4",
+            UpdatedWithVersion = "1.2.4",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+    }
+
+    private static OfficeSessionDocument CloneBulkFormulaSession(
+        OfficeSessionDocument template,
+        WordBulkRun run,
+        string? sourceDocumentId,
+        double fontSizePt,
+        string objectMode)
+    {
+        var formulaId = Guid.NewGuid().ToString("D");
+        var line = new FormulaLine
+        {
+            Id = Guid.NewGuid().ToString("D"),
+            Latex = run.Latex,
+        };
+        return new OfficeSessionDocument
+        {
+            Id = Guid.NewGuid().ToString("D"),
+            Mode = "create",
+            Host = "word",
+            FormulaId = formulaId,
+            SourceDocumentId = sourceDocumentId,
+            Title = "Bulk imported Word formula",
+            Lines = new List<FormulaLine> { line },
+            CodeFormat = "latex",
+            DisplayMode = run.DisplayMode,
+            ObjectMode = objectMode,
+            Numbered = false,
+            FontSizePt = fontSizePt,
+            Status = "committing",
+            Dirty = true,
+            OriginalMetadata = CreateBulkFormulaMetadata(
+                formulaId,
+                line,
+                run,
+                fontSizePt),
+            ExportResult = template.ExportResult,
+        };
+    }
+
+    private static void WriteRedrawAcceptanceLog(string message)
+    {
+        var path = Environment.GetEnvironmentVariable(
+            "VISUALTEX_VSTO_REDRAW_ACCEPTANCE_LOG");
+        if (string.IsNullOrWhiteSpace(path)) return;
+        try
+        {
+            var directory = Path.GetDirectoryName(path);
+            if (!string.IsNullOrWhiteSpace(directory)) Directory.CreateDirectory(directory!);
+            lock (BulkAcceptanceLogGate)
+            {
+                File.AppendAllText(
+                    path!,
+                    $"{DateTimeOffset.Now:O} {message}{Environment.NewLine}",
+                    Encoding.UTF8);
+            }
+        }
+        catch { }
+    }
+
+    private static void WriteBulkAcceptanceLog(string message)
+    {
+        var path = Environment.GetEnvironmentVariable(
+            "VISUALTEX_VSTO_BULK_ACCEPTANCE_LOG");
+        if (string.IsNullOrWhiteSpace(path)) return;
+        try
+        {
+            var directory = Path.GetDirectoryName(path);
+            if (!string.IsNullOrWhiteSpace(directory)) Directory.CreateDirectory(directory!);
+            lock (BulkAcceptanceLogGate)
+            {
+                File.AppendAllText(
+                    path!,
+                    $"{DateTimeOffset.Now:O} {message}{Environment.NewLine}",
+                    Encoding.UTF8);
+            }
+        }
+        catch { }
+    }
+
+    private static void TryDeleteFile(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return;
+        try { File.Delete(path!); } catch { }
     }
 
     private async Task UpdateEquationNumbersAsync()
@@ -791,6 +1836,12 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         _lifetime = null;
         Volatile.Write(ref _activeSessionId, null);
         _ribbonUi = null;
+        if (_comAddIn is not null)
+        {
+            try { _comAddIn.Object = null; } catch { }
+            ReleaseComObject(_comAddIn);
+            _comAddIn = null;
+        }
         _application = null;
     }
 }
