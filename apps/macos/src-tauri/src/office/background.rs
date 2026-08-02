@@ -444,20 +444,18 @@ pub(crate) fn prepare_foreground_app(_app: &AppHandle) -> Result<(), String> {
 pub(crate) fn activate_foreground_app(app: &AppHandle) -> Result<(), String> {
     prepare_foreground_app(app)?;
     let running = NSRunningApplication::currentApplication();
-    // Preserve the released 1.2.3 cross-application activation behavior, but
-    // do not make its advisory Boolean result fatal. In the resident 1.2.4
-    // lifecycle the process may have just transitioned from Accessory to
-    // Regular, and macOS can briefly reject activation even though the editor
-    // is already visible and can become key a moment later.
-    for delay_ms in [0_u64, 10, 25, 50, 100, 150] {
-        if delay_ms > 0 {
-            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+    let options = NSApplicationActivationOptions::ActivateAllWindows;
+    // Match the proven eb2fcf2a lifecycle. macOS may briefly return false
+    // immediately after an Accessory-to-Regular transition; retry for a few
+    // milliseconds, but never abort editor presentation on that advisory flag.
+    for attempt in 0..4 {
+        if running.activateWithOptions(options) {
+            break;
         }
-        if running.activateWithOptions(NSApplicationActivationOptions::ActivateAllWindows) {
-            return Ok(());
+        if attempt < 3 {
+            std::thread::sleep(std::time::Duration::from_millis(5));
         }
     }
-    eprintln!("macOS deferred VisualTeX foreground activation; continuing editor presentation");
     Ok(())
 }
 

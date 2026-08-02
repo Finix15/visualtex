@@ -927,24 +927,40 @@ expectIncludes(wordAdapter, 'VTApplicationSupportRoot() & "/NativeDocuments/" & 
 const handleOpenUrlStart = rustRuntime.indexOf("pub(crate) fn handle_open_url");
 const handleOpenUrlEnd = rustRuntime.indexOf("fn decode_png", handleOpenUrlStart);
 const handleOpenUrlSource = rustRuntime.slice(handleOpenUrlStart, handleOpenUrlEnd);
+const documentImportWindowStart = rustRuntime.indexOf("fn open_document_import_window");
+const documentImportWindowEnd = rustRuntime.indexOf(
+  "fn open_word_latex_redraw_window",
+  documentImportWindowStart,
+);
+const documentImportWindowSource = rustRuntime.slice(
+  documentImportWindowStart,
+  documentImportWindowEnd,
+);
 expect(handleOpenUrlStart >= 0 && handleOpenUrlEnd > handleOpenUrlStart, "The native Office URL handler source must be discoverable");
+expect(
+  documentImportWindowStart >= 0 && documentImportWindowEnd > documentImportWindowStart,
+  "The Word batch-import window source must be discoverable",
+);
 expect(!rustRuntime.includes("hide_main_window_for_office_editor"), "Opening an Office formula must not hide an already visible VisualTeX desktop workspace");
 expect(!handleOpenUrlSource.includes("reveal_main_window"), "Office URL handling must never reveal the desktop main window");
 expect(!handleOpenUrlSource.includes("hide_main_window"), "Office URL handling must never hide the desktop main window");
 expect(!rustRuntime.includes("main_was_visible"), "The Office editor lifecycle must derive background mode from current main-window visibility instead of hiding and remembering the workspace");
-expectIncludes(rustRuntime, "Preserve an already visible desktop workspace", "The Office editor must explicitly preserve the user's main VisualTeX window");
+expect(
+  (documentImportWindowSource.match(/order_main_window_behind_office_editor\(app\)\?/g) ?? []).length >= 2,
+  "Both reused and newly created Word batch-import windows must send the VisualTeX main workspace behind Word after receiving focus",
+);
 expectIncludes(rustRuntime, "restore_office_host_focus(host)", "Closing the formula editor must return focus to Word or PowerPoint");
 expectIncludes(backgroundRuntime, "prepare_foreground_app", "Office hydration must be able to prepare a regular macOS app without activating every VisualTeX window");
 expectIncludes(rustRuntime, "order_main_window_behind_office_editor", "The dedicated Office editor must explicitly keep the desktop main window behind Word or PowerPoint");
 expectIncludes(rustRuntime, "native_window.orderBack(None)", "The main VisualTeX workspace must be ordered behind Office instead of being raised with the editor");
-expectIncludes(rustRuntime, "Duration::from_millis(100)", "Transparent Office editor prewarming must be parked promptly instead of lingering in Mission Control");
+expect(!rustRuntime.includes("Duration::from_millis(100)"), "Resident editor prewarming must not use a delayed hide that can race a new Office Session");
 expectIncludes(backgroundRuntime, "yieldActivationToApplication", "Closing the Office editor must cooperatively yield activation back to Word or PowerPoint on modern macOS");
 expect(!rustRuntime.includes("native_window.orderFrontRegardless();"), "Office editor hydration must not bypass normal macOS window ordering");
-expectIncludes(backgroundRuntime, "NSApplicationActivationOptions::ActivateAllWindows", "Office formula editing must preserve the released 1.2.3 activation behavior so the editor rises above Word or PowerPoint");
-expectIncludes(backgroundRuntime, "for delay_ms in [0_u64, 10, 25, 50, 100, 150]", "Accessory-to-Regular activation must retry while macOS settles the foreground policy transition");
-expectIncludes(backgroundRuntime, "continuing editor presentation", "A deferred activation result must never abort editor presentation and leave the resident window transparent");
-expectIncludes(rustRuntime, "Unable to restore the resident Office editor window", "The resident editor must restore full native visibility before attempting cross-application activation");
-expectIncludes(rustRuntime, "crate::office::background::activate_foreground_app(app)?", "A visible resident Office editor must then force VisualTeX across the Word or PowerPoint application boundary");
+expectIncludes(backgroundRuntime, "NSApplicationActivationOptions::ActivateAllWindows", "Office formula editing must preserve the proven eb2fcf2a activation behavior so the editor rises above Word or PowerPoint");
+expectIncludes(backgroundRuntime, "for attempt in 0..4", "Accessory-to-Regular activation must use the short retry sequence from eb2fcf2a");
+expectIncludes(backgroundRuntime, "Duration::from_millis(5)", "Foreground activation retries must remain within the proven short settling interval");
+expectIncludes(rustRuntime, "wake_resident_editor_for_hydration", "An Office request must restore the continuously mounted resident WebView to full native alpha before hydration");
+expectIncludes(rustRuntime, "crate::office::background::activate_foreground_app(app)?", "Office request and ready presentation must force VisualTeX across the Word or PowerPoint application boundary");
 expectIncludes(appRuntime, "office::background::install_application_icon(app.handle())", "macOS setup must install the VisualTeX application icon before any background-to-foreground transition");
 expectIncludes(backgroundRuntime, "Every Accessory-to-Regular transition must have the real bundle icon", "Every Office foreground transition must preserve the VisualTeX Dock icon");
 expectIncludes(backgroundRuntime, 'const DOCK_ICON_MIGRATION_MARKER_FILE: &str = "dock-icon-v4.refreshed"', "The repaired Dock icon lifecycle must refresh stale same-version icon cache once");
@@ -1008,13 +1024,14 @@ expectIncludes(dialogApp, "onCurrentTauriWindowCloseRequested", "Closing a nativ
 expectIncludes(dialogApp, "close_macos_offline_office_editor_window", "A successful native Office transaction must hide and clear the resident Tauri editor window");
 expectIncludes(rustRuntime, '"office-native-word-editor"', "Word must use one fixed resident editor window label");
 expectIncludes(rustRuntime, '"office-native-powerpoint-editor"', "PowerPoint must keep a separate resident editor window label");
-expectIncludes(rustRuntime, "native_window.orderOut(None)", "An idle resident Office editor must be fully removed from the visible window list without destroying its WebView");
-expectIncludes(rustRuntime, "Unable to hide the resident Office editor", "Parking must synchronize Tauri visibility after AppKit orderOut so the next show reliably wakes WebKit");
-expectIncludes(rustRuntime, "native_window.setAlphaValue(1.0)", "A fully hidden resident editor must not remain as a transparent ghost window");
-expectIncludes(rustRuntime, "native_window.setIgnoresMouseEvents(true)", "A hidden or prewarming resident editor must never intercept user input");
-expectIncludes(rustRuntime, "present_resident_editor_window", "A hydrated resident editor must restore native mouse and key-window state before accepting input");
-expectIncludes(rustRuntime, "native_window.setIgnoresMouseEvents(false)", "A visible resident editor must explicitly disable click-through after hydration");
-expectIncludes(rustRuntime, "native_window.makeKeyAndOrderFront(None)", "A visible resident editor must become the native key window instead of remaining behind Word");
+expect(!rustRuntime.includes("native_window.orderOut(None)"), "The resident Office editor must remain in AppKit ordering so WebKit is never suspended between formula edits");
+expect(!rustRuntime.includes("Unable to hide the resident Office editor"), "The macOS resident editor must not use Tauri hide as part of its idle lifecycle");
+expectIncludes(rustRuntime, "setAlphaValue(if parked { 0.01 } else { 1.0 })", "Parking must use the proven eb2fcf2a native alpha transition without removing the WebView from the window list");
+expectIncludes(rustRuntime, "native_window.setAlphaValue(1.0)", "Hydration must restore the resident editor to full native opacity immediately after an Office request");
+expectIncludes(rustRuntime, "native_window.setIgnoresMouseEvents(true)", "A parked or hydrating resident editor must never intercept user input");
+expectIncludes(rustRuntime, "present_resident_editor_window", "A hydrated resident editor must restore native mouse and focus state before accepting input");
+expectIncludes(rustRuntime, "native_window.setIgnoresMouseEvents(parked)", "The resident editor must disable click-through whenever its parked state becomes false after hydration");
+expectIncludes(rustRuntime, "window.set_focus()", "A ready resident editor must receive keyboard focus after the second foreground activation");
 expect(!rustRuntime.includes("request_office_editor_foreground_activation"), "Office foreground activation must not use the ineffective LaunchServices reopen detour");
 expect(!rustRuntime.includes("NSWorkspaceOpenConfiguration::configuration()"), "Office foreground activation must follow the released 1.2.3 AppKit path instead of reopening the application");
 expect(!rustRuntime.includes("ActivateIgnoringOtherApps"), "Office foreground activation must not rely on the deprecated macOS ignoringOtherApps option");
