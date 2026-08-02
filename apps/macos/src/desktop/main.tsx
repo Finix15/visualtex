@@ -7,6 +7,7 @@ import { configureOcrTransport } from "../ocr/ocrService";
 import { desktopOcrTransport } from "../ocr/ocrTransport";
 import { OfficeDialogApp } from "../office/dialog/OfficeDialogApp";
 import { OfficeDocumentImportApp } from "../office/documentImport/OfficeDocumentImportApp";
+import { WordLatexRedrawApp } from "../office/redraw/WordLatexRedrawApp";
 import { DesktopApp } from "./DesktopApp";
 import { applyDocumentTheme, readSynchronizedTheme } from "../themeSync";
 import { VisualTexErrorBoundary } from "../runtime/VisualTexErrorBoundary";
@@ -19,7 +20,8 @@ if (!root) throw new Error("Missing VisualTeX application root element.");
 const view = new URLSearchParams(window.location.search).get("view");
 const officeFormulaView = view === "office-formula";
 const officeDocumentImportView = view === "office-document-import";
-if (officeFormulaView || officeDocumentImportView) {
+const officeWordLatexRedrawView = view === "office-word-latex-redraw";
+if (officeFormulaView || officeDocumentImportView || officeWordLatexRedrawView) {
   document.body.classList.add("office-dialog-page");
   applyDocumentTheme(readSynchronizedTheme());
 }
@@ -31,6 +33,8 @@ createRoot(root).render(
         <OfficeDialogApp />
       ) : officeDocumentImportView ? (
         <OfficeDocumentImportApp />
+      ) : officeWordLatexRedrawView ? (
+        <WordLatexRedrawApp />
       ) : (
         <DesktopApp />
       )}

@@ -174,7 +174,8 @@ export function EditorWorkspace({
     event: ReactPointerEvent<HTMLButtonElement>,
   ) => {
     preserveFormulaFocus(event);
-    rememberFormulaSelection();
+    const liveTarget = editorRef.current?.captureSelectionTarget() ?? null;
+    if (liveTarget) formulaSelectionTargetRef.current = liveTarget;
   };
 
   const applySelectedFormulaStyle = (kind: "bold" | "italic") => {
@@ -184,6 +185,14 @@ export function EditorWorkspace({
       null;
     if (target) editorRef.current?.applySelectionStyle({ kind }, target);
     formulaSelectionTargetRef.current = null;
+  };
+
+  const applySelectedFormulaStyleFromPointer = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+    kind: "bold" | "italic",
+  ) => {
+    preserveFormulaSelection(event);
+    applySelectedFormulaStyle(kind);
   };
 
   const toggleFormulaColorMenu = (kind: FormulaColorMenu) => {
@@ -464,19 +473,22 @@ export function EditorWorkspace({
                     className="icon-button compact formula-formatting-button is-selection-action"
                     aria-label={
                       isEn
-                        ? "Apply bold to selected content"
-                        : "将选中内容设为粗体"
+                        ? "Toggle bold for selected content"
+                        : "切换选中内容的粗体状态"
                     }
                     title={
                       isEn
-                        ? "Selection bold · does not affect later input"
-                        : "选中部分粗体 · 不影响后续输入"
+                        ? "Toggle \\mathbf bold for the selection only"
+                        : "切换粗体 · 使用 \\mathbf · 仅作用于选中内容"
                     }
                     data-formula-selection-bold
                     onPointerEnter={rememberFormulaSelection}
-                    onPointerDown={preserveFormulaSelection}
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => applySelectedFormulaStyle("bold")}
+                    onPointerDown={(event) =>
+                      applySelectedFormulaStyleFromPointer(event, "bold")
+                    }
+                    onClick={(event) => {
+                      if (event.detail === 0) applySelectedFormulaStyle("bold");
+                    }}
                   >
                     <Bold size={15} strokeWidth={2.2} />
                   </button>
@@ -485,19 +497,22 @@ export function EditorWorkspace({
                     className="icon-button compact formula-formatting-button is-selection-action"
                     aria-label={
                       isEn
-                        ? "Apply italic to selected content"
-                        : "将选中内容设为斜体"
+                        ? "Toggle italic or upright for selected content"
+                        : "切换选中内容的斜体或正体状态"
                     }
                     title={
                       isEn
-                        ? "Selection italic · does not affect later input"
-                        : "选中部分斜体 · 不影响后续输入"
+                        ? "Toggle default math italic and \\mathrm upright"
+                        : "切换默认数学斜体与 \\mathrm 正体 · 仅作用于选中内容"
                     }
                     data-formula-selection-italic
                     onPointerEnter={rememberFormulaSelection}
-                    onPointerDown={preserveFormulaSelection}
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => applySelectedFormulaStyle("italic")}
+                    onPointerDown={(event) =>
+                      applySelectedFormulaStyleFromPointer(event, "italic")
+                    }
+                    onClick={(event) => {
+                      if (event.detail === 0) applySelectedFormulaStyle("italic");
+                    }}
                   >
                     <Italic size={15} strokeWidth={2.2} />
                   </button>

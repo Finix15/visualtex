@@ -4047,6 +4047,7 @@ try {
   const entries = [
     ["protocolVersion", "1"],
     ["sessionId", sessionId],
+    ["operation", "documentImport"],
     ["outputKind", outputKind],
     ["sourceDocumentId", request.sourceDocumentId],
     ["bookmarkName", request.documentImport.bookmarkName],

@@ -5,6 +5,10 @@ Private Const VT_WORD_HOST As String = "word"
 Private Const VT_WORD_STATUS_FILE As String = "/OfficePluginStatus/word.json"
 Private Const VT_WORD_SOURCE_REVISION As String = _
     "word-office-performance-20260801-r77"
+Private Const VT_WORD_LATEX_REDRAW_REVISION As String = _
+    "word-latex-redraw-20260802-r1"
+Private Const VT_WORD_DOCUMENT_IMPORT_REVISION As String = _
+    "word-structured-document-import-20260730-r61"
 Private Const VT_WORD_EQUATION_NUMBER_FONT_NAME As String = "Cambria Math"
 Private Const VT_WORD_BOOKMARK_PREFIX As String = "VT_Pending_"
 Private Const VT_WORD_DOCUMENT_IMPORT_BOOKMARK_PREFIX As String = "VT_D_"
@@ -30,6 +34,11 @@ Private Const VT_WORD_IMAGE_MACRO_SCHEMA_VERSION As String = "2"
 Private Const VT_WORD_IMAGE_EDIT_DEBOUNCE_SECONDS As Double = 0.75
 Private Const VT_WORD_PAYLOAD_CHUNK_SIZE As Long = 20000
 Private Const VT_WORD_PAYLOAD_MAX_CHUNKS As Long = 128
+Private Const VT_WORD_LATEX_REDRAW_SOURCE_FILE As String = _
+    "/latex-redraw-source.txt"
+Private Const VT_WORD_LATEX_REDRAW_CHUNK_SIZE As Long = 16000
+Private Const VT_WORD_LATEX_REDRAW_MAX_BYTES As Long = 5242880
+Private Const VT_WORD_LATEX_REDRAW_MAX_FORMULAS As Long = 1000
 Private Const VT_WORD_TRACE_ENABLED As Boolean = False
 Private Const VT_WORD_DOUBLE_CLICK_TRACE_ENABLED As Boolean = False
 Private Const VT_WORD_DOUBLE_CLICK_TRACE_FILE As String = _
@@ -6010,6 +6019,163 @@ Private Function VTDocumentImportRequestJson( _
         "}}"
 End Function
 
+Private Function VTLatexRedrawRequestJson( _
+    ByVal sessionId As String, _
+    ByVal sourceDocumentId As String, _
+    ByVal bookmarkName As String, _
+    ByVal defaultFontSizePt As Double, _
+    ByVal redrawScope As String, _
+    ByVal outputKind As String) As String
+
+    VTLatexRedrawRequestJson = VTDocumentImportRequestJson( _
+        sessionId, sourceDocumentId, bookmarkName, defaultFontSizePt)
+    VTLatexRedrawRequestJson = Replace$( _
+        VTLatexRedrawRequestJson, _
+        """operation"":""documentImport""", _
+        """operation"":""latexRedraw""")
+    VTLatexRedrawRequestJson = _
+        Left$(VTLatexRedrawRequestJson, _
+            Len(VTLatexRedrawRequestJson) - 2) & _
+        "," & """redrawScope"":" & VTJsonString(redrawScope) & _
+        "," & """outputKind"":" & VTJsonString(outputKind) & _
+        "}}"
+End Function
+
+Private Sub VTWriteLatexRedrawSource( _
+    ByVal sessionId As String, _
+    ByVal sourceText As String)
+
+    Dim sourcePath As String
+    Dim sourceOffset As Long
+    Dim sourceChunk As String
+
+    If Len(sourceText) = 0 Or _
+       VTUtf8ByteLength(sourceText) > VT_WORD_LATEX_REDRAW_MAX_BYTES Then
+        Err.Raise vbObjectError + 7590, "VisualTeX", _
+            "The LaTeX redraw source must be between 1 byte and 5 MB."
+    End If
+
+    sourcePath = VTSessionDirectory(sessionId) & _
+        VT_WORD_LATEX_REDRAW_SOURCE_FILE
+    sourceOffset = 1
+    sourceChunk = Mid$( _
+        sourceText, sourceOffset, VT_WORD_LATEX_REDRAW_CHUNK_SIZE)
+    VTWriteTextAtomic sourcePath, sourceChunk
+    sourceOffset = sourceOffset + Len(sourceChunk)
+    Do While sourceOffset <= Len(sourceText)
+        sourceChunk = Mid$( _
+            sourceText, sourceOffset, VT_WORD_LATEX_REDRAW_CHUNK_SIZE)
+        VTAppendText sourcePath, sourceChunk
+        sourceOffset = sourceOffset + Len(sourceChunk)
+    Loop
+End Sub
+
+Private Sub VTStartWordLatexRedraw( _
+    ByVal redrawScope As String, _
+    ByVal outputKind As String)
+
+    Dim sessionId As String
+    Dim bookmarkName As String
+    Dim sourceDocumentId As String
+    Dim sourceText As String
+    Dim targetRange As Range
+    Dim defaultFontSizePt As Double
+    Dim requestJson As String
+    Dim operationStage As String
+    Dim errorNumber As Long
+    Dim errorDescription As String
+
+    If redrawScope <> "selection" And redrawScope <> "document" Then
+        VTShowError "Word LaTeX redraw", vbObjectError + 7590, _
+            "The LaTeX redraw scope is invalid."
+        Exit Sub
+    End If
+    If outputKind <> "image" And outputKind <> "omml" Then
+        VTShowError "Word LaTeX redraw", vbObjectError + 7590, _
+            "The LaTeX redraw output kind is invalid."
+        Exit Sub
+    End If
+    On Error GoTo Failed
+    operationStage = "require-document"
+    VTRequireWritableWordDocument
+    operationStage = "refresh-health"
+    VTRefreshWordHealthQuietly
+    operationStage = "resolve-range"
+    If redrawScope = "selection" Then
+        Set targetRange = Selection.Range.Duplicate
+        If targetRange.Start = targetRange.End Then
+            Err.Raise vbObjectError + 7590, "VisualTeX", _
+                "Select Word text containing LaTeX before using redraw selection."
+        End If
+    Else
+        Set targetRange = ActiveDocument.Content.Duplicate
+    End If
+    sourceText = targetRange.Text
+    If Len(sourceText) = 0 Then
+        Err.Raise vbObjectError + 7590, "VisualTeX", _
+            "The selected Word range does not contain text to scan."
+    End If
+    If VTUtf8ByteLength(sourceText) > _
+       VT_WORD_LATEX_REDRAW_MAX_BYTES Then
+        Err.Raise vbObjectError + 7590, "VisualTeX", _
+            "The LaTeX redraw range exceeds 5 MB. Select a smaller range."
+    End If
+
+    operationStage = "create-identities"
+    sessionId = VTNewUuidV4()
+    bookmarkName = VTDocumentImportBookmarkName(sessionId)
+    sourceDocumentId = VTWordDocumentIdentity()
+    defaultFontSizePt = VTPreferredWordFormulaFontSize(targetRange)
+    If ActiveDocument.Bookmarks.Exists(bookmarkName) Then
+        ActiveDocument.Bookmarks(bookmarkName).Delete
+    End If
+    ActiveDocument.Bookmarks.Add Name:=bookmarkName, Range:=targetRange
+
+    operationStage = "serialize-request"
+    requestJson = VTLatexRedrawRequestJson( _
+        sessionId, sourceDocumentId, bookmarkName, defaultFontSizePt, _
+        redrawScope, outputKind)
+    operationStage = "write-request"
+    VTWriteRequest sessionId, requestJson
+    operationStage = "write-source"
+    VTWriteLatexRedrawSource sessionId, sourceText
+    operationStage = "launch"
+    VTLaunchSession VT_WORD_HOST, sessionId
+    operationStage = "complete"
+    Exit Sub
+
+Failed:
+    errorNumber = Err.Number
+    errorDescription = Err.Description
+    On Error Resume Next
+    If Len(bookmarkName) > 0 Then
+        If ActiveDocument.Bookmarks.Exists(bookmarkName) Then
+            ActiveDocument.Bookmarks(bookmarkName).Delete
+        End If
+    End If
+    If Len(sessionId) > 0 Then VTDeleteSessionFiles sessionId
+    On Error GoTo 0
+    VTShowError _
+        "Word LaTeX redraw (" & operationStage & ")", _
+        errorNumber, errorDescription
+End Sub
+
+Public Sub VisualTeX_RedrawSelectionToImage()
+    VTStartWordLatexRedraw "selection", "image"
+End Sub
+
+Public Sub VisualTeX_RedrawSelectionToOmml()
+    VTStartWordLatexRedraw "selection", "omml"
+End Sub
+
+Public Sub VisualTeX_RedrawDocumentToImage()
+    VTStartWordLatexRedraw "document", "image"
+End Sub
+
+Public Sub VisualTeX_RedrawDocumentToOmml()
+    VTStartWordLatexRedraw "document", "omml"
+End Sub
+
 Public Sub VisualTeX_InsertLatexMarkdownDocument()
     Dim sessionId As String
     Dim bookmarkName As String
@@ -6109,6 +6275,26 @@ End Sub
 
 Public Sub VTWordRibbonDocumentImport(ByVal control As IRibbonControl)
     VisualTeX_InsertLatexMarkdownDocument
+End Sub
+
+Public Sub VTWordRibbonRedrawSelectionImage( _
+    ByVal control As IRibbonControl)
+    VisualTeX_RedrawSelectionToImage
+End Sub
+
+Public Sub VTWordRibbonRedrawSelectionOmml( _
+    ByVal control As IRibbonControl)
+    VisualTeX_RedrawSelectionToOmml
+End Sub
+
+Public Sub VTWordRibbonRedrawDocumentImage( _
+    ByVal control As IRibbonControl)
+    VisualTeX_RedrawDocumentToImage
+End Sub
+
+Public Sub VTWordRibbonRedrawDocumentOmml( _
+    ByVal control As IRibbonControl)
+    VisualTeX_RedrawDocumentToOmml
 End Sub
 
 Public Sub VTWordRibbonInline(ByVal control As IRibbonControl)
@@ -8533,6 +8719,7 @@ Private Function VTReadDocumentImportManifest( _
     Next row
     VTRequireDispatchValue dictionary, "protocolVersion"
     VTRequireDispatchValue dictionary, "sessionId"
+    VTRequireDispatchValue dictionary, "operation"
     VTRequireDispatchValue dictionary, "outputKind"
     VTRequireDispatchValue dictionary, "sourceDocumentId"
     VTRequireDispatchValue dictionary, "bookmarkName"
@@ -8866,7 +9053,8 @@ Private Sub VTDocumentImportInsertFormula( _
     ByVal manifest As Object, _
     ByVal itemIndex As Long, _
     ByVal outputKind As String, _
-    ByRef insertedFormulaIds As Collection)
+    ByRef insertedFormulaIds As Collection, _
+    Optional ByVal overrideFontSizePt As Double = 0#)
 
     Dim targetDocument As Document
     Dim targetRange As Range
@@ -8893,6 +9081,7 @@ Private Sub VTDocumentImportInsertFormula( _
     Dim referenceHeightPt As Double
     Dim referenceBaselinePt As Double
     Dim observedWordFontSizePt As Double
+    Dim fontScale As Double
     Dim numberCreated As Boolean
     Dim nativeMath As OMath
     Dim formulaStage As String
@@ -8956,6 +9145,17 @@ Private Sub VTDocumentImportInsertFormula( _
        referenceBaselinePt < -256# Or referenceBaselinePt > 0# Then
         Err.Raise vbObjectError + 7584, "VisualTeX", _
             "A document formula has invalid point-size geometry."
+    End If
+    If overrideFontSizePt <> 0# Then
+        If Not VTValidWordFormulaFontSize(overrideFontSizePt) Then
+            Err.Raise vbObjectError + 7584, "VisualTeX", _
+                "The redraw source formula has an invalid Word font size."
+        End If
+        fontScale = overrideFontSizePt / fontSizePt
+        widthPoints = widthPoints * fontScale
+        heightPoints = heightPoints * fontScale
+        baselinePoints = baselinePoints * fontScale
+        fontSizePt = overrideFontSizePt
     End If
     VTValidateAbsoluteVisualTeXPath nativeDocumentPath
     If Not VTPathFileExists(nativeDocumentPath) Then
@@ -9279,6 +9479,329 @@ Private Sub VTCancelWordDocumentImportDispatch( _
     End If
 End Sub
 
+Private Function VTDocumentImportSourceOffset( _
+    ByVal manifest As Object, _
+    ByVal itemIndex As Long, _
+    ByVal suffix As String) As Long
+
+    Dim rawValue As String
+    Dim numericValue As Double
+
+    rawValue = VTDocumentImportRequired(manifest, itemIndex, suffix)
+    If Not IsNumeric(rawValue) Then GoTo InvalidOffset
+    numericValue = CDbl(rawValue)
+    If numericValue < 0# Or _
+       numericValue > CDbl(VT_WORD_LATEX_REDRAW_MAX_BYTES) Or _
+       numericValue <> Fix(numericValue) Then GoTo InvalidOffset
+    VTDocumentImportSourceOffset = CLng(numericValue)
+    Exit Function
+
+InvalidOffset:
+    Err.Raise vbObjectError + 7591, "VisualTeX", _
+        "A LaTeX redraw source range is invalid."
+End Function
+
+Private Sub VTResolveWordLatexRedrawFontsDispatch( _
+    ByVal sessionId As String, _
+    ByVal dispatch As Object)
+
+    Dim manifest As Object
+    Dim targetDocument As Document
+    Dim anchorBookmark As Bookmark
+    Dim targetRange As Range
+    Dim sourceRange As Range
+    Dim manifestPath As String
+    Dim resultPath As String
+    Dim sourceDocumentId As String
+    Dim bookmarkName As String
+    Dim sourceText As String
+    Dim resultText As String
+    Dim targetStart As Long
+    Dim targetEnd As Long
+    Dim sourceStart As Long
+    Dim sourceEnd As Long
+    Dim previousEnd As Long
+    Dim itemCount As Long
+    Dim itemIndex As Long
+    Dim fontSizePt As Double
+
+    VTRequireWritableWordDocument
+    VTRequireDispatchValue dispatch, "sourceDocumentId"
+    VTRequireDispatchValue dispatch, "bookmarkName"
+    VTRequireDispatchValue dispatch, "documentImportPath"
+    VTRequireDispatchValue dispatch, "fontSizeResultPath"
+    sourceDocumentId = CStr(dispatch("sourceDocumentId"))
+    bookmarkName = CStr(dispatch("bookmarkName"))
+    manifestPath = CStr(dispatch("documentImportPath"))
+    resultPath = CStr(dispatch("fontSizeResultPath"))
+    VTValidateAbsoluteVisualTeXPath resultPath
+
+    If sourceDocumentId <> VTWordDocumentIdentity() Then
+        Err.Raise vbObjectError + 7594, "VisualTeX", _
+            "The active Word document changed before LaTeX redraw preflight."
+    End If
+    If Not ActiveDocument.Bookmarks.Exists(bookmarkName) Then
+        Err.Raise vbObjectError + 7594, "VisualTeX", _
+            "The LaTeX redraw target range no longer exists."
+    End If
+
+    Set manifest = VTReadDocumentImportManifest(manifestPath, sessionId)
+    If CStr(manifest("operation")) <> "latexRedraw" Or _
+       CStr(manifest("sourceDocumentId")) <> sourceDocumentId Or _
+       CStr(manifest("bookmarkName")) <> bookmarkName Or _
+       Not IsNumeric(CStr(manifest("itemCount"))) Then
+        Err.Raise vbObjectError + 7594, "VisualTeX", _
+            "The LaTeX redraw preflight manifest is invalid."
+    End If
+    itemCount = CLng(manifest("itemCount"))
+    If itemCount < 1 Or itemCount > VT_WORD_LATEX_REDRAW_MAX_FORMULAS Then
+        Err.Raise vbObjectError + 7594, "VisualTeX", _
+            "The LaTeX redraw preflight count is outside the supported range."
+    End If
+
+    Set targetDocument = ActiveDocument
+    Set anchorBookmark = targetDocument.Bookmarks(bookmarkName)
+    Set targetRange = anchorBookmark.Range.Duplicate
+    targetStart = targetRange.Start
+    targetEnd = targetRange.End
+    If targetEnd <= targetStart Then
+        Err.Raise vbObjectError + 7594, "VisualTeX", _
+            "The LaTeX redraw target range is empty."
+    End If
+
+    resultText = "itemCount=" & CStr(itemCount) & vbLf
+    previousEnd = 0
+    For itemIndex = 0 To itemCount - 1
+        sourceStart = VTDocumentImportSourceOffset( _
+            manifest, itemIndex, "sourceStart")
+        sourceEnd = VTDocumentImportSourceOffset( _
+            manifest, itemIndex, "sourceEnd")
+        If sourceStart < previousEnd Or _
+           sourceEnd <= sourceStart Or _
+           sourceEnd > targetEnd - targetStart Then
+            Err.Raise vbObjectError + 7594, "VisualTeX", _
+                "LaTeX redraw preflight ranges overlap or exceed the Word target."
+        End If
+        sourceText = VTBase64UrlDecodeUtf8( _
+            VTDocumentImportRequired( _
+                manifest, itemIndex, "sourceTextBase64"))
+        Set sourceRange = targetDocument.Range( _
+            Start:=targetStart + sourceStart, _
+            End:=targetStart + sourceEnd)
+        If StrComp(sourceRange.Text, sourceText, vbBinaryCompare) <> 0 Then
+            Err.Raise vbObjectError + 7594, "VisualTeX", _
+                "Word text changed before LaTeX redraw rendering."
+        End If
+        fontSizePt = VTPreferredWordFormulaFontSize(sourceRange)
+        If Not VTValidWordFormulaFontSize(fontSizePt) Then
+            Err.Raise vbObjectError + 7594, "VisualTeX", _
+                "A LaTeX redraw source formula has an invalid Word font size."
+        End If
+        resultText = resultText & _
+            "item" & CStr(itemIndex) & "fontSizePt=" & _
+            VTJsonNumber(fontSizePt) & vbLf
+        previousEnd = sourceEnd
+    Next itemIndex
+
+    VTWriteTextAtomic resultPath, resultText
+End Sub
+
+Private Sub VTCommitWordLatexRedrawDispatch( _
+    ByVal sessionId As String, _
+    ByVal manifest As Object, _
+    ByVal sourceDocumentId As String, _
+    ByVal bookmarkName As String, _
+    ByVal outputKind As String, _
+    ByVal itemCount As Long)
+
+    Dim targetDocument As Document
+    Dim anchorBookmark As Bookmark
+    Dim targetRange As Range
+    Dim sourceRange As Range
+    Dim cursorRange As Range
+    Dim rollbackRange As Range
+    Dim undoRecord As Object
+    Dim insertedFormulaIds As Collection
+    Dim sourceStarts() As Long
+    Dim sourceEnds() As Long
+    Dim sourceFontSizes() As Double
+    Dim originalSource As String
+    Dim sourceText As String
+    Dim formulaId As String
+    Dim itemKind As String
+    Dim targetStart As Long
+    Dim targetEnd As Long
+    Dim previousEnd As Long
+    Dim itemIndex As Long
+    Dim errorNumber As Long
+    Dim errorDescription As String
+    Dim transactionStage As String
+    Dim internalMutationStarted As Boolean
+    Dim undoRecordStarted As Boolean
+    Dim mutationOccurred As Boolean
+    Dim rollbackVerified As Boolean
+
+    On Error GoTo Failed
+    transactionStage = "redraw-validate-target"
+    If itemCount < 1 Or itemCount > VT_WORD_LATEX_REDRAW_MAX_FORMULAS Then
+        Err.Raise vbObjectError + 7591, "VisualTeX", _
+            "The LaTeX redraw formula count is outside the supported range."
+    End If
+    If sourceDocumentId <> VTWordDocumentIdentity() Then
+        Err.Raise vbObjectError + 7591, "VisualTeX", _
+            "The active Word document changed while LaTeX redraw was open."
+    End If
+    Set targetDocument = ActiveDocument
+    If Not targetDocument.Bookmarks.Exists(bookmarkName) Then
+        Err.Raise vbObjectError + 7591, "VisualTeX", _
+            "The LaTeX redraw target range no longer exists."
+    End If
+    Set anchorBookmark = targetDocument.Bookmarks(bookmarkName)
+    Set targetRange = anchorBookmark.Range.Duplicate
+    targetStart = targetRange.Start
+    targetEnd = targetRange.End
+    originalSource = targetRange.Text
+    If targetEnd <= targetStart Then
+        Err.Raise vbObjectError + 7591, "VisualTeX", _
+            "The LaTeX redraw target range is empty."
+    End If
+
+    ReDim sourceStarts(0 To itemCount - 1)
+    ReDim sourceEnds(0 To itemCount - 1)
+    ReDim sourceFontSizes(0 To itemCount - 1)
+    previousEnd = 0
+    For itemIndex = 0 To itemCount - 1
+        transactionStage = "redraw-preflight item " & CStr(itemIndex)
+        itemKind = VTDocumentImportRequired(manifest, itemIndex, "kind")
+        If itemKind <> "formula" Then
+            Err.Raise vbObjectError + 7591, "VisualTeX", _
+                "LaTeX redraw accepts formula items only."
+        End If
+        formulaId = VTDocumentImportRequired( _
+            manifest, itemIndex, "formulaId")
+        If Not VTIsCanonicalUuid(formulaId) Then
+            Err.Raise vbObjectError + 7591, "VisualTeX", _
+                "A LaTeX redraw formula id is invalid."
+        End If
+        sourceStarts(itemIndex) = VTDocumentImportSourceOffset( _
+            manifest, itemIndex, "sourceStart")
+        sourceEnds(itemIndex) = VTDocumentImportSourceOffset( _
+            manifest, itemIndex, "sourceEnd")
+        If sourceStarts(itemIndex) < previousEnd Or _
+           sourceEnds(itemIndex) <= sourceStarts(itemIndex) Or _
+           sourceEnds(itemIndex) > targetEnd - targetStart Then
+            Err.Raise vbObjectError + 7591, "VisualTeX", _
+                "LaTeX redraw source ranges overlap or exceed the Word target."
+        End If
+        sourceText = VTBase64UrlDecodeUtf8( _
+            VTDocumentImportRequired( _
+                manifest, itemIndex, "sourceTextBase64"))
+        Set sourceRange = targetDocument.Range( _
+            Start:=targetStart + sourceStarts(itemIndex), _
+            End:=targetStart + sourceEnds(itemIndex))
+        If StrComp(sourceRange.Text, sourceText, vbBinaryCompare) <> 0 Then
+            Err.Raise vbObjectError + 7591, "VisualTeX", _
+                "Word text changed after LaTeX redraw opened. " & _
+                "Please reopen redraw from the current selection."
+        End If
+        sourceFontSizes(itemIndex) = _
+            VTPreferredWordFormulaFontSize(sourceRange)
+        previousEnd = sourceEnds(itemIndex)
+    Next itemIndex
+
+    transactionStage = "redraw-start-undo"
+    Set undoRecord = CallByName(Application, "UndoRecord", VbGet)
+    undoRecord.StartCustomRecord "VisualTeX Redraw LaTeX Formulas"
+    undoRecordStarted = True
+    Set insertedFormulaIds = New Collection
+    VTBeginWordInternalMutation
+    internalMutationStarted = True
+    anchorBookmark.Delete
+    VTUpdateDocumentImportProgress sessionId, 0, itemCount, "inserting"
+
+    For itemIndex = itemCount - 1 To 0 Step -1
+        transactionStage = "redraw-replace item " & CStr(itemIndex)
+        Set sourceRange = targetDocument.Range( _
+            Start:=targetStart + sourceStarts(itemIndex), _
+            End:=targetStart + sourceEnds(itemIndex))
+        sourceRange.Delete
+        mutationOccurred = True
+        Set cursorRange = targetDocument.Range( _
+            Start:=targetStart + sourceStarts(itemIndex), _
+            End:=targetStart + sourceStarts(itemIndex))
+        VTDocumentImportInsertFormula _
+            cursorRange, manifest, itemIndex, outputKind, _
+            insertedFormulaIds, sourceFontSizes(itemIndex)
+        VTUpdateDocumentImportProgress _
+            sessionId, itemCount - itemIndex, itemCount, "inserting"
+    Next itemIndex
+
+    If internalMutationStarted Then
+        VTEndWordInternalMutation
+        internalMutationStarted = False
+    End If
+    If undoRecordStarted Then
+        undoRecord.EndCustomRecord
+        undoRecordStarted = False
+    End If
+    If Not cursorRange Is Nothing Then cursorRange.Select
+    VTUpdateDocumentImportProgress _
+        sessionId, itemCount, itemCount, "complete"
+    Application.StatusBar = ""
+    Exit Sub
+
+Failed:
+    errorNumber = Err.Number
+    errorDescription = Err.Description
+    On Error Resume Next
+    VTUpdateDocumentImportProgress sessionId, 0, itemCount, "error"
+    VTWriteWordFailureTrace _
+        sessionId, transactionStage, errorNumber, errorDescription
+    If undoRecordStarted Then
+        undoRecord.EndCustomRecord
+        undoRecordStarted = False
+    End If
+    rollbackVerified = Not mutationOccurred
+    If mutationOccurred Then
+        CallByName Application, "Undo", VbMethod
+        Err.Clear
+        Set rollbackRange = targetDocument.Range( _
+            Start:=targetStart, End:=targetStart + Len(originalSource))
+        rollbackVerified = _
+            StrComp(rollbackRange.Text, originalSource, vbBinaryCompare) = 0
+    End If
+    If Not targetDocument Is Nothing Then
+        For itemIndex = 0 To itemCount - 1
+            formulaId = VTDocumentImportRequired( _
+                manifest, itemIndex, "formulaId")
+            If VTIsCanonicalUuid(formulaId) Then
+                VTDeleteDocumentImportedFormulaState _
+                    targetDocument, formulaId
+            End If
+        Next itemIndex
+        If rollbackVerified And _
+           Not targetDocument.Bookmarks.Exists(bookmarkName) Then
+            Set rollbackRange = targetDocument.Range( _
+                Start:=targetStart, End:=targetStart + Len(originalSource))
+            targetDocument.Bookmarks.Add _
+                Name:=bookmarkName, Range:=rollbackRange
+        End If
+    End If
+    If internalMutationStarted Then
+        VTEndWordInternalMutation
+        internalMutationStarted = False
+    End If
+    On Error GoTo 0
+    If Not rollbackVerified Then
+        Err.Raise vbObjectError + 7592, _
+            "VisualTeX Word LaTeX redraw", _
+            transactionStage & ": " & errorDescription & _
+            " Word could not verify the automatic rollback."
+    End If
+    Err.Raise errorNumber, "VisualTeX Word LaTeX redraw", _
+        transactionStage & ": " & errorDescription
+End Sub
+
 Private Sub VTCommitWordDocumentImportDispatch( _
     ByVal sessionId As String, _
     ByVal dispatch As Object)
@@ -9293,6 +9816,7 @@ Private Sub VTCommitWordDocumentImportDispatch( _
     Dim manifestPath As String
     Dim sourceDocumentId As String
     Dim bookmarkName As String
+    Dim operationName As String
     Dim outputKind As String
     Dim itemKind As String
     Dim itemParagraphId As String
@@ -9343,6 +9867,12 @@ Private Sub VTCommitWordDocumentImportDispatch( _
         Err.Raise vbObjectError + 7586, "VisualTeX", _
             "The document import manifest target does not match Word."
     End If
+    operationName = CStr(manifest("operation"))
+    If operationName <> "documentImport" And _
+       operationName <> "latexRedraw" Then
+        Err.Raise vbObjectError + 7586, "VisualTeX", _
+            "The document import manifest operation is invalid."
+    End If
     outputKind = CStr(manifest("outputKind"))
     If outputKind <> "omml" And outputKind <> "image" Then
         Err.Raise vbObjectError + 7586, "VisualTeX", _
@@ -9353,6 +9883,17 @@ Private Sub VTCommitWordDocumentImportDispatch( _
             "The document import item count is invalid."
     End If
     itemCount = CLng(manifest("itemCount"))
+    If operationName = "latexRedraw" Then
+        If itemCount < 1 Or _
+           itemCount > VT_WORD_LATEX_REDRAW_MAX_FORMULAS Then
+            Err.Raise vbObjectError + 7586, "VisualTeX", _
+                "The LaTeX redraw formula count is outside the supported range."
+        End If
+        VTCommitWordLatexRedrawDispatch _
+            sessionId, manifest, sourceDocumentId, bookmarkName, _
+            outputKind, itemCount
+        Exit Sub
+    End If
     If itemCount < 1 Or itemCount > 2048 Then
         Err.Raise vbObjectError + 7586, "VisualTeX", _
             "The document import item count is outside the supported range."
@@ -9582,6 +10123,8 @@ Public Sub VisualTeX_ApplyPendingResult()
     Select Case actionName
         Case "commit": VTCommitWordDispatch sessionId, dispatch
         Case "cancel": VTCancelWordDispatch sessionId, dispatch
+        Case "latexRedrawPreflight": _
+            VTResolveWordLatexRedrawFontsDispatch sessionId, dispatch
         Case "documentCommit": _
             VTCommitWordDocumentImportDispatch sessionId, dispatch
         Case "documentCancel": _

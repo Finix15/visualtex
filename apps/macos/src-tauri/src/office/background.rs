@@ -426,6 +426,11 @@ pub fn uninstall_launch_agent() -> Result<OfficeBackgroundStatus, String> {
 
 #[cfg(target_os = "macos")]
 pub(crate) fn activate_foreground_app(app: &AppHandle) -> Result<(), String> {
+    // Every Accessory-to-Regular transition must have the real bundle icon in
+    // place before macOS creates or refreshes the Dock tile. Setup normally
+    // installs it already; this idempotent guard keeps later Office entry points
+    // from regressing to an empty or generic application icon.
+    install_application_icon(app)?;
     app.set_activation_policy(tauri::ActivationPolicy::Regular)
         .map_err(|error| format!("Unable to activate VisualTeX: {error}"))?;
     let running = NSRunningApplication::currentApplication();
@@ -561,21 +566,6 @@ pub fn reveal_main_window(app: &AppHandle) -> Result<(), String> {
         eprintln!("{error}");
     }
     Ok(())
-}
-
-pub(crate) fn hide_main_window_for_office_editor(app: &AppHandle) -> Result<bool, String> {
-    let window = app
-        .get_webview_window("main")
-        .ok_or_else(|| "VisualTeX main window is unavailable".to_string())?;
-    let was_visible = window
-        .is_visible()
-        .map_err(|error| format!("Unable to inspect VisualTeX visibility: {error}"))?;
-    if was_visible {
-        window
-            .hide()
-            .map_err(|error| format!("Unable to hide VisualTeX during Office editing: {error}"))?;
-    }
-    Ok(was_visible)
 }
 
 pub fn hide_main_window(app: &AppHandle) -> Result<(), String> {

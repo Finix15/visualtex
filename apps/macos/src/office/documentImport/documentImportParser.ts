@@ -35,6 +35,8 @@ export interface DocumentFormulaBlock extends DocumentParagraphMetadata {
   kind: "formula";
   latex: string;
   sourceText?: string;
+  sourceStart?: number;
+  sourceEnd?: number;
   displayMode: DocumentFormulaDisplayMode;
   numbered: boolean;
   fontSizePt: number;
@@ -272,11 +274,15 @@ function findLatexCommandEnd(source: string, start: number) {
     else if (character === "}" && braceDepth > 0) braceDepth -= 1;
     else if (character === "[") bracketDepth += 1;
     else if (character === "]" && bracketDepth > 0) bracketDepth -= 1;
-    else if (character === "\n" && braceDepth === 0 && bracketDepth === 0) {
+    else if (
+      (character === "\n" || character === "\r") &&
+      braceDepth === 0 &&
+      bracketDepth === 0
+    ) {
       let continuation = cursor + 1;
       while (
         continuation < source.length &&
-        /[ \t\n]/.test(source[continuation])
+        /[ \t\r\n]/.test(source[continuation])
       ) {
         continuation += 1;
       }
@@ -400,9 +406,26 @@ function latexProtectedRanges(
   theoremEnvironmentNames: ReadonlySet<string> = new Set(),
 ) {
   const ranges = latexLiteralFallbackRanges(source, theoremEnvironmentNames);
-  const verbPattern = /\\verb\*?([^\sA-Za-z0-9])[^\n]*?\1/g;
+  const mathRanges = latexMathSourceRanges(source);
+  const verbPattern = /\\verb\*?([^\sA-Za-z0-9])[^\r\n]*?\1/g;
   for (let match = verbPattern.exec(source); match; match = verbPattern.exec(source)) {
     ranges.push({ start: match.index, end: verbPattern.lastIndex });
+  }
+  for (let cursor = 0; cursor < source.length; cursor += 1) {
+    if (
+      source[cursor] !== "%" ||
+      isEscaped(source, cursor) ||
+      sourceIndexInsideRanges(ranges, cursor) ||
+      sourceIndexInsideRanges(mathRanges, cursor)
+    ) {
+      continue;
+    }
+    let end = cursor + 1;
+    while (end < source.length && source[end] !== "\r" && source[end] !== "\n") {
+      end += 1;
+    }
+    ranges.push({ start: cursor, end });
+    cursor = end - 1;
   }
   return mergeProtectedRanges(ranges);
 }
@@ -415,9 +438,21 @@ function markdownProtectedRanges(source: string) {
   let fenceLength = 0;
 
   while (offset < source.length) {
-    const newline = source.indexOf("\n", offset);
-    const lineEnd = newline < 0 ? source.length : newline;
-    const nextOffset = newline < 0 ? source.length : newline + 1;
+    let lineEnd = offset;
+    while (
+      lineEnd < source.length &&
+      source[lineEnd] !== "\r" &&
+      source[lineEnd] !== "\n"
+    ) {
+      lineEnd += 1;
+    }
+    let nextOffset = lineEnd;
+    if (nextOffset < source.length) {
+      nextOffset +=
+        source[nextOffset] === "\r" && source[nextOffset + 1] === "\n"
+          ? 2
+          : 1;
+    }
     const line = source.slice(offset, lineEnd);
     const fence = line.match(/^ {0,3}(`{3,}|~{3,})/);
     if (fenceStart < 0 && fence) {
@@ -446,7 +481,7 @@ function markdownProtectedRanges(source: string) {
   if (fenceStart >= 0) ranges.push({ start: fenceStart, end: source.length });
 
   const fenced = mergeProtectedRanges(ranges);
-  const inlineCodePattern = /(`+)([^\n]*?)\1/g;
+  const inlineCodePattern = /(`+)([^\r\n]*?)\1/g;
   for (
     let match = inlineCodePattern.exec(source);
     match;
@@ -490,7 +525,7 @@ function latexCommentIndex(
 }
 
 function hasLatexCommentSignal(source: string) {
-  return source.split("\n").some((line) => {
+  return source.split(/\r\n|\r|\n/).some((line) => {
     const index = line.indexOf("%");
     return index >= 0 && !isEscaped(line, index) && line.slice(0, index).trim() === "";
   });
@@ -879,7 +914,7 @@ function delimiterAt(source: string, index: number): MathDelimiter | null {
       contentStart: index + 2,
     };
   }
-  if (source.startsWith("\\[", index)) {
+  if (source.startsWith("\\[", index) && !isEscaped(source, index)) {
     return {
       opening: "\\[",
       closing: "\\]",
@@ -888,7 +923,7 @@ function delimiterAt(source: string, index: number): MathDelimiter | null {
       contentStart: index + 2,
     };
   }
-  if (source.startsWith("\\(", index)) {
+  if (source.startsWith("\\(", index) && !isEscaped(source, index)) {
     return {
       opening: "\\(",
       closing: "\\)",
@@ -906,7 +941,7 @@ function delimiterAt(source: string, index: number): MathDelimiter | null {
       contentStart: index + 1,
     };
   }
-  if (source.startsWith("\\begin", index)) {
+  if (source.startsWith("\\begin", index) && !isEscaped(source, index)) {
     const match = source.slice(index).match(/^\\begin\s*\{([^{}]+)\}/);
     const environment = match?.[1]?.trim();
     if (
@@ -968,6 +1003,100 @@ function findClosingDelimiter(
     return { start: found, end: found + delimiter.closing.length };
   }
   return null;
+}
+
+
+export interface DocumentLatexFormulaSpan {
+  id: string;
+  start: number;
+  end: number;
+  sourceText: string;
+  latex: string;
+  displayMode: DocumentFormulaDisplayMode;
+  numbered: boolean;
+  fontSizePt: number;
+}
+
+export function findLatexFormulaSpans(
+  source: string,
+  defaultFontSizePt = 12,
+  requestedKind: DocumentImportSourceKind = "auto",
+): DocumentLatexFormulaSpan[] {
+  if (new TextEncoder().encode(source).byteLength > 5 * 1024 * 1024) {
+    throw new Error("Word LaTeX redraw source exceeds the 5 MB limit.");
+  }
+  const sourceKind = resolvedSourceKind(source, requestedKind);
+  const protectedRanges = protectedSourceRanges(source, sourceKind, new Set());
+  const fontSizePt = Math.min(512, Math.max(1, defaultFontSizePt));
+  const spans: DocumentLatexFormulaSpan[] = [];
+  let protectedIndex = 0;
+  let cursor = 0;
+
+  while (cursor < source.length) {
+    while (
+      protectedIndex < protectedRanges.length &&
+      protectedRanges[protectedIndex].end <= cursor
+    ) {
+      protectedIndex += 1;
+    }
+    const protectedRange = protectedRanges[protectedIndex];
+    if (
+      protectedRange &&
+      cursor >= protectedRange.start &&
+      cursor < protectedRange.end
+    ) {
+      cursor = protectedRange.end;
+      continue;
+    }
+
+    const delimiter = delimiterAt(source, cursor);
+    if (!delimiter) {
+      cursor += 1;
+      continue;
+    }
+    const closing = findClosingDelimiter(source, delimiter);
+    if (!closing) {
+      cursor += delimiter.opening.length;
+      continue;
+    }
+    if (
+      protectedRange &&
+      closing.start > protectedRange.start &&
+      cursor < protectedRange.start
+    ) {
+      cursor = protectedRange.end;
+      continue;
+    }
+
+    const sourceText = source.slice(cursor, closing.end);
+    const latex = (delimiter.environment && delimiter.displayMode === "block"
+      ? sourceText
+      : source.slice(delimiter.contentStart, closing.start)
+    )
+      .trim()
+      .replace(/^\s*\\displaystyle\s*/, "")
+      .replace(/\\label\s*\{[^{}]*\}/g, "")
+      .replace(/\\tag\*?\s*\{[^{}]*\}/g, "")
+      .trim();
+    if (latex) {
+      spans.push({
+        id: createUuid(),
+        start: cursor,
+        end: closing.end,
+        sourceText,
+        latex,
+        displayMode: delimiter.displayMode,
+        numbered: delimiter.displayMode === "block" && delimiter.numbered,
+        fontSizePt,
+      });
+      if (spans.length > 1000) {
+        throw new Error("Word LaTeX redraw supports at most 1000 formulas.");
+      }
+    }
+    cursor = closing.end;
+  }
+
+  return spans;
 }
 
 function extractFormulas(

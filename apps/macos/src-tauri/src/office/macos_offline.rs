@@ -29,6 +29,10 @@ const RESULT_SVG_FILE: &str = "formula.svg";
 const RESULT_WORD_SVG_DOCX_FILE: &str = "formula-svg.docx";
 const DOCUMENT_IMPORT_MANIFEST_FILE: &str = "document-import.txt";
 const DOCUMENT_IMPORT_PROGRESS_FILE: &str = "document-import-progress.txt";
+const LATEX_REDRAW_SOURCE_FILE: &str = "latex-redraw-source.txt";
+const LATEX_REDRAW_PREFLIGHT_MANIFEST_FILE: &str = "latex-redraw-preflight.txt";
+const LATEX_REDRAW_FONT_SIZES_FILE: &str = "latex-redraw-font-sizes.txt";
+const MAX_LATEX_REDRAW_SOURCE_BYTES: u64 = 5 * 1024 * 1024;
 const EDITOR_READY_FILE: &str = "editor-ready.json";
 const EDITOR_PERFORMANCE_FILE: &str = "editor-performance.jsonl";
 const OFFICE_EDITOR_ACTIVATE_EVENT: &str = "visualtex-office-editor-activate";
@@ -88,6 +92,10 @@ struct MacOfflinePowerPointRequest {
 struct MacOfflineDocumentImportRequest {
     bookmark_name: String,
     default_font_size_pt: f64,
+    #[serde(default)]
+    redraw_scope: Option<String>,
+    #[serde(default)]
+    output_kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -128,6 +136,13 @@ pub struct MacOfflineDocumentImportPublicRequest {
     source_document_id: String,
     bookmark_name: String,
     default_font_size_pt: f64,
+    operation: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    redraw_scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -143,6 +158,20 @@ pub struct MacOfflineDocumentImportProgress {
 pub struct MacOfflineDocumentImportCommitInput {
     output_kind: String,
     items: Vec<MacOfflineDocumentImportCommitItem>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MacOfflineLatexRedrawFontRangeInput {
+    source_start: usize,
+    source_end: usize,
+    source_text: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MacOfflineLatexRedrawFontQueryInput {
+    ranges: Vec<MacOfflineLatexRedrawFontRangeInput>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -189,6 +218,12 @@ pub enum MacOfflineDocumentImportCommitItem {
         height: Option<f64>,
         #[serde(default)]
         baseline: Option<f64>,
+        #[serde(default)]
+        source_start: Option<usize>,
+        #[serde(default)]
+        source_end: Option<usize>,
+        #[serde(default)]
+        source_text: Option<String>,
         #[serde(default)]
         paragraph_id: Option<String>,
         #[serde(default)]
@@ -264,7 +299,6 @@ struct ActiveOfficeEditorSession {
     activation: MacOfflineOfficeEditorActivation,
     received_at: Instant,
     ready: bool,
-    main_was_visible: bool,
 }
 
 #[derive(Debug, Default)]
@@ -447,6 +481,15 @@ fn document_import_manifest_path(session_id: &str) -> Result<PathBuf, String> {
     Ok(session_directory(OfficeHost::Word, session_id)?.join(DOCUMENT_IMPORT_MANIFEST_FILE))
 }
 
+fn latex_redraw_preflight_manifest_path(session_id: &str) -> Result<PathBuf, String> {
+    Ok(session_directory(OfficeHost::Word, session_id)?
+        .join(LATEX_REDRAW_PREFLIGHT_MANIFEST_FILE))
+}
+
+fn latex_redraw_font_sizes_path(session_id: &str) -> Result<PathBuf, String> {
+    Ok(session_directory(OfficeHost::Word, session_id)?.join(LATEX_REDRAW_FONT_SIZES_FILE))
+}
+
 fn result_png_path(host: OfficeHost, session_id: &str) -> Result<PathBuf, String> {
     Ok(session_directory(host, session_id)?.join(RESULT_PNG_FILE))
 }
@@ -479,6 +522,9 @@ fn cleanup_session_files_at(
         RESULT_SVG_FILE,
         RESULT_WORD_SVG_DOCX_FILE,
         DOCUMENT_IMPORT_MANIFEST_FILE,
+        LATEX_REDRAW_SOURCE_FILE,
+        LATEX_REDRAW_PREFLIGHT_MANIFEST_FILE,
+        LATEX_REDRAW_FONT_SIZES_FILE,
         "formula.docx",
     ] {
         let path = directory.join(name);
@@ -552,6 +598,14 @@ fn validate_finite_geometry(value: f64, label: &str) -> Result<(), String> {
     }
 }
 
+fn validate_latex_redraw_source_size(byte_len: u64) -> Result<(), String> {
+    if byte_len == 0 || byte_len > MAX_LATEX_REDRAW_SOURCE_BYTES {
+        Err("LaTeX redraw source must contain 1 byte to 5 MB".to_string())
+    } else {
+        Ok(())
+    }
+}
+
 fn validate_request(request: &MacOfflineSessionRequest, session_id: &str) -> Result<(), String> {
     if request.protocol_version != OFFLINE_PROTOCOL_VERSION {
         return Err("Unsupported VisualTeX macOS offline protocol version".to_string());
@@ -567,7 +621,7 @@ fn validate_request(request: &MacOfflineSessionRequest, session_id: &str) -> Res
         return Err("Offline Office request mode must be create or edit".to_string());
     }
     let operation = request.operation.as_deref().unwrap_or("formula");
-    if operation == "documentImport" {
+    if matches!(operation, "documentImport" | "latexRedraw") {
         if request.host != "word" || request.mode != "create" {
             return Err("Document import is supported only as a new Word operation".to_string());
         }
@@ -594,6 +648,27 @@ fn validate_request(request: &MacOfflineSessionRequest, session_id: &str) -> Res
             return Err(
                 "Document import default font size is outside the supported range".to_string(),
             );
+        }
+        if operation == "latexRedraw" {
+            if !matches!(
+                document_import.redraw_scope.as_deref(),
+                Some("selection" | "document")
+            ) {
+                return Err("LaTeX redraw scope must be selection or document".to_string());
+            }
+            if !matches!(
+                document_import.output_kind.as_deref(),
+                Some("omml" | "image")
+            ) {
+                return Err("LaTeX redraw output kind must be omml or image".to_string());
+            }
+            let source_path =
+                session_directory(OfficeHost::Word, session_id)?.join(LATEX_REDRAW_SOURCE_FILE);
+            let source_metadata = fs::metadata(&source_path)
+                .map_err(|error| format!("Unable to read {}: {error}", source_path.display()))?;
+            validate_latex_redraw_source_size(source_metadata.len())?;
+        } else if document_import.redraw_scope.is_some() || document_import.output_kind.is_some() {
+            return Err("Document import request contains LaTeX redraw fields".to_string());
         }
         if request.formula_id.is_some()
             || request.encoded_metadata.is_some()
@@ -1690,10 +1765,10 @@ fn open_editor_window(
     let label = editor_window_label(host);
     let reused = app.get_webview_window(label).is_some();
     let window = create_editor_window(app, host)?;
-    // Keep the desktop workspace out of the Office z-order while retaining the
-    // process as a Regular application. This preserves the Dock/app-switcher
-    // identity without allowing the main editor to cover Word or PowerPoint.
-    let main_was_visible = crate::office::background::hide_main_window_for_office_editor(app)?;
+    // Preserve an already visible desktop workspace. Activating VisualTeX with
+    // NSApplicationActivationOptions::empty() and focusing only this dedicated
+    // editor keeps the main window out of the Office z-order without hiding it
+    // or disturbing the application's Dock/app-switcher identity.
     let activation = {
         let mut runtime = office_editor_runtime()
             .lock()
@@ -1714,7 +1789,6 @@ fn open_editor_window(
             activation: activation.clone(),
             received_at,
             ready: false,
-            main_was_visible,
         });
         activation
     };
@@ -1744,18 +1818,18 @@ fn open_editor_window(
     Ok(())
 }
 
-fn set_word_document_import_preparing_status() -> Result<(), String> {
+fn set_word_document_operation_preparing_status(operation: &str) -> Result<(), String> {
+    let status = if operation == "latexRedraw" {
+        "VisualTeX is rendering LaTeX formulas..."
+    } else {
+        "VisualTeX is preparing the Word document import..."
+    };
+    let script = format!(
+        "tell application \"Microsoft Word\" to set status bar to {:?}",
+        status
+    );
     let output = Command::new("/usr/bin/osascript")
-        .args([
-            "-e",
-            "tell application \"Microsoft Word\"",
-            "-e",
-            "activate",
-            "-e",
-            "set status bar to \"VisualTeX 正在准备批量导入…\"",
-            "-e",
-            "end tell",
-        ])
+        .args(["-e", "tell application \"Microsoft Word\" to activate", "-e", &script])
         .output()
         .map_err(|error| format!("Unable to activate Microsoft Word: {error}"))?;
     if output.status.success() {
@@ -1803,6 +1877,31 @@ fn open_document_import_window(app: &AppHandle, session_id: &str) -> Result<(), 
     window.show().map_err(|error| error.to_string())?;
     crate::office::background::activate_foreground_app(app)?;
     window.set_focus().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn open_word_latex_redraw_window(app: &AppHandle, session_id: &str) -> Result<(), String> {
+    crate::office::background::install_application_icon(app)?;
+    let label = document_import_window_label(session_id);
+    if let Some(window) = app.get_webview_window(&label) {
+        window.hide().map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+    let theme = crate::persisted_app_theme(app);
+    let path = format!(
+        "index.html?view=office-word-latex-redraw&sessionId={session_id}&transport=tauri&theme={theme}"
+    );
+    WebviewWindowBuilder::new(app, label, WebviewUrl::App(path.into()))
+        .title("VisualTeX Word LaTeX Redraw")
+        .inner_size(560.0, 300.0)
+        .min_inner_size(420.0, 220.0)
+        .center()
+        .focused(false)
+        .skip_taskbar(true)
+        .visible(false)
+        .background_throttling(BackgroundThrottlingPolicy::Disabled)
+        .build()
+        .map_err(|error| format!("Unable to start the VisualTeX Word redraw renderer: {error}"))?;
     Ok(())
 }
 
@@ -1991,25 +2090,23 @@ pub fn close_macos_offline_office_editor_window(
     let generation = generation.ok_or_else(|| {
         "The Office formula editor close request is missing generation".to_string()
     })?;
-    let main_was_visible = {
+    {
         // Keep activation validation and hiding atomic with respect to a new
         // URL activation. A late close from generation N must never hide the
         // already-hydrating generation N+1.
         let mut runtime = office_editor_runtime()
             .lock()
             .map_err(|_| "VisualTeX Office editor state is unavailable".to_string())?;
-        let active = runtime
+        runtime
             .active(host)
             .filter(|active| {
                 active.activation.session_id == session_id
                     && active.activation.generation == generation
             })
             .ok_or_else(|| "The Office editor Session is no longer active".to_string())?;
-        let main_was_visible = active.main_was_visible;
         set_resident_editor_content_visible(&window, false)?;
         *runtime.active_mut(host) = None;
-        main_was_visible
-    };
+    }
     park_resident_editor_if_idle(&window, host)
         .map_err(|error| format!("Unable to close the VisualTeX Office editor: {error}"))?;
     let _ = window.emit(
@@ -2025,7 +2122,6 @@ pub fn close_macos_offline_office_editor_window(
             .unwrap_or(false);
         if !has_open_office_editor(&app)
             && !main_visible
-            && !main_was_visible
             && crate::office::background::is_background_mode()
         {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory)
@@ -2036,7 +2132,7 @@ pub fn close_macos_offline_office_editor_window(
     }
     // Applying or cancelling a formula ends the temporary VisualTeX editing
     // interaction. Explicitly return the foreground application to the Office
-    // host so a hidden main workspace can never become the topmost window.
+    // host without changing the visibility of the user's main workspace.
     restore_office_host_focus(host);
     Ok(())
 }
@@ -2101,7 +2197,10 @@ pub(crate) fn handle_open_url(app: &AppHandle, value: &str) -> Result<(), String
     );
     ensure_runtime_root(host)?;
 
-    if request.operation.as_deref() == Some("documentImport") {
+    if matches!(
+        request.operation.as_deref(),
+        Some("documentImport" | "latexRedraw")
+    ) {
         for host in [OfficeHost::Word, OfficeHost::Powerpoint] {
             if let Some(window) = app.get_webview_window(editor_window_label(host)) {
                 let _ = set_resident_editor_content_visible(&window, false);
@@ -2124,7 +2223,11 @@ pub(crate) fn handle_open_url(app: &AppHandle, value: &str) -> Result<(), String
                 let _ = window.destroy();
             }
         }
-        return open_document_import_window(app, &session_id);
+        return if request.operation.as_deref() == Some("latexRedraw") {
+            open_word_latex_redraw_window(app, &session_id)
+        } else {
+            open_document_import_window(app, &session_id)
+        };
     }
 
     import_request(state.inner(), request)?;
@@ -3155,13 +3258,29 @@ fn cancel_host(request: &MacOfflineSessionRequest) -> Result<(), String> {
 fn document_import_request_data(
     request: &MacOfflineSessionRequest,
 ) -> Result<MacOfflineDocumentImportPublicRequest, String> {
-    if request.operation.as_deref() != Some("documentImport") || request.host != "word" {
-        return Err("Offline Office request is not a Word document import".to_string());
+    let operation = request.operation.as_deref().unwrap_or("");
+    if !matches!(operation, "documentImport" | "latexRedraw") || request.host != "word" {
+        return Err("Offline Office request is not a Word document operation".to_string());
     }
     let document_import = request
         .document_import
         .as_ref()
         .ok_or_else(|| "Document import request is missing insertion information".to_string())?;
+    let source = if operation == "latexRedraw" {
+        let source_path = session_directory(OfficeHost::Word, &request.session_id)?
+            .join(LATEX_REDRAW_SOURCE_FILE);
+        let bytes = fs::read(&source_path)
+            .map_err(|error| format!("Unable to read {}: {error}", source_path.display()))?;
+        if bytes.is_empty() || bytes.len() as u64 > MAX_LATEX_REDRAW_SOURCE_BYTES {
+            return Err("LaTeX redraw source must contain 1 byte to 5 MB".to_string());
+        }
+        Some(
+            String::from_utf8(bytes)
+                .map_err(|_| "LaTeX redraw source is not valid UTF-8".to_string())?,
+        )
+    } else {
+        None
+    };
     Ok(MacOfflineDocumentImportPublicRequest {
         protocol_version: request.protocol_version,
         session_id: request.session_id.clone(),
@@ -3171,6 +3290,10 @@ fn document_import_request_data(
         })?,
         bookmark_name: document_import.bookmark_name.clone(),
         default_font_size_pt: document_import.default_font_size_pt,
+        operation: operation.to_string(),
+        redraw_scope: document_import.redraw_scope.clone(),
+        output_kind: document_import.output_kind.clone(),
+        source,
     })
 }
 
@@ -3335,6 +3458,167 @@ fn append_document_paragraph_entries(
     }
 }
 
+fn validate_latex_redraw_range(
+    source_utf16: &[u16],
+    previous_end: &mut usize,
+    start: usize,
+    end: usize,
+    original: &str,
+) -> Result<(), String> {
+    let original_utf16 = original.encode_utf16().collect::<Vec<_>>();
+    if start < *previous_end
+        || end <= start
+        || end > source_utf16.len()
+        || source_utf16[start..end] != original_utf16
+    {
+        return Err(
+            "LaTeX redraw formula range does not match the Word source snapshot".to_string(),
+        );
+    }
+    *previous_end = end;
+    Ok(())
+}
+
+fn parse_latex_redraw_font_sizes(source: &str, expected_count: usize) -> Result<Vec<f64>, String> {
+    let mut item_count = None;
+    let mut values = vec![None; expected_count];
+    for line in source.lines() {
+        let Some((key, raw)) = line.split_once('=') else {
+            continue;
+        };
+        if key == "itemCount" {
+            item_count = raw.parse::<usize>().ok();
+            continue;
+        }
+        let Some(index_text) = key
+            .strip_prefix("item")
+            .and_then(|value| value.strip_suffix("fontSizePt"))
+        else {
+            continue;
+        };
+        let index = index_text
+            .parse::<usize>()
+            .map_err(|_| "LaTeX redraw font-size result contains an invalid item index".to_string())?;
+        if index >= expected_count || values[index].is_some() {
+            return Err("LaTeX redraw font-size result contains an invalid or duplicate item".to_string());
+        }
+        let value = raw
+            .parse::<f64>()
+            .map_err(|_| "LaTeX redraw font-size result contains an invalid number".to_string())?;
+        if !value.is_finite() || !(MIN_WORD_FONT_SIZE_PT..=MAX_WORD_FONT_SIZE_PT).contains(&value) {
+            return Err("LaTeX redraw font-size result is outside the supported range".to_string());
+        }
+        values[index] = Some(value);
+    }
+    if item_count != Some(expected_count) {
+        return Err("LaTeX redraw font-size result count does not match the request".to_string());
+    }
+    values
+        .into_iter()
+        .map(|value| value.ok_or_else(|| "LaTeX redraw font-size result is incomplete".to_string()))
+        .collect()
+}
+
+fn resolve_latex_redraw_font_sizes_blocking(
+    session_id: String,
+    input: MacOfflineLatexRedrawFontQueryInput,
+) -> Result<Vec<f64>, String> {
+    validate_uuid(&session_id, "Session id")?;
+    if input.ranges.is_empty() || input.ranges.len() > 1000 {
+        return Err("LaTeX redraw font preflight must contain 1 to 1000 ranges".to_string());
+    }
+    let request = read_request(&session_id)?;
+    let public_request = document_import_request_data(&request)?;
+    if public_request.operation != "latexRedraw" {
+        return Err("Only a Word LaTeX redraw session can resolve source font sizes".to_string());
+    }
+    let source = public_request
+        .source
+        .as_deref()
+        .ok_or_else(|| "LaTeX redraw source snapshot is missing".to_string())?;
+    let source_utf16 = source.encode_utf16().collect::<Vec<_>>();
+    let mut previous_end = 0usize;
+    for range in &input.ranges {
+        validate_latex_redraw_range(
+            &source_utf16,
+            &mut previous_end,
+            range.source_start,
+            range.source_end,
+            &range.source_text,
+        )?;
+    }
+
+    let manifest_path = latex_redraw_preflight_manifest_path(&session_id)?;
+    let result_path = latex_redraw_font_sizes_path(&session_id)?;
+    let mut entries = vec![
+        ("protocolVersion".to_string(), OFFLINE_PROTOCOL_VERSION.to_string()),
+        ("sessionId".to_string(), session_id.clone()),
+        ("operation".to_string(), "latexRedraw".to_string()),
+        (
+            "outputKind".to_string(),
+            public_request
+                .output_kind
+                .clone()
+                .ok_or_else(|| "LaTeX redraw output kind is missing".to_string())?,
+        ),
+        (
+            "sourceDocumentId".to_string(),
+            public_request.source_document_id.clone(),
+        ),
+        ("bookmarkName".to_string(), public_request.bookmark_name.clone()),
+        ("itemCount".to_string(), input.ranges.len().to_string()),
+    ];
+    for (index, range) in input.ranges.iter().enumerate() {
+        let prefix = format!("item{index}");
+        entries.push((format!("{prefix}sourceStart"), range.source_start.to_string()));
+        entries.push((format!("{prefix}sourceEnd"), range.source_end.to_string()));
+        entries.push((
+            format!("{prefix}sourceTextBase64"),
+            URL_SAFE_NO_PAD.encode(range.source_text.as_bytes()),
+        ));
+    }
+    let manifest = dynamic_dispatch_text(&entries)?;
+    if manifest.len() > MAX_DOCUMENT_IMPORT_MANIFEST_BYTES {
+        return Err("LaTeX redraw font preflight exceeds the transfer limit".to_string());
+    }
+    atomic_write(&manifest_path, manifest.as_bytes(), 0o600)?;
+    let _ = fs::remove_file(&result_path);
+
+    let dispatch = dispatch_text(&[
+        ("protocolVersion", OFFLINE_PROTOCOL_VERSION.to_string()),
+        ("sessionId", session_id.clone()),
+        ("action", "latexRedrawPreflight".to_string()),
+        ("host", "word".to_string()),
+        (
+            "sourceDocumentId",
+            public_request.source_document_id.clone(),
+        ),
+        ("bookmarkName", public_request.bookmark_name.clone()),
+        (
+            "documentImportPath",
+            manifest_path.to_string_lossy().to_string(),
+        ),
+        (
+            "fontSizeResultPath",
+            result_path.to_string_lossy().to_string(),
+        ),
+    ])?;
+    atomic_write(
+        &dispatch_path(OfficeHost::Word, &session_id)?,
+        dispatch.as_bytes(),
+        0o600,
+    )?;
+    with_dispatch_pointer(OfficeHost::Word, &session_id, || {
+        run_vba_callback(OfficeHost::Word)
+    })?;
+    let result = fs::read_to_string(&result_path)
+        .map_err(|error| format!("Unable to read Word LaTeX redraw font sizes: {error}"))?;
+    let values = parse_latex_redraw_font_sizes(&result, input.ranges.len())?;
+    let _ = fs::remove_file(manifest_path);
+    let _ = fs::remove_file(result_path);
+    Ok(values)
+}
+
 fn commit_document_import_blocking(
     state: OfficeCompanionState,
     session_id: String,
@@ -3343,12 +3627,76 @@ fn commit_document_import_blocking(
     validate_uuid(&session_id, "Session id")?;
     let request = read_request(&session_id)?;
     let public_request = document_import_request_data(&request)?;
+    let is_redraw = public_request.operation == "latexRedraw";
     if input.output_kind != "omml" && input.output_kind != "image" {
         return Err("Document formula output kind must be omml or image".to_string());
     }
-    if input.items.is_empty() || input.items.len() > 2048 {
-        return Err("Document import must contain 1 to 2048 blocks".to_string());
+    if is_redraw && public_request.output_kind.as_deref() != Some(input.output_kind.as_str()) {
+        return Err("LaTeX redraw output kind changed after the Word request".to_string());
     }
+    let maximum_items = if is_redraw { 1000 } else { 2048 };
+    if input.items.is_empty() || input.items.len() > maximum_items {
+        return Err(format!(
+            "Document operation must contain 1 to {maximum_items} blocks"
+        ));
+    }
+    let redraw_source_utf16 = public_request
+        .source
+        .as_deref()
+        .map(|source| source.encode_utf16().collect::<Vec<_>>());
+    if is_redraw {
+        let source = redraw_source_utf16
+            .as_deref()
+            .ok_or_else(|| "LaTeX redraw source snapshot is missing".to_string())?;
+        let mut preflight_end = 0usize;
+        for item in &input.items {
+            match item {
+                MacOfflineDocumentImportCommitItem::Formula {
+                    source_start,
+                    source_end,
+                    source_text,
+                    paragraph_id,
+                    paragraph_style,
+                    paragraph_alignment,
+                    list_kind,
+                    list_level,
+                    paragraph_start,
+                    paragraph_end,
+                    ..
+                } => {
+                    if paragraph_id.is_some()
+                        || paragraph_style.is_some()
+                        || paragraph_alignment.is_some()
+                        || list_kind.is_some()
+                        || list_level.is_some()
+                        || *paragraph_start
+                        || *paragraph_end
+                    {
+                        return Err(
+                            "LaTeX redraw formulas cannot carry paragraph metadata".to_string()
+                        );
+                    }
+                    validate_latex_redraw_range(
+                        source,
+                        &mut preflight_end,
+                        source_start.ok_or_else(|| {
+                            "LaTeX redraw formula is missing sourceStart".to_string()
+                        })?,
+                        source_end.ok_or_else(|| {
+                            "LaTeX redraw formula is missing sourceEnd".to_string()
+                        })?,
+                        source_text.as_deref().ok_or_else(|| {
+                            "LaTeX redraw formula is missing sourceText".to_string()
+                        })?,
+                    )?;
+                }
+                MacOfflineDocumentImportCommitItem::Text { .. } => {
+                    return Err("LaTeX redraw accepts formula items only".to_string());
+                }
+            }
+        }
+    }
+    let mut previous_redraw_end = 0usize;
 
     let mut entries = vec![
         (
@@ -3356,6 +3704,7 @@ fn commit_document_import_blocking(
             OFFLINE_PROTOCOL_VERSION.to_string(),
         ),
         ("sessionId".to_string(), session_id.clone()),
+        ("operation".to_string(), public_request.operation.clone()),
         ("outputKind".to_string(), input.output_kind.clone()),
         (
             "sourceDocumentId".to_string(),
@@ -3385,6 +3734,9 @@ fn commit_document_import_blocking(
                 paragraph_start,
                 paragraph_end,
             } => {
+                if is_redraw {
+                    return Err("LaTeX redraw accepts formula items only".to_string());
+                }
                 let paragraph = resolve_document_paragraph_transfer(
                     paragraph_id,
                     paragraph_style,
@@ -3440,6 +3792,9 @@ fn commit_document_import_blocking(
                 width,
                 height,
                 baseline,
+                source_start,
+                source_end,
+                source_text,
                 paragraph_id,
                 paragraph_style,
                 paragraph_alignment,
@@ -3457,6 +3812,34 @@ fn commit_document_import_blocking(
                     *paragraph_start,
                     *paragraph_end,
                 )?;
+                if is_redraw {
+                    if paragraph.is_some() {
+                        return Err(
+                            "LaTeX redraw formulas cannot carry paragraph metadata".to_string()
+                        );
+                    }
+                    let start = (*source_start)
+                        .ok_or_else(|| "LaTeX redraw formula is missing sourceStart".to_string())?;
+                    let end = (*source_end)
+                        .ok_or_else(|| "LaTeX redraw formula is missing sourceEnd".to_string())?;
+                    let original = source_text
+                        .as_deref()
+                        .ok_or_else(|| "LaTeX redraw formula is missing sourceText".to_string())?;
+                    let source = redraw_source_utf16
+                        .as_ref()
+                        .ok_or_else(|| "LaTeX redraw source snapshot is missing".to_string())?;
+                    validate_latex_redraw_range(
+                        source,
+                        &mut previous_redraw_end,
+                        start,
+                        end,
+                        original,
+                    )?;
+                } else if source_start.is_some() || source_end.is_some() || source_text.is_some() {
+                    return Err(
+                        "Document import formula contains LaTeX redraw coordinates".to_string()
+                    );
+                }
                 if display_mode == "block" && paragraph.is_some() {
                     return Err("Display formulas must own their Word paragraph".to_string());
                 }
@@ -3479,8 +3862,8 @@ fn commit_document_import_blocking(
                     );
                 }
                 formula_count += 1;
-                if formula_count > 512 {
-                    return Err("Document import supports at most 512 formulas".to_string());
+                if formula_count > 1000 {
+                    return Err("Document operations support at most 1000 formulas".to_string());
                 }
                 validate_uuid(formula_id, "Document formula id")?;
                 if latex.trim().is_empty() || latex.len() > 1_000_000 || latex.contains('\0') {
@@ -3611,6 +3994,27 @@ fn commit_document_import_blocking(
                     format!("{prefix}referenceBaselinePt"),
                     format!("{:.6}", geometry.reference_baseline_pt),
                 ));
+                if is_redraw {
+                    entries.push((
+                        format!("{prefix}sourceStart"),
+                        source_start
+                            .expect("validated redraw sourceStart")
+                            .to_string(),
+                    ));
+                    entries.push((
+                        format!("{prefix}sourceEnd"),
+                        source_end.expect("validated redraw sourceEnd").to_string(),
+                    ));
+                    entries.push((
+                        format!("{prefix}sourceTextBase64"),
+                        URL_SAFE_NO_PAD.encode(
+                            source_text
+                                .as_deref()
+                                .expect("validated redraw sourceText")
+                                .as_bytes(),
+                        ),
+                    ));
+                }
                 append_document_paragraph_entries(&mut entries, &prefix, paragraph.as_ref());
                 if paragraph.as_ref().is_some_and(|value| value.end) {
                     active_paragraph_id = None;
@@ -3862,11 +4266,29 @@ pub fn get_macos_offline_document_import_request(
 }
 
 #[tauri::command]
-pub fn focus_macos_offline_document_import_target(window: WebviewWindow) -> Result<(), String> {
+pub async fn resolve_macos_offline_latex_redraw_font_sizes(
+    session_id: String,
+    input: MacOfflineLatexRedrawFontQueryInput,
+) -> Result<Vec<f64>, String> {
+    tokio::task::spawn_blocking(move || {
+        resolve_latex_redraw_font_sizes_blocking(session_id, input)
+    })
+    .await
+    .map_err(|error| format!("Word LaTeX redraw font preflight task failed: {error}"))?
+}
+
+#[tauri::command]
+pub fn focus_macos_offline_document_import_target(
+    window: WebviewWindow,
+    operation: String,
+) -> Result<(), String> {
     if !window.label().starts_with("office-native-document-") {
         return Err("Only the VisualTeX document importer can focus Word".to_string());
     }
-    set_word_document_import_preparing_status()?;
+    if !matches!(operation.as_str(), "documentImport" | "latexRedraw") {
+        return Err("Word document operation is invalid".to_string());
+    }
+    set_word_document_operation_preparing_status(&operation)?;
     window
         .hide()
         .map_err(|error| format!("Unable to hide the VisualTeX document importer: {error}"))
@@ -4229,6 +4651,108 @@ mod tests {
     }
 
     #[test]
+    fn latex_redraw_source_limits_and_utf16_ranges_are_strict() {
+        assert!(validate_latex_redraw_source_size(0).is_err());
+        assert!(validate_latex_redraw_source_size(1).is_ok());
+        assert!(validate_latex_redraw_source_size(MAX_LATEX_REDRAW_SOURCE_BYTES).is_ok());
+        assert!(validate_latex_redraw_source_size(MAX_LATEX_REDRAW_SOURCE_BYTES + 1).is_err());
+
+        let source = "前😀 $x$ 后 $$y$$";
+        let source_utf16 = source.encode_utf16().collect::<Vec<_>>();
+        let first_start = "前😀 ".encode_utf16().count();
+        let first_text = "$x$";
+        let first_end = first_start + first_text.encode_utf16().count();
+        let second_start = first_end + " 后 ".encode_utf16().count();
+        let second_text = "$$y$$";
+        let second_end = second_start + second_text.encode_utf16().count();
+        let mut previous_end = 0usize;
+
+        validate_latex_redraw_range(
+            &source_utf16,
+            &mut previous_end,
+            first_start,
+            first_end,
+            first_text,
+        )
+        .expect("the first formula must use Word-compatible UTF-16 offsets");
+        validate_latex_redraw_range(
+            &source_utf16,
+            &mut previous_end,
+            second_start,
+            second_end,
+            second_text,
+        )
+        .expect("the second non-overlapping formula must validate");
+        assert_eq!(previous_end, second_end);
+
+        let mut overlap_end = first_end;
+        assert!(validate_latex_redraw_range(
+            &source_utf16,
+            &mut overlap_end,
+            first_start,
+            first_end,
+            first_text,
+        )
+        .is_err());
+        let mut mismatch_end = 0usize;
+        assert!(validate_latex_redraw_range(
+            &source_utf16,
+            &mut mismatch_end,
+            first_start,
+            first_end,
+            "$z$",
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn latex_redraw_request_rejects_invalid_scope_and_output_before_file_access() {
+        let session_id = "32345678-1234-4234-9234-123456789abc".to_string();
+        let mut request = MacOfflineSessionRequest {
+            protocol_version: OFFLINE_PROTOCOL_VERSION,
+            session_id: session_id.clone(),
+            host: "word".to_string(),
+            mode: "create".to_string(),
+            operation: Some("latexRedraw".to_string()),
+            formula_id: None,
+            display_mode: "inline".to_string(),
+            numbered: false,
+            native_equation: false,
+            source_document_id: Some("Document".to_string()),
+            source_object_id: None,
+            encoded_metadata: None,
+            pending_marker: None,
+            font_size_pt: None,
+            reference_width_pt: None,
+            reference_height_pt: None,
+            power_point: None,
+            document_import: Some(MacOfflineDocumentImportRequest {
+                bookmark_name: "VT_D_323456781234423492341234".to_string(),
+                default_font_size_pt: 12.0,
+                redraw_scope: Some("page".to_string()),
+                output_kind: Some("image".to_string()),
+            }),
+        };
+        assert!(validate_request(&request, &session_id)
+            .unwrap_err()
+            .contains("scope"));
+
+        let document_import = request.document_import.as_mut().unwrap();
+        document_import.redraw_scope = Some("selection".to_string());
+        document_import.output_kind = Some("ole".to_string());
+        assert!(validate_request(&request, &session_id)
+            .unwrap_err()
+            .contains("output kind"));
+
+        request.operation = Some("documentImport".to_string());
+        let document_import = request.document_import.as_mut().unwrap();
+        document_import.output_kind = Some("image".to_string());
+        assert!(validate_request(&request, &session_id)
+            .unwrap_err()
+            .contains("redraw fields"));
+    }
+
+    #[test]
     fn document_image_requires_a_real_png_compatibility_preview() {
         assert!(decode_document_image_fallback_png(None).is_err());
 
@@ -4579,8 +5103,8 @@ mod tests {
             reference_width_pt: None,
             reference_height_pt: None,
             reference_baseline_pt: None,
-            created_with_version: "1.2.3".to_string(),
-            updated_with_version: "1.2.3".to_string(),
+            created_with_version: "1.2.4".to_string(),
+            updated_with_version: "1.2.4".to_string(),
             created_at: "unix-ms:1".to_string(),
             updated_at: "unix-ms:1".to_string(),
         }

@@ -1,5 +1,6 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import packageInfo from "../../package.json";
+import { stripPersonalAuthorNames } from "./releaseNotes";
 
 const LATEST_RELEASE_API =
   "https://api.github.com/repos/paulhe666/visualtex/releases/latest";
@@ -76,8 +77,10 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
       currentVersion: CURRENT_VERSION,
       latestVersion,
       releaseUrl: release.html_url,
-      releaseName: release.name || `VisualTeX v${latestVersion}`,
-      releaseNotes: release.body || "",
+      releaseName: stripPersonalAuthorNames(
+        release.name || `VisualTeX v${latestVersion}`,
+      ),
+      releaseNotes: stripPersonalAuthorNames(release.body || ""),
       publishedAt: release.published_at || "",
       updateAvailable: isNewerVersion(latestVersion, CURRENT_VERSION),
     };

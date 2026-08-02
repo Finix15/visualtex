@@ -15,6 +15,34 @@
                   screentip="解析并插入 LaTeX 或 Markdown"
                   supertip="文字按 Word 普通文本插入；每个行内公式和行间公式作为独立的 OMML 或 SVG 图片公式插入，可分别编辑、调整字号和设置编号。"/>
         </group>
+        <group id="VisualTeX.Mac.Word.RedrawGroup" label="LaTeX 重绘">
+          <menu id="VisualTeX.Mac.Word.RedrawSelection"
+                label="重绘所选"
+                size="large"
+                image="VisualTeXIcon09"
+                screentip="重绘所选 LaTeX 代码"
+                supertip="识别所选文字中的 $...$、$$...$$、\(...\)、\[...\] 和常见公式环境，并在原位置换为可编辑公式。">
+            <button id="VisualTeX.Mac.Word.RedrawSelectionImage"
+                    label="重绘为 VisualTeX 图片对象"
+                    onAction="VTWordRibbonRedrawSelectionImage"/>
+            <button id="VisualTeX.Mac.Word.RedrawSelectionOmml"
+                    label="重绘为 Word OMML"
+                    onAction="VTWordRibbonRedrawSelectionOmml"/>
+          </menu>
+          <menu id="VisualTeX.Mac.Word.RedrawDocument"
+                label="重绘全文"
+                size="large"
+                image="VisualTeXIcon06"
+                screentip="重绘当前 Word 正文中的 LaTeX 代码"
+                supertip="选择输出格式后立即扫描当前 Word 正文，并原位置换全部 LaTeX 公式。">
+            <button id="VisualTeX.Mac.Word.RedrawDocumentImage"
+                    label="全文重绘为 VisualTeX 图片对象"
+                    onAction="VTWordRibbonRedrawDocumentImage"/>
+            <button id="VisualTeX.Mac.Word.RedrawDocumentOmml"
+                    label="全文重绘为 Word OMML"
+                    onAction="VTWordRibbonRedrawDocumentOmml"/>
+          </menu>
+        </group>
         <group id="VisualTeX.Mac.Word.Group" label="公式工具">
           <button id="VisualTeX.Mac.Word.Inline"
                   label="新建行内公式"

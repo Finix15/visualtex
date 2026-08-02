@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { localizeReleaseNotes } from "../src/update/releaseNotes.ts";
+import {
+  localizeReleaseNotes,
+  stripPersonalAuthorNames,
+} from "../src/update/releaseNotes.ts";
 
 const bilingualNotes = `
 ## 中文
@@ -44,12 +47,38 @@ assert.deepEqual(localizeReleaseNotes(legacyNotes, "cn"), {
   other: ["VisualTeX improves editing stability.", "Existing release note."],
 });
 
+const privateChineseName = String.fromCodePoint(24278, 29632, 20581);
+const privateEnglishName = ["Liao", "Pojian"].join(" ");
+const privateIdentityNotes =
+  `## 中文\n- 作者：${privateChineseName}（paulhe666）\n` +
+  `## English\n- Author: ${privateEnglishName} (paulhe666)`;
+for (const language of ["cn", "en"]) {
+  const localized = localizeReleaseNotes(privateIdentityNotes, language);
+  const visible = [
+    ...localized.features,
+    ...localized.fixes,
+    ...localized.other,
+  ].join(" ");
+  assert(!visible.includes(privateChineseName));
+  assert(!visible.toLocaleLowerCase().includes(privateEnglishName.toLocaleLowerCase()));
+}
+assert.equal(
+  stripPersonalAuthorNames(`Release by ${privateChineseName}`),
+  "Release by VisualTeX",
+);
+
 const updateDialogSource = await readFile("src/components/UpdateDialog.tsx", "utf8");
 const qqGroupCard = await readFile("public/qq-group-card.svg", "utf8");
 assert(updateDialogSource.includes('const QQ_GROUP_NUMBER = "1045801770"'));
 assert(updateDialogSource.includes('const QQ_GROUP_IMAGE_URL = "/qq-group-card.svg"'));
 assert(updateDialogSource.includes('className="update-community-card"'));
 assert(updateDialogSource.includes("加入 VisualTeX QQ 交流群"));
+assert(!updateDialogSource.includes(privateChineseName));
+assert(
+  !updateDialogSource
+    .toLocaleLowerCase()
+    .includes(privateEnglishName.toLocaleLowerCase()),
+);
 assert(!updateDialogSource.includes("Join the VisualTeX QQ community"));
 assert(qqGroupCard.includes("https://qm.qq.com/q/TppXdoOO8Q") === false);
 assert(qqGroupCard.includes("1045801770"));

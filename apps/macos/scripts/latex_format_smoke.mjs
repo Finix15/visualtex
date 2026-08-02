@@ -180,6 +180,11 @@ const contextualDifferentialCases = [
     "second derivative",
   ],
   [
+    String.raw`\frac{d^2y}{\mathrm{d}x^2}`,
+    String.raw`\frac{\mathrm{d}^2y}{\mathrm{d}x^2}`,
+    "incremental second derivative with an already-upright denominator",
+  ],
+  [
     String.raw`\frac{d\mathbf{r}}{dt}`,
     String.raw`\frac{\mathrm{d}\mathbf{r}}{\mathrm{d}t}`,
     "styled vector differential",

@@ -431,8 +431,20 @@ function transformOutsideProtectedCommands(
       continue;
     }
 
-    result += transform(source.slice(chunkStart, index));
     const end = readBracedCommand(source, index);
+    const semanticUprightSymbol =
+      (commandMatch[1] === "mathrm" || commandMatch[1] === "textrm") &&
+      /^\\(?:mathrm|textrm)\{[dDeij]\}$/.test(source.slice(index, end));
+    if (semanticUprightSymbol) {
+      // Keep canonical one-symbol upright atoms in the surrounding semantic
+      // chunk. Incremental MathLive input can normalize the denominator first
+      // (for example \frac{d^2y}{\mathrm{d}x^2}); splitting at that atom
+      // would hide the still-italic numerator from derivative detection.
+      index = end;
+      continue;
+    }
+
+    result += transform(source.slice(chunkStart, index));
     result += source.slice(index, end);
     index = end;
     chunkStart = end;

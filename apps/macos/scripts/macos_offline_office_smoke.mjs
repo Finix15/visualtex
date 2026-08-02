@@ -53,6 +53,10 @@ const requiredFiles = [
   "office-native-dialog.html",
   "src/office/native-dialog-main.tsx",
   "src/office/shared/tauriTransport.ts",
+  "src/office/documentImport/OfficeDocumentImportApp.tsx",
+  "src/office/redraw/WordLatexRedrawApp.tsx",
+  "src/office/redraw/wordLatexRedrawParser.ts",
+  "src/office/redraw/wordLatexRedrawRenderer.ts",
 ];
 
 for (const file of requiredFiles) {
@@ -88,6 +92,12 @@ const nativeHtml = read("office-native-dialog.html");
 const nativeMain = read("src/office/native-dialog-main.tsx");
 const dialogApp = read("src/office/dialog/OfficeDialogApp.tsx");
 const dialogMessages = read("src/office/dialog/dialogMessages.ts");
+const documentImportApp = read(
+  "src/office/documentImport/OfficeDocumentImportApp.tsx",
+);
+const wordLatexRedrawApp = read("src/office/redraw/WordLatexRedrawApp.tsx");
+const wordLatexRedrawParser = read("src/office/redraw/wordLatexRedrawParser.ts");
+const wordLatexRedrawRenderer = read("src/office/redraw/wordLatexRedrawRenderer.ts");
 const tauriTransport = read("src/office/shared/tauriTransport.ts");
 const capabilities = read("src-tauri/capabilities/default.json");
 const infoPlist = read("src-tauri/Info.macos.plist");
@@ -218,6 +228,49 @@ expectIncludes(wordAdapter, "VisualTeX_CreateNativeDisplay", "Word must expose d
 expectIncludes(wordAdapter, "Public Sub VTWordRibbonOnLoad", "The Word Ribbon onLoad callback must initialize the application event sink in an attached isolation template");
 expectIncludes(wordAdapter, "Public Sub VTWordRibbonNativeInline", "The visible OMML inline Ribbon button must have a resolvable callback");
 expectIncludes(wordAdapter, "Public Sub VTWordRibbonNativeDisplay", "The visible OMML display Ribbon button must have a resolvable callback");
+for (const callback of [
+  "VTWordRibbonRedrawSelectionImage",
+  "VTWordRibbonRedrawSelectionOmml",
+  "VTWordRibbonRedrawDocumentImage",
+  "VTWordRibbonRedrawDocumentOmml",
+]) {
+  expectIncludes(wordAdapter, `Public Sub ${callback}`, `Word LaTeX redraw must expose ${callback}`);
+  expectIncludes(wordRibbon, `onAction="${callback}"`, `The Word Ribbon must bind ${callback}`);
+}
+expectIncludes(wordAdapter, '"word-latex-redraw-20260802-r1"', "Word must retain an auditable LaTeX redraw source revision");
+expectIncludes(wordAdapter, "VTLatexRedrawRequestJson = Replace$(", "Word redraw requests must derive their JSON through the VBA-safe operation replacement path");
+expectIncludes(wordAdapter, '"""operation"":""documentImport"""', "Word redraw request construction must replace the document-import operation token");
+expectIncludes(wordAdapter, '"""operation"":""latexRedraw"""', "Word redraw requests must replace that token with the dedicated latexRedraw operation");
+expectIncludes(wordAdapter, "VTWriteRequest sessionId, requestJson", "Word redraw must create the session before writing its source snapshot");
+expectIncludes(wordAdapter, "VTWriteLatexRedrawSource sessionId, sourceText", "Word redraw must write an exact source snapshot before launching");
+expectIncludes(wordAdapter, "For itemIndex = itemCount - 1 To 0 Step -1", "Word redraw must replace exact source ranges from right to left");
+expectIncludes(wordAdapter, 'undoRecord.StartCustomRecord "VisualTeX Redraw LaTeX Formulas"', "Word redraw must group every replacement into one undo record without relying on VBA source-code page encoding");
+expect(!wordAdapter.includes("是否继续？"), "Word redraw must start immediately after the user chooses an output format");
+expect(!wordRibbon.includes("开始前会再次确认"), "The Word Ribbon must not promise an extra redraw confirmation dialog");
+expectIncludes(wordAdapter, "StrComp(sourceRange.Text, sourceText, vbBinaryCompare)", "Word redraw must reject stale Word ranges before mutation");
+expectIncludes(wordAdapter, "sourceFontSizes(itemIndex)", "Word redraw must preserve the original Word font size for each formula during insertion");
+expectIncludes(wordAdapter, "VTResolveWordLatexRedrawFontsDispatch", "Word redraw must capture per-formula source font sizes before rendering");
+expectIncludes(wordAdapter, 'Case "latexRedrawPreflight"', "The Word callback must expose the redraw preflight action");
+expectIncludes(wordAdapter, "VTJsonNumber(fontSizePt)", "Word redraw preflight must return locale-independent point sizes");
+expectIncludes(protocol, "Public Function VTUtf8ByteLength", "The shared protocol must expose exact UTF-8 byte sizing for the 5 MB redraw limit");
+expectIncludes(rustRuntime, 'LATEX_REDRAW_SOURCE_FILE: &str = "latex-redraw-source.txt"', "The native runtime must read the fixed redraw source snapshot");
+expectIncludes(rustRuntime, "sourceTextBase64", "The native manifest must preserve the exact source text for Word-side verification");
+expectIncludes(rustRuntime, 'open_word_latex_redraw_window(app, &session_id)', "Word redraw must route to its dedicated renderer instead of the document importer");
+expectIncludes(rustRuntime, 'view=office-word-latex-redraw', "Word redraw must have a dedicated hidden frontend entry point");
+expectIncludes(rustRuntime, ".visible(false)", "The Word redraw renderer must stay invisible during successful automatic runs");
+expectIncludes(rustRuntime, ".background_throttling(BackgroundThrottlingPolicy::Disabled)", "Hidden redraw rendering must not be suspended by WebKit background throttling");
+expectIncludes(wordLatexRedrawApp, "findWindowsWordLatexRedrawSpans", "The redraw frontend must use the Windows-parity span scanner");
+expectIncludes(wordLatexRedrawApp, "prepareWindowsStyleWordLatexRedrawItems", "The redraw frontend must use the direct cached redraw renderer");
+expectIncludes(wordLatexRedrawApp, 'focusMacosDocumentImportTarget("latexRedraw")', "The redraw renderer must start automatically without a second user click");
+expectIncludes(wordLatexRedrawApp, "resolveMacosLatexRedrawFontSizes", "The redraw renderer must capture Word font sizes before rendering like Windows");
+expect(!wordLatexRedrawApp.includes("OfficeDocumentImportApp"), "The Word redraw path must not load the document-import UI");
+expect(!wordLatexRedrawParser.includes("documentImportParser"), "The Word redraw parser must be independent of the batch-import parser");
+expectIncludes(wordLatexRedrawParser, "Direct TypeScript port of Windows WordBulkImportParser.FindFormulaSpans", "The redraw scanner must document its Windows source of truth");
+expectIncludes(wordLatexRedrawRenderer, "const templates = new Map", "The redraw renderer must cache duplicate formulas like Windows");
+expectIncludes(wordLatexRedrawRenderer, "String(span.fontSizePt)", "The redraw cache key must include each source formula's Word font size like Windows");
+expectIncludes(rustRuntime, 'action", "latexRedrawPreflight"', "The native bridge must dispatch a non-mutating Word redraw preflight");
+expectIncludes(rustRuntime, "parse_latex_redraw_font_sizes", "The native bridge must validate the complete Word font-size plan");
+expect(!documentImportApp.includes("autoRedrawStartedRef"), "The document importer must not own the automatic Word redraw workflow");
 expectIncludes(wordAdapter, "Public Sub VTWordRibbonCrossReference", "The visible Equation-reference Ribbon button must have a resolvable callback");
 expectIncludes(wordAdapter, "nativeEquation", "Word requests must preserve the direct native-equation intent");
 expectIncludes(wordAdapter, "VT_WORD_IMAGE_SCALE_VARIABLE_PREFIX", "Word must persist formula point size and reference image geometry per formula id");
@@ -875,12 +928,14 @@ const handleOpenUrlStart = rustRuntime.indexOf("pub(crate) fn handle_open_url");
 const handleOpenUrlEnd = rustRuntime.indexOf("fn decode_png", handleOpenUrlStart);
 const handleOpenUrlSource = rustRuntime.slice(handleOpenUrlStart, handleOpenUrlEnd);
 expect(handleOpenUrlStart >= 0 && handleOpenUrlEnd > handleOpenUrlStart, "The native Office URL handler source must be discoverable");
-expectIncludes(rustRuntime, "hide_main_window_for_office_editor(app)?", "Opening an Office formula must keep the desktop workspace out of the Office window stack");
-expectIncludes(rustRuntime, "main_was_visible", "The Office editor lifecycle must remember whether the desktop workspace had promoted a background process");
+expect(!rustRuntime.includes("hide_main_window_for_office_editor"), "Opening an Office formula must not hide an already visible VisualTeX desktop workspace");
+expect(!rustRuntime.includes("main_was_visible"), "The Office editor lifecycle must derive background mode from current main-window visibility instead of hiding and remembering the workspace");
+expectIncludes(rustRuntime, "Preserve an already visible desktop workspace", "The Office editor must explicitly preserve the user's main VisualTeX window");
 expectIncludes(rustRuntime, "restore_office_host_focus(host)", "Closing the formula editor must return focus to Word or PowerPoint");
 expectIncludes(backgroundRuntime, "NSApplicationActivationOptions::empty()", "VisualTeX activation must not raise every application window above Office");
 expect(!backgroundRuntime.includes("NSApplicationActivationOptions::ActivateAllWindows"), "VisualTeX must never activate all windows during Office formula editing");
 expectIncludes(appRuntime, "office::background::install_application_icon(app.handle())", "macOS setup must install the VisualTeX application icon before any background-to-foreground transition");
+expectIncludes(backgroundRuntime, "Every Accessory-to-Regular transition must have the real bundle icon", "Every Office foreground transition must preserve the VisualTeX Dock icon");
 expectIncludes(backgroundRuntime, 'const DOCK_ICON_MIGRATION_MARKER_FILE: &str = "dock-icon-v4.refreshed"', "The repaired Dock icon lifecycle must refresh stale same-version icon cache once");
 expectIncludes(backgroundRuntime, "Install the bundle icon before changing activation policy", "Foreground reveal must install the VisualTeX icon before creating a regular Dock tile");
 expectIncludes(rustRuntime, "open_editor_window(app, host, &session_id, received_epoch_ms, received_at)", "Office formula requests must activate the fixed host editor with one generation and timing origin");

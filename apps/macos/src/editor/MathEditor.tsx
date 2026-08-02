@@ -66,6 +66,10 @@ import {
   nativeSuggestionPreviewHasVisibleInk,
   resolveNativeSuggestionPreview,
 } from "./nativeSuggestionPreviews";
+import {
+  toggleFormulaSelectionLatex,
+  type FormulaSelectionToggleKind,
+} from "./selectionStyleToggle";
 
 export interface MathEditorInsertionTarget {
   lineId: string;
@@ -2839,6 +2843,7 @@ function findTrailingCommandRange(
 ): [number, number] | null {
   const normalizedQuery = activeQuery.trim();
   if (!normalizedQuery) return null;
+  const semanticQuery = normalizeChineseLatex(normalizedQuery).trim();
 
   const candidateEnds = Array.from(
     new Set([field.position, field.lastOffset].filter((offset) => offset >= 0)),
@@ -2846,7 +2851,12 @@ function findTrailingCommandRange(
   for (const end of candidateEnds) {
     for (let start = end; start >= 0; start -= 1) {
       const rangeLatex = field.getValue(start, end, "latex").trim();
-      if (rangeLatex === normalizedQuery) return [start, end];
+      if (
+        rangeLatex === normalizedQuery ||
+        normalizeChineseLatex(rangeLatex).trim() === semanticQuery
+      ) {
+        return [start, end];
+      }
     }
   }
 
@@ -5506,6 +5516,12 @@ function FormulaField(props: FormulaFieldProps) {
     const zoomChanged = sizingZoomRef.current !== props.zoom;
     sizingZoomRef.current = props.zoom;
 
+    // Store normalization can make the React value semantically equal
+    // while MathLive still holds the pre-normalized atom model. Repair that
+    // model first so upright operators and plain command candidates never
+    // depend on a remount or app restart.
+    normalizeCompletedDifferentialDisplay(field);
+
     // 本地输入仅因中文规范化而与 store 等值时，不重建 MathLive 模型；
     // 只更新事务基准，保留当前光标、选区和删除键内部状态。
     if (normalizeChineseLatex(field.value) === props.latex) {
@@ -7470,51 +7486,138 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       });
       if (!resolved.length) return false;
 
-      let applied = false;
-      for (const { lineId, field, selection } of resolved) {
-        field.selection = selection;
-        let mathLiveStyle: Pick<
+      historyManager.commitPendingTransaction();
+      for (const entry of resolved) {
+        const { field, lineId } = entry;
+        field.selection = entry.selection;
+        if (style.kind === "bold" || style.kind === "italic") {
+          const original = captureFieldSnapshot(field);
+          const toggled = applyDiscreteFormulaMutation(
+            lineId,
+            field,
+            "toolbar",
+            () => {
+              const nextRanges: Array<[number, number]> = [];
+              let changed = false;
+              const ranges = [...entry.selection.ranges]
+                .map(([start, end]) =>
+                  [Math.min(start, end), Math.max(start, end)] as [number, number],
+                )
+                .sort((left, right) => right[0] - left[0]);
+              for (const [start, end] of ranges) {
+                const singleSelection: MathSelectionSnapshot = {
+                  ranges: [[start, end]],
+                  direction: "forward",
+                };
+                field.selection = singleSelection;
+                const selectedLatex = field
+                  .getValue(singleSelection, "latex")
+                  .trim();
+                if (!selectedLatex) continue;
+                const replacement = toggleFormulaSelectionLatex(
+                  selectedLatex,
+                  style.kind satisfies FormulaSelectionToggleKind,
+                  {
+                    allBold:
+                      field.queryStyle({ variantStyle: "bold" }) === "all",
+                    allBoldItalic:
+                      field.queryStyle({ variantStyle: "bolditalic" }) === "all",
+                    allItalic:
+                      field.queryStyle({ variantStyle: "italic" }) === "all",
+                    allUpright:
+                      field.queryStyle({ variantStyle: "up" }) === "all",
+                  },
+                );
+                if (!replacement || replacement === selectedLatex) {
+                  nextRanges.push([start, end]);
+                  continue;
+                }
+                const inserted = field.insert(replacement, {
+                  mode: "math",
+                  format: "latex",
+                  insertionMode: "replaceSelection",
+                  selectionMode: "after",
+                  style: {
+                    variant: "normal",
+                    variantStyle: undefined,
+                  },
+                  focus: true,
+                  scrollIntoView: false,
+                });
+                if (!inserted) {
+                  field.setValue(original.latex, {
+                    mode: "math",
+                    format: "latex",
+                    insertionMode: "replaceAll",
+                    selectionMode: "after",
+                    silenceNotifications: true,
+                  });
+                  field.selection = original.selection;
+                  return false;
+                }
+                const nextEnd = field.position;
+                const delta = nextEnd - end;
+                for (const range of nextRanges) {
+                  if (range[0] >= end) {
+                    range[0] += delta;
+                    range[1] += delta;
+                  }
+                }
+                nextRanges.push([start, nextEnd]);
+                changed = true;
+              }
+              const nextSelection = clampSelection(
+                {
+                  ranges: nextRanges.sort((left, right) => left[0] - right[0]),
+                  direction: entry.selection.direction,
+                },
+                field.lastOffset,
+              );
+              field.selection = nextSelection;
+              return changed;
+            },
+          );
+          if (!toggled) field.selection = entry.selection;
+          entry.selection = captureSelection(field);
+          continue;
+        }
+
+        const mathLiveStyle: Pick<
           Style,
           "variant" | "variantStyle" | "color" | "backgroundColor"
-        >;
-        if (style.kind === "bold") {
-          const explicitlyUpright =
-            field.queryStyle({ variantStyle: "up" }) === "all";
-          const explicitlyItalic =
-            field.queryStyle({ variantStyle: "italic" }) === "all" ||
-            field.queryStyle({ variantStyle: "bolditalic" }) === "all";
-          mathLiveStyle = {
-            variant: "normal",
-            variantStyle:
-              explicitlyItalic || !explicitlyUpright ? "bolditalic" : "bold",
-          };
-        } else if (style.kind === "italic") {
-          const alreadyBold =
-            field.queryStyle({ variantStyle: "bold" }) === "all" ||
-            field.queryStyle({ variantStyle: "bolditalic" }) === "all";
-          mathLiveStyle = {
-            variant: "normal",
-            variantStyle: alreadyBold ? "bolditalic" : "italic",
-          };
-        } else if (style.kind === "color") {
-          mathLiveStyle = { color: style.value };
-        } else {
-          mathLiveStyle = { backgroundColor: style.value };
+        > =
+          style.kind === "color"
+            ? { color: style.value }
+            : { backgroundColor: style.value };
+        for (const [start, end] of entry.selection.ranges) {
+          const range: [number, number] = [
+            Math.min(start, end),
+            Math.max(start, end),
+          ];
+          if (range[0] === range[1]) continue;
+          field.applyStyle(mathLiveStyle, {
+            range,
+            operation: "set",
+          });
         }
-        const changed = applyDiscreteFormulaMutation(
-          lineId,
-          field,
-          "toolbar",
-          () => {
-            field.selection = selection;
-            field.applyStyle(mathLiveStyle, { operation: "set" });
-            field.selection = selection;
-            return true;
-          },
+        // Keep color and background selection-only: clear MathLive's implicit
+        // style at the trailing caret before restoring the user's selection.
+        const resetPosition = Math.max(
+          ...entry.selection.ranges.flatMap(([start, end]) => [start, end]),
         );
-        applied = changed || applied;
+        field.selection = {
+          ranges: [[resetPosition, resetPosition]],
+          direction: "none",
+        };
+        field.applyStyle(
+          style.kind === "color"
+            ? { color: "none" }
+            : { backgroundColor: "none" },
+          { operation: "set" },
+        );
+        field.selection = entry.selection;
       }
-      if (!applied) return false;
+      historyManager.commitPendingTransaction();
 
       const activeSelection =
         resolved.find(({ lineId }) => lineId === activeLineIdRef.current) ??

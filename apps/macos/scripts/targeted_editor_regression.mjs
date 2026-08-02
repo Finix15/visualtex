@@ -3,9 +3,9 @@ import { rm, writeFile } from "node:fs/promises";
 import process from "node:process";
 
 const scenario = process.argv[2];
-if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "native-structure-audit", "native-structure-input-over", "native-structure-input-under", "native-structure-input-multi", "native-structure-input-core", "native-space-selection", "candidate-query-reset", "limit-candidate", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "accent-placeholder", "caret-probe", "vertical-structure-probe", "vertical-structure-navigation", "scripts", "upright", "context-style", "suggestions", "navigation", "geometry", "source-layout", "toolbar-compact", "formula-tiles", "cursor-placement", "settings", "layout", "delete", "export"]).has(scenario)) {
+if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "native-structure-audit", "native-structure-input-over", "native-structure-input-under", "native-structure-input-multi", "native-structure-input-core", "native-space-selection", "candidate-query-reset", "limit-candidate", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "accent-placeholder", "caret-probe", "vertical-structure-probe", "vertical-structure-navigation", "scripts", "upright", "formula-formatting", "context-style", "suggestions", "navigation", "geometry", "source-layout", "toolbar-compact", "formula-tiles", "cursor-placement", "settings", "layout", "delete", "export"]).has(scenario)) {
   throw new Error(
-    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|native-structure-audit|native-structure-input-over|native-structure-input-under|native-structure-input-multi|native-structure-input-core|native-space-selection|candidate-query-reset|limit-candidate|raw-placeholder-visual|placeholder-selection|structural-placeholder|accent-placeholder|caret-probe|vertical-structure-probe|vertical-structure-navigation|scripts|upright|context-style|suggestions|navigation|geometry|source-layout|toolbar-compact|formula-tiles|cursor-placement|settings|layout|delete|export>",
+    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|native-structure-audit|native-structure-input-over|native-structure-input-under|native-structure-input-multi|native-structure-input-core|native-space-selection|candidate-query-reset|limit-candidate|raw-placeholder-visual|placeholder-selection|structural-placeholder|accent-placeholder|caret-probe|vertical-structure-probe|vertical-structure-navigation|scripts|upright|formula-formatting|context-style|suggestions|navigation|geometry|source-layout|toolbar-compact|formula-tiles|cursor-placement|settings|layout|delete|export>",
   );
 }
 
@@ -177,17 +177,20 @@ async function main() {
       );
     };
 
-    const key = async (value, code, virtualKeyCode) => {
+    const key = async (value, code, virtualKeyCode, modifiers = 0) => {
       const common = {
         key: value,
         code,
+        modifiers,
         windowsVirtualKeyCode: virtualKeyCode,
         nativeVirtualKeyCode: virtualKeyCode,
       };
       await client.send("Input.dispatchKeyEvent", {
         type: "keyDown",
         ...common,
-        ...(value.length === 1 ? { text: value, unmodifiedText: value } : {}),
+        ...(value.length === 1 && modifiers === 0
+          ? { text: value, unmodifiedText: value }
+          : {}),
       });
       await client.send("Input.dispatchKeyEvent", { type: "keyUp", ...common });
       await sleep(45);
@@ -220,6 +223,7 @@ async function main() {
         ...(persisted.state || {}),
         lines: [{ id: crypto.randomUUID(), latex: "" }],
         activeLineId: null,
+        checkUpdatesOnStartup: false,
       };
       persisted.state.activeLineId = persisted.state.lines[0].id;
       delete persisted.state.inputBehavior;
@@ -2100,6 +2104,92 @@ async function main() {
         };
       })()`, "confirmed integral opens VisualTeX command candidate popup");
 
+      const twoStageStates = [];
+      await key("Enter", "Enter", 13);
+      twoStageStates.push(
+        await waitForEvaluation(`(() => {
+          const field = document.querySelector("math-field");
+          const value = field?.value ?? "";
+          const selection = field?.selection ?? null;
+          return {
+            ready:
+              value.startsWith("\\\\int_") &&
+              (value.match(/\\\\placeholder\{\}/g) ?? []).length === 4 &&
+              document.querySelectorAll("math-field").length === 1 &&
+              selection?.ranges?.[0]?.[0] !== selection?.ranges?.[0]?.[1],
+            command: "\\\\int",
+            value,
+            selection,
+          };
+        })()`, "second integral confirmation inserts the VisualTeX structure"),
+      );
+
+      for (const [command, expectedPlaceholderCount] of [
+        ["\\sum", 3],
+        ["\\lim", 3],
+      ]) {
+        await clearField();
+        await typeText(command);
+        await waitForEvaluation(`(() => {
+          const panel = document.getElementById("mathlive-suggestion-popover");
+          return {
+            ready:
+              panel?.classList.contains("is-visible") &&
+              panel.querySelector("li.ML__popover__current")?.dataset.command ===
+                ${JSON.stringify(command)},
+          };
+        })()`, `native ${command} awaits its first confirmation`);
+        await key(" ", "Space", 32);
+        const firstConfirmation = await waitForEvaluation(`(() => {
+          const field = document.querySelector("math-field");
+          return {
+            ready:
+              field?.value === ${JSON.stringify(command)} &&
+              Boolean(document.querySelector(".suggestion-popup")) &&
+              document.querySelectorAll("math-field").length === 1,
+            value: field?.value ?? "",
+          };
+        })()`, `first ${command} confirmation keeps the bare command`);
+        await key("Enter", "Enter", 13);
+        const secondConfirmation = await waitForEvaluation(`(() => {
+          const field = document.querySelector("math-field");
+          const value = field?.value ?? "";
+          const selection = field?.selection ?? null;
+          return {
+            ready:
+              value.startsWith(${JSON.stringify(command + "_")}) &&
+              (value.match(/\\\\placeholder\{\}/g) ?? []).length ===
+                ${expectedPlaceholderCount} &&
+              document.querySelectorAll("math-field").length === 1 &&
+              selection?.ranges?.[0]?.[0] !== selection?.ranges?.[0]?.[1],
+            value,
+            selection,
+          };
+        })()`, `second ${command} confirmation inserts the VisualTeX structure`);
+        twoStageStates.push({
+          command,
+          firstConfirmation,
+          secondConfirmation,
+        });
+      }
+
+      await clearField();
+      await typeText("\\int");
+      await waitForEvaluation(`(() => {
+        const panel = document.getElementById("mathlive-suggestion-popover");
+        return {
+          ready:
+            panel?.classList.contains("is-visible") &&
+            panel.querySelector("li.ML__popover__current")?.dataset.command === "\\\\int",
+        };
+      })()`, "integral selected again before candidate query reset");
+      await key(" ", "Space", 32);
+      await waitForEvaluation(`(() => ({
+        ready:
+          document.querySelector("math-field")?.value === "\\\\int" &&
+          Boolean(document.querySelector(".suggestion-popup")),
+      }))()`, "integral candidate restored before query reset");
+
       await typeText("\\");
       const resetState = await waitForEvaluation(`(() => {
         const field = document.querySelector("math-field");
@@ -2124,7 +2214,9 @@ async function main() {
         };
       })()`, "lone backslash clears stale integral command candidate query");
 
-      console.log(JSON.stringify({ confirmedState, resetState }, null, 2));
+      console.log(
+        JSON.stringify({ confirmedState, twoStageStates, resetState }, null, 2),
+      );
       console.log("Targeted command candidate query reset regression passed");
       return;
     }
@@ -5463,6 +5555,181 @@ async function main() {
       return;
     }
 
+    if (scenario === "formula-formatting") {
+      await waitForEvaluation(`(() => ({
+        ready: [
+          '[data-formula-selection-bold]',
+          '[data-formula-selection-italic]',
+          '[data-formula-selection-color]',
+          '[data-formula-selection-background]',
+        ].every((selector) => {
+          const button = document.querySelector(selector);
+          if (!(button instanceof HTMLElement)) return false;
+          const rect = button.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        }),
+      }))()`, "desktop formula formatting controls");
+
+      const dispatchFormattingToggle = async (selector) => {
+        const encodedSelector = JSON.stringify(selector);
+        const target = await evaluate(`(() => {
+          const field = document.querySelector('math-field');
+          const button = document.querySelector(${encodedSelector});
+          if (!field || !(button instanceof HTMLElement)) return null;
+          field.focus();
+          field.selection = {
+            ranges: [[0, field.lastOffset]],
+            direction: 'forward',
+          };
+          globalThis.__visualTexFormattingTrace = { events: [] };
+          for (const type of ['pointerenter', 'pointerdown', 'mousedown', 'mouseup', 'click']) {
+            button.addEventListener(
+              type,
+              () => globalThis.__visualTexFormattingTrace.events.push({
+                type,
+                selection: structuredClone(field.selection),
+                activeTag: document.activeElement?.tagName ?? null,
+              }),
+              { once: true },
+            );
+          }
+          const rect = button.getBoundingClientRect();
+          return {
+            x: rect.left + rect.width / 2,
+            y: rect.top + rect.height / 2,
+            selection: structuredClone(field.selection),
+          };
+        })()`);
+        if (!target) throw new Error(`Unable to resolve formatting button ${selector}`);
+        await client.send("Input.dispatchMouseEvent", {
+          type: "mouseMoved",
+          x: target.x,
+          y: target.y,
+        });
+        await client.send("Input.dispatchMouseEvent", {
+          type: "mousePressed",
+          x: target.x,
+          y: target.y,
+          button: "left",
+          buttons: 1,
+          clickCount: 1,
+        });
+        await client.send("Input.dispatchMouseEvent", {
+          type: "mouseReleased",
+          x: target.x,
+          y: target.y,
+          button: "left",
+          buttons: 0,
+          clickCount: 1,
+        });
+        await sleep(100);
+        return evaluate(`(() => {
+          const field = document.querySelector('math-field');
+          const persisted = JSON.parse(localStorage.getItem('visualtex-editor') || '{}');
+          return {
+            initialSelection: ${JSON.stringify(target.selection)},
+            events: globalThis.__visualTexFormattingTrace?.events ?? [],
+            selection: field ? structuredClone(field.selection) : null,
+            value: field?.value ?? null,
+            storeValue: persisted.state?.lines?.[0]?.latex ?? null,
+          };
+        })()`);
+      };
+
+      const setFormattingValue = async (latex) => {
+        const encodedLatex = JSON.stringify(latex);
+        await evaluate(`(() => {
+          const field = document.querySelector('math-field');
+          if (!field) return false;
+          field.setValue(${encodedLatex}, {
+            mode: 'math',
+            format: 'latex',
+            insertionMode: 'replaceAll',
+            selectionMode: 'after',
+            silenceNotifications: true,
+          });
+          field.dispatchEvent(new InputEvent('input', {
+            bubbles: true,
+            composed: true,
+            inputType: 'insertText',
+          }));
+          field.focus();
+          return true;
+        })()`);
+        await sleep(100);
+      };
+
+      const readFormattingValue = () => evaluate(`(() => {
+        const field = document.querySelector('math-field');
+        return field?.value?.replace(/\\s+/g, '') ?? '';
+      })()`);
+
+      await setFormattingValue('abc');
+      const boldTrace = await dispatchFormattingToggle('[data-formula-selection-bold]');
+      const boldApplied = await readFormattingValue();
+      if (boldApplied !== String.raw`\mathbf{abc}`) {
+        throw new Error(
+          `Bold toggle must emit \\mathbf exactly; received ${boldApplied}; trace=${JSON.stringify(boldTrace)}`,
+        );
+      }
+      await dispatchFormattingToggle('[data-formula-selection-bold]');
+      const boldRemoved = await readFormattingValue();
+      if (boldRemoved !== 'abc') {
+        throw new Error(`Second bold toggle must restore ordinary math; received ${boldRemoved}`);
+      }
+
+      await setFormattingValue('xyz');
+      await dispatchFormattingToggle('[data-formula-selection-italic]');
+      const uprightApplied = await readFormattingValue();
+      if (uprightApplied !== String.raw`\mathrm{xyz}`) {
+        throw new Error(`Italic toggle must switch default math italic to \\mathrm; received ${uprightApplied}`);
+      }
+      await dispatchFormattingToggle('[data-formula-selection-italic]');
+      const italicRestored = await readFormattingValue();
+      if (italicRestored !== 'xyz') {
+        throw new Error(`Second italic toggle must restore default math italic; received ${italicRestored}`);
+      }
+
+      await setFormattingValue(String.raw`\mathbf{q}`);
+      await dispatchFormattingToggle('[data-formula-selection-italic]');
+      const boldItalicApplied = await readFormattingValue();
+      if (boldItalicApplied !== String.raw`\mathbfit{q}`) {
+        throw new Error(`Italic toggle must preserve bold as \\mathbfit; received ${boldItalicApplied}`);
+      }
+      await dispatchFormattingToggle('[data-formula-selection-italic]');
+      const boldUprightRestored = await readFormattingValue();
+      if (boldUprightRestored !== String.raw`\mathbf{q}`) {
+        throw new Error(`Second italic toggle must restore \\mathbf; received ${boldUprightRestored}`);
+      }
+
+      const selectionBold = {
+        applied: boldApplied,
+        removed: boldRemoved,
+      };
+      const selectionItalic = {
+        upright: uprightApplied,
+        restored: italicRestored,
+        boldItalic: boldItalicApplied,
+        boldRestored: boldUprightRestored,
+      };
+
+      const removedPersistentControls = await evaluate(`(() => ({
+        typingBold: Boolean(document.querySelector('[data-formula-typing-bold]')),
+        typingItalic: Boolean(document.querySelector('[data-formula-typing-italic]')),
+      }))()`);
+      if (removedPersistentControls.typingBold || removedPersistentControls.typingItalic) {
+        throw new Error(`Persistent typing controls must stay removed: ${JSON.stringify(removedPersistentControls)}`);
+      }
+
+      console.log(JSON.stringify({
+        selectionBold,
+        selectionItalic,
+        removedPersistentControls,
+      }, null, 2));
+      console.log("Targeted desktop formula formatting regression passed");
+      return;
+    }
+
     if (scenario === "context-style") {
       await focusField();
       await clearField();
@@ -5717,6 +5984,44 @@ async function main() {
       await evaluate(`document.querySelector(".canvas-input-behavior-trigger")?.click()`);
       await focusField();
       await clearField();
+      await typeText("sin");
+      await waitForEvaluation(`(() => ({
+        ready: document.querySelector("math-field")?.value === "\\\\sin",
+      }))()`, "plain function name becomes an upright command");
+      await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        field.setValue("sin", {
+          mode: "math",
+          format: "latex",
+          insertionMode: "replaceAll",
+          selectionMode: "after",
+          silenceNotifications: true,
+        });
+        field.position = field.lastOffset;
+        field.selection = {
+          ranges: [[field.lastOffset, field.lastOffset]],
+          direction: "none",
+        };
+        const zoomButton = [...document.querySelectorAll(".canvas-controls button")]
+          .find((button) => !button.disabled);
+        zoomButton?.click();
+      })()`);
+      const semanticRepairState = await waitForEvaluation(`(() => {
+        const field = document.querySelector("math-field");
+        const persisted = JSON.parse(localStorage.getItem("visualtex-editor") || "{}");
+        return {
+          ready:
+            field?.value === "\\\\sin" &&
+            persisted.state?.lines?.[0]?.latex === "\\\\sin" &&
+            field.selection?.ranges?.[0]?.[0] === field.lastOffset &&
+            field.selection?.ranges?.[0]?.[1] === field.lastOffset,
+          value: field?.value ?? "",
+          storeValue: persisted.state?.lines?.[0]?.latex ?? "",
+          selection: field?.selection ?? null,
+        };
+      })()`, "React synchronization repairs a stale MathLive semantic model");
+
+      await clearField();
       await typeText("lim");
       await waitForEvaluation(`(() => {
         const popup = document.querySelector(".suggestion-popup");
@@ -5729,6 +6034,27 @@ async function main() {
           value: document.querySelector("math-field")?.value ?? "",
         };
       })()`, "plain lim opens the structured limit candidate");
+      const staleCandidateState = await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        field.setValue("lim", {
+          mode: "math",
+          format: "latex",
+          insertionMode: "replaceAll",
+          selectionMode: "after",
+          silenceNotifications: true,
+        });
+        field.position = field.lastOffset;
+        field.selection = {
+          ranges: [[field.lastOffset, field.lastOffset]],
+          direction: "none",
+        };
+        field.focus();
+        field.shadowRoot?.querySelector('[part="keyboard-sink"]')?.focus({ preventScroll: true });
+        return {
+          value: field.value,
+          popupVisible: Boolean(document.querySelector(".suggestion-popup")),
+        };
+      })()`);
       await key("Enter", "Enter", 13);
       const result = await waitForEvaluation(`(() => {
         const field = document.querySelector("math-field");
@@ -5747,7 +6073,49 @@ async function main() {
             document.getElementById("mathlive-suggestion-popover")?.classList.contains("is-visible") ?? false,
         };
       })()`, "one Enter accepts the first structured limit candidate");
-      console.log(JSON.stringify(result, null, 2));
+
+      await key("z", "KeyZ", 90, 4);
+      const undoState = await waitForEvaluation(`(() => {
+        const field = document.querySelector("math-field");
+        const persisted = JSON.parse(localStorage.getItem("visualtex-editor") || "{}");
+        return {
+          ready:
+            field?.value === "\\\\lim" &&
+            persisted.state?.lines?.[0]?.latex === "\\\\lim" &&
+            document.querySelectorAll("math-field").length === 1,
+          value: field?.value ?? "",
+          storeValue: persisted.state?.lines?.[0]?.latex ?? "",
+        };
+      })()`, "undo restores the confirmed bare limit command");
+      await key("z", "KeyZ", 90, 12);
+      const redoState = await waitForEvaluation(`(() => {
+        const field = document.querySelector("math-field");
+        const value = field?.value ?? "";
+        const persisted = JSON.parse(localStorage.getItem("visualtex-editor") || "{}");
+        return {
+          ready:
+            value === "\\\\lim_{\\\\placeholder{}\\\\to\\\\placeholder{}} \\\\placeholder{}" &&
+            persisted.state?.lines?.[0]?.latex === value &&
+            document.querySelectorAll("math-field").length === 1,
+          value,
+          storeValue: persisted.state?.lines?.[0]?.latex ?? "",
+          selection: field?.selection ?? null,
+        };
+      })()`, "redo reapplies the complete limit structure");
+
+      console.log(
+        JSON.stringify(
+          {
+            semanticRepairState,
+            staleCandidateState,
+            result,
+            undoState,
+            redoState,
+          },
+          null,
+          2,
+        ),
+      );
       console.log("Targeted limit candidate Enter regression passed");
       return;
     }
@@ -5793,6 +6161,70 @@ async function main() {
       })()`, "ordinary identifier remains italic variables");
 
       await clearField();
+      await typeText("dx/dy");
+      const cartesianDifferentialState = await waitForEvaluation(`(() => {
+        const value = document.querySelector("math-field")?.value ?? "";
+        return {
+          ready: value === "\\\\frac{\\\\mathrm{d}x}{\\\\mathrm{d}y}",
+          value,
+        };
+      })()`, "dx/dy keeps only each differential operator upright");
+
+      await clearField();
+      await typeText("d^2y/dx^2");
+      const higherDerivativeState = await waitForEvaluation(`(() => {
+        const value = document.querySelector("math-field")?.value ?? "";
+        return {
+          ready:
+            value ===
+            "\\\\frac{\\\\mathrm{d}^2y}{\\\\mathrm{d}x^2}",
+          value,
+        };
+      })()`, "higher derivative keeps d upright and variables italic");
+
+      await clearField();
+      await typeText("\\int");
+      await waitForEvaluation(`(() => {
+        const panel = document.getElementById("mathlive-suggestion-popover");
+        return {
+          ready:
+            panel?.classList.contains("is-visible") &&
+            panel.querySelector("li.ML__popover__current")?.dataset.command === "\\\\int",
+        };
+      })()`, "integral native command awaits its first confirmation");
+      await key(" ", "Space", 32);
+      await waitForEvaluation(`(() => ({
+        ready:
+          document.querySelector("math-field")?.value === "\\\\int" &&
+          Boolean(document.querySelector(".suggestion-popup")),
+      }))()`, "first integral confirmation preserves the bare command");
+      await typeText("f(x)dx");
+      const integralMeasureState = await waitForEvaluation(`(() => {
+        const value = document.querySelector("math-field")?.value ?? "";
+        return {
+          ready:
+            value.includes("\\\\int") &&
+            value.includes("f") &&
+            value.includes("x") &&
+            value.endsWith("\\\\mathrm{d}x"),
+          value,
+        };
+      })()`, "integral differential measure becomes upright");
+
+      const functionStates = {};
+      for (const functionName of ["sin", "cos", "exp"]) {
+        await clearField();
+        await typeText(functionName);
+        functionStates[functionName] = await waitForEvaluation(`(() => {
+          const value = document.querySelector("math-field")?.value ?? "";
+          return {
+            ready: value === ${JSON.stringify("\\" + functionName)},
+            value,
+          };
+        })()`, `plain ${functionName} becomes an upright function command`);
+      }
+
+      await clearField();
       await typeText("dr/d");
       await typeText("\\theta");
       await key(" ", "Space", 32);
@@ -5811,7 +6243,20 @@ async function main() {
         };
       })()`, "slash derivative uses two upright differential operators");
 
-      console.log(JSON.stringify({ identifierState, differentialState }, null, 2));
+      console.log(
+        JSON.stringify(
+          {
+            identifierState,
+            cartesianDifferentialState,
+            higherDerivativeState,
+            integralMeasureState,
+            functionStates,
+            differentialState,
+          },
+          null,
+          2,
+        ),
+      );
       console.log("Targeted contextual upright differential regression passed");
       return;
     }
