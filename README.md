@@ -18,9 +18,6 @@
   <img src="https://img.shields.io/badge/WORD-SUPPORTED-0099E5?style=for-the-badge&labelColor=555555" alt="Word">
   <img src="https://img.shields.io/badge/POWERPOINT-SUPPORTED-0099E5?style=for-the-badge&labelColor=555555" alt="PowerPoint">
   <img src="https://img.shields.io/badge/LaTeX-INPUT-0099E5?style=for-the-badge&labelColor=555555" alt="LaTeX">
-  <img src="https://img.shields.io/badge/OMML-NATIVE-55B800?style=for-the-badge&labelColor=555555" alt="OMML">
-  <img src="https://img.shields.io/badge/OPEN%20SOURCE-YES-55B800?style=for-the-badge&labelColor=555555" alt="Open Source">
-  <img src="https://img.shields.io/badge/EDITOR-WYSIWYG-0099E5?style=for-the-badge&labelColor=555555" alt="WYSIWYG">
   <img src="https://img.shields.io/badge/LICENSE-MIT-55B800?style=for-the-badge&labelColor=555555" alt="MIT License">
 </p>
 </div>
