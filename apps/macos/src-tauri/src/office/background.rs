@@ -444,14 +444,20 @@ pub(crate) fn prepare_foreground_app(_app: &AppHandle) -> Result<(), String> {
 pub(crate) fn activate_foreground_app(app: &AppHandle) -> Result<(), String> {
     prepare_foreground_app(app)?;
     let running = NSRunningApplication::currentApplication();
-    // Restore the activation behavior used by the released 1.2.3 build. A
-    // normal/cooperative activation request cannot move a VisualTeX editor in
-    // front of an already-active Word or PowerPoint window. Activate all of the
-    // application's windows first, then the Office editor path immediately
-    // makes the dedicated editor key and orders the desktop main window back.
-    if !running.activateWithOptions(NSApplicationActivationOptions::ActivateAllWindows) {
-        return Err("macOS did not activate VisualTeX as a foreground application".to_string());
+    // Preserve the released 1.2.3 cross-application activation behavior, but
+    // do not make its advisory Boolean result fatal. In the resident 1.2.4
+    // lifecycle the process may have just transitioned from Accessory to
+    // Regular, and macOS can briefly reject activation even though the editor
+    // is already visible and can become key a moment later.
+    for delay_ms in [0_u64, 10, 25, 50, 100, 150] {
+        if delay_ms > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+        }
+        if running.activateWithOptions(NSApplicationActivationOptions::ActivateAllWindows) {
+            return Ok(());
+        }
     }
+    eprintln!("macOS deferred VisualTeX foreground activation; continuing editor presentation");
     Ok(())
 }
 

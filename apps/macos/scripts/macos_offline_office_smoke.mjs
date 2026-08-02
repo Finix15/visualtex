@@ -941,7 +941,10 @@ expectIncludes(rustRuntime, "Duration::from_millis(100)", "Transparent Office ed
 expectIncludes(backgroundRuntime, "yieldActivationToApplication", "Closing the Office editor must cooperatively yield activation back to Word or PowerPoint on modern macOS");
 expect(!rustRuntime.includes("native_window.orderFrontRegardless();"), "Office editor hydration must not bypass normal macOS window ordering");
 expectIncludes(backgroundRuntime, "NSApplicationActivationOptions::ActivateAllWindows", "Office formula editing must preserve the released 1.2.3 activation behavior so the editor rises above Word or PowerPoint");
-expectIncludes(rustRuntime, "crate::office::background::activate_foreground_app(app)?", "A ready resident Office editor must force VisualTeX to the foreground before becoming the key window");
+expectIncludes(backgroundRuntime, "for delay_ms in [0_u64, 10, 25, 50, 100, 150]", "Accessory-to-Regular activation must retry while macOS settles the foreground policy transition");
+expectIncludes(backgroundRuntime, "continuing editor presentation", "A deferred activation result must never abort editor presentation and leave the resident window transparent");
+expectIncludes(rustRuntime, "Unable to restore the resident Office editor window", "The resident editor must restore full native visibility before attempting cross-application activation");
+expectIncludes(rustRuntime, "crate::office::background::activate_foreground_app(app)?", "A visible resident Office editor must then force VisualTeX across the Word or PowerPoint application boundary");
 expectIncludes(appRuntime, "office::background::install_application_icon(app.handle())", "macOS setup must install the VisualTeX application icon before any background-to-foreground transition");
 expectIncludes(backgroundRuntime, "Every Accessory-to-Regular transition must have the real bundle icon", "Every Office foreground transition must preserve the VisualTeX Dock icon");
 expectIncludes(backgroundRuntime, 'const DOCK_ICON_MIGRATION_MARKER_FILE: &str = "dock-icon-v4.refreshed"', "The repaired Dock icon lifecycle must refresh stale same-version icon cache once");

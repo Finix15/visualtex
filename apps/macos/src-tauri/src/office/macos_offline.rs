@@ -1632,18 +1632,24 @@ fn order_main_window_behind_office_editor(_app: &AppHandle) -> Result<(), String
 
 #[cfg(target_os = "macos")]
 fn present_resident_editor_window(app: &AppHandle, window: &WebviewWindow) -> Result<(), String> {
-    // The released 1.2.3 build used ActivateAllWindows before focusing its
-    // Office editor. That cross-application activation is required to move the
-    // editor above an already-active Word or PowerPoint window. The caller
-    // orders the desktop main window back immediately after this editor becomes
-    // key, so only the dedicated formula editor remains in front.
-    crate::office::background::activate_foreground_app(app)?;
+    // Never let an activation race strand the resident editor at its 0.01
+    // hydration alpha. First restore and order the dedicated window, then use
+    // the released 1.2.3 ActivateAllWindows behavior to cross the Word/
+    // PowerPoint application boundary, and finally make the editor key again.
+    crate::office::background::prepare_foreground_app(app)?;
     window
         .with_webview(move |webview| unsafe {
             let native_window: &objc2_app_kit::NSWindow = &*webview.ns_window().cast();
             native_window.setAlphaValue(1.0);
             native_window.setIgnoresMouseEvents(false);
             native_window.setLevel(objc2_app_kit::NSNormalWindowLevel);
+            native_window.makeKeyAndOrderFront(None);
+        })
+        .map_err(|error| format!("Unable to restore the resident Office editor window: {error}"))?;
+    crate::office::background::activate_foreground_app(app)?;
+    window
+        .with_webview(move |webview| unsafe {
+            let native_window: &objc2_app_kit::NSWindow = &*webview.ns_window().cast();
             native_window.makeKeyAndOrderFront(None);
         })
         .map_err(|error| format!("Unable to present the resident Office editor window: {error}"))
