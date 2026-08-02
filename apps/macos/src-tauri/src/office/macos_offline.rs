@@ -1660,6 +1660,30 @@ fn present_resident_editor_window(_app: &AppHandle, window: &WebviewWindow) -> R
     window.set_focus().map_err(|error| error.to_string())
 }
 
+#[cfg(target_os = "macos")]
+fn request_office_editor_foreground_activation() -> Result<(), String> {
+    // Since macOS 14, direct cross-application activation requests are
+    // cooperative and may leave an already-visible editor behind Word.
+    // Ask LaunchServices to activate this existing application instead.
+    // Tauri receives RunEvent::Reopen and its handler focuses the active
+    // resident Office editor without revealing the desktop main window.
+    let running = objc2_app_kit::NSRunningApplication::currentApplication();
+    let bundle_url = running.bundleURL().ok_or_else(|| {
+        "Unable to resolve the running VisualTeX application bundle".to_string()
+    })?;
+    let configuration = objc2_app_kit::NSWorkspaceOpenConfiguration::configuration();
+    configuration.setActivates(true);
+    configuration.setAddsToRecentItems(false);
+    objc2_app_kit::NSWorkspace::sharedWorkspace()
+        .openApplicationAtURL_configuration_completionHandler(&bundle_url, &configuration, None);
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn request_office_editor_foreground_activation() -> Result<(), String> {
+    Ok(())
+}
+
 fn set_resident_editor_content_visible(
     window: &WebviewWindow,
     visible: bool,
@@ -2058,6 +2082,7 @@ pub fn report_macos_offline_office_editor_ready(
     present_resident_editor_window(&app, &window)?;
     window.set_focus().map_err(|error| error.to_string())?;
     order_main_window_behind_office_editor(&app)?;
+    request_office_editor_foreground_activation()?;
     let show_focus_ms = active.received_at.elapsed().as_secs_f64() * 1000.0;
     drop(runtime);
     let ready_epoch_ms = epoch_ms();

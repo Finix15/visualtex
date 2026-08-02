@@ -1013,6 +1013,11 @@ expectIncludes(rustRuntime, "native_window.setIgnoresMouseEvents(true)", "A hidd
 expectIncludes(rustRuntime, "present_resident_editor_window", "A hydrated resident editor must restore native mouse and key-window state before accepting input");
 expectIncludes(rustRuntime, "native_window.setIgnoresMouseEvents(false)", "A visible resident editor must explicitly disable click-through after hydration");
 expectIncludes(rustRuntime, "native_window.makeKeyAndOrderFront(None)", "A visible resident editor must become the native key window instead of remaining behind Word");
+expectIncludes(rustRuntime, "NSWorkspaceOpenConfiguration::configuration()", "A ready Office editor must use LaunchServices activation rather than relying only on cooperative NSApplication activation");
+expectIncludes(rustRuntime, "configuration.setActivates(true)", "LaunchServices must activate the existing VisualTeX application so its editor can rise above Word");
+expectIncludes(rustRuntime, "openApplicationAtURL_configuration_completionHandler", "Office foreground activation must reopen the existing application through NSWorkspace");
+expectIncludes(rustRuntime, "request_office_editor_foreground_activation()?", "LaunchServices activation must occur only after the resident editor reports content readiness");
+expect(!rustRuntime.includes("ActivateIgnoringOtherApps"), "Office foreground activation must not rely on the deprecated macOS ignoringOtherApps option");
 expectIncludes(rustRuntime, "native_window.setLevel(objc2_app_kit::NSNormalWindowLevel)", "A visible resident editor must return to the normal macOS window level");
 expectIncludes(rustRuntime, "ready: false", "A newly activated resident editor generation must not be focusable before frontend readiness");
 expectIncludes(rustRuntime, "runtime.next_generation", "Resident editor activation must reject stale readiness and close callbacks by generation");
