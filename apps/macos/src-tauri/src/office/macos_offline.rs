@@ -2428,10 +2428,21 @@ fn calculate_word_geometry(
         return Err("Word formula export has invalid dimensions".to_string());
     }
 
-    let font_size_pt = request
+    // The editor persists the user's current selection on the Session. That
+    // value must win over the immutable launch request; otherwise changing the
+    // size in the editor is silently replaced by the size observed when the
+    // Office command was first opened.
+    let font_size_pt = session
         .font_size_pt
         .filter(|value| {
             value.is_finite() && *value >= MIN_WORD_FONT_SIZE_PT && *value <= MAX_WORD_FONT_SIZE_PT
+        })
+        .or_else(|| {
+            request.font_size_pt.filter(|value| {
+                value.is_finite()
+                    && *value >= MIN_WORD_FONT_SIZE_PT
+                    && *value <= MAX_WORD_FONT_SIZE_PT
+            })
         })
         .or_else(|| {
             session
@@ -2498,6 +2509,11 @@ fn calculate_powerpoint_geometry(
                 .map(|value| value * 0.75)
         });
 
+    let committed_font_size = session.font_size_pt.filter(|value| {
+        value.is_finite()
+            && *value >= MIN_POWERPOINT_FONT_SIZE_PT
+            && *value <= MAX_POWERPOINT_FONT_SIZE_PT
+    });
     let declared_font_size = request
         .font_size_pt
         .filter(|value| {
@@ -2525,7 +2541,12 @@ fn calculate_powerpoint_geometry(
                 && *value >= MIN_POWERPOINT_FONT_SIZE_PT
                 && *value <= MAX_POWERPOINT_FONT_SIZE_PT
         });
-    let font_size_pt = observed_font_size
+    // The VBA adapter already converts a manually resized existing shape into
+    // the Session's initial fontSizePt. After the editor opens, however, the
+    // Session value is the user's explicit choice and must not be overwritten
+    // by re-observing the old shape bounds during commit.
+    let font_size_pt = committed_font_size
+        .or(observed_font_size)
         .or(declared_font_size)
         .unwrap_or(DEFAULT_POWERPOINT_FONT_SIZE_PT);
     let point_scale = font_size_pt / POWERPOINT_REFERENCE_FONT_SIZE_PT;
@@ -4907,5 +4928,63 @@ c &= e
         assert!((create_geometry.height - 75.0).abs() < 0.001);
         assert!((create_geometry.left + create_geometry.width / 2.0 - 160.0).abs() < 0.001);
         assert!((create_geometry.top + create_geometry.height / 2.0 - 220.0).abs() < 0.001);
+
+        let mut edited_request = request.clone();
+        edited_request.font_size_pt = Some(18.0);
+        edited_request.reference_width_pt = Some(225.0);
+        edited_request.reference_height_pt = Some(37.5);
+        let mut edited_session = session.clone();
+        edited_session.font_size_pt = Some(32.0);
+        let edited_geometry = calculate_powerpoint_geometry(&edited_request, &edited_session)
+            .expect("the editor-selected PowerPoint size should override the launch geometry");
+        assert!((edited_geometry.font_size_pt - 32.0).abs() < 0.001);
+        assert!(
+            (edited_geometry.width / edited_geometry.reference_width_pt - 32.0 / 14.0).abs()
+                < 0.001
+        );
+        assert!(
+            (edited_geometry.height / edited_geometry.reference_height_pt - 32.0 / 14.0).abs()
+                < 0.001
+        );
+
+        let word_request = MacOfflineSessionRequest {
+            protocol_version: OFFLINE_PROTOCOL_VERSION,
+            session_id: "42345678-1234-4234-9234-123456789abc".to_string(),
+            host: "word".to_string(),
+            mode: "edit".to_string(),
+            operation: None,
+            formula_id: Some("12345678-1234-4234-9234-123456789abc".to_string()),
+            display_mode: "inline".to_string(),
+            numbered: false,
+            native_equation: false,
+            source_document_id: Some("Document".to_string()),
+            source_object_id: Some("VT_F_12345678-1234-4234-9234-123456789abc".to_string()),
+            encoded_metadata: None,
+            pending_marker: None,
+            font_size_pt: Some(10.5),
+            reference_width_pt: Some(60.0),
+            reference_height_pt: Some(15.0),
+            power_point: None,
+            document_import: None,
+        };
+        let mut word_session = session.clone();
+        word_session.host = OfficeHost::Word;
+        word_session.font_size_pt = Some(24.0);
+        if let Some(metadata) = word_session.original_metadata.as_mut() {
+            metadata.font_size_pt = Some(10.5);
+        }
+        let edited_word_geometry = calculate_word_geometry(&word_request, &word_session)
+            .expect("the editor-selected Word size should override the launch request");
+        assert!((edited_word_geometry.font_size_pt - 24.0).abs() < 0.001);
+        assert!(
+            (edited_word_geometry.width / edited_word_geometry.reference_width_pt - 24.0 / 14.0)
+                .abs()
+                < 0.001
+        );
+        assert!(
+            (edited_word_geometry.height / edited_word_geometry.reference_height_pt - 24.0 / 14.0)
+                .abs()
+                < 0.001
+        );
     }
 }

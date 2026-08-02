@@ -27,10 +27,10 @@ interface InputBehaviorOption {
 const AUTO_ESCAPE_OPTIONS: InputBehaviorOption[] = [
   {
     key: "autoEscapeShortcuts",
-    titleZh: "常用数学输入自动转义",
-    titleEn: "Auto-convert common math input",
-    descriptionZh: "按项目内实际快捷转义表转换普通输入",
-    descriptionEn: "Convert plain input using the actual shortcut table",
+    titleZh: "常用数学快捷转义",
+    titleEn: "Common math shortcuts",
+    descriptionZh: "控制 alpha、>=、hat 等快捷映射；微分元、函数名等正体自动检测独立运行，不受此开关影响",
+    descriptionEn: "Controls shortcuts such as alpha, >= and hat; upright detection for differentials and function names remains independent",
   },
 ];
 
@@ -337,7 +337,7 @@ export function InputBehaviorMenu() {
                 <span>
                   {isEn
                     ? "Control whether plain math input uses shortcut conversion."
-                    : "控制普通数学输入是否使用快捷转义。"}
+                    : "控制普通数学输入是否使用快捷转义；正体自动检测始终独立生效。"}
                 </span>
               </div>
 

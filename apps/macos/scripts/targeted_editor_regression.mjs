@@ -3,9 +3,9 @@ import { rm, writeFile } from "node:fs/promises";
 import process from "node:process";
 
 const scenario = process.argv[2];
-if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "native-structure-audit", "native-structure-input-over", "native-structure-input-under", "native-structure-input-multi", "native-structure-input-core", "native-space-selection", "candidate-query-reset", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "accent-placeholder", "caret-probe", "vertical-structure-probe", "vertical-structure-navigation", "scripts", "upright", "context-style", "suggestions", "navigation", "geometry", "source-layout", "toolbar-compact", "formula-tiles", "cursor-placement", "settings", "layout", "delete", "export"]).has(scenario)) {
+if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "native-structure-audit", "native-structure-input-over", "native-structure-input-under", "native-structure-input-multi", "native-structure-input-core", "native-space-selection", "candidate-query-reset", "limit-candidate", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "accent-placeholder", "caret-probe", "vertical-structure-probe", "vertical-structure-navigation", "scripts", "upright", "context-style", "suggestions", "navigation", "geometry", "source-layout", "toolbar-compact", "formula-tiles", "cursor-placement", "settings", "layout", "delete", "export"]).has(scenario)) {
   throw new Error(
-    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|native-structure-audit|native-structure-input-over|native-structure-input-under|native-structure-input-multi|native-structure-input-core|native-space-selection|candidate-query-reset|raw-placeholder-visual|placeholder-selection|structural-placeholder|accent-placeholder|caret-probe|vertical-structure-probe|vertical-structure-navigation|scripts|upright|context-style|suggestions|navigation|geometry|source-layout|toolbar-compact|formula-tiles|cursor-placement|settings|layout|delete|export>",
+    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|native-structure-audit|native-structure-input-over|native-structure-input-under|native-structure-input-multi|native-structure-input-core|native-space-selection|candidate-query-reset|limit-candidate|raw-placeholder-visual|placeholder-selection|structural-placeholder|accent-placeholder|caret-probe|vertical-structure-probe|vertical-structure-navigation|scripts|upright|context-style|suggestions|navigation|geometry|source-layout|toolbar-compact|formula-tiles|cursor-placement|settings|layout|delete|export>",
   );
 }
 
@@ -2072,6 +2072,7 @@ async function main() {
 
     if (scenario === "candidate-query-reset") {
       await focusField();
+      await clearField();
       await typeText("\\int");
       await waitForEvaluation(`(() => {
         const panel = document.getElementById("mathlive-suggestion-popover");
@@ -5697,7 +5698,89 @@ async function main() {
       return;
     }
 
+    if (scenario === "limit-candidate") {
+      await waitForEvaluation(`(() => ({
+        ready: Boolean(document.querySelector(".canvas-input-behavior-trigger")),
+      }))()`, "input behavior trigger for plain lim candidate");
+      await evaluate(`document.querySelector(".canvas-input-behavior-trigger")?.click()`);
+      await waitForEvaluation(`(() => ({
+        ready: Boolean(document.querySelector(".input-behavior-popover")),
+      }))()`, "input behavior menu for plain lim candidate");
+      await evaluate(`(() => {
+        const option = [...document.querySelectorAll(".input-behavior-option")].find((label) => {
+          const title = label.querySelector("strong")?.textContent ?? "";
+          return title.includes("快捷转义") || title.includes("Common math shortcuts");
+        });
+        const checkbox = option?.querySelector('input[type="checkbox"]');
+        if (checkbox?.checked) checkbox.click();
+      })()`);
+      await evaluate(`document.querySelector(".canvas-input-behavior-trigger")?.click()`);
+      await focusField();
+      await clearField();
+      await typeText("lim");
+      await waitForEvaluation(`(() => {
+        const popup = document.querySelector(".suggestion-popup");
+        const selected = popup?.querySelector(
+          ".suggestion-item.is-selected .suggestion-command",
+        )?.textContent?.trim() ?? "";
+        return {
+          ready: Boolean(popup) && selected === "\\\\lim",
+          selected,
+          value: document.querySelector("math-field")?.value ?? "",
+        };
+      })()`, "plain lim opens the structured limit candidate");
+      await key("Enter", "Enter", 13);
+      const result = await waitForEvaluation(`(() => {
+        const field = document.querySelector("math-field");
+        const value = field?.value ?? "";
+        const selection = field?.selection ?? null;
+        return {
+          ready:
+            value === "\\\\lim_{\\\\placeholder{}\\\\to\\\\placeholder{}} \\\\placeholder{}" &&
+            document.querySelectorAll("math-field").length === 1 &&
+            selection?.ranges?.[0]?.[0] !== selection?.ranges?.[0]?.[1],
+          value,
+          selection,
+          lineCount: document.querySelectorAll("math-field").length,
+          customPopupVisible: Boolean(document.querySelector(".suggestion-popup")),
+          nativePopupVisible:
+            document.getElementById("mathlive-suggestion-popover")?.classList.contains("is-visible") ?? false,
+        };
+      })()`, "one Enter accepts the first structured limit candidate");
+      console.log(JSON.stringify(result, null, 2));
+      console.log("Targeted limit candidate Enter regression passed");
+      return;
+    }
+
     if (scenario === "upright") {
+      await waitForEvaluation(`(() => ({
+        ready: Boolean(document.querySelector(".canvas-input-behavior-trigger")),
+      }))()`, "input behavior trigger for upright detection");
+      await evaluate(`document.querySelector(".canvas-input-behavior-trigger")?.click()`);
+      await waitForEvaluation(`(() => ({
+        ready: Boolean(document.querySelector(".input-behavior-popover")),
+      }))()`, "input behavior menu for upright detection");
+      await evaluate(`(() => {
+        const option = [...document.querySelectorAll(".input-behavior-option")].find((label) => {
+          const title = label.querySelector("strong")?.textContent ?? "";
+          return title.includes("快捷转义") || title.includes("Common math shortcuts");
+        });
+        const checkbox = option?.querySelector('input[type="checkbox"]');
+        if (checkbox?.checked) checkbox.click();
+      })()`);
+      await waitForEvaluation(`(() => {
+        const option = [...document.querySelectorAll(".input-behavior-option")].find((label) => {
+          const title = label.querySelector("strong")?.textContent ?? "";
+          return title.includes("快捷转义") || title.includes("Common math shortcuts");
+        });
+        return {
+          ready: option?.querySelector('input[type="checkbox"]')?.checked === false,
+        };
+      })()`, "common shortcut escaping disabled");
+      await evaluate(`document.querySelector(".canvas-input-behavior-trigger")?.click()`);
+      await waitForEvaluation(`(() => ({
+        ready: !document.querySelector(".input-behavior-popover"),
+      }))()`, "input behavior menu closed before upright input");
       await focusField();
       await clearField();
       await typeText("driver");
@@ -5725,7 +5808,6 @@ async function main() {
             /\\\\theta/.test(value),
           value,
           uprightCount,
-          shadowText: field?.shadowRoot?.textContent ?? "",
         };
       })()`, "slash derivative uses two upright differential operators");
 
@@ -5859,7 +5941,11 @@ async function main() {
         };
       })()`, "other-command candidate list opens with multiple theta variants");
 
-      await evaluate(`document.querySelector(".source-toggle")?.click()`);
+      await evaluate(`(() => {
+        const standardToggle = document.querySelector(".source-toggle");
+        const classicToggle = document.querySelector('[data-classic-bottom-view="source"]');
+        (standardToggle || classicToggle)?.click();
+      })()`);
       await waitForEvaluation(`(() => ({
         ready:
           Boolean(document.querySelector(".source-panel")) &&
@@ -5896,7 +5982,11 @@ async function main() {
           topmostClass: topmostNode?.className ?? "",
         };
       })()`, "VisualTeX command candidate stays above the source pane");
-      await evaluate(`document.querySelector(".source-collapse-button")?.click()`);
+      await evaluate(`(() => {
+        const standardCollapse = document.querySelector(".source-collapse-button");
+        const classicTools = document.querySelector('[data-classic-bottom-view="tools"]');
+        (standardCollapse || classicTools)?.click();
+      })()`);
       await waitForEvaluation(`(() => ({
         ready:
           !document.querySelector(".source-panel") &&

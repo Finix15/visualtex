@@ -351,7 +351,6 @@ export const visualTexAutoEscapeShortcutGroups: readonly VisualTexAutoEscapeShor
   { id: "arrows", titleZh: "箭头", titleEn: "Arrows", shortcuts: ARROW_INLINE_SHORTCUTS },
   { id: "accents", titleZh: "重音结构", titleEn: "Accents", shortcuts: ACCENT_INLINE_SHORTCUTS },
   { id: "commands", titleZh: "常用命令", titleEn: "Common commands", shortcuts: COMMON_COMMAND_INLINE_SHORTCUTS },
-  { id: "differentials", titleZh: "微分变量", titleEn: "Differentials", shortcuts: visualTexUprightInlineShortcuts },
 ];
 
 export const visualTexAutoEscapeInlineShortcuts: VisualTexInlineShortcutDefinitions = {
@@ -361,7 +360,6 @@ export const visualTexAutoEscapeInlineShortcuts: VisualTexInlineShortcutDefiniti
   ...ARROW_INLINE_SHORTCUTS,
   ...ACCENT_INLINE_SHORTCUTS,
   ...COMMON_COMMAND_INLINE_SHORTCUTS,
-  ...visualTexUprightInlineShortcuts,
 };
 
 const DISABLED_AUTO_ESCAPE_SHORTCUT_KEYS = new Set([
@@ -394,17 +392,22 @@ const DISABLED_AUTO_ESCAPE_SHORTCUT_KEYS = new Set([
 
 export function resolveVisualTexInlineShortcuts(
   mathLiveDefaults: Readonly<VisualTexInlineShortcutDefinitions>,
-  enabled: boolean,
+  autoEscapeShortcuts: boolean,
 ): VisualTexInlineShortcutDefinitions {
-  if (!enabled) return {};
-  const safeMathLiveDefaults = Object.fromEntries(
-    Object.entries(mathLiveDefaults).filter(
-      ([shortcut]) => !DISABLED_AUTO_ESCAPE_SHORTCUT_KEYS.has(shortcut),
-    ),
-  );
+  const shortcutMappings = autoEscapeShortcuts
+    ? Object.fromEntries(
+        Object.entries(mathLiveDefaults).filter(
+          ([shortcut]) => !DISABLED_AUTO_ESCAPE_SHORTCUT_KEYS.has(shortcut),
+        ),
+      )
+    : {};
   return {
-    ...safeMathLiveDefaults,
-    ...visualTexAutoEscapeInlineShortcuts,
+    ...shortcutMappings,
+    ...(autoEscapeShortcuts ? visualTexAutoEscapeInlineShortcuts : {}),
+    // Upright differential detection is semantic input normalization, not a
+    // general shortcut escape. Keep it active even when plain-text shortcuts
+    // such as alpha, >= or hat are disabled.
+    ...visualTexUprightInlineShortcuts,
   };
 }
 

@@ -2730,17 +2730,12 @@ function removePointerPlaceholderSnapshotStyle(field: MathfieldElement) {
     ?.remove();
 }
 
-function normalizeCompletedDifferentialDisplay(
-  field: MathfieldElement,
-  autoEscapeShortcuts = true,
-) {
+function normalizeCompletedDifferentialDisplay(field: MathfieldElement) {
   if (field.mode === "latex" || !field.selectionIsCollapsed) return false;
 
   const originalValue = field.value;
   const portableValue = normalizeMathLiveCanonicalUprightCommands(originalValue);
-  const contextualValue = autoEscapeShortcuts
-    ? normalizeContextualUprightSymbols(portableValue)
-    : portableValue;
+  const contextualValue = normalizeContextualUprightSymbols(portableValue);
   if (contextualValue === originalValue) return false;
 
   const distanceFromEnd = Math.max(0, field.lastOffset - field.position);
@@ -4529,10 +4524,7 @@ function FormulaField(props: FormulaFieldProps) {
         );
       }
       clearPendingAutoExit();
-    normalizeCompletedDifferentialDisplay(
-      field,
-      propsRef.current.inputBehavior.autoEscapeShortcuts,
-    );
+    normalizeCompletedDifferentialDisplay(field);
     const inputType =
       event instanceof InputEvent ? event.inputType || "insertText" : "insertText";
     let postInputSnapshot = captureFieldSnapshot(field);
@@ -4576,10 +4568,7 @@ function FormulaField(props: FormulaFieldProps) {
           }
         }
         if (
-          normalizeCompletedDifferentialDisplay(
-            field,
-            propsRef.current.inputBehavior.autoEscapeShortcuts,
-          ) || autoExitMoved
+          normalizeCompletedDifferentialDisplay(field) || autoExitMoved
         ) {
           emitEdit(
             deferredBefore,
@@ -6289,10 +6278,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       }
       if (!changed) return false;
 
-      normalizeCompletedDifferentialDisplay(
-        field,
-        state.inputBehavior.autoEscapeShortcuts,
-      );
+      normalizeCompletedDifferentialDisplay(field);
       const after = captureFieldSnapshot(field);
       if (before.latex === after.latex) {
         field.resetUndo();

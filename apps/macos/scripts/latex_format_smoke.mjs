@@ -117,8 +117,8 @@ assert.equal(
 );
 assert.deepEqual(
   resolveVisualTexInlineShortcuts({ alpha: String.raw`\alpha` }, false),
-  {},
-  "disabling automatic conversion must remove every inline shortcut",
+  visualTexUprightInlineShortcuts,
+  "disabling general shortcuts must preserve only the independent upright differential rules",
 );
 const enabledShortcuts = resolveVisualTexInlineShortcuts(
   {
@@ -155,7 +155,7 @@ assert.equal(enabledShortcuts.hat, String.raw`\hat{#?}`);
 assert.equal(visualTexAutoEscapeInlineShortcuts.mathbf, undefined);
 assert.equal(visualTexAutoEscapeInlineShortcuts.mathbb, undefined);
 assert.equal(
-  visualTexAutoEscapeInlineShortcuts.dx.value,
+  visualTexUprightInlineShortcuts.dx.value,
   String.raw`\mathrm{d}x`,
 );
 const contextualDifferentialCases = [

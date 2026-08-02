@@ -862,6 +862,12 @@ expectIncludes(rustRuntime, "materialize_powerpoint_svg(session)?", "PowerPoint 
 expectIncludes(rustRuntime, "decode_svg", "PowerPoint SVG exports must be validated before Office receives them");
 expectIncludes(rustRuntime, "POWERPOINT_REFERENCE_FONT_SIZE_PT", "The native runtime must scale PowerPoint SVG geometry from a fixed point-size reference");
 expectIncludes(rustRuntime, "previous_reference_height", "PowerPoint edits must infer the current point size from existing SVG geometry");
+expectIncludes(rustRuntime, "let committed_font_size = session.font_size_pt", "PowerPoint commits must prefer the font size selected in the editor Session");
+expectIncludes(rustRuntime, "let font_size_pt = session", "Word commits must prefer the font size selected in the editor Session");
+expect(
+  (dialogApp.match(/fontSizePt: officeFontSizePt/g) ?? []).length >= 3,
+  "Office explicit apply, autosave, and close-commit drafts must all persist the selected point size",
+);
 expectIncludes(rustRuntime, '("fontSizePt", format!', "PowerPoint dispatches must carry the resolved point size back to VBA");
 expectIncludes(rustRuntime, "metadata.font_size_pt = Some(geometry.font_size_pt)", "PowerPoint metadata must retain the resolved SVG point size");
 expectIncludes(wordAdapter, 'VTApplicationSupportRoot() & "/NativeDocuments/" & formulaId & ".docx"', "Word image-to-OMML conversion must resolve the same durable formula-scoped staging path");

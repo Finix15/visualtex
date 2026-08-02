@@ -598,9 +598,10 @@ impl SessionStore {
                 "Only Word display formulas can use equation numbering".to_string(),
             ));
         }
-        if next.font_size_pt.is_some_and(|value| {
-            !value.is_finite() || !(1.0..=512.0).contains(&value)
-        }) {
+        if next
+            .font_size_pt
+            .is_some_and(|value| !value.is_finite() || !(1.0..=512.0).contains(&value))
+        {
             return Err(SessionError::Invalid(
                 "Office Session fontSizePt must be from 1 to 512 pt".to_string(),
             ));
