@@ -938,11 +938,10 @@ expectIncludes(backgroundRuntime, "prepare_foreground_app", "Office hydration mu
 expectIncludes(rustRuntime, "order_main_window_behind_office_editor", "The dedicated Office editor must explicitly keep the desktop main window behind Word or PowerPoint");
 expectIncludes(rustRuntime, "native_window.orderBack(None)", "The main VisualTeX workspace must be ordered behind Office instead of being raised with the editor");
 expectIncludes(rustRuntime, "Duration::from_millis(100)", "Transparent Office editor prewarming must be parked promptly instead of lingering in Mission Control");
-expectIncludes(rustRuntime, "application.activate();", "The ready Office editor must use the modern AppKit activation API only after hydration");
 expectIncludes(backgroundRuntime, "yieldActivationToApplication", "Closing the Office editor must cooperatively yield activation back to Word or PowerPoint on modern macOS");
 expect(!rustRuntime.includes("native_window.orderFrontRegardless();"), "Office editor hydration must not bypass normal macOS window ordering");
-expectIncludes(backgroundRuntime, "NSApplicationActivationOptions::empty()", "Normal VisualTeX activation must not raise every application window above Office");
-expect(!backgroundRuntime.includes("NSApplicationActivationOptions::ActivateAllWindows"), "VisualTeX must never activate all windows during Office formula editing");
+expectIncludes(backgroundRuntime, "NSApplicationActivationOptions::ActivateAllWindows", "Office formula editing must preserve the released 1.2.3 activation behavior so the editor rises above Word or PowerPoint");
+expectIncludes(rustRuntime, "crate::office::background::activate_foreground_app(app)?", "A ready resident Office editor must force VisualTeX to the foreground before becoming the key window");
 expectIncludes(appRuntime, "office::background::install_application_icon(app.handle())", "macOS setup must install the VisualTeX application icon before any background-to-foreground transition");
 expectIncludes(backgroundRuntime, "Every Accessory-to-Regular transition must have the real bundle icon", "Every Office foreground transition must preserve the VisualTeX Dock icon");
 expectIncludes(backgroundRuntime, 'const DOCK_ICON_MIGRATION_MARKER_FILE: &str = "dock-icon-v4.refreshed"', "The repaired Dock icon lifecycle must refresh stale same-version icon cache once");
@@ -1013,10 +1012,8 @@ expectIncludes(rustRuntime, "native_window.setIgnoresMouseEvents(true)", "A hidd
 expectIncludes(rustRuntime, "present_resident_editor_window", "A hydrated resident editor must restore native mouse and key-window state before accepting input");
 expectIncludes(rustRuntime, "native_window.setIgnoresMouseEvents(false)", "A visible resident editor must explicitly disable click-through after hydration");
 expectIncludes(rustRuntime, "native_window.makeKeyAndOrderFront(None)", "A visible resident editor must become the native key window instead of remaining behind Word");
-expectIncludes(rustRuntime, "NSWorkspaceOpenConfiguration::configuration()", "A ready Office editor must use LaunchServices activation rather than relying only on cooperative NSApplication activation");
-expectIncludes(rustRuntime, "configuration.setActivates(true)", "LaunchServices must activate the existing VisualTeX application so its editor can rise above Word");
-expectIncludes(rustRuntime, "openApplicationAtURL_configuration_completionHandler", "Office foreground activation must reopen the existing application through NSWorkspace");
-expectIncludes(rustRuntime, "request_office_editor_foreground_activation()?", "LaunchServices activation must occur only after the resident editor reports content readiness");
+expect(!rustRuntime.includes("request_office_editor_foreground_activation"), "Office foreground activation must not use the ineffective LaunchServices reopen detour");
+expect(!rustRuntime.includes("NSWorkspaceOpenConfiguration::configuration()"), "Office foreground activation must follow the released 1.2.3 AppKit path instead of reopening the application");
 expect(!rustRuntime.includes("ActivateIgnoringOtherApps"), "Office foreground activation must not rely on the deprecated macOS ignoringOtherApps option");
 expectIncludes(rustRuntime, "native_window.setLevel(objc2_app_kit::NSNormalWindowLevel)", "A visible resident editor must return to the normal macOS window level");
 expectIncludes(rustRuntime, "ready: false", "A newly activated resident editor generation must not be focusable before frontend readiness");

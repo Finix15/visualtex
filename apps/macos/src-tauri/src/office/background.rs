@@ -444,23 +444,13 @@ pub(crate) fn prepare_foreground_app(_app: &AppHandle) -> Result<(), String> {
 pub(crate) fn activate_foreground_app(app: &AppHandle) -> Result<(), String> {
     prepare_foreground_app(app)?;
     let running = NSRunningApplication::currentApplication();
-    // Do not use ActivateAllWindows here. Formula editing should activate only
-    // the dedicated key window; raising every VisualTeX window also pulls the
-    // desktop workspace above Word or PowerPoint after a formula is applied.
-    let options = NSApplicationActivationOptions::empty();
-    // macOS can return false briefly after switching an accessory/background
-    // application back to Regular, especially before its hidden resident
-    // WebView is shown. Do not abort the request on that advisory result: the
-    // caller immediately shows the target window and validates set_focus().
-    // A few short attempts still avoid an unnecessary focus delay when the
-    // activation policy transition settles synchronously.
-    for attempt in 0..4 {
-        if running.activateWithOptions(options) {
-            break;
-        }
-        if attempt < 3 {
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+    // Restore the activation behavior used by the released 1.2.3 build. A
+    // normal/cooperative activation request cannot move a VisualTeX editor in
+    // front of an already-active Word or PowerPoint window. Activate all of the
+    // application's windows first, then the Office editor path immediately
+    // makes the dedicated editor key and orders the desktop main window back.
+    if !running.activateWithOptions(NSApplicationActivationOptions::ActivateAllWindows) {
+        return Err("macOS did not activate VisualTeX as a foreground application".to_string());
     }
     Ok(())
 }

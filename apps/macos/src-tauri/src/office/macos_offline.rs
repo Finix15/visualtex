@@ -1632,23 +1632,18 @@ fn order_main_window_behind_office_editor(_app: &AppHandle) -> Result<(), String
 
 #[cfg(target_os = "macos")]
 fn present_resident_editor_window(app: &AppHandle, window: &WebviewWindow) -> Result<(), String> {
-    crate::office::background::prepare_foreground_app(app)?;
+    // The released 1.2.3 build used ActivateAllWindows before focusing its
+    // Office editor. That cross-application activation is required to move the
+    // editor above an already-active Word or PowerPoint window. The caller
+    // orders the desktop main window back immediately after this editor becomes
+    // key, so only the dedicated formula editor remains in front.
+    crate::office::background::activate_foreground_app(app)?;
     window
         .with_webview(move |webview| unsafe {
             let native_window: &objc2_app_kit::NSWindow = &*webview.ns_window().cast();
-            // Hydration deliberately makes the resident window mouse-inert.
-            // Restore only this dedicated editor, activate the process once at
-            // the final presentation boundary, then make this NSWindow key.
-            // Do not use orderFrontRegardless: it bypasses normal application
-            // ordering and can drag the desktop main window above Word.
             native_window.setAlphaValue(1.0);
             native_window.setIgnoresMouseEvents(false);
             native_window.setLevel(objc2_app_kit::NSNormalWindowLevel);
-            if let Some(main_thread) = objc2::MainThreadMarker::new() {
-                let application =
-                    objc2_app_kit::NSApplication::sharedApplication(main_thread);
-                application.activate();
-            }
             native_window.makeKeyAndOrderFront(None);
         })
         .map_err(|error| format!("Unable to present the resident Office editor window: {error}"))
@@ -1658,30 +1653,6 @@ fn present_resident_editor_window(app: &AppHandle, window: &WebviewWindow) -> Re
 fn present_resident_editor_window(_app: &AppHandle, window: &WebviewWindow) -> Result<(), String> {
     window.show().map_err(|error| error.to_string())?;
     window.set_focus().map_err(|error| error.to_string())
-}
-
-#[cfg(target_os = "macos")]
-fn request_office_editor_foreground_activation() -> Result<(), String> {
-    // Since macOS 14, direct cross-application activation requests are
-    // cooperative and may leave an already-visible editor behind Word.
-    // Ask LaunchServices to activate this existing application instead.
-    // Tauri receives RunEvent::Reopen and its handler focuses the active
-    // resident Office editor without revealing the desktop main window.
-    let running = objc2_app_kit::NSRunningApplication::currentApplication();
-    let bundle_url = running.bundleURL().ok_or_else(|| {
-        "Unable to resolve the running VisualTeX application bundle".to_string()
-    })?;
-    let configuration = objc2_app_kit::NSWorkspaceOpenConfiguration::configuration();
-    configuration.setActivates(true);
-    configuration.setAddsToRecentItems(false);
-    objc2_app_kit::NSWorkspace::sharedWorkspace()
-        .openApplicationAtURL_configuration_completionHandler(&bundle_url, &configuration, None);
-    Ok(())
-}
-
-#[cfg(not(target_os = "macos"))]
-fn request_office_editor_foreground_activation() -> Result<(), String> {
-    Ok(())
 }
 
 fn set_resident_editor_content_visible(
@@ -2082,7 +2053,6 @@ pub fn report_macos_offline_office_editor_ready(
     present_resident_editor_window(&app, &window)?;
     window.set_focus().map_err(|error| error.to_string())?;
     order_main_window_behind_office_editor(&app)?;
-    request_office_editor_foreground_activation()?;
     let show_focus_ms = active.received_at.elapsed().as_secs_f64() * 1000.0;
     drop(runtime);
     let ready_epoch_ms = epoch_ms();
