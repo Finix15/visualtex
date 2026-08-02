@@ -15,13 +15,13 @@
     <a href="https://visualtex.pauljianliao.com/"><img src="https://img.shields.io/badge/WEBSITE-visualtex.pauljianliao.com-0A84FF?style=for-the-badge&logo=googlechrome&logoColor=white" alt="VisualTeX Website" /></a>
   </p>
   <p align="center">
- <img src="https://img.shields.io/badge/WORD-SUPPORTED-0099E5?style=flat-square&labelColor=555555" alt="Word">
-  <img src="https://img.shields.io/badge/POWERPOINT-SUPPORTED-0099E5?style=flat-square&labelColor=555555" alt="PowerPoint">
-  <img src="https://img.shields.io/badge/LaTeX-INPUT-0099E5?style=flat-square&labelColor=555555" alt="LaTeX">
-  <img src="https://img.shields.io/badge/OMML-NATIVE-55B800?style=flat-square&labelColor=555555" alt="OMML">
-  <img src="https://img.shields.io/badge/OPEN%20SOURCE-YES-55B800?style=flat-square&labelColor=555555" alt="Open Source">
-  <img src="https://img.shields.io/badge/EDITOR-WYSIWYG-0099E5?style=flat-square&labelColor=555555" alt="WYSIWYG">
-     <a href="LICENSE"><img src="https://img.shields.io/github/license/paulhe666/visualtex?style=for-the-badge&label=LICENSE" alt="License" /></a>
+  <img src="https://img.shields.io/badge/WORD-SUPPORTED-0099E5?style=for-the-badge&labelColor=555555" alt="Word">
+  <img src="https://img.shields.io/badge/POWERPOINT-SUPPORTED-0099E5?style=for-the-badge&labelColor=555555" alt="PowerPoint">
+  <img src="https://img.shields.io/badge/LaTeX-INPUT-0099E5?style=for-the-badge&labelColor=555555" alt="LaTeX">
+  <img src="https://img.shields.io/badge/OMML-NATIVE-55B800?style=for-the-badge&labelColor=555555" alt="OMML">
+  <img src="https://img.shields.io/badge/OPEN%20SOURCE-YES-55B800?style=for-the-badge&labelColor=555555" alt="Open Source">
+  <img src="https://img.shields.io/badge/EDITOR-WYSIWYG-0099E5?style=for-the-badge&labelColor=555555" alt="WYSIWYG">
+  <img src="https://img.shields.io/badge/LICENSE-MIT-55B800?style=for-the-badge&labelColor=555555" alt="MIT License">
 </p>
 </div>
 
