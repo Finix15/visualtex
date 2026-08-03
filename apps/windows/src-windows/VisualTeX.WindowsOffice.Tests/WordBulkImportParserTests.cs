@@ -78,6 +78,29 @@ public sealed class WordBulkImportParserTests
     }
 
     [Fact]
+    public void LatexCjkInlineMathWhitespaceFollowsTexSemantics()
+    {
+        const string source =
+            "中文 $x=1$ 中文；English $y=2$ words；"
+            + "中文\\ $z=3$\\ 中文；中文~$q=4$~中文；"
+            + "中文\\quad$r=5$\\qquad中文";
+
+        var document = WordBulkImportParser.Parse(
+            source,
+            WordBulkSourceFormat.Latex,
+            WordBulkFormulaObjectMode.Omml);
+
+        var serialized = string.Concat(
+            document.Blocks.SelectMany(block => block.Runs).Select(run =>
+                run.IsFormula ? $"<{run.Latex}>" : run.Text));
+        Assert.Equal(
+            "中文<x=1>中文；English <y=2> words；"
+            + "中文\u00A0<z=3>\u00A0中文；中文\u00A0<q=4>\u00A0中文；"
+            + "中文\u00A0<r=5>\u00A0\u00A0中文",
+            serialized);
+    }
+
+    [Fact]
     public void LatexVerbatimDocumentExamplesDoNotTruncateLargeFragment()
     {
         var source = new System.Text.StringBuilder();

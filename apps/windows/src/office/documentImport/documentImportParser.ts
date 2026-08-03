@@ -90,6 +90,7 @@ function decodeText(text: string, format: ResolvedDocumentSourceFormat) {
   }
   return text
     .replace(/~/g, "\u00a0")
+    .replace(/\\ /g, "\u00a0")
     .replace(/\\%/g, "%")
     .replace(/\\_/g, "_")
     .replace(/\\&/g, "&")
@@ -156,6 +157,33 @@ function mergeTextRuns(runs: DocumentImportRun[]) {
     }
   }
   return merged;
+}
+
+function isTightLatexBoundaryCharacter(character: string | undefined) {
+  if (!character) return false;
+  return /[\u2e80-\u2fff\u3000-\u303f\u3040-\u30ff\u31c0-\u31ef\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff00-\uffef，。！？；：、）》】」』”’…,.!?;:()[\]{}]/u.test(
+    character,
+  );
+}
+
+function normalizeLatexInlineBoundaryWhitespace(runs: DocumentImportRun[]) {
+  for (let index = 0; index < runs.length; index += 1) {
+    const run = runs[index];
+    if (run.kind !== "formula" || run.display) continue;
+
+    const previous = runs[index - 1];
+    if (previous?.kind === "text" && /[ \t]+$/.test(previous.text)) {
+      const visible = previous.text.replace(/[ \t]+$/, "");
+      if (isTightLatexBoundaryCharacter(visible.at(-1))) previous.text = visible;
+    }
+
+    const next = runs[index + 1];
+    if (next?.kind === "text" && /^[ \t]+/.test(next.text)) {
+      const visible = next.text.replace(/^[ \t]+/, "");
+      if (isTightLatexBoundaryCharacter(visible[0])) next.text = visible;
+    }
+  }
+  return runs.filter((run) => run.kind === "formula" || run.text.length > 0);
 }
 
 function parseInline(
@@ -523,8 +551,8 @@ function parseInline(
           textquotedblright: "”",
           textquoteleft: "‘",
           textquoteright: "’",
-          quad: " ",
-          qquad: "  ",
+          quad: "\u00a0",
+          qquad: "\u00a0\u00a0",
           smallskip: "\n",
           medskip: "\n",
           bigskip: "\n",
@@ -565,7 +593,10 @@ function parseInline(
     index += 1;
   }
   flush();
-  return mergeTextRuns(runs);
+  const merged = mergeTextRuns(runs);
+  return format === "latex"
+    ? normalizeLatexInlineBoundaryWhitespace(merged)
+    : merged;
 }
 
 function normalizeDisplayEnvironment(environment: string, body: string) {

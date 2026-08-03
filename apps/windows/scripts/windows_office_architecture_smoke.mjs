@@ -295,6 +295,9 @@ const vstoFlowAcceptanceProject = await source(
 const vstoFlowAcceptance = await source(
   "src-windows/VisualTeX.VstoFlowAcceptance/Program.cs",
 );
+const vstoBulkSpacingAcceptance = await source(
+  "src-windows/VisualTeX.VstoFlowAcceptance/WordBulkImportLatexSpacingAcceptance.cs",
+);
 const officeServer = await source("src-tauri/src/office/server.rs");
 const officeState = await source("src-tauri/src/office/state.rs");
 const officeSessions = await source("src-tauri/src/office/sessions.rs");
@@ -472,6 +475,8 @@ assert.ok(documentImportParser.includes('findUnescaped(text, "\\\\["'));
 assert.ok(documentImportParser.includes("normalizeDisplayEnvironment"));
 assert.ok(documentImportParser.includes("normalizeMarkdownSource"));
 assert.ok(documentImportParser.includes("normalizeLatexExtensions"));
+assert.ok(documentImportParser.includes("normalizeLatexInlineBoundaryWhitespace"));
+assert.ok(documentImportParser.includes("isTightLatexBoundaryCharacter"));
 assert.ok(documentImportParser.includes("visibleMultiArgumentCommands"));
 assert.ok(documentImportFile.includes("readDocumentImportFile"));
 assert.ok(documentImportFile.includes("documentFormatFromFileName"));
@@ -491,6 +496,13 @@ assert.ok(wordVstoService.includes("screenUpdatingSuspended"));
 assert.ok(wordVstoService.includes("InsertBulkOleDocumentTwoPhase"));
 assert.ok(wordVstoService.includes("plainTextBlock"));
 assert.ok(wordVstoService.includes("trustExportDimensions: bulkImport"));
+assert.ok(wordVstoService.includes("NormalizeInlineBaselineBoundary"));
+assert.ok(wordVstoService.includes('private const string InlineMathGuard = " ";'));
+assert.ok(wordVstoService.includes('private const string InlineBaselineSentinel = " ";'));
+assert.ok(wordVstoService.includes("LegacyInlineMathGuard"));
+assert.ok(wordVstoService.includes("LegacyInlineBaselineSentinel"));
+assert.ok(wordVstoService.includes("font.Hidden = -1"));
+assert.ok(wordVstoService.includes("RestoreOmmlReplacementRollback"));
 assert.ok(officeSessions.includes("unchanged_edit"));
 assert.ok(officeSessions.includes("document_import"));
 assert.ok(officeSessions.includes('"visualtex-document-json"'));
@@ -542,6 +554,12 @@ assert.ok(vstoFlowAcceptance.includes("PowerPoint OLE export still resembles the
 assert.ok(vstoFlowAcceptance.includes("Local\\VisualTeX.VstoFlowAcceptance"));
 assert.ok(vstoFlowAcceptance.includes("acceptance.log"));
 assert.ok(vstoFlowAcceptance.includes('"word-create"'));
+assert.ok(vstoFlowAcceptance.includes('"word-bulk-import-latex-spacing"'));
+assert.ok(vstoBulkSpacingAcceptance.includes("ordinary CJK boundary spaces"));
+assert.ok(vstoBulkSpacingAcceptance.includes("rawXml.IndexOf('\\u200B') < 0"));
+assert.ok(vstoBulkSpacingAcceptance.includes("rawXml.IndexOf('\\u2060') < 0"));
+assert.ok(vstoBulkSpacingAcceptance.includes("rawXml.IndexOf('\\uE000') < 0"));
+assert.ok(vstoFlowAcceptanceProject.includes("System.IO.Compression"));
 assert.ok(vstoFlowAcceptance.includes('oleFormat.DoVerb(0)'));
 assert.ok(vstoFlowAcceptance.includes("CloseEditorAsync"));
 assert.ok(wordVsto.includes("活动 Word 文档已切换，未写入公式"));
@@ -705,7 +723,11 @@ assert.ok(wordEquationNumbering.includes("WordOmmlFormulaStore.FormulaIds"));
 assert.ok(wordEquationNumbering.includes("WordOmmlFormulaStore.FindByFormulaId"));
 assert.ok(wordEquationNumbering.includes("WordOmmlFormulaStore.GetEquationRange"));
 assert.ok(wordEquationNumbering.includes("FormulaFontSize.ResolveSemanticFontSize"));
-assert.ok(wordEquationNumbering.includes("font.Size = numberFontSize"));
+assert.ok(wordEquationNumbering.includes("ResolveEquationNumberLabelRange"));
+assert.ok(wordEquationNumbering.includes('EquationNumberFontName = "Cambria Math"'));
+assert.ok(wordEquationNumbering.includes("ApplyEquationNumberFont"));
+assert.ok(wordEquationNumbering.includes("DisableLineHeightGrid = -1"));
+assert.ok(wordEquationNumbering.includes("wdAutoFitFixed"));
 assert.ok(wordOmmlConverter.includes("MML2OMML.XSL"));
 assert.ok(wordOmmlConverter.includes("FormattedText"));
 assert.ok(wordOmmlConverter.includes("CreateBatchSource"));

@@ -44,6 +44,7 @@ internal static class WordEquationNumbering
     private const int WdTabAlignmentRight = 2;
     private const int WdTabLeaderSpaces = 0;
     private const int WdFieldEmpty = -1;
+    private const string EquationNumberFontName = "Cambria Math";
     private const string LegacyEquationSequenceName = "VisualTeXEquation";
     private const string EquationBookmarkPrefix = "VTEq_";
     private const string NativeCaptionBookmarkPrefix = "VTEqCap_";
@@ -477,6 +478,9 @@ internal static class WordEquationNumbering
             table.PreferredWidth = 100f;
             table.LeftPadding = 0f;
             table.RightPadding = 0f;
+            table.TopPadding = 0f;
+            table.BottomPadding = 0f;
+            try { table.AutoFitBehavior(WdAutoFitBehavior.wdAutoFitFixed); } catch { }
             columns = table.Columns;
             leftColumn = columns[1];
             centerColumn = columns[2];
@@ -505,6 +509,10 @@ internal static class WordEquationNumbering
             numberFormat.FirstLineIndent = 0f;
             centerFormat.SpaceBefore = centerFormat.SpaceAfter = 0f;
             numberFormat.SpaceBefore = numberFormat.SpaceAfter = 0f;
+            centerFormat.LineSpacingRule = WdLineSpacing.wdLineSpaceSingle;
+            numberFormat.LineSpacingRule = WdLineSpacing.wdLineSpaceSingle;
+            try { centerFormat.DisableLineHeightGrid = -1; } catch { }
+            try { numberFormat.DisableLineHeightGrid = -1; } catch { }
         }
         finally
         {
@@ -1267,13 +1275,16 @@ internal static class WordEquationNumbering
             NormalizeReferenceResult(field);
             fieldResult = field.Result;
 
-            // Inserting a field inside scaffoldRange expands that Range to
-            // include the complete field and the closing parenthesis. Using
-            // field.Result.End misses the closing parenthesis because Word's
-            // hidden field-end character sits between them.
-            object labelStartObject = suffixStart;
-            object labelEndObject = scaffoldRange.End;
-            bookmarkRange = document.Range(ref labelStartObject, ref labelEndObject);
+            // Do not rely on scaffoldRange.End. Word 2013/2016 perpetual,
+            // Microsoft 365 and compatibility mode expand a Range around an
+            // inserted field differently. Resolve the actual closing parenthesis
+            // from the document text so the bookmark always contains the tab,
+            // both brackets and the complete REF field.
+            bookmarkRange = ResolveEquationNumberLabelRange(
+                document,
+                suffixStart,
+                scaffoldRange,
+                tableLayout);
             bookmarks = document.Bookmarks;
             bookmarks.Add(EquationBookmarkName(formulaId), bookmarkRange);
             if (tableLayout)
@@ -1300,6 +1311,67 @@ internal static class WordEquationNumbering
             Release(fields);
             Release(fieldRange);
             Release(scaffoldRange);
+        }
+    }
+
+    private static Range ResolveEquationNumberLabelRange(
+        Document document,
+        int labelStart,
+        Range scaffoldRange,
+        bool tableLayout)
+    {
+        Range? character = null;
+        Range? candidate = null;
+        try
+        {
+            var searchEnd = Math.Min(document.Content.End, labelStart + 512);
+            for (var position = labelStart + 1; position < searchEnd; position++)
+            {
+                object characterStart = position;
+                object characterEnd = position + 1;
+                character = document.Range(ref characterStart, ref characterEnd);
+                if (!string.Equals(character.Text, ")", StringComparison.Ordinal))
+                {
+                    Release(character);
+                    character = null;
+                    continue;
+                }
+
+                object candidateStart = labelStart;
+                object candidateEnd = character.End;
+                candidate = document.Range(ref candidateStart, ref candidateEnd);
+                var text = candidate.Text ?? string.Empty;
+                var expectedPrefix = tableLayout ? "(" : "\t(";
+                if (text.StartsWith(expectedPrefix, StringComparison.Ordinal)
+                    && text.EndsWith(")", StringComparison.Ordinal))
+                {
+                    var result = candidate;
+                    candidate = null;
+                    return result;
+                }
+                Release(candidate);
+                candidate = null;
+                Release(character);
+                character = null;
+            }
+
+            object fallbackStart = labelStart;
+            object fallbackEnd = scaffoldRange.End;
+            candidate = document.Range(ref fallbackStart, ref fallbackEnd);
+            var fallbackText = candidate.Text ?? string.Empty;
+            var fallbackPrefix = tableLayout ? "(" : "\t(";
+            if (!fallbackText.StartsWith(fallbackPrefix, StringComparison.Ordinal)
+                || !fallbackText.EndsWith(")", StringComparison.Ordinal))
+                throw new InvalidOperationException(
+                    "Word did not preserve the complete VisualTeX equation-number label.");
+            var fallback = candidate;
+            candidate = null;
+            return fallback;
+        }
+        finally
+        {
+            Release(candidate);
+            Release(character);
         }
     }
 
@@ -1627,15 +1699,39 @@ internal static class WordEquationNumbering
 
             // The native caption target is deliberately white and one point.
             // Word propagates that appearance into REF results unless the
-            // visible range is normalized after every field update.
-            font.Hidden = 0;
-            font.Color = WdColor.wdColorAutomatic;
-            font.Size = numberFontSize;
-            font.Position = CalculateEquationNumberFontPosition(
-                formulaHeightPoints,
-                numberFontSize);
+            // visible range is normalized after every field update. Normalize
+            // the brackets and field result as one run so locale-specific body
+            // fonts cannot put the digits and parentheses on different baselines.
+            ApplyEquationNumberFont(
+                font,
+                numberFontSize,
+                CalculateEquationNumberFontPosition(
+                    formulaHeightPoints,
+                    numberFontSize));
         }
         finally { Release(font); }
+    }
+
+    private static void ApplyEquationNumberFont(
+        Microsoft.Office.Interop.Word.Font font,
+        float size,
+        int position)
+    {
+        font.Hidden = 0;
+        font.Color = WdColor.wdColorAutomatic;
+        font.Size = size;
+        font.Position = position;
+        try { font.Name = EquationNumberFontName; } catch { }
+        try { font.NameAscii = EquationNumberFontName; } catch { }
+        try { font.NameFarEast = EquationNumberFontName; } catch { }
+        try { font.NameBi = EquationNumberFontName; } catch { }
+        try { font.Bold = 0; } catch { }
+        try { font.Italic = 0; } catch { }
+        try { font.Superscript = 0; } catch { }
+        try { font.Subscript = 0; } catch { }
+        try { font.Scaling = 100; } catch { }
+        try { font.Spacing = 0f; } catch { }
+        try { font.Kerning = 0f; } catch { }
     }
 
     internal static IReadOnlyList<EquationReferenceTarget> GetEquationReferenceTargets(
@@ -1816,18 +1912,12 @@ internal static class WordEquationNumbering
             // CHARFORMAT makes Word use the field-code appearance instead of
             // copying the hidden one-point SEQ target appearance into the REF.
             codeFont = code.Font;
-            codeFont.Hidden = 0;
-            codeFont.Color = WdColor.wdColorAutomatic;
-            codeFont.Size = size;
-            codeFont.Position = 0;
+            ApplyEquationNumberFont(codeFont, size, position: 0);
             field.Update();
 
             result = field.Result;
             resultFont = result.Font;
-            resultFont.Hidden = 0;
-            resultFont.Color = WdColor.wdColorAutomatic;
-            resultFont.Size = size;
-            resultFont.Position = 0;
+            ApplyEquationNumberFont(resultFont, size, position: 0);
         }
         finally
         {

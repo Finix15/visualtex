@@ -302,6 +302,10 @@ internal static partial class Program
             {
                 RunWordLatexRedraw(client, artifactRoot);
             }
+            else if (string.Equals(mode, "word-bulk-import-latex-spacing", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordBulkImportLatexSpacing(artifactRoot);
+            }
             else if (string.Equals(mode, "word-bulk-import-performance", StringComparison.OrdinalIgnoreCase))
             {
                 var objectMode = args
@@ -1119,6 +1123,10 @@ internal static partial class Program
                 Word.Cell? numberCell = null;
                 Word.Range? centerRange = null;
                 Word.Range? numberRange = null;
+                Word.Bookmarks? numberBookmarks = null;
+                Word.Bookmark? labelBookmark = null;
+                Word.Range? labelRange = null;
+                Word.Font? labelFont = null;
                 Word.Paragraphs? centerParagraphs = null;
                 Word.Paragraphs? numberParagraphs = null;
                 try
@@ -1153,6 +1161,47 @@ internal static partial class Program
                     AssertNear(0f, numberRange.Font.Position, 0.1f,
                         $"{stage}: number has a manual baseline offset.");
 
+                    numberBookmarks = numberRange.Bookmarks;
+                    for (var bookmarkIndex = 1;
+                         bookmarkIndex <= numberBookmarks.Count;
+                         bookmarkIndex++)
+                    {
+                        Word.Bookmark? candidate = null;
+                        try
+                        {
+                            candidate = numberBookmarks[bookmarkIndex];
+                            var name = candidate.Name ?? string.Empty;
+                            if (!name.StartsWith("VTEq_", StringComparison.Ordinal)
+                                || name.StartsWith("VTEqCap_", StringComparison.Ordinal)
+                                || name.StartsWith("VTEqNum_", StringComparison.Ordinal))
+                                continue;
+                            labelBookmark = candidate;
+                            candidate = null;
+                            break;
+                        }
+                        finally { Release(candidate); }
+                    }
+                    if (labelBookmark is null)
+                        throw new InvalidDataException(
+                            $"{stage}: visible equation-number bookmark is missing.");
+                    labelRange = labelBookmark.Range;
+                    labelFont = labelRange.Font;
+                    var labelText = labelRange.Text ?? string.Empty;
+                    AssertTrue(
+                        labelText.StartsWith("(", StringComparison.Ordinal)
+                        && labelText.EndsWith(")", StringComparison.Ordinal),
+                        $"{stage}: equation-number bookmark does not contain both parentheses.");
+                    AssertEqual("Cambria Math", labelFont.Name,
+                        $"{stage}: parentheses and number do not share the compatibility font.");
+                    AssertNear(0f, labelFont.Position, 0.1f,
+                        $"{stage}: parentheses and number have different baselines.");
+                    AssertEqual(0, labelFont.Hidden,
+                        $"{stage}: visible number inherited hidden caption formatting.");
+                    AssertEqual(0, labelFont.Bold,
+                        $"{stage}: visible number inherited bold formatting.");
+                    AssertEqual(0, labelFont.Italic,
+                        $"{stage}: visible number inherited italic formatting.");
+
                     var cellXml = XDocument.Parse(centerRange.WordOpenXML);
                     XNamespace word =
                         "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
@@ -1161,6 +1210,10 @@ internal static partial class Program
                 }
                 finally
                 {
+                    Release(labelFont);
+                    Release(labelRange);
+                    Release(labelBookmark);
+                    Release(numberBookmarks);
                     Release(numberParagraphs);
                     Release(centerParagraphs);
                     Release(numberRange);
@@ -1456,6 +1509,10 @@ internal static partial class Program
             Console.WriteLine("[OMML fixtures 7/8] Reopening and exercising real VisualTeX double-click editing...");
             document = application.Documents.Open(path, ReadOnly: false, Visible: true);
             application.Visible = true;
+            for (var tableIndex = 1; tableIndex <= 3; tableIndex++)
+                AssertNumberedTableCellNormalized(
+                    tableIndex,
+                    $"reopened numbered table {tableIndex}");
             Word.Window? focusWindow = null;
             try
             {

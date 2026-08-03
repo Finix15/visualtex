@@ -13,9 +13,15 @@ internal sealed class WordFormulaService
 {
     private const string RangeReferencePrefix = "visualtex-word-vsto-range:";
     private const string InlineBaselineBookmarkPrefix = "VTBL_";
-    private const string InlineMathGuard = "\u200B";
-    private const string InlineBaselineSentinel = "\u2060";
-    private const string LegacyInlineBaselineSentinel = "\u00A0";
+    // Use ordinary hidden spaces for the durable Word text boundary. Older
+    // builds persisted U+200B/U+2060, which some Word/font combinations expose
+    // as visible boxes or unexpected glyphs. A standard hidden space is safe in
+    // every supported Word file format and remains an ordinary non-math run.
+    private const string InlineMathGuard = " ";
+    private const string InlineBaselineSentinel = " ";
+    private const string LegacyInlineMathGuard = "\u200B";
+    private const string LegacyInlineBaselineSentinel = "\u2060";
+    private const string LegacyInlineNonbreakingBaselineSentinel = "\u00A0";
     private const string BulkInlineFormulaPlaceholder = "\uE000";
     private const float ParagraphBeforeOleDisplaySpaceAfterPoints = 0f;
     private readonly Application _application;
@@ -526,6 +532,7 @@ internal sealed class WordFormulaService
                 ommlRange = WordOmmlFormulaStore.GetEquationRange(ommlBookmark);
                 ommlBookmark.Delete();
                 ommlRange.Delete();
+                RemoveInlineBaselineSentinel(document, requiredFormulaId);
                 WordOmmlFormulaStore.Delete(document, requiredFormulaId);
             }
             else
@@ -892,6 +899,10 @@ internal sealed class WordFormulaService
                     display: false,
                     sourceFingerprint: out sourceFingerprint,
                     replaceTarget: true);
+                NormalizeInlineBaselineBoundary(
+                    document,
+                    equationRange,
+                    metadata.FormulaId);
             }
             else
             {
@@ -2034,6 +2045,11 @@ internal sealed class WordFormulaService
                         display,
                         sourceFingerprint: out sourceFingerprint,
                         replaceTarget: !display);
+                if (!display)
+                    NormalizeInlineBaselineBoundary(
+                        document,
+                        equationRange,
+                        metadata.FormulaId);
                 ApplyOmmlFontSize(equationRange, session.FontSizePt);
                 metadata.NativeOmmlFingerprint = sourceFingerprint;
                 bookmark = WordOmmlFormulaStore.Wrap(
@@ -2704,6 +2720,9 @@ internal sealed class WordFormulaService
         Range? replacementParagraphRange = null;
         UndoRecord? undoRecord = null;
         FormulaMetadata? originalOmmlMetadata = null;
+        string? originalOmmlWordOpenXml = null;
+        var originalOmmlStart = -1;
+        var originalOmmlRemoved = false;
         WordViewState? viewState = null;
         Range? finalSelection = null;
         var previousScreenUpdating = true;
@@ -2772,6 +2791,8 @@ internal sealed class WordFormulaService
                 // corrupts the paragraph layout. Resolve the complete equation
                 // from its collapsed bookmark immediately before committing.
                 oldRange = WordOmmlFormulaStore.GetEquationRange(oldBookmark);
+                originalOmmlStart = oldRange.Start;
+                originalOmmlWordOpenXml = oldRange.WordOpenXML;
                 insertion = oldRange.Duplicate;
             }
             if (session.DisplayMode == "inline")
@@ -2779,6 +2800,22 @@ internal sealed class WordFormulaService
                     document,
                     oldRange,
                     metadata.FormulaId);
+            if (oldShape is null)
+            {
+                // Never ask Word to overwrite a live OMath range directly.
+                // Older perpetual and compatibility-mode builds can clip or
+                // expand that range, leaving the original equation beside the
+                // replacement. First replace the complete resolved equation with
+                // one ordinary placeholder, then replace that exact one-character
+                // range with the new OMML.
+                oldBookmark!.Delete();
+                oldBookmarkRemoved = true;
+                insertion!.Text = BulkInlineFormulaPlaceholder;
+                insertion.SetRange(
+                    originalOmmlStart,
+                    originalOmmlStart + BulkInlineFormulaPlaceholder.Length);
+                originalOmmlRemoved = true;
+            }
             TraceAcceptancePerformance(
                 "ReplaceOmml",
                 "resolve-source",
@@ -2800,11 +2837,6 @@ internal sealed class WordFormulaService
                 ref performanceCheckpoint);
             ValidateInsertedOmml(equationRange);
             ApplyOmmlFontSize(equationRange, session.FontSizePt);
-            if (oldBookmark is not null)
-            {
-                oldBookmark.Delete();
-                oldBookmarkRemoved = true;
-            }
             metadata.NativeOmmlFingerprint = sourceFingerprint;
             TraceAcceptancePerformance(
                 "ReplaceOmml",
@@ -2822,10 +2854,7 @@ internal sealed class WordFormulaService
 
             // Keep the source OLE until replacement and metadata are valid.
             if (oldShape is not null)
-            {
                 oldShape.Delete();
-                RemoveInlineBaselineSentinel(document, session.FormulaId);
-            }
             if (session.DisplayMode == "block" && session.Numbered)
             {
                 // Turning an OMath into display form while its source OLE is
@@ -2847,10 +2876,10 @@ internal sealed class WordFormulaService
             // by RestoreViewState's final formula selection. Keep the durable
             // inline text boundary normalized directly from the live range.
             if (session.DisplayMode == "inline")
-                EnsureInlineBaselineSentinel(
+                NormalizeInlineBaselineBoundary(
+                    document,
                     equationRange,
-                    metadata.FormulaId,
-                    placeOutsideNativeMath: true);
+                    metadata.FormulaId);
             if (session.DisplayMode == "block")
                 TryReconcileOmml(document, replacement!, equationRange, metadata);
             TraceAcceptancePerformance(
@@ -2872,15 +2901,41 @@ internal sealed class WordFormulaService
                 try
                 {
                     if (oldBookmarkRemoved
-                        && oldRange is not null
+                        && originalOmmlRemoved
+                        && originalOmmlStart >= 0
+                        && !string.IsNullOrWhiteSpace(originalOmmlWordOpenXml)
                         && originalOmmlMetadata is not null)
                     {
-                        var restored = WordOmmlFormulaStore.Wrap(
-                            document,
-                            oldRange,
-                            originalOmmlMetadata);
-                        Release(restored);
-                        WordOmmlFormulaStore.Save(document, originalOmmlMetadata);
+                        Range? restoredRange = null;
+                        Bookmark? restoredBookmark = null;
+                        try
+                        {
+                            restoredRange = RestoreOmmlReplacementRollback(
+                                document,
+                                originalOmmlStart,
+                                originalOmmlWordOpenXml!);
+                            restoredBookmark = WordOmmlFormulaStore.Wrap(
+                                document,
+                                restoredRange,
+                                originalOmmlMetadata);
+                            WordOmmlFormulaStore.Save(document, originalOmmlMetadata);
+                            if (originalOmmlMetadata.DisplayMode == "inline")
+                                EnsureInlineBaselineSentinel(
+                                    restoredRange,
+                                    originalOmmlMetadata.FormulaId,
+                                    placeOutsideNativeMath: true);
+                            else
+                                TryReconcileOmml(
+                                    document,
+                                    restoredBookmark,
+                                    restoredRange,
+                                    originalOmmlMetadata);
+                        }
+                        finally
+                        {
+                            Release(restoredBookmark);
+                            Release(restoredRange);
+                        }
                     }
                     else if (metadataSaved)
                     {
@@ -3624,23 +3679,29 @@ internal sealed class WordFormulaService
         Bookmark? bookmark = null;
         Range? placeholders = null;
         Range? formulaPlaceholder = null;
+        Range? guard = null;
         Range? sentinel = null;
         try
         {
             placeholders = insertionRange.Duplicate;
             placeholders.Collapse(WdCollapseDirection.wdCollapseEnd);
             var start = placeholders.Start;
-            // Word absorbs the first ordinary character immediately after a
-            // newly materialized inline OMath. Keep one sacrificial guard space
-            // before the durable VTBL sentinel so the caret can sit in a proven
-            // non-math text run.
+            // Word can absorb the first ordinary character immediately after a
+            // newly materialized inline OMath. Keep two temporary hidden ordinary
+            // spaces while importing: the first is sacrificial and is removed
+            // after Word has materialized the equation; the second remains as the
+            // durable VTBL text boundary.
             placeholders.Text = BulkInlineFormulaPlaceholder
                 + InlineMathGuard
                 + InlineBaselineSentinel;
             formulaPlaceholder = document.Range(start, start + BulkInlineFormulaPlaceholder.Length);
+            guard = document.Range(
+                formulaPlaceholder.End,
+                formulaPlaceholder.End + InlineMathGuard.Length);
             sentinel = document.Range(
-                formulaPlaceholder.End + InlineMathGuard.Length,
-                formulaPlaceholder.End + InlineMathGuard.Length + InlineBaselineSentinel.Length);
+                guard.End,
+                guard.End + InlineBaselineSentinel.Length);
+            ConfigureInlineBaselineSentinel(guard);
             ConfigureInlineBaselineSentinel(sentinel);
             bookmarks = document.Bookmarks;
             bookmark = bookmarks.Add(InlineBaselineBookmarkName(formulaId), sentinel);
@@ -3651,6 +3712,7 @@ internal sealed class WordFormulaService
         finally
         {
             Release(sentinel);
+            Release(guard);
             Release(formulaPlaceholder);
             Release(placeholders);
             Release(bookmark);
@@ -3679,13 +3741,12 @@ internal sealed class WordFormulaService
                 bookmark = bookmarks[name];
                 sentinel = bookmark.Range;
                 if (IsUsableInlineBaselineSentinel(sentinel, formulaRange))
-                {
-                    ConfigureInlineBaselineSentinel(sentinel);
-                    return sentinel.End;
-                }
+                    return NormalizeInlineBaselineBoundary(
+                        document,
+                        formulaRange,
+                        formulaId);
                 bookmark.Delete();
-                if (string.Equals(sentinel.Text, InlineBaselineSentinel, StringComparison.Ordinal)
-                    || string.Equals(sentinel.Text, LegacyInlineBaselineSentinel, StringComparison.Ordinal))
+                if (IsKnownInlineBaselineSentinel(sentinel.Text))
                     sentinel.Delete();
                 Release(sentinel);
                 sentinel = null;
@@ -3714,10 +3775,10 @@ internal sealed class WordFormulaService
             object sentinelStart = insertionPosition;
             object sentinelEnd = insertionPosition;
             sentinel = document.Range(ref sentinelStart, ref sentinelEnd);
-            sentinel.Text = InlineMathGuard + InlineBaselineSentinel;
+            sentinel.Text = InlineBaselineSentinel;
             sentinel.SetRange(
-                insertionPosition + InlineMathGuard.Length,
-                insertionPosition + InlineMathGuard.Length + InlineBaselineSentinel.Length);
+                insertionPosition,
+                insertionPosition + InlineBaselineSentinel.Length);
             ConfigureInlineBaselineSentinel(sentinel);
             bookmark = bookmarks.Add(name, sentinel);
             return sentinel.End;
@@ -3734,17 +3795,112 @@ internal sealed class WordFormulaService
         }
     }
 
+    private static bool IsKnownInlineBaselineSentinel(string? text) =>
+        string.Equals(text, InlineBaselineSentinel, StringComparison.Ordinal)
+        || string.Equals(text, LegacyInlineBaselineSentinel, StringComparison.Ordinal)
+        || string.Equals(
+            text,
+            LegacyInlineNonbreakingBaselineSentinel,
+            StringComparison.Ordinal);
+
     private static bool IsUsableInlineBaselineSentinel(
         Range sentinel,
         Range formulaRange)
     {
-        if (!string.Equals(sentinel.Text, InlineBaselineSentinel, StringComparison.Ordinal))
-            return false;
+        if (!IsKnownInlineBaselineSentinel(sentinel.Text)) return false;
         // The durable VTBL bookmark is the hard formula/text boundary. Word can
         // over-report adjacent prose through OMath.Range, so coordinate
         // adjacency is more reliable than character-level OMaths.Count here.
         return sentinel.Start >= formulaRange.End
             && sentinel.Start <= formulaRange.End + 8;
+    }
+
+    private static bool IsHiddenTextRange(Range range)
+    {
+        Microsoft.Office.Interop.Word.Font? font = null;
+        try
+        {
+            font = range.Font;
+            return font.Hidden != 0;
+        }
+        catch { return false; }
+        finally { Release(font); }
+    }
+
+    private static int NormalizeInlineBaselineBoundary(
+        Document document,
+        Range formulaRange,
+        string formulaId)
+    {
+        Bookmarks? bookmarks = null;
+        Bookmark? bookmark = null;
+        Range? sentinel = null;
+        Range? guard = null;
+        try
+        {
+            var name = InlineBaselineBookmarkName(formulaId);
+            bookmarks = document.Bookmarks;
+            if (!bookmarks.Exists(name))
+                throw new InvalidOperationException(
+                    "Word lost the VisualTeX inline typing boundary.");
+            bookmark = bookmarks[name];
+            sentinel = bookmark.Range;
+            if (!IsUsableInlineBaselineSentinel(sentinel, formulaRange))
+                throw new InvalidOperationException(
+                    "The VisualTeX inline typing boundary is no longer adjacent to its formula.");
+
+            // Migrate U+2060/NBSP sentinels created by older builds to a standard
+            // hidden ASCII space. This avoids font-dependent tofu glyphs while
+            // keeping the range in an ordinary non-math Word run.
+            if (!string.Equals(sentinel.Text, InlineBaselineSentinel, StringComparison.Ordinal))
+            {
+                var sentinelStart = sentinel.Start;
+                bookmark.Delete();
+                sentinel.Text = InlineBaselineSentinel;
+                sentinel.SetRange(
+                    sentinelStart,
+                    sentinelStart + InlineBaselineSentinel.Length);
+                ConfigureInlineBaselineSentinel(sentinel);
+                Release(bookmark);
+                bookmark = bookmarks.Add(name, sentinel);
+            }
+            else
+            {
+                ConfigureInlineBaselineSentinel(sentinel);
+            }
+
+            // Remove the sacrificial guard used only while Word materializes the
+            // inline OMath. Existing documents may contain the old visible U+200B
+            // guard; new documents use a hidden ordinary space. Never delete an
+            // ordinary user-authored visible space.
+            Release(sentinel);
+            sentinel = bookmark.Range;
+            if (sentinel.Start > formulaRange.End)
+            {
+                object guardStart = sentinel.Start - 1;
+                object guardEnd = sentinel.Start;
+                guard = document.Range(ref guardStart, ref guardEnd);
+                var removableGuard =
+                    string.Equals(guard.Text, LegacyInlineMathGuard, StringComparison.Ordinal)
+                    || string.Equals(guard.Text, InlineMathGuard, StringComparison.Ordinal)
+                        && IsHiddenTextRange(guard);
+                if (removableGuard && !RangeContainsMath(guard))
+                {
+                    guard.Delete();
+                    Release(sentinel);
+                    sentinel = bookmark.Range;
+                    ConfigureInlineBaselineSentinel(sentinel);
+                }
+            }
+            return sentinel.End;
+        }
+        finally
+        {
+            Release(guard);
+            Release(sentinel);
+            Release(bookmark);
+            Release(bookmarks);
+        }
     }
 
     private static bool RangeContainsMath(Range range)
@@ -3781,8 +3937,10 @@ internal sealed class WordFormulaService
                 if (IsUsableInlineBaselineSentinel(sentinel, formulaRange))
                 {
                     ResetParagraphTypingPosition(formulaRange);
-                    ConfigureInlineBaselineSentinel(sentinel);
-                    return sentinel.End;
+                    return NormalizeInlineBaselineBoundary(
+                        document,
+                        formulaRange,
+                        formulaId);
                 }
             }
         }
@@ -3821,10 +3979,29 @@ internal sealed class WordFormulaService
             if (!bookmarks.Exists(name)) return;
             bookmark = bookmarks[name];
             sentinel = bookmark.Range;
+            var sentinelStart = sentinel.Start;
             bookmark.Delete();
-            if (string.Equals(sentinel.Text, InlineBaselineSentinel, StringComparison.Ordinal)
-                || string.Equals(sentinel.Text, LegacyInlineBaselineSentinel, StringComparison.Ordinal))
+            if (IsKnownInlineBaselineSentinel(sentinel.Text))
                 sentinel.Delete();
+
+            // Clean up the sacrificial character left by old documents or by an
+            // interrupted insertion transaction. Only hidden ASCII spaces and the
+            // legacy U+200B guard are eligible; visible user spacing is untouched.
+            if (sentinelStart > document.Content.Start)
+            {
+                object guardStart = sentinelStart - 1;
+                object guardEnd = sentinelStart;
+                Range? guard = null;
+                try
+                {
+                    guard = document.Range(ref guardStart, ref guardEnd);
+                    if (string.Equals(guard.Text, LegacyInlineMathGuard, StringComparison.Ordinal)
+                        || string.Equals(guard.Text, InlineMathGuard, StringComparison.Ordinal)
+                            && IsHiddenTextRange(guard))
+                        guard.Delete();
+                }
+                finally { Release(guard); }
+            }
         }
         catch
         {
@@ -3846,8 +4023,9 @@ internal sealed class WordFormulaService
         {
             font = range.Font;
             font.Position = 0;
-            font.Hidden = 1;
-            font.Name = "Calibri";
+            // Office's COM Boolean convention uses -1 for True. Some older Word
+            // builds do not consistently serialize a literal 1 as w:vanish.
+            font.Hidden = -1;
         }
         finally { Release(font); }
     }
@@ -4143,6 +4321,7 @@ internal sealed class WordFormulaService
         out Table table)
     {
         Cell? centerCell = null;
+        Cell? numberCell = null;
         Range? centerCellRange = null;
         Borders? borders = null;
         Columns? columns = null;
@@ -4159,6 +4338,9 @@ internal sealed class WordFormulaService
             table.PreferredWidth = 100f;
             table.LeftPadding = 0f;
             table.RightPadding = 0f;
+            table.TopPadding = 0f;
+            table.BottomPadding = 0f;
+            try { table.AutoFitBehavior(WdAutoFitBehavior.wdAutoFitFixed); } catch { }
             borders = table.Borders;
             borders.Enable = 0;
             columns = table.Columns;
@@ -4173,7 +4355,9 @@ internal sealed class WordFormulaService
             rightColumn.PreferredWidth = 20f;
 
             centerCell = table.Cell(1, 2);
+            numberCell = table.Cell(1, 3);
             centerCell.VerticalAlignment = WdCellVerticalAlignment.wdCellAlignVerticalCenter;
+            numberCell.VerticalAlignment = WdCellVerticalAlignment.wdCellAlignVerticalCenter;
             centerCellRange = centerCell.Range;
             var insertion = centerCellRange.Duplicate;
             insertion.End = Math.Max(insertion.Start, insertion.End - 1);
@@ -4188,6 +4372,7 @@ internal sealed class WordFormulaService
             Release(columns);
             Release(borders);
             Release(centerCellRange);
+            Release(numberCell);
             Release(centerCell);
         }
     }
@@ -4254,6 +4439,75 @@ internal sealed class WordFormulaService
             NormalizeNumberedDisplayCell(range);
         }
         finally { Release(range); }
+    }
+
+    private static Range RestoreOmmlReplacementRollback(
+        Document document,
+        int position,
+        string wordOpenXml)
+    {
+        Range? content = null;
+        Range? insertion = null;
+        Range? probe = null;
+        OMaths? maths = null;
+        Range? best = null;
+        var bestDistance = int.MaxValue;
+        try
+        {
+            content = document.Content;
+            var safePosition = Math.Max(content.Start, Math.Min(position, content.End));
+            object insertionStart = safePosition;
+            object insertionEnd = Math.Min(
+                content.End,
+                safePosition + BulkInlineFormulaPlaceholder.Length);
+            insertion = document.Range(ref insertionStart, ref insertionEnd);
+            if (string.Equals(
+                    insertion.Text,
+                    BulkInlineFormulaPlaceholder,
+                    StringComparison.Ordinal))
+                insertion.Text = string.Empty;
+            insertion.SetRange(safePosition, safePosition);
+            insertion.InsertXML(wordOpenXml);
+
+            object probeStart = Math.Max(content.Start, safePosition - 1);
+            object probeEnd = Math.Min(document.Content.End, safePosition + 8);
+            probe = document.Range(ref probeStart, ref probeEnd);
+            maths = probe.OMaths;
+            for (var index = 1; index <= maths.Count; index++)
+            {
+                OMath? math = null;
+                Range? range = null;
+                try
+                {
+                    math = maths[index];
+                    range = math.Range;
+                    var distance = Math.Abs(range.Start - safePosition);
+                    if (distance >= bestDistance) continue;
+                    Release(best);
+                    best = range.Duplicate;
+                    bestDistance = distance;
+                }
+                finally
+                {
+                    Release(range);
+                    Release(math);
+                }
+            }
+            if (best is null)
+                throw new InvalidOperationException(
+                    "Word could not restore the original OMML equation after a failed replacement.");
+            var result = best;
+            best = null;
+            return result;
+        }
+        finally
+        {
+            Release(best);
+            Release(maths);
+            Release(probe);
+            Release(insertion);
+            Release(content);
+        }
     }
 
     private static void ValidateInsertedOmml(Range equationRange)

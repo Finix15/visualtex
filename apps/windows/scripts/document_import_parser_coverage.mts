@@ -261,6 +261,16 @@ const latexBaseline: CoverageCase[] = [
     },
   },
   {
+    name: "LaTeX CJK inline math spacing follows TeX semantics",
+    format: "latex",
+    source: String.raw`中文 $x=1$ 中文；English $y=2$ words；中文\ $z=3$\ 中文；中文~$q=4$~中文；中文\quad$r=5$\qquad中文`,
+    check: (parsed) =>
+      runs(parsed)
+        .map((run) => (run.kind === "formula" ? `<${run.latex}>` : run.text))
+        .join("") ===
+      `中文<x=1>中文；English <y=2> words；中文\u00a0<z=3>\u00a0中文；中文\u00a0<q=4>\u00a0中文；中文\u00a0<r=5>\u00a0\u00a0中文`,
+  },
+  {
     name: "real document boundaries ignore comments and inline literal examples",
     format: "latex",
     source: String.raw`% \begin{document}

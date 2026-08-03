@@ -1171,8 +1171,11 @@ internal static class WordBulkImportParser
     {
         var runs = new List<WordBulkRun>();
         ParseInlineSegment(text, format, false, false, false, runs, warnings);
-        if (runs.Count == 0) runs.Add(new WordBulkRun { Text = string.Empty });
-        return MergeTextRuns(runs);
+        var merged = MergeTextRuns(runs);
+        if (format == WordBulkSourceFormat.Latex)
+            merged = NormalizeLatexInlineBoundaryWhitespace(merged);
+        if (merged.Count == 0) merged.Add(new WordBulkRun { Text = string.Empty });
+        return merged;
     }
 
     private static void ParseInlineSegment(
@@ -1345,6 +1348,27 @@ internal static class WordBulkImportParser
                     index = literalEnd;
                     goto ContinueOuter;
                 }
+                var explicitSpacing = Regex.Match(
+                    text.Substring(index),
+                    @"^\\(?<name>quad|qquad)(?![A-Za-z@])",
+                    RegexOptions.IgnoreCase);
+                if (explicitSpacing.Success)
+                {
+                    Flush();
+                    runs.Add(new WordBulkRun
+                    {
+                        Text = explicitSpacing.Groups["name"].Value.Equals(
+                            "qquad",
+                            StringComparison.OrdinalIgnoreCase)
+                            ? "\u00A0\u00A0"
+                            : "\u00A0",
+                        Bold = bold,
+                        Italic = italic,
+                        Code = code,
+                    });
+                    index += explicitSpacing.Length;
+                    goto ContinueOuter;
+                }
                 var declaration = Regex.Match(
                     text.Substring(index),
                     @"^\\(?:tiny|scriptsize|footnotesize|small|normalsize|large|huge|centering|raggedright|raggedleft)(?![A-Za-z@])",
@@ -1391,6 +1415,55 @@ internal static class WordBulkImportParser
         Flush();
     }
 
+    private static bool IsTightLatexBoundaryCharacter(char character)
+    {
+        return character is >= '\u2E80' and <= '\u2FFF'
+            or >= '\u3000' and <= '\u303F'
+            or >= '\u3040' and <= '\u30FF'
+            or >= '\u31C0' and <= '\u31EF'
+            or >= '\u3400' and <= '\u4DBF'
+            or >= '\u4E00' and <= '\u9FFF'
+            or >= '\uAC00' and <= '\uD7AF'
+            or >= '\uF900' and <= '\uFAFF'
+            or >= '\uFF00' and <= '\uFFEF'
+            or '，' or '。' or '！' or '？' or '；' or '：' or '、'
+            or '》' or '）' or '】' or '」' or '』' or '”' or '’' or '…'
+            or ',' or '.' or '!' or '?' or ';' or ':'
+            or '(' or ')' or '[' or ']' or '{' or '}';
+    }
+
+    private static List<WordBulkRun> NormalizeLatexInlineBoundaryWhitespace(
+        List<WordBulkRun> runs)
+    {
+        for (var index = 0; index < runs.Count; index++)
+        {
+            var run = runs[index];
+            if (!run.IsFormula || run.DisplayMode != "inline") continue;
+
+            if (index > 0 && !runs[index - 1].IsFormula)
+            {
+                var previous = runs[index - 1];
+                var visible = previous.Text.TrimEnd(' ', '\t');
+                if (visible.Length < previous.Text.Length
+                    && visible.Length > 0
+                    && IsTightLatexBoundaryCharacter(visible[visible.Length - 1]))
+                    previous.Text = visible;
+            }
+
+            if (index + 1 < runs.Count && !runs[index + 1].IsFormula)
+            {
+                var next = runs[index + 1];
+                var visible = next.Text.TrimStart(' ', '\t');
+                if (visible.Length < next.Text.Length
+                    && visible.Length > 0
+                    && IsTightLatexBoundaryCharacter(visible[0]))
+                    next.Text = visible;
+            }
+        }
+        runs.RemoveAll(run => !run.IsFormula && run.Text.Length == 0);
+        return runs;
+    }
+
     private static List<WordBulkRun> MergeTextRuns(IEnumerable<WordBulkRun> source)
     {
         var merged = new List<WordBulkRun>();
@@ -1433,6 +1506,7 @@ internal static class WordBulkImportParser
         }
         return value
             .Replace("~", "\u00A0")
+            .Replace("\\ ", "\u00A0")
             .Replace("\\%", "%")
             .Replace("\\_", "_")
             .Replace("\\&", "&")
