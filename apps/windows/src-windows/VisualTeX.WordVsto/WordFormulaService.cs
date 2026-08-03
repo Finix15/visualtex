@@ -449,7 +449,11 @@ internal sealed class WordFormulaService
                 WordOmmlNativeSource.StampFingerprint(metadata, equationRange);
                 WordOmmlFormulaStore.Save(document, metadata);
                 if (alignInline)
-                    RestoreTypingBaselineAfter(bookmark);
+                    FinalizeInlineOmmlBoundary(
+                        document,
+                        equationRange,
+                        metadata.FormulaId,
+                        moveCaretOutsideMath: true);
                 else
                     TryReconcileOmml(document, bookmark, equationRange, metadata);
                 return target;
@@ -898,10 +902,6 @@ internal sealed class WordFormulaService
                     display: false,
                     sourceFingerprint: out sourceFingerprint,
                     replaceTarget: true);
-                NormalizeInlineBaselineBoundary(
-                    document,
-                    equationRange,
-                    metadata.FormulaId);
             }
             else
             {
@@ -936,7 +936,11 @@ internal sealed class WordFormulaService
             metadataSaved = true;
             if (session.DisplayMode == "inline")
             {
-                RestoreTypingBaselineAfter(bookmark);
+                FinalizeInlineOmmlBoundary(
+                    document,
+                    equationRange,
+                    metadata.FormulaId,
+                    moveCaretOutsideMath: true);
             }
             else
             {
@@ -2041,11 +2045,6 @@ internal sealed class WordFormulaService
                         display,
                         sourceFingerprint: out sourceFingerprint,
                         replaceTarget: !display);
-                if (!display)
-                    NormalizeInlineBaselineBoundary(
-                        document,
-                        equationRange,
-                        metadata.FormulaId);
                 ApplyOmmlFontSize(equationRange, session.FontSizePt);
                 metadata.NativeOmmlFingerprint = sourceFingerprint;
                 bookmark = WordOmmlFormulaStore.Wrap(
@@ -2063,9 +2062,20 @@ internal sealed class WordFormulaService
                     if (!preserveExistingDisplayParagraphBoundary)
                         MoveSelectionAfterDisplayFormula(selection, equationRange);
                 }
-                else if (!bulkImport)
+                else if (bulkImport)
                 {
-                    RestoreTypingBaselineAfter(bookmark);
+                    RemoveInlineOmmlTemporaryBoundary(
+                        document,
+                        equationRange,
+                        metadata.FormulaId);
+                }
+                else
+                {
+                    FinalizeInlineOmmlBoundary(
+                        document,
+                        equationRange,
+                        metadata.FormulaId,
+                        moveCaretOutsideMath: true);
                 }
                 return;
             }
@@ -2912,10 +2922,11 @@ internal sealed class WordFormulaService
             // by RestoreViewState's final formula selection. Keep the durable
             // inline text boundary normalized directly from the live range.
             if (session.DisplayMode == "inline")
-                NormalizeInlineBaselineBoundary(
+                FinalizeInlineOmmlBoundary(
                     document,
                     equationRange,
-                    metadata.FormulaId);
+                    metadata.FormulaId,
+                    moveCaretOutsideMath: false);
             if (session.DisplayMode == "block")
                 TryReconcileOmml(document, replacement!, equationRange, metadata);
             TraceAcceptancePerformance(
@@ -2956,10 +2967,11 @@ internal sealed class WordFormulaService
                                 originalOmmlMetadata);
                             WordOmmlFormulaStore.Save(document, originalOmmlMetadata);
                             if (originalOmmlMetadata.DisplayMode == "inline")
-                                EnsureInlineBaselineSentinel(
+                                FinalizeInlineOmmlBoundary(
+                                    document,
                                     restoredRange,
                                     originalOmmlMetadata.FormulaId,
-                                    placeOutsideNativeMath: true);
+                                    moveCaretOutsideMath: false);
                             else
                                 TryReconcileOmml(
                                     document,
@@ -3724,8 +3736,8 @@ internal sealed class WordFormulaService
             var start = placeholders.Start;
             // Word can absorb the first ordinary character immediately after a
             // newly materialized inline OMath. Keep two temporary hidden ordinary
-            // spaces only while importing. NormalizeInlineBaselineBoundary removes
-            // both and replaces them with a collapsed zero-length VTBL bookmark.
+            // spaces only while importing. FinalizeInlineOmmlBoundary removes both
+            // and deletes the temporary VTBL bookmark before the operation returns.
             placeholders.Text = BulkInlineFormulaPlaceholder
                 + InlineMathGuard
                 + InlineBaselineSentinel;
@@ -4136,27 +4148,60 @@ internal sealed class WordFormulaService
         finally { Release(range); }
     }
 
-    private void RestoreTypingBaselineAfter(Bookmark bookmark)
+    private static void RemoveInlineOmmlTemporaryBoundary(
+        Document document,
+        Range formulaRange,
+        string formulaId)
     {
-        Range? range = null;
-        Document? document = null;
+        // VTBL is only a temporary insertion guard for native OMath. Persisting
+        // even a collapsed bookmark makes Word show a dotted placeholder when
+        // "Show bookmarks" is enabled. Remove the bookmark and every temporary
+        // character before returning; VTOMML remains the durable formula identity.
+        RemoveInlineBaselineSentinel(document, formulaId);
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            if (!TryDeleteTemporaryInlineBoundaryAt(document, formulaRange.End))
+                break;
+        }
+    }
+
+    private void FinalizeInlineOmmlBoundary(
+        Document document,
+        Range formulaRange,
+        string formulaId,
+        bool moveCaretOutsideMath)
+    {
+        RemoveInlineOmmlTemporaryBoundary(document, formulaRange, formulaId);
+        ResetParagraphTypingPosition(formulaRange);
+        if (moveCaretOutsideMath)
+            MoveCaretOutsideInlineOmml(formulaRange);
+    }
+
+    private void MoveCaretOutsideInlineOmml(Range formulaRange)
+    {
+        Selection? selection = null;
+        Microsoft.Office.Interop.Word.Font? font = null;
         try
         {
-            range = WordOmmlFormulaStore.GetEquationRange(bookmark);
-            document = range.Document;
-            var metadata = WordOmmlFormulaStore.TryRead(document, bookmark);
-            var caretPosition = metadata is null
-                ? range.End
-                : EnsureInlineBaselineSentinel(
-                    range,
-                    metadata.FormulaId,
-                    placeOutsideNativeMath: true);
-            RestoreTypingBaselineAfter(range, caretPosition);
+            selection = _application.Selection;
+            selection.SetRange(formulaRange.End, formulaRange.End);
+
+            // A collapsed range at OMath.End still has mathematical caret
+            // affinity. Word's native right-arrow operation switches that same
+            // coordinate to the ordinary text side without inserting or skipping
+            // a character. Following prose is therefore typed outside the OMath.
+            _ = selection.MoveRight(
+                WdUnits.wdCharacter,
+                1,
+                WdMovementType.wdMove);
+            font = selection.Font;
+            font.Position = 0;
+            font.Hidden = 0;
         }
         finally
         {
-            Release(document);
-            Release(range);
+            Release(font);
+            Release(selection);
         }
     }
 

@@ -74,7 +74,7 @@ internal static partial class Program
             var imported = ReadOrderedBulkMetadataAndAssertRouting(service, document, "omml");
             AssertEqual(4, imported.Count,
                 "LaTeX spacing import did not create four editable OMML formulas.");
-            AssertCollapsedInlineBoundaryBookmarks(
+            AssertNoInlineBoundaryBookmarks(
                 document,
                 imported.Select(item => item.FormulaId));
             document.SaveAs2(outputPath, Word.WdSaveFormat.wdFormatXMLDocument);
@@ -93,7 +93,7 @@ internal static partial class Program
                 "omml");
             AssertEqual(4, reopenedMetadata.Count,
                 "LaTeX spacing formulas changed after save and reopen.");
-            AssertCollapsedInlineBoundaryBookmarks(
+            AssertNoInlineBoundaryBookmarks(
                 reopened,
                 reopenedMetadata.Select(item => item.FormulaId));
             AssertLatexSpacingDocumentXml(outputPath);
@@ -101,7 +101,7 @@ internal static partial class Program
             Console.WriteLine(
                 "LaTeX inline spacing acceptance passed: ordinary CJK boundary spaces "
                 + "were suppressed, English word spaces and explicit LaTeX spacing were preserved, "
-                + "VTBL bookmarks were collapsed, and no boundary character remained.");
+                + "no VTBL bookmark or boundary character remained.");
             Console.WriteLine($"Artifact: {outputPath}");
         }
         finally
@@ -181,7 +181,7 @@ internal static partial class Program
             "Word-visible inline spacing no longer matches LaTeX semantics.");
     }
 
-    private static void AssertCollapsedInlineBoundaryBookmarks(
+    private static void AssertNoInlineBoundaryBookmarks(
         Word.Document document,
         IEnumerable<string> formulaIds)
     {
@@ -192,24 +192,8 @@ internal static partial class Program
             foreach (var formulaId in formulaIds)
             {
                 var name = "VTBL_" + Guid.Parse(formulaId).ToString("N");
-                AssertTrue(bookmarks.Exists(name),
-                    $"The inline formula boundary bookmark {name} is missing.");
-                Word.Bookmark? bookmark = null;
-                Word.Range? range = null;
-                try
-                {
-                    bookmark = bookmarks[name];
-                    range = bookmark.Range;
-                    AssertEqual(range.Start, range.End,
-                        $"The inline formula boundary bookmark {name} still owns a character.");
-                    AssertEqual(string.Empty, range.Text ?? string.Empty,
-                        $"The inline formula boundary bookmark {name} is not zero length.");
-                }
-                finally
-                {
-                    Release(range);
-                    Release(bookmark);
-                }
+                AssertTrue(!bookmarks.Exists(name),
+                    $"The native OMML formula still exposes the temporary boundary bookmark {name}.");
             }
         }
         finally { Release(bookmarks); }

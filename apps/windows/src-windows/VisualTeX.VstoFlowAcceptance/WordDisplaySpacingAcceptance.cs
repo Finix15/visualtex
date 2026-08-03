@@ -44,6 +44,12 @@ internal static partial class Program
                 addIn,
                 ref custom);
 
+            var inlineOmmlFormulaId = InsertAndAssertInlineOmmlCaret(
+                client,
+                application,
+                document,
+                addIn);
+
             var cases = new List<DisplaySpacingCase>
             {
                 InsertDisplaySpacingCase(
@@ -91,10 +97,12 @@ internal static partial class Program
                 ReadOnly: true,
                 AddToRecentFiles: false);
             AssertDisplaySpacingCases(reopened, cases);
+            AssertInlineOmmlCaretResult(reopened, inlineOmmlFormulaId);
 
             Console.WriteLine(
-                "Word display spacing acceptance passed: unnumbered/numbered OLE and OMML "
-                + "start immediately after the preceding paragraph with no inserted blank paragraph.");
+                "Word formula spacing acceptance passed: inline OMML left no VTBL placeholder and "
+                + "typed prose stayed outside OMath; unnumbered/numbered OLE and OMML started "
+                + "immediately after the preceding paragraph with no inserted blank paragraph.");
             Console.WriteLine($"Artifact: {outputPath}");
         }
         finally
@@ -116,6 +124,90 @@ internal static partial class Program
             Release(document);
             Release(application);
             ForceComCleanup();
+        }
+    }
+
+    private static string InsertAndAssertInlineOmmlCaret(
+        VisualTeXSessionClient client,
+        Word.Application application,
+        Word.Document document,
+        VisualTeX.WordVsto.ThisAddIn addIn)
+    {
+        const string mathMl =
+            "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"inline\">"
+            + "<mi>x</mi><mo>=</mo><mn>1</mn></math>";
+        Word.Selection? selection = null;
+        try
+        {
+            selection = application.Selection;
+            selection.EndKey(Word.WdUnits.wdStory);
+            selection.TypeText("前文");
+            var existing = SnapshotSessionIds();
+            addIn.OnInsertInlineOmml(new object());
+            var sessionId = WaitForNewSession(existing, "word", TimeSpan.FromSeconds(30));
+            var session = client.GetSessionAsync(sessionId, CancellationToken.None)
+                .GetAwaiter().GetResult();
+            AssertEqual(FormulaOleContract.WordOmmlMode, session.ObjectMode,
+                "The inline OMML command created the wrong Word object mode.");
+            Commit(
+                client,
+                session,
+                "inline",
+                FormulaOleContract.WordOmmlMode,
+                "x=1",
+                mathMl: mathMl);
+            var final = WaitForTerminal(client, sessionId, TimeSpan.FromSeconds(45));
+            AssertEqual("completed", final.Status,
+                final.Error ?? "The inline OMML formula did not complete.");
+            client.CloseEditorAsync(sessionId, CancellationToken.None).GetAwaiter().GetResult();
+            WaitForAddInIdle(addIn, TimeSpan.FromSeconds(10));
+
+            // Do not adjust the caret in the acceptance test. This must exercise
+            // the insertion point left by VisualTeX itself.
+            selection.TypeText("正文");
+            var formulaId = final.FormulaId
+                ?? throw new InvalidDataException("The inline OMML formula has no formulaId.");
+            AssertInlineOmmlCaretResult(document, formulaId);
+            selection.TypeParagraph();
+            return formulaId;
+        }
+        finally { Release(selection); }
+    }
+
+    private static void AssertInlineOmmlCaretResult(
+        Word.Document document,
+        string formulaId)
+    {
+        Word.Bookmark? formulaBookmark = null;
+        Word.Range? equationRange = null;
+        Word.Range? following = null;
+        Word.Bookmarks? bookmarks = null;
+        try
+        {
+            formulaBookmark = WordOmmlFormulaStore.FindByFormulaId(document, formulaId)
+                ?? throw new InvalidDataException("The inline OMML formula bookmark is missing.");
+            equationRange = WordOmmlFormulaStore.GetEquationRange(formulaBookmark);
+            AssertTrue((equationRange.Text ?? string.Empty).IndexOf("正文", StringComparison.Ordinal) < 0,
+                "Text typed after inline OMML was absorbed into the native equation.");
+
+            var contentEnd = document.Content.End;
+            object followingStart = equationRange.End;
+            object followingEnd = Math.Min(contentEnd, equationRange.End + 2);
+            following = document.Range(ref followingStart, ref followingEnd);
+            AssertTrue((following.Text ?? string.Empty).StartsWith("正文", StringComparison.Ordinal),
+                "The inline OMML caret did not remain immediately before following prose.");
+
+            bookmarks = document.Bookmarks;
+            var boundaryName = "VTBL_" + Guid.Parse(formulaId).ToString("N");
+            AssertTrue(!bookmarks.Exists(boundaryName),
+                "The inline OMML formula still exposes a VTBL placeholder bookmark.");
+        }
+        finally
+        {
+            Release(bookmarks);
+            Release(following);
+            Release(equationRange);
+            Release(formulaBookmark);
         }
     }
 
