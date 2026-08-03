@@ -306,6 +306,10 @@ internal static partial class Program
             {
                 RunWordBulkImportLatexSpacing(artifactRoot);
             }
+            else if (string.Equals(mode, "word-display-spacing", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordDisplaySpacing(client, artifactRoot);
+            }
             else if (string.Equals(mode, "word-bulk-import-performance", StringComparison.OrdinalIgnoreCase))
             {
                 var objectMode = args

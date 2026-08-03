@@ -13,10 +13,9 @@ internal sealed class WordFormulaService
 {
     private const string RangeReferencePrefix = "visualtex-word-vsto-range:";
     private const string InlineBaselineBookmarkPrefix = "VTBL_";
-    // Use ordinary hidden spaces for the durable Word text boundary. Older
-    // builds persisted U+200B/U+2060, which some Word/font combinations expose
-    // as visible boxes or unexpected glyphs. A standard hidden space is safe in
-    // every supported Word file format and remains an ordinary non-math run.
+    // These ordinary spaces exist only while Word materializes an inline OMath.
+    // They are deleted immediately afterwards; the durable VTBL boundary is a
+    // collapsed zero-length bookmark and therefore contributes no visible width.
     private const string InlineMathGuard = " ";
     private const string InlineBaselineSentinel = " ";
     private const string LegacyInlineMathGuard = "\u200B";
@@ -274,9 +273,13 @@ internal sealed class WordFormulaService
                 if (IsUsableInlineBaselineSentinel(sentinel, formulaRange)
                     && caretPosition <= sentinel.End)
                 {
-                    ConfigureInlineBaselineSentinel(sentinel);
-                    if (selection.Start != sentinel.End || selection.End != sentinel.End)
-                        selection.SetRange(sentinel.End, sentinel.End);
+                    var boundaryPosition = NormalizeInlineBaselineBoundary(
+                        document,
+                        formulaRange,
+                        metadata.FormulaId);
+                    if (selection.Start != boundaryPosition
+                        || selection.End != boundaryPosition)
+                        selection.SetRange(boundaryPosition, boundaryPosition);
                     font = selection.Font;
                     font.Position = 0;
                     font.Hidden = 0;
@@ -701,12 +704,10 @@ internal sealed class WordFormulaService
             else
             {
                 CompactParagraphBeforeOleDisplayFormula(document, insertion);
-                insertion.InsertParagraphAfter();
-                insertion.Collapse(WdCollapseDirection.wdCollapseEnd);
-                paragraph = document.Paragraphs.Add(insertion);
-                paragraph.Alignment = WdParagraphAlignment.wdAlignParagraphCenter;
-                paragraphRange = paragraph.Range;
-                rangeObject = paragraphRange;
+                var displayInsertion = ResolveDisplayInsertionRange(document, insertion);
+                Release(insertion);
+                insertion = displayInsertion;
+                rangeObject = insertion;
                 shape = document.InlineShapes.AddPicture(
                     imagePath,
                     ref link,
@@ -801,12 +802,10 @@ internal sealed class WordFormulaService
                 }
                 else
                 {
-                    insertion.InsertParagraphAfter();
-                    insertion.Collapse(WdCollapseDirection.wdCollapseEnd);
-                    paragraph = document.Paragraphs.Add(insertion);
-                    paragraph.Alignment = WdParagraphAlignment.wdAlignParagraphCenter;
-                    paragraphRange = paragraph.Range;
-                    shape = AddOleObject(document, paragraphRange);
+                    var displayInsertion = ResolveDisplayInsertionRange(document, insertion);
+                    Release(insertion);
+                    insertion = displayInsertion;
+                    shape = AddOleObject(document, insertion);
                 }
             }
             InitializeOle(shape, metadata, emfPath, pngPath);
@@ -917,12 +916,9 @@ internal sealed class WordFormulaService
                 }
                 else
                 {
-                    insertion.InsertParagraphAfter();
-                    insertion.Collapse(WdCollapseDirection.wdCollapseEnd);
-                    paragraph = document.Paragraphs.Add(insertion);
-                    paragraph.Alignment = WdParagraphAlignment.wdAlignParagraphCenter;
-                    paragraphRange = paragraph.Range;
-                    insertion.SetRange(paragraphRange.Start, paragraphRange.Start);
+                    var displayInsertion = ResolveDisplayInsertionRange(document, insertion);
+                    Release(insertion);
+                    insertion = displayInsertion;
                 }
                 equationRange = WordOmmlConverter.Insert(
                     _application,
@@ -2262,6 +2258,46 @@ internal sealed class WordFormulaService
         }
         finally
         {
+            Release(paragraphRange);
+            Release(paragraph);
+            Release(paragraphs);
+        }
+    }
+
+    private static Range ResolveDisplayInsertionRange(
+        Document document,
+        Range anchor)
+    {
+        Paragraphs? paragraphs = null;
+        Paragraph? paragraph = null;
+        Range? paragraphRange = null;
+        Range? content = null;
+        try
+        {
+            paragraphs = anchor.Paragraphs;
+            if (paragraphs.Count == 0)
+                return anchor.Duplicate;
+            paragraph = paragraphs[1];
+            paragraphRange = paragraph.Range;
+            content = document.Content;
+
+            // Reuse an existing empty paragraph instead of creating another one.
+            // If the caret is in a paragraph containing body text, insert at the
+            // paragraph end; Word creates the display paragraph directly there.
+            // Tables.Add/InlineShapes.AddOLEObject then consume that location and
+            // leave only Word's required trailing paragraph, never a blank one in
+            // front of the formula.
+            var position = ContainsVisibleBodyText(paragraphRange.Text)
+                ? paragraphRange.End
+                : paragraphRange.Start;
+            position = Math.Max(content.Start, Math.Min(position, content.End));
+            object insertionStart = position;
+            object insertionEnd = position;
+            return document.Range(ref insertionStart, ref insertionEnd);
+        }
+        finally
+        {
+            Release(content);
             Release(paragraphRange);
             Release(paragraph);
             Release(paragraphs);
@@ -3688,9 +3724,8 @@ internal sealed class WordFormulaService
             var start = placeholders.Start;
             // Word can absorb the first ordinary character immediately after a
             // newly materialized inline OMath. Keep two temporary hidden ordinary
-            // spaces while importing: the first is sacrificial and is removed
-            // after Word has materialized the equation; the second remains as the
-            // durable VTBL text boundary.
+            // spaces only while importing. NormalizeInlineBaselineBoundary removes
+            // both and replaces them with a collapsed zero-length VTBL bookmark.
             placeholders.Text = BulkInlineFormulaPlaceholder
                 + InlineMathGuard
                 + InlineBaselineSentinel;
@@ -3775,13 +3810,8 @@ internal sealed class WordFormulaService
             object sentinelStart = insertionPosition;
             object sentinelEnd = insertionPosition;
             sentinel = document.Range(ref sentinelStart, ref sentinelEnd);
-            sentinel.Text = InlineBaselineSentinel;
-            sentinel.SetRange(
-                insertionPosition,
-                insertionPosition + InlineBaselineSentinel.Length);
-            ConfigureInlineBaselineSentinel(sentinel);
             bookmark = bookmarks.Add(name, sentinel);
-            return sentinel.End;
+            return insertionPosition;
         }
         finally
         {
@@ -3796,7 +3826,8 @@ internal sealed class WordFormulaService
     }
 
     private static bool IsKnownInlineBaselineSentinel(string? text) =>
-        string.Equals(text, InlineBaselineSentinel, StringComparison.Ordinal)
+        string.IsNullOrEmpty(text)
+        || string.Equals(text, InlineBaselineSentinel, StringComparison.Ordinal)
         || string.Equals(text, LegacyInlineBaselineSentinel, StringComparison.Ordinal)
         || string.Equals(
             text,
@@ -3807,10 +3838,12 @@ internal sealed class WordFormulaService
         Range sentinel,
         Range formulaRange)
     {
-        if (!IsKnownInlineBaselineSentinel(sentinel.Text)) return false;
-        // The durable VTBL bookmark is the hard formula/text boundary. Word can
-        // over-report adjacent prose through OMath.Range, so coordinate
-        // adjacency is more reliable than character-level OMaths.Count here.
+        if (sentinel.Start != sentinel.End
+            && !IsKnownInlineBaselineSentinel(sentinel.Text))
+            return false;
+        // The durable VTBL bookmark is collapsed at the formula/text boundary.
+        // Legacy one-character bookmarks are accepted only long enough to be
+        // migrated by NormalizeInlineBaselineBoundary.
         return sentinel.Start >= formulaRange.End
             && sentinel.Start <= formulaRange.End + 8;
     }
@@ -3835,68 +3868,51 @@ internal sealed class WordFormulaService
         Bookmarks? bookmarks = null;
         Bookmark? bookmark = null;
         Range? sentinel = null;
-        Range? guard = null;
         try
         {
             var name = InlineBaselineBookmarkName(formulaId);
             bookmarks = document.Bookmarks;
-            if (!bookmarks.Exists(name))
-                throw new InvalidOperationException(
-                    "Word lost the VisualTeX inline typing boundary.");
-            bookmark = bookmarks[name];
-            sentinel = bookmark.Range;
-            if (!IsUsableInlineBaselineSentinel(sentinel, formulaRange))
-                throw new InvalidOperationException(
-                    "The VisualTeX inline typing boundary is no longer adjacent to its formula.");
-
-            // Migrate U+2060/NBSP sentinels created by older builds to a standard
-            // hidden ASCII space. This avoids font-dependent tofu glyphs while
-            // keeping the range in an ordinary non-math Word run.
-            if (!string.Equals(sentinel.Text, InlineBaselineSentinel, StringComparison.Ordinal))
+            if (bookmarks.Exists(name))
             {
-                var sentinelStart = sentinel.Start;
+                bookmark = bookmarks[name];
+                sentinel = bookmark.Range;
+
+                // A VTBL bookmark owns only VisualTeX's historical boundary
+                // marker. Delete that marker completely; even a hidden ASCII
+                // space still has layout width in several Word versions. Word is
+                // allowed to discard a collapsed bookmark while replacing an OLE
+                // or OMath range, so absence is not an error: the bookmark is
+                // recreated below at the new formula end.
+                var ownedBoundaryText = sentinel.Text;
+                var ownedBoundaryHasWidth = sentinel.Start < sentinel.End
+                    && IsKnownInlineBaselineSentinel(ownedBoundaryText);
                 bookmark.Delete();
-                sentinel.Text = InlineBaselineSentinel;
-                sentinel.SetRange(
-                    sentinelStart,
-                    sentinelStart + InlineBaselineSentinel.Length);
-                ConfigureInlineBaselineSentinel(sentinel);
-                Release(bookmark);
-                bookmark = bookmarks.Add(name, sentinel);
-            }
-            else
-            {
-                ConfigureInlineBaselineSentinel(sentinel);
+                if (ownedBoundaryHasWidth)
+                    sentinel.Delete();
             }
 
-            // Remove the sacrificial guard used only while Word materializes the
-            // inline OMath. Existing documents may contain the old visible U+200B
-            // guard; new documents use a hidden ordinary space. Never delete an
-            // ordinary user-authored visible space.
-            Release(sentinel);
-            sentinel = bookmark.Range;
-            if (sentinel.Start > formulaRange.End)
+            // An interrupted insertion can also leave one sacrificial guard at
+            // OMath.Range.End. Remove only VisualTeX legacy characters or hidden
+            // ordinary spaces; visible user-authored spacing is never touched.
+            for (var attempt = 0; attempt < 2; attempt++)
             {
-                object guardStart = sentinel.Start - 1;
-                object guardEnd = sentinel.Start;
-                guard = document.Range(ref guardStart, ref guardEnd);
-                var removableGuard =
-                    string.Equals(guard.Text, LegacyInlineMathGuard, StringComparison.Ordinal)
-                    || string.Equals(guard.Text, InlineMathGuard, StringComparison.Ordinal)
-                        && IsHiddenTextRange(guard);
-                if (removableGuard && !RangeContainsMath(guard))
-                {
-                    guard.Delete();
-                    Release(sentinel);
-                    sentinel = bookmark.Range;
-                    ConfigureInlineBaselineSentinel(sentinel);
-                }
+                if (!TryDeleteTemporaryInlineBoundaryAt(
+                        document,
+                        formulaRange.End))
+                    break;
             }
-            return sentinel.End;
+
+            var boundaryPosition = formulaRange.End;
+            object boundaryStart = boundaryPosition;
+            object boundaryEnd = boundaryPosition;
+            Release(sentinel);
+            sentinel = document.Range(ref boundaryStart, ref boundaryEnd);
+            Release(bookmark);
+            bookmark = bookmarks.Add(name, sentinel);
+            return boundaryPosition;
         }
         finally
         {
-            Release(guard);
             Release(sentinel);
             Release(bookmark);
             Release(bookmarks);
@@ -3980,28 +3996,17 @@ internal sealed class WordFormulaService
             bookmark = bookmarks[name];
             sentinel = bookmark.Range;
             var sentinelStart = sentinel.Start;
+            var ownedBoundaryHasWidth = sentinel.Start < sentinel.End
+                && IsKnownInlineBaselineSentinel(sentinel.Text);
             bookmark.Delete();
-            if (IsKnownInlineBaselineSentinel(sentinel.Text))
+            if (ownedBoundaryHasWidth)
                 sentinel.Delete();
 
-            // Clean up the sacrificial character left by old documents or by an
-            // interrupted insertion transaction. Only hidden ASCII spaces and the
-            // legacy U+200B guard are eligible; visible user spacing is untouched.
-            if (sentinelStart > document.Content.Start)
-            {
-                object guardStart = sentinelStart - 1;
-                object guardEnd = sentinelStart;
-                Range? guard = null;
-                try
-                {
-                    guard = document.Range(ref guardStart, ref guardEnd);
-                    if (string.Equals(guard.Text, LegacyInlineMathGuard, StringComparison.Ordinal)
-                        || string.Equals(guard.Text, InlineMathGuard, StringComparison.Ordinal)
-                            && IsHiddenTextRange(guard))
-                        guard.Delete();
-                }
-                finally { Release(guard); }
-            }
+            // Remove a temporary guard from interrupted insertions. Probe both
+            // sides of the former bookmark because deleting the bookmarked marker
+            // shifts the following text one position to the left.
+            TryDeleteTemporaryInlineBoundaryAt(document, sentinelStart - 1);
+            TryDeleteTemporaryInlineBoundaryAt(document, sentinelStart);
         }
         catch
         {
@@ -4016,6 +4021,36 @@ internal sealed class WordFormulaService
     }
 
 
+    private static bool TryDeleteTemporaryInlineBoundaryAt(
+        Document document,
+        int position)
+    {
+        Range? candidate = null;
+        try
+        {
+            var contentStart = document.Content.Start;
+            var contentEnd = document.Content.End;
+            if (position < contentStart || position >= contentEnd) return false;
+            object candidateStart = position;
+            object candidateEnd = Math.Min(contentEnd, position + 1);
+            candidate = document.Range(ref candidateStart, ref candidateEnd);
+            var text = candidate.Text;
+            var removable =
+                string.Equals(text, LegacyInlineMathGuard, StringComparison.Ordinal)
+                || string.Equals(text, LegacyInlineBaselineSentinel, StringComparison.Ordinal)
+                || string.Equals(text, InlineMathGuard, StringComparison.Ordinal)
+                    && IsHiddenTextRange(candidate);
+            // U+00A0 is also the correct Word representation of explicit LaTeX
+            // spacing (for example `~` and `\ `). Delete it only when the VTBL
+            // bookmark itself owns that legacy marker, never by proximity.
+            if (!removable || RangeContainsMath(candidate)) return false;
+            candidate.Delete();
+            return true;
+        }
+        catch { return false; }
+        finally { Release(candidate); }
+    }
+
     private static void ConfigureInlineBaselineSentinel(Range range)
     {
         Microsoft.Office.Interop.Word.Font? font = null;
@@ -4023,8 +4058,8 @@ internal sealed class WordFormulaService
         {
             font = range.Font;
             font.Position = 0;
-            // Office's COM Boolean convention uses -1 for True. Some older Word
-            // builds do not consistently serialize a literal 1 as w:vanish.
+            // This formatting is applied only to temporary insertion guards.
+            // Both characters are deleted before the operation is committed.
             font.Hidden = -1;
         }
         finally { Release(font); }
@@ -4328,11 +4363,11 @@ internal sealed class WordFormulaService
         Column? leftColumn = null;
         Column? centerColumn = null;
         Column? rightColumn = null;
+        Range? tableAnchor = null;
         try
         {
-            anchor.InsertParagraphAfter();
-            anchor.Collapse(WdCollapseDirection.wdCollapseEnd);
-            table = document.Tables.Add(anchor, 1, 3);
+            tableAnchor = ResolveDisplayInsertionRange(document, anchor);
+            table = document.Tables.Add(tableAnchor, 1, 3);
             table.AllowAutoFit = false;
             table.PreferredWidthType = WdPreferredWidthType.wdPreferredWidthPercent;
             table.PreferredWidth = 100f;
@@ -4366,6 +4401,7 @@ internal sealed class WordFormulaService
         }
         finally
         {
+            Release(tableAnchor);
             Release(rightColumn);
             Release(centerColumn);
             Release(leftColumn);

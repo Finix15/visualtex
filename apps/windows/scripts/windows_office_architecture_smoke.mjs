@@ -298,6 +298,9 @@ const vstoFlowAcceptance = await source(
 const vstoBulkSpacingAcceptance = await source(
   "src-windows/VisualTeX.VstoFlowAcceptance/WordBulkImportLatexSpacingAcceptance.cs",
 );
+const vstoDisplaySpacingAcceptance = await source(
+  "src-windows/VisualTeX.VstoFlowAcceptance/WordDisplaySpacingAcceptance.cs",
+);
 const officeServer = await source("src-tauri/src/office/server.rs");
 const officeState = await source("src-tauri/src/office/state.rs");
 const officeSessions = await source("src-tauri/src/office/sessions.rs");
@@ -497,6 +500,9 @@ assert.ok(wordVstoService.includes("InsertBulkOleDocumentTwoPhase"));
 assert.ok(wordVstoService.includes("plainTextBlock"));
 assert.ok(wordVstoService.includes("trustExportDimensions: bulkImport"));
 assert.ok(wordVstoService.includes("NormalizeInlineBaselineBoundary"));
+assert.ok(wordVstoService.includes("collapsed zero-length bookmark"));
+assert.ok(wordVstoService.includes("ResolveDisplayInsertionRange"));
+assert.ok(wordVstoService.includes("document.Tables.Add(tableAnchor, 1, 3)"));
 assert.ok(wordVstoService.includes('private const string InlineMathGuard = " ";'));
 assert.ok(wordVstoService.includes('private const string InlineBaselineSentinel = " ";'));
 assert.ok(wordVstoService.includes("LegacyInlineMathGuard"));
@@ -555,7 +561,11 @@ assert.ok(vstoFlowAcceptance.includes("Local\\VisualTeX.VstoFlowAcceptance"));
 assert.ok(vstoFlowAcceptance.includes("acceptance.log"));
 assert.ok(vstoFlowAcceptance.includes('"word-create"'));
 assert.ok(vstoFlowAcceptance.includes('"word-bulk-import-latex-spacing"'));
+assert.ok(vstoFlowAcceptance.includes('"word-display-spacing"'));
 assert.ok(vstoBulkSpacingAcceptance.includes("ordinary CJK boundary spaces"));
+assert.ok(vstoBulkSpacingAcceptance.includes("VTBL bookmarks were collapsed"));
+assert.ok(vstoDisplaySpacingAcceptance.includes("no inserted blank paragraph"));
+assert.ok(vstoDisplaySpacingAcceptance.includes("markerParagraphRange.End"));
 assert.ok(vstoBulkSpacingAcceptance.includes("rawXml.IndexOf('\\u200B') < 0"));
 assert.ok(vstoBulkSpacingAcceptance.includes("rawXml.IndexOf('\\u2060') < 0"));
 assert.ok(vstoBulkSpacingAcceptance.includes("rawXml.IndexOf('\\uE000') < 0"));

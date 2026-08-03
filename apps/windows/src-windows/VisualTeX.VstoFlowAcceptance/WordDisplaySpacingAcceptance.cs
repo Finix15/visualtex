@@ -1,0 +1,341 @@
+using Extensibility;
+using VisualTeX.WindowsOffice.Contracts;
+using VisualTeX.WindowsOffice.VstoShared;
+using VisualTeX.WordVsto;
+using Word = Microsoft.Office.Interop.Word;
+
+namespace VisualTeX.VstoFlowAcceptance;
+
+internal static partial class Program
+{
+    private sealed class DisplaySpacingCase
+    {
+        internal string MarkerBookmark { get; set; } = string.Empty;
+        internal string FormulaId { get; set; } = string.Empty;
+        internal string ObjectMode { get; set; } = string.Empty;
+        internal bool Numbered { get; set; }
+    }
+
+    private static void RunWordDisplaySpacing(
+        VisualTeXSessionClient client,
+        string artifactRoot)
+    {
+        Directory.CreateDirectory(artifactRoot);
+        var outputPath = Path.Combine(artifactRoot, "word-display-spacing.docx");
+        DeleteBulkPerformanceArtifact(outputPath);
+
+        Word.Application? application = null;
+        Word.Document? document = null;
+        Word.Document? reopened = null;
+        VisualTeX.WordVsto.ThisAddIn? addIn = null;
+        Array custom = Array.Empty<object>();
+        try
+        {
+            application = new Word.Application
+            {
+                Visible = false,
+                DisplayAlerts = Word.WdAlertLevel.wdAlertsNone,
+            };
+            document = application.Documents.Add();
+            addIn = new VisualTeX.WordVsto.ThisAddIn();
+            addIn.OnConnection(
+                application,
+                ext_ConnectMode.ext_cm_AfterStartup,
+                addIn,
+                ref custom);
+
+            var cases = new List<DisplaySpacingCase>
+            {
+                InsertDisplaySpacingCase(
+                    client,
+                    application,
+                    document,
+                    addIn,
+                    markerIndex: 1,
+                    FormulaOleContract.NativeOleMode,
+                    numbered: false),
+                InsertDisplaySpacingCase(
+                    client,
+                    application,
+                    document,
+                    addIn,
+                    markerIndex: 2,
+                    FormulaOleContract.NativeOleMode,
+                    numbered: true),
+                InsertDisplaySpacingCase(
+                    client,
+                    application,
+                    document,
+                    addIn,
+                    markerIndex: 3,
+                    FormulaOleContract.WordOmmlMode,
+                    numbered: false),
+                InsertDisplaySpacingCase(
+                    client,
+                    application,
+                    document,
+                    addIn,
+                    markerIndex: 4,
+                    FormulaOleContract.WordOmmlMode,
+                    numbered: true),
+            };
+
+            AssertDisplaySpacingCases(document, cases);
+            document.SaveAs2(outputPath, Word.WdSaveFormat.wdFormatXMLDocument);
+            document.Close(Word.WdSaveOptions.wdDoNotSaveChanges);
+            Release(document);
+            document = null;
+
+            reopened = application.Documents.Open(
+                outputPath,
+                ReadOnly: true,
+                AddToRecentFiles: false);
+            AssertDisplaySpacingCases(reopened, cases);
+
+            Console.WriteLine(
+                "Word display spacing acceptance passed: unnumbered/numbered OLE and OMML "
+                + "start immediately after the preceding paragraph with no inserted blank paragraph.");
+            Console.WriteLine($"Artifact: {outputPath}");
+        }
+        finally
+        {
+            if (addIn is not null)
+            {
+                try
+                {
+                    addIn.OnDisconnection(
+                        ext_DisconnectMode.ext_dm_UserClosed,
+                        ref custom);
+                }
+                catch { }
+            }
+            try { reopened?.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
+            try { document?.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
+            try { application?.Quit(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
+            Release(reopened);
+            Release(document);
+            Release(application);
+            ForceComCleanup();
+        }
+    }
+
+    private static DisplaySpacingCase InsertDisplaySpacingCase(
+        VisualTeXSessionClient client,
+        Word.Application application,
+        Word.Document document,
+        VisualTeX.WordVsto.ThisAddIn addIn,
+        int markerIndex,
+        string objectMode,
+        bool numbered)
+    {
+        const string mathMl =
+            "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">"
+            + "<mi>x</mi><mo>=</mo><mn>1</mn></math>";
+        var markerBookmark = InsertDisplaySpacingMarker(
+            application,
+            document,
+            markerIndex,
+            $"{(numbered ? "numbered " : string.Empty)}{objectMode}");
+        var existing = SnapshotSessionIds();
+        if (string.Equals(
+                objectMode,
+                FormulaOleContract.WordOmmlMode,
+                StringComparison.Ordinal))
+            addIn.OnInsertDisplayOmml(new object());
+        else
+            addIn.OnInsertDisplay(new object());
+
+        var sessionId = WaitForNewSession(existing, "word", TimeSpan.FromSeconds(30));
+        var session = client.GetSessionAsync(sessionId, CancellationToken.None)
+            .GetAwaiter().GetResult();
+        AssertEqual(objectMode, session.ObjectMode,
+            "The display spacing command created the wrong Word object mode.");
+        Commit(
+            client,
+            session,
+            "block",
+            objectMode,
+            "x=1",
+            numbered: numbered,
+            mathMl: string.Equals(
+                    objectMode,
+                    FormulaOleContract.WordOmmlMode,
+                    StringComparison.Ordinal)
+                ? mathMl
+                : null);
+        var final = WaitForTerminal(client, sessionId, TimeSpan.FromSeconds(45));
+        AssertEqual("completed", final.Status,
+            final.Error ?? "The display spacing formula did not complete.");
+        client.CloseEditorAsync(sessionId, CancellationToken.None).GetAwaiter().GetResult();
+        WaitForAddInIdle(addIn, TimeSpan.FromSeconds(10));
+
+        var result = new DisplaySpacingCase
+        {
+            MarkerBookmark = markerBookmark,
+            FormulaId = final.FormulaId
+                ?? throw new InvalidDataException("The display spacing formula has no formulaId."),
+            ObjectMode = objectMode,
+            Numbered = numbered,
+        };
+        AssertDisplaySpacingCase(document, result);
+        return result;
+    }
+
+    private static string InsertDisplaySpacingMarker(
+        Word.Application application,
+        Word.Document document,
+        int markerIndex,
+        string label)
+    {
+        Word.Selection? selection = null;
+        Word.Range? markerRange = null;
+        Word.Bookmarks? bookmarks = null;
+        Word.Bookmark? bookmark = null;
+        try
+        {
+            selection = application.Selection;
+            selection.EndKey(Word.WdUnits.wdStory);
+            var markerText = $"Before {label} {markerIndex}";
+            var markerStart = selection.Start;
+            selection.TypeText(markerText);
+            var markerEnd = selection.End;
+            selection.TypeParagraph();
+            markerRange = document.Range(markerStart, markerEnd);
+            bookmarks = document.Bookmarks;
+            var bookmarkName = $"VTTestDisplay{markerIndex}";
+            bookmark = bookmarks.Add(bookmarkName, markerRange);
+            return bookmarkName;
+        }
+        finally
+        {
+            Release(bookmark);
+            Release(bookmarks);
+            Release(markerRange);
+            Release(selection);
+        }
+    }
+
+    private static void AssertDisplaySpacingCases(
+        Word.Document document,
+        IEnumerable<DisplaySpacingCase> cases)
+    {
+        foreach (var item in cases)
+            AssertDisplaySpacingCase(document, item);
+    }
+
+    private static void AssertDisplaySpacingCase(
+        Word.Document document,
+        DisplaySpacingCase item)
+    {
+        Word.Bookmarks? bookmarks = null;
+        Word.Bookmark? markerBookmark = null;
+        Word.Range? markerRange = null;
+        Word.Range? markerParagraphRange = null;
+        Word.Range? formulaRange = null;
+        try
+        {
+            bookmarks = document.Bookmarks;
+            AssertTrue(bookmarks.Exists(item.MarkerBookmark),
+                $"The marker bookmark {item.MarkerBookmark} is missing.");
+            markerBookmark = bookmarks[item.MarkerBookmark];
+            markerRange = markerBookmark.Range;
+            markerParagraphRange = markerRange.Paragraphs[1].Range;
+            formulaRange = string.Equals(
+                    item.ObjectMode,
+                    FormulaOleContract.WordOmmlMode,
+                    StringComparison.Ordinal)
+                ? FindDisplaySpacingOmmlRange(document, item.FormulaId)
+                : FindDisplaySpacingOleRange(document, item.FormulaId);
+            var containerStart = DisplayFormulaContainerStart(formulaRange);
+            AssertEqual(
+                markerParagraphRange.End,
+                containerStart,
+                $"A blank paragraph was inserted before {(item.Numbered ? "numbered " : string.Empty)}{item.ObjectMode} formula {item.FormulaId}.");
+        }
+        finally
+        {
+            Release(formulaRange);
+            Release(markerParagraphRange);
+            Release(markerRange);
+            Release(markerBookmark);
+            Release(bookmarks);
+        }
+    }
+
+    private static Word.Range FindDisplaySpacingOleRange(
+        Word.Document document,
+        string formulaId)
+    {
+        Word.InlineShapes? shapes = null;
+        try
+        {
+            shapes = document.InlineShapes;
+            for (var index = 1; index <= shapes.Count; index++)
+            {
+                Word.InlineShape? shape = null;
+                Word.Range? range = null;
+                try
+                {
+                    shape = shapes[index];
+                    var metadata = WordFormulaMetadataReader.TryRead(shape);
+                    if (!string.Equals(
+                            metadata?.FormulaId,
+                            formulaId,
+                            StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    range = shape.Range;
+                    return range.Duplicate;
+                }
+                finally
+                {
+                    Release(range);
+                    Release(shape);
+                }
+            }
+            throw new InvalidDataException($"OLE formula {formulaId} was not found.");
+        }
+        finally { Release(shapes); }
+    }
+
+    private static Word.Range FindDisplaySpacingOmmlRange(
+        Word.Document document,
+        string formulaId)
+    {
+        Word.Bookmark? bookmark = null;
+        try
+        {
+            bookmark = WordOmmlFormulaStore.FindByFormulaId(document, formulaId)
+                ?? throw new InvalidDataException($"OMML formula {formulaId} was not found.");
+            return WordOmmlFormulaStore.GetEquationRange(bookmark);
+        }
+        finally { Release(bookmark); }
+    }
+
+    private static int DisplayFormulaContainerStart(Word.Range formulaRange)
+    {
+        Word.Table? table = null;
+        Word.Paragraphs? paragraphs = null;
+        Word.Paragraph? paragraph = null;
+        Word.Range? paragraphRange = null;
+        try
+        {
+            if ((bool)formulaRange.get_Information(Word.WdInformation.wdWithInTable)
+                && formulaRange.Tables.Count > 0)
+            {
+                table = formulaRange.Tables[1];
+                return table.Range.Start;
+            }
+            paragraphs = formulaRange.Paragraphs;
+            paragraph = paragraphs[1];
+            paragraphRange = paragraph.Range;
+            return paragraphRange.Start;
+        }
+        finally
+        {
+            Release(paragraphRange);
+            Release(paragraph);
+            Release(paragraphs);
+            Release(table);
+        }
+    }
+}

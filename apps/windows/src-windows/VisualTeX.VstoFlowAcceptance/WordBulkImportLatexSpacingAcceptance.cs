@@ -74,6 +74,9 @@ internal static partial class Program
             var imported = ReadOrderedBulkMetadataAndAssertRouting(service, document, "omml");
             AssertEqual(4, imported.Count,
                 "LaTeX spacing import did not create four editable OMML formulas.");
+            AssertCollapsedInlineBoundaryBookmarks(
+                document,
+                imported.Select(item => item.FormulaId));
             document.SaveAs2(outputPath, Word.WdSaveFormat.wdFormatXMLDocument);
             document.Close(Word.WdSaveOptions.wdDoNotSaveChanges);
             Release(document);
@@ -90,12 +93,15 @@ internal static partial class Program
                 "omml");
             AssertEqual(4, reopenedMetadata.Count,
                 "LaTeX spacing formulas changed after save and reopen.");
+            AssertCollapsedInlineBoundaryBookmarks(
+                reopened,
+                reopenedMetadata.Select(item => item.FormulaId));
             AssertLatexSpacingDocumentXml(outputPath);
 
             Console.WriteLine(
                 "LaTeX inline spacing acceptance passed: ordinary CJK boundary spaces "
                 + "were suppressed, English word spaces and explicit LaTeX spacing were preserved, "
-                + "and no legacy zero-width/private-use characters remained.");
+                + "VTBL bookmarks were collapsed, and no boundary character remained.");
             Console.WriteLine($"Artifact: {outputPath}");
         }
         finally
@@ -148,7 +154,7 @@ internal static partial class Program
             ?? throw new InvalidDataException(
                 "The LaTeX spacing paragraph does not contain exactly four direct inline equations.");
         var visible = new StringBuilder();
-        var hiddenBoundaryCount = 0;
+        var hiddenBoundaryCharacterCount = 0;
         var formulaIndex = 0;
         foreach (var child in paragraph.Elements())
         {
@@ -161,22 +167,51 @@ internal static partial class Program
             if (child.Name != word + "r") continue;
             var runText = string.Concat(child.Descendants(word + "t").Select(text => text.Value));
             var hidden = child.Element(word + "rPr")?.Element(word + "vanish") is not null;
-            if (hidden)
-            {
-                AssertEqual(" ", runText,
-                    "A VisualTeX hidden inline boundary is not a standard ASCII space.");
-                hiddenBoundaryCount++;
-                continue;
-            }
+            if (hidden && runText.Length > 0)
+                hiddenBoundaryCharacterCount++;
             visible.Append(runText);
         }
 
-        AssertEqual(4, hiddenBoundaryCount,
-            "The Word document does not contain exactly one hidden standard boundary per formula.");
+        AssertEqual(0, hiddenBoundaryCharacterCount,
+            "The Word document still contains a hidden character after an inline formula.");
         AssertEqual(
             "中文<M1>中文；English <M2> words；"
             + "中文\u00A0<M3>\u00A0中文；中文\u00A0<M4>\u00A0中文。",
             visible.ToString(),
             "Word-visible inline spacing no longer matches LaTeX semantics.");
+    }
+
+    private static void AssertCollapsedInlineBoundaryBookmarks(
+        Word.Document document,
+        IEnumerable<string> formulaIds)
+    {
+        Word.Bookmarks? bookmarks = null;
+        try
+        {
+            bookmarks = document.Bookmarks;
+            foreach (var formulaId in formulaIds)
+            {
+                var name = "VTBL_" + Guid.Parse(formulaId).ToString("N");
+                AssertTrue(bookmarks.Exists(name),
+                    $"The inline formula boundary bookmark {name} is missing.");
+                Word.Bookmark? bookmark = null;
+                Word.Range? range = null;
+                try
+                {
+                    bookmark = bookmarks[name];
+                    range = bookmark.Range;
+                    AssertEqual(range.Start, range.End,
+                        $"The inline formula boundary bookmark {name} still owns a character.");
+                    AssertEqual(string.Empty, range.Text ?? string.Empty,
+                        $"The inline formula boundary bookmark {name} is not zero length.");
+                }
+                finally
+                {
+                    Release(range);
+                    Release(bookmark);
+                }
+            }
+        }
+        finally { Release(bookmarks); }
     }
 }
