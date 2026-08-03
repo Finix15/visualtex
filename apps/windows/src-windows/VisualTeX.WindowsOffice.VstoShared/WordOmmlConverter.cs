@@ -30,6 +30,175 @@ internal static class WordOmmlConverter
     private static XslCompiledTransform? _mathMlToOmml;
     private static XslCompiledTransform? _ommlToMathMl;
 
+    internal sealed class BatchSource : IDisposable
+    {
+        private Document? _document;
+        private readonly string _path;
+        private readonly IReadOnlyDictionary<string, BatchEntry> _entries;
+
+        internal BatchSource(
+            Document document,
+            string path,
+            IReadOnlyDictionary<string, BatchEntry> entries)
+        {
+            _document = document;
+            _path = path;
+            _entries = entries;
+        }
+
+        internal Range Insert(
+            Document targetDocument,
+            Range insertionRange,
+            string formulaId,
+            bool display,
+            out string sourceFingerprint,
+            bool replaceTarget)
+        {
+            var sourceDocument = _document
+                ?? throw new ObjectDisposedException(nameof(BatchSource));
+            if (!_entries.TryGetValue(formulaId, out var entry))
+                throw new InvalidDataException(
+                    $"The OMML batch source does not contain formula {formulaId}.");
+
+            Bookmarks? bookmarks = null;
+            Bookmark? bookmark = null;
+            Range? sourceRange = null;
+            Range? formattedSource = null;
+            Range? target = null;
+            OMath? insertedMath = null;
+            Range? result = null;
+            try
+            {
+                bookmarks = sourceDocument.Bookmarks;
+                if (!bookmarks.Exists(entry.BookmarkName))
+                    throw new InvalidDataException(
+                        $"The OMML batch bookmark {entry.BookmarkName} is missing.");
+                bookmark = bookmarks[entry.BookmarkName];
+                sourceRange = bookmark.Range;
+                formattedSource = sourceRange.FormattedText;
+                target = insertionRange.Duplicate;
+                if (!replaceTarget)
+                    target.Collapse(WdCollapseDirection.wdCollapseStart);
+                var insertionStart = target.Start;
+                target.FormattedText = formattedSource;
+                insertedMath = FindMathAtPosition(
+                        targetDocument,
+                        insertionStart,
+                        target.End)
+                    ?? throw new InvalidOperationException(
+                        "Word did not materialize the batch OMML equation.");
+                var targetType = display
+                    ? WdOMathType.wdOMathDisplay
+                    : WdOMathType.wdOMathInline;
+                if (insertedMath.Type != targetType)
+                    insertedMath.Type = targetType;
+                result = insertedMath.Range.Duplicate;
+                sourceFingerprint = entry.SourceFingerprint;
+                var returned = result;
+                result = null;
+                return returned;
+            }
+            finally
+            {
+                Release(result);
+                Release(insertedMath);
+                Release(target);
+                Release(formattedSource);
+                Release(sourceRange);
+                Release(bookmark);
+                Release(bookmarks);
+            }
+        }
+
+        public void Dispose()
+        {
+            var document = _document;
+            _document = null;
+            if (document is not null)
+            {
+                try { document.Saved = true; } catch { }
+                try { document.Close(WdSaveOptions.wdDoNotSaveChanges); } catch { }
+                Release(document);
+            }
+            try { File.Delete(_path); } catch { }
+        }
+    }
+
+    internal sealed class BatchEntry
+    {
+        internal BatchEntry(
+            string bookmarkName,
+            string sourceFingerprint,
+            string omml,
+            int bookmarkId)
+        {
+            BookmarkName = bookmarkName;
+            SourceFingerprint = sourceFingerprint;
+            Omml = omml;
+            BookmarkId = bookmarkId;
+        }
+
+        internal string BookmarkName { get; }
+        internal string SourceFingerprint { get; }
+        internal string Omml { get; }
+        internal int BookmarkId { get; }
+    }
+
+    internal static BatchSource CreateBatchSource(
+        Application application,
+        IReadOnlyList<(string FormulaId, string MathMl)> formulas)
+    {
+        if (application is null) throw new ArgumentNullException(nameof(application));
+        if (formulas is null) throw new ArgumentNullException(nameof(formulas));
+        if (formulas.Count == 0)
+            throw new ArgumentOutOfRangeException(
+                nameof(formulas),
+                "At least one OMML formula is required for a batch source.");
+
+        var entries = new Dictionary<string, BatchEntry>(
+            formulas.Count,
+            StringComparer.OrdinalIgnoreCase);
+        for (var index = 0; index < formulas.Count; index++)
+        {
+            var formula = formulas[index];
+            if (string.IsNullOrWhiteSpace(formula.FormulaId))
+                throw new InvalidDataException("The OMML batch formula id is missing.");
+            var omml = TransformMathMlToOmml(formula.MathMl);
+            entries.Add(
+                formula.FormulaId,
+                new BatchEntry(
+                    $"VisualTeXBatch{index:D4}",
+                    ComputeOmmlFingerprint(omml),
+                    omml,
+                    index));
+        }
+
+        var path = CreateTemporaryBatchDocx(entries.Values.ToList());
+        Document? document = null;
+        try
+        {
+            document = application.Documents.Open(
+                FileName: path,
+                ConfirmConversions: false,
+                ReadOnly: true,
+                AddToRecentFiles: false,
+                Visible: false,
+                OpenAndRepair: false);
+            var source = new BatchSource(document, path, entries);
+            document = null;
+            return source;
+        }
+        finally
+        {
+            if (document is not null)
+            {
+                try { document.Close(WdSaveOptions.wdDoNotSaveChanges); } catch { }
+                Release(document);
+                try { File.Delete(path); } catch { }
+            }
+        }
+    }
+
     internal static Range Insert(
         Application application,
         Document targetDocument,
@@ -1611,6 +1780,60 @@ internal static class WordOmmlConverter
             new XsltSettings(enableDocumentFunction: false, enableScript: false),
             null);
         return transform;
+    }
+
+    private static string CreateTemporaryBatchDocx(
+        IReadOnlyList<BatchEntry> entries)
+    {
+        var path = Path.Combine(
+            Path.GetTempPath(),
+            $"visualtex-omml-batch-{Guid.NewGuid():N}.docx");
+        using var stream = new FileStream(
+            path,
+            FileMode.CreateNew,
+            FileAccess.ReadWrite,
+            FileShare.None);
+        using var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: false);
+        WriteEntry(
+            archive,
+            "[Content_Types].xml",
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
+            + "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
+            + "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>"
+            + "<Default Extension=\"xml\" ContentType=\"application/xml\"/>"
+            + "<Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/>"
+            + "</Types>");
+        WriteEntry(
+            archive,
+            "_rels/.rels",
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
+            + "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+            + "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/>"
+            + "</Relationships>");
+
+        var body = new StringBuilder();
+        foreach (var entry in entries)
+        {
+            var equation = ExtractSingleOMath(entry.Omml);
+            body.Append("<w:p><w:r><w:t>L</w:t></w:r>")
+                .Append("<w:bookmarkStart w:id=\"")
+                .Append(entry.BookmarkId)
+                .Append("\" w:name=\"")
+                .Append(entry.BookmarkName)
+                .Append("\"/>")
+                .Append(equation)
+                .Append("<w:bookmarkEnd w:id=\"")
+                .Append(entry.BookmarkId)
+                .Append("\"/>")
+                .Append("<w:r><w:t>R</w:t></w:r></w:p>");
+        }
+        WriteEntry(
+            archive,
+            "word/document.xml",
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
+            + $"<w:document xmlns:w=\"{WordNamespace}\" xmlns:m=\"{MathNamespace}\">"
+            + $"<w:body>{body}<w:sectPr/></w:body></w:document>");
+        return path;
     }
 
     private static string CreateTemporaryDocx(

@@ -1593,14 +1593,25 @@ internal sealed class WordFormulaService
         Selection? selection = null;
         Range? rollbackRange = null;
         UndoRecord? undoRecord = null;
+        WordOmmlConverter.BatchSource? ommlBatchSource = null;
+        var deferredOmmlMetadata = new List<FormulaMetadata>();
         var insertedFormulaIds = new List<string>();
         var insertionStart = -1;
+        var previousScreenUpdating = true;
+        var screenUpdatingSuspended = false;
         try
         {
             document = _application.ActiveDocument
                 ?? throw new InvalidOperationException("No active Word document.");
             EnsureWritable(document);
             EnsureSourceDocument(document, expectedDocumentId);
+            try
+            {
+                previousScreenUpdating = _application.ScreenUpdating;
+                _application.ScreenUpdating = false;
+                screenUpdatingSuspended = true;
+            }
+            catch { }
             selection = _application.Selection;
             Range? sourceRange = null;
             try
@@ -1613,8 +1624,45 @@ internal sealed class WordFormulaService
                 selection.Text = string.Empty;
             selection.Collapse(WdCollapseDirection.wdCollapseEnd);
             insertionStart = selection.Start;
+            var ommlFormulas = prepared.Values
+                .Where(item => string.Equals(
+                    item.Session.ObjectMode,
+                    FormulaOleContract.WordOmmlMode,
+                    StringComparison.Ordinal))
+                .Select(item => (
+                    FormulaId: item.Session.FormulaId,
+                    MathMl: item.MathMl
+                        ?? throw new InvalidDataException(
+                            $"公式 {item.Session.FormulaId} 没有可用的 MathML。")))
+                .ToList();
+            if (ommlFormulas.Count > 0)
+            {
+                ommlBatchSource = WordOmmlConverter.CreateBatchSource(
+                    _application,
+                    ommlFormulas);
+                document.Activate();
+                Release(selection);
+                selection = _application.Selection;
+                selection.SetRange(insertionStart, insertionStart);
+            }
             undoRecord = BeginUndoRecord("VisualTeX 批量导入 LaTeX / Markdown");
 
+            var nativeOleBulk = prepared.Count > 0
+                && prepared.Values.All(item => string.Equals(
+                    item.Session.ObjectMode,
+                    FormulaOleContract.NativeOleMode,
+                    StringComparison.Ordinal));
+            if (nativeOleBulk)
+            {
+                InsertBulkOleDocumentTwoPhase(
+                    document,
+                    selection,
+                    source,
+                    prepared,
+                    insertedFormulaIds);
+            }
+            else
+            {
             for (var blockIndex = 0; blockIndex < source.Blocks.Count; blockIndex++)
             {
                 var block = source.Blocks[blockIndex];
@@ -1627,7 +1675,16 @@ internal sealed class WordFormulaService
                     if (!prepared.TryGetValue(formulaRun.Id, out var formula))
                         throw new InvalidDataException(
                             $"缺少行间公式 {formulaRun.Id} 的渲染结果。");
-                    InsertPreparedFormula(document, selection, formula, display: true);
+                    InsertPreparedFormula(
+                        document,
+                        selection,
+                        formula,
+                        display: true,
+                        ommlBatchSource: ommlBatchSource,
+                        deferredOmmlMetadata: ommlBatchSource is null
+                            ? null
+                            : deferredOmmlMetadata,
+                        bulkImport: true);
                     insertedFormulaIds.Add(formula.Session.FormulaId);
                     continue;
                 }
@@ -1673,13 +1730,26 @@ internal sealed class WordFormulaService
                     selection.SetRange(pending.Start, pending.Start + BulkInlineFormulaPlaceholder.Length);
                     selection.Text = string.Empty;
                     selection.Collapse(WdCollapseDirection.wdCollapseStart);
-                    InsertPreparedFormula(document, selection, pending.Formula, display: false);
+                    InsertPreparedFormula(
+                        document,
+                        selection,
+                        pending.Formula,
+                        display: false,
+                        ommlBatchSource: ommlBatchSource,
+                        deferredOmmlMetadata: ommlBatchSource is null
+                            ? null
+                            : deferredOmmlMetadata,
+                        bulkImport: true);
                     insertedFormulaIds.Add(pending.Formula.Session.FormulaId);
                 }
 
                 MoveSelectionAfterBulkParagraph(document, selection, paragraphStart);
                 ResetNextParagraphFormatting(selection, block.Kind, nextKind);
             }
+            }
+
+            if (deferredOmmlMetadata.Count > 0)
+                WordOmmlFormulaStore.SaveNewBatch(document, deferredOmmlMetadata);
 
             return new WordBulkInsertResult
             {
@@ -1715,11 +1785,160 @@ internal sealed class WordFormulaService
         }
         finally
         {
+            try { document?.Activate(); } catch { }
+            ommlBatchSource?.Dispose();
+            if (screenUpdatingSuspended)
+            {
+                try { _application.ScreenUpdating = previousScreenUpdating; } catch { }
+            }
             EndUndoRecord(undoRecord);
             Release(undoRecord);
             Release(rollbackRange);
             Release(selection);
             Release(document);
+        }
+    }
+
+    private void InsertBulkOleDocumentTwoPhase(
+        Document document,
+        Selection selection,
+        WordBulkImportDocument source,
+        IReadOnlyDictionary<string, PreparedWordBulkFormula> prepared,
+        ICollection<string> insertedFormulaIds)
+    {
+        var pendingFormulas = new List<(
+            int Start,
+            PreparedWordBulkFormula Formula,
+            bool Display)>();
+        var endBookmarkName = "VTBI_" + Guid.NewGuid().ToString("N");
+        Bookmarks? bookmarks = null;
+        Bookmark? endBookmark = null;
+        Range? endRange = null;
+        try
+        {
+            for (var blockIndex = 0; blockIndex < source.Blocks.Count; blockIndex++)
+            {
+                var block = source.Blocks[blockIndex];
+                var nextKind = blockIndex + 1 < source.Blocks.Count
+                    ? source.Blocks[blockIndex + 1].Kind
+                    : (WordBulkBlockKind?)null;
+                if (block.Kind == WordBulkBlockKind.DisplayFormula)
+                {
+                    var formulaRun = block.Runs.Single(run => run.IsFormula);
+                    if (!prepared.TryGetValue(formulaRun.Id, out var formula))
+                        throw new InvalidDataException(
+                            $"缺少行间公式 {formulaRun.Id} 的渲染结果。");
+                    EnsureWritableParagraph(selection);
+                    var placeholderStart = selection.Start;
+                    selection.TypeText(BulkInlineFormulaPlaceholder);
+                    pendingFormulas.Add((placeholderStart, formula, true));
+                    selection.TypeParagraph();
+                    ResetNextParagraphFormatting(selection, block.Kind, nextKind);
+                    continue;
+                }
+
+                EnsureWritableParagraph(selection);
+                var paragraphStart = selection.Start;
+                var plainTextBlock = block.Runs
+                    .Where(run => !run.IsFormula)
+                    .All(run =>
+                        !run.Bold
+                        && !run.Italic
+                        && !run.Strike
+                        && !run.Underline
+                        && !run.Code);
+                foreach (var run in block.Runs)
+                {
+                    if (!run.IsFormula)
+                    {
+                        if (plainTextBlock)
+                        {
+                            if (!string.IsNullOrEmpty(run.Text))
+                                selection.TypeText(run.Text);
+                        }
+                        else
+                        {
+                            InsertNativeTextRun(document, selection, run);
+                        }
+                        continue;
+                    }
+                    if (!prepared.TryGetValue(run.Id, out var formula))
+                        throw new InvalidDataException(
+                            $"缺少行内公式 {run.Id} 的渲染结果。");
+                    var placeholderStart = selection.Start;
+                    selection.TypeText(BulkInlineFormulaPlaceholder);
+                    pendingFormulas.Add((placeholderStart, formula, false));
+                }
+                selection.TypeParagraph();
+                var paragraphEnd = selection.Start;
+                ApplyBulkParagraphFormatting(
+                    document,
+                    paragraphStart,
+                    paragraphEnd,
+                    block);
+                ResetNextParagraphFormatting(selection, block.Kind, nextKind);
+            }
+
+            endRange = selection.Range.Duplicate;
+            endRange.Collapse(WdCollapseDirection.wdCollapseStart);
+            bookmarks = document.Bookmarks;
+            endBookmark = bookmarks.Add(endBookmarkName, endRange);
+
+            foreach (var pending in pendingFormulas
+                         .OrderByDescending(item => item.Start))
+            {
+                Range? preservedDisplayParagraphRange = null;
+                Range? selectionRange = null;
+                try
+                {
+                    selection.SetRange(
+                        pending.Start,
+                        pending.Start + BulkInlineFormulaPlaceholder.Length);
+                    selection.Text = string.Empty;
+                    selection.Collapse(WdCollapseDirection.wdCollapseStart);
+                    if (pending.Display)
+                    {
+                        selectionRange = selection.Range;
+                        preservedDisplayParagraphRange =
+                            DuplicateContainingParagraphRange(selectionRange);
+                    }
+                    InsertPreparedFormula(
+                        document,
+                        selection,
+                        pending.Formula,
+                        display: pending.Display,
+                        preserveExistingDisplayParagraphBoundary: pending.Display,
+                        preservedDisplayParagraphRange: preservedDisplayParagraphRange,
+                        bulkImport: true);
+                    insertedFormulaIds.Add(pending.Formula.Session.FormulaId);
+                }
+                finally
+                {
+                    Release(selectionRange);
+                    Release(preservedDisplayParagraphRange);
+                }
+            }
+
+            if (bookmarks.Exists(endBookmarkName))
+            {
+                Release(endBookmark);
+                endBookmark = bookmarks[endBookmarkName];
+                Release(endRange);
+                endRange = endBookmark.Range;
+                selection.SetRange(endRange.Start, endRange.End);
+                selection.Collapse(WdCollapseDirection.wdCollapseStart);
+                endBookmark.Delete();
+            }
+        }
+        finally
+        {
+            if (endBookmark is not null)
+            {
+                try { endBookmark.Delete(); } catch { }
+            }
+            Release(endRange);
+            Release(endBookmark);
+            Release(bookmarks);
         }
     }
 
@@ -1729,7 +1948,10 @@ internal sealed class WordFormulaService
         PreparedWordBulkFormula prepared,
         bool display,
         bool preserveExistingDisplayParagraphBoundary = false,
-        Range? preservedDisplayParagraphRange = null)
+        Range? preservedDisplayParagraphRange = null,
+        WordOmmlConverter.BatchSource? ommlBatchSource = null,
+        ICollection<FormulaMetadata>? deferredOmmlMetadata = null,
+        bool bulkImport = false)
     {
         var session = prepared.Session;
         session.DisplayMode = display ? "block" : "inline";
@@ -1796,25 +2018,40 @@ internal sealed class WordFormulaService
                     Release(insertion);
                     insertion = placeholder;
                 }
-                equationRange = WordOmmlConverter.Insert(
-                    _application,
-                    document,
-                    insertion,
-                    mathMl!,
-                    display,
-                    sourceFingerprint: out sourceFingerprint,
-                    replaceTarget: !display);
+                equationRange = ommlBatchSource is not null
+                    ? ommlBatchSource.Insert(
+                        document,
+                        insertion,
+                        metadata.FormulaId,
+                        display,
+                        sourceFingerprint: out sourceFingerprint,
+                        replaceTarget: !display)
+                    : WordOmmlConverter.Insert(
+                        _application,
+                        document,
+                        insertion,
+                        mathMl!,
+                        display,
+                        sourceFingerprint: out sourceFingerprint,
+                        replaceTarget: !display);
                 ApplyOmmlFontSize(equationRange, session.FontSizePt);
                 metadata.NativeOmmlFingerprint = sourceFingerprint;
-                bookmark = WordOmmlFormulaStore.Wrap(document, equationRange, metadata);
-                WordOmmlFormulaStore.Save(document, metadata);
+                bookmark = WordOmmlFormulaStore.Wrap(
+                    document,
+                    equationRange,
+                    metadata,
+                    replaceExisting: !bulkImport);
+                if (ommlBatchSource is not null && deferredOmmlMetadata is not null)
+                    deferredOmmlMetadata.Add(metadata);
+                else
+                    WordOmmlFormulaStore.Save(document, metadata);
                 if (display)
                 {
                     TryReconcileOmml(document, bookmark, equationRange, metadata);
                     if (!preserveExistingDisplayParagraphBoundary)
                         MoveSelectionAfterDisplayFormula(selection, equationRange);
                 }
-                else
+                else if (!bulkImport)
                 {
                     RestoreTypingBaselineAfter(bookmark);
                 }
@@ -1841,10 +2078,13 @@ internal sealed class WordFormulaService
                 prepared.PngPath!,
                 session.ExportResult?.Height ?? 0,
                 session.ExportResult?.Baseline,
-                !display);
+                !display,
+                nativeOleKnown: true,
+                trustExportDimensions: bulkImport);
             if (display)
             {
-                TryReconcileShape(document, shape, metadata);
+                if (!bulkImport)
+                    TryReconcileShape(document, shape, metadata);
                 if (!preserveExistingDisplayParagraphBoundary)
                 {
                     Range? shapeRange = null;
@@ -1856,7 +2096,7 @@ internal sealed class WordFormulaService
                     finally { Release(shapeRange); }
                 }
             }
-            else
+            else if (!bulkImport)
             {
                 RestoreTypingBaselineAfter(shape);
             }
@@ -3158,20 +3398,26 @@ internal sealed class WordFormulaService
         string imagePath,
         float exportedHeight,
         float? exportedBaseline,
-        bool alignInline)
+        bool alignInline,
+        bool nativeOleKnown = false,
+        bool trustExportDimensions = false)
     {
-        using var image = Image.FromFile(imagePath);
-        var ratio = image.Width / (float)Math.Max(1, image.Height);
         // maxWidth/maxHeight are already the SVG's physical size after the
         // 96 dpi CSS-pixel to 72 dpi Word-point conversion. A 12 pt minimum
         // width scales narrow inline formulas (notably x) far above their
         // semantic font size. Keep only a one-point safety floor.
         var width = Math.Max(1f, maxWidth);
-        var height = width / ratio;
-        if (maxHeight > 0 && height > maxHeight)
+        var height = Math.Max(1f, maxHeight);
+        if (!trustExportDimensions)
         {
-            height = maxHeight;
-            width = height * ratio;
+            using var image = Image.FromFile(imagePath);
+            var ratio = image.Width / (float)Math.Max(1, image.Height);
+            height = width / ratio;
+            if (maxHeight > 0 && height > maxHeight)
+            {
+                height = maxHeight;
+                width = height * ratio;
+            }
         }
         // An OLE object is initially created with the placeholder preview's 4:1
         // aspect ratio. Setting only Width while aspect-ratio locking is enabled
@@ -3181,7 +3427,7 @@ internal sealed class WordFormulaService
         shape.Width = width;
         shape.Height = height;
         shape.LockAspectRatio = Microsoft.Office.Core.MsoTriState.msoTrue;
-        if (!WordFormulaMetadataReader.IsNativeOle(shape))
+        if (!nativeOleKnown && !WordFormulaMetadataReader.IsNativeOle(shape))
         {
             var encoded = FormulaMetadataCodec.Encode(metadata);
             shape.Title = encoded;

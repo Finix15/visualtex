@@ -361,6 +361,35 @@ public sealed class VisualTeXSessionClient : IDisposable
         await EnsureSuccessAsync(response).ConfigureAwait(false);
     }
 
+    public async Task OpenConverterBatchAsync(
+        IReadOnlyList<string> sessionIds,
+        CancellationToken cancellationToken)
+    {
+        if (sessionIds is null)
+            throw new ArgumentNullException(nameof(sessionIds));
+        if (sessionIds.Count == 0 || sessionIds.Count > 256)
+            throw new ArgumentOutOfRangeException(
+                nameof(sessionIds),
+                "VisualTeX batch conversion requires between 1 and 256 Sessions.");
+        var validated = new List<string>(sessionIds.Count);
+        foreach (var sessionId in sessionIds)
+        {
+            if (!Guid.TryParse(sessionId, out _))
+                throw new InvalidOperationException(
+                    "VisualTeX Session id must be a UUID.");
+            validated.Add(sessionId);
+        }
+        EnsureAuthorizationHeader();
+        var json = JsonSerializer.Serialize(
+            new { sessionIds = validated },
+            JsonOptions.Default);
+        using var response = await SendTrackedAsync(() => _http.PostAsync(
+            "/api/v1/app/converter/convert-batch",
+            new StringContent(json, Encoding.UTF8, "application/json"),
+            cancellationToken)).ConfigureAwait(false);
+        await EnsureSuccessAsync(response).ConfigureAwait(false);
+    }
+
     public async Task OpenBulkImportAsync(
         string sessionId,
         CancellationToken cancellationToken)

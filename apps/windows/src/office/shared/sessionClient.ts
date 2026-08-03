@@ -51,6 +51,10 @@ export interface OfficePreferences {
   powerpointDefaultFontSizePt: number;
 }
 
+export interface OfficeBatchConversion {
+  sessionIds: string[];
+}
+
 export interface OfficeFormulaSession {
   id: string;
   mode: OfficeSessionMode;
@@ -168,6 +172,12 @@ export function getOfficeTheme() {
 
 export function getOfficePreferences() {
   return requestJson<OfficePreferences>("/api/v1/preferences");
+}
+
+export function takeOfficeConverterBatch() {
+  return requestJson<OfficeBatchConversion>(
+    "/api/v1/app/converter/next-batch",
+  );
 }
 
 export function updateOfficeSession(

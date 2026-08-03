@@ -1164,6 +1164,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         var prepared = new Dictionary<string, PreparedWordBulkFormula>(
             StringComparer.Ordinal);
         var converterSessionIds = new List<string>();
+        var operationStopwatch = Stopwatch.StartNew();
         string? bulkImportSessionId = null;
         try
         {
@@ -1197,6 +1198,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             SetStatus(
                 $"正在准备批量导入：{document.Blocks.Count} 个块，{document.FormulaCount} 个公式…");
             await client.EnsureHealthyAsync(lifetime.Token).ConfigureAwait(false);
+            await client.PrewarmConverterAsync(lifetime.Token).ConfigureAwait(false);
             var formulaRuns = document.Blocks
                 .SelectMany(block => block.Runs)
                 .Where(run => run.IsFormula)
@@ -1204,6 +1206,12 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             var objectMode = document.FormulaObjectMode == WordBulkFormulaObjectMode.Ole
                 ? FormulaOleContract.NativeOleMode
                 : FormulaOleContract.WordOmmlMode;
+            var pendingKeys = new HashSet<string>(StringComparer.Ordinal);
+            var formulaKeys = new Dictionary<string, string>(StringComparer.Ordinal);
+            var pendingTemplates = new List<(
+                string Key,
+                WordBulkRun Run,
+                OfficeSessionDocument Session)>();
 
             for (var index = 0; index < formulaRuns.Count; index++)
             {
@@ -1216,27 +1224,63 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                     fontSizePt.ToString(System.Globalization.CultureInfo.InvariantCulture),
                     run.Latex,
                     run.EquationTag ?? string.Empty);
-                if (!rendered.TryGetValue(key, out var template))
+                formulaKeys.Add(run.Id, key);
+                if (rendered.ContainsKey(key) || !pendingKeys.Add(key))
+                    continue;
+
+                WriteBulkAcceptanceLog(
+                    $"render-prepare index={index + 1}/{formulaRuns.Count} "
+                    + $"display={run.DisplayMode} latex={run.Latex}");
+                SetStatus($"正在准备公式 {index + 1}/{formulaRuns.Count}…");
+                var conversionSession = await CreateBulkFormulaConversionSessionAsync(
+                        client,
+                        run,
+                        objectMode,
+                        sourceDocumentId,
+                        fontSizePt,
+                        lifetime.Token)
+                    .ConfigureAwait(false);
+                pendingTemplates.Add((key, run, conversionSession));
+                converterSessionIds.Add(conversionSession.Id);
+            }
+
+            if (pendingTemplates.Count > 0)
+            {
+                WriteBulkAcceptanceLog(
+                    $"render-batch-start unique={pendingTemplates.Count} total={formulaRuns.Count}");
+                SetStatus($"正在批量渲染 {pendingTemplates.Count} 个独立公式…");
+                var renderStopwatch = Stopwatch.StartNew();
+                await client.OpenConverterBatchAsync(
+                        pendingTemplates.Select(item => item.Session.Id).ToList(),
+                        lifetime.Token)
+                    .ConfigureAwait(false);
+                foreach (var pending in pendingTemplates)
                 {
-                    WriteBulkAcceptanceLog(
-                        $"render-start index={index + 1}/{formulaRuns.Count} "
-                        + $"display={run.DisplayMode} latex={run.Latex}");
-                    SetStatus($"正在渲染公式 {index + 1}/{formulaRuns.Count}…");
-                    template = await RenderBulkFormulaTemplateAsync(
-                            client,
-                            run,
-                            objectMode,
-                            sourceDocumentId,
-                            fontSizePt,
+                    var completedSession = await client.WaitForCommitAsync(
+                            pending.Session.Id,
+                            TimeSpan.FromMinutes(3),
                             lifetime.Token)
                         .ConfigureAwait(false);
+                    var template = MaterializeBulkFormulaTemplate(
+                        client,
+                        pending.Run,
+                        objectMode,
+                        completedSession);
+                    rendered.Add(pending.Key, template);
                     WriteBulkAcceptanceLog(
-                        $"render-complete index={index + 1}/{formulaRuns.Count} "
-                        + $"sessionId={template.Session.Id} status={template.Session.Status}");
-                    rendered.Add(key, template);
-                    converterSessionIds.Add(template.Session.Id);
+                        $"render-batch-item sessionId={completedSession.Id} "
+                        + $"status={completedSession.Status} display={pending.Run.DisplayMode}");
                 }
+                renderStopwatch.Stop();
+                WriteBulkAcceptanceLog(
+                    $"render-batch-complete unique={pendingTemplates.Count} "
+                    + $"elapsedMs={renderStopwatch.ElapsedMilliseconds}");
+            }
 
+            foreach (var run in formulaRuns)
+            {
+                var key = formulaKeys[run.Id];
+                var template = rendered[key];
                 var independentSession = CloneBulkFormulaSession(
                     template.Session,
                     run,
@@ -1254,6 +1298,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             }
 
             SetStatus("公式渲染完成，正在写入 Word…");
+            var insertStopwatch = Stopwatch.StartNew();
             var result = await dispatcher.InvokeAsync(() =>
                     service.InsertBulkDocument(
                         document,
@@ -1261,6 +1306,10 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                         sourceDocumentId,
                         selection.ObjectId))
                 .ConfigureAwait(false);
+            insertStopwatch.Stop();
+            WriteBulkAcceptanceLog(
+                $"bulk-insert-complete blocks={result.BlockCount} "
+                + $"formulas={result.FormulaCount} elapsedMs={insertStopwatch.ElapsedMilliseconds}");
             foreach (var sessionId in converterSessionIds)
             {
                 try
@@ -1279,10 +1328,13 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 }
                 catch { }
             }
+            operationStopwatch.Stop();
             WriteBulkAcceptanceLog(
-                $"bulk-import-complete blocks={result.BlockCount} formulas={result.FormulaCount}");
+                $"bulk-import-complete blocks={result.BlockCount} formulas={result.FormulaCount} "
+                + $"elapsedMs={operationStopwatch.ElapsedMilliseconds}");
             SetStatus(
-                $"批量导入完成：{result.BlockCount} 个内容块，{result.FormulaCount} 个独立公式。");
+                $"批量导入完成：{result.BlockCount} 个内容块，{result.FormulaCount} 个独立公式；"
+                + $"耗时 {operationStopwatch.Elapsed.TotalSeconds:0.0} 秒。");
         }
         catch (OperationCanceledException error)
         {
@@ -1468,6 +1520,36 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         double fontSizePt,
         CancellationToken cancellationToken)
     {
+        var session = await CreateBulkFormulaConversionSessionAsync(
+                client,
+                run,
+                objectMode,
+                sourceDocumentId,
+                fontSizePt,
+                cancellationToken)
+            .ConfigureAwait(false);
+        await client.OpenConverterAsync(session.Id, cancellationToken)
+            .ConfigureAwait(false);
+        WriteBulkAcceptanceLog($"converter-opened sessionId={session.Id}");
+        session = await client.WaitForCommitAsync(
+                session.Id,
+                TimeSpan.FromMinutes(3),
+                cancellationToken)
+            .ConfigureAwait(false);
+        WriteBulkAcceptanceLog(
+            $"converter-finished sessionId={session.Id} status={session.Status} "
+            + $"error={session.Error ?? "<null>"}");
+        return MaterializeBulkFormulaTemplate(client, run, objectMode, session);
+    }
+
+    private static async Task<OfficeSessionDocument> CreateBulkFormulaConversionSessionAsync(
+        VisualTeXSessionClient client,
+        WordBulkRun run,
+        string objectMode,
+        string? sourceDocumentId,
+        double fontSizePt,
+        CancellationToken cancellationToken)
+    {
         var formulaId = Guid.NewGuid().ToString("D");
         var line = new FormulaLine
         {
@@ -1501,17 +1583,15 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             },
             cancellationToken).ConfigureAwait(false);
         WriteBulkAcceptanceLog($"converter-created sessionId={session.Id}");
-        await client.OpenConverterAsync(session.Id, cancellationToken)
-            .ConfigureAwait(false);
-        WriteBulkAcceptanceLog($"converter-opened sessionId={session.Id}");
-        session = await client.WaitForCommitAsync(
-                session.Id,
-                TimeSpan.FromMinutes(3),
-                cancellationToken)
-            .ConfigureAwait(false);
-        WriteBulkAcceptanceLog(
-            $"converter-finished sessionId={session.Id} status={session.Status} "
-            + $"error={session.Error ?? "<null>"}");
+        return session;
+    }
+
+    private static RenderedWordBulkFormulaTemplate MaterializeBulkFormulaTemplate(
+        VisualTeXSessionClient client,
+        WordBulkRun run,
+        string objectMode,
+        OfficeSessionDocument session)
+    {
         if (session.Status == "failed")
         {
             var detail = string.IsNullOrWhiteSpace(session.Error)
@@ -1524,7 +1604,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             throw new InvalidOperationException(
                 $"公式渲染失败：{formula}\r\n原因：{detail}");
         }
-        if (session.Status == "cancelled")
+        if (session.Status == "cancelled" || session.ExplicitCancel)
             throw new OperationCanceledException("批量公式渲染已取消。" );
         var export = session.ExportResult
             ?? throw new InvalidOperationException(

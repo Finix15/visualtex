@@ -354,6 +354,39 @@ internal static class WordOmmlFormulaStore
         }
     }
 
+    internal static void SaveNewBatch(
+        Document document,
+        IReadOnlyList<FormulaMetadata> metadataItems)
+    {
+        if (metadataItems is null)
+            throw new ArgumentNullException(nameof(metadataItems));
+        if (metadataItems.Count == 0) return;
+        foreach (var metadata in metadataItems)
+            metadata.Validate();
+
+        object? parts = null;
+        object? added = null;
+        try
+        {
+            parts = ((dynamic)document).CustomXMLParts;
+            foreach (var metadata in metadataItems)
+            {
+                added = ((dynamic)parts).Add(BuildPartXml(metadata));
+                if (added is null)
+                    throw new InvalidOperationException(
+                        "Word did not create the VisualTeX OMML metadata part.");
+                RememberPart(document, added, metadata);
+                Release(added);
+                added = null;
+            }
+        }
+        finally
+        {
+            Release(added);
+            Release(parts);
+        }
+    }
+
     internal static void Delete(Document document, string formulaId)
     {
         object? part = null;
@@ -369,7 +402,8 @@ internal static class WordOmmlFormulaStore
     internal static Bookmark Wrap(
         Document document,
         Range equationRange,
-        FormulaMetadata metadata)
+        FormulaMetadata metadata,
+        bool replaceExisting = true)
     {
         Bookmarks? bookmarks = null;
         Bookmark? bookmark = null;
@@ -392,7 +426,8 @@ internal static class WordOmmlFormulaStore
             anchorRange = document.Range(ref anchorStart, ref anchorEnd);
             bookmarks = document.Bookmarks;
             var name = BookmarkName(metadata.FormulaId);
-            if (bookmarks.Exists(name)) bookmarks[name].Delete();
+            if (replaceExisting && bookmarks.Exists(name))
+                bookmarks[name].Delete();
             bookmark = bookmarks.Add(name, anchorRange);
             var result = bookmark;
             bookmark = null;

@@ -37,7 +37,10 @@ import {
   getOfficeSession,
   getOfficeTheme,
   saveOfficeSessionKeepalive,
+  takeOfficeConverterBatch,
+  updateOfficeSession,
   type OfficeExportResult,
+  type OfficeFormulaSession,
   type OfficeHost,
 } from "../api/sessionClient";
 import { useOfficeSession } from "./useOfficeSession";
@@ -217,6 +220,7 @@ export function OfficeDialogApp() {
   const commitFromShortcutRef = useRef<() => void>(() => undefined);
   const exportRunIdRef = useRef(0);
   const conversionStartedRef = useRef(false);
+  const batchConversionQueueRef = useRef<Promise<void>>(Promise.resolve());
   const initialEditorFocusSessionRef = useRef("");
   const latestCompleteExportRef = useRef<{
     fingerprint: string;
@@ -564,13 +568,12 @@ export function OfficeDialogApp() {
     sourceLatex: string = latex,
     sourceDisplayMode: "inline" | "block" = displayMode,
     sourceFontSizePt: number = officeFontSizePt,
+    sourceEquationTag: string | null | undefined =
+      session?.originalMetadata?.equationTag,
   ): OfficeExportResult | null => {
     if (!sourceLatex.trim()) return null;
     const renderedLatex = sourceDisplayMode === "block"
-      ? attachFormulaEquationTag(
-          sourceLatex,
-          session?.originalMetadata?.equationTag,
-        )
+      ? attachFormulaEquationTag(sourceLatex, sourceEquationTag)
       : sourceLatex;
     const svg = latexToSvg(renderedLatex, {
       displayMode: sourceDisplayMode === "block",
@@ -593,17 +596,9 @@ export function OfficeDialogApp() {
     session?.originalMetadata?.equationTag,
   ]);
 
-  const generateExportResult = useCallback(async (
-    sourceLatex: string = latex,
-    sourceDisplayMode: "inline" | "block" = displayMode,
-    sourceFontSizePt: number = officeFontSizePt,
-  ): Promise<OfficeExportResult | null> => {
-    const base = generateSvgExportResult(
-      sourceLatex,
-      sourceDisplayMode,
-      sourceFontSizePt,
-    );
-    if (!base) return null;
+  const rasterizeSvgExportResult = useCallback(async (
+    base: OfficeExportResult,
+  ): Promise<OfficeExportResult> => {
     let pngBase64: string | undefined;
     try {
       const { svgToPng } = await import("../../export/svgToPng");
@@ -623,7 +618,63 @@ export function OfficeDialogApp() {
       // SVG remains a complete Office fallback when PNG rasterization fails.
     }
     return { ...base, pngBase64 };
-  }, [latex, displayMode, generateSvgExportResult]);
+  }, []);
+
+  const generateExportResult = useCallback(async (
+    sourceLatex: string = latex,
+    sourceDisplayMode: "inline" | "block" = displayMode,
+    sourceFontSizePt: number = officeFontSizePt,
+    sourceEquationTag: string | null | undefined =
+      session?.originalMetadata?.equationTag,
+  ): Promise<OfficeExportResult | null> => {
+    const base = generateSvgExportResult(
+      sourceLatex,
+      sourceDisplayMode,
+      sourceFontSizePt,
+      sourceEquationTag,
+    );
+    return base ? rasterizeSvgExportResult(base) : null;
+  }, [
+    latex,
+    displayMode,
+    officeFontSizePt,
+    session?.originalMetadata?.equationTag,
+    generateSvgExportResult,
+    rasterizeSvgExportResult,
+  ]);
+
+  const generateSessionExportResult = useCallback(async (
+    sourceSession: OfficeFormulaSession,
+  ): Promise<OfficeExportResult> => {
+    const conversionLines = sourceSession.lines.length
+      ? sourceSession.lines
+      : [{ id: crypto.randomUUID(), latex: "" }];
+    const conversionLatex = joinFormulaLines(conversionLines);
+    const conversionFontSizePt = requireOfficeSessionFontSizePt(
+      sourceSession.fontSizePt ??
+        sourceSession.originalMetadata?.fontSizePt ??
+        sourceSession.originalMetadata?.renderFontSizePt,
+      sourceSession.host,
+    );
+    const sourceEquationTag = sourceSession.originalMetadata?.equationTag;
+    const base = generateSvgExportResult(
+      conversionLatex,
+      sourceSession.displayMode,
+      conversionFontSizePt,
+      sourceEquationTag,
+    );
+    if (!base?.mathMl) {
+      throw new Error("Unable to generate MathML for Office conversion.");
+    }
+    if (sourceSession.objectMode === "wordOmml") {
+      return base;
+    }
+    const complete = await rasterizeSvgExportResult(base);
+    if (!complete?.mathMl || !complete.pngBase64) {
+      throw new Error("Unable to generate a complete Office formula preview.");
+    }
+    return complete;
+  }, [generateSvgExportResult, rasterizeSvgExportResult]);
 
   useEffect(() => {
     if (
@@ -662,18 +713,7 @@ export function OfficeDialogApp() {
             session.originalMetadata?.renderFontSizePt,
           session.host,
         );
-        const exportResult = await generateExportResult(
-          conversionLatex,
-          conversionDisplayMode,
-          conversionFontSizePt,
-        );
-        if (!exportResult?.pngBase64 || !exportResult.mathMl) {
-          throw new Error(
-            isEn
-              ? "Unable to render the formula for format conversion"
-              : "无法为格式转换生成完整公式预览",
-          );
-        }
+        const exportResult = await generateSessionExportResult(session);
         await save({
           title: session.title,
           lines: conversionLines,
@@ -715,7 +755,116 @@ export function OfficeDialogApp() {
         }
       }
     })();
-  }, [session?.id, sessionId, isEn, save, generateExportResult]);
+  }, [session?.id, sessionId, isEn, save, generateSessionExportResult]);
+
+  useEffect(() => {
+    if (!IS_VSTO_CONVERT_RUNTIME) return;
+
+    let disposed = false;
+    let requestInFlight = false;
+    const enqueue = (sessionIds: string[]) => {
+      const uniqueSessionIds = Array.from(
+        new Set(sessionIds.map((value) => value.trim()).filter(Boolean)),
+      );
+      if (!uniqueSessionIds.length) return;
+      batchConversionQueueRef.current = batchConversionQueueRef.current
+        .catch(() => undefined)
+        .then(async () => {
+          for (const queuedSessionId of uniqueSessionIds) {
+            let queuedSession: OfficeFormulaSession | null = null;
+            try {
+              queuedSession = await getOfficeSession(queuedSessionId);
+              const conversionLines = queuedSession.lines.length
+                ? queuedSession.lines
+                : [{ id: crypto.randomUUID(), latex: "" }];
+              const conversionFontSizePt = requireOfficeSessionFontSizePt(
+                queuedSession.fontSizePt ??
+                  queuedSession.originalMetadata?.fontSizePt ??
+                  queuedSession.originalMetadata?.renderFontSizePt,
+                queuedSession.host,
+              );
+              const exportResult = await generateSessionExportResult(queuedSession);
+              await updateOfficeSession(queuedSessionId, {
+                title: queuedSession.title,
+                lines: conversionLines,
+                activeLineId:
+                  queuedSession.activeLineId &&
+                  conversionLines.some((line) => line.id === queuedSession?.activeLineId)
+                    ? queuedSession.activeLineId
+                    : conversionLines[0]?.id ?? null,
+                codeFormat: normalizeOfficeCodeFormat(queuedSession.codeFormat),
+                displayMode: queuedSession.displayMode,
+                numbered:
+                  queuedSession.displayMode === "block" && Boolean(queuedSession.numbered),
+                fontSizePt: conversionFontSizePt,
+                dirty: false,
+                status: "committing",
+                autoCommitOnClose: false,
+                exportResult,
+                exportWidth: exportResult.width,
+                exportHeight: exportResult.height,
+                error: null,
+              });
+            } catch (reason) {
+              const detail = readErrorMessage(reason, "Formula format conversion failed");
+              const sourceFormula = queuedSession
+                ? joinFormulaLines(queuedSession.lines).trim()
+                : "";
+              const formulaPreview = sourceFormula.length <= 500
+                ? sourceFormula
+                : `${sourceFormula.slice(0, 500)}…`;
+              const message = formulaPreview
+                ? `Formula rendering failed: ${detail}\nFormula: ${formulaPreview}`
+                : `Formula rendering failed: ${detail}`;
+              try {
+                await updateOfficeSession(queuedSessionId, {
+                  status: "failed",
+                  error: message,
+                });
+              } catch {
+                // VSTO reports a timeout if the failure cannot be persisted.
+              }
+            }
+          }
+        });
+    };
+
+    const drainCompanionQueue = async () => {
+      if (disposed || requestInFlight) return;
+      requestInFlight = true;
+      try {
+        while (!disposed) {
+          const batch = await takeOfficeConverterBatch();
+          if (!batch.sessionIds.length) break;
+          enqueue(batch.sessionIds);
+        }
+      } catch {
+        // The next poll retries after transient companion or startup failures.
+      } finally {
+        requestInFlight = false;
+      }
+    };
+    const handleBatchConversion = () => {
+      void drainCompanionQueue();
+    };
+
+    window.addEventListener(
+      "visualtex-office-batch-conversion",
+      handleBatchConversion,
+    );
+    void drainCompanionQueue();
+    const pollTimer = window.setInterval(() => {
+      void drainCompanionQueue();
+    }, 100);
+    return () => {
+      disposed = true;
+      window.clearInterval(pollTimer);
+      window.removeEventListener(
+        "visualtex-office-batch-conversion",
+        handleBatchConversion,
+      );
+    };
+  }, [generateSessionExportResult]);
 
   useEffect(() => {
     if (IS_VSTO_CONVERT_RUNTIME) return;

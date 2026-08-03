@@ -302,6 +302,16 @@ internal static partial class Program
             {
                 RunWordLatexRedraw(client, artifactRoot);
             }
+            else if (string.Equals(mode, "word-bulk-import-performance", StringComparison.OrdinalIgnoreCase))
+            {
+                var objectMode = args
+                    .FirstOrDefault(argument => argument.StartsWith(
+                        "--object-mode=",
+                        StringComparison.OrdinalIgnoreCase))
+                    ?.Substring("--object-mode=".Length)
+                    ?? "omml";
+                RunWordBulkImportPerformance(client, artifactRoot, objectMode);
+            }
             else if (string.Equals(mode, "targeted-2364", StringComparison.OrdinalIgnoreCase))
             {
                 RunTargetedWord2364(client, artifactRoot);

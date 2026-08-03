@@ -20,10 +20,11 @@ use axum::{Json, Router};
 use axum_server::tls_rustls::RustlsConfig;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::fs;
 use std::net::TcpListener;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::services::ServeDir;
 use uuid::Uuid;
@@ -35,6 +36,8 @@ const INSTALL_TOKEN_HEADER: &str = "x-visualtex-install-token";
 const OFFICE_CSP: &str = "default-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self' https://*.office.com https://*.officeapps.live.com";
 static POWERPOINT_COMMIT_LOCK: Mutex<()> = Mutex::new(());
 static WINDOWS_OFFICE_COMMIT_LOCK: Mutex<()> = Mutex::new(());
+static OFFICE_BATCH_CONVERSION_QUEUE: OnceLock<Mutex<VecDeque<Vec<String>>>> =
+    OnceLock::new();
 
 #[derive(Clone)]
 struct ServerContext {
@@ -62,6 +65,16 @@ struct ThemeResponse {
 #[serde(rename_all = "camelCase")]
 struct OfficePreferencesResponse {
     powerpoint_default_font_size_pt: f64,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BatchConversionRequest {
+    session_ids: Vec<String>,
+}
+
+fn office_batch_conversion_queue() -> &'static Mutex<VecDeque<Vec<String>>> {
+    OFFICE_BATCH_CONVERSION_QUEUE.get_or_init(|| Mutex::new(VecDeque::new()))
 }
 
 #[derive(Serialize)]
@@ -409,6 +422,24 @@ fn open_desktop_conversion_window(
 }
 
 #[cfg(target_os = "windows")]
+fn queue_desktop_batch_conversion(
+    app: tauri::AppHandle,
+    session_ids: Vec<String>,
+) -> Result<(), String> {
+    let window = ensure_desktop_conversion_window(&app)?;
+    office_batch_conversion_queue()
+        .lock()
+        .map_err(|_| "The VisualTeX batch conversion queue is unavailable".to_string())?
+        .push_back(session_ids);
+    // The queue is authoritative. This event only avoids waiting for the next
+    // frontend poll and may safely be missed while the hidden WebView starts.
+    let _ = window.eval(
+        "window.dispatchEvent(new CustomEvent('visualtex-office-batch-conversion'));",
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
 fn prewarm_desktop_conversion_window(app: tauri::AppHandle) -> Result<(), String> {
     ensure_desktop_conversion_window(&app).map(|_| ())
 }
@@ -623,6 +654,94 @@ async fn prewarm_desktop_conversion(State(context): State<ServerContext>) -> Res
             )
                 .into_response(),
         }
+    }
+}
+
+async fn open_desktop_batch_conversion(
+    State(context): State<ServerContext>,
+    Json(request): Json<BatchConversionRequest>,
+) -> Response {
+    if request.session_ids.is_empty() || request.session_ids.len() > 256 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "Batch conversion requires between 1 and 256 Session ids"
+            })),
+        )
+            .into_response();
+    }
+    if request
+        .session_ids
+        .iter()
+        .any(|session_id| !valid_session_id(session_id))
+    {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+
+    let store = context.companion.session_store.clone();
+    let lookup_ids = request.session_ids.clone();
+    if let Err(error) = run_session_operation(move || {
+        for session_id in lookup_ids {
+            store.get(&session_id)?;
+        }
+        Ok(())
+    })
+    .await
+    {
+        return session_error_response(error);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        return (
+            StatusCode::NOT_IMPLEMENTED,
+            Json(serde_json::json!({
+                "error": "Headless VSTO conversion is available only on Windows"
+            })),
+        )
+            .into_response();
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let Some(app) = context.companion.app.clone() else {
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        };
+        match tokio::task::spawn_blocking(move || {
+            queue_desktop_batch_conversion(app, request.session_ids)
+        })
+        .await
+        {
+            Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+            Ok(Err(error)) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": error })),
+            )
+                .into_response(),
+            Err(error) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("VisualTeX batch conversion task failed: {error}")
+                })),
+            )
+                .into_response(),
+        }
+    }
+}
+
+async fn take_desktop_batch_conversion() -> Response {
+    match office_batch_conversion_queue().lock() {
+        Ok(mut queue) => Json(BatchConversionRequest {
+            session_ids: queue.pop_front().unwrap_or_default(),
+        })
+        .into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": "The VisualTeX batch conversion queue is unavailable"
+            })),
+        )
+            .into_response(),
     }
 }
 
@@ -1742,6 +1861,14 @@ pub(crate) fn build_router(companion: OfficeCompanionState) -> Router {
         .route(
             "/app/converter/prewarm",
             post(prewarm_desktop_conversion),
+        )
+        .route(
+            "/app/converter/convert-batch",
+            post(open_desktop_batch_conversion),
+        )
+        .route(
+            "/app/converter/next-batch",
+            get(take_desktop_batch_conversion),
         )
         .route(
             "/app/sessions/{session_id}/convert",
