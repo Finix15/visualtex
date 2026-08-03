@@ -529,6 +529,16 @@ function parseInline(
           medskip: "\n",
           bigskip: "\n",
           par: "\n",
+          tiny: "",
+          scriptsize: "",
+          footnotesize: "",
+          small: "",
+          normalsize: "",
+          large: "",
+          huge: "",
+          centering: "",
+          raggedright: "",
+          raggedleft: "",
         };
         if (Object.prototype.hasOwnProperty.call(visibleCommands, name)) {
           flush();
@@ -1101,19 +1111,61 @@ function normalizeLatexExtensions(source: string, warnings: string[]) {
   return body;
 }
 
+function findLatexInlineLiteralEnd(text: string, index: number) {
+  if (text[index] !== "\\" || isEscaped(text, index)) return -1;
+  const match = text
+    .slice(index)
+    .match(/^\\(?:verb|lstinline)\*?(?![A-Za-z@])(?:\[[^\]\n]*\])?/i);
+  if (!match) return -1;
+  const delimiterIndex = index + match[0].length;
+  const delimiter = text[delimiterIndex];
+  if (!delimiter || /[A-Za-z0-9\s]/.test(delimiter)) return -1;
+  const close = text.indexOf(delimiter, delimiterIndex + 1);
+  if (close >= 0) return close + 1;
+  const lineEnd = text.indexOf("\n", delimiterIndex + 1);
+  return lineEnd >= 0 ? lineEnd : text.length;
+}
+
+function findLatexDocumentToken(source: string, token: string, startIndex = 0) {
+  const lowered = source.toLowerCase();
+  const target = token.toLowerCase();
+  for (let index = Math.max(0, startIndex); index < source.length; ) {
+    const literalEnd = findLatexInlineLiteralEnd(source, index);
+    if (literalEnd > index) {
+      index = literalEnd;
+      continue;
+    }
+    if (source[index] === "%" && !isEscaped(source, index)) {
+      const lineEnd = source.indexOf("\n", index + 1);
+      index = lineEnd >= 0 ? lineEnd + 1 : source.length;
+      continue;
+    }
+    if (source[index] === "\\" && !isEscaped(source, index)) {
+      const literalEnvironment = source
+        .slice(index)
+        .match(/^\\begin\{(verbatim\*?|lstlisting\*?)\}(?:\[[^\]\n]*\])?/i);
+      if (literalEnvironment) {
+        const endToken = `\\end{${literalEnvironment[1]}}`;
+        const environmentEnd = lowered.indexOf(
+          endToken.toLowerCase(),
+          index + literalEnvironment[0].length,
+        );
+        index = environmentEnd >= 0 ? environmentEnd + endToken.length : source.length;
+        continue;
+      }
+      if (lowered.startsWith(target, index)) return index;
+    }
+    index += 1;
+  }
+  return -1;
+}
+
 function findLatexCommentStart(line: string) {
   for (let index = 0; index < line.length; index += 1) {
-    if (line.startsWith("\\verb", index) && !isEscaped(line, index)) {
-      let delimiterIndex = index + "\\verb".length;
-      if (line[delimiterIndex] === "*") delimiterIndex += 1;
-      const delimiter = line[delimiterIndex];
-      if (delimiter && !/[A-Za-z0-9\s]/.test(delimiter)) {
-        const close = line.indexOf(delimiter, delimiterIndex + 1);
-        if (close >= 0) {
-          index = close;
-          continue;
-        }
-      }
+    const literalEnd = findLatexInlineLiteralEnd(line, index);
+    if (literalEnd > index) {
+      index = literalEnd - 1;
+      continue;
     }
     if (line[index] === "%" && !isEscaped(line, index)) return index;
   }
@@ -1121,12 +1173,27 @@ function findLatexCommentStart(line: string) {
 }
 
 function normalizeLatexSource(source: string, warnings: string[]) {
-  let body = normalizeLatexExtensions(source, warnings);
-  const begin = body.search(/\\begin\{document\}/i);
+  const normalizedSource = source.replace(/\r\n?/g, "\n");
+  const beginToken = "\\begin{document}";
+  const endToken = "\\end{document}";
+  const begin = findLatexDocumentToken(normalizedSource, beginToken);
+  const end = begin >= 0
+    ? findLatexDocumentToken(normalizedSource, endToken, begin + beginToken.length)
+    : -1;
+  const beginSentinel = "\uE100VISUALTEX_LATEX_DOCUMENT_BEGIN\uE101";
+  const endSentinel = "\uE102VISUALTEX_LATEX_DOCUMENT_END\uE103";
+  const markedSource = begin < 0
+    ? normalizedSource
+    : end >= 0
+      ? `${normalizedSource.slice(0, begin)}${beginSentinel}${normalizedSource.slice(begin + beginToken.length, end)}${endSentinel}${normalizedSource.slice(end + endToken.length)}`
+      : `${normalizedSource.slice(0, begin)}${beginSentinel}${normalizedSource.slice(begin + beginToken.length)}`;
+
+  let body = normalizeLatexExtensions(markedSource, warnings);
   if (begin >= 0) {
-    const contentStart = begin + body.slice(begin).match(/^\\begin\{document\}/i)![0].length;
-    const end = body.slice(contentStart).search(/\\end\{document\}/i);
-    body = end >= 0 ? body.slice(contentStart, contentStart + end) : body.slice(contentStart);
+    const markedBegin = body.indexOf(beginSentinel);
+    const contentStart = markedBegin >= 0 ? markedBegin + beginSentinel.length : 0;
+    const markedEnd = body.indexOf(endSentinel, contentStart);
+    body = markedEnd >= 0 ? body.slice(contentStart, markedEnd) : body.slice(contentStart);
     if (end < 0) warnings.push("LaTeX 文档缺少 \\end{document}，预览已读取其余内容。");
   }
 

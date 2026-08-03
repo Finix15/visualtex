@@ -78,6 +78,101 @@ public sealed class WordBulkImportParserTests
     }
 
     [Fact]
+    public void LatexVerbatimDocumentExamplesDoNotTruncateLargeFragment()
+    {
+        var source = new System.Text.StringBuilder();
+        source.AppendLine("\\section*{综合 LaTeX 正文示例}");
+        source.AppendLine();
+        source.AppendLine("这是一段不含 \\verb|\\documentclass|、导言区和宏包加载命令的正文代码，可直接放入已有文档的 \\verb|\\begin{document}| 与 \\verb|\\end{document}| 之间。");
+        source.AppendLine("\\textbf{\\Large 常见公式与排版语法综合练习}");
+        source.AppendLine();
+        for (var number = 1; number <= 20; number++)
+        {
+            source.AppendLine("\\section{" + number + ". 综合公式}");
+            source.AppendLine(
+                "正文 $x_{" + number + "}=a_{" + number + "}+b_{" + number + "}$、"
+                + "$y_{" + number + "}=c_{" + number + "}-d_{" + number + "}$ 与 "
+                + "$z_{" + number + "}=e_{" + number + "}f_{" + number + "}$。");
+            source.AppendLine("\\[");
+            source.AppendLine("A_{" + number + "}=\\frac{" + number + "}{" + (number + 1) + "}");
+            source.AppendLine("\\]");
+            source.AppendLine("\\[");
+            source.AppendLine("B_{" + number + "}=\\sum_{k=1}^{" + number + "}k");
+            source.AppendLine("\\]");
+        }
+        source.AppendLine("\\section{21. 综合案例与表达规范}");
+        source.AppendLine("最后一节没有额外公式，但必须完整保留。");
+        source.AppendLine("\\section*{排版检查清单}");
+        source.AppendLine("正文结束。");
+
+        var document = WordBulkImportParser.Parse(
+            source.ToString(),
+            WordBulkSourceFormat.Latex,
+            WordBulkFormulaObjectMode.Omml);
+
+        Assert.Equal(23, document.Blocks.Count(block => block.Kind == WordBulkBlockKind.Heading));
+        Assert.Equal(100, document.FormulaCount);
+        Assert.Equal(60, document.InlineFormulaCount);
+        Assert.Equal(40, document.DisplayFormulaCount);
+        Assert.Contains(
+            document.Blocks.SelectMany(block => block.Runs),
+            run => !run.IsFormula && run.Code && run.Text == "\\documentclass");
+        Assert.Contains(
+            document.Blocks.SelectMany(block => block.Runs),
+            run => !run.IsFormula && run.Code && run.Text == "\\begin{document}");
+        Assert.Contains(
+            document.Blocks.SelectMany(block => block.Runs),
+            run => !run.IsFormula && run.Code && run.Text == "\\end{document}");
+        Assert.Contains(
+            document.Blocks.SelectMany(block => block.Runs),
+            run => !run.IsFormula && run.Bold && run.Text.Contains("常见公式与排版语法综合练习", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            document.Blocks.SelectMany(block => block.Runs),
+            run => !run.IsFormula && run.Text.Contains("\\Large", StringComparison.Ordinal));
+        Assert.Contains(
+            document.Blocks.SelectMany(block => block.Runs),
+            run => !run.IsFormula && run.Text.Contains("最后一节没有额外公式", StringComparison.Ordinal));
+        Assert.Contains(
+            document.Blocks.SelectMany(block => block.Runs),
+            run => !run.IsFormula && run.Text.Contains("正文结束", StringComparison.Ordinal));
+        Assert.Empty(document.Warnings);
+    }
+
+    [Fact]
+    public void LatexDocumentBoundariesIgnoreCommentsAndLiteralRegions()
+    {
+        const string source = """
+            % \begin{document}
+            \documentclass{article}
+            \begin{verbatim}
+            \begin{document}
+            \end{document}
+            \end{verbatim}
+            \begin{document}
+            正文前 \verb|\end{document}| 正文后 $x=1$。
+            \end{document}
+            尾部不应导入。
+            """;
+
+        var document = WordBulkImportParser.Parse(
+            source,
+            WordBulkSourceFormat.Latex,
+            WordBulkFormulaObjectMode.Omml);
+
+        Assert.Equal(1, document.FormulaCount);
+        Assert.Contains(
+            document.Blocks.SelectMany(block => block.Runs),
+            run => !run.IsFormula && run.Text.Contains("正文前", StringComparison.Ordinal));
+        Assert.Contains(
+            document.Blocks.SelectMany(block => block.Runs),
+            run => !run.IsFormula && run.Code && run.Text == "\\end{document}");
+        Assert.DoesNotContain(
+            document.Blocks.SelectMany(block => block.Runs),
+            run => !run.IsFormula && run.Text.Contains("尾部不应导入", StringComparison.Ordinal));
+        Assert.Empty(document.Warnings);
+    }
+
+    [Fact]
     public void LatexAmsDisplayEnvironmentsRemainRenderableAndEditable()
     {
         const string source = """

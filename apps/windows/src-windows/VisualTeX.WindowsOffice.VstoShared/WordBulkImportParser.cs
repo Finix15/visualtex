@@ -454,6 +454,105 @@ internal static class WordBulkImportParser
         return WordBulkSourceFormat.Markdown;
     }
 
+    private static bool TryReadLatexInlineLiteral(
+        string text,
+        int index,
+        out string content,
+        out int nextIndex)
+    {
+        content = string.Empty;
+        nextIndex = index;
+        if (index < 0 || index >= text.Length || text[index] != '\\' || IsEscaped(text, index))
+            return false;
+        var match = Regex.Match(
+            text.Substring(index),
+            @"^\\(?:verb|lstinline)\*?(?![A-Za-z@])(?:\[[^\]\r\n]*\])?",
+            RegexOptions.IgnoreCase);
+        if (!match.Success) return false;
+        var delimiterIndex = index + match.Length;
+        if (delimiterIndex >= text.Length) return false;
+        var delimiter = text[delimiterIndex];
+        if (char.IsLetterOrDigit(delimiter) || char.IsWhiteSpace(delimiter)) return false;
+        var close = text.IndexOf(delimiter, delimiterIndex + 1);
+        if (close < 0) return false;
+        content = text.Substring(delimiterIndex + 1, close - delimiterIndex - 1);
+        nextIndex = close + 1;
+        return true;
+    }
+
+    private static int FindLatexInlineLiteralEnd(string text, int index)
+    {
+        if (TryReadLatexInlineLiteral(text, index, out _, out var nextIndex))
+            return nextIndex;
+        if (index < 0 || index >= text.Length || text[index] != '\\' || IsEscaped(text, index))
+            return -1;
+        var match = Regex.Match(
+            text.Substring(index),
+            @"^\\(?:verb|lstinline)\*?(?![A-Za-z@])(?:\[[^\]\r\n]*\])?",
+            RegexOptions.IgnoreCase);
+        if (!match.Success) return -1;
+        var lineEnd = text.IndexOf('\n', index + match.Length);
+        return lineEnd >= 0 ? lineEnd : text.Length;
+    }
+
+    private static int FindLatexDocumentToken(string source, string token, int startIndex = 0)
+    {
+        for (var index = Math.Max(0, startIndex); index < source.Length;)
+        {
+            var literalEnd = FindLatexInlineLiteralEnd(source, index);
+            if (literalEnd > index)
+            {
+                index = literalEnd;
+                continue;
+            }
+            if (source[index] == '%' && !IsEscaped(source, index))
+            {
+                var lineEnd = source.IndexOf('\n', index + 1);
+                index = lineEnd >= 0 ? lineEnd + 1 : source.Length;
+                continue;
+            }
+            if (source[index] == '\\' && !IsEscaped(source, index))
+            {
+                var literalEnvironment = Regex.Match(
+                    source.Substring(index),
+                    @"^\\begin\{(?<name>verbatim\*?|lstlisting\*?)\}(?:\[[^\]\r\n]*\])?",
+                    RegexOptions.IgnoreCase);
+                if (literalEnvironment.Success)
+                {
+                    var endToken = $"\\end{{{literalEnvironment.Groups["name"].Value}}}";
+                    var environmentEnd = source.IndexOf(
+                        endToken,
+                        index + literalEnvironment.Length,
+                        StringComparison.OrdinalIgnoreCase);
+                    index = environmentEnd >= 0
+                        ? environmentEnd + endToken.Length
+                        : source.Length;
+                    continue;
+                }
+                if (index <= source.Length - token.Length
+                    && source.IndexOf(token, index, token.Length, StringComparison.OrdinalIgnoreCase) == index)
+                    return index;
+            }
+            index++;
+        }
+        return -1;
+    }
+
+    private static int FindLatexCommentStart(string line)
+    {
+        for (var index = 0; index < line.Length; index++)
+        {
+            var literalEnd = FindLatexInlineLiteralEnd(line, index);
+            if (literalEnd > index)
+            {
+                index = literalEnd - 1;
+                continue;
+            }
+            if (line[index] == '%' && !IsEscaped(line, index)) return index;
+        }
+        return -1;
+    }
+
     private static string NormalizeSource(
         string source,
         WordBulkSourceFormat format,
@@ -465,17 +564,16 @@ internal static class WordBulkImportParser
             .Trim('\uFEFF', ' ', '\t', '\n');
         if (format != WordBulkSourceFormat.Latex) return normalized;
 
-        var begin = normalized.IndexOf("\\begin{document}", StringComparison.OrdinalIgnoreCase);
+        const string beginToken = "\\begin{document}";
+        const string endToken = "\\end{document}";
+        var begin = FindLatexDocumentToken(normalized, beginToken);
         if (begin >= 0)
         {
-            begin += "\\begin{document}".Length;
-            var end = normalized.IndexOf(
-                "\\end{document}",
-                begin,
-                StringComparison.OrdinalIgnoreCase);
+            var contentStart = begin + beginToken.Length;
+            var end = FindLatexDocumentToken(normalized, endToken, contentStart);
             normalized = end >= 0
-                ? normalized.Substring(begin, end - begin)
-                : normalized.Substring(begin);
+                ? normalized.Substring(contentStart, end - contentStart)
+                : normalized.Substring(contentStart);
             if (end < 0) warnings.Add("LaTeX 文档缺少 \\end{document}，已导入其余内容。");
         }
 
@@ -504,7 +602,7 @@ internal static class WordBulkImportParser
                 continue;
             }
 
-            var comment = FindUnescaped(line, '%', 0);
+            var comment = FindLatexCommentStart(line);
             cleaned.Append(comment >= 0 ? line.Substring(0, comment) : line)
                 .Append('\n');
         }
@@ -1234,6 +1332,29 @@ internal static class WordBulkImportParser
             }
             else if (text[index] == '\\')
             {
+                if (TryReadLatexInlineLiteral(text, index, out var literal, out var literalEnd))
+                {
+                    Flush();
+                    runs.Add(new WordBulkRun
+                    {
+                        Text = literal,
+                        Bold = bold,
+                        Italic = italic,
+                        Code = true,
+                    });
+                    index = literalEnd;
+                    goto ContinueOuter;
+                }
+                var declaration = Regex.Match(
+                    text.Substring(index),
+                    @"^\\(?:tiny|scriptsize|footnotesize|small|normalsize|large|huge|centering|raggedright|raggedleft)(?![A-Za-z@])",
+                    RegexOptions.IgnoreCase);
+                if (declaration.Success)
+                {
+                    Flush();
+                    index += declaration.Length;
+                    goto ContinueOuter;
+                }
                 foreach (var command in new[]
                          {
                              (Name: "\\textbf{", Bold: true, Italic: italic, Code: code),

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
+import { readFileSync } from "node:fs";
 import {
   parseDocumentImport,
   type DocumentImportBlock,
@@ -148,6 +149,57 @@ $$`,
   },
 ];
 
+const latexVerbatimBoundaryFixture = [
+  String.raw`\section*{综合 LaTeX 正文示例}`,
+  "",
+  String.raw`这是一段不含 \verb|\documentclass|、导言区和宏包加载命令的正文代码，可直接放入已有文档的 \verb|\begin{document}| 与 \verb|\end{document}| 之间。`,
+  "",
+  String.raw`\begin{center}`,
+  String.raw`\textbf{\Large 常见公式与排版语法综合练习}`,
+  String.raw`\end{center}`,
+  "",
+  String.raw`\begin{quote}`,
+  String.raw`\emph{排版的目标不是堆叠命令，而是让结构、符号和论证关系更加清楚。}`,
+  String.raw`\end{quote}`,
+  "",
+  String.raw`\begin{itemize}`,
+  String.raw`\item \textbf{行内公式：}适合嵌入普通句子。`,
+  String.raw`\item \textbf{行间公式：}适合核心结论。`,
+  String.raw`\item \textbf{高亮语法：}包括粗体和斜体。`,
+  String.raw`\end{itemize}`,
+  "",
+  String.raw`\begin{enumerate}`,
+  String.raw`\item 先定义符号与假设；`,
+  String.raw`\item 再给出推导过程；`,
+  String.raw`\item 最后解释结果。`,
+  String.raw`\end{enumerate}`,
+  "",
+  String.raw`\begin{description}`,
+  String.raw`\item[定义] 明确对象是什么。`,
+  String.raw`\item[定理] 陈述在什么条件下成立。`,
+  String.raw`\item[证明] 给出逻辑过程。`,
+  String.raw`\end{description}`,
+  "",
+  ...Array.from({ length: 20 }, (_, index) => {
+    const number = index + 1;
+    return [
+      String.raw`\section{${number}. 综合公式}`,
+      `正文 $x_${number}=a_${number}+b_${number}$、$y_${number}=c_${number}-d_${number}$ 与 $z_${number}=e_${number}f_${number}$。`,
+      String.raw`\[A_{${number}}=\frac{${number}}{${number}+1}\]`,
+      String.raw`\[B_{${number}}=\sum_{k=1}^{${number}}k\]`,
+    ].join("\n");
+  }),
+  String.raw`\section{21. 综合案例与表达规范}`,
+  "最后一节没有额外公式，但必须完整保留。",
+  String.raw`\section*{排版检查清单}`,
+  "正文结束。",
+].join("\n");
+
+const exactLatexUserFixture = readFileSync(
+  new URL("./fixtures/latex_100_formulas_4000_chinese.tex", import.meta.url),
+  "utf8",
+);
+
 const latexBaseline: CoverageCase[] = [
   {
     name: "full document preamble stripping and comments",
@@ -163,6 +215,68 @@ const latexBaseline: CoverageCase[] = [
       !text(parsed).includes("documentclass") &&
       !text(parsed).includes("remove this") &&
       text(parsed).includes("保留 % 百分号"),
+  },
+  {
+    name: "verbatim document command examples do not truncate a LaTeX fragment",
+    format: "latex",
+    source: latexVerbatimBoundaryFixture,
+    check: (parsed) => {
+      const allFormulas = formulas(parsed);
+      const codeRuns = runs(parsed).filter(
+        (run): run is Extract<DocumentImportRun, { kind: "text" }> =>
+          run.kind === "text" && Boolean(run.code),
+      );
+      return (
+        blocksOf(parsed, "heading").length === 23 &&
+        allFormulas.length === 100 &&
+        allFormulas.filter((run) => !run.display).length === 60 &&
+        allFormulas.filter((run) => run.display).length === 40 &&
+        codeRuns.map((run) => run.text).join("|") ===
+          String.raw`\documentclass|\begin{document}|\end{document}` &&
+        text(parsed).includes("最后一节没有额外公式，但必须完整保留。") &&
+        text(parsed).includes("常见公式与排版语法综合练习") &&
+        !text(parsed).includes("\\Large") &&
+        text(parsed).includes("正文结束。")
+      );
+    },
+  },
+  {
+    name: "uploaded 8743-character 100-formula LaTeX fixture parses completely",
+    format: "latex",
+    source: exactLatexUserFixture,
+    check: (parsed) => {
+      const allFormulas = formulas(parsed);
+      return (
+        exactLatexUserFixture.length === 8743 &&
+        blocksOf(parsed, "heading").length === 23 &&
+        allFormulas.length === 100 &&
+        allFormulas.filter((run) => !run.display).length === 60 &&
+        allFormulas.filter((run) => run.display).length === 40 &&
+        blocksOf(parsed, "bullet").length === 6 &&
+        blocksOf(parsed, "numbered").length === 8 &&
+        text(parsed).includes("这是一段不含 \\documentclass、导言区和宏包加载命令的正文代码") &&
+        text(parsed).includes("正文结束：共包含 100 个数学公式示例") &&
+        !text(parsed).includes("\\Large")
+      );
+    },
+  },
+  {
+    name: "real document boundaries ignore comments and inline literal examples",
+    format: "latex",
+    source: String.raw`% \begin{document}
+\documentclass{article}
+\begin{verbatim}
+\begin{document}
+\end{document}
+\end{verbatim}
+\begin{document}
+正文前 \verb|\end{document}| 正文后 $x=1$。
+\end{document}
+尾部不应导入。`,
+    check: (parsed) =>
+      text(parsed).includes("正文前 \\end{document} 正文后") &&
+      !text(parsed).includes("尾部不应导入") &&
+      formulas(parsed).length === 1,
   },
   {
     name: "all common sectioning commands",
