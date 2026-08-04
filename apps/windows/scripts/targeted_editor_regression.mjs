@@ -7,9 +7,9 @@ import {
 } from "./browser_test_runtime.mjs";
 
 const scenario = process.argv[2];
-if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "usage-ranking", "native-space-selection", "candidate-query-reset", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "direct-shortcut-placeholder", "toolbar-placeholder-overflow", "horizontal-overflow", "accent-placeholder", "caret-probe", "scripts", "upright", "context-style", "suggestions", "navigation", "geometry", "source-layout", "toolbar-compact", "toolbar-postfix", "formula-tiles", "formula-formatting", "cursor-placement", "settings", "layout", "multi-line-selection", "delete", "export"]).has(scenario)) {
+if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "usage-ranking", "native-space-selection", "candidate-query-reset", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "direct-shortcut-placeholder", "toolbar-placeholder-overflow", "horizontal-overflow", "accent-placeholder", "caret-probe", "scripts", "upright", "context-style", "suggestions", "navigation", "geometry", "source-layout", "toolbar-compact", "toolbar-postfix", "classic-panel-resize", "ocr-storage-ui", "formula-tiles", "formula-formatting", "cursor-placement", "settings", "layout", "multi-line-selection", "delete", "export"]).has(scenario)) {
   throw new Error(
-    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|usage-ranking|native-space-selection|candidate-query-reset|raw-placeholder-visual|placeholder-selection|structural-placeholder|direct-shortcut-placeholder|toolbar-placeholder-overflow|horizontal-overflow|accent-placeholder|caret-probe|scripts|upright|context-style|suggestions|navigation|geometry|source-layout|toolbar-compact|toolbar-postfix|formula-tiles|formula-formatting|cursor-placement|settings|layout|multi-line-selection|delete|export>",
+    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|usage-ranking|native-space-selection|candidate-query-reset|raw-placeholder-visual|placeholder-selection|structural-placeholder|direct-shortcut-placeholder|toolbar-placeholder-overflow|horizontal-overflow|accent-placeholder|caret-probe|scripts|upright|context-style|suggestions|navigation|geometry|source-layout|toolbar-compact|toolbar-postfix|classic-panel-resize|ocr-storage-ui|formula-tiles|formula-formatting|cursor-placement|settings|layout|multi-line-selection|delete|export>",
   );
 }
 
@@ -670,6 +670,782 @@ async function main() {
 
       console.log(JSON.stringify({ toolbar, selectionState }, null, 2));
       console.log("Targeted multiline selection visual regression passed");
+      return;
+    }
+
+    if (scenario === "ocr-storage-ui") {
+      await evaluate(`(() => {
+        localStorage.setItem("visualtex.onboarding.v3.completed", "true");
+        let callbackId = 1;
+        const callbacks = new Map();
+        const initialRuntime = {
+          installed: true,
+          pythonPath: "C:\\\\Users\\\\Tester\\\\VisualTeX-OCR\\\\python\\\\python.exe",
+          pythonVersion: "3.12.10",
+          paddleVersion: "3.3.1",
+          paddleocrVersion: "3.7.0",
+          runtimePath: "C:\\\\Users\\\\Tester\\\\VisualTeX-OCR",
+          storageConfigPath: "C:\\\\Users\\\\Tester\\\\AppData\\\\Roaming\\\\VisualTeX\\\\ocr-storage.json",
+          storageSource: "configured",
+          storageManaged: true,
+          storageAvailableBytes: 68719476736,
+          storagePersistentAcrossUninstall: true,
+          runtimeBundleAvailable: true,
+          offlineBundleAvailable: false,
+          installedModels: ["PP-FormulaNet_plus-M"],
+          damagedModels: [],
+          modelCatalogAvailable: true,
+          defaultModel: "PP-FormulaNet_plus-M",
+          message: "OCR runtime ready",
+        };
+        const runtimeAt = (parent, installed) => {
+          const runtimePath = parent + "\\\\VisualTeX-OCR";
+          return {
+            ...initialRuntime,
+            installed,
+            pythonPath: installed ? runtimePath + "\\\\python\\\\python.exe" : null,
+            pythonVersion: installed ? "3.12.10" : null,
+            paddleVersion: installed ? "3.3.1" : null,
+            paddleocrVersion: installed ? "3.7.0" : null,
+            runtimePath,
+            storageAvailableBytes: 128849018880,
+            installedModels: [],
+            message: installed
+              ? "OCR runtime reinstalled at the selected location"
+              : "OCR runtime is not installed at the selected location",
+          };
+        };
+        window.__visualtexOcrStorageCalls = [];
+        window.__visualtexOcrCurrentRuntime = initialRuntime;
+        window.__visualtexOcrDialogSelections = [
+          "D:\\\\OCR Data",
+          "E:\\\\Second OCR",
+        ];
+        window.__visualtexDelayNextRuntimeStatus = false;
+        window.confirm = () => true;
+        window.__TAURI_INTERNALS__ = {
+          metadata: {
+            currentWindow: { label: "main" },
+            currentWebview: { windowLabel: "main", label: "main" },
+          },
+          transformCallback(callback, once = false) {
+            const id = callbackId++;
+            callbacks.set(id, { callback, once });
+            return id;
+          },
+          unregisterCallback(id) {
+            callbacks.delete(id);
+          },
+          async invoke(command, args) {
+            window.__visualtexOcrStorageCalls.push({ command, args });
+            if (command === "get_ocr_runtime_status") {
+              const snapshot = window.__visualtexOcrCurrentRuntime;
+              if (window.__visualtexDelayNextRuntimeStatus) {
+                window.__visualtexDelayNextRuntimeStatus = false;
+                await new Promise((resolve) => setTimeout(resolve, 450));
+                return initialRuntime;
+              }
+              return snapshot;
+            }
+            if (command === "get_ocr_install_status") {
+              const installed = Boolean(window.__visualtexOcrCurrentRuntime?.installed);
+              return {
+                schemaVersion: 1,
+                state: installed ? "complete" : "notInstalled",
+                currentStep: null,
+                completedSteps: installed ? ["dependencies", "verify"] : [],
+                percent: installed ? 100 : 0,
+                message: installed ? "OCR runtime ready" : "OCR runtime is not installed",
+                detail: null,
+                error: null,
+                logPath: "C:\\\\fake\\\\ocr-install.log",
+                updatedAtMs: Date.now(),
+              };
+            }
+            if (command === "get_ocr_model_catalog") {
+              return {
+                schemaVersion: 1,
+                platform: "windows",
+                architecture: "x64",
+                entries: [
+                  {
+                    model: "PP-FormulaNet_plus-S",
+                    url: "https://example.invalid/S",
+                    size: 200050659,
+                    sha256: "a".repeat(64),
+                  },
+                  {
+                    model: "PP-FormulaNet_plus-M",
+                    url: "https://example.invalid/M",
+                    size: 425830895,
+                    sha256: "b".repeat(64),
+                  },
+                  {
+                    model: "PP-FormulaNet_plus-L",
+                    url: "https://example.invalid/L",
+                    size: 670293702,
+                    sha256: "c".repeat(64),
+                  },
+                ],
+              };
+            }
+            if (command === "get_ocr_model_download_status") return null;
+            if (command === "configure_ocr_storage_location") {
+              window.__visualtexOcrCurrentRuntime = runtimeAt(args.selectedDirectory, false);
+              return window.__visualtexOcrCurrentRuntime;
+            }
+            if (command === "install_ocr_runtime") {
+              const currentPath = window.__visualtexOcrCurrentRuntime.runtimePath;
+              const parent = currentPath.replace(/\\\\VisualTeX-OCR$/i, "");
+              window.__visualtexOcrCurrentRuntime = runtimeAt(parent, true);
+              return window.__visualtexOcrCurrentRuntime;
+            }
+            if (command === "reset_ocr_runtime") {
+              const currentPath = window.__visualtexOcrCurrentRuntime.runtimePath;
+              const parent = currentPath.replace(/\\\\VisualTeX-OCR$/i, "");
+              window.__visualtexOcrCurrentRuntime = runtimeAt(parent, false);
+              return window.__visualtexOcrCurrentRuntime;
+            }
+            if (command === "open_ocr_storage_location") return null;
+            if (command === "plugin:dialog|open") {
+              return window.__visualtexOcrDialogSelections.shift() ?? null;
+            }
+            if (
+              command === "plugin:event|listen" ||
+              command === "plugin:event|unlisten"
+            ) {
+              return 1;
+            }
+            throw new Error("Unexpected OCR storage UI command: " + command);
+          },
+        };
+      })()`);
+
+      await waitForEvaluation(`(() => ({
+        ready: Boolean(document.querySelector(".menu-button")),
+      }))()`, "main menu button for OCR storage UI");
+      await clickSelectorWithPointer(".menu-button");
+      await waitForEvaluation(`(() => {
+        const button = document.querySelector(".menu-button");
+        return {
+          ready: Boolean(document.querySelector("#app-main-menu")),
+          expanded: button?.getAttribute("aria-expanded") ?? null,
+          buttonConnected: Boolean(button?.isConnected),
+          onboardingVisible: Boolean(document.querySelector(".onboarding-overlay")),
+        };
+      })()`, "main menu for OCR storage UI");
+      await evaluate(`(() => {
+        const item = [...document.querySelectorAll('#app-main-menu [role="menuitem"]')]
+          .find((button) => /图片公式识别|Formula image OCR/.test(button.textContent || ""));
+        if (!item) throw new Error("Missing OCR menu item");
+        item.click();
+      })()`);
+
+      const initialState = await waitForEvaluation(`(() => {
+        const dialog = document.querySelector(".ocr-dialog");
+        const card = dialog?.querySelector(".ocr-storage-location");
+        const code = card?.querySelector("code");
+        const buttons = [...(card?.querySelectorAll("button") ?? [])];
+        const dialogRect = dialog?.getBoundingClientRect();
+        const cardRect = card?.getBoundingClientRect();
+        return {
+          ready:
+            Boolean(dialog && card && code && dialogRect && cardRect) &&
+            code.textContent.includes("VisualTeX-OCR") &&
+            buttons.length === 2 &&
+            buttons.some((button) => /更改位置|Change location/.test(button.textContent || "")) &&
+            buttons.some((button) => /打开文件夹|Open folder/.test(button.textContent || "")) &&
+            cardRect.left >= dialogRect.left - 1 &&
+            cardRect.right <= dialogRect.right + 1 &&
+            card.scrollWidth <= card.clientWidth + 1,
+          path: code?.textContent ?? "",
+          labels: [...(card?.querySelectorAll("span") ?? [])].map((item) => item.textContent),
+          buttonLabels: buttons.map((button) => button.textContent?.trim()),
+          cardOverflow: card ? card.scrollWidth - card.clientWidth : -1,
+        };
+      })()`, "independent OCR storage card");
+
+      await evaluate(`(() => {
+        const card = document.querySelector(".ocr-storage-location");
+        const button = [...(card?.querySelectorAll("button") ?? [])]
+          .find((item) => /更改位置|Change location/.test(item.textContent || ""));
+        if (!button) throw new Error("Missing OCR storage change button");
+        button.click();
+      })()`);
+
+      const switchedState = await waitForEvaluation(`(() => {
+        const card = document.querySelector(".ocr-storage-location");
+        const code = card?.querySelector("code");
+        const calls = window.__visualtexOcrStorageCalls || [];
+        const configureCall = calls.find(
+          (item) => item.command === "configure_ocr_storage_location",
+        );
+        const installCall = calls.find(
+          (item) => item.command === "install_ocr_runtime",
+        );
+        return {
+          ready:
+            Boolean(card && code && configureCall && installCall) &&
+            code.textContent.includes("D:\\\\OCR Data\\\\VisualTeX-OCR") &&
+            configureCall.args?.selectedDirectory === "D:\\\\OCR Data" &&
+            card.scrollWidth <= card.clientWidth + 1,
+          path: code?.textContent ?? "",
+          configureArgs: configureCall?.args ?? null,
+          reinstalled: Boolean(installCall),
+          calls: calls.map((item) => item.command),
+        };
+      })()`, "reset and switched OCR storage UI state");
+
+      // Reopen the dialog with a deliberately delayed stale status request,
+      // then change the location a second time before that old response returns.
+      // The delayed C: result must never overwrite the new E: path.
+      await evaluate(`(() => {
+        window.__visualtexDelayNextRuntimeStatus = true;
+        document.querySelector(".ocr-dialog-header .icon-button")?.click();
+      })()`);
+      await waitForEvaluation(`(() => ({
+        ready: !document.querySelector(".ocr-dialog"),
+      }))()`, "closed OCR dialog before second path change");
+      await clickSelectorWithPointer(".menu-button");
+      await evaluate(`(() => {
+        const item = [...document.querySelectorAll('#app-main-menu [role="menuitem"]')]
+          .find((button) => /图片公式识别|Formula image OCR/.test(button.textContent || ""));
+        if (!item) throw new Error("Missing OCR menu item for second open");
+        item.click();
+      })()`);
+      await waitForEvaluation(`(() => ({
+        ready: Boolean(document.querySelector(".ocr-dialog .ocr-storage-location")),
+      }))()`, "reopened OCR dialog for stale path race");
+      await sleep(60);
+      await evaluate(`(() => {
+        const button = [...document.querySelectorAll(".ocr-storage-location button")]
+          .find((item) => /更改位置|Change location/.test(item.textContent || ""));
+        if (!button) throw new Error("Missing second OCR storage change button");
+        button.click();
+      })()`);
+      const secondSwitchState = await waitForEvaluation(`(() => {
+        const card = document.querySelector(".ocr-storage-location");
+        const code = card?.querySelector("code");
+        const calls = window.__visualtexOcrStorageCalls || [];
+        const configureCalls = calls.filter(
+          (item) => item.command === "configure_ocr_storage_location",
+        );
+        return {
+          ready:
+            configureCalls.length === 2 &&
+            code?.textContent.includes("E:\\\\Second OCR\\\\VisualTeX-OCR"),
+          path: code?.textContent ?? "",
+          configureArgs: configureCalls.at(-1)?.args ?? null,
+        };
+      })()`, "second OCR storage location change");
+      await sleep(600);
+      const stalePathRaceState = await evaluate(`(() => {
+        const card = document.querySelector(".ocr-storage-location");
+        const code = card?.querySelector("code");
+        return {
+          path: code?.textContent ?? "",
+          installedReady: /本地 OCR 环境已就绪|Local OCR runtime ready/.test(
+            document.querySelector(".ocr-runtime-summary strong")?.textContent || "",
+          ),
+          stalePathRejected: code?.textContent.includes("E:\\\\Second OCR\\\\VisualTeX-OCR"),
+        };
+      })()`);
+      if (!stalePathRaceState.stalePathRejected || !stalePathRaceState.installedReady) {
+        throw new Error(`A delayed stale runtime query overwrote the second path: ${JSON.stringify(stalePathRaceState)}`);
+      }
+
+      // Repeat the race for reset: a late old "installed" response must not
+      // restore the ready card after reset_ocr_runtime returned uninstalled.
+      await evaluate(`(() => {
+        window.__visualtexDelayNextRuntimeStatus = true;
+        document.querySelector(".ocr-dialog-header .icon-button")?.click();
+      })()`);
+      await waitForEvaluation(`(() => ({ ready: !document.querySelector(".ocr-dialog") }))()`, "closed OCR dialog before reset race");
+      await clickSelectorWithPointer(".menu-button");
+      await evaluate(`(() => {
+        const item = [...document.querySelectorAll('#app-main-menu [role="menuitem"]')]
+          .find((button) => /图片公式识别|Formula image OCR/.test(button.textContent || ""));
+        if (!item) throw new Error("Missing OCR menu item for reset race");
+        item.click();
+      })()`);
+      await waitForEvaluation(`(() => ({ ready: Boolean(document.querySelector(".ocr-runtime-details .is-danger")) }))()`, "OCR reset button");
+      await sleep(60);
+      await evaluate(`(() => {
+        const button = document.querySelector(".ocr-runtime-details .is-danger");
+        if (!button) throw new Error("Missing OCR reset button");
+        button.click();
+      })()`);
+      const resetState = await waitForEvaluation(`(() => {
+        const path = document.querySelector(".ocr-storage-location code")?.textContent ?? "";
+        const heading = document.querySelector(".ocr-runtime-summary strong")?.textContent ?? "";
+        return {
+          ready:
+            path.includes("E:\\\\Second OCR\\\\VisualTeX-OCR") &&
+            /尚未安装 OCR 运行环境|OCR runtime is not installed/.test(heading) &&
+            !document.querySelector(".ocr-runtime-details"),
+          path,
+          heading,
+        };
+      })()`, "OCR reset uninstalled state");
+      await sleep(600);
+      const staleResetRaceState = await evaluate(`(() => {
+        const path = document.querySelector(".ocr-storage-location code")?.textContent ?? "";
+        const heading = document.querySelector(".ocr-runtime-summary strong")?.textContent ?? "";
+        return {
+          path,
+          heading,
+          staleInstalledRejected:
+            path.includes("E:\\\\Second OCR\\\\VisualTeX-OCR") &&
+            /尚未安装 OCR 运行环境|OCR runtime is not installed/.test(heading) &&
+            !document.querySelector(".ocr-runtime-details"),
+        };
+      })()`);
+      if (!staleResetRaceState.staleInstalledRejected) {
+        throw new Error(`A delayed stale installed status overwrote reset: ${JSON.stringify(staleResetRaceState)}`);
+      }
+
+      await evaluate(`(() => {
+        const card = document.querySelector(".ocr-storage-location");
+        const button = [...(card?.querySelectorAll("button") ?? [])]
+          .find((item) => /打开文件夹|Open folder/.test(item.textContent || ""));
+        if (!button) throw new Error("Missing OCR storage open button");
+        button.click();
+      })()`);
+      const openState = await waitForEvaluation(`(() => {
+        const calls = window.__visualtexOcrStorageCalls || [];
+        return {
+          ready: calls.some((item) => item.command === "open_ocr_storage_location"),
+          calls: calls.map((item) => item.command),
+        };
+      })()`, "open OCR storage folder command");
+
+      console.log(
+        JSON.stringify({ initialState, switchedState, openState }, null, 2),
+      );
+      console.log("Targeted OCR independent storage UI regression passed");
+      return;
+    }
+
+    if (scenario === "classic-panel-resize") {
+      await evaluate(`(() => {
+        const storageKey = "visualtex-editor";
+        const persisted = JSON.parse(localStorage.getItem(storageKey) || "{}");
+        persisted.state = {
+          ...(persisted.state || {}),
+          editorLayout: "classic",
+        };
+        localStorage.setItem(storageKey, JSON.stringify(persisted));
+        localStorage.setItem("visualtex-classic-tile-width", "300");
+        localStorage.setItem("visualtex-classic-dock-height", "240");
+      })()`);
+      await client.send("Page.reload", { ignoreCache: true });
+
+      const initial = await waitForEvaluation(`(() => {
+        const tileHandle = document.querySelector(".classic-tile-resizer");
+        const dockHandle = document.querySelector(".classic-dock-resizer");
+        const tilePanel = document.querySelector(".classic-tile-toolbar");
+        const dock = document.querySelector(".classic-bottom-dock");
+        const toolbar = document.querySelector(".classic-bottom-toolbar");
+        const strip = toolbar?.querySelector(".template-strip");
+        const rowCount = Number(toolbar?.dataset.toolbarRowCount || 0);
+        const computedRowCount = strip
+          ? getComputedStyle(strip).gridTemplateRows.split(/\\s+/).filter(Boolean).length
+          : 0;
+        return {
+          ready:
+            Boolean(tileHandle && dockHandle && tilePanel && dock && toolbar) &&
+            rowCount >= 2 &&
+            computedRowCount === rowCount,
+          tileWidth: tilePanel?.getBoundingClientRect().width ?? 0,
+          dockHeight: dock?.getBoundingClientRect().height ?? 0,
+          rowCount,
+          computedRowCount,
+        };
+      })()`, "classic resizable panels");
+
+      const handleCenter = async (selector) =>
+        evaluate(`(() => {
+          const handle = document.querySelector(${JSON.stringify(selector)});
+          const rect = handle?.getBoundingClientRect();
+          return rect
+            ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+            : null;
+        })()`);
+
+      const tileStart = await handleCenter(".classic-tile-resizer");
+      if (!tileStart) throw new Error("Missing classic tile resize handle");
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: tileStart.x,
+        y: tileStart.y,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: tileStart.x,
+        y: tileStart.y,
+        button: "left",
+        buttons: 1,
+        clickCount: 1,
+      });
+      for (let step = 1; step <= 6; step += 1) {
+        await client.send("Input.dispatchMouseEvent", {
+          type: "mouseMoved",
+          x: tileStart.x - step * 20,
+          y: tileStart.y,
+          button: "left",
+          buttons: 1,
+        });
+        await sleep(22);
+      }
+      const tileDuringDrag = await waitForEvaluation(`(() => {
+        const panel = document.querySelector(".classic-tile-toolbar");
+        const buttons = [...(panel?.querySelectorAll(".formula-tile-button") ?? [])];
+        const width = panel?.getBoundingClientRect().width ?? 0;
+        const firstRect = buttons[0]?.getBoundingClientRect();
+        const singleColumn = Boolean(firstRect) && buttons.every((button) =>
+          Math.abs(button.getBoundingClientRect().left - firstRect.left) < 1,
+        );
+        const previewsInside = buttons.every((button) => {
+          const buttonRect = button.getBoundingClientRect();
+          const visual = button.querySelector(".formula-tile-preview .ML__latex");
+          const visualRect = visual?.getBoundingClientRect();
+          return Boolean(
+            visualRect &&
+              visualRect.left >= buttonRect.left - 1 &&
+              visualRect.right <= buttonRect.right + 1 &&
+              visualRect.top >= buttonRect.top - 1 &&
+              visualRect.bottom <= buttonRect.bottom + 1,
+          );
+        });
+        return {
+          ready:
+            width >= ${initial.tileWidth + 90} &&
+            buttons.length === 10 &&
+            singleColumn &&
+            previewsInside,
+          width,
+          buttonWidth: firstRect?.width ?? 0,
+          buttonCount: buttons.length,
+          singleColumn,
+          previewsInside,
+          resizeMode: document.body.dataset.workspaceResize ?? "",
+        };
+      })()`, "live tile panel resize without formula overflow");
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: tileStart.x - 120,
+        y: tileStart.y,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+      });
+      const tileAfterDrag = await waitForEvaluation(`(() => {
+        const panel = document.querySelector(".classic-tile-toolbar");
+        const width = panel?.getBoundingClientRect().width ?? 0;
+        const stored = Number(localStorage.getItem("visualtex-classic-tile-width"));
+        return {
+          ready:
+            width >= ${initial.tileWidth + 90} &&
+            Math.abs(stored - width) < 3 &&
+            !document.body.dataset.workspaceResize,
+          width,
+          stored,
+        };
+      })()`, "persisted tile panel resize");
+
+      const growDockStart = await handleCenter(".classic-dock-resizer");
+      if (!growDockStart) throw new Error("Missing classic dock resize handle");
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: growDockStart.x,
+        y: growDockStart.y,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: growDockStart.x,
+        y: growDockStart.y,
+        button: "left",
+        buttons: 1,
+        clickCount: 1,
+      });
+      for (let step = 1; step <= 10; step += 1) {
+        await client.send("Input.dispatchMouseEvent", {
+          type: "mouseMoved",
+          x: growDockStart.x,
+          y: growDockStart.y - step * 18,
+          button: "left",
+          buttons: 1,
+        });
+        await sleep(28);
+      }
+      const dockGrowDuringDrag = await waitForEvaluation(`(() => {
+        const dock = document.querySelector(".classic-bottom-dock");
+        const toolbar = document.querySelector(".classic-bottom-toolbar");
+        const strip = toolbar?.querySelector(".template-strip");
+        const stripRect = strip?.getBoundingClientRect();
+        const height = dock?.getBoundingClientRect().height ?? 0;
+        const rowCount = Number(toolbar?.dataset.toolbarRowCount || 0);
+        const computedRowCount = strip
+          ? getComputedStyle(strip).gridTemplateRows.split(/\\s+/).filter(Boolean).length
+          : 0;
+        const buttonsVerticallyInside = Boolean(stripRect) &&
+          [...(toolbar?.querySelectorAll(".template-button") ?? [])].every((button) => {
+            const rect = button.getBoundingClientRect();
+            return rect.top >= stripRect.top - 1 && rect.bottom <= stripRect.bottom + 1;
+          });
+        return {
+          ready:
+            height >= ${initial.dockHeight + 150} &&
+            rowCount >= 6 &&
+            computedRowCount === rowCount &&
+            buttonsVerticallyInside &&
+            document.body.dataset.workspaceResize === "dock",
+          height,
+          rowCount,
+          computedRowCount,
+          buttonsVerticallyInside,
+          resizeMode: document.body.dataset.workspaceResize ?? "",
+        };
+      })()`, "live dock growth and toolbar row expansion");
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: growDockStart.x,
+        y: growDockStart.y - 180,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+      });
+
+      const shrinkDockStart = await handleCenter(".classic-dock-resizer");
+      if (!shrinkDockStart) throw new Error("Missing dock handle after growth");
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: shrinkDockStart.x,
+        y: shrinkDockStart.y,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: shrinkDockStart.x,
+        y: shrinkDockStart.y,
+        button: "left",
+        buttons: 1,
+        clickCount: 1,
+      });
+      for (let step = 1; step <= 15; step += 1) {
+        await client.send("Input.dispatchMouseEvent", {
+          type: "mouseMoved",
+          x: shrinkDockStart.x,
+          y: shrinkDockStart.y + step * 20,
+          button: "left",
+          buttons: 1,
+        });
+        await sleep(26);
+      }
+      const dockShrinkDuringDrag = await waitForEvaluation(`(() => {
+        const dock = document.querySelector(".classic-bottom-dock");
+        const toolbar = document.querySelector(".classic-bottom-toolbar");
+        const strip = toolbar?.querySelector(".template-strip");
+        const stripRect = strip?.getBoundingClientRect();
+        const height = dock?.getBoundingClientRect().height ?? 0;
+        const rowCount = Number(toolbar?.dataset.toolbarRowCount || 0);
+        const computedRowCount = strip
+          ? getComputedStyle(strip).gridTemplateRows.split(/\\s+/).filter(Boolean).length
+          : 0;
+        const buttonsVerticallyInside = Boolean(stripRect) &&
+          [...(toolbar?.querySelectorAll(".template-button") ?? [])].every((button) => {
+            const rect = button.getBoundingClientRect();
+            return rect.top >= stripRect.top - 1 && rect.bottom <= stripRect.bottom + 1;
+          });
+        return {
+          ready:
+            height <= 134 &&
+            rowCount === 1 &&
+            computedRowCount === rowCount &&
+            buttonsVerticallyInside &&
+            document.body.dataset.workspaceResize === "dock",
+          height,
+          rowCount,
+          computedRowCount,
+          buttonsVerticallyInside,
+        };
+      })()`, "live dock shrink to one complete toolbar row");
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: shrinkDockStart.x,
+        y: shrinkDockStart.y + 300,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+      });
+
+      const restoreTwoRowsStart = await handleCenter(".classic-dock-resizer");
+      if (!restoreTwoRowsStart) throw new Error("Missing dock handle after one-row shrink");
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: restoreTwoRowsStart.x,
+        y: restoreTwoRowsStart.y,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: restoreTwoRowsStart.x,
+        y: restoreTwoRowsStart.y,
+        button: "left",
+        buttons: 1,
+        clickCount: 1,
+      });
+      for (let step = 1; step <= 4; step += 1) {
+        await client.send("Input.dispatchMouseEvent", {
+          type: "mouseMoved",
+          x: restoreTwoRowsStart.x,
+          y: restoreTwoRowsStart.y - step * 18,
+          button: "left",
+          buttons: 1,
+        });
+        await sleep(24);
+      }
+      const dockRestoreTwoRows = await waitForEvaluation(`(() => {
+        const toolbar = document.querySelector(".classic-bottom-toolbar");
+        const strip = toolbar?.querySelector(".template-strip");
+        const rowCount = Number(toolbar?.dataset.toolbarRowCount || 0);
+        const computedRowCount = strip
+          ? getComputedStyle(strip).gridTemplateRows.split(/\\s+/).filter(Boolean).length
+          : 0;
+        return {
+          ready:
+            rowCount === 2 &&
+            computedRowCount === rowCount &&
+            document.body.dataset.workspaceResize === "dock",
+          rowCount,
+          computedRowCount,
+        };
+      })()`, "restored two-row toolbar for matrix tools");
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: restoreTwoRowsStart.x,
+        y: restoreTwoRowsStart.y - 72,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+      });
+
+      await evaluate(`document.querySelector(
+        '.classic-bottom-toolbar .toolbar-tab[data-category="matrix"]',
+      )?.click()`);
+      const compactMatrixState = await waitForEvaluation(`(() => {
+        const toolbar = document.querySelector(".classic-bottom-toolbar");
+        const strip = toolbar?.querySelector(".template-strip");
+        const builder = toolbar?.querySelector(".matrix-builder");
+        const grid = toolbar?.querySelector(".matrix-size-grid");
+        const stripRect = strip?.getBoundingClientRect();
+        const builderRect = builder?.getBoundingClientRect();
+        const gridRect = grid?.getBoundingClientRect();
+        const rowCount = Number(toolbar?.dataset.toolbarRowCount || 0);
+        return {
+          ready:
+            rowCount === 2 &&
+            Boolean(stripRect && builderRect && gridRect) &&
+            builderRect.top >= stripRect.top - 1 &&
+            builderRect.bottom <= stripRect.bottom + 1 &&
+            gridRect.top >= builderRect.top - 1 &&
+            gridRect.bottom <= builderRect.bottom + 1,
+          rowCount,
+          stripHeight: stripRect?.height ?? 0,
+          builderHeight: builderRect?.height ?? 0,
+          gridHeight: gridRect?.height ?? 0,
+        };
+      })()`, "compact two-row matrix toolbar");
+
+      await evaluate(`document.querySelector('[data-classic-bottom-view="source"]')?.click()`);
+      const sourceBefore = await waitForEvaluation(`(() => {
+        const slot = document.querySelector(".classic-source-pane-slot");
+        const editor = slot?.querySelector(".cm-editor");
+        const height = slot?.getBoundingClientRect().height ?? 0;
+        return {
+          ready: Boolean(slot && editor) && height > 80,
+          height,
+          editorHeight: editor?.getBoundingClientRect().height ?? 0,
+        };
+      })()`, "classic source panel after toolbar resize");
+
+      const sourceDockStart = await handleCenter(".classic-dock-resizer");
+      if (!sourceDockStart) throw new Error("Missing dock handle in source view");
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: sourceDockStart.x,
+        y: sourceDockStart.y,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: sourceDockStart.x,
+        y: sourceDockStart.y,
+        button: "left",
+        buttons: 1,
+        clickCount: 1,
+      });
+      for (let step = 1; step <= 4; step += 1) {
+        await client.send("Input.dispatchMouseEvent", {
+          type: "mouseMoved",
+          x: sourceDockStart.x,
+          y: sourceDockStart.y - step * 18,
+          button: "left",
+          buttons: 1,
+        });
+        await sleep(28);
+      }
+      const sourceDuringDrag = await waitForEvaluation(`(() => {
+        const slot = document.querySelector(".classic-source-pane-slot");
+        const editor = slot?.querySelector(".cm-editor");
+        const height = slot?.getBoundingClientRect().height ?? 0;
+        return {
+          ready:
+            height >= ${sourceBefore.height + 50} &&
+            (editor?.getBoundingClientRect().height ?? 0) >= ${sourceBefore.editorHeight + 45} &&
+            document.body.dataset.workspaceResize === "dock",
+          height,
+          editorHeight: editor?.getBoundingClientRect().height ?? 0,
+        };
+      })()`, "live source editor resize");
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: sourceDockStart.x,
+        y: sourceDockStart.y - 72,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+      });
+
+      const persistedState = await waitForEvaluation(`(() => {
+        const tile = Number(localStorage.getItem("visualtex-classic-tile-width"));
+        const dock = Number(localStorage.getItem("visualtex-classic-dock-height"));
+        return {
+          ready:
+            tile >= ${initial.tileWidth + 90} &&
+            dock >= ${sourceBefore.height + 72} &&
+            !document.body.dataset.workspaceResize,
+          tile,
+          dock,
+        };
+      })()`, "persisted classic panel dimensions");
+
+      console.log(
+        JSON.stringify(
+          {
+            initial,
+            tileDuringDrag,
+            tileAfterDrag,
+            dockGrowDuringDrag,
+            dockShrinkDuringDrag,
+            dockRestoreTwoRows,
+            compactMatrixState,
+            sourceBefore,
+            sourceDuringDrag,
+            persistedState,
+          },
+          null,
+          2,
+        ),
+      );
+      console.log("Targeted classic panel resize regression passed");
       return;
     }
 

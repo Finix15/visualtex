@@ -319,6 +319,85 @@ if ([string]$tauriConfig.bundle.windows.nsis.template -ne "./target/nsis-templat
     throw "Tauri is not configured to bundle with the verified custom NSIS template."
 }
 
+$nsisHooksPath = Join-Path $root "src-tauri\windows\hooks.nsh"
+$nsisHooksSource = Get-Content -LiteralPath $nsisHooksPath -Raw -Encoding UTF8
+if ($nsisHooksSource.Contains('$INSTDIR\VisualTeX.exe')) {
+    throw "NSIS Office integration hooks must not hard-code VisualTeX.exe; use the Tauri MAINBINARYNAME macro."
+}
+foreach ($requiredHookMarker in @(
+    'IfFileExists "$INSTDIR\${MAINBINARYNAME}.exe" 0 visualtex_main_binary_missing',
+    '-VisualTeXPath "$INSTDIR\${MAINBINARYNAME}.exe"',
+    'Behavior:Win32/Persistence.A!ml',
+    'Remove only known legacy application payloads.',
+    '%APPDATA%\VisualTeX\ocr-storage.json',
+    'preserve %APPDATA%\com.visualtex.studio.'
+)) {
+    if (-not $nsisHooksSource.Contains($requiredHookMarker)) {
+        throw "NSIS hooks are missing a verified executable or persistent-data marker: $requiredHookMarker"
+    }
+}
+foreach ($forbiddenUninstallPattern in @(
+    '(?im)^\s*RMDir\s+/r\s+"\$APPDATA\\VisualTeX"\s*$',
+    '(?im)^\s*RMDir\s+/r\s+"\$APPDATA\\com\.visualtex\.studio"\s*$',
+    '(?im)^\s*Delete\s+"\$APPDATA\\VisualTeX\\ocr-storage\.json"\s*$'
+)) {
+    if ($nsisHooksSource -match $forbiddenUninstallPattern) {
+        throw "NSIS uninstall hooks must preserve the OCR storage pointer and legacy reusable OCR environment: $forbiddenUninstallPattern"
+    }
+}
+
+$ocrStorageSource = Get-Content -LiteralPath (Join-Path $root "src-tauri\src\ocr_storage.rs") -Raw -Encoding UTF8
+foreach ($requiredStorageMarker in @(
+    'pub const STORAGE_DIRECTORY_NAME: &str = "VisualTeX-OCR"',
+    'pub const STORAGE_CONFIG_FILE: &str = "ocr-storage.json"',
+    'pub const STORAGE_MARKER_FILE: &str = ".visualtex-ocr-root.json"',
+    'reset_source: source_has_payload',
+    'ocr-storage.invalid-'
+)) {
+    if (-not $ocrStorageSource.Contains($requiredStorageMarker)) {
+        throw "OCR independent-storage source is missing a release-safety marker: $requiredStorageMarker"
+    }
+}
+$ocrRuntimeSource = Get-Content -LiteralPath (Join-Path $root "src-tauri\src\lib.rs") -Raw -Encoding UTF8
+foreach ($requiredRuntimeStorageMarker in @(
+    '.join("VisualTeXData")',
+    '.join("ocr-runtime")',
+    'storage_persistent_across_uninstall: true',
+    'configure_ocr_storage_location',
+    'reset_runtime_contents(&current.root)'
+)) {
+    if (-not $ocrRuntimeSource.Contains($requiredRuntimeStorageMarker)) {
+        throw "OCR runtime path resolution is missing a persistent-storage marker: $requiredRuntimeStorageMarker"
+    }
+}
+foreach ($forbiddenStorageMigrationMarker in @(
+    'copy_tree',
+    'source_to_remove',
+    'remove_migrated_source',
+    '.visualtex-ocr-migrating-'
+)) {
+    if ($ocrStorageSource.Contains($forbiddenStorageMigrationMarker) -or $ocrRuntimeSource.Contains($forbiddenStorageMigrationMarker)) {
+        throw "OCR storage must reset and reinstall instead of copying the previous environment: $forbiddenStorageMigrationMarker"
+    }
+}
+
+$generatedNsisPath = Join-Path $root "src-tauri\target\release\nsis\x64\installer.nsi"
+if (-not (Test-Path -LiteralPath $generatedNsisPath -PathType Leaf)) {
+    throw "Generated release NSIS script is missing: $generatedNsisPath"
+}
+$generatedNsisSource = Get-Content -LiteralPath $generatedNsisPath -Raw -Encoding UTF8
+foreach ($requiredGeneratedMarker in @(
+    '!define MAINBINARYNAME "visualtex"',
+    'src-tauri\windows\hooks.nsh"',
+    'File /a "/oname=windows-office\VisualTeX-WindowsOffice-VSTO-x64.msi"',
+    'File /a "/oname=windows-office\VisualTeX-WindowsOffice-VSTO-x86.msi"',
+    'File /a "/oname=windows-office\vstor_redist.exe"'
+)) {
+    if (-not $generatedNsisSource.Contains($requiredGeneratedMarker)) {
+        throw "Generated NSIS installer is missing verified main/Office resource marker: $requiredGeneratedMarker"
+    }
+}
+
 & node.exe (Join-Path $root "scripts\verify_embedded_frontend_assets.mjs") `
     --exe (Join-Path $root "src-tauri\target\release\visualtex.exe")
 if ($LASTEXITCODE -ne 0) {

@@ -184,6 +184,10 @@ impl ModelDownloadControl {
         })
     }
 
+    pub fn is_running(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
+    }
+
     pub fn cancel(&self) -> bool {
         let running = self.running.load(Ordering::SeqCst);
         self.cancel_generation.fetch_add(1, Ordering::SeqCst);
@@ -630,6 +634,15 @@ fn install_model_pack_with_cancel(
     if metadata.len() == 0 || metadata.len() > MAX_MODEL_PACK_BYTES {
         return Err("The OCR model package size is invalid".to_string());
     }
+    let required_space = metadata
+        .len()
+        .saturating_mul(2)
+        .saturating_add(512 * 1024 * 1024);
+    crate::ocr_storage::ensure_available_space(
+        runtime_root,
+        required_space,
+        "Staging, verifying, and installing the selected OCR model package",
+    )?;
 
     let staging_root = runtime_root
         .join("staging")
@@ -996,6 +1009,15 @@ pub async fn download_and_install_model(
     mut callback: impl FnMut(&ModelDownloadSnapshot),
 ) -> Result<String, String> {
     let entry = catalog_entry(app, model)?;
+    let required_space = entry
+        .size
+        .saturating_mul(2)
+        .saturating_add(512 * 1024 * 1024);
+    crate::ocr_storage::ensure_available_space(
+        runtime_root,
+        required_space,
+        &format!("Downloading, staging, and installing the {} OCR model", entry.model),
+    )?;
     let downloads_root = runtime_root.join("downloads");
     fs::create_dir_all(&downloads_root)
         .map_err(|error| format!("Unable to create OCR model download directory: {error}"))?;

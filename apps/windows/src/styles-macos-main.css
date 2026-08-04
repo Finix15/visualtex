@@ -447,7 +447,10 @@ html body #visualtex-native-input-suggestion-popover .visualtex-native-placehold
 }
 
 .workspace.is-classic-layout.has-sidebar {
-  grid-template-columns: minmax(0, 1fr) 300px;
+  grid-template-columns:
+    minmax(0, 1fr)
+    7px
+    minmax(220px, var(--classic-tile-width, 300px));
 }
 
 .workspace.is-classic-layout .formula-workspace.editor-pane {
@@ -458,7 +461,10 @@ html body #visualtex-native-input-suggestion-popover .visualtex-native-placehold
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) clamp(230px, 29vh, 250px);
+  grid-template-rows:
+    minmax(0, 1fr)
+    7px
+    minmax(132px, var(--classic-dock-height, 240px));
   overflow: hidden;
   background: var(--bg-elevated);
 }
@@ -550,6 +556,77 @@ html body #visualtex-native-input-suggestion-popover .visualtex-native-placehold
   overflow: hidden;
 }
 
+.workspace-panel-resizer {
+  position: relative;
+  z-index: 12;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  background: var(--bg-elevated);
+  touch-action: none;
+  outline: none;
+}
+
+.workspace-panel-resizer::before {
+  content: "";
+  position: absolute;
+  border-radius: 999px;
+  background: var(--border-strong);
+  opacity: 0.72;
+  transition:
+    background-color 120ms ease,
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.workspace-panel-resizer:hover::before,
+.workspace-panel-resizer:focus-visible::before {
+  background: var(--accent);
+  opacity: 1;
+}
+
+.classic-tile-resizer {
+  width: 7px;
+  cursor: col-resize;
+}
+
+.classic-tile-resizer::before {
+  inset: 8px 2px;
+  width: 3px;
+}
+
+.classic-tile-resizer:hover::before,
+.classic-tile-resizer:focus-visible::before {
+  transform: scaleX(1.35);
+}
+
+.classic-dock-resizer {
+  height: 7px;
+  cursor: row-resize;
+}
+
+.classic-dock-resizer::before {
+  inset: 2px 10px;
+  height: 3px;
+}
+
+.classic-dock-resizer:hover::before,
+.classic-dock-resizer:focus-visible::before {
+  transform: scaleY(1.35);
+}
+
+body[data-workspace-resize="tiles"],
+body[data-workspace-resize="tiles"] * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+body[data-workspace-resize="dock"],
+body[data-workspace-resize="dock"] * {
+  cursor: row-resize !important;
+  user-select: none !important;
+}
+
 .classic-source-pane-slot {
   width: 100%;
   height: 100%;
@@ -567,7 +644,7 @@ html body #visualtex-native-input-suggestion-popover .visualtex-native-placehold
 .classic-tile-toolbar {
   min-width: 0;
   border-right: 0;
-  border-left: 1px solid var(--border);
+  border-left: 0;
 }
 
 .classic-tile-toolbar .formula-tiles-panel {
@@ -629,13 +706,12 @@ html body #visualtex-native-input-suggestion-popover .visualtex-native-placehold
   grid-template-columns: none;
   grid-auto-flow: column;
   grid-auto-columns: 56px;
-  grid-template-rows: repeat(3, 46px);
+  grid-template-rows: repeat(var(--toolbar-row-count, 3), 46px);
   align-items: stretch;
   align-content: start;
   gap: 4px;
   padding: 5px 8px 7px;
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow: auto;
 }
 
 .formula-toolbar.is-horizontal .template-button {
@@ -663,7 +739,7 @@ html body #visualtex-native-input-suggestion-popover .visualtex-native-placehold
   min-width: 0;
   height: auto;
   grid-column: span 6;
-  grid-row: 1 / span 3;
+  grid-row: 1 / span var(--toolbar-row-count, 3);
   grid-template-columns: minmax(0, 212px) 126px;
   grid-template-rows: minmax(0, 1fr);
   align-items: stretch;
@@ -747,9 +823,75 @@ html body #visualtex-native-input-suggestion-popover .visualtex-native-placehold
   white-space: nowrap;
 }
 
+.formula-toolbar.is-horizontal[data-toolbar-row-count="2"] .matrix-builder {
+  grid-column: span 5;
+  grid-template-columns: minmax(0, 190px) 78px;
+  gap: 4px;
+  padding: 4px;
+}
+
+.formula-toolbar.is-horizontal[data-toolbar-row-count="2"] .matrix-options-column {
+  gap: 2px;
+  padding-right: 4px;
+}
+
+.formula-toolbar.is-horizontal[data-toolbar-row-count="2"] .matrix-builder-heading {
+  min-height: 16px;
+}
+
+.formula-toolbar.is-horizontal[data-toolbar-row-count="2"] .matrix-builder-heading strong {
+  font-size: 10px;
+}
+
+.formula-toolbar.is-horizontal[data-toolbar-row-count="2"] .matrix-size-badge {
+  min-width: 36px;
+  height: 17px;
+  padding-inline: 3px;
+  font-size: 8px;
+}
+
+.formula-toolbar.is-horizontal[data-toolbar-row-count="2"] .matrix-control-label {
+  display: none;
+}
+
+.formula-toolbar.is-horizontal[data-toolbar-row-count="2"] .matrix-delimiter-options {
+  height: 28px;
+  gap: 2px;
+}
+
+.formula-toolbar.is-horizontal[data-toolbar-row-count="2"] .matrix-delimiter-options button {
+  min-height: 0;
+  padding: 1px;
+}
+
+.formula-toolbar.is-horizontal[data-toolbar-row-count="2"] .matrix-delimiter-options .math-preview {
+  min-height: 0;
+  font-size: 13px;
+}
+
+.formula-toolbar.is-horizontal[data-toolbar-row-count="2"] .matrix-size-picker {
+  gap: 1px;
+}
+
+.formula-toolbar.is-horizontal[data-toolbar-row-count="2"] .matrix-size-grid {
+  width: 74px;
+  padding: 2px;
+  gap: 1px;
+}
+
+.formula-toolbar.is-horizontal[data-toolbar-row-count="2"] .matrix-insert-button {
+  height: 23px;
+  min-height: 23px;
+  padding-inline: 7px;
+  font-size: 9px;
+}
+
 @media (max-width: 980px) {
   .workspace.is-classic-layout.has-sidebar {
-    grid-template-columns: minmax(0, 1fr) clamp(220px, 28vw, 260px);
+    grid-template-columns:
+      minmax(0, 1fr)
+      7px
+      minmax(220px, var(--classic-tile-width, 300px));
   }
 
   .classic-bottom-tab-group button {
@@ -762,11 +904,15 @@ html body #visualtex-native-input-suggestion-popover .visualtex-native-placehold
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .workspace.is-classic-layout > .classic-tile-resizer {
+    display: none;
+  }
+
   .workspace.is-classic-layout > .classic-tile-toolbar {
     position: absolute;
     inset: 0 0 0 auto;
     z-index: 35;
-    width: min(280px, 82vw);
+    width: min(var(--classic-tile-width, 300px), 82vw);
     min-width: 0;
     box-shadow: -10px 0 28px rgba(20, 24, 34, 0.16);
   }
@@ -783,7 +929,14 @@ html body #visualtex-native-input-suggestion-popover .visualtex-native-placehold
   }
 
   .classic-editor-pane-body {
-    grid-template-rows: minmax(0, 1fr) clamp(210px, 32vh, 238px);
+    grid-template-rows:
+      minmax(0, 1fr)
+      7px
+      minmax(132px, var(--classic-dock-height, 240px));
+  }
+
+  .classic-editor-pane-body.is-dock-collapsed {
+    grid-template-rows: minmax(0, 1fr) 36px;
   }
 }
 
@@ -1240,15 +1393,6 @@ html body #visualtex-native-input-suggestion-popover .visualtex-native-placehold
 
 .classic-source-pane-slot .source-panel {
   border-radius: 0;
-}
-
-.formula-toolbar.is-horizontal .template-strip {
-  grid-template-rows: repeat(3, minmax(46px, 1fr));
-  align-content: stretch;
-}
-
-.formula-toolbar.is-horizontal .template-button {
-  height: 100%;
 }
 
 :root[data-theme="beige"] .formula-tiles-panel,

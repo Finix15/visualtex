@@ -11,6 +11,7 @@ default-run = "visualtex"
 ocr-install-acceptance = []
 ocr-python-bundle-acceptance = []
 ocr-model-acceptance = []
+ocr-storage-acceptance = []
 
 [[bin]]
 name = "ocr_install_acceptance"
@@ -26,6 +27,11 @@ required-features = ["ocr-python-bundle-acceptance"]
 name = "ocr_model_acceptance"
 path = "src/bin/ocr_model_acceptance.rs"
 required-features = ["ocr-model-acceptance"]
+
+[[bin]]
+name = "ocr_storage_acceptance"
+path = "src/bin/ocr_storage_acceptance.rs"
+required-features = ["ocr-storage-acceptance"]
 
 [lib]
 name = "visualtex_lib"

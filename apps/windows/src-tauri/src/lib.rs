@@ -20,6 +20,7 @@ mod app_lifecycle;
 mod ocr_install;
 #[cfg(windows)]
 mod ocr_models;
+mod ocr_storage;
 mod ocr_offline;
 #[cfg(windows)]
 mod ocr_python_bundle;
@@ -124,6 +125,9 @@ struct RuntimePaths {
     logs: PathBuf,
     cache: PathBuf,
     temp: PathBuf,
+    storage_config_path: PathBuf,
+    storage_source: String,
+    storage_managed: bool,
 }
 
 #[derive(Clone)]
@@ -132,6 +136,8 @@ pub(crate) struct OcrState {
     worker_pid: Arc<AtomicU32>,
     cancel_generation: Arc<AtomicU64>,
     runtime_status: Arc<Mutex<Option<OcrRuntimeStatus>>>,
+    storage_change_running: Arc<AtomicBool>,
+    runtime_mutations: Arc<AtomicU32>,
     install_control: Arc<InstallControl>,
     #[cfg(windows)]
     model_download_control: Arc<ocr_models::ModelDownloadControl>,
@@ -146,12 +152,34 @@ impl Default for OcrState {
             worker_pid: Arc::new(AtomicU32::new(0)),
             cancel_generation: Arc::new(AtomicU64::new(0)),
             runtime_status: Arc::new(Mutex::new(None)),
+            storage_change_running: Arc::new(AtomicBool::new(false)),
+            runtime_mutations: Arc::new(AtomicU32::new(0)),
             install_control: Arc::new(InstallControl::default()),
             #[cfg(windows)]
             model_download_control: Arc::new(ocr_models::ModelDownloadControl::default()),
             desired_warmup_model: Arc::new(Mutex::new(None)),
             events: OcrEventBus::default(),
         }
+    }
+}
+
+struct StorageChangeLease {
+    running: Arc<AtomicBool>,
+}
+
+impl Drop for StorageChangeLease {
+    fn drop(&mut self) {
+        self.running.store(false, Ordering::SeqCst);
+    }
+}
+
+struct RuntimeMutationLease {
+    counter: Arc<AtomicU32>,
+}
+
+impl Drop for RuntimeMutationLease {
+    fn drop(&mut self) {
+        self.counter.store(0, Ordering::SeqCst);
     }
 }
 
@@ -175,19 +203,74 @@ impl Drop for OcrState {
 }
 
 impl OcrState {
+    fn begin_runtime_mutation(&self, operation: &str) -> Result<RuntimeMutationLease, String> {
+        if self.storage_change_running.load(Ordering::SeqCst) {
+            return Err(format!(
+                "The OCR storage location is currently being changed; wait for it to finish before {operation}"
+            ));
+        }
+        self.runtime_mutations
+            .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+            .map_err(|_| {
+                format!(
+                    "Another OCR runtime or model operation is active; wait for it to finish before {operation}"
+                )
+            })?;
+        if self.storage_change_running.load(Ordering::SeqCst) {
+            self.runtime_mutations.store(0, Ordering::SeqCst);
+            return Err(format!(
+                "An OCR storage location change started before {operation}; retry after it finishes"
+            ));
+        }
+        Ok(RuntimeMutationLease {
+            counter: self.runtime_mutations.clone(),
+        })
+    }
+
+    fn begin_storage_change(&self) -> Result<StorageChangeLease, String> {
+        self.storage_change_running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .map_err(|_| "An OCR storage location change is already running".to_string())?;
+        let lease = StorageChangeLease {
+            running: self.storage_change_running.clone(),
+        };
+        if self.runtime_mutations.load(Ordering::SeqCst) != 0 || self.install_control.is_running() {
+            return Err("OCR runtime files are currently being modified; wait for the active operation to finish before changing storage".to_string());
+        }
+        #[cfg(windows)]
+        if self.model_download_control.is_running() {
+            return Err("An OCR model download is active; cancel or finish it before changing storage".to_string());
+        }
+        Ok(lease)
+    }
+
+    fn ensure_storage_not_changing(&self, operation: &str) -> Result<(), String> {
+        if self.storage_change_running.load(Ordering::SeqCst) {
+            return Err(format!(
+                "The OCR storage location is currently being changed; wait for it to finish before {operation}"
+            ));
+        }
+        Ok(())
+    }
+
     pub(crate) async fn runtime_status(
         &self,
         app: AppHandle,
         force_refresh: bool,
     ) -> Result<OcrRuntimeStatus, String> {
+        if self.storage_change_running.load(Ordering::SeqCst) {
+            return Err("The OCR storage location is being changed; runtime status will refresh when the reset/switch operation finishes".to_string());
+        }
         let runtime_status = self.runtime_status.clone();
         let install_control = self.install_control.clone();
         let installing = install_control.is_running();
-        if !force_refresh || installing {
+        // A cached runtime status is only safe while installation is actively
+        // mutating the environment. Outside installation, always resolve the
+        // current storage pointer and verify the actual files on disk so a path
+        // switch or reset cannot leave the UI on a stale "installed" state.
+        if installing {
             if let Some(status) = read_cached_runtime_status(&runtime_status)? {
-                if !installing || status.installed {
-                    return Ok(status);
-                }
+                return Ok(status);
             }
         }
 
@@ -214,6 +297,7 @@ impl OcrState {
     }
 
     pub(crate) async fn install_runtime(&self, app: AppHandle) -> Result<OcrRuntimeStatus, String> {
+        let mutation = self.begin_runtime_mutation("installing the OCR runtime")?;
         let lease = self.install_control.begin()?;
         let generation = lease.generation();
         let install_control = self.install_control.clone();
@@ -223,6 +307,7 @@ impl OcrState {
         write_cached_runtime_status(&runtime_status, None)?;
         let install_app = app.clone();
         let status = tauri::async_runtime::spawn_blocking(move || {
+            let _mutation = mutation;
             let _lease = lease;
             let status = install_runtime_inner(
                 &install_app,
@@ -241,6 +326,7 @@ impl OcrState {
     }
 
     pub(crate) async fn install_status(&self, app: AppHandle) -> Result<InstallSnapshot, String> {
+        self.ensure_storage_not_changing("reading OCR installation status")?;
         let control = self.install_control.clone();
         tauri::async_runtime::spawn_blocking(move || {
             let paths = runtime_paths(&app)?;
@@ -267,6 +353,7 @@ impl OcrState {
         app: AppHandle,
         request: OcrImageRequest,
     ) -> Result<OcrRecognitionResult, String> {
+        let mutation = self.begin_runtime_mutation("recognizing a formula")?;
         if !ALLOWED_MODELS.contains(&request.model.as_str()) {
             return Err(format!("Unsupported PP-FormulaNet model: {}", request.model));
         }
@@ -299,6 +386,7 @@ impl OcrState {
         let cancel_generation = self.cancel_generation.clone();
         let runtime_status = self.runtime_status.clone();
         tauri::async_runtime::spawn_blocking(move || {
+            let _mutation = mutation;
             run_recognition(
                 &app,
                 &worker,
@@ -326,6 +414,8 @@ impl OcrState {
             self.worker_pid.clone(),
             self.runtime_status.clone(),
             self.desired_warmup_model.clone(),
+            self.storage_change_running.clone(),
+            self.runtime_mutations.clone(),
         );
 
         terminate_result.map(|_| ())
@@ -343,10 +433,12 @@ impl OcrState {
     }
 
     pub(crate) async fn restart(&self, app: AppHandle) -> Result<(), String> {
+        let mutation = self.begin_runtime_mutation("restarting the OCR worker")?;
         self.cancel_generation.fetch_add(1, Ordering::SeqCst);
         let worker = self.worker.clone();
         let worker_pid = self.worker_pid.clone();
         tauri::async_runtime::spawn_blocking(move || {
+            let _mutation = mutation;
             stop_worker(&worker, &worker_pid)?;
             cleanup_worker_temp(&runtime_paths(&app)?)
         })
@@ -394,6 +486,7 @@ impl OcrState {
         app: AppHandle,
         model: String,
     ) -> Result<(), String> {
+        let mutation = self.begin_runtime_mutation("warming up an OCR model")?;
         if !ALLOWED_MODELS.contains(&model.as_str()) {
             return Err(format!("Unsupported PP-FormulaNet model: {model}"));
         }
@@ -420,6 +513,7 @@ impl OcrState {
         let runtime_status = self.runtime_status.clone();
         let desired_warmup_model = self.desired_warmup_model.clone();
         tauri::async_runtime::spawn_blocking(move || {
+            let _mutation = mutation;
             warmup_worker(
                 &app,
                 &worker,
@@ -434,13 +528,16 @@ impl OcrState {
     }
 
     pub(crate) async fn reset_runtime(&self, app: AppHandle) -> Result<OcrRuntimeStatus, String> {
+        let mutation = self.begin_runtime_mutation("resetting the OCR runtime")?;
         self.cancel_generation.fetch_add(1, Ordering::SeqCst);
         let _ = self.install_control.cancel();
         let install_control = self.install_control.clone();
         let worker = self.worker.clone();
         let worker_pid = self.worker_pid.clone();
         let runtime_status = self.runtime_status.clone();
+        write_cached_runtime_status(&runtime_status, None)?;
         tauri::async_runtime::spawn_blocking(move || {
+            let _mutation = mutation;
             let deadline = Instant::now() + Duration::from_secs(15);
             while install_control.is_running() && Instant::now() < deadline {
                 thread::sleep(Duration::from_millis(100));
@@ -468,11 +565,13 @@ impl OcrState {
         app: AppHandle,
         package_path: PathBuf,
     ) -> Result<OcrRuntimeStatus, String> {
+        let mutation = self.begin_runtime_mutation("installing an OCR model package")?;
         self.cancel_generation.fetch_add(1, Ordering::SeqCst);
         let worker = self.worker.clone();
         let worker_pid = self.worker_pid.clone();
         let runtime_status = self.runtime_status.clone();
         tauri::async_runtime::spawn_blocking(move || {
+            let _mutation = mutation;
             stop_worker(&worker, &worker_pid)?;
             let paths = runtime_paths(&app)?;
             #[cfg(windows)]
@@ -492,11 +591,13 @@ impl OcrState {
         app: AppHandle,
         model: String,
     ) -> Result<OcrRuntimeStatus, String> {
+        let mutation = self.begin_runtime_mutation("removing an OCR model")?;
         self.cancel_generation.fetch_add(1, Ordering::SeqCst);
         let worker = self.worker.clone();
         let worker_pid = self.worker_pid.clone();
         let runtime_status = self.runtime_status.clone();
         tauri::async_runtime::spawn_blocking(move || {
+            let _mutation = mutation;
             stop_worker(&worker, &worker_pid)?;
             let paths = runtime_paths(&app)?;
             #[cfg(windows)]
@@ -542,6 +643,7 @@ impl OcrState {
         if !ocr_models::KNOWN_MODELS.contains(&model.as_str()) {
             return Err(format!("Unsupported PP-FormulaNet model: {model}"));
         }
+        let _mutation = self.begin_runtime_mutation("downloading and installing an OCR model")?;
         let lease = self.model_download_control.begin()?;
         let generation = lease.generation();
         let worker = self.worker.clone();
@@ -582,6 +684,124 @@ impl OcrState {
         })
         .await
         .map_err(|error| format!("OCR model status refresh task failed: {error}"))?
+    }
+
+    pub(crate) async fn configure_storage(
+        &self,
+        app: AppHandle,
+        selected_directory: PathBuf,
+    ) -> Result<OcrRuntimeStatus, String> {
+        let storage_lease = self.begin_storage_change()?;
+        self.cancel_generation.fetch_add(1, Ordering::SeqCst);
+        let worker = self.worker.clone();
+        let worker_pid = self.worker_pid.clone();
+        let runtime_status = self.runtime_status.clone();
+        let install_control = self.install_control.clone();
+        write_cached_runtime_status(&runtime_status, None)?;
+        tauri::async_runtime::spawn_blocking(move || {
+            let _storage_lease = storage_lease;
+            stop_worker(&worker, &worker_pid)?;
+            write_cached_runtime_status(&runtime_status, None)?;
+            let current = runtime_paths(&app)?;
+            let change = ocr_storage::configure(
+                &current.storage_config_path,
+                &current.root,
+                &selected_directory,
+                &protected_ocr_storage_roots(&app),
+            )?;
+
+            let target_paths = runtime_paths_from_resolution(ocr_storage::StorageResolution {
+                root: change.target_root.clone(),
+                config_path: current.storage_config_path.clone(),
+                source: "pending-switch".to_string(),
+                managed: ocr_storage::marker_is_valid(&change.target_root),
+            });
+            let mut reused_target_environment = false;
+            let target_probe = if change.adopted_existing {
+                match probe_runtime(&target_paths) {
+                    Ok(probe) => {
+                        reused_target_environment = true;
+                        Ok(probe)
+                    }
+                    Err(error) if ocr_storage::marker_is_valid(&change.target_root) => {
+                        let _ = cleanup_stale_process(&change.target_root);
+                        cleanup_runtime_processes(&change.target_root)?;
+                        reset_runtime_contents(&change.target_root)?;
+                        Err(format!(
+                            "The selected VisualTeX OCR directory contained an incomplete environment and was reset before reinstalling: {error}"
+                        ))
+                    }
+                    Err(error) => {
+                        return Err(format!(
+                            "The selected unmarked OCR environment could not be verified and was not modified: {}. Error: {}",
+                            change.target_root.display(),
+                            error
+                        ));
+                    }
+                }
+            } else {
+                probe_runtime_from_files(&target_paths)
+            };
+
+            if change.reset_source {
+                let _ = cleanup_stale_process(&current.root);
+                cleanup_runtime_processes(&current.root)?;
+                reset_runtime_contents(&current.root)?;
+            }
+
+            if let Err(error) =
+                ocr_storage::write_config(&current.storage_config_path, &change.target_root)
+            {
+                let _ = ocr_storage::write_config(
+                    &current.storage_config_path,
+                    &change.source_root,
+                );
+                return Err(format!(
+                    "The OCR environment was reset, but the new storage pointer could not be written. Pointer: {}. Error: {}",
+                    current.storage_config_path.display(),
+                    error
+                ));
+            }
+
+            let next = runtime_paths(&app)?;
+            if next.root != change.target_root {
+                let rollback = ocr_storage::write_config(
+                    &current.storage_config_path,
+                    &change.source_root,
+                );
+                return Err(format!(
+                    "OCR storage pointer verification failed. Expected {}, resolved {}. Rollback status: {}",
+                    change.target_root.display(),
+                    next.root.display(),
+                    rollback
+                        .map(|_| "restored the previous pointer".to_string())
+                        .unwrap_or_else(|error| format!("failed to restore the previous pointer: {error}"))
+                ));
+            }
+
+            install_control.set_snapshot(InstallSnapshot::new(&install_log_path(&next.root)))?;
+            let mut status = runtime_status_from_probe(&app, &next, target_probe);
+            if reused_target_environment {
+                status.message = format!(
+                    "{} Existing OCR storage was adopted without reinstalling the environment or models.",
+                    status.message
+                );
+            } else if change.reset_source {
+                status.message = format!(
+                    "{} The previous OCR environment was reset. Install the OCR runtime again at the new location.",
+                    status.message
+                );
+            } else {
+                status.message = format!(
+                    "{} OCR storage location changed. Install the OCR runtime at this location.",
+                    status.message
+                );
+            }
+            write_cached_runtime_status(&runtime_status, Some(status.clone()))?;
+            Ok(status)
+        })
+        .await
+        .map_err(|error| format!("OCR storage reset/switch task failed: {error}"))?
     }
 
     pub(crate) fn poll_events(&self, cursor: u64, event: Option<&str>) -> OcrEventEnvelope {
@@ -730,6 +950,11 @@ pub(crate) struct OcrRuntimeStatus {
     paddle_version: Option<String>,
     paddleocr_version: Option<String>,
     runtime_path: String,
+    storage_config_path: String,
+    storage_source: String,
+    storage_managed: bool,
+    storage_available_bytes: Option<u64>,
+    storage_persistent_across_uninstall: bool,
     runtime_bundle_available: bool,
     offline_bundle_available: bool,
     installed_models: Vec<String>,
@@ -812,12 +1037,55 @@ struct PythonProbe {
     executable: String,
 }
 
-fn runtime_paths(app: &AppHandle) -> Result<RuntimePaths, String> {
-    let root = app
+fn ocr_storage_config_path(app: &AppHandle) -> Result<PathBuf, String> {
+    #[cfg(windows)]
+    if let Some(appdata) = env::var_os("APPDATA") {
+        return Ok(PathBuf::from(appdata)
+            .join("VisualTeX")
+            .join(ocr_storage::STORAGE_CONFIG_FILE));
+    }
+    Ok(app
         .path()
         .app_data_dir()
         .map_err(|error| format!("Unable to resolve application data directory: {error}"))?
-        .join("ocr-runtime");
+        .join(ocr_storage::STORAGE_CONFIG_FILE))
+}
+
+fn legacy_ocr_runtime_root(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Unable to resolve application data directory: {error}"))?
+        .join("ocr-runtime"))
+}
+
+fn default_ocr_runtime_root(app: &AppHandle) -> Result<PathBuf, String> {
+    #[cfg(windows)]
+    if let Some(local_appdata) = env::var_os("LOCALAPPDATA") {
+        return Ok(PathBuf::from(local_appdata)
+            .join("VisualTeXData")
+            .join("ocr-runtime"));
+    }
+    legacy_ocr_runtime_root(app)
+}
+
+fn protected_ocr_storage_roots(app: &AppHandle) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(executable) = env::current_exe() {
+        if let Some(parent) = executable.parent() {
+            roots.push(parent.to_path_buf());
+        }
+    }
+    if let Ok(resources) = app.path().resource_dir() {
+        roots.push(resources);
+    }
+    roots
+}
+
+fn runtime_paths_from_resolution(
+    resolution: ocr_storage::StorageResolution,
+) -> RuntimePaths {
+    let root = resolution.root;
     let offline_python = if cfg!(windows) {
         root.join("python").join("python.exe")
     } else {
@@ -834,7 +1102,7 @@ fn runtime_paths(app: &AppHandle) -> Result<RuntimePaths, String> {
     } else {
         legacy_python.clone()
     };
-    Ok(RuntimePaths {
+    RuntimePaths {
         root: root.clone(),
         venv,
         python,
@@ -843,7 +1111,20 @@ fn runtime_paths(app: &AppHandle) -> Result<RuntimePaths, String> {
         logs: root.join("logs"),
         cache: root.join("cache"),
         temp: root.join("tmp"),
-    })
+        storage_config_path: resolution.config_path,
+        storage_source: resolution.source,
+        storage_managed: resolution.managed,
+    }
+}
+
+fn runtime_paths(app: &AppHandle) -> Result<RuntimePaths, String> {
+    let resolution = ocr_storage::resolve(
+        &ocr_storage_config_path(app)?,
+        &legacy_ocr_runtime_root(app)?,
+        &default_ocr_runtime_root(app)?,
+        &protected_ocr_storage_roots(app),
+    )?;
+    Ok(runtime_paths_from_resolution(resolution))
 }
 
 fn read_preferred_ocr_model(paths: &RuntimePaths) -> Option<String> {
@@ -1454,6 +1735,11 @@ fn runtime_status_from_probe(
                 paddle_version: Some(probe.paddle_version),
                 paddleocr_version: Some(probe.paddleocr_version),
                 runtime_path: paths.root.display().to_string(),
+                storage_config_path: paths.storage_config_path.display().to_string(),
+                storage_source: paths.storage_source.clone(),
+                storage_managed: paths.storage_managed || ocr_storage::marker_is_valid(&paths.root),
+                storage_available_bytes: ocr_storage::available_space_bytes(&paths.root),
+                storage_persistent_across_uninstall: true,
                 runtime_bundle_available,
                 offline_bundle_available,
                 installed_models,
@@ -1477,6 +1763,11 @@ fn runtime_status_from_probe(
             paddle_version: None,
             paddleocr_version: None,
             runtime_path: paths.root.display().to_string(),
+            storage_config_path: paths.storage_config_path.display().to_string(),
+            storage_source: paths.storage_source.clone(),
+            storage_managed: paths.storage_managed || ocr_storage::marker_is_valid(&paths.root),
+            storage_available_bytes: ocr_storage::available_space_bytes(&paths.root),
+            storage_persistent_across_uninstall: true,
             runtime_bundle_available,
             offline_bundle_available,
             installed_models,
@@ -1677,7 +1968,10 @@ fn reset_runtime_contents(runtime_root: &Path) -> Result<(), String> {
         .map_err(|error| format!("Unable to enumerate OCR runtime before reset: {error}"))?;
 
     for entry in entries {
-        if entry.file_name().to_string_lossy().eq_ignore_ascii_case("logs") {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.eq_ignore_ascii_case("logs")
+            || name.eq_ignore_ascii_case(ocr_storage::STORAGE_MARKER_FILE)
+        {
             continue;
         }
         remove_runtime_entry_with_retry(&entry.path(), runtime_root)?;
@@ -2545,6 +2839,7 @@ fn install_windows_runtime_inner(
     match installation_result {
         Ok(status) => Ok(status),
         Err(error) => {
+            let error = ocr_storage::friendly_storage_error(error, &paths.root);
             let cancelled = error.to_ascii_lowercase().contains("cancelled");
             let verification = snapshot.current_step.as_deref() == Some("verify");
             let state = if cancelled {
@@ -2588,6 +2883,17 @@ fn install_runtime_inner(
 ) -> Result<OcrRuntimeStatus, String> {
     stop_worker(worker, worker_pid)?;
     let paths = runtime_paths(app)?;
+    ocr_storage::ensure_marker(&paths.root)?;
+    let required_space = if paths.python.exists() {
+        512 * 1024 * 1024
+    } else {
+        ocr_storage::RUNTIME_INSTALL_MIN_FREE_BYTES
+    };
+    ocr_storage::ensure_available_space(
+        &paths.root,
+        required_space,
+        "Installing the private Python 3.12 OCR runtime and fixed dependencies",
+    )?;
 
     #[cfg(windows)]
     {
@@ -2596,7 +2902,8 @@ fn install_runtime_inner(
             &paths,
             install_control,
             install_generation,
-        );
+        )
+        .map_err(|error| ocr_storage::friendly_storage_error(error, &paths.root));
     }
 
     #[cfg(not(windows))]
@@ -2717,15 +3024,51 @@ fn spawn_worker(
     Ok(worker)
 }
 
+fn acquire_background_runtime_mutation(
+    storage_change_running: &Arc<AtomicBool>,
+    runtime_mutations: &Arc<AtomicU32>,
+) -> Option<RuntimeMutationLease> {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        if storage_change_running.load(Ordering::SeqCst) {
+            return None;
+        }
+        if runtime_mutations
+            .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            if storage_change_running.load(Ordering::SeqCst) {
+                runtime_mutations.store(0, Ordering::SeqCst);
+                return None;
+            }
+            return Some(RuntimeMutationLease {
+                counter: runtime_mutations.clone(),
+            });
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
 fn schedule_worker_rewarm(
     app: AppHandle,
     worker_state: Arc<Mutex<Option<OcrWorker>>>,
     worker_pid: Arc<AtomicU32>,
     runtime_status: Arc<Mutex<Option<OcrRuntimeStatus>>>,
     desired_warmup_model: Arc<Mutex<Option<String>>>,
+    storage_change_running: Arc<AtomicBool>,
+    runtime_mutations: Arc<AtomicU32>,
 ) {
     let _ = tauri::async_runtime::spawn(async move {
         let result = tauri::async_runtime::spawn_blocking(move || {
+            let Some(_mutation) = acquire_background_runtime_mutation(
+                &storage_change_running,
+                &runtime_mutations,
+            ) else {
+                return Ok(());
+            };
             let model = {
                 let mut desired = desired_warmup_model
                     .lock()
@@ -3146,6 +3489,42 @@ async fn get_ocr_runtime_status(
 }
 
 #[tauri::command]
+async fn configure_ocr_storage_location(
+    app: AppHandle,
+    state: State<'_, OcrState>,
+    selected_directory: String,
+) -> Result<OcrRuntimeStatus, String> {
+    let selected_directory = selected_directory.trim();
+    if selected_directory.is_empty() {
+        return Err("No OCR storage directory was selected".to_string());
+    }
+    state
+        .configure_storage(app, PathBuf::from(selected_directory))
+        .await
+}
+
+#[tauri::command]
+fn open_ocr_storage_location(app: AppHandle) -> Result<(), String> {
+    let paths = runtime_paths(&app)?;
+    ocr_storage::ensure_marker(&paths.root)?;
+    #[cfg(windows)]
+    {
+        let mut command = Command::new("explorer.exe");
+        command.arg(&paths.root);
+        hide_windows_console(&mut command);
+        return command
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| format!("Unable to open OCR storage location: {error}"));
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = paths;
+        Err("Opening the OCR storage location is currently available only on Windows".to_string())
+    }
+}
+
+#[tauri::command]
 async fn install_ocr_runtime(
     app: AppHandle,
     state: State<'_, OcrState>,
@@ -3410,6 +3789,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             write_export_file,
             get_ocr_runtime_status,
+            configure_ocr_storage_location,
+            open_ocr_storage_location,
             install_ocr_runtime,
             get_ocr_install_status,
             cancel_ocr_install,
@@ -3626,6 +4007,14 @@ mod protocol_tests {
             &office.runtime_status
         ));
         assert!(Arc::ptr_eq(
+            &desktop.storage_change_running,
+            &office.storage_change_running
+        ));
+        assert!(Arc::ptr_eq(
+            &desktop.runtime_mutations,
+            &office.runtime_mutations
+        ));
+        assert!(Arc::ptr_eq(
             &desktop.install_control,
             &office.install_control
         ));
@@ -3641,6 +4030,25 @@ mod protocol_tests {
     }
 
     #[test]
+    fn storage_change_and_runtime_mutations_are_mutually_exclusive() {
+        let state = OcrState::default();
+        let mutation = state
+            .begin_runtime_mutation("test mutation")
+            .expect("first runtime mutation should start");
+        assert!(state.begin_runtime_mutation("second mutation").is_err());
+        assert!(state.begin_storage_change().is_err());
+        drop(mutation);
+
+        let storage = state
+            .begin_storage_change()
+            .expect("storage location change should start after the mutation ends");
+        assert!(state.begin_runtime_mutation("mutation during storage change").is_err());
+        assert!(state.begin_storage_change().is_err());
+        drop(storage);
+        assert!(state.begin_runtime_mutation("mutation after storage change").is_ok());
+    }
+
+    #[test]
     fn runtime_status_cache_round_trips_and_clears() {
         let cache = Arc::new(Mutex::new(None));
         let expected = OcrRuntimeStatus {
@@ -3650,6 +4058,11 @@ mod protocol_tests {
             paddle_version: Some(PADDLE_VERSION.to_string()),
             paddleocr_version: Some(PADDLEOCR_VERSION.to_string()),
             runtime_path: "/tmp/visualtex-ocr".to_string(),
+            storage_config_path: "/tmp/ocr-storage.json".to_string(),
+            storage_source: "configured".to_string(),
+            storage_managed: true,
+            storage_available_bytes: Some(1024),
+            storage_persistent_across_uninstall: true,
             runtime_bundle_available: true,
             offline_bundle_available: true,
             installed_models: vec![DEFAULT_OCR_MODEL.to_string()],
@@ -3684,6 +4097,9 @@ mod protocol_tests {
             logs: root.join("logs"),
             cache: root.join("cache"),
             temp: root.join("tmp"),
+            storage_config_path: root.join("ocr-storage.json"),
+            storage_source: "test".to_string(),
+            storage_managed: true,
         }
     }
 

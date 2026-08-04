@@ -82,6 +82,11 @@ export interface OcrRuntimeStatus {
   paddleVersion: string | null;
   paddleocrVersion: string | null;
   runtimePath: string;
+  storageConfigPath: string;
+  storageSource: "configured" | "legacy" | "default" | string;
+  storageManaged: boolean;
+  storageAvailableBytes: number | null;
+  storagePersistentAcrossUninstall: boolean;
   runtimeBundleAvailable: boolean;
   offlineBundleAvailable: boolean;
   installedModels: string[];
@@ -288,6 +293,20 @@ export async function getOcrRuntimeStatus(
 ): Promise<OcrRuntimeStatus> {
   requireOcrEnvironment();
   return invoke<OcrRuntimeStatus>("get_ocr_runtime_status", { forceRefresh });
+}
+
+export async function configureOcrStorageLocation(
+  selectedDirectory: string,
+): Promise<OcrRuntimeStatus> {
+  requireDesktopOcrEnvironment();
+  return invoke<OcrRuntimeStatus>("configure_ocr_storage_location", {
+    selectedDirectory,
+  });
+}
+
+export async function openOcrStorageLocation(): Promise<void> {
+  requireDesktopOcrEnvironment();
+  return invoke("open_ocr_storage_location");
 }
 
 export async function installOcrRuntime(): Promise<OcrRuntimeStatus> {

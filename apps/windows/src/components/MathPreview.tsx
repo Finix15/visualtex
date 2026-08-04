@@ -114,8 +114,24 @@ export function MathPreview({
     let animationFrame = 0;
     const measure = () => {
       animationFrame = 0;
-      const naturalWidth = Math.max(1, content.offsetWidth);
-      const naturalHeight = Math.max(1, content.offsetHeight);
+      // Measure MathLive's visible formula root rather than its invisible
+      // positioning struts. The old offset box could underestimate tall glyphs,
+      // while measuring every descendant also counted ML__pstrut helpers that
+      // intentionally extend far outside the painted formula.
+      content.style.setProperty("--math-preview-fit-scale", "1");
+      const visualRoot =
+        content.querySelector<HTMLElement>(".ML__latex") ?? content;
+      const visualRect = visualRoot.getBoundingClientRect();
+      const naturalWidth = Math.max(
+        1,
+        content.scrollWidth,
+        visualRect.width,
+      );
+      const naturalHeight = Math.max(
+        1,
+        content.offsetHeight,
+        visualRect.height,
+      );
       onMeasureRef.current?.({ width: naturalWidth, height: naturalHeight });
       if (intrinsicWidth) {
         const desiredWidth = Math.min(

@@ -154,7 +154,7 @@ FunctionEnd
   DetailPrint "Applying the selected VisualTeX Office integration mode: $VisualTeXOfficeChoice"
   ${If} $VisualTeXOfficeChoice == "native"
     DetailPrint "Installing the machine-wide VisualTeX Ribbon add-ins and native Formula OLE LocalServer. A UAC prompt may appear."
-    IfFileExists "$INSTDIR\VisualTeX.exe" 0 visualtex_office_missing
+    IfFileExists "$INSTDIR\${MAINBINARYNAME}.exe" 0 visualtex_main_binary_missing
     IfFileExists "$INSTDIR\scripts\ensure_windows_office_certificate.ps1" 0 visualtex_office_missing
     IfFileExists "$INSTDIR\scripts\install_windows_vsto.ps1" 0 visualtex_office_missing
     IfFileExists "$INSTDIR\scripts\install_windows_vsto_runtime.ps1" 0 visualtex_office_missing
@@ -194,11 +194,11 @@ visualtex_vsto_runtime_failed:
 visualtex_vsto_runtime_ready:
     DetailPrint "Microsoft VSTO Runtime is installed and verified."
 
-    nsExec::ExecToLog `"$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\ensure_windows_office_certificate.ps1" -VisualTeXPath "$INSTDIR\VisualTeX.exe"`
+    nsExec::ExecToLog `"$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\ensure_windows_office_certificate.ps1" -VisualTeXPath "$INSTDIR\${MAINBINARYNAME}.exe"`
     Pop $0
     StrCmp $0 "0" 0 visualtex_office_failed
 
-    nsExec::ExecToLog `"$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install_windows_vsto.ps1" -PackageDirectory "$INSTDIR\windows-office" -VisualTeXPath "$INSTDIR\VisualTeX.exe"`
+    nsExec::ExecToLog `"$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install_windows_vsto.ps1" -PackageDirectory "$INSTDIR\windows-office" -VisualTeXPath "$INSTDIR\${MAINBINARYNAME}.exe"`
     Pop $0
     StrCmp $0 "0" visualtex_office_static_installed visualtex_office_failed
 
@@ -226,6 +226,12 @@ visualtex_office_failed:
     Goto visualtex_office_done
   ${EndIf}
 
+visualtex_main_binary_missing:
+  DetailPrint "The VisualTeX main executable is missing after installation. Windows Security or another antivirus may have quarantined it. Office integration was skipped."
+  IfSilent visualtex_office_done 0
+  MessageBox MB_ICONEXCLAMATION "VisualTeX 主程序在安装后立即丢失，Windows 安全中心或其他安全软件可能已将 visualtex.exe 隔离。Office 插件安装已跳过。$\r$\n$\r$\n请打开 Windows 安全中心 → 病毒和威胁防护 → 保护历史记录，检查 Behavior:Win32/Persistence.A!ml 等记录。"
+  Goto visualtex_office_done
+
 visualtex_office_missing:
   DetailPrint "Windows native Office installation resources are missing. The VisualTeX main application was installed without Office integration."
   IfSilent visualtex_office_done 0
@@ -252,7 +258,21 @@ visualtex_direct_appdata_done:
     IfFileExists "$APPDATA\VisualTeX\uninstall.exe" visualtex_remove_roaming_legacy 0
     IfFileExists "$APPDATA\VisualTeX\visualtex.exe" visualtex_remove_roaming_legacy visualtex_roaming_legacy_done
 visualtex_remove_roaming_legacy:
-    RMDir /r "$APPDATA\VisualTeX"
+    ; Remove only known legacy application payloads. Preserve
+    ; %APPDATA%\VisualTeX\ocr-storage.json, OfficeSessions, logs, and any
+    ; unknown user data so a later VisualTeX installation can reuse the
+    ; independently stored OCR environment without reinstalling it.
+    Delete "$APPDATA\VisualTeX\visualtex.exe"
+    Delete "$APPDATA\VisualTeX\VisualTeX.exe"
+    Delete "$APPDATA\VisualTeX\uninstall.exe"
+    Delete "$APPDATA\VisualTeX\visualtex-windows-office-bridge.exe"
+    RMDir /r "$APPDATA\VisualTeX\ocr"
+    RMDir /r "$APPDATA\VisualTeX\ocr-models"
+    RMDir /r "$APPDATA\VisualTeX\ocr-python"
+    RMDir /r "$APPDATA\VisualTeX\office"
+    RMDir /r "$APPDATA\VisualTeX\scripts"
+    RMDir /r "$APPDATA\VisualTeX\windows-office"
+    RMDir "$APPDATA\VisualTeX"
 visualtex_roaming_legacy_done:
   ${EndIf}
 visualtex_postinstall_cleanup_done:

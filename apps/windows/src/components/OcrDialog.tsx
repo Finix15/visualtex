@@ -8,6 +8,8 @@ import {
   Copy,
   Cpu,
   Download,
+  FolderOpen,
+  HardDrive,
   ImagePlus,
   LoaderCircle,
   Plus,
@@ -40,11 +42,13 @@ import {
   cancelOcrInstall,
   cancelOcrModelDownload,
   cancelOcrRecognition,
+  configureOcrStorageLocation,
   downloadOcrModel,
   getOcrInstallStatus,
   getOcrModelCatalog,
   getOcrModelDownloadStatus,
   openOcrInstallLogs,
+  openOcrStorageLocation,
   type OcrInstallProgress,
   type OcrInstallStatus,
   type OcrModelCatalog,
@@ -160,6 +164,7 @@ export function OcrDialog({
   const cancellingRef = useRef(false);
   const installingRef = useRef(false);
   const modelCancelRequestedRef = useRef(false);
+  const runtimeRequestGenerationRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const objectUrlRef = useRef<string | null>(null);
   const [runtime, setRuntime] = useState<OcrRuntimeStatus | null>(null);
@@ -168,6 +173,7 @@ export function OcrDialog({
   const [modelBusy, setModelBusy] = useState(false);
   const [modelPackageDragging, setModelPackageDragging] = useState(false);
   const [checkingRuntime, setCheckingRuntime] = useState(false);
+  const [changingStorage, setChangingStorage] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [installProgress, setInstallProgress] = useState<OcrInstallProgress | null>(null);
   const [installStatus, setInstallStatus] = useState<OcrInstallStatus | null>(null);
@@ -205,6 +211,20 @@ export function OcrDialog({
     modelDownload?.state === "downloading" ||
     modelDownload?.state === "verifying" ||
     modelDownload?.state === "installing";
+  const storageAvailableBytes = runtime?.storageAvailableBytes ?? null;
+  const storageLowForInitialInstall =
+    !runtime?.installed &&
+    storageAvailableBytes !== null &&
+    storageAvailableBytes < 2 * 1024 * 1024 * 1024;
+
+  const applyRuntimeStatus = useCallback((nextRuntime: OcrRuntimeStatus) => {
+    // Invalidate any older status request that may still be resolving. Without
+    // this guard, an OCR dialog refresh started before a reset/path switch can
+    // arrive later and overwrite the new path or uninstalled state.
+    runtimeRequestGenerationRef.current += 1;
+    setCheckingRuntime(false);
+    setRuntime(nextRuntime);
+  }, []);
 
   const clearObjectUrl = useCallback(() => {
     if (objectUrlRef.current) {
@@ -231,34 +251,49 @@ export function OcrDialog({
   }, [applyInstallStatus]);
 
   const refreshRuntime = useCallback(async (forceRefresh = false) => {
+    const requestGeneration = ++runtimeRequestGenerationRef.current;
     if (!isTauriEnvironment() && !isOfficeCompanionEnvironment()) {
-      setRuntime({
-        installed: false,
-        pythonPath: null,
-        pythonVersion: null,
-        paddleVersion: null,
-        paddleocrVersion: null,
-        runtimePath: "",
-        runtimeBundleAvailable: false,
-        offlineBundleAvailable: false,
-        installedModels: [],
-        damagedModels: [],
-        modelCatalogAvailable: false,
-        defaultModel: "PP-FormulaNet_plus-M",
-        message: isEn
-          ? "OCR is available in the VisualTeX desktop app, not in the browser preview."
-          : "OCR 只能在 VisualTeX 桌面应用中运行，浏览器预览无法调用本地模型。",
-      });
+      if (requestGeneration === runtimeRequestGenerationRef.current) {
+        setRuntime({
+          installed: false,
+          pythonPath: null,
+          pythonVersion: null,
+          paddleVersion: null,
+          paddleocrVersion: null,
+          runtimePath: "",
+          storageConfigPath: "",
+          storageSource: "default",
+          storageManaged: false,
+          storageAvailableBytes: null,
+          storagePersistentAcrossUninstall: false,
+          runtimeBundleAvailable: false,
+          offlineBundleAvailable: false,
+          installedModels: [],
+          damagedModels: [],
+          modelCatalogAvailable: false,
+          defaultModel: "PP-FormulaNet_plus-M",
+          message: isEn
+            ? "OCR is available in the VisualTeX desktop app, not in the browser preview."
+            : "OCR 只能在 VisualTeX 桌面应用中运行，浏览器预览无法调用本地模型。",
+        });
+      }
       return;
     }
 
     setCheckingRuntime(true);
     try {
-      setRuntime(await getOcrRuntimeStatus(forceRefresh));
+      const nextRuntime = await getOcrRuntimeStatus(forceRefresh);
+      if (requestGeneration === runtimeRequestGenerationRef.current) {
+        setRuntime(nextRuntime);
+      }
     } catch (runtimeError) {
-      setError(readError(runtimeError));
+      if (requestGeneration === runtimeRequestGenerationRef.current) {
+        setError(readError(runtimeError));
+      }
     } finally {
-      setCheckingRuntime(false);
+      if (requestGeneration === runtimeRequestGenerationRef.current) {
+        setCheckingRuntime(false);
+      }
     }
   }, [isEn]);
 
@@ -297,7 +332,7 @@ export function OcrDialog({
       setError("");
       try {
         const nextRuntime = await installOptionalOcrModel(packagePath);
-        setRuntime(nextRuntime);
+        applyRuntimeStatus(nextRuntime);
         const newlyInstalled = nextRuntime.installedModels.find(
           (candidate) => !previouslyInstalled.has(candidate),
         ) as OcrModelName | undefined;
@@ -326,15 +361,19 @@ export function OcrDialog({
     let cancelled = false;
     const frame = window.requestAnimationFrame(() => {
       if (cancelled) return;
-      if (!runtime) void refreshRuntime();
+      // Re-read the pointer and actual runtime files every time the dialog is
+      // opened. Keeping the previous React object here made a changed path or
+      // deleted environment appear unchanged after reopening the dialog.
+      void refreshRuntime(false);
       void refreshInstallStatus();
       void refreshModelCatalog();
     });
     return () => {
       cancelled = true;
+      runtimeRequestGenerationRef.current += 1;
       window.cancelAnimationFrame(frame);
     };
-  }, [open, runtime, refreshInstallStatus, refreshModelCatalog, refreshRuntime]);
+  }, [open, refreshInstallStatus, refreshModelCatalog, refreshRuntime]);
 
   useEffect(() => {
     if (!open || !isTauriEnvironment()) return;
@@ -596,7 +635,7 @@ export function OcrDialog({
 
     try {
       const nextRuntime = await installOcrRuntime();
-      setRuntime(nextRuntime);
+      applyRuntimeStatus(nextRuntime);
       setError("");
       await refreshInstallStatus();
       onNotify(isEn ? "OCR runtime installed" : "OCR 运行环境安装完成");
@@ -626,6 +665,104 @@ export function OcrDialog({
       await openOcrInstallLogs();
     } catch (logError) {
       setError(readError(logError));
+    }
+  };
+
+  const handleChangeStorage = async () => {
+    if (
+      !isTauriEnvironment() ||
+      changingStorage ||
+      installing ||
+      modelBusy ||
+      modelDownloadActive ||
+      recognizing
+    ) {
+      return;
+    }
+    let reinstallGuardHeld = false;
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        directory: true,
+        title: isEn
+          ? "Choose a parent folder for VisualTeX OCR storage"
+          : "选择 VisualTeX OCR 存储位置的上级文件夹",
+      });
+      if (typeof selected !== "string") return;
+      const hasExistingData =
+        Boolean(runtime?.installed) ||
+        installedModels.length > 0 ||
+        Boolean(runtime?.pythonPath) ||
+        (installStatus?.percent ?? 0) > 1;
+      const confirmed = window.confirm(
+        isEn
+          ? hasExistingData
+            ? `VisualTeX will create or use a VisualTeX-OCR folder under:\n${selected}\n\nThe current private Python environment, dependencies, models, resumable downloads, caches, and logs will be deleted. If the destination contains an incomplete VisualTeX OCR environment, that incomplete data will also be reset. VisualTeX will then switch to the new location and reinstall the OCR runtime there. Models must be downloaded or imported again. Continue?`
+            : `VisualTeX will create or use a VisualTeX-OCR folder under:\n${selected}\n\nThe OCR runtime and all future models, downloads, caches, and logs will use this location. It will be preserved after uninstall. Continue?`
+          : hasExistingData
+            ? `VisualTeX 将在下面的位置创建或使用 VisualTeX-OCR 文件夹：\n${selected}\n\n当前私有 Python 环境、全部依赖、模型、断点下载、缓存和日志都会被删除；如果目标位置存在不完整的 VisualTeX OCR 环境，也会一并安全重置。随后会切换到新位置并重新安装 OCR 环境，模型需要重新下载或导入。是否继续？`
+            : `VisualTeX 将在下面的位置创建或使用 VisualTeX-OCR 文件夹：\n${selected}\n\nOCR 环境以及以后安装的模型、下载、缓存和日志都会写入该位置，卸载软件后仍会保留。是否继续？`,
+      );
+      if (!confirmed) return;
+
+      setChangingStorage(true);
+      setError("");
+      let nextRuntime = await configureOcrStorageLocation(selected);
+      applyRuntimeStatus(nextRuntime);
+
+      if (hasExistingData) {
+        if (!beginOcrInstallGuard(installingRef)) {
+          throw new Error(
+            isEn ? "OCR installation is already running" : "OCR 环境正在安装中",
+          );
+        }
+        reinstallGuardHeld = true;
+        setInstalling(true);
+        setInstallProgress({
+          stage: "start",
+          state: "installing",
+          percent: 1,
+          message: isEn
+            ? "Reinstalling OCR at the new storage location"
+            : "正在新的存储位置重新安装 OCR 环境",
+          detail: isEn
+            ? "The previous environment was reset. Models are installed separately."
+            : "旧环境已重置；识别模型需要单独重新安装。",
+          error: null,
+          logPath: null,
+        });
+        nextRuntime = await installOcrRuntime();
+        applyRuntimeStatus(nextRuntime);
+      }
+
+      const fallback = resolveAvailableOcrModel(nextRuntime, model);
+      if (fallback !== model) onModelChange(fallback);
+      await Promise.all([refreshInstallStatus(), refreshModelCatalog()]);
+      onNotify(
+        isEn
+          ? hasExistingData
+            ? "OCR storage changed and the runtime was reinstalled"
+            : "OCR storage location updated"
+          : hasExistingData
+            ? "OCR 存储位置已更改，运行环境已重新安装"
+            : "OCR 存储位置已更新",
+      );
+    } catch (storageError) {
+      setError(readError(storageError));
+      await refreshRuntime(true);
+      await refreshInstallStatus();
+    } finally {
+      if (reinstallGuardHeld) endOcrInstallGuard(installingRef);
+      setInstalling(false);
+      setChangingStorage(false);
+    }
+  };
+
+  const handleOpenStorage = async () => {
+    try {
+      await openOcrStorageLocation();
+    } catch (storageError) {
+      setError(readError(storageError));
     }
   };
 
@@ -661,7 +798,7 @@ export function OcrDialog({
     setError("");
     try {
       const nextRuntime = await downloadOcrModel(model);
-      setRuntime(nextRuntime);
+      applyRuntimeStatus(nextRuntime);
       onNotify(isEn ? "OCR model downloaded and verified" : "OCR 模型已下载、校验并安装");
     } catch (downloadError) {
       const message = readError(downloadError);
@@ -708,7 +845,7 @@ export function OcrDialog({
     setError("");
     try {
       const nextRuntime = await removeOptionalOcrModel(model);
-      setRuntime(nextRuntime);
+      applyRuntimeStatus(nextRuntime);
       const fallback = resolveAvailableOcrModel(nextRuntime, DEFAULT_OCR_MODEL);
       onModelChange(fallback);
     } catch (removeError) {
@@ -895,7 +1032,8 @@ export function OcrDialog({
     setCheckingRuntime(true);
     setError("");
     try {
-      setRuntime(await resetOcrRuntime());
+      const nextRuntime = await resetOcrRuntime();
+      applyRuntimeStatus(nextRuntime);
       await refreshInstallStatus();
       setResult(null);
       setLatex("");
@@ -1186,8 +1324,8 @@ export function OcrDialog({
           <div className="ocr-output-column">
             <section className="ocr-runtime-card">
               <div className="ocr-runtime-summary">
-                <span className={"ocr-runtime-icon " + (runtime?.installed ? "is-ready" : "")}>
-                  {checkingRuntime ? (
+                <span className={"ocr-runtime-icon " + (runtime?.installed && !checkingRuntime && !changingStorage ? "is-ready" : "")}>
+                  {checkingRuntime || changingStorage ? (
                     <LoaderCircle size={17} className="is-spinning" />
                   ) : runtime?.installed ? (
                     <CheckCircle2 size={17} />
@@ -1197,11 +1335,19 @@ export function OcrDialog({
                 </span>
                 <div>
                   <strong>
-                    {runtime?.installed
+                    {changingStorage
                       ? isEn
-                        ? "Local OCR runtime ready"
-                        : "本地 OCR 环境已就绪"
-                      : installing
+                        ? "Resetting and changing OCR storage"
+                        : "正在重置并更改 OCR 存储位置"
+                      : checkingRuntime
+                        ? isEn
+                          ? "Checking the actual OCR environment"
+                          : "正在核对实际 OCR 环境"
+                        : runtime?.installed
+                          ? isEn
+                            ? "Local OCR runtime ready"
+                            : "本地 OCR 环境已就绪"
+                          : installing
                         ? isEn
                           ? "OCR runtime is being installed"
                           : "正在安装 OCR 运行环境"
@@ -1218,12 +1364,102 @@ export function OcrDialog({
                               : "尚未安装 OCR 运行环境"}
                   </strong>
                   <span>
-                    {installing || installFailed
-                      ? installStatus?.message ?? installProgress?.message
-                      : runtime?.message ?? (isEn ? "Checking runtime…" : "正在检查运行环境…")}
+                    {changingStorage
+                      ? isEn
+                        ? "The displayed path and installation state will update after the disk operation completes."
+                        : "磁盘操作完成后会更新显示路径和安装状态。"
+                      : installing || installFailed
+                        ? installStatus?.message ?? installProgress?.message
+                        : runtime?.message ?? (isEn ? "Checking runtime…" : "正在检查运行环境…")}
                   </span>
                 </div>
               </div>
+
+              {runtime && (
+                <div
+                  className={
+                    "ocr-storage-location" +
+                    (storageLowForInitialInstall ? " is-low-space" : "")
+                  }
+                >
+                  <div className="ocr-storage-location-main">
+                    <HardDrive size={16} />
+                    <div>
+                      <span>{isEn ? "Independent OCR storage" : "独立 OCR 存储位置"}</span>
+                      <code title={runtime.runtimePath || undefined}>
+                        {runtime.runtimePath || (isEn ? "Unavailable" : "不可用")}
+                      </code>
+                    </div>
+                  </div>
+                  <div className="ocr-storage-location-meta">
+                    <span>
+                      {storageAvailableBytes === null
+                        ? isEn
+                          ? "Free space unavailable"
+                          : "无法读取可用空间"
+                        : isEn
+                          ? `${readableBytes(storageAvailableBytes)} free`
+                          : `可用 ${readableBytes(storageAvailableBytes)}`}
+                    </span>
+                    <span>
+                      {runtime.storageSource === "legacy"
+                        ? isEn
+                          ? "Existing environment adopted"
+                          : "已接管原有环境"
+                        : runtime.storagePersistentAcrossUninstall
+                          ? isEn
+                            ? "Preserved after uninstall"
+                            : "卸载后保留并自动复用"
+                          : isEn
+                            ? "Application data location"
+                            : "应用数据位置"}
+                    </span>
+                  </div>
+                  {storageLowForInitialInstall && (
+                    <small className="ocr-storage-space-warning">
+                      {isEn
+                        ? "Less than 2 GB is available. Choose another disk before installing the OCR runtime."
+                        : "当前可用空间不足 2 GB，请先更换到空间充足的磁盘再安装 OCR 环境。"}
+                    </small>
+                  )}
+                  {isTauriEnvironment() && (
+                    <div className="ocr-storage-location-actions">
+                      <button
+                        type="button"
+                        onClick={() => void handleChangeStorage()}
+                        disabled={
+                          changingStorage ||
+                          installing ||
+                          modelBusy ||
+                          modelDownloadActive ||
+                          recognizing
+                        }
+                      >
+                        {changingStorage ? (
+                          <LoaderCircle size={13} className="is-spinning" />
+                        ) : (
+                          <FolderOpen size={13} />
+                        )}
+                        {changingStorage
+                          ? isEn
+                            ? "Resetting and switching…"
+                            : "正在重置并切换…"
+                          : isEn
+                            ? "Change location"
+                            : "更改位置"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleOpenStorage()}
+                        disabled={changingStorage || !runtime.runtimePath}
+                      >
+                        <FolderOpen size={13} />
+                        {isEn ? "Open folder" : "打开文件夹"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {runtime?.installed ? (
                 <div className="ocr-runtime-details">
@@ -1292,6 +1528,7 @@ export function OcrDialog({
                           type="button"
                           className="primary-button"
                           onClick={() => void handleInstall()}
+                          disabled={changingStorage || storageLowForInitialInstall}
                         >
                           <RefreshCw size={14} />
                           {isEn ? "Retry current step" : "重试当前步骤"}
@@ -1330,7 +1567,9 @@ export function OcrDialog({
                             (!isTauriEnvironment() &&
                               !isOfficeCompanionEnvironment()) ||
                             checkingRuntime ||
-                            installing
+                            installing ||
+                            changingStorage ||
+                            storageLowForInitialInstall
                           }
                         >
                           <Download size={15} />

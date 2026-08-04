@@ -70,6 +70,44 @@ const formulaBackgroundColorPresets = [
 ] as const;
 
 type FormulaColorMenu = "color" | "backgroundColor";
+type ClassicResizeTarget = "tiles" | "dock";
+
+const classicTileWidthStorageKey = "visualtex-classic-tile-width";
+const classicDockHeightStorageKey = "visualtex-classic-dock-height";
+const defaultClassicTileWidth = 300;
+const minimumClassicTileWidth = 220;
+const maximumClassicTileWidth = 2000;
+const defaultClassicDockHeight = 240;
+const minimumClassicDockHeight = 132;
+const maximumClassicDockHeight = 2000;
+
+function clampPanelSize(value: number, minimum: number, maximum: number) {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function loadPanelSize(
+  storageKey: string,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+) {
+  try {
+    const stored = Number.parseFloat(localStorage.getItem(storageKey) ?? "");
+    return Number.isFinite(stored)
+      ? clampPanelSize(stored, minimum, maximum)
+      : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function persistPanelSize(storageKey: string, value: number) {
+  try {
+    localStorage.setItem(storageKey, String(Math.round(value)));
+  } catch {
+    // Panel resizing must remain usable even when storage is unavailable.
+  }
+}
 
 export function EditorWorkspace({
   mode,
@@ -100,6 +138,26 @@ export function EditorWorkspace({
     useState<FormulaColorMenu | null>(null);
   const formulaColorMenuRef = useRef<HTMLDivElement>(null);
   const formulaSelectionTargetRef = useRef<MathEditorSelectionTarget | null>(null);
+  const workspaceRef = useRef<HTMLElement>(null);
+  const classicEditorBodyRef = useRef<HTMLDivElement>(null);
+  const activeResizeCleanupRef = useRef<(() => void) | null>(null);
+  const resizeFrameRef = useRef<number | null>(null);
+  const [classicTileWidth, setClassicTileWidth] = useState(() =>
+    loadPanelSize(
+      classicTileWidthStorageKey,
+      defaultClassicTileWidth,
+      minimumClassicTileWidth,
+      maximumClassicTileWidth,
+    ),
+  );
+  const [classicDockHeight, setClassicDockHeight] = useState(() =>
+    loadPanelSize(
+      classicDockHeightStorageKey,
+      defaultClassicDockHeight,
+      minimumClassicDockHeight,
+      maximumClassicDockHeight,
+    ),
+  );
   const [formulaTextColor, setFormulaTextColor] = useState("#2563eb");
   const [formulaBackgroundColor, setFormulaBackgroundColor] = useState("#fef3c7");
   const [sourceDraftFallback, setSourceDraftFallback] = useState<{
@@ -159,6 +217,196 @@ export function EditorWorkspace({
       document.removeEventListener("keydown", closeFromKey, true);
     };
   }, [formulaColorMenu]);
+
+  useEffect(
+    () => () => {
+      activeResizeCleanupRef.current?.();
+      if (resizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(resizeFrameRef.current);
+        resizeFrameRef.current = null;
+      }
+    },
+    [],
+  );
+
+  const classicTileWidthLimit = () => {
+    const workspaceWidth = workspaceRef.current?.getBoundingClientRect().width;
+    if (!workspaceWidth) return maximumClassicTileWidth;
+    return Math.max(minimumClassicTileWidth, workspaceWidth - 360);
+  };
+
+  const classicDockHeightLimit = () => {
+    const editorHeight =
+      classicEditorBodyRef.current?.getBoundingClientRect().height;
+    if (!editorHeight) return maximumClassicDockHeight;
+    return Math.max(minimumClassicDockHeight, editorHeight - 120);
+  };
+
+  const commitClassicPanelSize = (
+    target: ClassicResizeTarget,
+    value: number,
+    persist = false,
+  ) => {
+    if (target === "tiles") {
+      const next = clampPanelSize(
+        value,
+        minimumClassicTileWidth,
+        classicTileWidthLimit(),
+      );
+      workspaceRef.current?.style.setProperty(
+        "--classic-tile-width",
+        `${next}px`,
+      );
+      setClassicTileWidth(next);
+      if (persist) persistPanelSize(classicTileWidthStorageKey, next);
+      return next;
+    }
+
+    const next = clampPanelSize(
+      value,
+      minimumClassicDockHeight,
+      classicDockHeightLimit(),
+    );
+    classicEditorBodyRef.current?.style.setProperty(
+      "--classic-dock-height",
+      `${next}px`,
+    );
+    setClassicDockHeight(next);
+    if (persist) persistPanelSize(classicDockHeightStorageKey, next);
+    return next;
+  };
+
+  const startClassicResize = (
+    target: ClassicResizeTarget,
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    activeResizeCleanupRef.current?.();
+
+    const handle = event.currentTarget;
+    const pointerId = event.pointerId;
+    let latestValue =
+      target === "tiles" ? classicTileWidth : classicDockHeight;
+    let finished = false;
+
+    const applyLatestValue = () => {
+      resizeFrameRef.current = null;
+      commitClassicPanelSize(target, latestValue);
+    };
+    const scheduleValue = (value: number) => {
+      latestValue = value;
+      if (resizeFrameRef.current !== null) return;
+      resizeFrameRef.current = window.requestAnimationFrame(applyLatestValue);
+    };
+    const move = (pointerEvent: PointerEvent) => {
+      if (pointerEvent.pointerId !== pointerId) return;
+      if (target === "tiles") {
+        const bounds = workspaceRef.current?.getBoundingClientRect();
+        if (bounds) scheduleValue(bounds.right - pointerEvent.clientX);
+      } else {
+        const bounds = classicEditorBodyRef.current?.getBoundingClientRect();
+        if (bounds) scheduleValue(bounds.bottom - pointerEvent.clientY);
+      }
+      pointerEvent.preventDefault();
+    };
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", finish);
+      document.removeEventListener("pointercancel", finish);
+      window.removeEventListener("blur", finish);
+      if (resizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(resizeFrameRef.current);
+        resizeFrameRef.current = null;
+      }
+      const finalValue = commitClassicPanelSize(target, latestValue, true);
+      latestValue = finalValue;
+      if (handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId);
+      delete document.body.dataset.workspaceResize;
+      if (activeResizeCleanupRef.current === finish) {
+        activeResizeCleanupRef.current = null;
+      }
+    };
+
+    document.body.dataset.workspaceResize = target;
+    handle.setPointerCapture(pointerId);
+    document.addEventListener("pointermove", move, { passive: false });
+    document.addEventListener("pointerup", finish);
+    document.addEventListener("pointercancel", finish);
+    window.addEventListener("blur", finish);
+    activeResizeCleanupRef.current = finish;
+  };
+
+  const adjustClassicPanelFromKeyboard = (
+    target: ClassicResizeTarget,
+    delta: number,
+  ) => {
+    const current = target === "tiles" ? classicTileWidth : classicDockHeight;
+    commitClassicPanelSize(target, current + delta, true);
+  };
+
+  const resetClassicPanelSize = (target: ClassicResizeTarget) => {
+    commitClassicPanelSize(
+      target,
+      target === "tiles" ? defaultClassicTileWidth : defaultClassicDockHeight,
+      true,
+    );
+  };
+
+  useEffect(() => {
+    if (editorLayout !== "classic") return;
+    const workspace = workspaceRef.current;
+    const editorBody = classicEditorBodyRef.current;
+    if (!workspace || !editorBody) return;
+
+    let frame = 0;
+    const constrainPanelSizes = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        const workspaceWidth = workspace.getBoundingClientRect().width;
+        const tileMaximum = Math.max(
+          minimumClassicTileWidth,
+          workspaceWidth - 360,
+        );
+        setClassicTileWidth((current) => {
+          const next = clampPanelSize(
+            current,
+            minimumClassicTileWidth,
+            tileMaximum,
+          );
+          if (next !== current) persistPanelSize(classicTileWidthStorageKey, next);
+          return next;
+        });
+
+        const editorHeight = editorBody.getBoundingClientRect().height;
+        const dockMaximum = Math.max(
+          minimumClassicDockHeight,
+          editorHeight - 120,
+        );
+        setClassicDockHeight((current) => {
+          const next = clampPanelSize(
+            current,
+            minimumClassicDockHeight,
+            dockMaximum,
+          );
+          if (next !== current) persistPanelSize(classicDockHeightStorageKey, next);
+          return next;
+        });
+      });
+    };
+
+    const observer = new ResizeObserver(constrainPanelSizes);
+    observer.observe(workspace);
+    observer.observe(editorBody);
+    constrainPanelSizes();
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [editorLayout]);
 
   const preserveFormulaFocus = (event: ReactPointerEvent<HTMLButtonElement>) => {
     event.preventDefault();
@@ -404,9 +652,15 @@ export function EditorWorkspace({
       )}
 
       <main
+        ref={workspaceRef}
         className={
           `workspace ${editorLayout === "classic" ? "is-classic-layout" : "is-standard-layout"}` +
           (sidebarOpen ? " has-sidebar" : "")
+        }
+        style={
+          {
+            "--classic-tile-width": `${classicTileWidth}px`,
+          } as CSSProperties
         }
         data-editor-layout={editorLayout}
       >
@@ -728,14 +982,67 @@ export function EditorWorkspace({
 
           {editorLayout === "classic" ? (
             <div
+              ref={classicEditorBodyRef}
               className={
                 "classic-editor-pane-body" +
                 (classicDockOpen ? "" : " is-dock-collapsed")
+              }
+              style={
+                {
+                  "--classic-dock-height": `${classicDockHeight}px`,
+                } as CSSProperties
               }
             >
               <div className="editor-pane-scroll">
                 {renderVisualEditor()}
               </div>
+
+              {classicDockOpen && (
+                <div
+                  className="workspace-panel-resizer classic-dock-resizer"
+                  role="separator"
+                  tabIndex={0}
+                  aria-orientation="horizontal"
+                  aria-valuemin={minimumClassicDockHeight}
+                  aria-valuemax={Math.round(classicDockHeightLimit())}
+                  aria-valuenow={Math.round(classicDockHeight)}
+                  aria-label={
+                    isEn
+                      ? "Resize formula tools and source panel"
+                      : "调整公式工具与源码区高度"
+                  }
+                  title={
+                    isEn
+                      ? "Drag to resize · Double-click to reset"
+                      : "拖动调整高度 · 双击恢复默认"
+                  }
+                  onPointerDown={(event) => startClassicResize("dock", event)}
+                  onDoubleClick={() => resetClassicPanelSize("dock")}
+                  onKeyDown={(event) => {
+                    if (event.key === "ArrowUp") {
+                      event.preventDefault();
+                      adjustClassicPanelFromKeyboard("dock", 16);
+                    } else if (event.key === "ArrowDown") {
+                      event.preventDefault();
+                      adjustClassicPanelFromKeyboard("dock", -16);
+                    } else if (event.key === "Home") {
+                      event.preventDefault();
+                      commitClassicPanelSize(
+                        "dock",
+                        minimumClassicDockHeight,
+                        true,
+                      );
+                    } else if (event.key === "End") {
+                      event.preventDefault();
+                      commitClassicPanelSize(
+                        "dock",
+                        classicDockHeightLimit(),
+                        true,
+                      );
+                    }
+                  }}
+                />
+              )}
 
               <section
                 className={
@@ -885,12 +1192,54 @@ export function EditorWorkspace({
         </section>
 
         {editorLayout === "classic" && sidebarOpen && (
-          <FormulaToolbar
-            view="tiles"
-            className="classic-tile-toolbar"
-            stabilizeTileLayout
-            onInsert={(command) => editorRef.current?.insertCommand(command)}
-          />
+          <>
+            <div
+              className="workspace-panel-resizer classic-tile-resizer"
+              role="separator"
+              tabIndex={0}
+              aria-orientation="vertical"
+              aria-valuemin={minimumClassicTileWidth}
+              aria-valuemax={Math.round(classicTileWidthLimit())}
+              aria-valuenow={Math.round(classicTileWidth)}
+              aria-label={isEn ? "Resize formula tiles" : "调整公式磁贴区宽度"}
+              title={
+                isEn
+                  ? "Drag to resize · Double-click to reset"
+                  : "拖动调整宽度 · 双击恢复默认"
+              }
+              onPointerDown={(event) => startClassicResize("tiles", event)}
+              onDoubleClick={() => resetClassicPanelSize("tiles")}
+              onKeyDown={(event) => {
+                if (event.key === "ArrowLeft") {
+                  event.preventDefault();
+                  adjustClassicPanelFromKeyboard("tiles", 16);
+                } else if (event.key === "ArrowRight") {
+                  event.preventDefault();
+                  adjustClassicPanelFromKeyboard("tiles", -16);
+                } else if (event.key === "Home") {
+                  event.preventDefault();
+                  commitClassicPanelSize(
+                    "tiles",
+                    minimumClassicTileWidth,
+                    true,
+                  );
+                } else if (event.key === "End") {
+                  event.preventDefault();
+                  commitClassicPanelSize(
+                    "tiles",
+                    classicTileWidthLimit(),
+                    true,
+                  );
+                }
+              }}
+            />
+            <FormulaToolbar
+              view="tiles"
+              className="classic-tile-toolbar"
+              stabilizeTileLayout
+              onInsert={(command) => editorRef.current?.insertCommand(command)}
+            />
+          </>
         )}
       </main>
 

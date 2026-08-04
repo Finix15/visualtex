@@ -23,6 +23,10 @@ const pythonBundleSource = fs.readFileSync(
   path.join(root, "src-tauri", "src", "ocr_python_bundle.rs"),
   "utf8",
 );
+const storageSource = fs.readFileSync(
+  path.join(root, "src-tauri", "src", "ocr_storage.rs"),
+  "utf8",
+);
 const tauriConfigSource = fs.readFileSync(
   path.join(root, "src-tauri", "tauri.conf.json"),
   "utf8",
@@ -141,6 +145,28 @@ assert.match(rustSource, /ensure_private_python_app_local_runtime/);
 assert.match(rustSource, /app-local Microsoft OpenMP runtime/);
 assert.match(rustSource, /is_x86_feature_detected!\("avx"\)/);
 assert.match(rustSource, /skipped pip reinstall/);
+assert.match(rustSource, /configure_ocr_storage_location/);
+assert.match(rustSource, /open_ocr_storage_location/);
+assert.match(rustSource, /\.join\("VisualTeXData"\)/);
+assert.match(rustSource, /storage_persistent_across_uninstall: true/);
+assert.match(rustSource, /begin_storage_change/);
+assert.match(rustSource, /begin_runtime_mutation/);
+assert.match(rustSource, /A cached runtime status is only safe while installation/);
+assert.doesNotMatch(rustSource, /if !force_refresh \|\| installing/);
+assert.match(dialogSource, /runtimeRequestGenerationRef/);
+assert.match(dialogSource, /Re-read the pointer and actual runtime files every time the dialog is/);
+assert.match(dialogSource, /applyRuntimeStatus\(nextRuntime\)/);
+assert.match(storageSource, /STORAGE_DIRECTORY_NAME: &str = "VisualTeX-OCR"/);
+assert.match(storageSource, /STORAGE_CONFIG_FILE: &str = "ocr-storage\.json"/);
+assert.match(storageSource, /STORAGE_MARKER_FILE: &str = "\.visualtex-ocr-root\.json"/);
+assert.match(storageSource, /reset_source: source_has_payload/);
+assert.match(storageSource, /directory_contains_payload/);
+assert.match(storageSource, /root\.join\("python"\)\.join\("python\.exe"\)\.is_file\(\)/);
+assert.doesNotMatch(storageSource, /current and selected locations both contain OCR data/);
+assert.match(rustSource, /reset_runtime_contents\(&current\.root\)/);
+assert.doesNotMatch(storageSource, /copy_tree|source_to_remove|visualtex-ocr-migrating/);
+assert.match(storageSource, /GetDiskFreeSpaceExW/);
+assert.match(storageSource, /ocr-storage\.invalid-/);
 
 assert.match(rustSource, /--only-binary=:all:/);
 assert.match(rustSource, /--no-deps/);
@@ -172,6 +198,11 @@ assert.match(dialogSource, /Cancel installation|取消安装/);
 assert.match(dialogSource, /beginOcrInstallGuard/);
 assert.match(dialogSource, /shouldDisplayRuntimeError/);
 assert.match(dialogSource, /await refreshInstallStatus\(\)/);
+assert.match(dialogSource, /Independent OCR storage|独立 OCR 存储位置/);
+assert.match(dialogSource, /Change location|更改位置/);
+assert.match(dialogSource, /Preserved after uninstall|卸载后保留并自动复用/);
+assert.match(dialogSource, /configureOcrStorageLocation/);
+assert.match(dialogSource, /storageLowForInitialInstall/);
 
 for (const command of [
   "get_ocr_install_status",

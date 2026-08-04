@@ -73,9 +73,16 @@ def main() -> None:
             worker._CURRENT_DEVICE = None
             calls.clear()
             (model_dir / "inference.yml").unlink()
-            worker._load_model(model_name, "cpu")
-            assert "model_dir" not in calls[0], (
-                "An incomplete model cache must not be treated as a valid local predictor"
+            try:
+                worker._load_model(model_name, "cpu")
+            except RuntimeError as error:
+                assert "verified local model" in str(error).lower()
+            else:
+                raise AssertionError(
+                    "An incomplete model directory must be rejected instead of allowing PaddleX to download implicitly"
+                )
+            assert calls == [], (
+                "An incomplete model directory must fail before PaddleOCR is constructed"
             )
     finally:
         if original_cache is None:

@@ -1,5 +1,7 @@
 #[path = "../ocr_models.rs"]
 mod ocr_models;
+#[path = "../ocr_storage.rs"]
+mod ocr_storage;
 #[path = "../ocr_python_bundle.rs"]
 mod ocr_python_bundle;
 

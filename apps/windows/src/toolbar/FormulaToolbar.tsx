@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -750,6 +751,7 @@ export function FormulaToolbar({
   const [matrixDelimiter, setMatrixDelimiter] =
     useState<MatrixDelimiter>("bmatrix");
   const toolbarRef = useRef<HTMLElement>(null);
+  const [horizontalRowCount, setHorizontalRowCount] = useState(3);
   const [customTileGridWidths, setCustomTileGridWidths] = useState<
     Record<string, number>
   >({});
@@ -915,6 +917,53 @@ export function FormulaToolbar({
     root.addEventListener("wheel", handleHorizontalWheel, { passive: false });
     return () => root.removeEventListener("wheel", handleHorizontalWheel);
   }, [layout, activeCategory, activeView]);
+
+  useLayoutEffect(() => {
+    if (layout !== "horizontal" || activeView !== "tools") return;
+    const root = toolbarRef.current;
+    const tabs = root?.querySelector<HTMLElement>(".toolbar-tabs");
+    const strip = root?.querySelector<HTMLElement>(".template-strip");
+    if (!root || !tabs || !strip) return;
+
+    let frame = 0;
+    const measureRows = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        const styles = window.getComputedStyle(strip);
+        const paddingTop = Number.parseFloat(styles.paddingTop) || 0;
+        const paddingBottom = Number.parseFloat(styles.paddingBottom) || 0;
+        const rowGap = Number.parseFloat(styles.rowGap) || 4;
+        const tabsHeight = tabs.getBoundingClientRect().height;
+        const availableHeight = Math.max(
+          0,
+          root.getBoundingClientRect().height -
+            tabsHeight -
+            paddingTop -
+            paddingBottom,
+        );
+        const nextRowCount = Math.max(
+          1,
+          Math.floor((availableHeight + rowGap) / (46 + rowGap)),
+        );
+
+        // Apply the row count to the live element before React's state update so
+        // pointer dragging never shows a stale extra row clipped by overflow.
+        root.style.setProperty("--toolbar-row-count", String(nextRowCount));
+        root.dataset.toolbarRowCount = String(nextRowCount);
+        setHorizontalRowCount((current) =>
+          current === nextRowCount ? current : nextRowCount,
+        );
+      });
+    };
+
+    const observer = new ResizeObserver(measureRows);
+    observer.observe(root);
+    measureRows();
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [activeCategory, activeView, layout]);
 
   useEffect(() => {
     if (!contextMenu) return;
@@ -1208,8 +1257,18 @@ export function FormulaToolbar({
         (layout === "horizontal" ? " is-horizontal" : "") +
         (className ? ` ${className}` : "")
       }
+      style={
+        layout === "horizontal"
+          ? ({
+              "--toolbar-row-count": horizontalRowCount,
+            } as CSSProperties)
+          : undefined
+      }
       data-toolbar-layout={layout}
       data-toolbar-fixed-view={fixedView ?? ""}
+      data-toolbar-row-count={
+        layout === "horizontal" ? horizontalRowCount : undefined
+      }
       aria-label={isEn ? "Formula toolbar" : "公式工具栏"}
     >
       {!fixedView && <header className="formula-toolbar-header">
@@ -1582,6 +1641,12 @@ export function FormulaToolbar({
                     className="formula-tile-preview"
                     fit
                     fluidHeight
+                    minimumFluidScale={0.2}
+                    maximumFluidScale={1}
+                    fitInsetRatio={0.86}
+                    minimumFluidHeight={60}
+                    maximumFluidHeight={190}
+                    fluidVerticalPadding={30}
                   />
                 </button>
               ))}
@@ -1777,11 +1842,12 @@ export function FormulaToolbar({
                                     showPlaceholders
                                     fit
                                     fluidHeight
-                                    minimumFluidScale={0.8}
-                                    maximumFluidScale={1.2}
-                                    fitInsetRatio={0.84}
-                                    minimumFluidHeight={44}
-                                    fluidVerticalPadding={8}
+                                    minimumFluidScale={0.65}
+                                    maximumFluidScale={1}
+                                    fitInsetRatio={0.82}
+                                    minimumFluidHeight={48}
+                                    maximumFluidHeight={150}
+                                    fluidVerticalPadding={18}
                                     onMeasure={({ width }) =>
                                       recordCustomTileNaturalWidth(tile.id, width)
                                     }
