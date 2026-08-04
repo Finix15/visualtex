@@ -301,6 +301,9 @@ const vstoBulkSpacingAcceptance = await source(
 const vstoDisplaySpacingAcceptance = await source(
   "src-windows/VisualTeX.VstoFlowAcceptance/WordDisplaySpacingAcceptance.cs",
 );
+const vstoEquationNumberFormatAcceptance = await source(
+  "src-windows/VisualTeX.VstoFlowAcceptance/WordEquationNumberFormatAcceptance.cs",
+);
 const officeServer = await source("src-tauri/src/office/server.rs");
 const officeState = await source("src-tauri/src/office/state.rs");
 const officeSessions = await source("src-tauri/src/office/sessions.rs");
@@ -562,6 +565,13 @@ assert.ok(vstoFlowAcceptance.includes("acceptance.log"));
 assert.ok(vstoFlowAcceptance.includes('"word-create"'));
 assert.ok(vstoFlowAcceptance.includes('"word-bulk-import-latex-spacing"'));
 assert.ok(vstoFlowAcceptance.includes('"word-display-spacing"'));
+assert.ok(vstoFlowAcceptance.includes('"word-equation-number-format"'));
+assert.ok(vstoEquationNumberFormatAcceptance.includes("Heading1DotId"));
+assert.ok(vstoEquationNumberFormatAcceptance.includes("Heading1DashId"));
+assert.ok(vstoEquationNumberFormatAcceptance.includes("Heading2DotId"));
+assert.ok(vstoEquationNumberFormatAcceptance.includes("Heading2DashId"));
+assert.ok(vstoEquationNumberFormatAcceptance.includes("InsertLegacyNumberingReference"));
+assert.ok(vstoEquationNumberFormatAcceptance.includes("survived save/reopen"));
 assert.ok(vstoBulkSpacingAcceptance.includes("ordinary CJK boundary spaces"));
 assert.ok(vstoBulkSpacingAcceptance.includes("no VTBL bookmark or boundary character remained"));
 assert.ok(vstoDisplaySpacingAcceptance.includes("typed prose stayed outside OMath"));
@@ -618,6 +628,18 @@ for (const command of [
   assert.ok(powerpointVsto.includes(command), `PowerPoint Ribbon is missing ${command}`);
 }
 assert.ok(wordVsto.includes("OnUpdateEquationNumbers"));
+assert.ok(wordVsto.includes("GetEquationNumberFormatPressed"));
+assert.ok(wordVsto.includes("OnEquationNumberFormatChanged"));
+assert.ok(wordVsto.includes('id="VisualTeX.WordVsto.NumberFormat"'));
+for (const formatTag of [
+  "continuous",
+  "heading1-dot",
+  "heading1-dash",
+  "heading2-dot",
+  "heading2-dash",
+]) {
+  assert.ok(wordVsto.includes(`tag="${formatTag}"`));
+}
 assert.ok(wordVsto.includes("OnInsertEquationReference"));
 assert.ok(wordVsto.includes("InsertEquationReferenceAsync"));
 assert.ok(wordVsto.includes("FormulaOleContract.NativeOleMode"));
@@ -723,8 +745,14 @@ assert.ok(wordVstoService.includes("WordEquationNumbering.TryReconcile"));
 assert.ok(wordVstoService.includes("WordEquationNumbering.Reconcile"));
 assert.ok(wordEquationNumbering.includes("SEQ {nativeSequenceName}"));
 assert.ok(wordEquationNumbering.includes("WdCaptionLabelID.wdCaptionEquation"));
-assert.ok(wordEquationNumbering.includes("selection.InsertCrossReference"));
-assert.ok(wordEquationNumbering.includes("WdReferenceKind.wdEntireCaption"));
+assert.ok(wordEquationNumbering.includes("EquationNumberFormatVariableName"));
+assert.ok(wordEquationNumbering.includes("Document.Variables") || wordEquationNumbering.includes("document.Variables"));
+assert.ok(wordEquationNumbering.includes("Heading1DotId"));
+assert.ok(wordEquationNumbering.includes("Heading2DashId"));
+assert.ok(wordEquationNumbering.includes("GetHeadingNumberAnchors"));
+assert.ok(wordEquationNumbering.includes("ResolveEquationNumberScope"));
+assert.ok(wordEquationNumbering.includes('REF {NativeNumberBookmarkName(target.FormulaId)}'));
+assert.ok(wordEquationNumbering.includes("TryResolveVisualTeXReferenceBookmark"));
 assert.ok(wordEquationNumbering.includes("EquationBookmarkPrefix"));
 assert.ok(wordEquationNumbering.includes("UpdateNativeCrossReferences"));
 assert.ok(!wordEquationNumbering.includes("EquationReferenceBookmarkPrefix"));

@@ -1,0 +1,496 @@
+using Extensibility;
+using Office = Microsoft.Office.Core;
+using VisualTeX.WindowsOffice.Contracts;
+using VisualTeX.WordVsto;
+using Word = Microsoft.Office.Interop.Word;
+
+namespace VisualTeX.VstoFlowAcceptance;
+
+internal static partial class Program
+{
+    private sealed class EquationNumberRibbonControl : Office.IRibbonControl
+    {
+        internal EquationNumberRibbonControl(string tag)
+        {
+            Id = "VisualTeX.WordVsto.NumberFormatAcceptance";
+            Tag = tag;
+        }
+
+        public string Id { get; }
+        public object Context => null!;
+        public string Tag { get; }
+    }
+
+    private sealed class NumberedFormulaCase
+    {
+        internal string FormulaId { get; set; } = string.Empty;
+        internal string ObjectMode { get; set; } = string.Empty;
+    }
+
+    private static void RunWordEquationNumberFormat(
+        VisualTeXSessionClient client,
+        string artifactRoot)
+    {
+        Directory.CreateDirectory(artifactRoot);
+        var outputPath = Path.Combine(artifactRoot, "word-equation-number-format.docx");
+        DeleteBulkPerformanceArtifact(outputPath);
+
+        Word.Application? application = null;
+        Word.Document? document = null;
+        Word.Document? reopened = null;
+        VisualTeX.WordVsto.ThisAddIn? addIn = null;
+        Array custom = Array.Empty<object>();
+        try
+        {
+            application = new Word.Application
+            {
+                Visible = false,
+                DisplayAlerts = Word.WdAlertLevel.wdAlertsNone,
+            };
+            document = application.Documents.Add();
+            addIn = new VisualTeX.WordVsto.ThisAddIn();
+            addIn.OnConnection(
+                application,
+                ext_ConnectMode.ext_cm_AfterStartup,
+                addIn,
+                ref custom);
+
+            InsertNumberingHeading(application, document, level: 1, "Chapter A");
+            var formulas = new List<NumberedFormulaCase>
+            {
+                InsertNumberedFormula(client, application, addIn, FormulaOleContract.NativeOleMode, "a_1=1"),
+                InsertNumberedFormula(client, application, addIn, FormulaOleContract.WordOmmlMode, "a_2=2"),
+            };
+            InsertNumberingHeading(application, document, level: 2, "Section A.1");
+            formulas.Add(InsertNumberedFormula(
+                client,
+                application,
+                addIn,
+                FormulaOleContract.NativeOleMode,
+                "a_3=3"));
+
+            InsertNumberingHeading(application, document, level: 1, "Chapter B");
+            formulas.Add(InsertNumberedFormula(
+                client,
+                application,
+                addIn,
+                FormulaOleContract.WordOmmlMode,
+                "b_1=4"));
+            InsertNumberingHeading(application, document, level: 2, "Section B.1");
+            formulas.Add(InsertNumberedFormula(
+                client,
+                application,
+                addIn,
+                FormulaOleContract.NativeOleMode,
+                "b_2=5"));
+
+            AssertEquationNumberFormat(
+                document,
+                addIn,
+                EquationNumberFormat.ContinuousId,
+                formulas,
+                new[] { "1", "2", "3", "4", "5" });
+
+            var referenceBookmark = InsertNumberingReference(
+                application,
+                document,
+                formulas[0].FormulaId);
+            var legacyReferenceBookmark = InsertLegacyNumberingReference(
+                application,
+                document,
+                formulas[0].FormulaId);
+            AssertReferenceText(document, referenceBookmark, "(1)");
+            AssertReferenceText(document, legacyReferenceBookmark, "(1)");
+
+            ApplyEquationNumberFormat(
+                addIn,
+                document,
+                EquationNumberFormat.Heading1DotId,
+                formulas,
+                new[] { "1.1", "1.2", "1.3", "2.1", "2.2" });
+            AssertReferenceText(document, referenceBookmark, "(1.1)");
+            AssertReferenceText(document, legacyReferenceBookmark, "(1.1)");
+
+            ApplyEquationNumberFormat(
+                addIn,
+                document,
+                EquationNumberFormat.Heading1DashId,
+                formulas,
+                new[] { "1-1", "1-2", "1-3", "2-1", "2-2" });
+            AssertReferenceText(document, referenceBookmark, "(1-1)");
+            AssertReferenceText(document, legacyReferenceBookmark, "(1-1)");
+
+            ApplyEquationNumberFormat(
+                addIn,
+                document,
+                EquationNumberFormat.Heading2DotId,
+                formulas,
+                new[] { "1.0.1", "1.0.2", "1.1.1", "2.0.1", "2.1.1" });
+            AssertReferenceText(document, referenceBookmark, "(1.0.1)");
+            AssertReferenceText(document, legacyReferenceBookmark, "(1.0.1)");
+
+            ApplyEquationNumberFormat(
+                addIn,
+                document,
+                EquationNumberFormat.Heading2DashId,
+                formulas,
+                new[] { "1.0-1", "1.0-2", "1.1-1", "2.0-1", "2.1-1" });
+            AssertReferenceText(document, referenceBookmark, "(1.0-1)");
+            AssertReferenceText(document, legacyReferenceBookmark, "(1.0-1)");
+
+            ApplyEquationNumberFormat(
+                addIn,
+                document,
+                EquationNumberFormat.Heading1DashId,
+                formulas,
+                new[] { "1-1", "1-2", "1-3", "2-1", "2-2" });
+            var futureFormula = InsertNumberedFormula(
+                client,
+                application,
+                addIn,
+                FormulaOleContract.WordOmmlMode,
+                "b_3=6");
+            formulas.Add(futureFormula);
+            AssertEquationNumberFormat(
+                document,
+                addIn,
+                EquationNumberFormat.Heading1DashId,
+                formulas,
+                new[] { "1-1", "1-2", "1-3", "2-1", "2-2", "2-3" });
+            AssertReferenceText(document, referenceBookmark, "(1-1)");
+            AssertReferenceText(document, legacyReferenceBookmark, "(1-1)");
+
+            document.SaveAs2(outputPath, Word.WdSaveFormat.wdFormatXMLDocument);
+            document.Close(Word.WdSaveOptions.wdDoNotSaveChanges);
+            Release(document);
+            document = null;
+
+            reopened = application.Documents.Open(
+                outputPath,
+                ReadOnly: false,
+                AddToRecentFiles: false);
+            AssertEquationNumberFormat(
+                reopened,
+                addIn,
+                EquationNumberFormat.Heading1DashId,
+                formulas,
+                new[] { "1-1", "1-2", "1-3", "2-1", "2-2", "2-3" });
+            AssertReferenceText(reopened, referenceBookmark, "(1-1)");
+            AssertReferenceText(reopened, legacyReferenceBookmark, "(1-1)");
+
+            Console.WriteLine(
+                "Word equation-number format acceptance passed: Ribbon selection changed all existing OLE/OMML numbers immediately, native cross-references followed the selected format, the document setting survived save/reopen, and a later inserted formula inherited the saved format.");
+            Console.WriteLine($"Artifact: {outputPath}");
+        }
+        finally
+        {
+            if (addIn is not null)
+            {
+                try
+                {
+                    addIn.OnDisconnection(
+                        ext_DisconnectMode.ext_dm_UserClosed,
+                        ref custom);
+                }
+                catch { }
+            }
+            try { reopened?.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
+            try { document?.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
+            try { application?.Quit(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
+            Release(reopened);
+            Release(document);
+            Release(application);
+            ForceComCleanup();
+        }
+    }
+
+    private static void InsertNumberingHeading(
+        Word.Application application,
+        Word.Document document,
+        int level,
+        string text)
+    {
+        Word.Selection? selection = null;
+        Word.Range? headingRange = null;
+        try
+        {
+            selection = application.Selection;
+            selection.EndKey(Word.WdUnits.wdStory);
+            var start = selection.Start;
+            selection.TypeText(text);
+            selection.TypeParagraph();
+            headingRange = document.Range(start, selection.Start);
+            object headingStyle = level == 1
+                ? Word.WdBuiltinStyle.wdStyleHeading1
+                : Word.WdBuiltinStyle.wdStyleHeading2;
+            headingRange.set_Style(ref headingStyle);
+            object normalStyle = Word.WdBuiltinStyle.wdStyleNormal;
+            selection.set_Style(ref normalStyle);
+        }
+        finally
+        {
+            Release(headingRange);
+            Release(selection);
+        }
+    }
+
+    private static NumberedFormulaCase InsertNumberedFormula(
+        VisualTeXSessionClient client,
+        Word.Application application,
+        VisualTeX.WordVsto.ThisAddIn addIn,
+        string objectMode,
+        string latex)
+    {
+        const string mathMlPrefix =
+            "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">";
+        const string mathMlSuffix = "</math>";
+        var existing = SnapshotSessionIds();
+        if (string.Equals(objectMode, FormulaOleContract.WordOmmlMode, StringComparison.Ordinal))
+            addIn.OnInsertDisplayOmml(new object());
+        else
+            addIn.OnInsertDisplay(new object());
+        var sessionId = WaitForNewSession(existing, "word", TimeSpan.FromSeconds(30));
+        var session = client.GetSessionAsync(sessionId, CancellationToken.None)
+            .GetAwaiter().GetResult();
+        var mathMl = string.Equals(objectMode, FormulaOleContract.WordOmmlMode, StringComparison.Ordinal)
+            ? mathMlPrefix + "<mi>x</mi><mo>=</mo><mn>1</mn>" + mathMlSuffix
+            : null;
+        Commit(
+            client,
+            session,
+            "block",
+            objectMode,
+            latex,
+            numbered: true,
+            mathMl: mathMl);
+        var final = WaitForTerminal(client, sessionId, TimeSpan.FromSeconds(45));
+        AssertEqual("completed", final.Status,
+            final.Error ?? "The numbered formula did not complete.");
+        client.CloseEditorAsync(sessionId, CancellationToken.None).GetAwaiter().GetResult();
+        WaitForAddInIdle(addIn, TimeSpan.FromSeconds(10));
+        return new NumberedFormulaCase
+        {
+            FormulaId = final.FormulaId
+                ?? throw new InvalidDataException("The numbered formula has no formulaId."),
+            ObjectMode = objectMode,
+        };
+    }
+
+    private static string InsertNumberingReference(
+        Word.Application application,
+        Word.Document document,
+        string formulaId)
+    {
+        Word.Selection? selection = null;
+        Word.Range? referenceRange = null;
+        Word.Bookmarks? bookmarks = null;
+        Word.Bookmark? bookmark = null;
+        try
+        {
+            selection = application.Selection;
+            selection.EndKey(Word.WdUnits.wdStory);
+            selection.TypeText("Reference: ");
+            var start = selection.Start;
+            var target = WordEquationNumbering.GetEquationReferenceTargets(document)
+                .Single(item => string.Equals(
+                    item.FormulaId,
+                    formulaId,
+                    StringComparison.OrdinalIgnoreCase));
+            WordEquationNumbering.InsertEquationReference(
+                document,
+                selection,
+                target,
+                EquationReferenceStyle.Parenthesized);
+            var end = selection.Start;
+            selection.TypeParagraph();
+            referenceRange = document.Range(start, end);
+            bookmarks = document.Bookmarks;
+            const string bookmarkName = "VTTestEquationNumberReference";
+            bookmark = bookmarks.Add(bookmarkName, referenceRange);
+            return bookmarkName;
+        }
+        finally
+        {
+            Release(bookmark);
+            Release(bookmarks);
+            Release(referenceRange);
+            Release(selection);
+        }
+    }
+
+    private static string InsertLegacyNumberingReference(
+        Word.Application application,
+        Word.Document document,
+        string formulaId)
+    {
+        Word.Selection? selection = null;
+        Word.Range? referenceRange = null;
+        Word.Bookmarks? bookmarks = null;
+        Word.Bookmark? bookmark = null;
+        try
+        {
+            selection = application.Selection;
+            selection.EndKey(Word.WdUnits.wdStory);
+            selection.TypeText("Legacy reference: ");
+            var start = selection.Start;
+            var target = WordEquationNumbering.GetEquationReferenceTargets(document)
+                .Single(item => string.Equals(
+                    item.FormulaId,
+                    formulaId,
+                    StringComparison.OrdinalIgnoreCase));
+            selection.TypeText("(");
+            selection.InsertCrossReference(
+                ReferenceType: Word.WdCaptionLabelID.wdCaptionEquation,
+                ReferenceKind: Word.WdReferenceKind.wdEntireCaption,
+                ReferenceItem: target.NativeReferenceItem,
+                InsertAsHyperlink: true,
+                IncludePosition: false);
+            selection.Collapse(Word.WdCollapseDirection.wdCollapseEnd);
+            selection.TypeText(")");
+            var end = selection.Start;
+            selection.TypeParagraph();
+            referenceRange = document.Range(start, end);
+            bookmarks = document.Bookmarks;
+            const string bookmarkName = "VTTestLegacyEquationNumberReference";
+            bookmark = bookmarks.Add(bookmarkName, referenceRange);
+            return bookmarkName;
+        }
+        finally
+        {
+            Release(bookmark);
+            Release(bookmarks);
+            Release(referenceRange);
+            Release(selection);
+        }
+    }
+
+    private static void ApplyEquationNumberFormat(
+        VisualTeX.WordVsto.ThisAddIn addIn,
+        Word.Document document,
+        string formatId,
+        IReadOnlyList<NumberedFormulaCase> formulas,
+        IReadOnlyList<string> expectedNumbers)
+    {
+        var control = new EquationNumberRibbonControl(formatId);
+        addIn.OnEquationNumberFormatChanged(control, pressed: true);
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        Exception? lastError = null;
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                AssertEquationNumberFormat(
+                    document,
+                    addIn,
+                    formatId,
+                    formulas,
+                    expectedNumbers);
+                return;
+            }
+            catch (Exception error)
+            {
+                lastError = error;
+                Thread.Sleep(100);
+            }
+        }
+        throw new InvalidOperationException(
+            $"The Ribbon did not apply equation-number format {formatId} in time.",
+            lastError);
+    }
+
+    private static void AssertEquationNumberFormat(
+        Word.Document document,
+        VisualTeX.WordVsto.ThisAddIn addIn,
+        string formatId,
+        IReadOnlyList<NumberedFormulaCase> formulas,
+        IReadOnlyList<string> expectedNumbers)
+    {
+        AssertEqual(formulas.Count, expectedNumbers.Count,
+            "The equation-number acceptance data is inconsistent.");
+        var selectedControl = new EquationNumberRibbonControl(formatId);
+        AssertTrue(addIn.GetEquationNumberFormatPressed(selectedControl),
+            $"Ribbon format {formatId} is not selected.");
+        foreach (var alternate in new[]
+                 {
+                     EquationNumberFormat.ContinuousId,
+                     EquationNumberFormat.Heading1DotId,
+                     EquationNumberFormat.Heading1DashId,
+                     EquationNumberFormat.Heading2DotId,
+                     EquationNumberFormat.Heading2DashId,
+                 })
+        {
+            var pressed = addIn.GetEquationNumberFormatPressed(
+                new EquationNumberRibbonControl(alternate));
+            AssertEqual(string.Equals(alternate, formatId, StringComparison.Ordinal), pressed,
+                $"Ribbon pressed state is wrong for {alternate}.");
+        }
+
+        for (var index = 0; index < formulas.Count; index++)
+        {
+            var visible = ReadEquationNumberBookmarkText(
+                document,
+                WordEquationNumbering.EquationBookmarkName(formulas[index].FormulaId));
+            var native = ReadEquationNumberBookmarkText(
+                document,
+                WordEquationNumbering.NativeNumberBookmarkName(formulas[index].FormulaId));
+            AssertEqual(expectedNumbers[index], visible,
+                $"Visible equation number {index + 1} is wrong for format {formatId}.");
+            AssertEqual(expectedNumbers[index], native,
+                $"Native caption number {index + 1} is wrong for format {formatId}.");
+        }
+    }
+
+    private static string ReadEquationNumberBookmarkText(
+        Word.Document document,
+        string bookmarkName)
+    {
+        Word.Bookmarks? bookmarks = null;
+        Word.Bookmark? bookmark = null;
+        Word.Range? range = null;
+        try
+        {
+            bookmarks = document.Bookmarks;
+            AssertTrue(bookmarks.Exists(bookmarkName),
+                $"Equation-number bookmark {bookmarkName} is missing.");
+            bookmark = bookmarks[bookmarkName];
+            range = bookmark.Range;
+            return (range.Text ?? string.Empty)
+                .Replace("\t", string.Empty)
+                .Trim()
+                .TrimStart('(', '（')
+                .TrimEnd(')', '）');
+        }
+        finally
+        {
+            Release(range);
+            Release(bookmark);
+            Release(bookmarks);
+        }
+    }
+
+    private static void AssertReferenceText(
+        Word.Document document,
+        string bookmarkName,
+        string expected)
+    {
+        Word.Bookmarks? bookmarks = null;
+        Word.Bookmark? bookmark = null;
+        Word.Range? range = null;
+        try
+        {
+            bookmarks = document.Bookmarks;
+            AssertTrue(bookmarks.Exists(bookmarkName),
+                "The equation reference bookmark is missing.");
+            bookmark = bookmarks[bookmarkName];
+            range = bookmark.Range;
+            AssertEqual(expected, (range.Text ?? string.Empty).Trim(),
+                "The native equation cross-reference did not follow the selected format.");
+        }
+        finally
+        {
+            Release(range);
+            Release(bookmark);
+            Release(bookmarks);
+        }
+    }
+}

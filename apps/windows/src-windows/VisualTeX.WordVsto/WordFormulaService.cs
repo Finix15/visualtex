@@ -584,6 +584,50 @@ internal sealed class WordFormulaService
         }
     }
 
+    public string GetEquationNumberFormatId()
+    {
+        Document? document = null;
+        try
+        {
+            document = _application.ActiveDocument
+                ?? throw new InvalidOperationException("No active Word document.");
+            return WordEquationNumbering.GetEquationNumberFormatId(document);
+        }
+        finally { Release(document); }
+    }
+
+    public string GetEquationNumberFormatDisplayName()
+    {
+        Document? document = null;
+        try
+        {
+            document = _application.ActiveDocument
+                ?? throw new InvalidOperationException("No active Word document.");
+            return WordEquationNumbering.GetEquationNumberFormatDisplayName(document);
+        }
+        finally { Release(document); }
+    }
+
+    public int SetEquationNumberFormat(string formatId)
+    {
+        Document? document = null;
+        UndoRecord? undoRecord = null;
+        try
+        {
+            document = _application.ActiveDocument
+                ?? throw new InvalidOperationException("No active Word document.");
+            EnsureWritable(document);
+            undoRecord = BeginUndoRecord("VisualTeX Set Equation Number Format");
+            return WordEquationNumbering.SetEquationNumberFormat(document, formatId);
+        }
+        finally
+        {
+            EndUndoRecord(undoRecord);
+            Release(undoRecord);
+            Release(document);
+        }
+    }
+
     public string ExportSelectedOleAsPicture()
     {
         var selected = ReadSelection();
@@ -2064,11 +2108,10 @@ internal sealed class WordFormulaService
                 }
                 else if (bulkImport)
                 {
-                    RemoveInlineOmmlTemporaryBoundary(
+                    RemoveBulkInlineOmmlTemporaryBoundary(
                         document,
                         equationRange,
-                        metadata.FormulaId,
-                        forceTextReplacement: false);
+                        metadata.FormulaId);
                 }
                 else
                 {
@@ -4169,6 +4212,69 @@ internal sealed class WordFormulaService
         finally { Release(formulaBookmark); }
     }
 
+    private static void RemoveBulkInlineOmmlTemporaryBoundary(
+        Document document,
+        Range formulaRange,
+        string formulaId)
+    {
+        Bookmarks? bookmarks = null;
+        Bookmark? bookmark = null;
+        Range? sentinel = null;
+        Range? cleanup = null;
+        try
+        {
+            bookmarks = document.Bookmarks;
+            var name = InlineBaselineBookmarkName(formulaId);
+            if (!bookmarks.Exists(name))
+            {
+                RemoveInlineOmmlTemporaryBoundary(
+                    document,
+                    formulaRange,
+                    formulaId,
+                    forceTextReplacement: false);
+                return;
+            }
+
+            bookmark = bookmarks[name];
+            sentinel = bookmark.Range;
+            var cleanupStart = Math.Min(sentinel.Start, formulaRange.End);
+            var cleanupEnd = Math.Max(cleanupStart, sentinel.End);
+            bookmark.Delete();
+            Release(bookmark);
+            bookmark = null;
+            if (cleanupEnd <= cleanupStart) return;
+
+            cleanup = document.Range(cleanupStart, cleanupEnd);
+            var temporaryText = cleanup.Text ?? string.Empty;
+            var ownsOnlyTemporaryGuards = temporaryText.All(character =>
+                character == InlineMathGuard[0]
+                || character == LegacyInlineMathGuard[0]
+                || character == LegacyInlineBaselineSentinel[0]);
+            if (!ownsOnlyTemporaryGuards)
+            {
+                RemoveInlineOmmlTemporaryBoundary(
+                    document,
+                    formulaRange,
+                    formulaId,
+                    forceTextReplacement: false);
+                return;
+            }
+
+            // The VTBL bookmark and the live OMath end delimit only the two
+            // sacrificial hidden guards created for this bulk replacement. One
+            // Range deletion avoids repeated Font/OMaths COM probes while the
+            // complete paragraph text is already present on both sides.
+            cleanup.Delete();
+        }
+        finally
+        {
+            Release(cleanup);
+            Release(sentinel);
+            Release(bookmark);
+            Release(bookmarks);
+        }
+    }
+
     private static void RemoveInlineOmmlTemporaryBoundary(
         Document document,
         Range formulaRange,
@@ -4186,6 +4292,26 @@ internal sealed class WordFormulaService
         try
         {
             RemoveInlineBaselineSentinel(document, formulaId);
+            if (!forceTextReplacement)
+            {
+                // Bulk import already owns a live range for the just-inserted
+                // OMath and writes complete paragraphs before replacing formula
+                // placeholders. Avoid re-opening the VTOMML bookmark for every
+                // sacrificial guard: Word updates this live range as the hidden
+                // runs are deleted, and the bulk spacing acceptance verifies that
+                // neither guard survives. The stricter single-insert path below
+                // still re-resolves the durable bookmark after every deletion.
+                for (var attempt = 0; attempt < 4; attempt++)
+                {
+                    if (!TryDeleteInlineOmmlGuardAt(
+                            document,
+                            formulaRange.End,
+                            forceTextReplacement: false))
+                        break;
+                }
+                return;
+            }
+
             for (var attempt = 0; attempt < 8; attempt++)
             {
                 Release(currentRange);
@@ -4196,7 +4322,7 @@ internal sealed class WordFormulaService
                 if (!TryDeleteInlineOmmlGuardAt(
                         document,
                         currentRange.End,
-                        forceTextReplacement))
+                        forceTextReplacement: true))
                     break;
             }
         }

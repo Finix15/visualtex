@@ -155,6 +155,8 @@ Test-RibbonComDispatch `
         "OnEditSelected",
         "OnConvertSelected",
         "OnUpdateEquationNumbers",
+        "GetEquationNumberFormatPressed",
+        "OnEquationNumberFormatChanged",
         "OnExportSelectedAsPicture",
         "OnDeleteSelected",
         "OnOpenDesktop",

@@ -310,6 +310,10 @@ internal static partial class Program
             {
                 RunWordDisplaySpacing(client, artifactRoot);
             }
+            else if (string.Equals(mode, "word-equation-number-format", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordEquationNumberFormat(client, artifactRoot);
+            }
             else if (string.Equals(mode, "word-bulk-import-performance", StringComparison.OrdinalIgnoreCase))
             {
                 var objectMode = args

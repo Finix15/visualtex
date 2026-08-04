@@ -87,6 +87,12 @@ public interface IWordRibbonCallbacks
 
     [DispId(24)]
     void OnRedrawDocumentToOle(object control);
+
+    [DispId(25)]
+    bool GetEquationNumberFormatPressed(Office.IRibbonControl control);
+
+    [DispId(26)]
+    void OnEquationNumberFormatChanged(Office.IRibbonControl control, bool pressed);
 }
 
 [ComVisible(true)]
@@ -112,6 +118,13 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
           <button id="VisualTeX.WordVsto.ConvertSelected" label="转为原生 OLE" screentip="转为可嵌入编辑的原生 OLE" supertip="转换后对象随 Word 文档保存，并可通过 VisualTeX 双击重新编辑。" tag="convertToOle" getImage="GetRibbonImage" onAction="OnConvertSelected" />
           <button id="VisualTeX.WordVsto.ConvertSelectedToOmml" label="转为 Word OMML" screentip="转为 Word 原生公式" supertip="将所选 VisualTeX 公式转换为 Word 原生 OMML；可在 Word 中直接编辑，也可继续用 VisualTeX 编辑。" tag="convertToOmml" getImage="GetRibbonImage" onAction="OnConvertSelectedToOmml" />
           <button id="VisualTeX.WordVsto.UpdateNumbers" label="更新公式编号" tag="updateNumbers" getImage="GetRibbonImage" onAction="OnUpdateEquationNumbers" />
+          <menu id="VisualTeX.WordVsto.NumberFormat" label="编号格式" screentip="设置当前文档的公式编号格式" supertip="选择后立即更新当前文档已有的 VisualTeX 公式编号，并应用于后续新插入的带编号公式。">
+            <toggleButton id="VisualTeX.WordVsto.NumberFormatContinuous" label="全文连续编号（1）" tag="continuous" getPressed="GetEquationNumberFormatPressed" onAction="OnEquationNumberFormatChanged" />
+            <toggleButton id="VisualTeX.WordVsto.NumberFormatHeading1Dot" label="按章编号（1.1）" tag="heading1-dot" getPressed="GetEquationNumberFormatPressed" onAction="OnEquationNumberFormatChanged" />
+            <toggleButton id="VisualTeX.WordVsto.NumberFormatHeading1Dash" label="按章编号（1-1）" tag="heading1-dash" getPressed="GetEquationNumberFormatPressed" onAction="OnEquationNumberFormatChanged" />
+            <toggleButton id="VisualTeX.WordVsto.NumberFormatHeading2Dot" label="按节编号（1.1.1）" tag="heading2-dot" getPressed="GetEquationNumberFormatPressed" onAction="OnEquationNumberFormatChanged" />
+            <toggleButton id="VisualTeX.WordVsto.NumberFormatHeading2Dash" label="按节编号（1.1-1）" tag="heading2-dash" getPressed="GetEquationNumberFormatPressed" onAction="OnEquationNumberFormatChanged" />
+          </menu>
           <button id="VisualTeX.WordVsto.InsertReference" label="插入公式引用" screentip="引用带编号公式" supertip="从当前文档的带编号公式中选择目标，并插入可自动更新的 Word REF 字段。" imageMso="HyperlinkInsert" onAction="OnInsertEquationReference" />
           <button id="VisualTeX.WordVsto.ExportPicture" label="导出所选为图片" imageMso="PictureInsertFromFile" onAction="OnExportSelectedAsPicture" />
           <button id="VisualTeX.WordVsto.Delete" label="删除所选公式" imageMso="Delete" onAction="OnDeleteSelected" />
@@ -259,6 +272,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
     {
         _ribbonUi = ribbonUi;
         InvalidateFormulaFontControls();
+        InvalidateEquationNumberFormatControls();
     }
     public object? GetRibbonImage(Office.IRibbonControl control) =>
         RibbonIconProvider.GetImage(control?.Tag);
@@ -322,6 +336,27 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             FormulaOleContract.WordOmmlMode,
             conversionOnly: true);
     public void OnUpdateEquationNumbers(object control) => _ = UpdateEquationNumbersAsync();
+    public bool GetEquationNumberFormatPressed(Office.IRibbonControl control)
+    {
+        try
+        {
+            var current = _formulaService?.GetEquationNumberFormatId()
+                ?? EquationNumberFormat.ContinuousId;
+            return string.Equals(current, control?.Tag, StringComparison.Ordinal);
+        }
+        catch { return false; }
+    }
+    public void OnEquationNumberFormatChanged(
+        Office.IRibbonControl control,
+        bool pressed)
+    {
+        if (!pressed)
+        {
+            InvalidateEquationNumberFormatControls();
+            return;
+        }
+        _ = SetEquationNumberFormatAsync(control?.Tag);
+    }
     public void OnBulkImport(object control) => _ = BulkImportAsync();
     public void OnRedrawSelectionToOmml(object control) =>
         _ = RedrawLatexAsync(wholeDocument: false, FormulaOleContract.WordOmmlMode);
@@ -376,6 +411,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         {
             Interlocked.Exchange(ref _formulaFontInvalidationPending, 0);
             InvalidateFormulaFontControls();
+            InvalidateEquationNumberFormatControls();
         });
     }
 
@@ -389,6 +425,23 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             ui.InvalidateControl("VisualTeX.WordVsto.FontSize");
             ui.InvalidateControl("VisualTeX.WordVsto.FontSizeDecrease");
             ui.InvalidateControl("VisualTeX.WordVsto.FontSizeIncrease");
+        }
+        catch { }
+    }
+
+    private void InvalidateEquationNumberFormatControls()
+    {
+        var ribbon = _ribbonUi;
+        if (ribbon is null) return;
+        try
+        {
+            dynamic ui = ribbon;
+            ui.InvalidateControl("VisualTeX.WordVsto.NumberFormat");
+            ui.InvalidateControl("VisualTeX.WordVsto.NumberFormatContinuous");
+            ui.InvalidateControl("VisualTeX.WordVsto.NumberFormatHeading1Dot");
+            ui.InvalidateControl("VisualTeX.WordVsto.NumberFormatHeading1Dash");
+            ui.InvalidateControl("VisualTeX.WordVsto.NumberFormatHeading2Dot");
+            ui.InvalidateControl("VisualTeX.WordVsto.NumberFormatHeading2Dash");
         }
         catch { }
     }
@@ -1758,6 +1811,34 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         {
             SetStatus($"更新 Word 公式编号失败：{error.Message}");
         }
+    }
+
+    private async Task SetEquationNumberFormatAsync(string? requestedFormatId)
+    {
+        var dispatcher = _dispatcher;
+        var service = _formulaService;
+        if (dispatcher is null || service is null) return;
+        var format = EquationNumberFormat.Resolve(requestedFormatId);
+        try
+        {
+            var current = await dispatcher.InvokeAsync(service.GetEquationNumberFormatId)
+                .ConfigureAwait(false);
+            if (string.Equals(current, format.Id, StringComparison.Ordinal))
+            {
+                SetStatus($"当前公式编号格式已是“{format.DisplayName}”。");
+                return;
+            }
+
+            var count = await dispatcher.InvokeAsync(
+                    () => service.SetEquationNumberFormat(format.Id))
+                .ConfigureAwait(false);
+            SetStatus($"公式编号格式已设置为“{format.DisplayName}”，并更新了 {count} 个带编号公式。");
+        }
+        catch (Exception error)
+        {
+            SetStatus($"设置公式编号格式失败：{error.Message}");
+        }
+        finally { InvalidateEquationNumberFormatControls(); }
     }
 
     private async Task InsertEquationReferenceAsync()
