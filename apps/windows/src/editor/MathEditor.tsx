@@ -1519,6 +1519,114 @@ function captureFieldSnapshot(field: MathfieldElement) {
   };
 }
 
+type StructuredCompositionAnchor = {
+  snapshot: ReturnType<typeof captureFieldSnapshot>;
+  modelPlaceholderIndex: number;
+  textualPlaceholderIndex: number;
+};
+
+function captureStructuredCompositionAnchor(
+  field: MathfieldElement,
+  snapshot: ReturnType<typeof captureFieldSnapshot>,
+): StructuredCompositionAnchor | null {
+  const activeRange = snapshot.selection.ranges.at(-1);
+  if (!activeRange) return null;
+  const normalizedRange: [number, number] = [
+    Math.min(activeRange[0], activeRange[1]),
+    Math.max(activeRange[0], activeRange[1]),
+  ];
+  if (
+    normalizedRange[0] === normalizedRange[1] ||
+    field.getValue(normalizedRange[0], normalizedRange[1], "latex").trim() !==
+      "\\placeholder{}"
+  ) {
+    return null;
+  }
+
+  const modelPlaceholderIndex = latexPlaceholderRanges(field).findIndex(
+    ([start, end]) =>
+      start === normalizedRange[0] && end === normalizedRange[1],
+  );
+  if (modelPlaceholderIndex < 0) return null;
+  const textualPlaceholderIndex =
+    textualPlaceholderIndexForRange(snapshot.latex, normalizedRange) ??
+    modelPlaceholderIndex;
+  return {
+    snapshot,
+    modelPlaceholderIndex,
+    textualPlaceholderIndex,
+  };
+}
+
+function restoreStructuredCompositionPlaceholder(
+  field: MathfieldElement,
+  anchor: StructuredCompositionAnchor,
+  committedText: string,
+) {
+  const replacement = normalizeChineseLatex(committedText);
+  if (!replacement) return false;
+
+  field.mode = "math";
+  field.setValue(anchor.snapshot.latex, {
+    mode: "math",
+    format: "latex",
+    insertionMode: "replaceAll",
+    selectionMode: "after",
+    silenceNotifications: true,
+  });
+  const targetRange =
+    modelRangeForTextualPlaceholder(
+      field,
+      anchor.snapshot.latex,
+      anchor.textualPlaceholderIndex,
+    ) ?? latexPlaceholderRanges(field)[anchor.modelPlaceholderIndex] ?? null;
+  if (!targetRange) {
+    const restoredLatex = replaceTextualPlaceholder(
+      anchor.snapshot.latex,
+      anchor.textualPlaceholderIndex,
+      replacement,
+    );
+    if (!restoredLatex) return false;
+    field.setValue(restoredLatex, {
+      mode: "math",
+      format: "latex",
+      insertionMode: "replaceAll",
+      selectionMode: "after",
+      silenceNotifications: true,
+    });
+    return true;
+  }
+
+  field.selection = {
+    ranges: [targetRange],
+    direction: "none",
+  };
+  const inserted = field.insert(replacement, {
+    mode: "math",
+    format: "latex",
+    insertionMode: "replaceSelection",
+    selectionMode: "after",
+    focus: true,
+    scrollIntoView: false,
+  });
+  if (inserted) return true;
+
+  const restoredLatex = replaceTextualPlaceholder(
+    anchor.snapshot.latex,
+    anchor.textualPlaceholderIndex,
+    replacement,
+  );
+  if (!restoredLatex) return false;
+  field.setValue(restoredLatex, {
+    mode: "math",
+    format: "latex",
+    insertionMode: "replaceAll",
+    selectionMode: "after",
+    silenceNotifications: true,
+  });
+  return true;
+}
+
 const visualTexPlaceholderStyleId = "visualtex-structural-placeholder-style";
 const visualTexPlaceholderClass = "visualtex-structural-placeholder";
 const visualTexAccentPlaceholderClass =
@@ -3758,6 +3866,8 @@ function FormulaField(props: FormulaFieldProps) {
     useRef<VisualTexInlineShortcutDefinitions | null>(null);
   const lastSnapshotRef = useRef<ReturnType<typeof captureFieldSnapshot> | null>(null);
   const compositionStartRef = useRef<ReturnType<typeof captureFieldSnapshot> | null>(null);
+  const structuredCompositionAnchorRef =
+    useRef<StructuredCompositionAnchor | null>(null);
   const sizingZoomRef = useRef(props.zoom);
   const propsRef = useRef(props);
   propsRef.current = props;
@@ -4213,12 +4323,26 @@ function FormulaField(props: FormulaFieldProps) {
       capturePendingAutoExit();
       propsRef.current.onCommitPending();
       imeGuard.compositionStart();
-      compositionStartRef.current =
-        lastSnapshotRef.current ?? captureFieldSnapshot(field);
+      const liveCompositionStart = captureFieldSnapshot(field);
+      compositionStartRef.current = liveCompositionStart;
+      structuredCompositionAnchorRef.current =
+        captureStructuredCompositionAnchor(field, liveCompositionStart);
     };
     const handleCompositionEnd = (event: CompositionEvent) => {
       const cancelledByCompositionDelete =
         event.data === "" && compositionDeleteObserved;
+      const before =
+        compositionStartRef.current ??
+        lastSnapshotRef.current ??
+        captureFieldSnapshot(field);
+      const structuredAnchor = structuredCompositionAnchorRef.current;
+      if (event.data !== "" && structuredAnchor) {
+        restoreStructuredCompositionPlaceholder(
+          field,
+          structuredAnchor,
+          event.data,
+        );
+      }
       imeGuard.compositionEnd(event.timeStamp);
       suppressPostCompositionDeleteUntil = cancelledByCompositionDelete
         ? event.timeStamp + 160
@@ -4227,10 +4351,6 @@ function FormulaField(props: FormulaFieldProps) {
         event.data === "" ? event.timeStamp + 260 : 0;
       compositionDeleteObserved = false;
       normalizeGuardedBackslashInput(event.timeStamp);
-      const before =
-        compositionStartRef.current ??
-        lastSnapshotRef.current ??
-        captureFieldSnapshot(field);
 
       // Cancelling an uncommitted macOS IME candidate with Backspace can make
       // WKWebView/MathLive apply the same physical key to the confirmed formula.
@@ -4252,6 +4372,7 @@ function FormulaField(props: FormulaFieldProps) {
         lastSnapshotRef.current = captureFieldSnapshot(field);
         clearPendingAutoExit();
         compositionStartRef.current = null;
+        structuredCompositionAnchorRef.current = null;
         syncFrameSize();
         return;
       }
@@ -4268,6 +4389,7 @@ function FormulaField(props: FormulaFieldProps) {
       }
       clearPendingAutoExit();
       compositionStartRef.current = null;
+      structuredCompositionAnchorRef.current = null;
       emitEdit(before, after, "composition", "keyboard");
       syncFrameSize();
     };
@@ -5350,7 +5472,9 @@ function FormulaField(props: FormulaFieldProps) {
     lastSnapshotRef.current = captureFieldSnapshot(field);
     fieldRef.current = field;
     propsRef.current.register(lineId, field);
-    field.addEventListener("compositionstart", handleCompositionStart);
+    // Capture before MathLive's keyboard sink replaces a selected placeholder;
+    // the bubble phase is already too late because the parent structure is gone.
+    field.addEventListener("compositionstart", handleCompositionStart, true);
     field.addEventListener("compositionend", handleCompositionEnd);
     field.addEventListener("beforeinput", handleBeforeInput, true);
     field.addEventListener("input", handleInput);
@@ -5425,7 +5549,7 @@ function FormulaField(props: FormulaFieldProps) {
       resizeObserver?.disconnect();
       inputMutationObserver?.disconnect();
       syncFrameSizeRef.current = null;
-      field.removeEventListener("compositionstart", handleCompositionStart);
+      field.removeEventListener("compositionstart", handleCompositionStart, true);
       field.removeEventListener("compositionend", handleCompositionEnd);
       field.removeEventListener("beforeinput", handleBeforeInput, true);
       field.removeEventListener("input", handleInput);

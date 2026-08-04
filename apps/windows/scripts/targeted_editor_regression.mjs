@@ -7,9 +7,9 @@ import {
 } from "./browser_test_runtime.mjs";
 
 const scenario = process.argv[2];
-if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "usage-ranking", "native-space-selection", "candidate-query-reset", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "direct-shortcut-placeholder", "toolbar-placeholder-overflow", "horizontal-overflow", "accent-placeholder", "caret-probe", "scripts", "upright", "context-style", "suggestions", "navigation", "geometry", "source-layout", "toolbar-compact", "toolbar-postfix", "classic-panel-resize", "ocr-storage-ui", "formula-tiles", "formula-formatting", "cursor-placement", "settings", "layout", "multi-line-selection", "delete", "export"]).has(scenario)) {
+if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "usage-ranking", "native-space-selection", "candidate-query-reset", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "structured-chinese-ime", "direct-shortcut-placeholder", "toolbar-placeholder-overflow", "horizontal-overflow", "accent-placeholder", "caret-probe", "scripts", "upright", "context-style", "suggestions", "navigation", "geometry", "source-layout", "toolbar-compact", "toolbar-postfix", "classic-panel-resize", "ocr-storage-ui", "formula-tiles", "formula-formatting", "cursor-placement", "settings", "layout", "multi-line-selection", "delete", "export"]).has(scenario)) {
   throw new Error(
-    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|usage-ranking|native-space-selection|candidate-query-reset|raw-placeholder-visual|placeholder-selection|structural-placeholder|direct-shortcut-placeholder|toolbar-placeholder-overflow|horizontal-overflow|accent-placeholder|caret-probe|scripts|upright|context-style|suggestions|navigation|geometry|source-layout|toolbar-compact|toolbar-postfix|classic-panel-resize|ocr-storage-ui|formula-tiles|formula-formatting|cursor-placement|settings|layout|multi-line-selection|delete|export>",
+    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|usage-ranking|native-space-selection|candidate-query-reset|raw-placeholder-visual|placeholder-selection|structural-placeholder|structured-chinese-ime|direct-shortcut-placeholder|toolbar-placeholder-overflow|horizontal-overflow|accent-placeholder|caret-probe|scripts|upright|context-style|suggestions|navigation|geometry|source-layout|toolbar-compact|toolbar-postfix|classic-panel-resize|ocr-storage-ui|formula-tiles|formula-formatting|cursor-placement|settings|layout|multi-line-selection|delete|export>",
   );
 }
 
@@ -3985,6 +3985,273 @@ async function main() {
         ),
       );
       console.log("Targeted toolbar placeholder and horizontal overflow regression passed");
+      return;
+    }
+
+    if (scenario === "structured-chinese-ime") {
+      const commitImeText = async (text) => {
+        await sleep(120);
+        await client.send("Input.imeSetComposition", {
+          text,
+          selectionStart: Array.from(text).length,
+          selectionEnd: Array.from(text).length,
+        });
+        await sleep(80);
+        await client.send("Input.insertText", { text });
+        await client.send("Input.imeSetComposition", {
+          text: "",
+          selectionStart: 0,
+          selectionEnd: 0,
+        });
+        await sleep(260);
+      };
+      const selectedPlaceholderState = async (description) =>
+        waitForEvaluation(`(() => {
+          const field = document.querySelector("math-field");
+          const range = field?.selection?.ranges?.at(-1) ?? null;
+          const selectedLatex = range
+            ? field.getValue(
+                Math.min(range[0], range[1]),
+                Math.max(range[0], range[1]),
+                "latex",
+              ).trim()
+            : "";
+          field?.focus();
+          field?.shadowRoot?.querySelector('[part="keyboard-sink"]')?.focus({ preventScroll: true });
+          return {
+            ready:
+              Boolean(field) &&
+              field.value.includes("\\\\placeholder{}") &&
+              selectedLatex === "\\\\placeholder{}",
+            value: field?.value ?? "",
+            selectedLatex,
+            selection: field?.selection ?? null,
+          };
+        })()`, description);
+      const readFieldState = async () =>
+        evaluate(`(() => {
+          const field = document.querySelector("math-field");
+          const range = field?.selection?.ranges?.at(-1) ?? null;
+          return {
+            value: field?.value ?? "",
+            placeholderCount:
+              (field?.value.match(/\\\\placeholder\\{\\}/g) ?? []).length,
+            selectedLatex: range
+              ? field.getValue(
+                  Math.min(range[0], range[1]),
+                  Math.max(range[0], range[1]),
+                  "latex",
+                ).trim()
+              : "",
+            selection: field?.selection ?? null,
+          };
+        })()`);
+      const clickToolbarCommand = async (commandId) => {
+        const selector = `[data-command-id="${commandId}"]`;
+        await waitForEvaluation(`(() => {
+          const button = document.querySelector(${JSON.stringify(selector)});
+          if (!(button instanceof HTMLElement)) return { ready: false };
+          const rect = button.getBoundingClientRect();
+          return { ready: rect.width > 0 && rect.height > 0 };
+        })()`, `${commandId} toolbar command`);
+        await evaluate(`document.querySelector(${JSON.stringify(selector)})?.click()`);
+        return selectedPlaceholderState(`${commandId} selected placeholder`);
+      };
+      const pressControlShortcut = async (keyValue, code, virtualKeyCode, shift = false) => {
+        const modifiers = 2 | (shift ? 8 : 0);
+        await client.send("Input.dispatchKeyEvent", {
+          type: "keyDown",
+          key: "Control",
+          code: "ControlLeft",
+          windowsVirtualKeyCode: 17,
+          nativeVirtualKeyCode: 17,
+          modifiers: 2,
+        });
+        if (shift) {
+          await client.send("Input.dispatchKeyEvent", {
+            type: "keyDown",
+            key: "Shift",
+            code: "ShiftLeft",
+            windowsVirtualKeyCode: 16,
+            nativeVirtualKeyCode: 16,
+            modifiers,
+          });
+        }
+        await client.send("Input.dispatchKeyEvent", {
+          type: "keyDown",
+          key: keyValue,
+          code,
+          windowsVirtualKeyCode: virtualKeyCode,
+          nativeVirtualKeyCode: virtualKeyCode,
+          modifiers,
+        });
+        await client.send("Input.dispatchKeyEvent", {
+          type: "keyUp",
+          key: keyValue,
+          code,
+          windowsVirtualKeyCode: virtualKeyCode,
+          nativeVirtualKeyCode: virtualKeyCode,
+          modifiers,
+        });
+        if (shift) {
+          await client.send("Input.dispatchKeyEvent", {
+            type: "keyUp",
+            key: "Shift",
+            code: "ShiftLeft",
+            windowsVirtualKeyCode: 16,
+            nativeVirtualKeyCode: 16,
+            modifiers: 2,
+          });
+        }
+        await client.send("Input.dispatchKeyEvent", {
+          type: "keyUp",
+          key: "Control",
+          code: "ControlLeft",
+          windowsVirtualKeyCode: 17,
+          nativeVirtualKeyCode: 17,
+          modifiers: 0,
+        });
+        await sleep(180);
+      };
+
+      const states = {};
+      const toolbarCases = [
+        {
+          id: "power",
+          name: "superscript",
+          expected: (value) => value.includes("^{\\text{中文}}"),
+          expectedPlaceholderCount: 0,
+        },
+        {
+          id: "subscript",
+          name: "subscript",
+          expected: (value) => value.includes("_{\\text{中文}}"),
+          expectedPlaceholderCount: 0,
+        },
+        {
+          id: "sqrt",
+          name: "square root",
+          expected: (value) => value.includes("\\sqrt{\\text{中文}}"),
+          expectedPlaceholderCount: 0,
+        },
+        {
+          id: "int",
+          name: "integral",
+          expected: (value) =>
+            value.includes("\\int") && value.includes("\\text{中文}"),
+          expectedPlaceholderCount: 3,
+        },
+        {
+          id: "matrix2",
+          name: "matrix",
+          expected: (value) =>
+            value.includes("\\begin{bmatrix}") &&
+            value.includes("\\text{中文}") &&
+            value.includes("\\end{bmatrix}"),
+          expectedPlaceholderCount: 3,
+        },
+      ];
+      for (const testCase of toolbarCases) {
+        await clearField();
+        const before = await clickToolbarCommand(testCase.id);
+        await commitImeText("中文");
+        const after = await readFieldState();
+        if (
+          !testCase.expected(after.value) ||
+          after.placeholderCount !== testCase.expectedPlaceholderCount
+        ) {
+          throw new Error(
+            `Toolbar ${testCase.name} lost its structure during Chinese IME: ${JSON.stringify({ before, after })}`,
+          );
+        }
+        states[testCase.name] = { before, after };
+      }
+
+      await clearField();
+      const fractionBefore = await clickToolbarCommand("frac");
+      await commitImeText("分子");
+      const fractionNumerator = await readFieldState();
+      if (
+        !fractionNumerator.value.includes(
+          "\\frac{\\text{分子}}{\\placeholder{}}",
+        ) ||
+        fractionNumerator.placeholderCount !== 1
+      ) {
+        throw new Error(
+          `Fraction numerator composition changed another slot: ${JSON.stringify({ fractionBefore, fractionNumerator })}`,
+        );
+      }
+      await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        if (!field) return false;
+        for (let offset = 1; offset <= field.lastOffset; offset += 1) {
+          if (
+            field.getValue(offset - 1, offset, "latex").trim() ===
+            "\\\\placeholder{}"
+          ) {
+            field.selection = {
+              ranges: [[offset - 1, offset]],
+              direction: "none",
+            };
+            field.focus();
+            field.shadowRoot?.querySelector('[part="keyboard-sink"]')?.focus({ preventScroll: true });
+            return true;
+          }
+        }
+        return false;
+      })()`);
+      const denominatorSelected = await selectedPlaceholderState(
+        "fraction denominator selected placeholder",
+      );
+      await commitImeText("分母");
+      const fractionComplete = await readFieldState();
+      if (
+        !fractionComplete.value.includes(
+          "\\frac{\\text{分子}}{\\text{分母}}",
+        ) ||
+        fractionComplete.placeholderCount !== 0
+      ) {
+        throw new Error(
+          `Fraction denominator composition lost the fraction: ${JSON.stringify({ denominatorSelected, fractionComplete })}`,
+        );
+      }
+      states.fraction = {
+        before: fractionBefore,
+        numerator: fractionNumerator,
+        denominatorSelected,
+        complete: fractionComplete,
+      };
+
+      await clearField();
+      const undoBefore = await clickToolbarCommand("power");
+      await commitImeText("中文");
+      const undoAfterComposition = await readFieldState();
+      await pressControlShortcut("z", "KeyZ", 90);
+      const undoState = await readFieldState();
+      if (
+        !undoState.value.includes("\\placeholder{}") ||
+        !undoState.value.includes("^")
+      ) {
+        throw new Error(
+          `Undo did not restore the structured placeholder transaction: ${JSON.stringify({ undoBefore, undoAfterComposition, undoState })}`,
+        );
+      }
+      await pressControlShortcut("y", "KeyY", 89);
+      const redoState = await readFieldState();
+      if (!redoState.value.includes("^{\\text{中文}}")) {
+        throw new Error(
+          `Redo did not restore structured Chinese composition: ${JSON.stringify({ undoState, redoState })}`,
+        );
+      }
+      states.history = {
+        before: undoBefore,
+        composed: undoAfterComposition,
+        undo: undoState,
+        redo: redoState,
+      };
+
+      console.log(JSON.stringify(states, null, 2));
+      console.log("Targeted structured Chinese IME regression passed");
       return;
     }
 
