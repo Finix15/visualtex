@@ -260,6 +260,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         _ = PrewarmCompanionAsync(_sessionClient, _lifetime.Token);
         _application.WindowBeforeDoubleClick += OnWindowBeforeDoubleClick;
         _application.WindowSelectionChange += OnWindowSelectionChange;
+        _application.DocumentBeforeSave += OnDocumentBeforeSave;
         string? doubleClickError = null;
         try
         {
@@ -502,6 +503,24 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             catch { }
             finally { ReleaseComObject(currentSelection); }
         });
+    }
+
+    private void OnDocumentBeforeSave(
+        Document document,
+        ref bool saveAsUi,
+        ref bool cancel)
+    {
+        if (cancel) return;
+        try
+        {
+            _formulaService?.NormalizeInlineOleParagraphBaselinesBeforeSave(
+                document);
+        }
+        catch (Exception error)
+        {
+            WordDoubleClickHook.TraceMessage(
+                $"document-before-save-baseline-normalization-failed: {error}");
+        }
     }
 
     private void OnWindowSelectionChange(Selection selection)
@@ -2125,6 +2144,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         {
             try { _application.WindowBeforeDoubleClick -= OnWindowBeforeDoubleClick; } catch { }
             try { _application.WindowSelectionChange -= OnWindowSelectionChange; } catch { }
+            try { _application.DocumentBeforeSave -= OnDocumentBeforeSave; } catch { }
         }
         try { _doubleClickHook?.Dispose(); } catch { }
         _doubleClickHook = null;

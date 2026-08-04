@@ -625,6 +625,11 @@ assert.ok(wordVsto.includes("cancel = true"));
 assert.ok(wordVsto.includes("new WordDoubleClickHook"));
 assert.ok(wordVsto.includes("ShouldInterceptNativeOleDoubleClick"));
 assert.ok(wordVsto.includes("ClearNativeOleTarget"));
+assert.ok(wordVsto.includes("DocumentBeforeSave += OnDocumentBeforeSave"));
+assert.ok(
+  wordVsto.includes("NormalizeInlineOleParagraphBaselinesBeforeSave"),
+);
+assert.ok(wordVsto.includes("DocumentBeforeSave -= OnDocumentBeforeSave"));
 assert.ok(wordDoubleClickHook.includes("WhMouseLl = 14"));
 assert.ok(wordDoubleClickHook.includes("return new IntPtr(1)"));
 assert.ok(wordDoubleClickHook.includes('"WINWORD"'));

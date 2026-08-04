@@ -4749,6 +4749,66 @@ internal sealed class WordFormulaService
         finally { Release(range); }
     }
 
+    internal void NormalizeInlineOleParagraphBaselinesBeforeSave(Document document)
+    {
+        InlineShapes? shapes = null;
+        InlineShape? shape = null;
+        Range? range = null;
+        var normalizedParagraphEnds = new HashSet<int>();
+        try
+        {
+            shapes = document.InlineShapes;
+            for (var index = 1; index <= shapes.Count; index++)
+            {
+                Release(shape);
+                shape = null;
+                Release(range);
+                range = null;
+                try
+                {
+                    shape = shapes[index];
+                    if (!WordFormulaMetadataReader.IsNativeOle(shape)) continue;
+                    var metadata = WordFormulaMetadataReader.TryRead(shape);
+                    if (!string.Equals(
+                            metadata?.DisplayMode,
+                            "inline",
+                            StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    range = shape.Range;
+                    Paragraphs? paragraphs = null;
+                    Paragraph? paragraph = null;
+                    Range? paragraphRange = null;
+                    try
+                    {
+                        paragraphs = range.Paragraphs;
+                        if (paragraphs.Count == 0) continue;
+                        paragraph = paragraphs[1];
+                        paragraphRange = paragraph.Range;
+                        if (!normalizedParagraphEnds.Add(paragraphRange.End)) continue;
+                    }
+                    finally
+                    {
+                        Release(paragraphRange);
+                        Release(paragraph);
+                        Release(paragraphs);
+                    }
+                    ResetParagraphTypingPosition(range);
+                }
+                catch
+                {
+                    // Saving must remain available when one stale or externally
+                    // edited object cannot be inspected.
+                }
+            }
+        }
+        finally
+        {
+            Release(range);
+            Release(shape);
+            Release(shapes);
+        }
+    }
+
     private static Range ResolveCurrentInlineOmmlRange(
         Document document,
         Range fallbackRange,
