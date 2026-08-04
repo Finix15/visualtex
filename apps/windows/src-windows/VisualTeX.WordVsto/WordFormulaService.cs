@@ -1565,11 +1565,11 @@ internal sealed class WordFormulaService
                 StringComparison.Ordinal))
         {
             latex = FormulaEquationTag.Attach(latex, metadata.EquationTag);
-            return $"\\[{latex}\\]";
+            return "$$" + latex + "$$";
         }
         latex = FormulaEquationTag.Extract(latex).Latex
             .Replace('\n', ' ');
-        return $"\\({latex}\\)";
+        return "$" + latex + "$";
     }
 
     private static Table? TryGetVisualTeXNumberedTable(

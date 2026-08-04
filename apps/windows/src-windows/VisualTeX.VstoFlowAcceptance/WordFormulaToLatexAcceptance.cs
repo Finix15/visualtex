@@ -70,22 +70,22 @@ internal static partial class Program
                 WaitForFormulaToLatex(logPath, expectedCompletions: 1);
                 WaitForAddInIdle(host.AddIn, TimeSpan.FromSeconds(20));
                 AssertFormulaObjectCounts(host.Document, expectedOle: 1, expectedOmml: 2);
-                AssertDocumentContains(host.Document, @"\(a=1\)");
-                AssertDocumentDoesNotContain(host.Document, @"\(b=2\)");
+                AssertDocumentContains(host.Document, "$a=1$");
+                AssertDocumentDoesNotContain(host.Document, "$b=2$");
 
                 SelectFormula(host, ommlInline);
                 host.AddIn.OnRedrawSelectionOmmlToLatex(new object());
                 WaitForFormulaToLatex(logPath, expectedCompletions: 2);
                 WaitForAddInIdle(host.AddIn, TimeSpan.FromSeconds(20));
                 AssertFormulaObjectCounts(host.Document, expectedOle: 1, expectedOmml: 1);
-                AssertDocumentContains(host.Document, @"\(b=2\)");
+                AssertDocumentContains(host.Document, "$b=2$");
 
                 CollapseSelectionAtDocumentStart(host);
                 host.AddIn.OnRedrawDocumentOleToLatex(new object());
                 WaitForFormulaToLatex(logPath, expectedCompletions: 3);
                 WaitForAddInIdle(host.AddIn, TimeSpan.FromSeconds(20));
                 AssertFormulaObjectCounts(host.Document, expectedOle: 0, expectedOmml: 1);
-                AssertDocumentContains(host.Document, @"\[c=3\]");
+                AssertDocumentContains(host.Document, "$$c=3$$");
                 AssertReferenceText(host.Document, referenceBookmark, "(1)");
                 AssertNoBrokenReferenceText(host.Document);
 
@@ -419,14 +419,14 @@ internal static partial class Program
         foreach (var required in new[]
                  {
                      "BEGIN",
-                     @"\(a=1\)",
+                     "$a=1$",
                      "BETWEEN",
-                     @"\(b=2\)",
+                     "$b=2$",
                      "INLINE_END",
                      "BEFORE_OLE_DISPLAY",
-                     @"\[c=3\]",
+                     "$$c=3$$",
                      "AFTER_OLE_DISPLAY",
-                     @"\[d=4+5\]",
+                     "$$d=4+5$$",
                      "AFTER_OMML_DISPLAY",
                      "Reference:",
                      "DOCUMENT_END",
@@ -437,14 +437,14 @@ internal static partial class Program
         var ordered = new[]
         {
             "BEGIN",
-            @"\(a=1\)",
+            "$a=1$",
             "BETWEEN",
-            @"\(b=2\)",
+            "$b=2$",
             "INLINE_END",
             "BEFORE_OLE_DISPLAY",
-            @"\[c=3\]",
+            "$$c=3$$",
             "AFTER_OLE_DISPLAY",
-            @"\[d=4+5\]",
+            "$$d=4+5$$",
             "AFTER_OMML_DISPLAY",
             "Reference:",
             "DOCUMENT_END",
