@@ -161,7 +161,11 @@ Test-RibbonComDispatch `
         "OnDeleteSelected",
         "OnOpenDesktop",
         "OnInsertEquationReference",
-        "OnBulkImport"
+        "OnBulkImport",
+        "OnRedrawSelectionOleToLatex",
+        "OnRedrawSelectionOmmlToLatex",
+        "OnRedrawDocumentOleToLatex",
+        "OnRedrawDocumentOmmlToLatex"
     )
 
 Test-RibbonComDispatch `

@@ -93,6 +93,18 @@ public interface IWordRibbonCallbacks
 
     [DispId(26)]
     void OnEquationNumberFormatChanged(Office.IRibbonControl control, bool pressed);
+
+    [DispId(27)]
+    void OnRedrawSelectionOleToLatex(object control);
+
+    [DispId(28)]
+    void OnRedrawSelectionOmmlToLatex(object control);
+
+    [DispId(29)]
+    void OnRedrawDocumentOleToLatex(object control);
+
+    [DispId(30)]
+    void OnRedrawDocumentOmmlToLatex(object control);
 }
 
 [ComVisible(true)]
@@ -127,18 +139,22 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
           </menu>
           <button id="VisualTeX.WordVsto.InsertReference" label="插入公式引用" screentip="引用带编号公式" supertip="从当前文档的带编号公式中选择目标，并插入可自动更新的 Word REF 字段。" imageMso="HyperlinkInsert" onAction="OnInsertEquationReference" />
           <button id="VisualTeX.WordVsto.ExportPicture" label="导出所选为图片" imageMso="PictureInsertFromFile" onAction="OnExportSelectedAsPicture" />
-          <button id="VisualTeX.WordVsto.Delete" label="删除所选公式" imageMso="Delete" onAction="OnDeleteSelected" />
           <button id="VisualTeX.WordVsto.BulkImport" label="批量导入" size="large" screentip="批量导入 LaTeX / Markdown" supertip="将 Markdown 或 LaTeX 文档解析为 Word 原生文字，以及可单独编辑和调整字号的行内/行间公式。" tag="batchImport" getImage="GetRibbonImage" onAction="OnBulkImport" />
-          <button id="VisualTeX.WordVsto.OpenDesktop" label="打开 VisualTeX" imageMso="FileOpen" onAction="OnOpenDesktop" />
         </group>
         <group id="VisualTeX.WordVsto.RedrawGroup" label="LaTeX 重绘">
-          <menu id="VisualTeX.WordVsto.RedrawSelection" label="重绘所选" size="large" screentip="重绘所选 LaTeX 代码" supertip="识别所选文字中的 $...$、$$...$$、\\(...\\)、\\[...\\] 和常见公式环境，并原位替换为可编辑公式。" tag="batchImport" getImage="GetRibbonImage">
-            <button id="VisualTeX.WordVsto.RedrawSelectionOmml" label="重绘为 Word OMML" screentip="原位替换为 Word 原生公式" onAction="OnRedrawSelectionToOmml" />
-            <button id="VisualTeX.WordVsto.RedrawSelectionOle" label="重绘为 VisualTeX OLE" screentip="原位替换为可双击编辑的 OLE" onAction="OnRedrawSelectionToOle" />
+          <menu id="VisualTeX.WordVsto.RedrawSelection" label="重绘所选" size="large" screentip="重绘所选公式或 LaTeX 代码" supertip="可将所选 LaTeX 代码原位重绘为公式，也可将所选 VisualTeX OLE 或 OMML 公式恢复为 LaTeX 代码。" tag="batchImport" getImage="GetRibbonImage">
+            <button id="VisualTeX.WordVsto.RedrawSelectionOmml" label="LaTeX 重绘为 Word OMML" screentip="原位替换为 Word 原生公式" onAction="OnRedrawSelectionToOmml" />
+            <button id="VisualTeX.WordVsto.RedrawSelectionOle" label="LaTeX 重绘为 VisualTeX OLE" screentip="原位替换为可双击编辑的 OLE" onAction="OnRedrawSelectionToOle" />
+            <menuSeparator id="VisualTeX.WordVsto.RedrawSelectionSeparator" />
+            <button id="VisualTeX.WordVsto.RedrawSelectionOleToLatex" label="所选 OLE 公式转为 LaTeX 代码" screentip="恢复所选 VisualTeX OLE 的 LaTeX 源码" onAction="OnRedrawSelectionOleToLatex" />
+            <button id="VisualTeX.WordVsto.RedrawSelectionOmmlToLatex" label="所选 OMML 公式转为 LaTeX 代码" screentip="恢复所选 VisualTeX OMML 的 LaTeX 源码" onAction="OnRedrawSelectionOmmlToLatex" />
           </menu>
-          <menu id="VisualTeX.WordVsto.RedrawDocument" label="重绘全文" size="large" screentip="重绘整个文档中的 LaTeX 代码" supertip="扫描当前文档并原位替换全部 LaTeX 公式；开始前会再次确认。" imageMso="RefreshAll">
-            <button id="VisualTeX.WordVsto.RedrawDocumentOmml" label="全文重绘为 Word OMML" onAction="OnRedrawDocumentToOmml" />
-            <button id="VisualTeX.WordVsto.RedrawDocumentOle" label="全文重绘为 VisualTeX OLE" onAction="OnRedrawDocumentToOle" />
+          <menu id="VisualTeX.WordVsto.RedrawDocument" label="重绘全文" size="large" screentip="重绘全文公式或 LaTeX 代码" supertip="可将全文 LaTeX 代码原位重绘为公式，也可将全文 VisualTeX OLE 或 OMML 公式恢复为 LaTeX 代码；开始前会再次确认。" imageMso="RefreshAll">
+            <button id="VisualTeX.WordVsto.RedrawDocumentOmml" label="全文 LaTeX 重绘为 Word OMML" onAction="OnRedrawDocumentToOmml" />
+            <button id="VisualTeX.WordVsto.RedrawDocumentOle" label="全文 LaTeX 重绘为 VisualTeX OLE" onAction="OnRedrawDocumentToOle" />
+            <menuSeparator id="VisualTeX.WordVsto.RedrawDocumentSeparator" />
+            <button id="VisualTeX.WordVsto.RedrawDocumentOleToLatex" label="全文 OLE 公式转为 LaTeX 代码" onAction="OnRedrawDocumentOleToLatex" />
+            <button id="VisualTeX.WordVsto.RedrawDocumentOmmlToLatex" label="全文 OMML 公式转为 LaTeX 代码" onAction="OnRedrawDocumentOmmlToLatex" />
           </menu>
         </group>
         <group id="VisualTeX.WordVsto.FontSizeGroup" label="公式字号">
@@ -366,6 +382,22 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         _ = RedrawLatexAsync(wholeDocument: true, FormulaOleContract.WordOmmlMode);
     public void OnRedrawDocumentToOle(object control) =>
         _ = RedrawLatexAsync(wholeDocument: true, FormulaOleContract.NativeOleMode);
+    public void OnRedrawSelectionOleToLatex(object control) =>
+        _ = ConvertFormulaObjectsToLatexAsync(
+            wholeDocument: false,
+            FormulaOleContract.NativeOleMode);
+    public void OnRedrawSelectionOmmlToLatex(object control) =>
+        _ = ConvertFormulaObjectsToLatexAsync(
+            wholeDocument: false,
+            FormulaOleContract.WordOmmlMode);
+    public void OnRedrawDocumentOleToLatex(object control) =>
+        _ = ConvertFormulaObjectsToLatexAsync(
+            wholeDocument: true,
+            FormulaOleContract.NativeOleMode);
+    public void OnRedrawDocumentOmmlToLatex(object control) =>
+        _ = ConvertFormulaObjectsToLatexAsync(
+            wholeDocument: true,
+            FormulaOleContract.WordOmmlMode);
     public void OnExportSelectedAsPicture(object control) => _ = ExportSelectedAsPictureAsync();
     public void OnDeleteSelected(object control) => _ = DeleteSelectedAsync();
     public void OnInsertEquationReference(object control) => _ = InsertEquationReferenceAsync();
@@ -1186,6 +1218,115 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             }
             _operationGate.Release();
         }
+    }
+
+    private async Task ConvertFormulaObjectsToLatexAsync(
+        bool wholeDocument,
+        string objectMode)
+    {
+        var dispatcher = _dispatcher;
+        var service = _formulaService;
+        var lifetime = _lifetime;
+        if (dispatcher is null
+            || service is null
+            || lifetime is null
+            || lifetime.IsCancellationRequested)
+            return;
+
+        if (!await _operationGate.WaitAsync(
+                TimeSpan.FromSeconds(2),
+                lifetime.Token).ConfigureAwait(false))
+        {
+            SetStatus("VisualTeX 正在执行其他 Word 操作，请稍候再试。");
+            return;
+        }
+
+        var modeLabel = string.Equals(
+            objectMode,
+            FormulaOleContract.NativeOleMode,
+            StringComparison.Ordinal)
+            ? "OLE"
+            : "OMML";
+        try
+        {
+            var count = await dispatcher.InvokeAsync(
+                    () => service.CountFormulaObjectsForLatex(
+                        wholeDocument,
+                        objectMode))
+                .ConfigureAwait(false);
+            if (count == 0)
+                throw new InvalidDataException(
+                    wholeDocument
+                        ? $"当前 Word 文档中没有找到 VisualTeX {modeLabel} 公式。"
+                        : $"所选内容中没有找到 VisualTeX {modeLabel} 公式。");
+
+            if (wholeDocument
+                && !string.Equals(
+                    Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE"),
+                    "1",
+                    StringComparison.Ordinal))
+            {
+                var confirmed = await dispatcher.InvokeAsync(() =>
+                    System.Windows.Forms.MessageBox.Show(
+                        $"将把当前文档中的 {count} 个 VisualTeX {modeLabel} 公式原位恢复为 LaTeX 代码。\r\n\r\n"
+                        + "另一种公式对象不会被修改；该操作可通过一次 Ctrl+Z 整体撤销。是否继续？",
+                        "VisualTeX 公式转为 LaTeX",
+                        System.Windows.Forms.MessageBoxButtons.YesNo,
+                        System.Windows.Forms.MessageBoxIcon.Question,
+                        System.Windows.Forms.MessageBoxDefaultButton.Button2)
+                    == System.Windows.Forms.DialogResult.Yes).ConfigureAwait(false);
+                if (!confirmed)
+                {
+                    SetStatus($"已取消全文 {modeLabel} 公式转为 LaTeX，Word 文档未修改。");
+                    return;
+                }
+            }
+
+            WriteRedrawAcceptanceLog(
+                $"formula-to-latex-start scope={(wholeDocument ? "document" : "selection")} "
+                + $"mode={objectMode} formulas={count}");
+            SetStatus($"正在把 {count} 个 VisualTeX {modeLabel} 公式恢复为 LaTeX 代码…");
+            var result = await dispatcher.InvokeAsync(
+                    () => service.ConvertFormulaObjectsToLatex(
+                        wholeDocument,
+                        objectMode))
+                .ConfigureAwait(false);
+            WriteRedrawAcceptanceLog(
+                $"formula-to-latex-complete scope={(wholeDocument ? "document" : "selection")} "
+                + $"mode={objectMode} formulas={result.FormulaCount}");
+            SetStatus(
+                $"公式转为 LaTeX 完成：{result.FormulaCount} 个 VisualTeX {modeLabel} 公式已恢复为源码。");
+        }
+        catch (OperationCanceledException error)
+        {
+            WriteRedrawAcceptanceLog("formula-to-latex-cancelled " + error);
+            SetStatus("VisualTeX 公式转为 LaTeX 已取消。");
+        }
+        catch (Exception error)
+        {
+            WriteRedrawAcceptanceLog("formula-to-latex-failed " + error);
+            SetStatus($"VisualTeX 公式转为 LaTeX 失败：{error.Message}");
+            if (!string.Equals(
+                    Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE"),
+                    "1",
+                    StringComparison.Ordinal))
+            {
+                try
+                {
+                    await dispatcher.InvokeAsync(() =>
+                    {
+                        System.Windows.Forms.MessageBox.Show(
+                            error.Message,
+                            "VisualTeX 公式转为 LaTeX",
+                            System.Windows.Forms.MessageBoxButtons.OK,
+                            System.Windows.Forms.MessageBoxIcon.Error);
+                        return true;
+                    }).ConfigureAwait(false);
+                }
+                catch { }
+            }
+        }
+        finally { _operationGate.Release(); }
     }
 
     private async Task BulkImportAsync()

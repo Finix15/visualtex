@@ -57,3 +57,9 @@ internal sealed class WordLatexRedrawResult
     internal long MaxInsertMilliseconds { get; set; }
     internal List<string> FormulaIds { get; set; } = new();
 }
+
+internal sealed class WordFormulaToLatexResult
+{
+    internal int FormulaCount { get; set; }
+    internal List<string> FormulaIds { get; set; } = new();
+}

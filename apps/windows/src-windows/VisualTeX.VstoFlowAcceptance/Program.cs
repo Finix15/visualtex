@@ -302,6 +302,10 @@ internal static partial class Program
             {
                 RunWordLatexRedraw(client, artifactRoot);
             }
+            else if (string.Equals(mode, "word-formula-to-latex", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordFormulaToLatex(client, artifactRoot);
+            }
             else if (string.Equals(mode, "word-bulk-import-latex-spacing", StringComparison.OrdinalIgnoreCase))
             {
                 RunWordBulkImportLatexSpacing(artifactRoot);

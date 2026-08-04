@@ -43,6 +43,17 @@ internal sealed class WordFormulaService
         internal string ExpectedSource { get; set; } = string.Empty;
     }
 
+    private sealed class FormulaToLatexTarget
+    {
+        internal FormulaMetadata Metadata { get; set; } = new();
+        internal string ObjectMode { get; set; } = string.Empty;
+        internal int Start { get; set; }
+        internal int End { get; set; }
+        internal Range FormulaRange { get; set; } = null!;
+        internal InlineShape? OleShape { get; set; }
+        internal Bookmark? OmmlBookmark { get; set; }
+    }
+
     public WordFormulaService(Application application)
     {
         _application = application;
@@ -1221,6 +1232,433 @@ internal sealed class WordFormulaService
             Release(validationRange);
             Release(selection);
             Release(document);
+        }
+    }
+
+    public int CountFormulaObjectsForLatex(bool wholeDocument, string objectMode)
+    {
+        Document? document = null;
+        Selection? selection = null;
+        Range? scope = null;
+        List<FormulaToLatexTarget>? targets = null;
+        try
+        {
+            document = _application.ActiveDocument
+                ?? throw new InvalidOperationException("No active Word document.");
+            EnsureWritable(document);
+            selection = _application.Selection;
+            scope = wholeDocument
+                ? document.Content.Duplicate
+                : selection.Range.Duplicate;
+            targets = CaptureFormulaToLatexTargets(
+                document,
+                scope,
+                wholeDocument,
+                objectMode,
+                refreshOmmlMetadata: false);
+            return targets.Count;
+        }
+        finally
+        {
+            ReleaseFormulaToLatexTargets(targets);
+            Release(scope);
+            Release(selection);
+            Release(document);
+        }
+    }
+
+    public WordFormulaToLatexResult ConvertFormulaObjectsToLatex(
+        bool wholeDocument,
+        string objectMode)
+    {
+        Document? document = null;
+        Selection? selection = null;
+        Range? scope = null;
+        UndoRecord? undoRecord = null;
+        WordViewState? viewState = null;
+        List<FormulaToLatexTarget>? targets = null;
+        try
+        {
+            document = _application.ActiveDocument
+                ?? throw new InvalidOperationException("No active Word document.");
+            EnsureWritable(document);
+            selection = _application.Selection;
+            scope = wholeDocument
+                ? document.Content.Duplicate
+                : selection.Range.Duplicate;
+            targets = CaptureFormulaToLatexTargets(
+                document,
+                scope,
+                wholeDocument,
+                objectMode,
+                refreshOmmlMetadata: true);
+            if (targets.Count == 0)
+            {
+                var modeLabel = string.Equals(
+                    objectMode,
+                    FormulaOleContract.NativeOleMode,
+                    StringComparison.Ordinal)
+                    ? "OLE"
+                    : "OMML";
+                throw new InvalidDataException(
+                    wholeDocument
+                        ? $"当前 Word 文档中没有找到 VisualTeX {modeLabel} 公式。"
+                        : $"所选内容中没有找到 VisualTeX {modeLabel} 公式。");
+            }
+
+            viewState = CaptureViewState();
+            undoRecord = BeginUndoRecord("VisualTeX 公式转为 LaTeX 代码");
+            var convertedIds = new List<string>(targets.Count);
+            foreach (var target in targets.OrderByDescending(item => item.Start))
+            {
+                ConvertFormulaTargetToLatex(document, target);
+                convertedIds.Add(target.Metadata.FormulaId);
+            }
+            WordEquationNumbering.TryReconcile(document);
+            return new WordFormulaToLatexResult
+            {
+                FormulaCount = convertedIds.Count,
+                FormulaIds = convertedIds,
+            };
+        }
+        finally
+        {
+            EndUndoRecord(undoRecord);
+            RestoreViewState(document, viewState, preferredSelection: null);
+            Release(undoRecord);
+            ReleaseFormulaToLatexTargets(targets);
+            Release(scope);
+            Release(selection);
+            Release(document);
+        }
+    }
+
+    private static List<FormulaToLatexTarget> CaptureFormulaToLatexTargets(
+        Document document,
+        Range scope,
+        bool wholeDocument,
+        string objectMode,
+        bool refreshOmmlMetadata)
+    {
+        if (!string.Equals(
+                objectMode,
+                FormulaOleContract.NativeOleMode,
+                StringComparison.Ordinal)
+            && !string.Equals(
+                objectMode,
+                FormulaOleContract.WordOmmlMode,
+                StringComparison.Ordinal))
+            throw new ArgumentOutOfRangeException(
+                nameof(objectMode),
+                objectMode,
+                "Only VisualTeX OLE and Word OMML formulas can be restored to LaTeX code.");
+
+        var targets = new List<FormulaToLatexTarget>();
+        try
+        {
+            if (string.Equals(
+                    objectMode,
+                    FormulaOleContract.NativeOleMode,
+                    StringComparison.Ordinal))
+            {
+                InlineShapes? shapes = null;
+                try
+                {
+                    shapes = document.InlineShapes;
+                    for (var index = 1; index <= shapes.Count; index++)
+                    {
+                        InlineShape? shape = null;
+                        Range? formulaRange = null;
+                        try
+                        {
+                            shape = shapes[index];
+                            if (!WordFormulaMetadataReader.IsNativeOle(shape)) continue;
+                            var metadata = WordFormulaMetadataReader.TryRead(shape);
+                            if (metadata is null) continue;
+                            formulaRange = shape.Range;
+                            if (!FormulaRangeMatchesScope(
+                                    formulaRange,
+                                    scope,
+                                    wholeDocument))
+                                continue;
+                            targets.Add(new FormulaToLatexTarget
+                            {
+                                Metadata = metadata,
+                                ObjectMode = FormulaOleContract.NativeOleMode,
+                                Start = formulaRange.Start,
+                                End = formulaRange.End,
+                                FormulaRange = formulaRange,
+                                OleShape = shape,
+                            });
+                            formulaRange = null;
+                            shape = null;
+                        }
+                        finally
+                        {
+                            Release(formulaRange);
+                            Release(shape);
+                        }
+                    }
+                }
+                finally { Release(shapes); }
+                return targets;
+            }
+
+            foreach (var formulaId in WordOmmlFormulaStore.FormulaIds(document))
+            {
+                Bookmark? bookmark = null;
+                Range? formulaRange = null;
+                try
+                {
+                    bookmark = WordOmmlFormulaStore.FindByFormulaId(document, formulaId);
+                    if (bookmark is null) continue;
+                    var metadata = WordOmmlFormulaStore.TryRead(document, bookmark);
+                    if (metadata is null) continue;
+                    if (refreshOmmlMetadata)
+                        metadata = WordOmmlNativeSource.RefreshForVisualTeX(
+                            document,
+                            bookmark,
+                            metadata);
+                    formulaRange = WordOmmlFormulaStore.GetEquationRange(bookmark);
+                    if (!FormulaRangeMatchesScope(
+                            formulaRange,
+                            scope,
+                            wholeDocument))
+                        continue;
+                    targets.Add(new FormulaToLatexTarget
+                    {
+                        Metadata = metadata,
+                        ObjectMode = FormulaOleContract.WordOmmlMode,
+                        Start = formulaRange.Start,
+                        End = formulaRange.End,
+                        FormulaRange = formulaRange,
+                        OmmlBookmark = bookmark,
+                    });
+                    formulaRange = null;
+                    bookmark = null;
+                }
+                finally
+                {
+                    Release(formulaRange);
+                    Release(bookmark);
+                }
+            }
+            return targets;
+        }
+        catch
+        {
+            ReleaseFormulaToLatexTargets(targets);
+            throw;
+        }
+    }
+
+    private static bool FormulaRangeMatchesScope(
+        Range formulaRange,
+        Range scope,
+        bool wholeDocument)
+    {
+        if (wholeDocument) return true;
+        var scopeStart = scope.Start;
+        var scopeEnd = scope.End;
+        var formulaStart = formulaRange.Start;
+        var formulaEnd = formulaRange.End;
+        if (scopeStart == scopeEnd)
+            return scopeStart >= formulaStart && scopeStart <= formulaEnd;
+        return formulaStart >= scopeStart && formulaEnd <= scopeEnd;
+    }
+
+    private static void ConvertFormulaTargetToLatex(
+        Document document,
+        FormulaToLatexTarget target)
+    {
+        var metadata = target.Metadata;
+        var latexSource = BuildFormulaLatexSource(metadata);
+        var formulaStart = target.FormulaRange.Start;
+        Table? numberedTable = null;
+        Range? tableRange = null;
+        Range? insertion = null;
+        Range? inserted = null;
+        try
+        {
+            numberedTable = TryGetVisualTeXNumberedTable(
+                target.FormulaRange,
+                metadata);
+            if (numberedTable is not null)
+            {
+                tableRange = numberedTable.Range;
+                formulaStart = tableRange.Start;
+            }
+
+            if (metadata.Numbered)
+            {
+                WordEquationNumbering.FreezeFormulaCrossReferences(
+                    document,
+                    metadata.FormulaId);
+                WordEquationNumbering.RemoveFormulaNumberingArtifacts(
+                    document,
+                    metadata.FormulaId);
+            }
+            RemoveInlineBaselineSentinel(document, metadata.FormulaId);
+
+            if (string.Equals(
+                    target.ObjectMode,
+                    FormulaOleContract.WordOmmlMode,
+                    StringComparison.Ordinal))
+            {
+                try { target.OmmlBookmark?.Delete(); } catch { }
+                WordOmmlFormulaStore.Delete(document, metadata.FormulaId);
+            }
+
+            if (numberedTable is not null)
+            {
+                numberedTable.Delete();
+                insertion = document.Range(formulaStart, formulaStart);
+                insertion.Text = latexSource + "\r";
+                inserted = document.Range(
+                    formulaStart,
+                    formulaStart + latexSource.Length);
+            }
+            else
+            {
+                if (string.Equals(
+                        target.ObjectMode,
+                        FormulaOleContract.NativeOleMode,
+                        StringComparison.Ordinal))
+                {
+                    target.OleShape?.Delete();
+                }
+                else
+                {
+                    target.FormulaRange.Delete();
+                }
+                insertion = document.Range(formulaStart, formulaStart);
+                insertion.Text = latexSource;
+                inserted = document.Range(
+                    formulaStart,
+                    formulaStart + latexSource.Length);
+                if (metadata.Numbered)
+                    NormalizeFormerNumberedFormulaParagraph(document, inserted);
+            }
+            NormalizeLatexSourceRange(inserted, metadata);
+        }
+        finally
+        {
+            Release(inserted);
+            Release(insertion);
+            Release(tableRange);
+            Release(numberedTable);
+        }
+    }
+
+    private static string BuildFormulaLatexSource(FormulaMetadata metadata)
+    {
+        var latex = string.IsNullOrWhiteSpace(metadata.Latex)
+            ? string.Join("\n", metadata.Lines.Select(line => line.Latex))
+            : metadata.Latex;
+        latex = (latex ?? string.Empty)
+            .Replace("\r\n", "\n")
+            .Replace('\r', '\n')
+            .Trim();
+        if (string.Equals(
+                metadata.DisplayMode,
+                "block",
+                StringComparison.Ordinal))
+        {
+            latex = FormulaEquationTag.Attach(latex, metadata.EquationTag);
+            return $"\\[{latex}\\]";
+        }
+        latex = FormulaEquationTag.Extract(latex).Latex
+            .Replace('\n', ' ');
+        return $"\\({latex}\\)";
+    }
+
+    private static Table? TryGetVisualTeXNumberedTable(
+        Range formulaRange,
+        FormulaMetadata metadata)
+    {
+        if (!metadata.Numbered) return null;
+        try
+        {
+            if (!(bool)formulaRange.get_Information(WdInformation.wdWithInTable)
+                || formulaRange.Tables.Count == 0)
+                return null;
+            var table = formulaRange.Tables[1];
+            if (table.Columns.Count < 3)
+            {
+                Release(table);
+                return null;
+            }
+            return table;
+        }
+        catch { return null; }
+    }
+
+    private static void NormalizeFormerNumberedFormulaParagraph(
+        Document document,
+        Range latexRange)
+    {
+        Paragraphs? paragraphs = null;
+        Paragraph? paragraph = null;
+        Range? paragraphRange = null;
+        Range? prefix = null;
+        ParagraphFormat? format = null;
+        TabStops? tabStops = null;
+        try
+        {
+            paragraphs = latexRange.Paragraphs;
+            if (paragraphs.Count == 0) return;
+            paragraph = paragraphs[1];
+            paragraphRange = paragraph.Range;
+            if (latexRange.Start > paragraphRange.Start)
+            {
+                prefix = document.Range(paragraphRange.Start, latexRange.Start);
+                var prefixText = prefix.Text ?? string.Empty;
+                if (prefixText.All(character => character is '\t' or '\v' or ' '))
+                    prefix.Delete();
+            }
+            format = paragraphRange.ParagraphFormat;
+            format.Alignment = WdParagraphAlignment.wdAlignParagraphLeft;
+            tabStops = format.TabStops;
+            tabStops.ClearAll();
+        }
+        finally
+        {
+            Release(tabStops);
+            Release(format);
+            Release(prefix);
+            Release(paragraphRange);
+            Release(paragraph);
+            Release(paragraphs);
+        }
+    }
+
+    private static void NormalizeLatexSourceRange(
+        Range range,
+        FormulaMetadata metadata)
+    {
+        Microsoft.Office.Interop.Word.Font? font = null;
+        try
+        {
+            font = range.Font;
+            font.Hidden = 0;
+            font.Position = 0;
+            font.Superscript = 0;
+            font.Subscript = 0;
+            var size = FormulaFontSize.ResolveSemanticFontSize(metadata);
+            if (size > 0) font.Size = (float)size;
+        }
+        finally { Release(font); }
+    }
+
+    private static void ReleaseFormulaToLatexTargets(
+        IEnumerable<FormulaToLatexTarget>? targets)
+    {
+        if (targets is null) return;
+        foreach (var target in targets)
+        {
+            Release(target.OmmlBookmark);
+            Release(target.OleShape);
+            Release(target.FormulaRange);
         }
     }
 

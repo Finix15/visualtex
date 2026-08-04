@@ -2180,6 +2180,55 @@ internal static class WordEquationNumbering
         }
     }
 
+    internal static int FreezeFormulaCrossReferences(
+        Document document,
+        string formulaId)
+    {
+        var targetBookmarkName = NativeNumberBookmarkName(formulaId);
+        Fields? fields = null;
+        var frozen = 0;
+        try
+        {
+            fields = document.Fields;
+            for (var index = fields.Count; index >= 1; index--)
+            {
+                Field? field = null;
+                Range? code = null;
+                try
+                {
+                    field = fields[index];
+                    code = field.Code;
+                    var fieldCode = code.Text;
+                    var matches = IsReferenceToBookmark(
+                        fieldCode,
+                        targetBookmarkName);
+                    if (!matches
+                        && TryResolveVisualTeXReferenceBookmark(
+                            document,
+                            fieldCode,
+                            out var resolvedBookmark))
+                    {
+                        matches = string.Equals(
+                            resolvedBookmark,
+                            targetBookmarkName,
+                            StringComparison.OrdinalIgnoreCase);
+                    }
+                    if (!matches) continue;
+                    NormalizeReferenceResult(field);
+                    field.Unlink();
+                    frozen++;
+                }
+                finally
+                {
+                    Release(code);
+                    Release(field);
+                }
+            }
+        }
+        finally { Release(fields); }
+        return frozen;
+    }
+
     internal static int UpdateNativeCrossReferences(Document document)
     {
         Fields? fields = null;

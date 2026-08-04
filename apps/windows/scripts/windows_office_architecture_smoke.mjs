@@ -304,6 +304,9 @@ const vstoDisplaySpacingAcceptance = await source(
 const vstoEquationNumberFormatAcceptance = await source(
   "src-windows/VisualTeX.VstoFlowAcceptance/WordEquationNumberFormatAcceptance.cs",
 );
+const vstoFormulaToLatexAcceptance = await source(
+  "src-windows/VisualTeX.VstoFlowAcceptance/WordFormulaToLatexAcceptance.cs",
+);
 const officeServer = await source("src-tauri/src/office/server.rs");
 const officeState = await source("src-tauri/src/office/state.rs");
 const officeSessions = await source("src-tauri/src/office/sessions.rs");
@@ -566,12 +569,19 @@ assert.ok(vstoFlowAcceptance.includes('"word-create"'));
 assert.ok(vstoFlowAcceptance.includes('"word-bulk-import-latex-spacing"'));
 assert.ok(vstoFlowAcceptance.includes('"word-display-spacing"'));
 assert.ok(vstoFlowAcceptance.includes('"word-equation-number-format"'));
+assert.ok(vstoFlowAcceptance.includes('"word-formula-to-latex"'));
 assert.ok(vstoEquationNumberFormatAcceptance.includes("Heading1DotId"));
 assert.ok(vstoEquationNumberFormatAcceptance.includes("Heading1DashId"));
 assert.ok(vstoEquationNumberFormatAcceptance.includes("Heading2DotId"));
 assert.ok(vstoEquationNumberFormatAcceptance.includes("Heading2DashId"));
 assert.ok(vstoEquationNumberFormatAcceptance.includes("InsertLegacyNumberingReference"));
 assert.ok(vstoEquationNumberFormatAcceptance.includes("survived save/reopen"));
+assert.ok(vstoFormulaToLatexAcceptance.includes("OnRedrawSelectionOleToLatex"));
+assert.ok(vstoFormulaToLatexAcceptance.includes("OnRedrawSelectionOmmlToLatex"));
+assert.ok(vstoFormulaToLatexAcceptance.includes("OnRedrawDocumentOleToLatex"));
+assert.ok(vstoFormulaToLatexAcceptance.includes("OnRedrawDocumentOmmlToLatex"));
+assert.ok(vstoFormulaToLatexAcceptance.includes("numbered tables were flattened"));
+assert.ok(vstoFormulaToLatexAcceptance.includes("persisted after save/reopen"));
 assert.ok(vstoBulkSpacingAcceptance.includes("ordinary CJK boundary spaces"));
 assert.ok(vstoBulkSpacingAcceptance.includes("no VTBL bookmark or boundary character remained"));
 assert.ok(vstoDisplaySpacingAcceptance.includes("typed prose stayed outside OMath"));
@@ -647,6 +657,31 @@ assert.ok(wordVsto.includes("FormulaOleContract.WordOmmlMode"));
 assert.ok(wordVsto.includes("OnInsertInlineOmml"));
 assert.ok(wordVsto.includes("OnInsertDisplayOmml"));
 assert.ok(wordVsto.includes("OnConvertSelectedToOmml"));
+for (const callback of [
+  "OnRedrawSelectionOleToLatex",
+  "OnRedrawSelectionOmmlToLatex",
+  "OnRedrawDocumentOleToLatex",
+  "OnRedrawDocumentOmmlToLatex",
+]) {
+  assert.ok(wordVsto.includes(callback), `Word Ribbon is missing ${callback}`);
+}
+for (const ribbonId of [
+  "VisualTeX.WordVsto.RedrawSelectionOleToLatex",
+  "VisualTeX.WordVsto.RedrawSelectionOmmlToLatex",
+  "VisualTeX.WordVsto.RedrawDocumentOleToLatex",
+  "VisualTeX.WordVsto.RedrawDocumentOmmlToLatex",
+]) {
+  assert.ok(wordVsto.includes(`id="${ribbonId}"`), `Word Ribbon is missing ${ribbonId}`);
+}
+assert.ok(!wordVsto.includes('id="VisualTeX.WordVsto.Delete"'));
+assert.ok(!wordVsto.includes('id="VisualTeX.WordVsto.OpenDesktop"'));
+assert.ok(!wordVsto.includes('label="删除所选公式"'));
+assert.ok(!wordVsto.includes('label="打开 VisualTeX"'));
+assert.ok(wordVstoService.includes("ConvertFormulaObjectsToLatex"));
+assert.ok(wordVstoService.includes("WordOmmlNativeSource.RefreshForVisualTeX"));
+assert.ok(wordVstoService.includes("BuildFormulaLatexSource"));
+assert.ok(wordVstoService.includes("TryGetVisualTeXNumberedTable"));
+assert.ok(wordEquationNumbering.includes("FreezeFormulaCrossReferences"));
 for (const binding of [
   ['VisualTeX.WordVsto.Inline', 'tag="oleInline"'],
   ['VisualTeX.WordVsto.Display', 'tag="oleDisplay"'],
