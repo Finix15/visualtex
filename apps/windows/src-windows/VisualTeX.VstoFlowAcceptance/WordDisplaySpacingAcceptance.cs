@@ -163,15 +163,57 @@ internal static partial class Program
             WaitForAddInIdle(addIn, TimeSpan.FromSeconds(10));
 
             // Do not adjust the caret in the acceptance test. This must exercise
-            // the insertion point left by VisualTeX itself.
-            selection.TypeText("正文");
+            // the insertion point left by VisualTeX itself. Before typing, the
+            // equation must already touch the paragraph mark with no hidden guard.
             var formulaId = final.FormulaId
                 ?? throw new InvalidDataException("The inline OMML formula has no formulaId.");
+            AssertInlineOmmlHasNoBoundaryCharacter(document, formulaId);
+            selection.TypeText("正文");
             AssertInlineOmmlCaretResult(document, formulaId);
             selection.TypeParagraph();
             return formulaId;
         }
         finally { Release(selection); }
+    }
+
+    private static void AssertInlineOmmlHasNoBoundaryCharacter(
+        Word.Document document,
+        string formulaId)
+    {
+        Word.Bookmark? formulaBookmark = null;
+        Word.Range? equationRange = null;
+        Word.Range? paragraphRange = null;
+        Word.Paragraphs? paragraphs = null;
+        Word.Paragraph? paragraph = null;
+        Word.Range? nextCharacter = null;
+        Word.Font? nextFont = null;
+        try
+        {
+            formulaBookmark = WordOmmlFormulaStore.FindByFormulaId(document, formulaId)
+                ?? throw new InvalidDataException("The inline OMML formula bookmark is missing.");
+            equationRange = WordOmmlFormulaStore.GetEquationRange(formulaBookmark);
+            paragraphs = equationRange.Paragraphs;
+            paragraph = paragraphs[1];
+            paragraphRange = paragraph.Range;
+            AssertEqual(paragraphRange.End - 1, equationRange.End,
+                "Inline OMML still has a character between OMath.End and the paragraph mark.");
+            nextCharacter = document.Range(equationRange.End, equationRange.End + 1);
+            AssertEqual("\r", nextCharacter.Text ?? string.Empty,
+                "Inline OMML is followed by a placeholder instead of the paragraph mark.");
+            nextFont = nextCharacter.Font;
+            AssertEqual(0, nextFont.Hidden,
+                "The paragraph mark after inline OMML unexpectedly inherited hidden formatting.");
+        }
+        finally
+        {
+            Release(nextFont);
+            Release(nextCharacter);
+            Release(paragraphRange);
+            Release(paragraph);
+            Release(paragraphs);
+            Release(equationRange);
+            Release(formulaBookmark);
+        }
     }
 
     private static void AssertInlineOmmlCaretResult(
@@ -196,6 +238,12 @@ internal static partial class Program
             following = document.Range(ref followingStart, ref followingEnd);
             AssertTrue((following.Text ?? string.Empty).StartsWith("正文", StringComparison.Ordinal),
                 "The inline OMML caret did not remain immediately before following prose.");
+            Release(following);
+            object afterProseStart = equationRange.End + 2;
+            object afterProseEnd = Math.Min(contentEnd, equationRange.End + 3);
+            following = document.Range(ref afterProseStart, ref afterProseEnd);
+            AssertEqual("\r", following.Text ?? string.Empty,
+                "A hidden placeholder remained after prose typed following inline OMML.");
 
             bookmarks = document.Bookmarks;
             var boundaryName = "VTBL_" + Guid.Parse(formulaId).ToString("N");

@@ -2067,7 +2067,8 @@ internal sealed class WordFormulaService
                     RemoveInlineOmmlTemporaryBoundary(
                         document,
                         equationRange,
-                        metadata.FormulaId);
+                        metadata.FormulaId,
+                        forceTextReplacement: false);
                 }
                 else
                 {
@@ -4148,20 +4149,102 @@ internal sealed class WordFormulaService
         finally { Release(range); }
     }
 
+    private static Range ResolveCurrentInlineOmmlRange(
+        Document document,
+        Range fallbackRange,
+        string formulaId)
+    {
+        Bookmark? formulaBookmark = null;
+        try
+        {
+            formulaBookmark = WordOmmlFormulaStore.FindByFormulaId(document, formulaId);
+            return formulaBookmark is null
+                ? fallbackRange.Duplicate
+                : WordOmmlFormulaStore.GetEquationRange(formulaBookmark);
+        }
+        catch
+        {
+            return fallbackRange.Duplicate;
+        }
+        finally { Release(formulaBookmark); }
+    }
+
     private static void RemoveInlineOmmlTemporaryBoundary(
         Document document,
         Range formulaRange,
-        string formulaId)
+        string formulaId,
+        bool forceTextReplacement = true)
     {
         // VTBL is only a temporary insertion guard for native OMath. Persisting
         // even a collapsed bookmark makes Word show a dotted placeholder when
         // "Show bookmarks" is enabled. Remove the bookmark and every temporary
         // character before returning; VTOMML remains the durable formula identity.
-        RemoveInlineBaselineSentinel(document, formulaId);
-        for (var attempt = 0; attempt < 2; attempt++)
+        // Re-resolve the final OMath after every deletion: Word mutates live Range
+        // coordinates when the bookmarked sentinel is removed, so a cached End can
+        // skip the last hidden ASCII guard and leave the caret immediately before it.
+        Range? currentRange = null;
+        try
         {
-            if (!TryDeleteTemporaryInlineBoundaryAt(document, formulaRange.End))
-                break;
+            RemoveInlineBaselineSentinel(document, formulaId);
+            for (var attempt = 0; attempt < 8; attempt++)
+            {
+                Release(currentRange);
+                currentRange = ResolveCurrentInlineOmmlRange(
+                    document,
+                    formulaRange,
+                    formulaId);
+                if (!TryDeleteInlineOmmlGuardAt(
+                        document,
+                        currentRange.End,
+                        forceTextReplacement))
+                    break;
+            }
+        }
+        finally { Release(currentRange); }
+    }
+
+    private static bool TryDeleteInlineOmmlGuardAt(
+        Document document,
+        int position,
+        bool forceTextReplacement)
+    {
+        Range? candidate = null;
+        Microsoft.Office.Interop.Word.Font? font = null;
+        try
+        {
+            var contentStart = document.Content.Start;
+            var contentEnd = document.Content.End;
+            if (position < contentStart || position >= contentEnd) return false;
+            candidate = document.Range(position, Math.Min(position + 1, contentEnd));
+            var text = candidate.Text;
+            var legacyGuard =
+                string.Equals(text, LegacyInlineMathGuard, StringComparison.Ordinal)
+                || string.Equals(text, LegacyInlineBaselineSentinel, StringComparison.Ordinal);
+            font = candidate.Font;
+            var hiddenAsciiGuard = string.Equals(
+                    text,
+                    InlineMathGuard,
+                    StringComparison.Ordinal)
+                && font.Hidden != 0;
+            if (!legacyGuard && !hiddenAsciiGuard) return false;
+
+            // Immediately after OMath.BuildUp, Word can report this external guard
+            // as math-affiliated even though it is outside OMath.Range. The guard
+            // was created by PrepareInlineBaselineSentinelBeforeInsert and sits at
+            // the re-resolved final OMath.End. Assigning empty text is more reliable
+            // than Range.Delete at this boundary; some Word builds return from
+            // Delete without actually removing the hidden run.
+            if (forceTextReplacement)
+                candidate.Text = string.Empty;
+            else
+                candidate.Delete();
+            return true;
+        }
+        catch { return false; }
+        finally
+        {
+            Release(font);
+            Release(candidate);
         }
     }
 
@@ -4171,10 +4254,19 @@ internal sealed class WordFormulaService
         string formulaId,
         bool moveCaretOutsideMath)
     {
-        RemoveInlineOmmlTemporaryBoundary(document, formulaRange, formulaId);
-        ResetParagraphTypingPosition(formulaRange);
-        if (moveCaretOutsideMath)
-            MoveCaretOutsideInlineOmml(formulaRange);
+        Range? currentRange = null;
+        try
+        {
+            RemoveInlineOmmlTemporaryBoundary(document, formulaRange, formulaId);
+            currentRange = ResolveCurrentInlineOmmlRange(
+                document,
+                formulaRange,
+                formulaId);
+            ResetParagraphTypingPosition(currentRange);
+            if (moveCaretOutsideMath)
+                MoveCaretOutsideInlineOmml(currentRange);
+        }
+        finally { Release(currentRange); }
     }
 
     private void MoveCaretOutsideInlineOmml(Range formulaRange)
