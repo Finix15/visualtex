@@ -31,6 +31,7 @@ import type {
 } from "../../editor/MathEditor";
 import { readErrorMessage } from "../../errors/readErrorMessage";
 import { latexToMathMl, latexToSvg } from "../../export/latexToSvg";
+import { isIncompleteLatexDraft } from "../../math/latexCompatibility";
 import {
   closeOfficeSessionWindow,
   getOfficePreferences,
@@ -890,6 +891,42 @@ export function OfficeDialogApp() {
     }
 
     const runId = ++exportRunIdRef.current;
+    const saveIncompleteDraft = () => {
+      latestCompleteExportRef.current = null;
+      void save({
+        title,
+        lines,
+        activeLineId,
+        codeFormat: latexCodeFormat,
+        displayMode,
+        numbered: displayMode === "block" && numbered,
+        fontSizePt: officeFontSizePt,
+        dirty,
+        status: "editing",
+        autoCommitOnClose,
+        exportResult: null,
+        exportWidth: 0,
+        exportHeight: 0,
+        error: null,
+      })
+        .then((saved) => {
+          if (saved && runId === exportRunIdRef.current) {
+            lastSavedFingerprintRef.current = currentFingerprint;
+          }
+        })
+        .catch((reason) => {
+          setToast(
+            readErrorMessage(
+              reason,
+              isEn ? "Unable to save the Office formula" : "无法保存 Office 公式",
+            ),
+          );
+        });
+    };
+    if (isIncompleteLatexDraft(latex)) {
+      saveIncompleteDraft();
+      return;
+    }
     try {
       // MathJax SVG generation is synchronous. Persist it immediately instead
       // of waiting for PNG rasterization, so closing the Office dialog cannot
@@ -965,6 +1002,10 @@ export function OfficeDialogApp() {
         latestCompleteExportRef.current = null;
       }
     } catch (reason) {
+      if (isIncompleteLatexDraft(latex, reason)) {
+        saveIncompleteDraft();
+        return;
+      }
       const message =
         reason instanceof Error
           ? reason.message
@@ -1004,7 +1045,9 @@ export function OfficeDialogApp() {
           : session?.exportResult ?? null
         : cached?.fingerprint === currentFingerprint
           ? cached.exportResult
-          : generateSvgExportResult();
+          : isIncompleteLatexDraft(latex)
+            ? null
+            : generateSvgExportResult();
       return {
         title,
         lines,

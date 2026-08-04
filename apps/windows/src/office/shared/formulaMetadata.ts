@@ -23,6 +23,9 @@ export interface VisualTeXFormulaMetadata {
   fontSizePt?: number;
   /** Point size used to create the current cached SVG/EMF/PNG preview. */
   renderFontSizePt?: number;
+  /** Physical Word inline OLE extent retained across OLE/OMML conversions. */
+  wordInlineOleWidthPt?: number;
+  wordInlineOleHeightPt?: number;
   /** Fingerprint of the exact Word-native OMML source. */
   nativeOmmlFingerprint?: string;
   createdWithVersion: string;
@@ -44,6 +47,8 @@ export interface CreateFormulaMetadataInput {
   baseline?: number;
   fontSizePt?: number;
   renderFontSizePt?: number;
+  wordInlineOleWidthPt?: number;
+  wordInlineOleHeightPt?: number;
   appVersion?: string;
   original?: VisualTeXFormulaMetadata | null;
 }
@@ -148,6 +153,15 @@ export function isVisualTeXFormulaMetadata(
         candidate.renderFontSizePt >= 5 &&
         candidate.renderFontSizePt <= 200 &&
         Math.abs(candidate.renderFontSizePt * 2 - Math.round(candidate.renderFontSizePt * 2)) < 1e-6)) &&
+    ((candidate.wordInlineOleWidthPt === undefined &&
+      candidate.wordInlineOleHeightPt === undefined) ||
+      (candidate.displayMode === "inline" &&
+        typeof candidate.wordInlineOleWidthPt === "number" &&
+        Number.isFinite(candidate.wordInlineOleWidthPt) &&
+        candidate.wordInlineOleWidthPt > 0 &&
+        typeof candidate.wordInlineOleHeightPt === "number" &&
+        Number.isFinite(candidate.wordInlineOleHeightPt) &&
+        candidate.wordInlineOleHeightPt > 0)) &&
     (candidate.nativeOmmlFingerprint === undefined ||
       (typeof candidate.nativeOmmlFingerprint === "string" &&
         /^[0-9a-f]{64}$/i.test(candidate.nativeOmmlFingerprint))) &&
@@ -171,6 +185,8 @@ export function createFormulaMetadata({
   baseline,
   fontSizePt,
   renderFontSizePt,
+  wordInlineOleWidthPt,
+  wordInlineOleHeightPt,
   appVersion = CURRENT_VISUALTEX_VERSION,
   original = null,
 }: CreateFormulaMetadataInput): VisualTeXFormulaMetadata {
@@ -208,6 +224,19 @@ export function createFormulaMetadata({
     renderFontSizePt,
     original?.renderFontSizePt ?? resolvedFontSize,
   );
+  const requestedInlineWidth = wordInlineOleWidthPt ?? original?.wordInlineOleWidthPt;
+  const requestedInlineHeight = wordInlineOleHeightPt ?? original?.wordInlineOleHeightPt;
+  const resolvedInlineOleSize =
+    displayMode === "inline" &&
+    Number.isFinite(requestedInlineWidth) &&
+    (requestedInlineWidth ?? 0) > 0 &&
+    Number.isFinite(requestedInlineHeight) &&
+    (requestedInlineHeight ?? 0) > 0
+      ? {
+          wordInlineOleWidthPt: requestedInlineWidth as number,
+          wordInlineOleHeightPt: requestedInlineHeight as number,
+        }
+      : {};
   return {
     schema: VISUALTEX_FORMULA_SCHEMA,
     schemaVersion: VISUALTEX_FORMULA_SCHEMA_VERSION,
@@ -227,6 +256,7 @@ export function createFormulaMetadata({
     ...(resolvedBaseline !== undefined ? { baseline: resolvedBaseline } : {}),
     fontSizePt: resolvedFontSize,
     renderFontSizePt: resolvedRenderFontSize,
+    ...resolvedInlineOleSize,
     ...(original?.nativeOmmlFingerprint
       ? { nativeOmmlFingerprint: original.nativeOmmlFingerprint }
       : {}),

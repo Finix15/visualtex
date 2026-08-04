@@ -443,11 +443,26 @@ async function main() {
     // Leave the PowerPoint page before replacing the mock Session. Its
     // pagehide autosave is valid for the old Session and must finish before
     // the test starts serving Word data.
-    await client.send("Page.navigate", { url: "about:blank" });
+    try {
+      await client.send("Page.navigate", { url: "about:blank" });
+    } catch (error) {
+      if (!String(error).includes("navigated or closed")) throw error;
+    }
+    client.close();
+    client = undefined;
     await sleep(250);
     session = createSession("word", 11.5);
     updates.length = 0;
-    await client.send("Page.navigate", { url: officeUrl });
+    const wordTarget = await (
+      await fetch(
+        `http://127.0.0.1:${debugPort}/json/new?${encodeURIComponent(officeUrl)}`,
+        { method: "PUT" },
+      )
+    ).json();
+    client = new CdpClient(wordTarget.webSocketDebuggerUrl);
+    await client.connect();
+    await client.send("Runtime.enable");
+    await client.send("Page.enable");
     const wordInherited = await waitForEvaluation(
       client,
       `(() => {
@@ -471,6 +486,83 @@ async function main() {
       !updates.some((update) => update.dirty === true),
       "Word initial Session load must not persist a transient dirty state",
     );
+
+    updates.length = 0;
+    await client.evaluate(`(() => {
+      const field = document.querySelector('math-field');
+      if (!field) return false;
+      field.setValue('\\\\frac{\\\\placeholder{}}{\\\\placeholder{}}', {
+        mode: 'math',
+        format: 'latex',
+        insertionMode: 'replaceAll',
+        selectionMode: 'placeholder',
+        silenceNotifications: true,
+      });
+      field.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        composed: true,
+        inputType: 'insertText',
+      }));
+      return true;
+    })()`);
+    for (
+      let attempt = 0;
+      attempt < 100 &&
+      !updates.some(
+        (update) =>
+          update.lines?.[0]?.latex?.includes('\\placeholder{}') &&
+          update.exportResult === null &&
+          update.error === null,
+      );
+      attempt += 1
+    ) {
+      await sleep(60);
+    }
+    assert.ok(
+      updates.some(
+        (update) =>
+          update.lines?.[0]?.latex?.includes('\\placeholder{}') &&
+          update.exportResult === null &&
+          update.error === null,
+      ),
+      "Word placeholder draft should autosave without a stale export result",
+    );
+    const placeholderDraftState = await client.evaluate(`(() => ({
+      value: document.querySelector('math-field')?.value ?? '',
+      toast: document.querySelector('.toast')?.textContent?.trim() ?? '',
+    }))()`);
+    assert.match(placeholderDraftState.value, /\\placeholder/);
+    assert.equal(
+      placeholderDraftState.toast,
+      "",
+      "An incomplete placeholder draft must not show a MathJax error toast",
+    );
+
+    await client.evaluate(`(() => {
+      const field = document.querySelector('math-field');
+      if (!field) return false;
+      field.setValue('x+y', {
+        mode: 'math',
+        format: 'latex',
+        insertionMode: 'replaceAll',
+        selectionMode: 'after',
+        silenceNotifications: true,
+      });
+      field.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        composed: true,
+        inputType: 'insertText',
+      }));
+      return true;
+    })()`);
+    for (
+      let attempt = 0;
+      attempt < 100 && session.lines?.[0]?.latex !== "x+y";
+      attempt += 1
+    ) {
+      await sleep(60);
+    }
+    assert.equal(session.lines?.[0]?.latex, "x+y");
 
     await setFontSize(client, 10.5);
     const wordChineseSize = await waitForEvaluation(

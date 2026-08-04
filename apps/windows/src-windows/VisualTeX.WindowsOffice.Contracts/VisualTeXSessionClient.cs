@@ -1395,6 +1395,8 @@ public sealed class OfficeSessionDocument
             RenderFontSizePt = ExportResult is not null
                 ? FormulaFontSize.Normalize(FontSizePt)
                 : OriginalMetadata?.RenderFontSizePt ?? FormulaFontSize.Normalize(FontSizePt),
+            WordInlineOleWidthPt = OriginalMetadata?.WordInlineOleWidthPt,
+            WordInlineOleHeightPt = OriginalMetadata?.WordInlineOleHeightPt,
             CreatedWithVersion = OriginalMetadata?.CreatedWithVersion ?? "1.0.18",
             UpdatedWithVersion = "1.0.18",
             CreatedAt = OriginalMetadata?.CreatedAt ?? now,

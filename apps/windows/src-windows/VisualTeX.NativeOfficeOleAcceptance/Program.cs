@@ -154,6 +154,29 @@ internal static class Program
         }
 
         if (args.Length >= 1
+            && string.Equals(
+                args[0],
+                "--installed-word-inline-roundtrip-anchor",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var roundTripArtifactRoot = args.Length >= 2
+                    ? Path.GetFullPath(args[1])
+                    : Path.Combine(
+                        Path.GetTempPath(),
+                        $"VisualTeX-Word-Inline-RoundTrip-{Guid.NewGuid():N}");
+                return RunInstalledWordInlineRoundTripAnchorAcceptance(
+                    roundTripArtifactRoot);
+            }
+            catch (Exception error)
+            {
+                Console.Error.WriteLine(error);
+                return 1;
+            }
+        }
+
+        if (args.Length >= 1
             && string.Equals(args[0], "--installed-font-size", StringComparison.OrdinalIgnoreCase))
         {
             try
@@ -2700,6 +2723,255 @@ internal static class Program
             "OMML script contains an empty slot that Word would render as a dotted placeholder. "
             + $"FormulaId={formulaId}; Script={script.Name.LocalName}; Slot={slotName.LocalName}; "
             + $"Xml={script.ToString(SaveOptions.DisableFormatting)}");
+    }
+
+    private static int RunInstalledWordInlineRoundTripAnchorAcceptance(
+        string artifactRoot)
+    {
+        if (!HasExistingRegistration())
+            throw new InvalidOperationException(
+                "VisualTeX Formula OLE must be installed before running the Word inline round-trip acceptance.");
+
+        Directory.CreateDirectory(artifactRoot);
+        var previewRoot = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "VisualTeX",
+            "office",
+            "temp");
+        Directory.CreateDirectory(previewRoot);
+        var formulaId = Guid.NewGuid().ToString();
+        var preview = CreatePreviewSet(
+            previewRoot,
+            formulaId,
+            "inline-roundtrip-anchor",
+            196,
+            44);
+        try
+        {
+            VerifyWordInlineOleOmmlRoundTripAndAnchorRecovery(
+                Path.Combine(
+                    artifactRoot,
+                    "VisualTeX-Word-Inline-OLE-OMML-OLE.docx"),
+                formulaId,
+                preview);
+            Console.WriteLine(
+                "VisualTeX Word inline OLE/OMML size and trailing-anchor recovery acceptance passed.");
+            Console.WriteLine($"Artifacts: {artifactRoot}");
+            return 0;
+        }
+        finally
+        {
+            ForceComCleanup();
+            TryDelete(preview.SvgPath);
+            TryDelete(preview.EmfPath);
+            TryDelete(preview.PngPath);
+        }
+    }
+
+    private static void VerifyWordInlineOleOmmlRoundTripAndAnchorRecovery(
+        string path,
+        string formulaId,
+        PreviewSet preview)
+    {
+        const string latex = @"v_{GS}+111111";
+        const string mathMl =
+            "<math xmlns=\"http://www.w3.org/1998/Math/MathML\"><mrow>"
+            + "<msub><mi>v</mi><mi>GS</mi></msub><mo>+</mo><mn>111111</mn>"
+            + "</mrow></math>";
+        Word.Application? application = null;
+        Word.Document? document = null;
+        Word.Selection? selection = null;
+        Word.InlineShape? shape = null;
+        Word.Bookmark? bookmark = null;
+        Word.Range? equationRange = null;
+        try
+        {
+            application = new Word.Application
+            {
+                Visible = false,
+                DisplayAlerts = Word.WdAlertLevel.wdAlertsNone,
+            };
+            document = application.Documents.Add();
+            selection = application.Selection;
+            selection.SetRange(0, 0);
+            selection.TypeText("inline: ");
+            var service = new WordFormulaService(application);
+            var createSession = CreateWordSession(
+                formulaId,
+                "create",
+                FormulaOleContract.NativeOleMode,
+                latex,
+                mathMl,
+                preview,
+                numbered: false,
+                originalMetadata: null,
+                fontSizePt: 11);
+            createSession.DisplayMode = "inline";
+            service.InsertOle(createSession, preview.PngPath, preview.EmfPath);
+            shape = FindWordFormula(document, formulaId)
+                ?? throw new InvalidOperationException(
+                    "Word inline OLE round-trip fixture was not created.");
+
+            // Reproduce the real failure: a user-sized inline OLE is smaller than
+            // the current renderer's natural extent. The old OMML -> OLE path
+            // discarded this physical size and recreated the larger natural one.
+            shape.LockAspectRatio = Office.MsoTriState.msoFalse;
+            shape.Width *= 0.68f;
+            shape.Height *= 0.68f;
+            shape.LockAspectRatio = Office.MsoTriState.msoTrue;
+            var expectedWidth = shape.Width;
+            var expectedHeight = shape.Height;
+            var oleMetadata = WordFormulaMetadataReader.TryRead(shape)
+                ?? throw new InvalidOperationException(
+                    "Word inline OLE round-trip metadata is missing.");
+
+            var toOmmlSession = CreateWordSession(
+                formulaId,
+                "edit",
+                FormulaOleContract.WordOmmlMode,
+                latex,
+                mathMl,
+                preview,
+                numbered: false,
+                originalMetadata: oleMetadata,
+                fontSizePt: 11);
+            toOmmlSession.DisplayMode = "inline";
+            service.ReplaceOmml(toOmmlSession, mathMl);
+            Release(shape);
+            shape = null;
+            bookmark = WordOmmlFormulaStore.FindByFormulaId(document, formulaId)
+                ?? throw new InvalidOperationException(
+                    "Inline OLE to OMML conversion did not create its anchor.");
+            equationRange = WordOmmlFormulaStore.GetEquationRange(bookmark);
+            var storedMetadata = WordOmmlFormulaStore.TryRead(document, bookmark)
+                ?? throw new InvalidOperationException(
+                    "Inline OLE physical dimensions were not persisted in OMML metadata.");
+            AssertClose(
+                expectedWidth,
+                (float)(storedMetadata.WordInlineOleWidthPt ?? 0),
+                0.05f,
+                "Inline OLE to OMML conversion lost the physical width.");
+            AssertClose(
+                expectedHeight,
+                (float)(storedMetadata.WordInlineOleHeightPt ?? 0),
+                0.05f,
+                "Inline OLE to OMML conversion lost the physical height.");
+
+            // Simulate Word moving the collapsed bookmark from the equation's
+            // leading edge to its trailing edge after native OMath rebuilding.
+            var bookmarkName = WordOmmlFormulaStore.BookmarkName(formulaId);
+            var trailingPosition = equationRange.End;
+            bookmark.Delete();
+            Release(bookmark);
+            bookmark = null;
+            object trailingStart = trailingPosition;
+            object trailingEnd = trailingPosition;
+            Word.Range? trailingRange = null;
+            Word.Bookmarks? bookmarks = null;
+            try
+            {
+                trailingRange = document.Range(ref trailingStart, ref trailingEnd);
+                bookmarks = document.Bookmarks;
+                bookmark = bookmarks.Add(bookmarkName, trailingRange);
+            }
+            finally
+            {
+                Release(bookmarks);
+                Release(trailingRange);
+            }
+
+            Release(equationRange);
+            equationRange = WordOmmlFormulaStore.GetEquationRange(bookmark);
+            var reopened = ReadSelectedFormula(application, service, equationRange);
+            AssertEqual(
+                FormulaOleContract.WordOmmlMode,
+                reopened.ObjectMode ?? string.Empty,
+                "VisualTeX could not reopen an OMML formula whose anchor moved behind it.");
+            var reopenedMetadata = reopened.Metadata
+                ?? throw new InvalidOperationException(
+                    "Recovered trailing-anchor OMML returned no metadata.");
+
+            var backToOleSession = CreateWordSession(
+                formulaId,
+                "edit",
+                FormulaOleContract.NativeOleMode,
+                latex,
+                mathMl,
+                preview,
+                numbered: false,
+                originalMetadata: reopenedMetadata,
+                fontSizePt: 11);
+            backToOleSession.DisplayMode = "inline";
+            service.ReplaceOle(
+                backToOleSession,
+                preview.PngPath,
+                preview.EmfPath);
+            shape = FindWordFormula(document, formulaId)
+                ?? throw new InvalidOperationException(
+                    "Inline OMML to OLE round trip did not recreate the object.");
+            AssertClose(
+                expectedWidth,
+                shape.Width,
+                0.75f,
+                "Inline OLE became wider after OLE to OMML to OLE conversion.");
+            AssertClose(
+                expectedHeight,
+                shape.Height,
+                0.75f,
+                "Inline OLE became taller after OLE to OMML to OLE conversion.");
+            AssertClose(
+                0f,
+                ReadParagraphMarkFontPosition(shape.Range),
+                0.1f,
+                "Inline OLE round trip contaminated the paragraph baseline.");
+            document.SaveAs2(path, Word.WdSaveFormat.wdFormatXMLDocument);
+            document.Close(Word.WdSaveOptions.wdSaveChanges);
+            Release(document);
+            document = application.Documents.Open(
+                path,
+                ConfirmConversions: false,
+                ReadOnly: false,
+                AddToRecentFiles: false,
+                Visible: false);
+            Release(shape);
+            shape = FindWordFormula(document, formulaId)
+                ?? throw new InvalidOperationException(
+                    "Saved inline OLE/OMML round-trip formula is missing.");
+            AssertClose(
+                expectedWidth,
+                shape.Width,
+                0.75f,
+                "Saved inline OLE became wider after OLE to OMML to OLE conversion.");
+            AssertClose(
+                expectedHeight,
+                shape.Height,
+                0.75f,
+                "Saved inline OLE became taller after OLE to OMML to OLE conversion.");
+            AssertClose(
+                0f,
+                ReadParagraphMarkFontPosition(shape.Range),
+                0.1f,
+                "Saved inline OLE round trip contaminated the paragraph baseline.");
+            Console.WriteLine(
+                $"  inline round trip preserved {shape.Width:0.###}x{shape.Height:0.###} pt after save/reopen and recovered a trailing OMML anchor.");
+        }
+        finally
+        {
+            Release(equationRange);
+            Release(bookmark);
+            Release(shape);
+            Release(selection);
+            if (document is not null)
+            {
+                try { document.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
+            }
+            Release(document);
+            if (application is not null)
+            {
+                try { application.Quit(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
+            }
+            Release(application);
+        }
     }
 
     private static int RunInstalledFormulaFontSizeAcceptance(string artifactRoot)

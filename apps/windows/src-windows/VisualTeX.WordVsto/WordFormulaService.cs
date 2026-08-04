@@ -867,12 +867,20 @@ internal sealed class WordFormulaService
                     shape = AddOleObject(document, insertion);
                 }
             }
+            var initialWidth = (session.ExportResult?.Width ?? 200) * 0.75f;
+            var initialHeight = (session.ExportResult?.Height ?? 60) * 0.75f;
+            StoreWordInlineOleSize(
+                metadata,
+                initialWidth,
+                initialHeight,
+                session.DisplayMode == "inline");
+            metadata.Validate();
             InitializeOle(shape, metadata, emfPath, pngPath);
             Configure(
                 shape,
                 metadata,
-                (session.ExportResult?.Width ?? 200) * 0.75f,
-                (session.ExportResult?.Height ?? 60) * 0.75f,
+                initialWidth,
+                initialHeight,
                 pngPath,
                 session.ExportResult?.Height ?? 0,
                 session.ExportResult?.Baseline,
@@ -2782,7 +2790,10 @@ internal sealed class WordFormulaService
             var position = ContainsVisibleBodyText(paragraphRange.Text)
                 ? paragraphRange.End
                 : paragraphRange.Start;
-            position = Math.Max(content.Start, Math.Min(position, content.End));
+            var lastInsertPosition = Math.Max(content.Start, content.End - 1);
+            position = Math.Max(
+                content.Start,
+                Math.Min(position, lastInsertPosition));
             object insertionStart = position;
             object insertionEnd = position;
             return document.Range(ref insertionStart, ref insertionEnd);
@@ -3037,10 +3048,26 @@ internal sealed class WordFormulaService
             float oldHeight;
             if (oldShape is not null)
             {
-                oldWidth = oldShape.Width;
-                oldHeight = oldShape.Height;
                 originalMetadata = WordFormulaMetadataReader.TryRead(oldShape)
                     ?? session.OriginalMetadata;
+                var preservesDisplayMode = string.Equals(
+                    originalMetadata?.DisplayMode,
+                    session.DisplayMode,
+                    StringComparison.OrdinalIgnoreCase);
+                if (preservesDisplayMode)
+                {
+                    oldWidth = oldShape.Width;
+                    oldHeight = oldShape.Height;
+                }
+                else
+                {
+                    oldWidth = (float)Math.Max(
+                        1,
+                        (originalMetadata?.RenderWidthPx ?? session.ExportResult?.Width ?? 200) * 0.75);
+                    oldHeight = (float)Math.Max(
+                        1,
+                        (originalMetadata?.RenderHeightPx ?? session.ExportResult?.Height ?? 60) * 0.75);
+                }
             }
             else
             {
@@ -3049,12 +3076,28 @@ internal sealed class WordFormulaService
                         "The target Word formula no longer exists.");
                 originalMetadata = WordOmmlFormulaStore.TryRead(document, oldBookmark)
                     ?? session.OriginalMetadata;
-                oldWidth = (float)Math.Max(
-                    12,
-                    (originalMetadata?.RenderWidthPx ?? session.ExportResult?.Width ?? 200) * 0.75);
-                oldHeight = (float)Math.Max(
-                    12,
-                    (originalMetadata?.RenderHeightPx ?? session.ExportResult?.Height ?? 60) * 0.75);
+                if (session.DisplayMode == "inline"
+                    && string.Equals(
+                        originalMetadata?.DisplayMode,
+                        "inline",
+                        StringComparison.OrdinalIgnoreCase)
+                    && TryReadStoredWordInlineOleSize(
+                        originalMetadata,
+                        out var storedInlineWidth,
+                        out var storedInlineHeight))
+                {
+                    oldWidth = storedInlineWidth;
+                    oldHeight = storedInlineHeight;
+                }
+                else
+                {
+                    oldWidth = (float)Math.Max(
+                        1,
+                        (originalMetadata?.RenderWidthPx ?? session.ExportResult?.Width ?? 200) * 0.75);
+                    oldHeight = (float)Math.Max(
+                        1,
+                        (originalMetadata?.RenderHeightPx ?? session.ExportResult?.Height ?? 60) * 0.75);
+                }
             }
             var editedSize = OfficeFormulaSizing.EditedSize(
                 oldWidth,
@@ -3065,6 +3108,12 @@ internal sealed class WordFormulaService
                 session.ExportResult?.Height ?? oldHeight / 0.75f,
                 originalFontSizePt: originalMetadata?.FontSizePt,
                 originalRenderFontSizePt: originalMetadata?.RenderFontSizePt);
+            StoreWordInlineOleSize(
+                metadata,
+                editedSize.Width,
+                editedSize.Height,
+                session.DisplayMode == "inline");
+            metadata.Validate();
 
             // Reusing an inline OLE object preserves its previous COM extent.
             // When the edited formula becomes wider or taller, Word can then
@@ -3111,7 +3160,11 @@ internal sealed class WordFormulaService
 
             oldRange = oldShape is not null
                 ? oldShape.Range
-                : WordOmmlFormulaStore.GetEquationRange(oldBookmark!);
+                : ResolveOmmlEquationRange(
+                    document,
+                    oldBookmark!,
+                    session.SourceObjectId,
+                    originalMetadata);
             oldStart = oldRange.Start;
             if (oldShape is not null)
             {
@@ -3318,10 +3371,34 @@ internal sealed class WordFormulaService
                 // leaves the old equation around the inserted replacement and
                 // corrupts the paragraph layout. Resolve the complete equation
                 // from its collapsed bookmark immediately before committing.
-                oldRange = WordOmmlFormulaStore.GetEquationRange(oldBookmark);
+                oldRange = ResolveOmmlEquationRange(
+                    document,
+                    oldBookmark,
+                    session.SourceObjectId,
+                    originalOmmlMetadata ?? session.OriginalMetadata);
                 originalOmmlStart = oldRange.Start;
                 originalOmmlWordOpenXml = oldRange.WordOpenXML;
                 insertion = oldRange.Duplicate;
+            }
+            if (oldShape is not null)
+            {
+                var sourceOleMetadata = WordFormulaMetadataReader.TryRead(oldShape)
+                    ?? session.OriginalMetadata;
+                StoreWordInlineOleSize(
+                    metadata,
+                    oldShape.Width,
+                    oldShape.Height,
+                    session.DisplayMode == "inline"
+                        && string.Equals(
+                            sourceOleMetadata?.DisplayMode,
+                            "inline",
+                            StringComparison.OrdinalIgnoreCase));
+                metadata.Validate();
+            }
+            else if (session.DisplayMode != "inline")
+            {
+                StoreWordInlineOleSize(metadata, 0, 0, inline: false);
+                metadata.Validate();
             }
             if (session.DisplayMode == "inline")
                 PrepareInlineBaselineSentinelAfterFormula(
@@ -3910,6 +3987,48 @@ internal sealed class WordFormulaService
                 metadata);
         }
         finally { Release(range); }
+    }
+
+    private static bool TryReadStoredWordInlineOleSize(
+        FormulaMetadata? metadata,
+        out float width,
+        out float height)
+    {
+        width = 0;
+        height = 0;
+        if (metadata?.WordInlineOleWidthPt is not > 0
+            || metadata.WordInlineOleHeightPt is not > 0)
+            return false;
+        width = (float)metadata.WordInlineOleWidthPt.Value;
+        height = (float)metadata.WordInlineOleHeightPt.Value;
+        return width > 0
+            && height > 0
+            && !float.IsNaN(width)
+            && !float.IsInfinity(width)
+            && !float.IsNaN(height)
+            && !float.IsInfinity(height);
+    }
+
+    private static void StoreWordInlineOleSize(
+        FormulaMetadata metadata,
+        float width,
+        float height,
+        bool inline)
+    {
+        if (!inline
+            || width <= 0
+            || height <= 0
+            || float.IsNaN(width)
+            || float.IsInfinity(width)
+            || float.IsNaN(height)
+            || float.IsInfinity(height))
+        {
+            metadata.WordInlineOleWidthPt = null;
+            metadata.WordInlineOleHeightPt = null;
+            return;
+        }
+        metadata.WordInlineOleWidthPt = width;
+        metadata.WordInlineOleHeightPt = height;
     }
 
     private static float ReadOmmlFontSize(
@@ -4927,6 +5046,46 @@ internal sealed class WordFormulaService
 
     private static string RangeReference(Range range) =>
         $"{RangeReferencePrefix}{range.Start}:{range.End}";
+
+    private static Range ResolveOmmlEquationRange(
+        Document document,
+        Bookmark bookmark,
+        string? sourceObjectId,
+        FormulaMetadata? metadata)
+    {
+        try
+        {
+            return WordOmmlFormulaStore.GetEquationRange(bookmark);
+        }
+        catch (InvalidDataException)
+        {
+            Range? fallback = null;
+            try
+            {
+                fallback = TryResolveOmmlRangeReference(document, sourceObjectId);
+                if (fallback is null) throw;
+                if (!string.IsNullOrWhiteSpace(metadata?.NativeOmmlFingerprint))
+                {
+                    string fingerprint;
+                    try
+                    {
+                        fingerprint = WordOmmlConverter.ComputeOmmlFingerprint(
+                            fallback.WordOpenXML);
+                    }
+                    catch { throw; }
+                    if (!string.Equals(
+                            fingerprint,
+                            metadata!.NativeOmmlFingerprint,
+                            StringComparison.OrdinalIgnoreCase))
+                        throw;
+                }
+                var result = fallback;
+                fallback = null;
+                return result;
+            }
+            finally { Release(fallback); }
+        }
+    }
 
     private static Range? TryResolveOmmlRangeReference(
         Document document,

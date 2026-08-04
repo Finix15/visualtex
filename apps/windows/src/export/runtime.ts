@@ -12,6 +12,7 @@ import { normalizeExtendedIntegralLatexCommands } from "../math/extendedIntegral
 import { applyVisualTexIntegralSvgGlyphs } from "../math/integralSvgExportCompatibility.ts";
 import { readErrorMessage } from "../errors/readErrorMessage.ts";
 import {
+  assertNoUnfilledStructuralPlaceholders,
   assertResolvedMathJaxSvg,
   assertResolvedPresentationMathMl,
   VISUALTEX_MATHML_MACROS,
@@ -106,6 +107,7 @@ function prepareLatex(latex: string) {
     normalizeExtendedIntegralLatexCommands(latex.replace(/\r\n?/g, "\n")),
   ).trim();
   if (!normalized) throw new Error("Cannot export an empty formula.");
+  assertNoUnfilledStructuralPlaceholders(normalized);
 
   const lines = normalized
     .split("\n")

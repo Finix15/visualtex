@@ -234,8 +234,10 @@ internal static class WordOmmlFormulaStore
                     {
                         equationRange = GetEquationRange(bookmark);
                         maths = equationRange.OMaths;
-                        var anchorDistance = equationRange.Start - bookmarkRange.Start;
-                        if (maths.Count == 1 && anchorDistance >= 0 && anchorDistance <= 1)
+                        var anchorDistance = DistanceFromAnchorToEquation(
+                            bookmarkRange.Start,
+                            equationRange);
+                        if (maths.Count == 1 && anchorDistance <= 8)
                             result.Add(formulaId);
                         else
                             staleFormulaIds.Add(formulaId);
@@ -475,6 +477,18 @@ internal static class WordOmmlFormulaStore
                 bestRange = FindAdjacentEquationRange(maths, anchor);
             }
 
+            var storedMetadata = bestRange is null
+                ? TryRead(document, bookmark)
+                : null;
+            if (bestRange is null
+                && !string.IsNullOrWhiteSpace(storedMetadata?.NativeOmmlFingerprint))
+            {
+                bestRange = FindNearbyEquationRangeByFingerprint(
+                    document,
+                    anchor,
+                    storedMetadata!.NativeOmmlFingerprint!);
+            }
+
             if (bestRange is null)
                 throw new InvalidDataException(
                     "The VisualTeX OMML anchor is no longer adjacent to a Word equation.");
@@ -541,7 +555,7 @@ internal static class WordOmmlFormulaStore
             Range? candidate = null;
             try
             {
-                object probeStart = Math.Max(content.Start, anchor);
+                object probeStart = Math.Max(content.Start, anchor - span);
                 object probeEnd = Math.Min(content.End, anchor + span);
                 if ((int)probeEnd <= (int)probeStart && content.End > (int)probeStart)
                     probeEnd = (int)probeStart + 1;
@@ -550,10 +564,14 @@ internal static class WordOmmlFormulaStore
                 candidate = FindAdjacentEquationRange(maths, anchor);
                 if (candidate is null) return null;
 
-                // A range touching the probe boundary may have been clipped by
-                // Word. Grow the probe and reacquire the same OMath until there
-                // is at least one character of room after the equation.
-                if (candidate.End < probe.End || probe.End >= content.End)
+                // A range touching either probe boundary may have been clipped
+                // by Word. This matters when Word moves the collapsed VisualTeX
+                // bookmark to the end of an equation after native OMath editing.
+                var completeAtStart = candidate.Start > probe.Start
+                    || probe.Start <= content.Start;
+                var completeAtEnd = candidate.End < probe.End
+                    || probe.End >= content.End;
+                if (completeAtStart && completeAtEnd)
                 {
                     var result = candidate;
                     candidate = null;
@@ -571,10 +589,28 @@ internal static class WordOmmlFormulaStore
         return null;
     }
 
+    private static int DistanceFromAnchorToEquation(int anchor, Range range)
+    {
+        if (anchor < range.Start) return range.Start - anchor;
+        if (anchor > range.End) return anchor - range.End;
+        return 0;
+    }
+
+    private static int AnchorRelationPriority(int anchor, Range range)
+    {
+        // Prefer a formula that actually contains the anchor. At an exact
+        // boundary, prefer the equation after the bookmark because that is the
+        // canonical VisualTeX layout; a preceding equation is the recovery path
+        // for bookmarks moved by Word-native editing.
+        if (anchor > range.Start && anchor < range.End) return 0;
+        return range.Start >= anchor ? 1 : 2;
+    }
+
     private static Range? FindAdjacentEquationRange(OMaths maths, int anchor)
     {
         Range? bestRange = null;
         var bestDistance = int.MaxValue;
+        var bestPriority = int.MaxValue;
         for (var index = 1; index <= maths.Count; index++)
         {
             OMath? math = null;
@@ -583,12 +619,16 @@ internal static class WordOmmlFormulaStore
             {
                 math = maths[index];
                 range = math.Range;
-                var containsAnchor = anchor >= range.Start && anchor <= range.End;
-                var distance = containsAnchor ? 0 : range.Start - anchor;
-                if (distance < 0 || distance > 8 || distance >= bestDistance) continue;
+                var distance = DistanceFromAnchorToEquation(anchor, range);
+                if (distance > 8) continue;
+                var priority = AnchorRelationPriority(anchor, range);
+                if (distance > bestDistance
+                    || (distance == bestDistance && priority >= bestPriority))
+                    continue;
                 Release(bestRange);
                 bestRange = TrimToNativeMath(range);
                 bestDistance = distance;
+                bestPriority = priority;
             }
             finally
             {
@@ -597,6 +637,79 @@ internal static class WordOmmlFormulaStore
             }
         }
         return bestRange;
+    }
+
+    private static Range? FindNearbyEquationRangeByFingerprint(
+        Document document,
+        int anchor,
+        string expectedFingerprint)
+    {
+        const int MaximumRecoveryDistance = 512;
+        OMaths? maths = null;
+        Range? bestRange = null;
+        var bestDistance = int.MaxValue;
+        var bestPriority = int.MaxValue;
+        var ambiguous = false;
+        try
+        {
+            maths = document.OMaths;
+            for (var index = 1; index <= maths.Count; index++)
+            {
+                OMath? math = null;
+                Range? range = null;
+                Range? trimmed = null;
+                try
+                {
+                    math = maths[index];
+                    range = math.Range;
+                    var distance = DistanceFromAnchorToEquation(anchor, range);
+                    if (distance > MaximumRecoveryDistance) continue;
+                    string fingerprint;
+                    try
+                    {
+                        fingerprint = WordOmmlConverter.ComputeOmmlFingerprint(
+                            range.WordOpenXML);
+                    }
+                    catch { continue; }
+                    if (!string.Equals(
+                            fingerprint,
+                            expectedFingerprint,
+                            StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    var priority = AnchorRelationPriority(anchor, range);
+                    if (distance < bestDistance
+                        || (distance == bestDistance && priority < bestPriority))
+                    {
+                        trimmed = TrimToNativeMath(range);
+                        Release(bestRange);
+                        bestRange = trimmed;
+                        trimmed = null;
+                        bestDistance = distance;
+                        bestPriority = priority;
+                        ambiguous = false;
+                    }
+                    else if (distance == bestDistance && priority == bestPriority)
+                    {
+                        ambiguous = true;
+                    }
+                }
+                finally
+                {
+                    Release(trimmed);
+                    Release(range);
+                    Release(math);
+                }
+            }
+            if (!ambiguous) return bestRange;
+            Release(bestRange);
+            bestRange = null;
+            return null;
+        }
+        finally
+        {
+            Release(maths);
+        }
     }
 
     private static Range TrimToNativeMath(Range source)

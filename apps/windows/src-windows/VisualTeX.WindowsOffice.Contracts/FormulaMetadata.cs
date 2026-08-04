@@ -51,6 +51,12 @@ public sealed class FormulaMetadata
     [JsonPropertyName("renderFontSizePt")]
     public double? RenderFontSizePt { get; set; }
 
+    [JsonPropertyName("wordInlineOleWidthPt")]
+    public double? WordInlineOleWidthPt { get; set; }
+
+    [JsonPropertyName("wordInlineOleHeightPt")]
+    public double? WordInlineOleHeightPt { get; set; }
+
     [JsonPropertyName("nativeOmmlFingerprint")]
     public string? NativeOmmlFingerprint { get; set; }
 
@@ -96,6 +102,22 @@ public sealed class FormulaMetadata
         if (RenderFontSizePt.HasValue
             && FormulaFontSize.Normalize(RenderFontSizePt.Value) != RenderFontSizePt.Value)
             throw new InvalidOperationException("VisualTeX renderFontSizePt must use a supported half-point value.");
+        if (WordInlineOleWidthPt.HasValue != WordInlineOleHeightPt.HasValue)
+            throw new InvalidOperationException(
+                "VisualTeX Word inline OLE width and height must be stored together.");
+        if (WordInlineOleWidthPt.HasValue
+            && !string.Equals(DisplayMode, "inline", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                "VisualTeX Word inline OLE dimensions are only valid for inline formulas.");
+        if (WordInlineOleWidthPt.HasValue
+            && (WordInlineOleWidthPt.Value <= 0
+                || double.IsNaN(WordInlineOleWidthPt.Value)
+                || double.IsInfinity(WordInlineOleWidthPt.Value)
+                || WordInlineOleHeightPt!.Value <= 0
+                || double.IsNaN(WordInlineOleHeightPt.Value)
+                || double.IsInfinity(WordInlineOleHeightPt.Value)))
+            throw new InvalidOperationException(
+                "VisualTeX Word inline OLE dimensions must be positive finite values.");
     }
 }
 

@@ -6,6 +6,7 @@ import {
 } from "../src/export/runtime.ts";
 import { normalizeChineseLatex } from "../src/editor/normalizeChineseLatex.ts";
 import { EXTENDED_INTEGRAL_SYMBOLS } from "../src/math/extendedIntegralCompatibility.ts";
+import { isIncompleteLatexDraft } from "../src/math/latexCompatibility.ts";
 
 const matrixRows = Array.from({ length: 10 }, (_, row) =>
   Array.from({ length: 10 }, (_, column) => `a_{${row + 1}${column + 1}}`).join("&"),
@@ -142,6 +143,59 @@ for (const [command, character, codePoint] of extendedIntegralCases) {
   );
 }
 
+assert.equal(
+  isIncompleteLatexDraft(String.raw`x+\placeholder{}`),
+  true,
+  "structural placeholder is an incomplete editor draft",
+);
+assert.equal(
+  isIncompleteLatexDraft(
+    String.raw`x+\alp`,
+    new Error("MathJax did not resolve LaTeX command \\alp."),
+  ),
+  true,
+  "a trailing partial command is an incomplete editor draft",
+);
+assert.equal(
+  isIncompleteLatexDraft(String.raw`\frac{a}{`),
+  true,
+  "an unclosed group is an incomplete editor draft",
+);
+assert.equal(
+  isIncompleteLatexDraft(String.raw`\begin{matrix}a&b`),
+  true,
+  "an unclosed environment is an incomplete editor draft",
+);
+assert.equal(
+  isIncompleteLatexDraft(String.raw`x+\alpha`),
+  false,
+  "a complete command is not an incomplete draft",
+);
+assert.equal(
+  isIncompleteLatexDraft(
+    String.raw`x+\definitelyUnknownVisualTeXCommand+y`,
+    new Error(
+      "MathJax did not resolve LaTeX command \\definitelyUnknownVisualTeXCommand.",
+    ),
+  ),
+  false,
+  "a complete unknown command in the formula remains a real error",
+);
+assert.equal(
+  isIncompleteLatexDraft(
+    String.raw`x+\definitelyUnknownVisualTeXCommand+\alpha`,
+    new Error(
+      "MathJax did not resolve LaTeX command \\definitelyUnknownVisualTeXCommand.",
+    ),
+  ),
+  false,
+  "a valid trailing command must not hide an earlier unknown command",
+);
+
+assert.throws(
+  () => latexToSvg(String.raw`x+\placeholder{}`),
+  /empty VisualTeX placeholders/,
+);
 assert.throws(
   () =>
     assertNoUnknownMathCommand(
