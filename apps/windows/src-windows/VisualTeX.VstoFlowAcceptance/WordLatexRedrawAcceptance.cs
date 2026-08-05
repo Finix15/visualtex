@@ -29,11 +29,14 @@ internal static partial class Program
             objectMode: FormulaOleContract.WordOmmlMode,
             wholeDocument: false,
             expectedFileName: "VisualTeX-Word-Latex-Redraw-OMML.docx");
+        const string oleFileName = "VisualTeX-Word-Latex-Redraw-OLE.docx";
         RunWordLatexRedrawScenario(
             artifactRoot,
             objectMode: FormulaOleContract.NativeOleMode,
             wholeDocument: true,
-            expectedFileName: "VisualTeX-Word-Latex-Redraw-OLE.docx");
+            expectedFileName: oleFileName);
+        AssertSavedInlineOleTypingAnchor(
+            Path.Combine(artifactRoot, oleFileName));
     }
 
     private static void RunWordLatexRedrawSourceContextStress()
@@ -166,8 +169,10 @@ internal static partial class Program
 
             var redrawLog = WaitForLatexRedraw(logPath, TimeSpan.FromMinutes(4));
             WaitForAddInIdle(host.AddIn, TimeSpan.FromSeconds(30));
-            host.Save(documentPath);
             AssertLatexRedrawDocument(host.Document, objectMode);
+            if (objectMode == FormulaOleContract.NativeOleMode)
+                AssertInlineOleResizeKeepsTrailingProseBaseline(host);
+            host.Save(documentPath);
             AssertLatexRedrawPerformance(redrawLog, modeName);
             Console.WriteLine(
                 $"[Word LaTeX redraw] {modeName} {(wholeDocument ? "document" : "selection")} redraw passed: {documentPath}");
@@ -214,6 +219,14 @@ internal static partial class Program
         selection.TypeText(@"$\left( \text{约}1.4\times 10^{-5}eV \right)$");
         selection.Font.Size = 12;
         selection.TypeText(" 无线信号后。");
+        selection.TypeParagraph();
+
+        selection.Font.Size = 10.5f;
+        selection.TypeText("INVALID_LATEX_BEFORE ");
+        selection.Font.Size = 9.5f;
+        selection.TypeText(@"$\VisualTeXDefinitelyUnknown{z}$");
+        selection.Font.Size = 10.5f;
+        selection.TypeText(" INVALID_LATEX_AFTER");
         selection.TypeParagraph();
     }
 
@@ -263,6 +276,9 @@ internal static partial class Program
                          "大字号正文后",
                          "无线信号前",
                          "无线信号后",
+                         "INVALID_LATEX_BEFORE",
+                         @"$\VisualTeXDefinitelyUnknown{z}$",
+                         "INVALID_LATEX_AFTER",
                      })
             {
                 if (text.IndexOf(required, StringComparison.Ordinal) < 0)
@@ -360,6 +376,323 @@ internal static partial class Program
         }
     }
 
+    private static void AssertSavedInlineOleTypingAnchor(string documentPath)
+    {
+        using var host = new WordPerformanceHost(documentPath);
+        Word.InlineShapes? shapes = null;
+        Word.InlineShape? target = null;
+        Word.Range? formulaRange = null;
+        Word.Range? preceding = null;
+        Word.Selection? selection = null;
+        Word.Range? typedRange = null;
+        Microsoft.Office.Interop.Word.Font? precedingFont = null;
+        Microsoft.Office.Interop.Word.Font? typedFont = null;
+        try
+        {
+            shapes = host.Document.InlineShapes;
+            FormulaMetadata? metadata = null;
+            for (var index = 1; index <= shapes.Count; index++)
+            {
+                Word.InlineShape? candidate = null;
+                try
+                {
+                    candidate = shapes[index];
+                    var candidateMetadata = WordFormulaMetadataReader.TryRead(candidate);
+                    if (!WordFormulaMetadataReader.IsNativeOle(candidate)
+                        || !string.Equals(
+                            candidateMetadata?.Latex,
+                            "UVI>2",
+                            StringComparison.Ordinal))
+                        continue;
+                    target = candidate;
+                    metadata = candidateMetadata;
+                    candidate = null;
+                    break;
+                }
+                finally { Release(candidate); }
+            }
+            if (target is null || metadata is null)
+                throw new InvalidDataException(
+                    "Save/reopen typing-anchor acceptance could not find the resized inline OLE.");
+
+            formulaRange = target.Range;
+            preceding = host.Document.Range(
+                Math.Max(0, formulaRange.Start - 1),
+                formulaRange.Start);
+            precedingFont = preceding.Font;
+            var expectedPosition = precedingFont.Position;
+            if (expectedPosition == (int)Word.WdConstants.wdUndefined)
+                expectedPosition = 0;
+            AssertInlineOleTypingAnchor(
+                host.Document,
+                target,
+                metadata,
+                expectedPosition);
+
+            host.Application.Visible = true;
+            host.Application.ActiveWindow.Activate();
+            _ = SetForegroundWindow(new IntPtr(host.Application.ActiveWindow.Hwnd));
+            WinForms.Application.DoEvents();
+            Thread.Sleep(300);
+            selection = host.Application.Selection;
+            selection.SetRange(formulaRange.End, formulaRange.End);
+            var service = new WordFormulaService(host.Application);
+            service.NormalizeTypingCaretAfterInlineFormula(selection);
+            WinForms.Application.DoEvents();
+            Thread.Sleep(300);
+            var typedStart = selection.Start;
+            const string typedText = "typedaftersavereopen";
+            WinForms.SendKeys.SendWait(typedText);
+            WinForms.Application.DoEvents();
+            Thread.Sleep(300);
+            typedRange = host.Document.Range(
+                typedStart,
+                typedStart + typedText.Length);
+            typedFont = typedRange.Font;
+            if (typedFont.Position != expectedPosition)
+                throw new InvalidDataException(
+                    "Typing after save/reopen inherited the resized OLE baseline. "
+                    + $"Expected {expectedPosition}, actual {typedFont.Position}.");
+            Console.WriteLine(
+                "[Word LaTeX redraw] Saved/reopened inline OLE zero-width typing anchor passed real keyboard input.");
+        }
+        finally
+        {
+            Release(typedFont);
+            Release(typedRange);
+            Release(selection);
+            Release(precedingFont);
+            Release(preceding);
+            Release(formulaRange);
+            Release(target);
+            Release(shapes);
+        }
+    }
+
+    private static void AssertInlineOleResizeKeepsTrailingProseBaseline(
+        WordPerformanceHost host)
+    {
+        Word.InlineShapes? shapes = null;
+        Word.InlineShape? target = null;
+        FormulaMetadata? targetMetadata = null;
+        Word.Range? formulaRange = null;
+        Word.Paragraphs? paragraphs = null;
+        Word.Paragraph? paragraph = null;
+        Word.Range? paragraphRange = null;
+        Word.Range? preceding = null;
+        Word.Range? trailing = null;
+        Word.Range? paragraphTail = null;
+        Word.Selection? typingSelection = null;
+        Word.Range? typedRange = null;
+        Microsoft.Office.Interop.Word.Font? precedingFont = null;
+        Microsoft.Office.Interop.Word.Font? trailingFont = null;
+        Microsoft.Office.Interop.Word.Font? formulaFont = null;
+        Microsoft.Office.Interop.Word.Font? typedFont = null;
+        try
+        {
+            shapes = host.Document.InlineShapes;
+            for (var index = 1; index <= shapes.Count; index++)
+            {
+                Word.InlineShape? candidate = null;
+                try
+                {
+                    candidate = shapes[index];
+                    var metadata = WordFormulaMetadataReader.TryRead(candidate);
+                    if (!WordFormulaMetadataReader.IsNativeOle(candidate)
+                        || !string.Equals(metadata?.Latex, "UVI>2", StringComparison.Ordinal))
+                        continue;
+                    target = candidate;
+                    targetMetadata = metadata;
+                    candidate = null;
+                    break;
+                }
+                finally { Release(candidate); }
+            }
+            if (target is null)
+                throw new InvalidDataException(
+                    "Inline OLE baseline acceptance could not find the UVI formula.");
+
+            formulaRange = target.Range;
+            paragraphs = formulaRange.Paragraphs;
+            paragraph = paragraphs[1];
+            paragraphRange = paragraph.Range;
+            preceding = host.Document.Range(
+                Math.Max(paragraphRange.Start, formulaRange.Start - 1),
+                formulaRange.Start);
+            trailing = host.Document.Range(
+                formulaRange.End,
+                Math.Max(formulaRange.End, paragraphRange.End - 1));
+            precedingFont = preceding.Font;
+            trailingFont = trailing.Font;
+            var expectedPosition = precedingFont.Position;
+            if (expectedPosition == (int)Word.WdConstants.wdUndefined)
+                expectedPosition = 0;
+
+            // Reproduce the visible corruption reported by users: the ordinary
+            // text run after a large inline OLE inherits the object's negative
+            // position. Resizing through VisualTeX must restore that run.
+            trailingFont.Position = -9;
+            host.Application.Selection.SetRange(formulaRange.Start, formulaRange.End);
+            var service = new WordFormulaService(host.Application);
+            service.SetSelectedFormulaFontSize(42);
+            AssertInlineOleTypingAnchor(
+                host.Document,
+                target,
+                targetMetadata
+                    ?? throw new InvalidDataException(
+                        "Inline OLE baseline acceptance lost formula metadata."),
+                expectedPosition);
+
+            Release(trailingFont);
+            trailingFont = trailing.Font;
+            if (trailingFont.Position != expectedPosition)
+                throw new InvalidDataException(
+                    "Resizing an inline OLE left the following prose on a different baseline. "
+                    + $"Expected {expectedPosition}, actual {trailingFont.Position}.");
+            formulaFont = formulaRange.Font;
+            if (formulaFont.Position == trailingFont.Position)
+                throw new InvalidDataException(
+                    "Inline OLE baseline repair incorrectly removed the formula's own alignment offset.");
+
+            // A collapsed Word insertion point can report Position=0 while the
+            // next character still inherits the OLE object's negative baseline.
+            // Validate the actual typed run rather than trusting caret metadata.
+            host.Application.Visible = true;
+            host.Application.ActiveWindow.Activate();
+            _ = SetForegroundWindow(new IntPtr(host.Application.ActiveWindow.Hwnd));
+            WinForms.Application.DoEvents();
+            Thread.Sleep(300);
+            typingSelection = host.Application.Selection;
+            typingSelection.SetRange(formulaRange.End, formulaRange.End);
+            service.NormalizeTypingCaretAfterInlineFormula(typingSelection);
+            WinForms.Application.DoEvents();
+            Thread.Sleep(300);
+            var typedStart = typingSelection.Start;
+            const string typedText = "typedafterlargeole";
+            WinForms.SendKeys.SendWait(typedText);
+            WinForms.Application.DoEvents();
+            Thread.Sleep(300);
+            typedRange = host.Document.Range(
+                typedStart,
+                typedStart + typedText.Length);
+            typedFont = typedRange.Font;
+            if (typedFont.Position != expectedPosition)
+                throw new InvalidDataException(
+                    "Typing after a resized inline OLE inherited the formula baseline. "
+                    + $"Expected {expectedPosition}, actual {typedFont.Position}.");
+
+            // Repeat with the OLE as the final content in its paragraph. Without
+            // an existing prose run after the object, Word can display a normal
+            // caret but apply the object's negative Position to keyboard input.
+            Release(typedFont);
+            typedFont = null;
+            Release(typedRange);
+            typedRange = null;
+            Release(typingSelection);
+            typingSelection = null;
+            Release(paragraphRange);
+            paragraphRange = paragraph.Range;
+            paragraphTail = host.Document.Range(
+                formulaRange.End,
+                Math.Max(formulaRange.End, paragraphRange.End - 1));
+            paragraphTail.Delete();
+            host.Application.Selection.SetRange(formulaRange.Start, formulaRange.End);
+            service.SetSelectedFormulaFontSize(44);
+            AssertInlineOleTypingAnchor(
+                host.Document,
+                target,
+                targetMetadata!,
+                expectedPosition);
+
+            typingSelection = host.Application.Selection;
+            typingSelection.SetRange(formulaRange.End, formulaRange.End);
+            service.NormalizeTypingCaretAfterInlineFormula(typingSelection);
+            WinForms.Application.DoEvents();
+            Thread.Sleep(300);
+            var paragraphEndTypedStart = typingSelection.Start;
+            const string paragraphEndTypedText = "typedatparagraphend";
+            WinForms.SendKeys.SendWait(paragraphEndTypedText);
+            WinForms.Application.DoEvents();
+            Thread.Sleep(300);
+            typedRange = host.Document.Range(
+                paragraphEndTypedStart,
+                paragraphEndTypedStart + paragraphEndTypedText.Length);
+            typedFont = typedRange.Font;
+            if (typedFont.Position != expectedPosition)
+                throw new InvalidDataException(
+                    "Typing after a paragraph-final resized inline OLE inherited the formula baseline. "
+                    + $"Expected {expectedPosition}, actual {typedFont.Position}.");
+        }
+        finally
+        {
+            Release(typedFont);
+            Release(typedRange);
+            Release(typingSelection);
+            Release(formulaFont);
+            Release(trailingFont);
+            Release(precedingFont);
+            Release(paragraphTail);
+            Release(trailing);
+            Release(preceding);
+            Release(paragraphRange);
+            Release(paragraph);
+            Release(paragraphs);
+            Release(formulaRange);
+            Release(target);
+            Release(shapes);
+        }
+    }
+
+    private static void AssertInlineOleTypingAnchor(
+        Word.Document document,
+        Word.InlineShape shape,
+        FormulaMetadata metadata,
+        int expectedPosition)
+    {
+        Word.Bookmarks? bookmarks = null;
+        Word.Bookmark? bookmark = null;
+        Word.Range? formulaRange = null;
+        Word.Range? anchorRange = null;
+        Microsoft.Office.Interop.Word.Font? anchorFont = null;
+        try
+        {
+            var bookmarkName = "VTBL_" + Guid.Parse(metadata.FormulaId).ToString("N");
+            bookmarks = document.Bookmarks;
+            if (!bookmarks.Exists(bookmarkName))
+                throw new InvalidDataException(
+                    "Inline OLE typing anchor bookmark was not created.");
+            bookmark = bookmarks[bookmarkName];
+            anchorRange = bookmark.Range;
+            formulaRange = shape.Range;
+            if (anchorRange.Start != formulaRange.End
+                || anchorRange.End != formulaRange.End + 1)
+                throw new InvalidDataException(
+                    "Inline OLE typing anchor is not immediately after the formula. "
+                    + $"Formula={formulaRange.Start}:{formulaRange.End}, "
+                    + $"anchor={anchorRange.Start}:{anchorRange.End}.");
+            if (!string.Equals(anchorRange.Text, "\u200C", StringComparison.Ordinal))
+                throw new InvalidDataException(
+                    "Inline OLE typing anchor is not the expected zero-width non-joiner.");
+            anchorFont = anchorRange.Font;
+            if (anchorFont.Position != expectedPosition
+                || anchorFont.Hidden != 0
+                || anchorFont.Subscript != 0
+                || anchorFont.Superscript != 0)
+                throw new InvalidDataException(
+                    "Inline OLE typing anchor does not carry ordinary body-text formatting. "
+                    + $"Position={anchorFont.Position}, Hidden={anchorFont.Hidden}, "
+                    + $"Subscript={anchorFont.Subscript}, Superscript={anchorFont.Superscript}.");
+        }
+        finally
+        {
+            Release(anchorFont);
+            Release(anchorRange);
+            Release(formulaRange);
+            Release(bookmark);
+            Release(bookmarks);
+        }
+    }
+
     private static void AssertDisplayFormulaFollowedImmediatelyByText(
         Word.Document document,
         Word.Range formulaRange,
@@ -454,6 +787,10 @@ internal static partial class Program
         if (timings.Length != 4)
             throw new InvalidDataException(
                 $"{modeName} redraw logged {timings.Length} render timings instead of 4.\n{log}");
+        if (log.IndexOf("render-skipped", StringComparison.Ordinal) < 0
+            || log.IndexOf("skipped=1", StringComparison.Ordinal) < 0)
+            throw new InvalidDataException(
+                $"{modeName} redraw did not report exactly one preserved invalid formula.\n{log}");
         var maximum = timings.Max();
         Console.WriteLine(
             $"[Word LaTeX redraw] {modeName} render timings: {string.Join(", ", timings)} ms; max={maximum} ms");

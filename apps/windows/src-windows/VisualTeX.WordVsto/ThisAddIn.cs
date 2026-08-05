@@ -1058,6 +1058,8 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         var prepared = new Dictionary<string, PreparedWordBulkFormula>(
             StringComparer.Ordinal);
         var converterSessionIds = new List<string>();
+        var renderFailures = new Dictionary<string, string>(StringComparer.Ordinal);
+        var skippedTargets = new List<(WordLatexRedrawTarget Target, string Error)>();
         var maxRenderMilliseconds = 0L;
         var totalRenderMilliseconds = 0L;
         try
@@ -1117,18 +1119,50 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                     target.DisplayMode,
                     target.FontSizePt.ToString(System.Globalization.CultureInfo.InvariantCulture),
                     target.Latex);
+                if (renderFailures.TryGetValue(key, out var cachedFailure))
+                {
+                    skippedTargets.Add((target, cachedFailure));
+                    WriteRedrawAcceptanceLog(
+                        $"render-skip-cache-hit index={index + 1} display={target.DisplayMode} "
+                        + $"latex={target.Latex} error={cachedFailure}");
+                    continue;
+                }
+
                 if (!rendered.TryGetValue(key, out var template))
                 {
                     SetStatus($"正在渲染公式 {index + 1}/{plan.Targets.Count}…");
                     var stopwatch = Stopwatch.StartNew();
-                    template = await RenderBulkFormulaTemplateAsync(
-                            client,
-                            run,
-                            objectMode,
-                            plan.DocumentId,
-                            target.FontSizePt,
-                            lifetime.Token)
-                        .ConfigureAwait(false);
+                    try
+                    {
+                        template = await RenderBulkFormulaTemplateAsync(
+                                client,
+                                run,
+                                objectMode,
+                                plan.DocumentId,
+                                target.FontSizePt,
+                                lifetime.Token)
+                            .ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
+                    catch (Exception error)
+                    {
+                        stopwatch.Stop();
+                        var detail = string.IsNullOrWhiteSpace(error.Message)
+                            ? error.GetType().Name
+                            : error.Message.Trim();
+                        renderFailures[key] = detail;
+                        skippedTargets.Add((target, detail));
+                        WriteRedrawAcceptanceLog(
+                            $"render-skipped index={index + 1} elapsedMs={stopwatch.ElapsedMilliseconds} "
+                            + $"fontSizePt={target.FontSizePt:0.##} display={target.DisplayMode} "
+                            + $"latex={target.Latex} error={detail}");
+                        SetStatus(
+                            $"公式 {index + 1}/{plan.Targets.Count} 无法渲染，已保留原 LaTeX 并继续处理其他公式…");
+                        continue;
+                    }
                     stopwatch.Stop();
                     totalRenderMilliseconds += stopwatch.ElapsedMilliseconds;
                     maxRenderMilliseconds = Math.Max(
@@ -1164,6 +1198,19 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 });
             }
 
+            if (prepared.Count == 0)
+            {
+                WriteRedrawAcceptanceLog(
+                    $"redraw-complete formulas=0 unique=0 skipped={skippedTargets.Count} "
+                    + "renderAverageMs=0 renderMaxMs=0 insertTotalMs=0 insertMaxMs=0");
+                SetStatus(
+                    $"LaTeX 重绘未转换任何公式：{skippedTargets.Count} 个公式无法解析，均已保留原代码。");
+                return;
+            }
+
+            plan.Targets = plan.Targets
+                .Where(target => prepared.ContainsKey(target.Id))
+                .ToList();
             SetStatus("公式渲染完成，正在原位写入 Word…");
             var result = await dispatcher.InvokeAsync(
                     () => service.ApplyLatexRedrawPlan(plan, prepared))
@@ -1181,13 +1228,17 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             var averageRenderMilliseconds = totalRenderMilliseconds / uniqueRenderCount;
             WriteRedrawAcceptanceLog(
                 $"redraw-complete formulas={result.FormulaCount} unique={rendered.Count} "
+                + $"skipped={skippedTargets.Count} "
                 + $"renderAverageMs={averageRenderMilliseconds} renderMaxMs={maxRenderMilliseconds} "
                 + $"insertTotalMs={result.TotalInsertMilliseconds} insertMaxMs={result.MaxInsertMilliseconds}");
             var performanceSuffix = maxRenderMilliseconds <= 250
                 ? $"渲染最大 {maxRenderMilliseconds} ms/公式"
                 : $"渲染最大 {maxRenderMilliseconds} ms/公式（本机超过 250 ms 目标）";
+            var skippedSuffix = skippedTargets.Count == 0
+                ? string.Empty
+                : $"；{skippedTargets.Count} 个无法解析的公式已保留原 LaTeX";
             SetStatus(
-                $"LaTeX 重绘完成：{result.FormulaCount} 个公式已转换为 {modeLabel}；{performanceSuffix}。");
+                $"LaTeX 重绘完成：{result.FormulaCount} 个公式已转换为 {modeLabel}{skippedSuffix}；{performanceSuffix}。");
         }
         catch (OperationCanceledException error)
         {
@@ -1733,26 +1784,50 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         double fontSizePt,
         CancellationToken cancellationToken)
     {
-        var session = await CreateBulkFormulaConversionSessionAsync(
-                client,
-                run,
-                objectMode,
-                sourceDocumentId,
-                fontSizePt,
-                cancellationToken)
-            .ConfigureAwait(false);
-        await client.OpenConverterAsync(session.Id, cancellationToken)
-            .ConfigureAwait(false);
-        WriteBulkAcceptanceLog($"converter-opened sessionId={session.Id}");
-        session = await client.WaitForCommitAsync(
-                session.Id,
-                TimeSpan.FromMinutes(3),
-                cancellationToken)
-            .ConfigureAwait(false);
-        WriteBulkAcceptanceLog(
-            $"converter-finished sessionId={session.Id} status={session.Status} "
-            + $"error={session.Error ?? "<null>"}");
-        return MaterializeBulkFormulaTemplate(client, run, objectMode, session);
+        OfficeSessionDocument? session = null;
+        try
+        {
+            session = await CreateBulkFormulaConversionSessionAsync(
+                    client,
+                    run,
+                    objectMode,
+                    sourceDocumentId,
+                    fontSizePt,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            await client.OpenConverterAsync(session.Id, cancellationToken)
+                .ConfigureAwait(false);
+            WriteBulkAcceptanceLog($"converter-opened sessionId={session.Id}");
+            session = await client.WaitForCommitAsync(
+                    session.Id,
+                    TimeSpan.FromMinutes(3),
+                    cancellationToken)
+                .ConfigureAwait(false);
+            WriteBulkAcceptanceLog(
+                $"converter-finished sessionId={session.Id} status={session.Status} "
+                + $"error={session.Error ?? "<null>"}");
+            return MaterializeBulkFormulaTemplate(client, run, objectMode, session);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception error)
+        {
+            if (session is not null)
+            {
+                try
+                {
+                    await client.FailAsync(
+                            session.Id,
+                            error.Message,
+                            CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
+                catch { }
+            }
+            throw;
+        }
     }
 
     private static async Task<OfficeSessionDocument> CreateBulkFormulaConversionSessionAsync(

@@ -6,6 +6,50 @@ namespace VisualTeX.WordVsto;
 
 internal static class WordOmmlNativeSource
 {
+    internal static FormulaMetadata CreateForNative(
+        Document document,
+        Range equationRange)
+    {
+        var formulaId = Guid.NewGuid().ToString("D");
+        var wordOpenXml = ReadCompleteEquationWordOpenXml(
+            document,
+            equationRange,
+            formulaId);
+        var displayMode = ReadDisplayMode(equationRange);
+        var mathMl = WordOmmlConverter.TransformOmmlToMathMl(
+            wordOpenXml,
+            display: string.Equals(displayMode, "block", StringComparison.Ordinal));
+        var latex = MathMlToLatexConverter.Convert(mathMl);
+        if (string.IsNullOrWhiteSpace(latex))
+            throw new InvalidDataException(
+                "The Word-native OMML equation could not be converted back to editable LaTeX.");
+
+        var fontSize = ReadFontSize(equationRange);
+        var now = DateTimeOffset.UtcNow.ToString("O");
+        var metadata = new FormulaMetadata
+        {
+            FormulaId = formulaId,
+            Title = "Word Formula",
+            Latex = latex,
+            Lines = new List<FormulaLine>
+            {
+                new() { Id = Guid.NewGuid().ToString("D"), Latex = latex },
+            },
+            CodeFormat = "raw",
+            DisplayMode = displayMode,
+            Numbered = false,
+            FontSizePt = fontSize,
+            RenderFontSizePt = fontSize,
+            NativeOmmlFingerprint = WordOmmlConverter.ComputeOmmlFingerprint(wordOpenXml),
+            CreatedWithVersion = "1.2.4",
+            UpdatedWithVersion = "1.2.4",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        metadata.Validate();
+        return metadata;
+    }
+
     internal static FormulaMetadata RefreshForVisualTeX(
         Document document,
         Bookmark bookmark,
@@ -71,7 +115,7 @@ internal static class WordOmmlNativeSource
         finally { Release(document); }
     }
 
-    private static string ReadCompleteEquationWordOpenXml(
+    internal static string ReadCompleteEquationWordOpenXml(
         Document document,
         Range equationRange,
         string formulaId)
@@ -115,6 +159,66 @@ internal static class WordOmmlNativeSource
             Release(probe);
             Release(content);
         }
+    }
+
+    private static string ReadDisplayMode(Range equationRange)
+    {
+        OMaths? maths = null;
+        OMath? selected = null;
+        try
+        {
+            maths = equationRange.OMaths;
+            for (var index = 1; index <= maths.Count; index++)
+            {
+                OMath? candidate = null;
+                Range? candidateRange = null;
+                try
+                {
+                    candidate = maths[index];
+                    candidateRange = candidate.Range;
+                    if (selected is null
+                        || candidateRange.Start == equationRange.Start
+                            && candidateRange.End == equationRange.End)
+                    {
+                        Release(selected);
+                        selected = candidate;
+                        candidate = null;
+                        if (candidateRange.Start == equationRange.Start
+                            && candidateRange.End == equationRange.End)
+                            break;
+                    }
+                }
+                finally
+                {
+                    Release(candidateRange);
+                    Release(candidate);
+                }
+            }
+            return selected?.Type == WdOMathType.wdOMathDisplay
+                ? "block"
+                : "inline";
+        }
+        catch { return "inline"; }
+        finally
+        {
+            Release(selected);
+            Release(maths);
+        }
+    }
+
+    private static double ReadFontSize(Range equationRange)
+    {
+        Microsoft.Office.Interop.Word.Font? font = null;
+        try
+        {
+            font = equationRange.Font;
+            var size = font.Size;
+            return size > 0 && !float.IsNaN(size) && !float.IsInfinity(size)
+                ? FormulaFontSize.Normalize(size)
+                : FormulaFontSize.DefaultPt;
+        }
+        catch { return FormulaFontSize.DefaultPt; }
+        finally { Release(font); }
     }
 
     private static FormulaMetadata Clone(FormulaMetadata metadata)

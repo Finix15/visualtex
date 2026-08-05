@@ -37,6 +37,7 @@ internal static partial class Program
         const string referenceBookmark = "VTTestEquationNumberReference";
         try
         {
+            RunNativeWordOmmlToOleAcceptance(client);
             using (var host = new WordPerformanceHost(documentPath: null))
             {
                 var formulas = PopulateFormulaToLatexDocument(client, host);
@@ -49,11 +50,14 @@ internal static partial class Program
                 var oleDisplay = formulas.Single(item =>
                     item.ObjectMode == FormulaOleContract.NativeOleMode
                     && item.DisplayMode == "block");
+                var ommlDisplay = formulas.Single(item =>
+                    item.ObjectMode == FormulaOleContract.WordOmmlMode
+                    && item.DisplayMode == "block");
 
-                // Edit the last OMML equation through Word's native equation
+                // Edit the selected OMML equation through Word's native equation
                 // model before restoring it. The reverse command must export the
                 // current Word content rather than stale VisualTeX metadata.
-                AppendToLastWordOmmlAndSelect(host.Document, "+5");
+                AppendToFormulaOmmlAndSelect(host.Document, ommlDisplay, "+5");
 
                 var insertedReference = InsertNumberingReference(
                     host.Application,
@@ -65,6 +69,7 @@ internal static partial class Program
                 AssertReferenceText(host.Document, referenceBookmark, "(1)");
                 AssertFormulaObjectCounts(host.Document, expectedOle: 2, expectedOmml: 2);
 
+                MaterializeInlineOleTypingAnchor(host, oleInline);
                 SelectFormula(host, oleInline);
                 host.AddIn.OnRedrawSelectionOleToLatex(new object());
                 WaitForFormulaToLatex(logPath, expectedCompletions: 1);
@@ -113,6 +118,114 @@ internal static partial class Program
             Environment.SetEnvironmentVariable(
                 "VISUALTEX_VSTO_REDRAW_ACCEPTANCE_LOG",
                 null);
+        }
+    }
+
+    private static void RunNativeWordOmmlToOleAcceptance(
+        VisualTeXSessionClient client)
+    {
+        using var host = new WordPerformanceHost(documentPath: null);
+        Word.Selection? selection = null;
+        Word.Range? nativeRange = null;
+        Word.InlineShapes? shapes = null;
+        Word.InlineShape? shape = null;
+        try
+        {
+            selection = host.Application.Selection;
+            selection.HomeKey(Word.WdUnits.wdStory);
+            selection.Font.Name = "宋体";
+            selection.Font.Size = 10.5f;
+            selection.TypeText("NATIVE_OLE_BEFORE ");
+            nativeRange = InsertNativeWordOmml(
+                host,
+                "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"inline\"><mi>p</mi><mo>=</mo><mn>6</mn></math>",
+                display: false);
+            selection.SetRange(nativeRange.End, nativeRange.End);
+            selection.MoveRight(
+                Word.WdUnits.wdCharacter,
+                1,
+                Word.WdMovementType.wdMove);
+            selection.TypeText(" NATIVE_OLE_AFTER");
+
+            AssertEqual(
+                0,
+                WordOmmlFormulaStore.FormulaIds(host.Document).Count,
+                "The native Word OMML fixture unexpectedly had VisualTeX metadata.");
+            host.Application.Selection.SetRange(nativeRange.Start, nativeRange.End);
+            var existing = SnapshotSessionIds();
+            var final = WaitForDirectConversion(
+                client,
+                existing,
+                "word",
+                FormulaOleContract.NativeOleMode,
+                () => host.AddIn.OnConvertSelected(new object()),
+                TimeSpan.FromSeconds(45),
+                out _);
+            AssertEqual(
+                "completed",
+                final.Status,
+                final.Error ?? "Native Word OMML-to-OLE conversion did not complete.");
+            WaitForAddInIdle(host.AddIn, TimeSpan.FromSeconds(20));
+
+            shapes = host.Document.InlineShapes;
+            AssertEqual(
+                1,
+                shapes.Count,
+                "Native Word OMML-to-OLE conversion did not create exactly one OLE object.");
+            shape = shapes[1];
+            if (!WordFormulaMetadataReader.IsNativeOle(shape))
+                throw new InvalidDataException(
+                    "Native Word OMML conversion created the wrong OLE class.");
+            var metadata = WordFormulaMetadataReader.TryRead(shape)
+                ?? throw new InvalidDataException(
+                    "Native Word OMML-to-OLE conversion did not attach VisualTeX metadata.");
+            AssertEqual(
+                "p=6",
+                (metadata.Latex ?? string.Empty).Replace(" ", string.Empty),
+                "Native Word OMML-to-OLE conversion recovered the wrong LaTeX source.");
+            AssertDocumentContains(host.Document, "NATIVE_OLE_BEFORE");
+            AssertDocumentContains(host.Document, "NATIVE_OLE_AFTER");
+            Console.WriteLine(
+                "Native Word OMML direct-to-OLE acceptance passed without pre-existing VisualTeX metadata.");
+        }
+        finally
+        {
+            Release(shape);
+            Release(shapes);
+            Release(nativeRange);
+            Release(selection);
+        }
+    }
+
+    private static Word.Range InsertNativeWordOmml(
+        WordPerformanceHost host,
+        string mathMl,
+        bool display)
+    {
+        Word.Selection? selection = null;
+        Word.Range? insertion = null;
+        Word.Range? equationRange = null;
+        try
+        {
+            selection = host.Application.Selection;
+            insertion = selection.Range.Duplicate;
+            insertion.Collapse(Word.WdCollapseDirection.wdCollapseStart);
+            equationRange = WordOmmlConverter.Insert(
+                host.Application,
+                host.Document,
+                insertion,
+                mathMl,
+                display,
+                sourceFingerprint: out _,
+                includeLeadingTab: false);
+            var result = equationRange.Duplicate;
+            return result;
+        }
+        finally
+        {
+            Release(equationRange);
+            Release(insertion);
+            Release(selection);
         }
     }
 
@@ -177,6 +290,15 @@ internal static partial class Program
                 mathNumber: "4");
             selection.EndKey(Word.WdUnits.wdStory);
             selection.TypeText("AFTER_OMML_DISPLAY");
+            selection.TypeParagraph();
+
+            selection.TypeText("BEFORE_NATIVE_OMML ");
+            InsertNativeWordOmml(
+                host,
+                "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"inline\"><mi>n</mi><mo>=</mo><mn>5</mn></math>",
+                display: false);
+            selection.EndKey(Word.WdUnits.wdStory);
+            selection.TypeText(" AFTER_NATIVE_OMML");
             selection.TypeParagraph();
 
             return new List<FormulaToLatexCase>
@@ -251,6 +373,42 @@ internal static partial class Program
         };
     }
 
+    private static void AppendToFormulaOmmlAndSelect(
+        Word.Document document,
+        FormulaToLatexCase formula,
+        string suffix)
+    {
+        Word.Range? range = null;
+        Word.OMaths? maths = null;
+        Word.OMath? math = null;
+        Word.Range? insertion = null;
+        Word.Range? selectedRange = null;
+        try
+        {
+            range = ResolveFormulaToLatexRange(document, formula);
+            maths = range.OMaths;
+            if (maths.Count == 0)
+                throw new InvalidDataException(
+                    $"OMML formula {formula.FormulaId} could not be opened for native editing.");
+            math = maths[1];
+            math.Linearize();
+            insertion = math.Range.Duplicate;
+            insertion.Collapse(Word.WdCollapseDirection.wdCollapseEnd);
+            insertion.InsertBefore(suffix);
+            math.BuildUp();
+            selectedRange = math.Range;
+            selectedRange.Select();
+        }
+        finally
+        {
+            Release(selectedRange);
+            Release(insertion);
+            Release(math);
+            Release(maths);
+            Release(range);
+        }
+    }
+
     private static void AppendFormulaToLatexDocumentEnd(Word.Application application)
     {
         Word.Selection? selection = null;
@@ -261,6 +419,36 @@ internal static partial class Program
             selection.TypeText("DOCUMENT_END");
         }
         finally { Release(selection); }
+    }
+
+    private static void MaterializeInlineOleTypingAnchor(
+        WordPerformanceHost host,
+        FormulaToLatexCase formula)
+    {
+        Word.Range? range = null;
+        Word.Selection? selection = null;
+        Word.Range? content = null;
+        try
+        {
+            range = ResolveFormulaToLatexRange(host.Document, formula);
+            selection = host.Application.Selection;
+            selection.SetRange(range.End, range.End);
+            var service = new WordFormulaService(host.Application);
+            service.NormalizeTypingCaretAfterInlineFormula(selection);
+            content = host.Document.Content;
+            var text = content.Text ?? string.Empty;
+            var anchorCount = text.Count(character => character == '\u200C');
+            AssertEqual(
+                1,
+                anchorCount,
+                "Clicking the inline OLE boundary did not create exactly one zero-width typing anchor.");
+        }
+        finally
+        {
+            Release(content);
+            Release(selection);
+            Release(range);
+        }
     }
 
     private static void SelectFormula(
@@ -428,12 +616,28 @@ internal static partial class Program
                      "AFTER_OLE_DISPLAY",
                      "$$d=4+5$$",
                      "AFTER_OMML_DISPLAY",
+                     "BEFORE_NATIVE_OMML",
+                     "$n=5$",
+                     "AFTER_NATIVE_OMML",
                      "Reference:",
                      "DOCUMENT_END",
                  })
             AssertDocumentContains(document, required);
 
         var text = ReadFormulaToLatexDocumentText(document);
+        if (text.IndexOf('\u200C') >= 0)
+        {
+            var positions = Enumerable.Range(0, text.Length)
+                .Where(index => text[index] == '\u200C')
+                .ToArray();
+            var escaped = text
+                .Replace("\u200C", "<ZWNJ>")
+                .Replace("\r", "<CR>")
+                .Replace("\a", "<CELL>");
+            throw new InvalidDataException(
+                "Formula-to-LaTeX conversion left inline OLE typing anchors at "
+                + $"positions [{string.Join(",", positions)}]. Document={escaped}");
+        }
         var ordered = new[]
         {
             "BEGIN",
@@ -446,6 +650,9 @@ internal static partial class Program
             "AFTER_OLE_DISPLAY",
             "$$d=4+5$$",
             "AFTER_OMML_DISPLAY",
+            "BEFORE_NATIVE_OMML",
+            "$n=5$",
+            "AFTER_NATIVE_OMML",
             "Reference:",
             "DOCUMENT_END",
         };
