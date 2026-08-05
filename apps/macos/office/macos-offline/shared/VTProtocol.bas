@@ -2,7 +2,7 @@ Attribute VB_Name = "VTProtocol"
 Option Explicit
 
 Public Const VT_PROTOCOL_VERSION As Long = 1
-Public Const VT_PLUGIN_VERSION As String = "1.2.3"
+Public Const VT_PLUGIN_VERSION As String = "1.2.4"
 Public Const VT_METADATA_PREFIX As String = "visualtex:v1:deflate:"
 Public Const VT_PENDING_PREFIX As String = "visualtex:pending:v1:"
 Public Const VT_FORMULA_REF_PREFIX As String = "visualtex:formula-ref:v1:"
@@ -209,7 +209,7 @@ InvalidNumber:
     Err.Raise vbObjectError + 7123, "VisualTeX", "VisualTeX dispatch contains an invalid invariant number."
 End Function
 
-Private Function VTUtf8ByteLength(ByVal value As String) As Long
+Public Function VTUtf8ByteLength(ByVal value As String) As Long
     Dim bytes() As Byte
     If Len(value) = 0 Then Exit Function
     bytes = VTUtf8Encode(value)

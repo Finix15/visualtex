@@ -5,15 +5,19 @@ import {
   useMemo,
   useRef,
   useState,
+  type ChangeEvent,
   type ErrorInfo,
   type ReactNode,
 } from "react";
 import {
   AlertCircle,
+  Braces,
   Check,
-  FileCode2,
+  CheckCircle2,
+  Eye,
   FileText,
   Image as ImageIcon,
+  Upload,
   LoaderCircle,
   Sigma,
   X,
@@ -37,10 +41,17 @@ import {
   cancelMacosDocumentImport,
   closeMacosDocumentImportWindow,
   commitMacosDocumentImport,
+  focusMacosDocumentImportTarget,
+  getMacosDocumentImportProgress,
   getMacosDocumentImportRequest,
+  restoreMacosDocumentImportWindow,
   type DocumentImportCommitItem,
   type MacosDocumentImportRequest,
 } from "./documentImportClient";
+import {
+  type ImportedDocumentFile,
+  readDocumentImportFile,
+} from "./documentImportFile.ts";
 import {
   mergeDocumentImportBlocks,
   parseLatexMarkdownDocument,
@@ -53,6 +64,17 @@ import {
 const MAX_WORD_REFERENCE_WIDTH_PT = 500;
 const WORD_IMAGE_VISUAL_SCALE = 1.1;
 const REFERENCE_FONT_SIZE_PT = OFFICE_FORMULA_REFERENCE_FONT_SIZE_PT;
+
+type ImportedFileState = Pick<
+  ImportedDocumentFile,
+  "name" | "encoding" | "size"
+> & { modified: boolean };
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
 
 class FormulaPreviewBoundary extends Component<
   { children: ReactNode; message: string },
@@ -98,6 +120,23 @@ function textCharacterCount(blocks: DocumentImportBlock[]) {
   );
 }
 
+function decodeUrlSafeBase64Utf8(value: string) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+  const binary = atob(padded);
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+function ommlRetainsLiteralLatexCommand(ommlBase64: string, latex: string) {
+  const commands = [...latex.matchAll(/\\([A-Za-z@]+)\b/g)]
+    .map((match) => match[1])
+    .filter((command, index, values) => values.indexOf(command) === index);
+  if (!commands.length) return false;
+  const omml = decodeUrlSafeBase64Utf8(ommlBase64);
+  return commands.some((command) => omml.includes(`\\${command}`));
+}
+
 function calculateReferenceGeometry(widthPx: number, heightPx: number, baselinePx: number) {
   const naturalWidthPt = widthPx * 0.75 * WORD_IMAGE_VISUAL_SCALE;
   const naturalHeightPt = heightPx * 0.75 * WORD_IMAGE_VISUAL_SCALE;
@@ -117,7 +156,7 @@ function calculateReferenceGeometry(widthPx: number, heightPx: number, baselineP
   return { referenceWidthPt, referenceHeightPt, referenceBaselinePt };
 }
 
-async function prepareFormulaCommitItem(
+async function prepareFormulaArtifactCommitItem(
   block: DocumentFormulaBlock,
   outputKind: DocumentFormulaOutputKind,
 ): Promise<DocumentImportCommitItem> {
@@ -136,6 +175,9 @@ async function prepareFormulaCommitItem(
     throw new Error("无法生成 Word OMML 公式制品。");
   }
   const omml = artifacts.omml;
+  if (ommlRetainsLiteralLatexCommand(omml.ommlBase64, canonicalLatex)) {
+    throw new Error("公式包含未被 Word 公式转换器识别的自定义命令。");
+  }
 
   const paragraphMetadata = {
     paragraphId: block.paragraphId,
@@ -149,18 +191,10 @@ async function prepareFormulaCommitItem(
 
   let metadata: VisualTeXFormulaMetadata;
   if (outputKind === "image") {
-    let pngBase64: string | undefined;
-    try {
-      const { svgToPng } = await import("../../export/svgToPng");
-      pngBase64 = (
-        await svgToPng(svg, { scale: 2, background: "transparent" })
-      ).base64;
-    } catch (reason) {
-      console.warn(
-        "VisualTeX document import could not create the optional PNG fallback",
-        reason,
-      );
-    }
+    const { svgToPng } = await import("../../export/svgToPng");
+    const pngBase64 = (
+      await svgToPng(svg, { scale: 2, background: "transparent" })
+    ).base64;
     const resolvedBaseline = svg.baseline ?? svg.height;
     const reference = calculateReferenceGeometry(
       svg.width,
@@ -191,7 +225,7 @@ async function prepareFormulaCommitItem(
       ommlBase64: omml.ommlBase64,
       ommlDocxBase64: omml.ommlDocxBase64,
       svgBase64: svg.base64,
-      ...(pngBase64 ? { pngBase64 } : {}),
+      pngBase64,
       width: svg.width,
       height: svg.height,
       baseline: resolvedBaseline,
@@ -223,6 +257,54 @@ async function prepareFormulaCommitItem(
   };
 }
 
+function formulaLiteralFallbackText(block: DocumentFormulaBlock) {
+  const original = block.sourceText?.trim();
+  if (original) return original;
+  const latex = block.latex.trim();
+  if (block.displayMode === "inline") return `\\(${latex}\\)`;
+  if (/^\\begin\s*\{[^{}]+\}/.test(latex)) return latex;
+  return `\\[\n${latex}\n\\]`;
+}
+
+async function prepareFormulaCommitItem(
+  block: DocumentFormulaBlock,
+  outputKind: DocumentFormulaOutputKind,
+): Promise<DocumentImportCommitItem> {
+  try {
+    return await prepareFormulaArtifactCommitItem(block, outputKind);
+  } catch (reason) {
+    console.warn(
+      "VisualTeX preserved an unsupported document formula as literal text",
+      reason,
+      block.latex,
+    );
+    const paragraphMetadata = block.paragraphId
+      ? {
+          paragraphId: block.paragraphId,
+          paragraphStyle: block.paragraphStyle,
+          paragraphAlignment: block.paragraphAlignment,
+          listKind: block.listKind,
+          listLevel: block.listLevel,
+          paragraphStart: block.paragraphStart,
+          paragraphEnd: block.paragraphEnd,
+        }
+      : {
+          paragraphId: createUuid(),
+          paragraphStyle: "code" as const,
+          paragraphAlignment: "left" as const,
+          listKind: "none" as const,
+          listLevel: 0,
+          paragraphStart: true,
+          paragraphEnd: true,
+        };
+    return {
+      kind: "text",
+      text: formulaLiteralFallbackText(block),
+      ...paragraphMetadata,
+    };
+  }
+}
+
 export function OfficeDocumentImportApp() {
   const sessionId = useMemo(
     () => new URLSearchParams(window.location.search).get("sessionId") ?? "",
@@ -233,10 +315,12 @@ export function OfficeDocumentImportApp() {
   const [sourceKind, setSourceKind] = useState<DocumentImportSourceKind>("auto");
   const [outputKind, setOutputKind] = useState<DocumentFormulaOutputKind>("omml");
   const [blocks, setBlocks] = useState<DocumentImportBlock[]>([]);
+  const [importedFile, setImportedFile] = useState<ImportedFileState | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const sourceRef = useRef<HTMLTextAreaElement>(null);
   const allowNativeCloseRef = useRef(false);
   const nativeCloseInFlightRef = useRef(false);
@@ -276,9 +360,17 @@ export function OfficeDocumentImportApp() {
   const updateFormula = useCallback(
     (id: string, update: Partial<Omit<DocumentFormulaBlock, "id" | "kind">>) => {
       setBlocks((current) =>
-        current.map((block) =>
-          block.kind === "formula" && block.id === id ? { ...block, ...update } : block,
-        ),
+        current.map((block) => {
+          if (block.kind !== "formula" || block.id !== id) return block;
+          const updated = { ...block, ...update };
+          if (
+            ("latex" in update && update.latex !== block.latex) ||
+            ("displayMode" in update && update.displayMode !== block.displayMode)
+          ) {
+            delete updated.sourceText;
+          }
+          return updated;
+        }),
       );
     },
     [],
@@ -286,8 +378,47 @@ export function OfficeDocumentImportApp() {
 
   const handleSourceChange = (value: string) => {
     setSource(value);
+    setImportedFile((current) =>
+      current ? { ...current, modified: true } : current,
+    );
     setError("");
     reparse(value);
+  };
+
+  const handleDocumentFile = async (file: File | null) => {
+    if (!file || busy) return;
+    setError("");
+    setToast("正在读取文档源码…");
+    try {
+      const imported = await readDocumentImportFile(file);
+      setSource(imported.source);
+      setSourceKind(imported.format);
+      setImportedFile({
+        name: imported.name,
+        encoding: imported.encoding,
+        size: imported.size,
+        modified: false,
+      });
+      const parsed = parseLatexMarkdownDocument(
+        imported.source,
+        imported.format,
+        request?.defaultFontSizePt ?? 12,
+      );
+      setBlocks((previous) => mergeDocumentImportBlocks(previous, parsed));
+      setToast(
+        `已加载 ${imported.name} · ${imported.encoding} · ${formatFileSize(imported.size)}`,
+      );
+      window.requestAnimationFrame(() => sourceRef.current?.focus());
+    } catch (reason) {
+      setError(documentImportErrorMessage(reason, "无法读取文档源码文件。"));
+      setToast("");
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const handleFileInput = (event: ChangeEvent<HTMLInputElement>) => {
+    void handleDocumentFile(event.currentTarget.files?.[0] ?? null);
   };
 
   const handleSourceKindChange = (value: DocumentImportSourceKind) => {
@@ -334,7 +465,12 @@ export function OfficeDocumentImportApp() {
     setBusy(true);
     setError("");
     setToast(outputKind === "omml" ? "正在生成 Word 原生公式…" : "正在生成 SVG 图片公式…");
+    let importerHidden = false;
+    let progressTimer: number | undefined;
+    let progressRequestInFlight = false;
     try {
+      await focusMacosDocumentImportTarget();
+      importerHidden = true;
       const preparedFormulas = await Promise.all(
         formulas.map(async (block, index) => {
           try {
@@ -371,11 +507,38 @@ export function OfficeDocumentImportApp() {
         formulaIndex += 1;
         return prepared;
       });
-      setToast("正在写入 Word…");
+      const literalFallbackCount = preparedFormulas.filter(
+        (item) => item.kind === "text",
+      ).length;
+      setToast(
+        literalFallbackCount > 0
+          ? `正在写入 Word（${literalFallbackCount} 个不支持片段按原文保留）…`
+          : `正在写入 Word：0/${items.length}`,
+      );
+      progressTimer = window.setInterval(() => {
+        if (progressRequestInFlight) return;
+        progressRequestInFlight = true;
+        void getMacosDocumentImportProgress(sessionId)
+          .then((progress) => {
+            if (progress.total > 0 && progress.stage === "inserting") {
+              setToast(`正在写入 Word：${progress.current}/${progress.total}`);
+            }
+          })
+          .catch(() => undefined)
+          .finally(() => {
+            progressRequestInFlight = false;
+          });
+      }, 120);
       await commitMacosDocumentImport(sessionId, { outputKind, items });
+      if (progressTimer !== undefined) window.clearInterval(progressTimer);
+      setToast(`已完成：${items.length}/${items.length}`);
       allowNativeCloseRef.current = true;
       await closeMacosDocumentImportWindow();
     } catch (reason) {
+      if (progressTimer !== undefined) window.clearInterval(progressTimer);
+      if (importerHidden) {
+        await restoreMacosDocumentImportWindow().catch(() => undefined);
+      }
       setError(documentImportErrorMessage(reason, "无法将内容插入 Word。"));
       setToast("");
       setBusy(false);
@@ -427,207 +590,263 @@ export function OfficeDocumentImportApp() {
   const textCharacters = textCharacterCount(blocks);
 
   return (
-    <main className="document-import-app">
-      <header className="document-import-header">
-        <div>
-          <span className="document-import-brand"><FileCode2 size={19} /> VisualTeX</span>
-          <h1>插入 LaTeX / Markdown 文档</h1>
-          <p>文字作为 Word 普通文本插入；每个公式保持独立，可单独编辑和调整字号。</p>
+    <main className="doc-import-shell macos-doc-import">
+      <header className="doc-import-toolbar">
+        <div className="doc-import-title-block">
+          <FileText size={20} />
+          <div>
+            <strong>Word 文档批量导入</strong>
+            <span>左侧编辑源码，右侧实时查看并调整最终 Word 结构</span>
+          </div>
         </div>
-        <button type="button" className="icon-button" onClick={() => void cancel()} disabled={busy} aria-label="关闭">
-          <X size={19} />
-        </button>
+        <div className="doc-import-options">
+          <label>
+            <span>源格式</span>
+            <select
+              value={sourceKind}
+              onChange={(event) =>
+                handleSourceKindChange(event.target.value as DocumentImportSourceKind)
+              }
+              disabled={busy}
+            >
+              <option value="auto">自动识别</option>
+              <option value="latex">LaTeX</option>
+              <option value="markdown">Markdown</option>
+            </select>
+          </label>
+          <label>
+            <span>公式格式</span>
+            <select
+              value={outputKind}
+              onChange={(event) =>
+                setOutputKind(event.target.value as DocumentFormulaOutputKind)
+              }
+              disabled={busy}
+            >
+              <option value="omml">Word 原生 OMML</option>
+              <option value="image">SVG 图片公式</option>
+            </select>
+          </label>
+          <button
+            type="button"
+            className="doc-import-secondary doc-import-file-button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={busy}
+            title="导入单个 LaTeX 或 Markdown 文件"
+          >
+            <Upload size={16} />
+            导入 .tex / .md
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".tex,.md,.markdown,text/x-tex,text/markdown"
+            aria-label="导入 LaTeX 或 Markdown 文件"
+            hidden
+            onChange={handleFileInput}
+          />
+        </div>
       </header>
 
-      <section className="document-import-toolbar" aria-label="文档导入设置">
-        <label>
-          <span>输入类型</span>
-          <select
-            value={sourceKind}
-            onChange={(event) => handleSourceKindChange(event.target.value as DocumentImportSourceKind)}
-            disabled={busy}
-          >
-            <option value="auto">自动识别</option>
-            <option value="markdown">Markdown</option>
-            <option value="latex">LaTeX 文档</option>
-          </select>
-        </label>
-        <fieldset className="document-import-output-kind">
-          <legend>公式插入格式</legend>
-          <label className={outputKind === "omml" ? "is-selected" : ""}>
-            <input
-              type="radio"
-              name="document-formula-output"
-              checked={outputKind === "omml"}
-              onChange={() => setOutputKind("omml")}
-              disabled={busy}
-            />
-            <Sigma size={17} />
-            <span><strong>Word 原生 OMML</strong><small>可直接用 Word 字号和公式工具编辑</small></span>
-          </label>
-          <label className={outputKind === "image" ? "is-selected" : ""}>
-            <input
-              type="radio"
-              name="document-formula-output"
-              checked={outputKind === "image"}
-              onChange={() => setOutputKind("image")}
-              disabled={busy}
-            />
-            <ImageIcon size={17} />
-            <span><strong>SVG 图片公式</strong><small>保持矢量清晰度，可双击回到 VisualTeX 编辑</small></span>
-          </label>
-        </fieldset>
-        <div className="document-import-summary">
-          <span><FileText size={15} /> {textCharacters} 个文字字符</span>
-          <span><Sigma size={15} /> {formulas} 个独立公式</span>
-        </div>
-      </section>
-
-      <section className="document-import-workspace">
-        <div className="document-import-source-pane">
-          <div className="document-import-pane-title">
-            <strong>粘贴内容</strong>
-            <span>支持行内与行间数学分隔符</span>
+      <section className="doc-import-workspace">
+        <article className="doc-import-pane source-pane">
+          <div className="doc-import-pane-header">
+            <div className="doc-import-pane-heading">
+              <span className="doc-import-pane-icon" aria-hidden="true">
+                <Braces size={16} />
+              </span>
+              <div>
+                <strong>LaTeX / Markdown 源码</strong>
+                <small>支持正文、标题、列表、定理、引用、代码块和混合公式</small>
+              </div>
+            </div>
+            <div className="doc-import-source-meta">
+              {importedFile ? (
+                <span
+                  className="doc-import-file-chip"
+                  title={`${importedFile.name} · ${importedFile.encoding} · ${formatFileSize(importedFile.size)}`}
+                >
+                  <FileText size={12} />
+                  <span>{importedFile.name}</span>
+                  <small>
+                    {importedFile.encoding}
+                    {importedFile.modified ? " · 已编辑" : ""}
+                  </small>
+                </span>
+              ) : null}
+              <span className="doc-import-pane-stat">
+                {source.length.toLocaleString()} 字符
+              </span>
+            </div>
           </div>
           <textarea
             ref={sourceRef}
             value={source}
             onChange={(event) => handleSourceChange(event.target.value)}
-            placeholder={
-              "在这里粘贴 Markdown 或 LaTeX，例如：\n\n动量满足 $p=mv$。\n\n$$E=mc^2$$"
-            }
-            spellCheck={false}
-            disabled={busy}
-          />
-        </div>
+            placeholder={String.raw`在这里粘贴 LaTeX 或 Markdown，例如：
 
-        <div className="document-import-preview-pane">
-          <div className="document-import-pane-title">
-            <strong>Word 插入预览</strong>
-            <span>每张公式卡片都可以独立修改</span>
-          </div>
-          <div className="document-import-preview-document">
-            {!blocks.length ? (
-              <div className="document-import-empty">
-                <FileText size={34} />
-                <strong>尚无可预览内容</strong>
-                <span>粘贴内容后，右侧会显示文本与公式的分段结果。</span>
+正文中的行内公式 $E=mc^2$。
+
+\begin{equation}
+\begin{aligned}
+a&=b\\
+c&=d
+\end{aligned}
+\end{equation}`}
+            spellCheck={false}
+            autoCapitalize="off"
+            autoCorrect="off"
+            disabled={busy}
+            aria-label="文档源码"
+          />
+        </article>
+
+        <article className="doc-import-pane preview-pane">
+          <div className="doc-import-pane-header">
+            <div className="doc-import-pane-heading">
+              <span className="doc-import-pane-icon is-preview" aria-hidden="true">
+                <Eye size={16} />
+              </span>
+              <div>
+                <strong>Word 结构预览</strong>
+                <small>公式卡片可单独调整行内/行间、编号和字号</small>
               </div>
-            ) : (
-              blocks.map((block, index) =>
-                block.kind === "text" ? (
-                  <div
-                    key={block.id}
-                    className={`document-import-text-preview is-${block.paragraphStyle ?? "normal"} is-${block.listKind ?? "none"}`}
-                    data-paragraph-start={block.paragraphStart ? "true" : undefined}
-                  >
-                    {block.paragraphStart && block.listKind === "bullet" ? (
-                      <span className="document-import-list-marker">•</span>
-                    ) : block.paragraphStart && block.listKind === "number" ? (
-                      <span className="document-import-list-marker">1.</span>
-                    ) : null}
-                    {block.text}
-                  </div>
-                ) : (
-                  <article
-                    key={block.id}
-                    className={`document-import-formula-card is-${block.displayMode}`}
-                  >
-                    <header>
-                      <span>公式 {index + 1}</span>
-                      <div>
-                        <select
-                          value={block.displayMode}
-                          onChange={(event) =>
-                            updateFormula(block.id, {
-                              displayMode: event.target.value as "inline" | "block",
-                              numbered:
-                                event.target.value === "block" ? block.numbered : false,
-                            })
-                          }
-                          disabled={busy}
-                          aria-label="公式显示模式"
-                        >
-                          <option value="inline">行内公式</option>
-                          <option value="block">行间公式</option>
-                        </select>
-                        {block.displayMode === "block" ? (
-                          <label className="document-import-number-toggle">
-                            <input
-                              type="checkbox"
-                              checked={block.numbered}
-                              onChange={(event) =>
-                                updateFormula(block.id, { numbered: event.target.checked })
-                              }
-                              disabled={busy}
-                            />
-                            <span>编号</span>
-                          </label>
-                        ) : null}
-                        <label>
-                          <span>字号</span>
-                          <input
-                            type="number"
-                            min="1"
-                            max="512"
-                            step="0.5"
-                            value={block.fontSizePt}
+            </div>
+            <div className="doc-import-preview-counts" aria-label="预览统计">
+              <span>{blocks.length} 块</span>
+              <span>{textCharacters} 字</span>
+              <span>{formulas} 公式</span>
+            </div>
+          </div>
+          <div className="doc-import-preview-scroll">
+            <div className="doc-import-preview-document">
+              {!blocks.length ? (
+                <div className="document-import-empty">
+                  <FileText size={34} />
+                  <strong>等待文档内容</strong>
+                  <span>在左侧粘贴内容后，这里会实时生成 Word 结构预览。</span>
+                </div>
+              ) : (
+                blocks.map((block, index) =>
+                  block.kind === "text" ? (
+                    <div
+                      key={block.id}
+                      className={`document-import-text-preview is-${block.paragraphStyle ?? "normal"} is-${block.listKind ?? "none"}`}
+                      data-paragraph-start={block.paragraphStart ? "true" : undefined}
+                    >
+                      {block.paragraphStart && block.listKind === "bullet" ? (
+                        <span className="document-import-list-marker">•</span>
+                      ) : block.paragraphStart && block.listKind === "number" ? (
+                        <span className="document-import-list-marker">1.</span>
+                      ) : null}
+                      {block.text}
+                    </div>
+                  ) : (
+                    <article
+                      key={block.id}
+                      className={`document-import-formula-card is-${block.displayMode}`}
+                    >
+                      <header>
+                        <span>公式 {index + 1}</span>
+                        <div>
+                          <select
+                            value={block.displayMode}
                             onChange={(event) =>
                               updateFormula(block.id, {
-                                fontSizePt: clampFontSize(
-                                  Number(event.target.value),
-                                  block.fontSizePt,
-                                ),
+                                displayMode: event.target.value as "inline" | "block",
+                                numbered:
+                                  event.target.value === "block" ? block.numbered : false,
                               })
                             }
                             disabled={busy}
-                          />
-                          <span>pt</span>
-                        </label>
+                            aria-label="公式显示模式"
+                          >
+                            <option value="inline">行内公式</option>
+                            <option value="block">行间公式</option>
+                          </select>
+                          {block.displayMode === "block" ? (
+                            <label className="document-import-number-toggle">
+                              <input
+                                type="checkbox"
+                                checked={block.numbered}
+                                onChange={(event) =>
+                                  updateFormula(block.id, { numbered: event.target.checked })
+                                }
+                                disabled={busy}
+                              />
+                              <span>编号</span>
+                            </label>
+                          ) : null}
+                          <label>
+                            <span>字号</span>
+                            <input
+                              type="number"
+                              min="1"
+                              max="512"
+                              step="0.5"
+                              value={block.fontSizePt}
+                              onChange={(event) =>
+                                updateFormula(block.id, {
+                                  fontSizePt: clampFontSize(
+                                    Number(event.target.value),
+                                    block.fontSizePt,
+                                  ),
+                                })
+                              }
+                              disabled={busy}
+                            />
+                            <span>pt</span>
+                          </label>
+                        </div>
+                      </header>
+                      <div className="document-import-formula-preview">
+                        <FormulaPreviewBoundary message="公式暂时无法预览，请检查 LaTeX。">
+                          <MathPreview latex={block.latex || "\\placeholder{}"} />
+                        </FormulaPreviewBoundary>
                       </div>
-                    </header>
-                    <div className="document-import-formula-preview">
-                      <FormulaPreviewBoundary message="公式暂时无法预览，请检查 LaTeX。">
-                        <MathPreview latex={block.latex || "\\placeholder{}"} />
-                      </FormulaPreviewBoundary>
-                    </div>
-                    <textarea
-                      value={block.latex}
-                      onChange={(event) => updateFormula(block.id, { latex: event.target.value })}
-                      spellCheck={false}
-                      disabled={busy}
-                      aria-label="编辑公式 LaTeX"
-                    />
-                  </article>
-                ),
-              )
-            )}
+                      <textarea
+                        value={block.latex}
+                        onChange={(event) => updateFormula(block.id, { latex: event.target.value })}
+                        spellCheck={false}
+                        disabled={busy}
+                        aria-label="编辑公式 LaTeX"
+                      />
+                    </article>
+                  ),
+                )
+              )}
+            </div>
           </div>
-        </div>
+        </article>
       </section>
 
-      <footer className="document-import-footer">
-        <div>
+      <footer className="doc-import-footer">
+        <div className="doc-import-messages">
           {error ? (
-            <span className="document-import-error" role="alert"><AlertCircle size={16} />{error}</span>
+            <span className="error" role="alert"><AlertCircle size={15} />{error}</span>
           ) : toast ? (
-            <span className="document-import-progress"><LoaderCircle size={16} className="is-spinning" />{toast}</span>
+            <span><LoaderCircle size={15} className="is-spinning" />{toast}</span>
           ) : (
-            <span>插入后，每个公式都保留自己的字号和 VisualTeX 元数据。</span>
+            <span className="ok">
+              <CheckCircle2 size={15} />
+              预览解析正常；点击导入后将切回 Word 并实时显示插入进度。
+            </span>
           )}
         </div>
-        <button type="button" className="secondary-button" onClick={() => void cancel()} disabled={busy}>
-          取消
-        </button>
-        <button
-          type="button"
-          className="primary-button"
-          onClick={() => void commit()}
-          disabled={busy || !blocks.length}
-        >
-          {busy ? <LoaderCircle size={16} className="is-spinning" /> : <Check size={16} />}
-          插入 Word
-        </button>
+        <div className="doc-import-actions">
+          <button type="button" className="doc-import-secondary" onClick={() => void cancel()} disabled={busy}>
+            <X size={16} />取消
+          </button>
+          <button
+            type="button"
+            className="doc-import-primary"
+            onClick={() => void commit()}
+            disabled={busy || !blocks.length}
+          >
+            {busy ? <LoaderCircle size={16} className="is-spinning" /> : <Check size={16} />}
+            {busy ? "正在导入…" : "导入到 Word"}
+          </button>
+        </div>
       </footer>
     </main>
   );

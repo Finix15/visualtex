@@ -73,6 +73,7 @@ export const OCR_MODELS = [
 ] as const;
 
 export type OcrModelName = (typeof OCR_MODELS)[number]["id"];
+export const DEFAULT_OCR_MODEL: OcrModelName = "PP-FormulaNet_plus-M";
 
 export interface OcrRuntimeStatus {
   installed: boolean;

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { rm } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import process from "node:process";
 import { boundaryValueDocumentSource } from "./fixtures/boundary_value_document_source.mjs";
 import { longPhysicsDocumentSource } from "./fixtures/long_physics_document_source.mjs";
@@ -10,14 +10,70 @@ const debugPort = 23600 + offset;
 const sessionId = "12345678-1234-4234-9234-123456789abc";
 const longPhysicsRegression = process.argv.includes("--long-physics");
 const boundaryValueRegression = process.argv.includes("--boundary-value");
-if (longPhysicsRegression && boundaryValueRegression) {
+const literalFallbackRegression = process.argv.includes("--literal-fallback");
+const theoremStructureRegression = process.argv.includes("--theorem-structure");
+const edgeStructureRegression = process.argv.includes("--edge-structures");
+const artifactOutputArgument = process.argv.find((argument) =>
+  argument.startsWith("--artifact-output="),
+);
+const artifactOutputPath = artifactOutputArgument?.slice(
+  "--artifact-output=".length,
+) ?? "";
+if (
+  [
+    longPhysicsRegression,
+    boundaryValueRegression,
+    literalFallbackRegression,
+    theoremStructureRegression,
+    edgeStructureRegression,
+  ].filter(Boolean).length > 1
+) {
   throw new Error("Choose only one document import fixture regression");
 }
 const fixtureRegression = longPhysicsRegression || boundaryValueRegression;
+const customSettingsRegression =
+  !fixtureRegression &&
+  !literalFallbackRegression &&
+  !theoremStructureRegression &&
+  !edgeStructureRegression;
 const baseUrl = `http://127.0.0.1:${previewPort}/?view=office-document-import&sessionId=${sessionId}&transport=tauri`;
 const chromeProfile = `/tmp/visualtex-document-import-${process.pid}`;
 const chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function assertWordCompatibleSvg(value, formulaId) {
+  const svg = Buffer.from(value, "base64").toString("utf8");
+  if (!/(?:fill|stroke)=["']#000000["']/i.test(svg)) {
+    throw new Error(`Formula ${formulaId} SVG has no explicit black formula paint`);
+  }
+  if (
+    /currentColor|var\(|(?:fill|stroke|color)\s*[:=]\s*["']?(?:inherit|white|#fff(?:fff)?)/i.test(
+      svg,
+    )
+  ) {
+    throw new Error(`Formula ${formulaId} SVG retains a deferred or white paint`);
+  }
+}
+
+function assertRenderedPngPreview(value, formulaId) {
+  if (typeof value !== "string" || !value) {
+    throw new Error(`Formula ${formulaId} is missing its PNG compatibility preview`);
+  }
+  const bytes = Buffer.from(value, "base64");
+  if (
+    bytes.length < 24 ||
+    !bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+  ) {
+    throw new Error(`Formula ${formulaId} has an invalid PNG compatibility preview`);
+  }
+  const width = bytes.readUInt32BE(16);
+  const height = bytes.readUInt32BE(20);
+  if (width <= 1 || height <= 1 || bytes.length <= 70) {
+    throw new Error(
+      `Formula ${formulaId} used a transparent placeholder PNG (${width}x${height}, ${bytes.length} bytes)`,
+    );
+  }
+}
 
 async function waitFor(url, timeoutMs = 15_000) {
   const started = Date.now();
@@ -160,6 +216,14 @@ async function main() {
                 defaultFontSizePt: 12,
               };
             }
+            if (command === "focus_macos_offline_document_import_target") {
+              window.__VISUALTEX_DOCUMENT_IMPORT_TARGET_FOCUSED__ = true;
+              return null;
+            }
+            if (command === "restore_macos_offline_document_import_window") return null;
+            if (command === "get_macos_offline_document_import_progress") {
+              return { current: 0, total: 0, stage: "preparing" };
+            }
             if (command === "commit_macos_offline_document_import") {
               window.__VISUALTEX_DOCUMENT_IMPORT_COMMIT__ = args;
               return null;
@@ -198,12 +262,12 @@ async function main() {
     const started = Date.now();
     while (Date.now() - started < 15_000) {
       const ready = await evaluate(
-        `Boolean(document.querySelector(".document-import-app"))`,
+        `Boolean(document.querySelector(".doc-import-shell"))`,
       );
       if (ready) break;
       await sleep(80);
     }
-    if (!(await evaluate(`Boolean(document.querySelector(".document-import-app"))`))) {
+    if (!(await evaluate(`Boolean(document.querySelector(".doc-import-shell"))`))) {
       const failure = await evaluate(`(() => ({
         text: document.body.innerText,
         html: document.getElementById("root")?.innerHTML?.slice(0, 2000) ?? "",
@@ -241,13 +305,61 @@ y &= z
 \end{align*}
 
 结尾文字。`;
-    const regressionSource = boundaryValueRegression
-      ? boundaryValueDocumentSource
-      : longPhysicsRegression
-        ? longPhysicsDocumentSource
-        : source;
+    const literalFallbackSource = String.raw`\documentclass{article}
+\usepackage{custompkg}
+\newcommand{\customsymbol}[1]{\mathbf{#1}}
+\begin{document}
+标准公式 $x=1$。
+\[
+\customsymbol{q}
+\]
+\end{document}`;
+    const theoremStructureSource = String.raw`\newtheorem{thm}{定理}
+\newtheorem{lem}[thm]{引理}
+\begin{thm}[谱定理]
+正文公式 $Av=\lambda v$。
+\[
+A=\begin{pmatrix}1&0\\0&2\end{pmatrix}
+\]
+\end{thm}
+\begin{lem}
+共享计数器正文。
+\end{lem}
+\begin{proof}[充分性]
+由 $x=1$ 立即得到。\qedhere
+\end{proof}`;
+    const edgeStructureSource = String.raw`这就是色散媒质中频域形式的本构关系。
+
+% ==================== % 6. 磁色散媒质中的本构关系 %
+====================
+
+对于良导体低频近似，若 \(\varepsilon_r(\omega)\) 的本征极化部分可以忽略，则
+
+\begin{equation}
+\begin{aligned}
+f^{*}(\mathbf{x})
+&=
+\frac{1}{p(\mathbf{x})}
+\int t\,p(\mathbf{x},t)\,\mathrm{d}t  \\
+&=
+\int t\,p(t\mid\mathbf{x})\,\mathrm{d}t
+=
+\mathbb{E}_{t}[t\mid\mathbf{x}]
+\end{aligned}
+\end{equation}`;
+    const regressionSource = edgeStructureRegression
+      ? edgeStructureSource
+      : theoremStructureRegression
+        ? theoremStructureSource
+        : literalFallbackRegression
+        ? literalFallbackSource
+        : boundaryValueRegression
+          ? boundaryValueDocumentSource
+          : longPhysicsRegression
+            ? longPhysicsDocumentSource
+            : source;
     await evaluate(`(() => {
-      const textarea = document.querySelector(".document-import-source-pane textarea");
+      const textarea = document.querySelector(".source-pane textarea");
       if (!textarea) throw new Error("Missing document import source textarea");
       const setter = Object.getOwnPropertyDescriptor(
         HTMLTextAreaElement.prototype,
@@ -257,11 +369,17 @@ y &= z
       textarea.dispatchEvent(new Event("input", { bubbles: true }));
     })()`);
 
-    const expectedFormulaCount = boundaryValueRegression
-      ? 22
-      : longPhysicsRegression
-        ? 16
-        : 4;
+    const expectedFormulaCount = edgeStructureRegression
+      ? 2
+      : theoremStructureRegression
+        ? 3
+        : literalFallbackRegression
+        ? 2
+        : boundaryValueRegression
+          ? 22
+          : longPhysicsRegression
+            ? 16
+            : 4;
     const parseStarted = Date.now();
     while (Date.now() - parseStarted < 10_000) {
       if ((await evaluate(`document.querySelectorAll(".document-import-formula-card").length`)) === expectedFormulaCount) {
@@ -279,7 +397,31 @@ y &= z
         summary: document.querySelector(".document-import-summary")?.innerText ?? "",
       };
     })()`);
-    if (fixtureRegression) {
+    if (edgeStructureRegression) {
+      if (
+        parsed.count !== 2 ||
+        parsed.modes.join(",") !== "inline,block" ||
+        parsed.numbered.join(",") !== "false,true"
+      ) {
+        throw new Error(`Unexpected edge structure blocks: ${JSON.stringify(parsed)}`);
+      }
+    } else if (theoremStructureRegression) {
+      if (
+        parsed.count !== 3 ||
+        parsed.modes.join(",") !== "inline,block,inline" ||
+        parsed.numbered.some(Boolean)
+      ) {
+        throw new Error(`Unexpected theorem structure blocks: ${JSON.stringify(parsed)}`);
+      }
+    } else if (literalFallbackRegression) {
+      if (
+        parsed.count !== 2 ||
+        parsed.modes.join(",") !== "inline,block" ||
+        parsed.numbered.some(Boolean)
+      ) {
+        throw new Error(`Unexpected literal fallback blocks: ${JSON.stringify(parsed)}`);
+      }
+    } else if (fixtureRegression) {
       if (
         parsed.count !== expectedFormulaCount ||
         parsed.modes.filter((mode) => mode === "inline").length !== 4 ||
@@ -297,12 +439,19 @@ y &= z
 
     await evaluate(`(() => {
       if (!${JSON.stringify(longPhysicsRegression)}) {
-        const imageRadio = document.querySelector(
-          'input[name="document-formula-output"][type="radio"]:not(:checked)',
+        const outputSelect = document.querySelector(
+          ".doc-import-options label:nth-child(2) select",
         );
-        imageRadio?.click();
+        if (!outputSelect) throw new Error("Missing formula output select");
+        const selectSetter = Object.getOwnPropertyDescriptor(
+          HTMLSelectElement.prototype,
+          "value",
+        ).set;
+        selectSetter.call(outputSelect, "image");
+        outputSelect.dispatchEvent(new Event("input", { bubbles: true }));
+        outputSelect.dispatchEvent(new Event("change", { bubbles: true }));
       }
-      if (!${JSON.stringify(fixtureRegression)}) {
+      if (${JSON.stringify(customSettingsRegression)}) {
         const cards = [...document.querySelectorAll(".document-import-formula-card")];
         const sizes = [10.5, 18, 14, 16];
         cards.forEach((card, index) => {
@@ -317,7 +466,9 @@ y &= z
         });
       }
       const insertButton = [...document.querySelectorAll("button")].find(
-        (button) => button.textContent?.includes("插入 Word"),
+        (button) =>
+          button.textContent?.includes("插入 Word") ||
+          button.textContent?.includes("导入到 Word"),
       );
       if (!insertButton) throw new Error("Missing insert button");
       insertButton.click();
@@ -329,25 +480,32 @@ y &= z
       commit = await evaluate(`window.__VISUALTEX_DOCUMENT_IMPORT_COMMIT__ ?? null`);
       if (commit) break;
       const error = await evaluate(
-        `document.querySelector(".document-import-error")?.innerText ?? ""`,
+        `document.querySelector(".doc-import-messages .error")?.innerText ?? ""`,
       );
       if (error) throw new Error(`Document import UI reported: ${error}`);
       await sleep(100);
     }
     if (!commit) throw new Error("Document importer did not submit its Tauri commit");
+    const targetFocused = await evaluate(
+      `window.__VISUALTEX_DOCUMENT_IMPORT_TARGET_FOCUSED__ === true`,
+    );
+    if (!targetFocused) {
+      throw new Error("Document importer did not return focus to Word before commit");
+    }
 
     const input = commit.input;
     const formulas = input?.items?.filter((item) => item.kind === "formula") ?? [];
     const texts = input?.items?.filter((item) => item.kind === "text") ?? [];
     const expectedOutputKind = longPhysicsRegression ? "omml" : "image";
+    const expectedCommittedFormulaCount = expectedFormulaCount;
     if (
       input?.outputKind !== expectedOutputKind ||
-      formulas.length !== expectedFormulaCount ||
+      formulas.length !== expectedCommittedFormulaCount ||
       texts.length < 2
     ) {
       throw new Error(`Unexpected document import commit: ${JSON.stringify(commit)}`);
     }
-    if (!fixtureRegression && (
+    if (customSettingsRegression && (
       formulas[0].displayMode !== "inline" ||
       formulas[0].numbered !== false ||
       formulas[0].fontSizePt !== 10.5 ||
@@ -375,7 +533,7 @@ y &= z
       const validOutput = longPhysicsRegression
         ? !formula.svgBase64 && !formula.pngBase64
         : formula.svgBase64 &&
-          !formula.pngBase64 &&
+          formula.pngBase64 &&
           formula.width > 0 &&
           formula.height > 0;
       if (!validCommon || !validOutput) {
@@ -383,9 +541,135 @@ y &= z
           `Document formula regression payload is invalid: ${JSON.stringify(formula)}`,
         );
       }
+      if (!longPhysicsRegression) {
+        assertWordCompatibleSvg(formula.svgBase64, formula.formulaId);
+        assertRenderedPngPreview(formula.pngBase64, formula.formulaId);
+      }
     }
     if (new Set(formulas.map((formula) => formula.formulaId)).size !== formulas.length) {
       throw new Error("Imported formulas did not receive independent identities");
+    }
+    if (edgeStructureRegression) {
+      const allText = texts.map((item) => item.text).join("\n");
+      if (
+        allText.includes("%") ||
+        allText.includes("====================") ||
+        allText.includes("磁色散媒质中的本构关系")
+      ) {
+        throw new Error(
+          `LaTeX comments leaked into the commit: ${JSON.stringify(texts)}`,
+        );
+      }
+      const beforeInline = texts.find(
+        (item) => item.text === "对于良导体低频近似，若",
+      );
+      const afterInline = texts.find(
+        (item) => item.text === "的本征极化部分可以忽略，则",
+      );
+      const inlineFormula = formulas.find((formula) =>
+        formula.latex.includes(String.raw`\varepsilon_r(\omega)`),
+      );
+      const alignedFormula = formulas.find((formula) =>
+        formula.latex.includes(String.raw`\begin{aligned}`),
+      );
+      if (
+        !beforeInline ||
+        !afterInline ||
+        !inlineFormula ||
+        beforeInline.paragraphId !== inlineFormula.paragraphId ||
+        afterInline.paragraphId !== inlineFormula.paragraphId ||
+        beforeInline.paragraphStart !== true ||
+        inlineFormula.paragraphStart !== false ||
+        inlineFormula.paragraphEnd !== false ||
+        afterInline.paragraphEnd !== true
+      ) {
+        throw new Error(
+          `Inline formula CJK boundaries retained spacing or lost paragraph identity: ${JSON.stringify({ texts, formulas })}`,
+        );
+      }
+      if (
+        !alignedFormula ||
+        alignedFormula.displayMode !== "block" ||
+        alignedFormula.numbered !== true ||
+        alignedFormula.metadata?.codeFormat !== "equation" ||
+        alignedFormula.metadata?.lines?.length !== 1 ||
+        !alignedFormula.latex.startsWith("\\begin{equation}\n") ||
+        !alignedFormula.latex.includes("\\begin{aligned}") ||
+        alignedFormula.width < 240 ||
+        alignedFormula.width > 360 ||
+        alignedFormula.height > 130
+      ) {
+        throw new Error(
+          `Nested aligned equation was renormalized or rendered vertically: ${JSON.stringify(alignedFormula)}`,
+        );
+      }
+    }
+    if (theoremStructureRegression) {
+      const findText = (value, style, listKind = "none") =>
+        texts.find(
+          (item) =>
+            item.text.includes(value) &&
+            item.paragraphStyle === style &&
+            item.listKind === listKind,
+        );
+      for (const [value, style] of [
+        [String.raw`\newtheorem{thm}{定理}`, "code"],
+        [String.raw`\newtheorem{lem}[thm]{引理}`, "code"],
+        ["定理 1（谱定理）", "heading4"],
+        ["引理 2", "heading4"],
+        ["证明（充分性）", "heading4"],
+        ["正文公式", "quote"],
+        ["共享计数器正文", "quote"],
+        ["由", "normal"],
+        ["□", "normal"],
+      ]) {
+        if (!findText(value, style)) {
+          throw new Error(
+            `Theorem structure commit lost ${style} text ${value}: ${JSON.stringify(texts)}`,
+          );
+        }
+      }
+      const theoremInline = formulas.find((formula) =>
+        formula.latex.includes(String.raw`Av=\lambda v`),
+      );
+      const theoremDisplay = formulas.find((formula) =>
+        formula.latex.includes(String.raw`\begin{pmatrix}`),
+      );
+      const proofInline = formulas.find((formula) => formula.latex.includes("x=1"));
+      if (
+        theoremInline?.paragraphStyle !== "quote" ||
+        theoremInline?.displayMode !== "inline" ||
+        theoremDisplay?.displayMode !== "block" ||
+        theoremDisplay?.paragraphId ||
+        proofInline?.paragraphStyle !== "normal" ||
+        proofInline?.displayMode !== "inline"
+      ) {
+        throw new Error(
+          `Theorem formula paragraph metadata is invalid: ${JSON.stringify(formulas)}`,
+        );
+      }
+    }
+    if (literalFallbackRegression) {
+      const literalText = texts.map((item) => item.text).join("\n");
+      for (const expected of [
+        String.raw`\documentclass{article}`,
+        String.raw`\usepackage{custompkg}`,
+        String.raw`\newcommand{\customsymbol}[1]{\mathbf{#1}}`,
+      ]) {
+        if (!literalText.includes(expected)) {
+          throw new Error(
+            `Literal fallback commit lost unsupported source ${expected}: ${JSON.stringify(texts)}`,
+          );
+        }
+      }
+      if (
+        formulas[0]?.latex !== "x=1" ||
+        formulas[1]?.latex !== "\\mathbf{q}"
+      ) {
+        throw new Error(
+          `Supported formulas beside literal fallback were not converted: ${JSON.stringify(formulas)}`,
+        );
+      }
     }
     if (boundaryValueRegression) {
       const singleEquationFormulas = formulas.filter((formula) =>
@@ -414,7 +698,7 @@ y &= z
         }
       }
     }
-    const multilineExpectations = fixtureRegression ? [] : [
+    const multilineExpectations = customSettingsRegression ? [
       {
         formula: formulas[2],
         codeFormat: "align",
@@ -427,7 +711,7 @@ y &= z
         lines: ["x = y", "y = z"],
         environment: "align*",
       },
-    ];
+    ] : [];
     for (const expectation of multilineExpectations) {
       const metadataLines = expectation.formula.metadata.lines.map(
         (line) => line.latex,
@@ -449,6 +733,23 @@ y &= z
       }
     }
 
+    if (artifactOutputPath) {
+      await writeFile(
+        artifactOutputPath,
+        JSON.stringify(
+          {
+            schema: "visualtex-word-browser-artifacts-v1",
+            outputKind: input.outputKind,
+            formulas,
+            texts,
+          },
+          null,
+          2,
+        ),
+        { mode: 0o600 },
+      );
+    }
+
     const closed = await evaluate(
       `window.__VISUALTEX_DOCUMENT_IMPORT_CLOSED__ === true`,
     );
@@ -461,7 +762,7 @@ y &= z
       fontSizePt: formula.fontSizePt,
       hasOmml: Boolean(formula.ommlBase64),
       hasSvg: Boolean(formula.svgBase64),
-      usesBackendPngFallback: !formula.pngBase64,
+      hasPng: Boolean(formula.pngBase64),
     })) }, null, 2));
     console.log("Document import browser regression passed");
   } finally {

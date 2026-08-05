@@ -1,6 +1,5 @@
 import { ChangeEvent, useCallback, useEffect, useRef, useState } from "react";
-import { invoke, isTauri as isNativeTauri } from "@tauri-apps/api/core";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
 import {
   AlertCircle,
   Braces,
@@ -42,6 +41,7 @@ import { SettingsDialog } from "./components/SettingsDialog";
 import { FormulaHotkeyManagerDialog } from "./components/FormulaHotkeyManagerDialog";
 import { HistoryPanel } from "./components/HistoryPanel";
 import { OcrDialog } from "./components/OcrDialog";
+import { ExportDialog } from "./components/ExportDialog";
 import { OnboardingTour } from "./components/OnboardingTour";
 import { MacOfficeFirstRunPrompt } from "./components/MacOfficeFirstRunPrompt";
 import { UpdateDialog } from "./components/UpdateDialog";
@@ -78,9 +78,6 @@ import {
 import { normalizeChineseLatex } from "./editor/normalizeChineseLatex";
 import type { FormulaDocument, LatexCodeFormat } from "./types/formula";
 import { publishSynchronizedTheme } from "./themeSync";
-import { buildMarkdownDocument } from "./export/markdownExport";
-import { latexToSvg, svgToPng } from "./export/runtime";
-import type { WorkspaceExportFormat } from "./workspace/workspaceTypes";
 import {
   OCR_MODELS,
   cancelOcrRecognition,
@@ -131,7 +128,6 @@ interface MacOfficeStartupStatus {
 
 const DEFAULT_OCR_MODEL: OcrModelName = "PP-FormulaNet_plus-M";
 const OCR_MODEL_STORAGE_KEY = "visualtex.ocr.model";
-const EXPORT_DIRECTORY_STORAGE_KEY = "visualtex.export.directory";
 const MAC_OFFICE_FIRST_RUN_STORAGE_KEY =
   "visualtex.office.macos.native-first-run.v1.2.0.completed";
 const DESKTOP_PLATFORM = detectDesktopPlatform();
@@ -151,6 +147,7 @@ function App() {
   const [formulaHotkeyManagerOpen, setFormulaHotkeyManagerOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [ocrOpen, setOcrOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 1040);
   const [macOfficeFirstRunOpen, setMacOfficeFirstRunOpen] = useState(() =>
     shouldShowMacOfficeFirstRun(
@@ -179,10 +176,6 @@ function App() {
   const [toast, setToast] = useState("");
   const [savedPulse, setSavedPulse] = useState(false);
   const [editorHistoryBusy, setEditorHistoryBusy] = useState(false);
-  const [exportDirectory, setExportDirectory] = useState(() =>
-    readLocalStorage(EXPORT_DIRECTORY_STORAGE_KEY) ?? "",
-  );
-  const [exportBusy, setExportBusy] = useState(false);
   const [ocrModel, setOcrModel] = useState<OcrModelName>(() => {
     const stored = readLocalStorage(OCR_MODEL_STORAGE_KEY);
     return OCR_MODELS.some((item) => item.id === stored)
@@ -197,6 +190,7 @@ function App() {
   const automaticUpdateCheckRef = useRef(false);
   const ocrPrewarmStartedRef = useRef(false);
   const macOfficeInstallStatusCheckedRef = useRef(false);
+  const initialEditorFocusDoneRef = useRef(false);
 
   const title = useEditorStore((state) => state.title);
   const setTitle = useEditorStore((state) => state.setTitle);
@@ -273,7 +267,7 @@ function App() {
     after: DocumentSnapshot,
     source: ReplaceDocumentEntry["source"],
   ) => {
-    historyManager.commitPendingTransaction();
+    if (source !== "source-apply") historyManager.commitPendingTransaction();
     const before = captureDocumentSnapshot();
     if (documentSnapshotsEquivalent(before, after)) return false;
     useEditorStore.getState().replaceDocumentState(after);
@@ -284,10 +278,36 @@ function App() {
       source,
       timestamp: Date.now(),
     };
-    historyManager.push(entry);
-    window.requestAnimationFrame(() => restoreSnapshotFocus(after));
+    if (source === "source-apply") {
+      historyManager.recordSourceDocumentEdit(entry);
+    } else {
+      historyManager.push(entry);
+      window.requestAnimationFrame(() => restoreSnapshotFocus(after));
+    }
     return true;
   };
+
+  useEffect(() => {
+    if (
+      onboardingOpen ||
+      macOfficeFirstRunOpen ||
+      initialEditorFocusDoneRef.current
+    ) {
+      return;
+    }
+    initialEditorFocusDoneRef.current = true;
+    let repairTimer = 0;
+    const frame = window.requestAnimationFrame(() => {
+      editorRef.current?.focus({ target: "last", moveToEnd: true });
+      repairTimer = window.setTimeout(() => {
+        editorRef.current?.focus({ target: "last", moveToEnd: true });
+      }, 80);
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(repairTimer);
+    };
+  }, [macOfficeFirstRunOpen, onboardingOpen]);
 
   useEffect(() => {
     historyManager.configure({
@@ -364,7 +384,7 @@ function App() {
 
   useEffect(() => {
     publishSynchronizedTheme(theme);
-    if (isNativeTauri()) {
+    if (isTauriEnvironment()) {
       void invoke<string>("set_app_theme", { theme }).catch(() => undefined);
     }
   }, [theme]);
@@ -706,110 +726,6 @@ function App() {
     downloadBlobFile(new Blob([content], { type }), filename);
   };
 
-  const utf8ToBase64 = (value: string) => {
-    const bytes = new TextEncoder().encode(value);
-    let binary = "";
-    const chunkSize = 0x8000;
-    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-      binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
-    }
-    return btoa(binary);
-  };
-
-  const chooseExportDirectory = async () => {
-    if (!isNativeTauri()) {
-      setToast(
-        isEn
-          ? "Browser exports use the system Downloads folder"
-          : "浏览器模式下将导出到系统下载目录",
-      );
-      return exportDirectory;
-    }
-    const selected = await openDialog({
-      directory: true,
-      multiple: false,
-      title: isEn ? "Choose export folder" : "选择导出文件夹",
-      defaultPath: exportDirectory || undefined,
-    });
-    const directory = Array.isArray(selected) ? selected[0] : selected;
-    if (!directory) return "";
-    setExportDirectory(directory);
-    writeLocalStorage(EXPORT_DIRECTORY_STORAGE_KEY, directory);
-    return directory;
-  };
-
-  const exportPath = (directory: string, filename: string) =>
-    `${directory.replace(/\/+$/, "")}/${filename}`;
-
-  const exportDocument = async (format: WorkspaceExportFormat) => {
-    if (exportBusy) return;
-    if (!latex.trim()) {
-      setToast(isEn ? "Cannot export an empty formula" : "空公式无法导出");
-      return;
-    }
-
-    setExportBusy(true);
-    try {
-      const safeTitle = getSafeDocumentTitle();
-      let filename = `${safeTitle}.md`;
-      let mimeType = "text/markdown;charset=utf-8";
-      let blob: Blob;
-      let dataBase64: string;
-
-      if (format === "markdown") {
-        const markdown = buildMarkdownDocument(
-          title,
-          lines.map((line) => line.latex),
-        );
-        blob = new Blob([markdown], { type: mimeType });
-        dataBase64 = utf8ToBase64(markdown);
-      } else {
-        const svg = latexToSvg(latex);
-        if (format === "svg") {
-          filename = `${safeTitle}.svg`;
-          mimeType = "image/svg+xml;charset=utf-8";
-          blob = new Blob([svg.svg], { type: mimeType });
-          dataBase64 = svg.base64;
-        } else {
-          filename = `${safeTitle}.png`;
-          mimeType = "image/png";
-          const png = await svgToPng(svg, {
-            scale: 2,
-            background: "transparent",
-          });
-          blob = png.blob;
-          dataBase64 = png.base64;
-        }
-      }
-
-      if (isNativeTauri()) {
-        const directory = exportDirectory || (await chooseExportDirectory());
-        if (!directory) return;
-        await invoke("write_export_file", {
-          path: exportPath(directory, filename),
-          dataBase64,
-        });
-      } else {
-        downloadBlobFile(blob, filename);
-      }
-
-      setToast(
-        isEn
-          ? `${format.toUpperCase()} exported`
-          : `${format.toUpperCase()} 已导出`,
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setToast(
-        isEn
-          ? `Export failed: ${message}`
-          : `导出失败：${message}`,
-      );
-    } finally {
-      setExportBusy(false);
-    }
-  };
-
   const saveDocument = () => {
     historyManager.commitPendingTransaction();
     void historyManager.createCheckpoint("save-document");
@@ -822,10 +738,6 @@ function App() {
     setSavedPulse(true);
     setToast(isEn ? "Formula document saved" : "公式文档已保存");
     window.setTimeout(() => setSavedPulse(false), 900);
-  };
-
-  const exportMarkdown = () => {
-    void exportDocument("markdown");
   };
 
   const openDocument = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -976,7 +888,7 @@ function App() {
         return;
       }
 
-      if (settingsOpen || formulaHotkeyManagerOpen || ocrOpen || historyOpen || macOfficeFirstRunOpen || onboardingOpen || updateOpen) {
+      if (settingsOpen || formulaHotkeyManagerOpen || ocrOpen || historyOpen || exportOpen || macOfficeFirstRunOpen || onboardingOpen || updateOpen) {
         return;
       }
 
@@ -1025,7 +937,7 @@ function App() {
 
     window.addEventListener("keydown", handleWindowKeyDown);
     return () => window.removeEventListener("keydown", handleWindowKeyDown);
-  }, [latex, title, isEn, zoom, settingsOpen, formulaHotkeyManagerOpen, ocrOpen, historyOpen, macOfficeFirstRunOpen, onboardingOpen, updateOpen]);
+  }, [latex, title, isEn, zoom, settingsOpen, formulaHotkeyManagerOpen, ocrOpen, historyOpen, exportOpen, macOfficeFirstRunOpen, onboardingOpen, updateOpen]);
 
   return (
     <div className="app-shell">
@@ -1037,7 +949,11 @@ function App() {
         onChange={openDocument}
       />
 
-      <header className="app-header">
+      <header
+        className={
+          "app-header" + (menuOpen || copyMenuOpen ? " has-open-menu" : "")
+        }
+      >
         <div className="brand-area">
           <button
             ref={menuButtonRef}
@@ -1125,10 +1041,14 @@ function App() {
                 <span>{isEn ? "Save document" : "保存文档"}</span>
                 <kbd>⌘S</kbd>
               </button>
-              <button type="button" role="menuitem" onClick={() => runMenuAction(exportMarkdown)}>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runMenuAction(() => setExportOpen(true))}
+              >
                 <FileDown size={16} />
-                <span>{isEn ? "Export Markdown" : "导出 Markdown"}</span>
-                <kbd>.md</kbd>
+                <span>{isEn ? "Export…" : "导出…"}</span>
+                <kbd>MD/SVG/PNG</kbd>
               </button>
               <div className="app-menu-divider" />
               <button
@@ -1381,12 +1301,7 @@ function App() {
         showUpdateActions
         showOfficeActions={false}
         showOcrActions
-        onExport={exportDocument}
-        onChooseExportDirectory={async () => {
-          await chooseExportDirectory();
-        }}
-        exportDirectory={exportDirectory}
-        exportBusy={exportBusy}
+        onOpenExport={() => setExportOpen(true)}
         editorRef={editorRef}
         sidebarOpen={sidebarOpen}
         onSidebarOpenChange={setSidebarOpen}
@@ -1453,6 +1368,14 @@ function App() {
         }
       />
 
+      <ExportDialog
+        open={exportOpen}
+        title={title}
+        formulas={lines.map((line) => line.latex)}
+        language={language}
+        onClose={() => setExportOpen(false)}
+        onNotify={setToast}
+      />
       <SettingsDialog
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}

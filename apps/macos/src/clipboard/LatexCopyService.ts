@@ -1,3 +1,4 @@
+import { validateLatex } from "mathlive/ssr";
 import { normalizeMathLiveCanonicalUprightCommands } from "../editor/normalizeChineseLatex.ts";
 import type { LatexCodeFormat } from "../types/formula";
 
@@ -34,6 +35,17 @@ export const latexCodeFormats: readonly LatexCodeFormatDefinition[] = [
     hint: "$ ... $",
     descriptionZh: "每个公式分别使用 $...$",
     descriptionEn: "Wrap every formula with $...$",
+  },
+  {
+    id: "inline-text-double-dollar",
+    group: "single",
+    titleZh: "行内公式 · 文字在公式外",
+    titleEn: "Inline formula · text outside math",
+    hint: "文字$$x^2$$文字",
+    descriptionZh:
+      "顶层文字直接放在公式环境外，公式片段使用 $$...$$；公式结构内的中文仍保留 \\text{}",
+    descriptionEn:
+      "Keep top-level text outside math and wrap formula fragments with $$...$$",
   },
   {
     id: "inline-paren",
@@ -399,6 +411,108 @@ function formatRows(lines: string[], alignRelations: boolean): string {
     .join("\n");
 }
 
+type InlineTextSegment = {
+  kind: "math" | "text";
+  value: string;
+};
+
+function readBalancedGroupEnd(
+  source: string,
+  openingIndex: number,
+  opening = "{",
+  closing = "}",
+): number | null {
+  if (source[openingIndex] !== opening) return null;
+  let depth = 0;
+  for (let index = openingIndex; index < source.length; index += 1) {
+    if (source[index] === "%" && !isEscaped(source, index)) {
+      const lineEnd = source.indexOf("\n", index);
+      if (lineEnd < 0) return null;
+      index = lineEnd;
+      continue;
+    }
+    if (source[index] === opening && !isEscaped(source, index)) depth += 1;
+    else if (source[index] === closing && !isEscaped(source, index)) {
+      depth -= 1;
+      if (depth === 0) return index + 1;
+      if (depth < 0) return null;
+    }
+  }
+  return null;
+}
+
+function appendInlineTextSegment(
+  segments: InlineTextSegment[],
+  kind: InlineTextSegment["kind"],
+  value: string,
+) {
+  if (!value) return;
+  const previous = segments[segments.length - 1];
+  if (previous?.kind === kind) previous.value += value;
+  else segments.push({ kind, value });
+}
+
+function splitTopLevelTextSegments(latex: string): InlineTextSegment[] {
+  const segments: InlineTextSegment[] = [];
+  const environments: string[] = [];
+  let math = "";
+  let braceDepth = 0;
+
+  const flushMath = () => {
+    appendInlineTextSegment(segments, "math", math);
+    math = "";
+  };
+
+  for (let index = 0; index < latex.length; index += 1) {
+    const token = readEnvironmentToken(latex, index);
+    if (token) {
+      math += latex.slice(index, token.end);
+      updateEnvironmentStack(environments, token);
+      index = token.end - 1;
+      continue;
+    }
+
+    if (
+      braceDepth === 0 &&
+      environments.length === 0 &&
+      latex.startsWith("\\text{", index)
+    ) {
+      const openingBrace = index + "\\text".length;
+      const end = readBalancedGroupEnd(latex, openingBrace);
+      if (end !== null) {
+        flushMath();
+        appendInlineTextSegment(
+          segments,
+          "text",
+          latex.slice(openingBrace + 1, end - 1),
+        );
+        index = end - 1;
+        continue;
+      }
+    }
+
+    const character = latex[index];
+    if (character === "{" && !isEscaped(latex, index)) braceDepth += 1;
+    else if (character === "}" && !isEscaped(latex, index)) {
+      braceDepth = Math.max(0, braceDepth - 1);
+    }
+    math += character;
+  }
+
+  flushMath();
+  return segments;
+}
+
+function formatInlineTextDoubleDollar(latex: string): string {
+  return splitTopLevelTextSegments(latex)
+    .map((segment) => {
+      if (segment.kind === "text") return segment.value;
+      const math = segment.value.trim();
+      return math ? `$$${math}$$` : "";
+    })
+    .join("");
+}
+
 export function formatLatexLines(
   logicalLines: readonly string[],
   format: LatexCodeFormat,
@@ -410,6 +524,8 @@ export function formatLatexLines(
       return lines.join("\n");
     case "inline-dollar":
       return lines.map((line) => `$${line}$`).join("\n");
+    case "inline-text-double-dollar":
+      return lines.map(formatInlineTextDoubleDollar).join("\n");
     case "inline-paren":
       return lines.map((line) => `\\(${line}\\)`).join("\n");
     case "display-dollar":
@@ -546,6 +662,43 @@ function parseInlineDollarLines(source: string): string[] {
     .filter(Boolean);
 }
 
+function escapeOutsideTextForMath(value: string): string {
+  return value.replace(/(?<!\\)([{}])/g, "\\$1");
+}
+
+function parseInlineTextDoubleDollarLine(line: string): string | null {
+  let result = "";
+  let cursor = 0;
+  while (cursor < line.length) {
+    const opening = line.indexOf("$$", cursor);
+    if (opening < 0) {
+      const text = line.slice(cursor);
+      if (text) result += `\\text{${escapeOutsideTextForMath(text)}}`;
+      break;
+    }
+    const text = line.slice(cursor, opening);
+    if (text) result += `\\text{${escapeOutsideTextForMath(text)}}`;
+    const closing = line.indexOf("$$", opening + 2);
+    if (closing < 0) return null;
+    const math = line.slice(opening + 2, closing).trim();
+    if (!math) return null;
+    result += math;
+    cursor = closing + 2;
+  }
+  return result || "";
+}
+
+function parseInlineTextDoubleDollarLines(source: string): string[] {
+  const values: string[] = [];
+  for (const line of source.split("\n")) {
+    if (!line.trim()) continue;
+    const value = parseInlineTextDoubleDollarLine(line);
+    if (value === null) return [];
+    values.push(value);
+  }
+  return values;
+}
+
 function parseMultilineEnvironment(source: string, name: string): string[] {
   const body = extractEnvironmentBodies(source, name)[0];
   if (body === undefined) return [];
@@ -561,6 +714,8 @@ function parseByFormat(source: string, format: LatexCodeFormat): string[] {
         .filter(Boolean);
     case "inline-dollar":
       return parseInlineDollarLines(source);
+    case "inline-text-double-dollar":
+      return parseInlineTextDoubleDollarLines(source);
     case "inline-paren":
       return parseWrappedBlocks(source, /\\\(([\s\S]*?)\\\)/g);
     case "display-dollar":
@@ -593,6 +748,239 @@ function parseByFormat(source: string, format: LatexCodeFormat): string[] {
   }
 }
 
+function patternConsumesWholeSource(source: string, pattern: RegExp) {
+  let cursor = 0;
+  let matched = false;
+  pattern.lastIndex = 0;
+  for (const match of source.matchAll(pattern)) {
+    const start = match.index ?? 0;
+    if (source.slice(cursor, start).trim()) return false;
+    cursor = start + match[0].length;
+    matched = true;
+  }
+  return matched && !source.slice(cursor).trim();
+}
+
+function environmentPattern(name: string) {
+  const escapedName = escapeRegExp(name);
+  return new RegExp(
+    `\\\\begin\\{${escapedName}\\}([\\s\\S]*?)\\\\end\\{${escapedName}\\}`,
+    "g",
+  );
+}
+
+function parseByFormatStrict(
+  source: string,
+  format: LatexCodeFormat,
+): string[] | null {
+  const values = parseByFormat(source, format);
+  if (!values.length) return null;
+  switch (format) {
+    case "raw":
+      return values;
+    case "inline-dollar": {
+      const lines = source.split("\n").map((line) => line.trim()).filter(Boolean);
+      return lines.length > 0 && lines.every(
+        (line) =>
+          line.startsWith("$") &&
+          !line.startsWith("$$") &&
+          line.endsWith("$") &&
+          !line.endsWith("$$") &&
+          line.length > 2,
+      )
+        ? values
+        : null;
+    }
+    case "inline-text-double-dollar":
+      return source
+        .split("\n")
+        .filter((line) => line.trim())
+        .every((line) => parseInlineTextDoubleDollarLine(line) !== null)
+        ? values
+        : null;
+    case "inline-paren":
+      return patternConsumesWholeSource(source, /\\\(([\s\S]*?)\\\)/g)
+        ? values
+        : null;
+    case "display-dollar":
+      return patternConsumesWholeSource(source, /\$\$([\s\S]*?)\$\$/g)
+        ? values
+        : null;
+    case "display-bracket":
+      return patternConsumesWholeSource(source, /\\\[([\s\S]*?)\\\]/g)
+        ? values
+        : null;
+    case "equation":
+      return patternConsumesWholeSource(source, environmentPattern("equation"))
+        ? values
+        : null;
+    case "equation-star":
+      return patternConsumesWholeSource(source, environmentPattern("equation*"))
+        ? values
+        : null;
+    case "align":
+    case "align-star":
+    case "gather":
+    case "gather-star":
+    case "multline":
+    case "multline-star": {
+      const name = format.endsWith("-star")
+        ? `${format.slice(0, -5)}*`
+        : format;
+      return patternConsumesWholeSource(source, environmentPattern(name))
+        ? values
+        : null;
+    }
+    case "aligned":
+      return /^\\\[[\s\S]*\\begin\{aligned\}[\s\S]*\\end\{aligned\}[\s\S]*\\\]$/.test(
+        source.trim(),
+      )
+        ? values
+        : null;
+    case "equation-split":
+      return /^\\begin\{equation\}[\s\S]*\\begin\{split\}[\s\S]*\\end\{split\}[\s\S]*\\end\{equation\}$/.test(
+        source.trim(),
+      )
+        ? values
+        : null;
+    case "equation-star-split":
+      return /^\\begin\{equation\*\}[\s\S]*\\begin\{split\}[\s\S]*\\end\{split\}[\s\S]*\\end\{equation\*\}$/.test(
+        source.trim(),
+      )
+        ? values
+        : null;
+  }
+}
+
+const requiredCommandArgumentCount = new Map<string, number>([
+  ["frac", 2], ["dfrac", 2], ["tfrac", 2], ["cfrac", 2],
+  ["binom", 2], ["overset", 2], ["underset", 2],
+  ["stackrel", 2], ["stackbin", 2], ["sqrt", 1], ["text", 1],
+  ["textrm", 1], ["mathrm", 1], ["mathbf", 1], ["mathit", 1],
+  ["mathsf", 1], ["mathtt", 1], ["mathbb", 1], ["mathcal", 1],
+  ["mathfrak", 1], ["operatorname", 1], ["overline", 1],
+  ["underline", 1], ["hat", 1], ["widehat", 1], ["tilde", 1],
+  ["widetilde", 1], ["vec", 1], ["dot", 1], ["ddot", 1],
+  ["dddot", 1], ["ddddot", 1], ["check", 1], ["breve", 1],
+  ["acute", 1], ["grave", 1], ["mathring", 1], ["overbrace", 1],
+  ["underbrace", 1], ["overarc", 1], ["underarc", 1],
+  ["overparen", 1], ["underparen", 1], ["overgroup", 1],
+  ["undergroup", 1], ["overrightarrow", 1], ["overleftarrow", 1],
+  ["overleftrightarrow", 1], ["underleftarrow", 1],
+  ["underrightarrow", 1], ["underleftrightarrow", 1],
+]);
+
+function skipLatexWhitespace(source: string, start: number): number {
+  let index = start;
+  while (/\s/.test(source[index] ?? "")) index += 1;
+  return index;
+}
+
+function readLatexCommandEnd(source: string, start: number): number {
+  if (source[start] !== "\\") return start;
+  let index = start + 1;
+  if (/[A-Za-z]/.test(source[index] ?? "")) {
+    while (/[A-Za-z]/.test(source[index] ?? "")) index += 1;
+    return index;
+  }
+  return Math.min(source.length, index + 1);
+}
+
+function readLatexArgumentEnd(source: string, start: number): number | null {
+  const index = skipLatexWhitespace(source, start);
+  if (index >= source.length || source[index] === "}") return null;
+  if (source[index] === "{") return readBalancedGroupEnd(source, index);
+  if (source[index] === "\\") return readLatexCommandEnd(source, index);
+  return index + 1;
+}
+
+function hasBalancedLatexGroups(source: string) {
+  const stack: string[] = [];
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === "%" && !isEscaped(source, index)) {
+      const lineEnd = source.indexOf("\n", index);
+      if (lineEnd < 0) break;
+      index = lineEnd;
+      continue;
+    }
+    if (isEscaped(source, index)) continue;
+    if (character === "{" || character === "[") stack.push(character);
+    else if (character === "}" || character === "]") {
+      const expected = character === "}" ? "{" : "[";
+      if (stack.pop() !== expected) return false;
+    }
+  }
+  return stack.length === 0;
+}
+
+function hasCompleteRequiredCommandArguments(source: string) {
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] === "%" && !isEscaped(source, index)) {
+      const lineEnd = source.indexOf("\n", index);
+      if (lineEnd < 0) break;
+      index = lineEnd;
+      continue;
+    }
+    if (source[index] !== "\\" || isEscaped(source, index)) continue;
+    const commandEnd = readLatexCommandEnd(source, index);
+    const command = source.slice(index + 1, commandEnd);
+    const requiredArguments = requiredCommandArgumentCount.get(command);
+    if (!requiredArguments) {
+      index = commandEnd - 1;
+      continue;
+    }
+    let cursor = skipLatexWhitespace(source, commandEnd);
+    if (source[cursor] === "*") cursor = skipLatexWhitespace(source, cursor + 1);
+    if (command === "sqrt" && source[cursor] === "[") {
+      const optionalEnd = readBalancedGroupEnd(source, cursor, "[", "]");
+      if (optionalEnd === null) return false;
+      cursor = optionalEnd;
+    }
+    for (let argument = 0; argument < requiredArguments; argument += 1) {
+      const argumentEnd = readLatexArgumentEnd(source, cursor);
+      if (argumentEnd === null) return false;
+      cursor = argumentEnd;
+    }
+    index = commandEnd - 1;
+  }
+  return true;
+}
+
+function validateFormulaDraft(latex: string): string | null {
+  if (!latex.trim()) return "empty-formula";
+  if (!hasBalancedLatexGroups(latex)) return "unbalanced-group";
+  if (/(^|[^\\])[_^]\s*$/.test(latex)) return "incomplete-script";
+  if (!hasCompleteRequiredCommandArguments(latex)) {
+    return "incomplete-command-arguments";
+  }
+  const errors = validateLatex(latex);
+  return errors.length ? errors[0]?.code ?? "invalid-latex" : null;
+}
+
+export interface LatexSourceDraftResult {
+  valid: boolean;
+  values: string[];
+  error?: string;
+}
+
+export function parseLatexSourceDraft(
+  source: string,
+  format: LatexCodeFormat = DEFAULT_LATEX_CODE_FORMAT,
+): LatexSourceDraftResult {
+  const normalized = source.replace(/\r\n?/g, "\n");
+  if (!normalized.trim()) return { valid: true, values: [""] };
+  const values = parseByFormatStrict(normalized.trim(), format);
+  if (!values?.length) {
+    return { valid: false, values: [], error: "incomplete-format-wrapper" };
+  }
+  for (const value of values) {
+    const error = validateFormulaDraft(value);
+    if (error) return { valid: false, values, error };
+  }
+  return { valid: true, values };
+}
+
 export function parseLatexSource(
   source: string,
   preferredFormat: LatexCodeFormat = DEFAULT_LATEX_CODE_FORMAT,
@@ -618,6 +1006,7 @@ export function parseLatexSource(
     "display-dollar",
     "display-bracket",
     "inline-paren",
+    "inline-text-double-dollar",
     "inline-dollar",
     "raw",
   ];

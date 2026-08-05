@@ -258,10 +258,7 @@ async fn recognize_ocr(
     }
 }
 
-async fn prewarm_ocr(
-    State(context): State<ServerContext>,
-    headers: HeaderMap,
-) -> Response {
+async fn prewarm_ocr(State(context): State<ServerContext>, headers: HeaderMap) -> Response {
     let model = ocr_header(&headers, "x-visualtex-ocr-model")
         .unwrap_or_else(|| "PP-FormulaNet_plus-M".to_string());
     if model.len() > 80 {
@@ -720,10 +717,8 @@ async fn confirm_powerpoint_session(
     State(context): State<ServerContext>,
 ) -> Response {
     let companion = context.companion.clone();
-    match run_native_operation(move || {
-        confirm_powerpoint_session_blocking(companion, session_id)
-    })
-    .await
+    match run_native_operation(move || confirm_powerpoint_session_blocking(companion, session_id))
+        .await
     {
         Ok(session) => Json(session).into_response(),
         Err(error) => native_error_response(error),

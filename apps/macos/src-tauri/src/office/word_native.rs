@@ -157,7 +157,10 @@ pub fn apply_inline_baseline(
         ));
     }
     if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
-        return Err("Microsoft Word returned invalid formula dimensions after baseline finalization".to_string());
+        return Err(
+            "Microsoft Word returned invalid formula dimensions after baseline finalization"
+                .to_string(),
+        );
     }
     Ok(WordInlineBaselineResult {
         applied_position,
@@ -179,7 +182,8 @@ mod tests {
         assert!(APPLY_INLINE_BASELINE_SCRIPT.contains("start with \"marker=\""));
         assert!(APPLY_INLINE_BASELINE_SCRIPT.contains("alternative text of candidateShape"));
         assert!(APPLY_INLINE_BASELINE_SCRIPT.contains("repeat with attemptIndex from 1 to 12"));
-        assert!(APPLY_INLINE_BASELINE_SCRIPT.contains("set documentShapeCount to count of inline shapes of active document"));
+        assert!(APPLY_INLINE_BASELINE_SCRIPT
+            .contains("set documentShapeCount to count of inline shapes of active document"));
         assert!(!APPLY_INLINE_BASELINE_SCRIPT.contains("set matchingShapes to {}"));
         assert!(!APPLY_INLINE_BASELINE_SCRIPT.contains("caretStart - 1"));
         assert!(

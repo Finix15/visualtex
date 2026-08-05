@@ -4,18 +4,26 @@ import { SVG } from "mathjax-full/js/output/svg.js";
 import { liteAdaptor } from "mathjax-full/js/adaptors/liteAdaptor.js";
 import { RegisterHTMLHandler } from "mathjax-full/js/handlers/html.js";
 import { AllPackages } from "mathjax-full/js/input/tex/AllPackages.js";
+import { STATE } from "mathjax-full/js/core/MathItem.js";
+import { SerializedMmlVisitor } from "mathjax-full/js/core/MmlTree/SerializedMmlVisitor.js";
+import type { MmlNode } from "mathjax-full/js/core/MmlTree/MmlNode.js";
 import { normalizeMathLiveCanonicalUprightCommands } from "../editor/normalizeChineseLatex.ts";
+import { normalizeExtendedIntegralLatexCommands } from "../math/extendedIntegralCompatibility.ts";
+import { applyVisualTexIntegralSvgGlyphs } from "../math/integralSvgExportCompatibility.ts";
 import {
-  normalizeMathJaxUnsupportedNaryCommands,
-  registerMathJaxIntegralGlyphs,
-} from "./mathJaxCompatibility.ts";
+  assertResolvedMathJaxSvg,
+  assertResolvedPresentationMathMl,
+  VISUALTEX_MATHML_MACROS,
+  VISUALTEX_SVG_MACROS,
+  type VisualTexMathJaxMacro,
+} from "../math/latexCompatibility.ts";
 import type {
   PngExportOptions,
   PngExportResult,
   SvgExportOptions,
   SvgExportResult,
 } from "./exportTypes";
-import { errorMessage } from "../runtime/errorMessage";
+import { errorMessage } from "../runtime/errorMessage.ts";
 
 const DEFAULT_OPTIONS: SvgExportOptions = {
   displayMode: true,
@@ -26,23 +34,41 @@ const DEFAULT_OPTIONS: SvgExportOptions = {
 
 const adaptor = liteAdaptor();
 RegisterHTMLHandler(adaptor);
-const texInput = new TeX({
-  packages: AllPackages,
-  formatError: (_jax: unknown, error: unknown) => {
-    throw new Error(errorMessage(error, "MathJax could not parse this formula."), {
-      cause: error,
-    });
-  },
+
+function createTexInput(macros: Record<string, VisualTexMathJaxMacro>) {
+  return new TeX({
+    packages: AllPackages,
+    macros,
+    formatError: (_jax: unknown, error: unknown) => {
+      throw new Error(
+        errorMessage(error, "MathJax could not parse this formula."),
+        { cause: error },
+      );
+    },
+  });
+}
+
+const mathMlTexInput = createTexInput(VISUALTEX_MATHML_MACROS);
+const svgTexInput = createTexInput(VISUALTEX_SVG_MACROS);
+const mathMlOutput = new SVG({
+  fontCache: "local",
+  internalSpeechTitles: false,
 });
 const svgOutput = new SVG({
   fontCache: "local",
   internalSpeechTitles: false,
 });
-registerMathJaxIntegralGlyphs(svgOutput.font);
+const mathMlDocument = mathjax.document("", {
+  InputJax: mathMlTexInput,
+  OutputJax: mathMlOutput,
+});
 const mathDocument = mathjax.document("", {
-  InputJax: texInput,
+  InputJax: svgTexInput,
   OutputJax: svgOutput,
 });
+const serializedMmlVisitor = new SerializedMmlVisitor(
+  mathMlDocument.mmlFactory,
+);
 
 function positiveFinite(value: number, fallback: number) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
@@ -79,10 +105,8 @@ function isSingleCompleteEnvironment(source: string) {
 }
 
 function prepareLatex(latex: string) {
-  const normalized = normalizeMathJaxUnsupportedNaryCommands(
-    normalizeMathLiveCanonicalUprightCommands(
-      latex.replace(/\r\n?/g, "\n"),
-    ),
+  const normalized = normalizeMathLiveCanonicalUprightCommands(
+    normalizeExtendedIntegralLatexCommands(latex.replace(/\r\n?/g, "\n")),
   ).trim();
   if (!normalized) throw new Error("Cannot export an empty formula.");
 
@@ -145,6 +169,74 @@ function assertSelfContained(svg: string) {
   }
 }
 
+const WORD_EXPLICIT_BLACK = "#000000";
+
+function wordCompatiblePaintValue(value: string) {
+  const trimmed = value.trim();
+  if (/^(?:none|transparent)$/i.test(trimmed)) {
+    return trimmed.toLowerCase();
+  }
+  return WORD_EXPLICIT_BLACK;
+}
+
+function removeCssCustomProperties(value: string) {
+  return value.replace(
+    /(^|[;{])\s*--[a-zA-Z0-9_-]+\s*:[^;}]*;?/g,
+    "$1",
+  );
+}
+
+function forceStylePaintBlack(value: string) {
+  return removeCssCustomProperties(value).replace(
+    /(^|[;{]\s*)(color|fill|stroke)\s*:\s*([^;}]+)/gi,
+    (_match, prefix: string, property: string, paint: string) =>
+      `${prefix}${property}:${wordCompatiblePaintValue(paint)}`,
+  );
+}
+
+/**
+ * Word 16.89 can initially paint an SVG formula as transparent when its first
+ * resolved colour comes from currentColor, a CSS variable, a white inherited
+ * paint, or another deferred style carrier. Normalize every SVG paint carrier
+ * before either the SVG or PNG is emitted so both compatibility representations
+ * are byte-for-byte derived from the same explicit-black artwork.
+ */
+function forceWordCompatibleBlack(svg: string) {
+  let output = svg.replace(/currentColor/gi, WORD_EXPLICIT_BLACK);
+  output = output.replace(
+    /\b(color|fill|stroke)=(['"])(.*?)\2/gi,
+    (_match, property: string, quote: string, paint: string) =>
+      `${property}=${quote}${wordCompatiblePaintValue(paint)}${quote}`,
+  );
+  output = output.replace(
+    /\bstyle=(['"])(.*?)\1/gi,
+    (_match, quote: string, style: string) =>
+      `style=${quote}${forceStylePaintBlack(style)}${quote}`,
+  );
+  output = output.replace(
+    /<style\b([^>]*)>([\s\S]*?)<\/style>/gi,
+    (_match, attributes: string, css: string) =>
+      `<style${attributes}>${forceStylePaintBlack(css)}</style>`,
+  );
+
+  const lower = output.toLowerCase();
+  if (
+    lower.includes("currentcolor") ||
+    lower.includes("var(") ||
+    /\b(?:color|fill|stroke)\s*[:=]\s*['"]?(?:inherit|white|#fff(?:fff)?)(?:['";\s>]|$)/i.test(
+      output,
+    )
+  ) {
+    throw new Error(
+      "Word SVG export still contains a deferred or white paint style.",
+    );
+  }
+  if (!/\b(?:fill|stroke)=["']#000000["']/i.test(output)) {
+    throw new Error("Word SVG export is missing explicit black formula paint.");
+  }
+  return output;
+}
+
 function encodeUtf8Base64(value: string) {
   const bytes = new TextEncoder().encode(value);
   let binary = "";
@@ -157,6 +249,20 @@ function encodeUtf8Base64(value: string) {
 
 export function svgToBase64(svg: string) {
   return encodeUtf8Base64(svg);
+}
+
+export function latexToMathMl(latex: string, displayMode = true) {
+  const source = prepareLatex(latex);
+  const root = mathMlDocument.convert(source, {
+    display: displayMode,
+    end: STATE.COMPILED,
+  }) as unknown as MmlNode;
+  const mathMl = serializedMmlVisitor.visitTree(root).trim();
+  if (!mathMl.startsWith("<math") || !mathMl.includes("MathML")) {
+    throw new Error("MathJax did not produce valid Presentation MathML.");
+  }
+  assertResolvedPresentationMathMl(mathMl);
+  return mathMl;
 }
 
 export function latexToSvg(
@@ -176,6 +282,7 @@ export function latexToSvg(
     containerWidth: 100_000,
   });
   let svg = extractSvg(adaptor.outerHTML(container));
+  svg = applyVisualTexIntegralSvgGlyphs(svg, options.displayMode);
   const viewBox = parseViewBox(svg);
 
   const unitsPerPx = 1000 / fontSizePx;
@@ -206,7 +313,10 @@ export function latexToSvg(
         attributes ? ` ${attributes}` : ""
       }>`;
     })
-    .replaceAll("currentColor", "#111111");
+    .replace(
+      /currentColor/gi,
+      options.forceExplicitBlack ? WORD_EXPLICIT_BLACK : "#111111",
+    );
 
   const openingEnd = svg.indexOf(">");
   if (options.background === "white") {
@@ -220,6 +330,11 @@ export function latexToSvg(
     svg = `${svg.slice(0, openingEnd + 1)}${hitTarget}${svg.slice(openingEnd + 1)}`;
   }
 
+  if (options.forceExplicitBlack) {
+    svg = forceWordCompatibleBlack(svg);
+  }
+
+  assertResolvedMathJaxSvg(svg);
   assertSelfContained(svg);
   return {
     svg,
@@ -241,6 +356,45 @@ function blobToBase64(blob: Blob) {
     };
     reader.readAsDataURL(blob);
   });
+}
+
+function pngDataUrlToBlob(value: string) {
+  const prefix = "data:image/png;base64,";
+  if (!value.startsWith(prefix)) {
+    throw new Error("Canvas did not produce a PNG data URL.");
+  }
+  const binary = atob(value.slice(prefix.length));
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return new Blob([bytes], { type: "image/png" });
+}
+
+async function encodeCanvasPng(canvas: HTMLCanvasElement) {
+  if (typeof canvas.toBlob === "function") {
+    const blob = await new Promise<Blob | null>((resolve) => {
+      let settled = false;
+      const finish = (value: Blob | null) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        resolve(value);
+      };
+      const timeout = window.setTimeout(() => finish(null), 750);
+      try {
+        canvas.toBlob(finish, "image/png");
+      } catch {
+        finish(null);
+      }
+    });
+    if (blob) return blob;
+  }
+
+  // WKWebView can expose canvas.toBlob() but return null for SVG-backed
+  // canvases. toDataURL() uses a different WebKit encoding path and is stable
+  // on the same canvas, so use it as the required Word compatibility fallback.
+  return pngDataUrlToBlob(canvas.toDataURL("image/png"));
 }
 
 export async function svgToPng(
@@ -275,13 +429,23 @@ export async function svgToPng(
   }
   context.drawImage(image, 0, 0, width, height);
 
-  const blob = await new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob(
-      (value) =>
-        value ? resolve(value) : reject(new Error("Unable to encode PNG output.")),
-      "image/png",
-    );
-  });
+  const pixels = context.getImageData(0, 0, width, height).data;
+  let hasVisibleInk = false;
+  for (let index = 0; index < pixels.length; index += 4) {
+    const alpha = pixels[index + 3];
+    if (
+      alpha >= 16 &&
+      (pixels[index] < 245 || pixels[index + 1] < 245 || pixels[index + 2] < 245)
+    ) {
+      hasVisibleInk = true;
+      break;
+    }
+  }
+  if (!hasVisibleInk) {
+    throw new Error("PNG rasterization produced no visible formula ink.");
+  }
+
+  const blob = await encodeCanvasPng(canvas);
   return {
     blob,
     base64: await blobToBase64(blob),

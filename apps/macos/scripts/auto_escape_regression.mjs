@@ -287,32 +287,6 @@ async function main() {
     );
 
     await evaluate(`document.querySelector(".canvas-input-behavior-trigger").click()`);
-    await evaluate(`document.querySelector(".export-menu-trigger").click()`);
-    await sleep(80);
-    const exportUi = await evaluate(`(() => {
-      const popover = document.querySelector(".export-menu-popover");
-      return {
-        width: getComputedStyle(popover).width,
-        heading: getComputedStyle(popover.querySelector(".export-menu-heading strong")).fontSize,
-        description: getComputedStyle(popover.querySelector(".export-menu-heading span")).fontSize,
-        formatTitle: getComputedStyle(popover.querySelector(".export-format-options strong")).fontSize,
-        extension: getComputedStyle(popover.querySelector(".export-format-options small")).fontSize,
-        pathLabel: getComputedStyle(popover.querySelector(".export-path-copy span")).fontSize,
-        path: getComputedStyle(popover.querySelector(".export-path-copy strong")).fontSize,
-        chooseButton: getComputedStyle(popover.querySelector(".export-path-button")).fontSize,
-      };
-    })()`);
-    assert.deepEqual(exportUi, {
-      width: "420px",
-      heading: "16px",
-      description: "12px",
-      formatTitle: "14px",
-      extension: "12px",
-      pathLabel: "12px",
-      path: "12px",
-      chooseButton: "13px",
-    });
-    await evaluate(`document.querySelector(".export-menu-trigger").click()`);
 
     assert.match(await typeText(">="), /\\(?:ge|geq)/);
     assert.match(await typeText("geq"), /\\(?:ge|geq)/);
@@ -345,7 +319,16 @@ async function main() {
     assert.equal(await typeText("varphi"), "varphi");
     assert.equal(await typeText("mathbb"), "mathbb");
     assert.equal(await typeText("xx"), "xx");
-    assert.equal(await typeText("dx"), "dx");
+    assert.equal(
+      await typeText("dx"),
+      "\\mathrm{d}x",
+      "upright differential detection must remain active when general shortcuts are disabled",
+    );
+    assert.equal(
+      await typeText("sin"),
+      "\\sin",
+      "upright named-operator detection must remain independent of general shortcuts",
+    );
 
     console.log("Auto escape regression passed");
   } finally {

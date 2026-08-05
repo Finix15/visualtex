@@ -10,6 +10,7 @@ const baseUrl = `http://127.0.0.1:${previewPort}`;
 const chromeProfile = `/tmp/visualtex-input-behavior-${process.pid}`;
 const chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const inputKeySettleMs = 60;
 
 async function waitFor(url, timeoutMs = 15000) {
   const started = Date.now();
@@ -150,7 +151,7 @@ async function main() {
         unmodifiedText: value,
       });
       await client.send("Input.dispatchKeyEvent", { type: "keyUp", ...common });
-      await sleep(180);
+      await sleep(inputKeySettleMs);
     };
 
     const typeRawCommand = async (command) => {
@@ -171,7 +172,7 @@ async function main() {
       };
       await client.send("Input.dispatchKeyEvent", { type: "keyDown", ...common });
       await client.send("Input.dispatchKeyEvent", { type: "keyUp", ...common });
-      await sleep(180);
+      await sleep(inputKeySettleMs);
     };
 
     const pressArrow = async (key) => {
@@ -184,7 +185,7 @@ async function main() {
       };
       await client.send("Input.dispatchKeyEvent", { type: "keyDown", ...common });
       await client.send("Input.dispatchKeyEvent", { type: "keyUp", ...common });
-      await sleep(180);
+      await sleep(inputKeySettleMs);
     };
 
     const configure = async (overrides = {}) => {
@@ -203,6 +204,7 @@ async function main() {
         const persisted = JSON.parse(localStorage.getItem(key) || "{}");
         persisted.state = {
           ...(persisted.state || {}),
+          checkUpdatesOnStartup: false,
           inputBehavior: {
             autoExitSuperscript: true,
             autoExitSubscript: true,
@@ -274,6 +276,16 @@ async function main() {
           value: field.value,
           position: field.position,
           lastOffset: field.lastOffset,
+          hasFocus: field.matches(":focus-within"),
+          documentActive:
+            document.activeElement?.getAttribute("aria-label") ||
+            document.activeElement?.className ||
+            document.activeElement?.tagName ||
+            "",
+          activePart:
+            field.shadowRoot?.activeElement?.getAttribute("part") ||
+            field.shadowRoot?.activeElement?.tagName ||
+            "",
           pendingWrapperCommand: field.dataset.pendingWrapperCommand || "",
           pendingWrapperLength: field.closest(".mathfield-host")?.dataset.pendingWrapperLength || "",
           hasPendingWrapperFrame: field.closest(".mathfield-host")?.classList.contains(
@@ -363,6 +375,17 @@ async function main() {
     for (const [label, latex] of operatorLimitCases) {
       await preparePlaceholder(latex);
       await typeCharacter("a", "KeyA", 65);
+      const firstOperatorLimitInput = await readState();
+      assert.match(
+        firstOperatorLimitInput.value,
+        /a/,
+        `${label} lost first input: ${JSON.stringify(firstOperatorLimitInput)}`,
+      );
+      assert.equal(
+        firstOperatorLimitInput.hasFocus,
+        true,
+        `${label} lost MathLive focus: ${JSON.stringify(firstOperatorLimitInput)}`,
+      );
       await typeCharacter("b", "KeyB", 66);
       const operatorLimit = await readState();
       assert.match(
@@ -711,11 +734,32 @@ async function main() {
       trigger?.click();
       setTimeout(() => resolve({
         triggerText: trigger?.textContent?.trim() ?? "",
-        optionCount: document.querySelectorAll(".input-behavior-option").length,
+        options: [...document.querySelectorAll(".input-behavior-option")].map((option) => ({
+          title: option.querySelector("strong")?.textContent?.trim() ?? "",
+          checked: option.querySelector('input[type="checkbox"]')?.checked ?? null,
+        })),
       }), 50);
     })`);
     assert.match(menu.triggerText, /操作逻辑|Input behavior/);
-    assert.equal(menu.optionCount, 6);
+    assert.equal(menu.options.length, 7);
+    for (const expectedTitle of [
+      /常用数学快捷转义|Common math shortcuts/,
+      /上标输入后跳出|Exit superscript after input/,
+      /下标输入后跳出|Exit subscript after input/,
+      /重音内容输入后跳出|Exit accent after input/,
+      /字体命令输入后跳出|Exit font command after input/,
+      /求和、积分等结构候选框|Structured command suggestions/,
+      /其他命令候选框|Other command suggestions/,
+    ]) {
+      assert.ok(
+        menu.options.some(({ title }) => expectedTitle.test(title)),
+        `Missing input behavior option ${expectedTitle}: ${JSON.stringify(menu.options)}`,
+      );
+    }
+    const shortcutOption = menu.options.find(({ title }) =>
+      /常用数学快捷转义|Common math shortcuts/.test(title),
+    );
+    assert.equal(shortcutOption?.checked, true);
     await evaluate(`document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))`);
 
     const loadSingleFormulaLine = async (latex) => {

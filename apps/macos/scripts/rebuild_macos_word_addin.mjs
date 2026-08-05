@@ -137,7 +137,17 @@ function acquireBuildLock() {
       bestEffort("/bin/cat", [buildLockOwnerPath]).trim(),
       10,
     );
-    if (processIsAlive(ownerPid)) {
+    const ownerCommand = bestEffort("/bin/ps", [
+      "-p",
+      String(ownerPid),
+      "-o",
+      "command=",
+    ]).trim();
+    if (
+      ownerPid !== process.pid &&
+      processIsAlive(ownerPid) &&
+      ownerCommand.includes("rebuild_macos_word_addin.mjs")
+    ) {
       throw new Error(
         `Another Word VBE build is already running (pid ${ownerPid}).`,
       );
@@ -854,16 +864,28 @@ function verifyBuiltVba(path) {
     "VTInsertRegisteredEquationCaption",
     "VTWriteWordFailureTrace",
     "VisualTeX_RunWordNativeRegression",
+    "AutoExec",
+    "word-structured-document-import-20260730-r61",
+    "VTWordRibbonDocumentImport",
     "VisualTeX_InsertLatexMarkdownDocument",
     "VTCommitWordDocumentImportDispatch",
+    "word-latex-redraw-20260802-r1",
+    "VTWordRibbonRedrawSelectionImage",
+    "VTWordRibbonRedrawSelectionOmml",
+    "VTWordRibbonRedrawDocumentImage",
+    "VTWordRibbonRedrawDocumentOmml",
     "VTWordEvents",
     "VTHandleWordBeforeDoubleClick",
     "VTTraceWordDoubleClick",
     "App_WindowBeforeDoubleClick",
+    "App_WindowSelectionChange",
+    "VTWordRibbonApplyImageFontSizePreset",
+    "VTRefreshNumberedImageFormulaFontLayout",
     "VisualTeX_EditImageField",
     "VisualTeX_EditSelectedImageFromNativeMonitor",
     "VTEnsureVisualTeXImageMacroButton",
-    "word-double-click-routing-20260730-r66",
+    "word-office-performance-20260801-r77",
+    "1.2.4",
   ];
   for (const value of required) {
     const utf8 = Buffer.from(value, "utf8");

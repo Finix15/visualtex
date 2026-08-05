@@ -55,7 +55,7 @@ inspectAddin("VisualTeX.dotm", "word/vbaProject.bin", [
   "App_WindowBeforeDoubleClick",
   "App_WindowSelectionChange",
   "VisualTeX_StabilizeImageEquationNumberSelection",
-  "word-double-click-routing-20260730-r66",
+  "word-office-performance-20260801-r77",
   "VTTraceWordDoubleClick",
   "VTWordRibbonApplyImageFontSizePreset",
   "VisualTeX_EditImageField",
@@ -73,7 +73,7 @@ inspectAddin("VisualTeX.ppam", "ppt/vbaProject.bin", [
   "App_WindowBeforeDoubleClick",
   "App_WindowSelectionChange",
   "VTPowerPointRibbonApplyFormulaFontSizePreset",
-  "powerpoint-svg-font-size-dropdown-unicode-20260727-r3",
+  "powerpoint-office-performance-20260801-r4",
 ]);
 
 process.stdout.write("VisualTeX compiled macOS Office add-ins: PASS\n");

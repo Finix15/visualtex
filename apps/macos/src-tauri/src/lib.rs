@@ -54,7 +54,10 @@ pub(crate) fn persisted_app_theme(app: &AppHandle) -> String {
 #[tauri::command]
 fn set_app_theme(app: AppHandle, theme: String) -> Result<String, String> {
     let normalized = normalize_app_theme(&theme).to_string();
-    let app_data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
     fs::create_dir_all(&app_data_dir).map_err(|error| error.to_string())?;
     fs::write(app_data_dir.join(ACTIVE_THEME_FILE), &normalized)
         .map_err(|error| error.to_string())?;
@@ -228,11 +231,7 @@ impl OcrState {
         .map_err(|error| format!("OCR recognition task failed: {error}"))?
     }
 
-    pub(crate) async fn prewarm_model(
-        &self,
-        app: AppHandle,
-        model: String,
-    ) -> Result<(), String> {
+    pub(crate) async fn prewarm_model(&self, app: AppHandle, model: String) -> Result<(), String> {
         let worker = self.worker.clone();
         let worker_pid = self.worker_pid.clone();
         let runtime_status = self.runtime_status.clone();
@@ -669,10 +668,7 @@ fn read_persisted_runtime_probe(paths: &RuntimePaths) -> Option<RuntimeProbe> {
     Some(cache.probe)
 }
 
-fn write_persisted_runtime_probe(
-    paths: &RuntimePaths,
-    probe: &RuntimeProbe,
-) -> Result<(), String> {
+fn write_persisted_runtime_probe(paths: &RuntimePaths, probe: &RuntimeProbe) -> Result<(), String> {
     fs::create_dir_all(&paths.root)
         .map_err(|error| format!("Unable to create OCR runtime directory: {error}"))?;
     let (python_size, python_modified_ms) = python_runtime_signature(&paths.python)?;
@@ -742,8 +738,12 @@ fn get_runtime_status_inner(
         return Ok(OcrRuntimeStatus {
             installed: true,
             python_path: Some(paths.python.display().to_string()),
-            python_version: cached_probe.as_ref().map(|probe| probe.python_version.clone()),
-            paddle_version: cached_probe.as_ref().map(|probe| probe.paddle_version.clone()),
+            python_version: cached_probe
+                .as_ref()
+                .map(|probe| probe.python_version.clone()),
+            paddle_version: cached_probe
+                .as_ref()
+                .map(|probe| probe.paddle_version.clone()),
             paddleocr_version: cached_probe
                 .as_ref()
                 .map(|probe| probe.paddleocr_version.clone()),
@@ -1004,7 +1004,9 @@ fn prewarm_model_inner(
     let paths = runtime_paths(app)?;
     let installed_models = ocr_offline::installed_models(&paths.root);
     if !paths.python.is_file() || !installed_models.iter().any(|item| item == model) {
-        return Err(format!("The offline model pack for {model} is not installed"));
+        return Err(format!(
+            "The offline model pack for {model} is not installed"
+        ));
     }
 
     let mut guard = worker_state
@@ -1290,10 +1292,7 @@ fn write_export_file(path: String, data_base64: String) -> Result<(), String> {
         .file_name()
         .and_then(|value| value.to_str())
         .ok_or_else(|| "Export filename is invalid".to_string())?;
-    let temporary = parent.join(format!(
-        ".{file_name}.visualtex-{}.tmp",
-        std::process::id()
-    ));
+    let temporary = parent.join(format!(".{file_name}.visualtex-{}.tmp", std::process::id()));
     let _ = fs::remove_file(&temporary);
     let write_result = (|| -> Result<(), String> {
         let mut file = OpenOptions::new()
@@ -1439,12 +1438,11 @@ fn claim_production_visualtex_url_handler() -> Result<(), String> {
 pub fn run() {
     let background_mode = office::background::is_background_mode();
     let maintenance_install = std::env::args_os().any(|argument| {
-        argument == std::ffi::OsStr::new(
-            office::macos_offline_installer::MAINTENANCE_INSTALL_ARGUMENT,
-        )
+        argument
+            == std::ffi::OsStr::new(office::macos_offline_installer::MAINTENANCE_INSTALL_ARGUMENT)
     });
-    let initial_office_url = std::env::args()
-        .find(|argument| argument.starts_with("visualtex://office/open?session="));
+    let initial_office_url =
+        std::env::args().find(|argument| argument.starts_with("visualtex://office/open?session="));
     let ocr_state = OcrState::default();
     let office_ocr_state = ocr_state.clone();
     let app = tauri::Builder::default()
@@ -1452,8 +1450,7 @@ pub fn run() {
             |app, arguments, _cwd| {
                 if arguments.iter().any(|argument| {
                     argument == office::background::BACKGROUND_ARGUMENT
-                        || argument
-                            == office::macos_offline_installer::MAINTENANCE_INSTALL_ARGUMENT
+                        || argument == office::macos_offline_installer::MAINTENANCE_INSTALL_ARGUMENT
                 }) {
                     return;
                 }
@@ -1505,6 +1502,12 @@ pub fn run() {
                 });
             }
 
+            // Set the application icon while setup is still on AppKit's main
+            // thread. Background-agent launches may stay accessory-only for a
+            // long time, but the first later transition to a regular app must
+            // already have the real VisualTeX Dock icon installed.
+            office::background::install_application_icon(app.handle())
+                .map_err(std::io::Error::other)?;
             let office_state = office::initialize(app.handle(), office_ocr_state.clone())
                 .map_err(std::io::Error::other)?;
             if let Err(error) = office::powerpoint_native::start_double_click_monitor(
@@ -1521,9 +1524,7 @@ pub fn run() {
                 office::background::hide_main_window(app.handle())
                     .map_err(std::io::Error::other)?;
             }
-            if let Err(error) =
-                office::macos_offline::prewarm_office_editor_windows(app.handle())
-            {
+            if let Err(error) = office::macos_offline::prewarm_office_editor_windows(app.handle()) {
                 // Prewarming is an optimization. handle_open_url still creates
                 // the fixed host window lazily if WebKit was unavailable here.
                 eprintln!("Unable to prewarm VisualTeX Office editors: {error}");
@@ -1558,9 +1559,15 @@ pub fn run() {
             office::lifecycle::open_word,
             office::lifecycle::open_powerpoint,
             office::macos_offline::get_macos_offline_document_import_request,
+            office::macos_offline::report_macos_offline_latex_redraw_stage,
+            office::macos_offline::resolve_macos_offline_latex_redraw_font_sizes,
+            office::macos_offline::focus_macos_offline_document_import_target,
+            office::macos_offline::restore_macos_offline_document_import_window,
+            office::macos_offline::get_macos_offline_document_import_progress,
             office::macos_offline::commit_macos_offline_document_import,
             office::macos_offline::cancel_macos_offline_document_import,
             office::macos_offline::get_macos_offline_office_session,
+            office::macos_offline::report_macos_offline_office_editor_prewarmed,
             office::macos_offline::update_macos_offline_office_session,
             office::macos_offline::delete_macos_offline_office_session,
             office::macos_offline::commit_macos_offline_office_session,
@@ -1593,9 +1600,7 @@ pub fn run() {
         tauri::RunEvent::Opened { urls } => {
             for url in urls {
                 if url.scheme() == "visualtex" {
-                    if let Err(error) =
-                        office::macos_offline::handle_open_url(app, url.as_str())
-                    {
+                    if let Err(error) = office::macos_offline::handle_open_url(app, url.as_str()) {
                         eprintln!("Unable to open VisualTeX offline Office Session: {error}");
                     }
                 }

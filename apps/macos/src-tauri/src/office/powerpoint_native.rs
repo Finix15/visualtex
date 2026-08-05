@@ -346,8 +346,7 @@ fn replacement_render_height_ratio(
         .map(|previous_height| {
             if !previous_height.is_finite() || previous_height <= 0.0 {
                 return Err(
-                    "PowerPoint formula metadata has an invalid previous render height"
-                        .to_string(),
+                    "PowerPoint formula metadata has an invalid previous render height".to_string(),
                 );
             }
             Ok(render_height_px / previous_height)
@@ -696,9 +695,7 @@ end tell"#,
 }
 
 fn parse_slide_snapshot(output: &str) -> Result<PowerPointNativeSlideSnapshot, String> {
-    let fields: Vec<&str> = output
-        .split(POWERPOINT_SNAPSHOT_FIELD_SEPARATOR)
-        .collect();
+    let fields: Vec<&str> = output.split(POWERPOINT_SNAPSHOT_FIELD_SEPARATOR).collect();
     if fields.len() != 5 {
         return Err(format!(
             "PowerPoint returned an invalid slide snapshot payload: {output}"
@@ -924,7 +921,7 @@ where
     // a pasted SVG to `Graphic N`; the Office.js command page can still verify
     // durable VisualTeX tags and silently ignore an ordinary picture.
     let mut last_selection = None;
-    for delay in [120_u64, 120, 220] {
+    for delay in [25_u64, 35, 60, 100] {
         wait(Duration::from_millis(delay));
         let Ok(selection) = read_selection() else {
             continue;
@@ -935,6 +932,90 @@ where
         last_selection = Some(selection);
     }
     last_selection.map(|selection| (selection, None))
+}
+
+#[cfg(target_os = "macos")]
+fn close_word_picture_format_task_pane_once() -> Result<bool, String> {
+    let script = r#"(() => {
+  const systemEvents = Application("System Events");
+  const word = systemEvents.processes.byName("Microsoft Word");
+  if (!word.exists()) return "not-running";
+
+  let clicked = false;
+  let visited = 0;
+  const text = (element, property) => {
+    try {
+      const value = element[property]();
+      return value === null || value === undefined ? "" : String(value);
+    } catch (_) {
+      return "";
+    }
+  };
+  const matchesCloseButton = (element) => {
+    if (text(element, "role") !== "AXButton") return false;
+    const name = text(element, "name").trim().toLowerCase();
+    return (
+      (name.startsWith("关闭 ") && name.includes("格式")) ||
+      (name.startsWith("close ") && name.includes("format"))
+    );
+  };
+  const walk = (element, depth) => {
+    if (clicked || visited >= 5000 || depth > 12) return;
+    visited += 1;
+    if (matchesCloseButton(element)) {
+      try {
+        element.click();
+        clicked = true;
+        return;
+      } catch (_) {}
+    }
+    let children = [];
+    try {
+      children = element.uiElements();
+    } catch (_) {}
+    for (let index = 0; index < children.length; index += 1) {
+      walk(children[index], depth + 1);
+      if (clicked) return;
+    }
+  };
+
+  const windows = word.windows();
+  for (let index = 0; index < windows.length; index += 1) {
+    walk(windows[index], 0);
+    if (clicked) break;
+  }
+  return clicked ? "clicked" : "not-found";
+})()"#;
+    let output = Command::new("/usr/bin/osascript")
+        .args(["-l", "JavaScript", "-e", script])
+        .output()
+        .map_err(|error| format!("Unable to inspect the Word picture-format task pane: {error}"))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if detail.is_empty() {
+            "Unable to close the Word picture-format task pane".to_string()
+        } else {
+            format!("Unable to close the Word picture-format task pane: {detail}")
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim() == "clicked")
+}
+
+#[cfg(target_os = "macos")]
+fn close_word_picture_format_task_pane_with_retries() {
+    for delay_ms in [0_u64, 100, 200, 350, 550] {
+        if delay_ms > 0 {
+            thread::sleep(Duration::from_millis(delay_ms));
+        }
+        match close_word_picture_format_task_pane_once() {
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(error) => {
+                eprintln!("Unable to close the Word picture-format task pane: {error}");
+                return;
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -991,15 +1072,11 @@ pub fn start_double_click_monitor(
             });
         } else if frontmost.as_deref() == Some(WORD_BUNDLE_ID) {
             std::thread::spawn(move || {
-                // Word's native VBA WindowBeforeDoubleClick event owns both
-                // InlineShape and native OMath editing. Keep only an image-only
-                // compatibility fallback here: never invoke the generic Word
-                // double-click macro from the global monitor, because native
-                // OMath can otherwise open a second editor while the first
-                // session is still becoming visible.
-                if crate::office::macos_offline::has_open_office_editor(&app) {
-                    return;
-                }
+                // Word may execute its default picture action even when the
+                // wdFieldMacroButton or WindowBeforeDoubleClick route also opens
+                // VisualTeX. Resolve the selected image first and apply task-pane
+                // cleanup to every image carrying valid VisualTeX metadata,
+                // including the current macro-button-wrapped representation.
                 let Some(selection) =
                     word_formula_after_double_click(selected_word_formula, std::thread::sleep)
                 else {
@@ -1008,20 +1085,36 @@ pub fn start_double_click_monitor(
                 if !selection.marker.starts_with(WORD_METADATA_PREFIX) {
                     return;
                 }
-                // Current VisualTeX images live inside a wdFieldMacroButton
-                // result and are routed by Word itself. The native monitor is
-                // only a compatibility entry for older, bare InlineShapes.
-                if selection.macro_button_wrapped {
+
+                let pane_cleanup = std::thread::spawn(|| {
+                    close_word_picture_format_task_pane_with_retries();
+                });
+                if crate::office::macos_offline::focus_open_office_editor(&app) {
+                    let _ = pane_cleanup.join();
                     return;
                 }
-                if crate::office::macos_offline::focus_open_office_editor(&app) {
-                    return;
+
+                // A wrapped image normally reaches VBA through its MacroButton.
+                // Give that route a short opportunity to create the Session so
+                // the native fallback never creates a duplicate editor. If Word
+                // skipped the VBA event, use the same strict metadata-only image
+                // edit entry that also supports legacy bare InlineShapes.
+                if selection.macro_button_wrapped {
+                    for delay_ms in [35_u64, 55, 85] {
+                        std::thread::sleep(Duration::from_millis(delay_ms));
+                        if crate::office::macos_offline::focus_open_office_editor(&app) {
+                            let _ = pane_cleanup.join();
+                            return;
+                        }
+                    }
                 }
                 if let Err(error) =
                     crate::office::macos_offline::run_word_image_double_click_edit_macro()
                 {
-                    eprintln!("Unable to route the bare Word formula image double-click: {error}");
+                    eprintln!("Unable to route the Word formula image double-click: {error}");
                 }
+                let _ = pane_cleanup.join();
+                let _ = crate::office::macos_offline::focus_open_office_editor(&app);
             });
         }
     });
@@ -1101,7 +1194,9 @@ end tell"#,
         .split(WORD_SELECTION_FIELD_SEPARATOR)
         .collect::<Vec<_>>();
     if fields.len() != 4 {
-        return Err(format!("Word returned an invalid formula selection payload: {output}"));
+        return Err(format!(
+            "Word returned an invalid formula selection payload: {output}"
+        ));
     }
     let parse_number = |value: &str, label: &str| {
         value
@@ -1326,8 +1421,14 @@ mod tests {
 
     #[test]
     fn powerpoint_replacement_keeps_the_previous_visual_scale() {
-        assert_eq!(replacement_render_height_ratio(40.0, Some(40.0)), Ok(Some(1.0)));
-        assert_eq!(replacement_render_height_ratio(80.0, Some(40.0)), Ok(Some(2.0)));
+        assert_eq!(
+            replacement_render_height_ratio(40.0, Some(40.0)),
+            Ok(Some(1.0))
+        );
+        assert_eq!(
+            replacement_render_height_ratio(80.0, Some(40.0)),
+            Ok(Some(2.0))
+        );
         assert_eq!(replacement_render_height_ratio(40.0, None), Ok(None));
         assert!(replacement_render_height_ratio(0.0, Some(40.0)).is_err());
         assert!(replacement_render_height_ratio(40.0, Some(0.0)).is_err());

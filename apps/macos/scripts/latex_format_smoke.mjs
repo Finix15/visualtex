@@ -66,7 +66,7 @@ assert.match(
 const canonicalUpright = String.raw`\differentialD x+\capitalDifferentialD y+\exponentialE^{\imaginaryI x}+\imaginaryJ`;
 assert.equal(
   normalizeMathLiveCanonicalUprightCommands(canonicalUpright),
-  String.raw`\mathrm{d} x+\mathrm{D} y+\mathrm{e}^{\mathrm{i} x}+\mathrm{j}`,
+  String.raw`\mathrm{d}x+\mathrm{D}y+\mathrm{e}^{\mathrm{i}x}+\mathrm{j}`,
   "MathLive upright commands must be converted to portable LaTeX",
 );
 assert.equal(
@@ -83,7 +83,7 @@ assert.equal(
 );
 assert.equal(
   formatLatex(canonicalUpright, "raw"),
-  String.raw`\mathrm{d} x+\mathrm{D} y+\mathrm{e}^{\mathrm{i} x}+\mathrm{j}`,
+  String.raw`\mathrm{d}x+\mathrm{D}y+\mathrm{e}^{\mathrm{i}x}+\mathrm{j}`,
   "copied LaTeX must never expose MathLive-only upright commands",
 );
 for (const shortcut of Object.values(visualTexUprightInlineShortcuts)) {
@@ -117,8 +117,8 @@ assert.equal(
 );
 assert.deepEqual(
   resolveVisualTexInlineShortcuts({ alpha: String.raw`\alpha` }, false),
-  {},
-  "disabling automatic conversion must remove every inline shortcut",
+  visualTexUprightInlineShortcuts,
+  "disabling general shortcuts must preserve only the independent upright differential rules",
 );
 const enabledShortcuts = resolveVisualTexInlineShortcuts(
   {
@@ -155,7 +155,7 @@ assert.equal(enabledShortcuts.hat, String.raw`\hat{#?}`);
 assert.equal(visualTexAutoEscapeInlineShortcuts.mathbf, undefined);
 assert.equal(visualTexAutoEscapeInlineShortcuts.mathbb, undefined);
 assert.equal(
-  visualTexAutoEscapeInlineShortcuts.dx.value,
+  visualTexUprightInlineShortcuts.dx.value,
   String.raw`\mathrm{d}x`,
 );
 const contextualDifferentialCases = [
@@ -178,6 +178,11 @@ const contextualDifferentialCases = [
     String.raw`\frac{d^2y}{dx^2}`,
     String.raw`\frac{\mathrm{d}^2y}{\mathrm{d}x^2}`,
     "second derivative",
+  ],
+  [
+    String.raw`\frac{d^2y}{\mathrm{d}x^2}`,
+    String.raw`\frac{\mathrm{d}^2y}{\mathrm{d}x^2}`,
+    "incremental second derivative with an already-upright denominator",
   ],
   [
     String.raw`\frac{d\mathbf{r}}{dt}`,

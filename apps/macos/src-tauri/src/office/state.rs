@@ -1,7 +1,5 @@
 use crate::office::formula_cache::FormulaMetadataCache;
-use crate::office::powerpoint_native::{
-    PowerPointInteractionBus, PowerPointNativeSelection,
-};
+use crate::office::powerpoint_native::{PowerPointInteractionBus, PowerPointNativeSelection};
 use crate::office::sessions::SessionStore;
 use crate::OcrState;
 use axum_server::Handle;
@@ -69,8 +67,7 @@ pub struct OfficeCompanionState {
     pub powerpoint_interactions: PowerPointInteractionBus,
     /// Keep the immutable prepared selection by Session id so retries never
     /// paste a second PowerPoint formula image.
-    pub prepared_powerpoint_commits:
-        Arc<Mutex<HashMap<String, PowerPointNativeSelection>>>,
+    pub prepared_powerpoint_commits: Arc<Mutex<HashMap<String, PowerPointNativeSelection>>>,
     pub ocr_available: bool,
 }
 

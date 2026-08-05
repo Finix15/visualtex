@@ -57,6 +57,39 @@ function normalize(source, codeFormat = "raw") {
   );
 }
 
+const sourceFormattedEquation = normalizeFormulaEditorDocument(
+  [
+    {
+      id: "source-formatted-equation",
+      latex: String.raw`\frac{\delta \mathbb{E}[L]}
+     {\delta f(\mathbf{x})}
+=
+2\int
+\{f(\mathbf{x})-t\}
+p(\mathbf{x},t)\,
+\mathrm{d}t
+=
+0`,
+    },
+  ],
+  "equation",
+);
+assert.equal(sourceFormattedEquation.lines.length, 1);
+assert.equal(sourceFormattedEquation.codeFormat, "equation");
+assert.equal(
+  sourceFormattedEquation.lines[0].latex,
+  String.raw`\frac{\delta \mathbb{E}[L]}{\delta f(\mathbf{x})}=2\int\{f(\mathbf{x})-t\}p(\mathbf{x},t)\,\mathrm{d}t=0`,
+  "source-formatting newlines inside one logical formula row must preserve adjacent TeX arguments without inserting parser-breaking spaces",
+);
+assert.doesNotThrow(() =>
+  renderOfficeFormulaArtifacts({
+    lines: sourceFormattedEquation.lines,
+    codeFormat: sourceFormattedEquation.codeFormat,
+    displayMode: "block",
+    includeWordOmml: false,
+  }),
+);
+
 const multilineCases = [
   {
     name: "align",
@@ -217,6 +250,7 @@ for (const testCase of multilineCases) {
       fontSizePt: 14,
       paddingPx: 2,
       background: "transparent",
+      forceExplicitBlack: true,
     });
     assert.equal(
       rendered.canonicalLatex,
@@ -239,6 +273,16 @@ for (const testCase of multilineCases) {
     assert.equal(wordRendered.svg.width, firstWordImportSvg.width);
     assert.equal(wordRendered.svg.height, firstWordImportSvg.height);
     assert.equal(wordRendered.svg.baseline, firstWordImportSvg.baseline);
+    assert.ok(
+      /(?:fill|stroke)=["']#000000["']/i.test(wordRendered.svg.svg),
+      `${testCase.name} Word SVG must contain explicit black formula paint`,
+    );
+    assert.ok(
+      !/currentColor|var\(|(?:fill|stroke|color)\s*[:=]\s*["']?(?:inherit|white|#fff(?:fff)?)/i.test(
+        wordRendered.svg.svg,
+      ),
+      `${testCase.name} Word SVG must not defer or whiten formula paint`,
+    );
     assert.ok(
       wordRendered.svg.height < rendered.svg.height,
       `${testCase.name} Word bounds must be tighter than PowerPoint bounds`,
@@ -267,7 +311,8 @@ f(x,y)=\sum_{n=1}^{+\infty}\sum_{m=1}^{+\infty}d_{nm}\sin\frac{n\pi}{a}x\sin\fra
     1,
     `${environment} source-formatting newlines must remain one logical formula`,
   );
-  assert.ok(normalized.lines[0].latex.includes("\n"));
+  assert.ok(!normalized.lines[0].latex.includes("\n"));
+  assert.ok(normalized.lines[0].latex.includes("\\qquad f(x,y)"));
   const canonical = serializeFormulaEditorDocument(normalized);
   assert.equal(
     (canonical.match(new RegExp(`\\\\begin\\{${environment.replace("*", "\\*")}\\}`, "g")) ?? []).length,
@@ -289,6 +334,54 @@ f(x,y)=\sum_{n=1}^{+\infty}\sum_{m=1}^{+\infty}d_{nm}\sin\frac{n\pi}{a}x\sin\fra
   assert.equal(rendered.canonicalLatex, canonical);
   assert.ok(rendered.svg.width > 0 && rendered.svg.height > 0);
 }
+
+const equationWithAlignedSource = String.raw`\begin{equation}
+\begin{aligned}
+f^{*}(\mathbf{x})
+&=
+\frac{1}{p(\mathbf{x})}
+\int t\,p(\mathbf{x},t)\,\mathrm{d}t \\
+&=
+\int t\,p(t\mid\mathbf{x})\,\mathrm{d}t
+=
+\mathbb{E}_{t}[t\mid\mathbf{x}]
+\end{aligned}
+\end{equation}`;
+const equationWithAligned = normalize(equationWithAlignedSource);
+assert.equal(equationWithAligned.codeFormat, "equation");
+assert.equal(equationWithAligned.lines.length, 1);
+assert.ok(equationWithAligned.lines[0].latex.includes("\\begin{aligned}"));
+const equationWithAlignedSecondPass = normalizeFormulaEditorDocument(
+  equationWithAligned.lines,
+  equationWithAligned.codeFormat,
+);
+assert.equal(equationWithAlignedSecondPass.codeFormat, "equation");
+assert.deepEqual(
+  equationWithAlignedSecondPass.lines,
+  equationWithAligned.lines,
+  "a normalized outer equation must not be reclassified from its inner aligned environment",
+);
+const equationWithAlignedRendered = renderOfficeFormulaArtifacts({
+  lines: equationWithAligned.lines,
+  codeFormat: equationWithAligned.codeFormat,
+  displayMode: "block",
+  host: "word",
+  includeWordOmml: false,
+});
+assert.equal(equationWithAlignedRendered.codeFormat, "equation");
+assert.equal(equationWithAlignedRendered.lines.length, 1);
+assert.ok(
+  equationWithAlignedRendered.canonicalLatex.startsWith("\\begin{equation}\n"),
+);
+assert.ok(
+  equationWithAlignedRendered.canonicalLatex.includes("\\begin{aligned}"),
+);
+assert.ok(equationWithAlignedRendered.canonicalLatex.includes("\\\\&="));
+assert.ok(equationWithAlignedRendered.svg.width > 240);
+assert.ok(
+  equationWithAlignedRendered.svg.height < 130,
+  "source-formatting newlines inside aligned must not become independent visual rows",
+);
 
 const displayMath = normalize(
   String.raw`\begin{displaymath}x^2+y^2=z^2\end{displaymath}`,

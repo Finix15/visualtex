@@ -10,9 +10,7 @@ use uuid::Uuid;
 #[cfg(target_os = "macos")]
 use objc2::{AnyThread, MainThreadMarker};
 #[cfg(target_os = "macos")]
-use objc2_app_kit::{
-    NSApplication, NSApplicationActivationOptions, NSImage, NSRunningApplication,
-};
+use objc2_app_kit::{NSApplication, NSApplicationActivationOptions, NSImage, NSRunningApplication};
 #[cfg(target_os = "macos")]
 use objc2_foundation::NSString;
 #[cfg(target_os = "macos")]
@@ -22,7 +20,7 @@ pub const BACKGROUND_ARGUMENT: &str = "--office-background";
 pub const LAUNCH_AGENT_LABEL: &str = "com.visualtex.studio.office";
 const LAUNCH_AGENT_FILE: &str = "com.visualtex.studio.office.plist";
 const BACKGROUND_MARKER_FILE: &str = "office-background.enabled";
-const DOCK_ICON_MIGRATION_MARKER_FILE: &str = "dock-icon-v2.refreshed";
+const DOCK_ICON_MIGRATION_MARKER_FILE: &str = "dock-icon-v4.refreshed";
 #[cfg(target_os = "macos")]
 static APPLICATION_ICON_INSTALLED: AtomicBool = AtomicBool::new(false);
 
@@ -427,17 +425,29 @@ pub fn uninstall_launch_agent() -> Result<OfficeBackgroundStatus, String> {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn activate_foreground_app(app: &AppHandle) -> Result<(), String> {
+pub(crate) fn prepare_foreground_app(app: &AppHandle) -> Result<(), String> {
+    // Every Accessory-to-Regular transition must have the real bundle icon in
+    // place before macOS creates or refreshes the Dock tile. Changing policy is
+    // intentionally separate from activating the process: hidden Office editor
+    // hydration must never raise the desktop main window.
+    install_application_icon(app)?;
     app.set_activation_policy(tauri::ActivationPolicy::Regular)
-        .map_err(|error| format!("Unable to activate VisualTeX: {error}"))?;
+        .map_err(|error| format!("Unable to prepare VisualTeX for foreground use: {error}"))
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn prepare_foreground_app(_app: &AppHandle) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn activate_foreground_app(app: &AppHandle) -> Result<(), String> {
+    prepare_foreground_app(app)?;
     let running = NSRunningApplication::currentApplication();
     let options = NSApplicationActivationOptions::ActivateAllWindows;
-    // macOS can return false briefly after switching an accessory/background
-    // application back to Regular, especially before its hidden resident
-    // WebView is shown. Do not abort the request on that advisory result: the
-    // caller immediately shows the target window and validates set_focus().
-    // A few short attempts still avoid an unnecessary focus delay when the
-    // activation policy transition settles synchronously.
+    // Match the proven eb2fcf2a lifecycle. macOS may briefly return false
+    // immediately after an Accessory-to-Regular transition; retry for a few
+    // milliseconds, but never abort editor presentation on that advisory flag.
     for attempt in 0..4 {
         if running.activateWithOptions(options) {
             break;
@@ -452,6 +462,24 @@ pub(crate) fn activate_foreground_app(app: &AppHandle) -> Result<(), String> {
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn activate_foreground_app(_app: &AppHandle) -> Result<(), String> {
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn activate_application_by_bundle_identifier(bundle_identifier: &str) -> bool {
+    let identifier = NSString::from_str(bundle_identifier);
+    let applications = NSRunningApplication::runningApplicationsWithBundleIdentifier(&identifier);
+    applications.firstObject().is_some_and(|application| {
+        if let Some(main_thread) = MainThreadMarker::new() {
+            let current = NSApplication::sharedApplication(main_thread);
+            current.yieldActivationToApplication(&application);
+        }
+        application.activateWithOptions(NSApplicationActivationOptions::empty())
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn activate_application_by_bundle_identifier(_bundle_identifier: &str) -> bool {
+    false
 }
 
 #[cfg(target_os = "macos")]
@@ -470,8 +498,9 @@ pub(crate) fn install_application_icon(app: &AppHandle) -> Result<(), String> {
             icon_path.display()
         ));
     }
-    let main_thread = MainThreadMarker::new()
-        .ok_or_else(|| "VisualTeX application icon must be installed on the main thread".to_string())?;
+    let main_thread = MainThreadMarker::new().ok_or_else(|| {
+        "VisualTeX application icon must be installed on the main thread".to_string()
+    })?;
     let path = NSString::from_str(&icon_path.to_string_lossy());
     let image = NSImage::initWithContentsOfFile(NSImage::alloc(), &path)
         .ok_or_else(|| format!("macOS could not decode {}", icon_path.display()))?;
@@ -500,10 +529,10 @@ fn refresh_dock_after_icon_migration() -> Result<(), String> {
     }
 
     // Older same-version builds could leave zero-width Dock items behind after
-    // switching between Accessory and Regular activation policies. The bundled
-    // icon and current activation logic cannot resize those already-cached
-    // ghost items. Restart Dock once after installing the new high-coverage
-    // icon; macOS immediately recreates the tile from the running application.
+    // exposing resident Office windows at a tiny non-zero alpha. The bundled
+    // icon and hidden-window prewarming fix cannot resize those already-cached
+    // ghost items. Restart Dock once after migrating to genuinely hidden
+    // resident windows; macOS immediately recreates the normal application tile.
     let status = Command::new("/usr/bin/killall")
         .arg("Dock")
         .status()
@@ -522,8 +551,12 @@ fn refresh_dock_after_icon_migration() -> Result<(), String> {
 }
 
 pub fn reveal_main_window(app: &AppHandle) -> Result<(), String> {
-    activate_foreground_app(app)?;
+    // Install the bundle icon before changing activation policy. A process
+    // launched by the Office background agent has no Dock tile until it becomes
+    // Regular; setting the icon first prevents macOS from creating a generic or
+    // empty tile during that transition.
     install_application_icon(app)?;
+    activate_foreground_app(app)?;
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "VisualTeX main window is unavailable".to_string())?;

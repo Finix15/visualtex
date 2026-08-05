@@ -1,9 +1,9 @@
 use crate::office::background;
-use crate::office::certificate::ensure_companion_tls;
 #[cfg(target_os = "macos")]
 use crate::office::certificate::ensure_companion_data_runtime;
 #[cfg(not(target_os = "macos"))]
 use crate::office::certificate::ensure_companion_runtime;
+use crate::office::certificate::ensure_companion_tls;
 use crate::office::formula_cache::FormulaMetadataCache;
 use crate::office::server;
 use crate::office::sessions::SessionStore;

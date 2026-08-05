@@ -187,10 +187,10 @@ async function main() {
     assert.equal(fieldReady, true, "VisualTeX mathfield mounted");
 
     const clearAndFocus = async () => {
-      const started = Date.now();
-      let ready = false;
-      while (!ready && Date.now() - started < 5_000) {
-        ready = await evaluate(`(() => {
+      const clearStarted = Date.now();
+      let cleared = false;
+      while (!cleared && Date.now() - clearStarted < 5_000) {
+        cleared = await evaluate(`(() => {
           const field = document.querySelector("math-field.visual-mathfield");
           if (!field?.isConnected || !field.shadowRoot) return false;
           field.setValue("", {
@@ -200,11 +200,25 @@ async function main() {
             selectionMode: "after",
             silenceNotifications: true,
           });
+          field.position = field.lastOffset;
           field.dispatchEvent(new InputEvent("input", {
             bubbles: true,
             composed: true,
             inputType: "insertText",
           }));
+          return field.isConnected && field.value === "";
+        })()`);
+        if (!cleared) await sleep(40);
+      }
+      assert.equal(cleared, true, "stable empty VisualTeX mathfield");
+      await sleep(100);
+
+      const focusStarted = Date.now();
+      let focused = false;
+      while (!focused && Date.now() - focusStarted < 5_000) {
+        focused = await evaluate(`(() => {
+          const field = document.querySelector("math-field.visual-mathfield");
+          if (!field?.isConnected || !field.shadowRoot) return false;
           field.focus();
           field.position = field.lastOffset;
           field.shadowRoot
@@ -212,10 +226,10 @@ async function main() {
             ?.focus({ preventScroll: true });
           return field.isConnected && field.hasFocus();
         })()`);
-        if (!ready) await sleep(40);
+        if (!focused) await sleep(40);
       }
-      assert.equal(ready, true, "stable focused VisualTeX mathfield");
-      await sleep(45);
+      assert.equal(focused, true, "stable focused VisualTeX mathfield");
+      await sleep(80);
     };
 
     const typeText = async (text) => {
@@ -238,7 +252,13 @@ async function main() {
       while (Date.now() - started < 5_000) {
         state = await evaluate(`(() => {
           const expected = ${JSON.stringify(expectedCommands)};
-          const panel = document.getElementById("mathlive-suggestion-popover");
+          const stablePanel = document.getElementById(
+            "visualtex-native-input-suggestion-popover",
+          );
+          const sourcePanel = document.getElementById("mathlive-suggestion-popover");
+          const panel = stablePanel?.querySelector("li[data-command]")
+            ? stablePanel
+            : sourcePanel;
           const items = [...(panel?.querySelectorAll("li[data-command]") ?? [])];
           const byCommand = new Map(
             items.map((item) => [item.dataset.command ?? "", item]),
@@ -259,11 +279,21 @@ async function main() {
               linkCount: rendered?.querySelectorAll("a[href]").length ?? 0,
             };
           });
+          const field = document.querySelector("math-field.visual-mathfield");
+          const rawLatex = [...(field?.shadowRoot?.querySelectorAll(".ML__raw-latex") ?? [])]
+            .filter((node) => !node.classList.contains("ML__suggestion"))
+            .map((node) => node.textContent ?? "")
+            .join("");
           return {
             ready:
               Boolean(panel?.classList.contains("is-visible")) &&
               result.every((entry) => entry.command),
             result,
+            availableCommands: items.map((item) => item.dataset.command ?? ""),
+            fieldValue: field?.value ?? "",
+            fieldMode: field?.mode ?? "",
+            fieldFocused: field?.hasFocus() ?? false,
+            rawLatex,
           };
         })()`);
         if (state?.ready) break;
@@ -278,7 +308,13 @@ async function main() {
       return (
         await evaluate(`(() => {
           const expected = ${JSON.stringify(expectedCommands)};
-          const panel = document.getElementById("mathlive-suggestion-popover");
+          const stablePanel = document.getElementById(
+            "visualtex-native-input-suggestion-popover",
+          );
+          const sourcePanel = document.getElementById("mathlive-suggestion-popover");
+          const panel = stablePanel?.querySelector("li[data-command]")
+            ? stablePanel
+            : sourcePanel;
           return expected.map((command) => {
             const item = [...(panel?.querySelectorAll("li[data-command]") ?? [])]
               .find((candidate) => candidate.dataset.command === command);
@@ -415,7 +451,13 @@ async function main() {
           prefixState = await evaluate(`(() => {
             const query = ${JSON.stringify(`\\${prefix}`)};
             const field = document.querySelector("math-field.visual-mathfield");
-            const panel = document.getElementById("mathlive-suggestion-popover");
+            const stablePanel = document.getElementById(
+              "visualtex-native-input-suggestion-popover",
+            );
+            const sourcePanel = document.getElementById("mathlive-suggestion-popover");
+            const panel = stablePanel?.querySelector("li[data-command]")
+              ? stablePanel
+              : sourcePanel;
             const items = [...(panel?.querySelectorAll("li[data-command]") ?? [])];
             const rawLatex = [...(field?.shadowRoot?.querySelectorAll(".ML__raw-latex") ?? [])]
               .filter((node) => !node.classList.contains("ML__suggestion"))
@@ -452,7 +494,13 @@ async function main() {
         await sleep(160);
         const entries = await evaluate(`(() => {
           const query = ${JSON.stringify(`\\${prefix}`)};
-          const panel = document.getElementById("mathlive-suggestion-popover");
+          const stablePanel = document.getElementById(
+            "visualtex-native-input-suggestion-popover",
+          );
+          const sourcePanel = document.getElementById("mathlive-suggestion-popover");
+          const panel = stablePanel?.querySelector("li[data-command]")
+            ? stablePanel
+            : sourcePanel;
           const hasVisibleInk = (preview) => {
             const rendered = preview?.querySelector(".ML__latex") ?? preview;
             if (!rendered || rendered.querySelector(".ML__error")) return false;

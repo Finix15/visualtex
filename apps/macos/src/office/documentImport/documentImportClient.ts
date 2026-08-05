@@ -15,6 +15,10 @@ export interface MacosDocumentImportRequest {
   sourceDocumentId: string;
   bookmarkName: string;
   defaultFontSizePt: number;
+  operation: "documentImport" | "latexRedraw";
+  redrawScope?: "selection" | "document";
+  outputKind?: DocumentFormulaOutputKind;
+  source?: string;
 }
 
 export interface DocumentImportParagraphCommitMetadata {
@@ -49,6 +53,9 @@ export interface DocumentImportFormulaCommitItem
   width?: number;
   height?: number;
   baseline?: number;
+  sourceStart?: number;
+  sourceEnd?: number;
+  sourceText?: string;
 }
 
 export type DocumentImportCommitItem =
@@ -60,9 +67,65 @@ export interface CommitMacosDocumentImportInput {
   items: DocumentImportCommitItem[];
 }
 
+export interface MacosDocumentImportProgress {
+  current: number;
+  total: number;
+  stage: "preparing" | "inserting" | "complete" | "error" | string;
+}
+
+export interface MacosLatexRedrawFontRangeInput {
+  sourceStart: number;
+  sourceEnd: number;
+  sourceText: string;
+  displayMode: DocumentFormulaDisplayMode;
+}
+
 export function getMacosDocumentImportRequest(sessionId: string) {
   return invokeTauri<MacosDocumentImportRequest>(
     "get_macos_offline_document_import_request",
+    { sessionId },
+  );
+}
+
+export function reportMacosLatexRedrawStage(
+  sessionId: string,
+  stage: string,
+  elapsedMs: number,
+  itemCount: number,
+) {
+  return invokeTauri<void>("report_macos_offline_latex_redraw_stage", {
+    sessionId,
+    stage,
+    elapsedMs,
+    itemCount,
+  });
+}
+
+export function resolveMacosLatexRedrawFontSizes(
+  sessionId: string,
+  ranges: MacosLatexRedrawFontRangeInput[],
+) {
+  return invokeTauri<number[]>(
+    "resolve_macos_offline_latex_redraw_font_sizes",
+    { sessionId, input: { ranges } },
+  );
+}
+
+export function focusMacosDocumentImportTarget(
+  operation: "documentImport" | "latexRedraw" = "documentImport",
+) {
+  return invokeTauri<void>("focus_macos_offline_document_import_target", {
+    operation,
+  });
+}
+
+export function restoreMacosDocumentImportWindow() {
+  return invokeTauri<void>("restore_macos_offline_document_import_window", {});
+}
+
+export function getMacosDocumentImportProgress(sessionId: string) {
+  return invokeTauri<MacosDocumentImportProgress>(
+    "get_macos_offline_document_import_progress",
     { sessionId },
   );
 }
