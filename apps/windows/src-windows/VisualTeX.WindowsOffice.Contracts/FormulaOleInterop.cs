@@ -47,6 +47,21 @@ public static class FormulaOleInterop
                 "The VisualTeX native OLE object contains invalid formula metadata.");
     }
 
+    public static void UpdateMetadata(
+        IVisualTeXFormulaObject formula,
+        FormulaMetadata metadata)
+    {
+        if (formula is null) throw new ArgumentNullException(nameof(formula));
+        if (metadata is null) throw new ArgumentNullException(nameof(metadata));
+        metadata.Validate();
+        if (formula is not IVisualTeXFormulaMetadata metadataWriter)
+            throw new NotSupportedException(
+                "The installed VisualTeX OLE server does not support metadata-only updates.");
+        ThrowIfFailed(
+            metadataWriter.SetFormulaJson(FormulaMetadataCodec.SerializeJson(metadata)),
+            "Unable to update metadata in the VisualTeX native OLE object.");
+    }
+
     private static void ThrowIfFailed(int hresult, string message)
     {
         if (hresult >= 0) return;

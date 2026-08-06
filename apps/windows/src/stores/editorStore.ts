@@ -18,6 +18,7 @@ import {
 } from "../clipboard/LatexCopyService";
 import { normalizeChineseLatex } from "../editor/normalizeChineseLatex";
 import { normalizeMultilineLatex } from "../editor/normalizeChineseLatex";
+import { normalizeFormulaLinePhysicalWhitespace } from "../math/formulaLineLatex";
 
 export type Language = "cn" | "en";
 export type EditorLayout = "standard" | "classic";
@@ -98,13 +99,17 @@ function normalizeEditorZoom(value: unknown) {
   );
 }
 
+function normalizeFormulaLineLatex(latex: string) {
+  return normalizeChineseLatex(normalizeFormulaLinePhysicalWhitespace(latex));
+}
+
 export function createFormulaLine(
   latex = "",
   id: string = crypto.randomUUID(),
 ): FormulaLine {
   return {
     id,
-    latex: normalizeChineseLatex(latex.replace(/\r\n?/g, "\n").split("\n")[0] ?? ""),
+    latex: normalizeFormulaLineLatex(latex),
   };
 }
 
@@ -132,10 +137,8 @@ export function normalizeFormulaLines(
         const candidate = item as Partial<FormulaLine>;
         return {
           id: uniqueLineId(candidate.id, usedIds),
-          latex: normalizeChineseLatex(
-            typeof candidate.latex === "string"
-              ? candidate.latex.replace(/\r\n?/g, "\n").split("\n")[0] ?? ""
-              : "",
+          latex: normalizeFormulaLineLatex(
+            typeof candidate.latex === "string" ? candidate.latex : "",
           ),
         } satisfies FormulaLine;
       })

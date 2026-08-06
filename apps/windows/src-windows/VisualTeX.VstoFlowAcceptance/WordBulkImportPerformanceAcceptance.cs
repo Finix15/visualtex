@@ -72,11 +72,7 @@ internal static partial class Program
         Array custom = Array.Empty<object>();
         try
         {
-            application = new Word.Application
-            {
-                Visible = false,
-                DisplayAlerts = Word.WdAlertLevel.wdAlertsNone,
-            };
+            application = CreateWordApplication(visible: false);
             document = application.Documents.Add();
             addIn = new VisualTeX.WordVsto.ThisAddIn();
             addIn.OnConnection(
@@ -174,7 +170,7 @@ internal static partial class Program
             }
             try { reopened?.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
             try { document?.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
-            try { application?.Quit(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
+            try { QuitWordApplicationIfOwned(application); } catch { }
             Release(reopened);
             Release(document);
             Release(application);

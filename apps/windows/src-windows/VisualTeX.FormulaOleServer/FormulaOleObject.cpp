@@ -1005,6 +1005,43 @@ HRESULT CFormulaOleObject::GetFormulaJson(BSTR* metadataJson)
     return *metadataJson == nullptr && !metadataJson_.empty() ? E_OUTOFMEMORY : S_OK;
 }
 
+HRESULT CFormulaOleObject::SetFormulaJson(BSTR metadataJson)
+{
+    TraceOleCall(L"SetFormulaJson enter");
+    if (metadataJson == nullptr)
+        return E_INVALIDARG;
+    if (!initialized_)
+        return CO_E_NOTINITIALIZED;
+
+    const UINT metadataLength = SysStringLen(metadataJson);
+    if (metadataLength == 0 || metadataLength > kMaximumMetadataCharacters)
+        return HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
+    std::wstring nextMetadata(metadataJson, metadataLength);
+    if (nextMetadata.find(L"\"schemaVersion\"") == std::wstring::npos ||
+        nextMetadata.find(L"\"formulaId\"") == std::wstring::npos)
+        return HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
+
+    std::wstring previousMetadata = metadataJson_;
+    const bool previousDirty = dirty_;
+    metadataJson_ = std::move(nextMetadata);
+    dirty_ = true;
+
+    if (clientSite_ != nullptr)
+    {
+        const HRESULT saveResult = clientSite_->SaveObject();
+        if (FAILED(saveResult))
+        {
+            metadataJson_ = std::move(previousMetadata);
+            dirty_ = previousDirty;
+            TraceOleCall(L"SetFormulaJson container save failed");
+            return saveResult;
+        }
+    }
+
+    TraceOleCall(L"SetFormulaJson succeeded");
+    return S_OK;
+}
+
 HRESULT CFormulaOleObject::InitializeOrUpdate(
     BSTR metadataJson,
     BSTR emfPath,

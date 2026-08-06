@@ -24,6 +24,83 @@ internal static partial class Program
     private const uint MouseLeftUp = 0x0004;
     private const double WordPerformanceLimitMilliseconds = 500.0;
 
+    [ComImport]
+    [Guid("00000016-0000-0000-C000-000000000046")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IOleMessageFilter
+    {
+        [PreserveSig]
+        int HandleInComingCall(
+            int callType,
+            IntPtr callerTask,
+            int tickCount,
+            IntPtr interfaceInfo);
+
+        [PreserveSig]
+        int RetryRejectedCall(
+            IntPtr calleeTask,
+            int tickCount,
+            int rejectType);
+
+        [PreserveSig]
+        int MessagePending(
+            IntPtr calleeTask,
+            int tickCount,
+            int pendingType);
+    }
+
+    private sealed class OfficeComMessageFilter : IOleMessageFilter, IDisposable
+    {
+        private IOleMessageFilter? _previous;
+        private bool _disposed;
+
+        private OfficeComMessageFilter()
+        {
+        }
+
+        internal static OfficeComMessageFilter Register()
+        {
+            var filter = new OfficeComMessageFilter();
+            var result = CoRegisterMessageFilter(filter, out filter._previous);
+            if (result < 0)
+                Marshal.ThrowExceptionForHR(result);
+            return filter;
+        }
+
+        public int HandleInComingCall(
+            int callType,
+            IntPtr callerTask,
+            int tickCount,
+            IntPtr interfaceInfo) => 0;
+
+        public int RetryRejectedCall(
+            IntPtr calleeTask,
+            int tickCount,
+            int rejectType)
+        {
+            const int ServerCallRejected = 1;
+            const int ServerCallRetryLater = 2;
+            if ((rejectType == ServerCallRejected || rejectType == ServerCallRetryLater)
+                && tickCount < 30_000)
+                return 100;
+            return -1;
+        }
+
+        public int MessagePending(
+            IntPtr calleeTask,
+            int tickCount,
+            int pendingType) => 2;
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            try { CoRegisterMessageFilter(_previous, out _); }
+            catch { }
+            _previous = null;
+        }
+    }
+
     private sealed class UserWordAddInAutoLoadSuppression : IDisposable
     {
         private const string KeyPath =
@@ -159,6 +236,11 @@ internal static partial class Program
     [DllImport("user32.dll")]
     private static extern bool SetCursorPos(int x, int y);
 
+    [DllImport("ole32.dll")]
+    private static extern int CoRegisterMessageFilter(
+        IOleMessageFilter? newFilter,
+        out IOleMessageFilter? oldFilter);
+
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr windowHandle);
 
@@ -207,6 +289,35 @@ internal static partial class Program
         "office",
         "sessions");
 
+    private static bool AttachActiveWord => string.Equals(
+        Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE_ATTACH_WORD"),
+        "1",
+        StringComparison.OrdinalIgnoreCase);
+
+    private static Word.Application CreateWordApplication(bool visible)
+    {
+        if (AttachActiveWord)
+        {
+            var active = Marshal.GetActiveObject("Word.Application") as Word.Application
+                ?? throw new InvalidOperationException("No active Word instance is available.");
+            active.DisplayAlerts = Word.WdAlertLevel.wdAlertsNone;
+            if (visible) active.Visible = true;
+            return active;
+        }
+
+        return new Word.Application
+        {
+            Visible = visible,
+            DisplayAlerts = Word.WdAlertLevel.wdAlertsNone,
+        };
+    }
+
+    private static void QuitWordApplicationIfOwned(Word.Application? application)
+    {
+        if (application is null || AttachActiveWord) return;
+        application.Quit(Word.WdSaveOptions.wdDoNotSaveChanges);
+    }
+
     [STAThread]
     private static int Main(string[] args)
     {
@@ -249,6 +360,7 @@ internal static partial class Program
         Console.SetError(new TeeTextWriter(originalError, log));
         Console.WriteLine($"Acceptance mode: {mode}");
 
+        using var officeMessageFilter = OfficeComMessageFilter.Register();
         using var installedWordAutoLoadSuppression =
             UserWordAddInAutoLoadSuppression.Create();
         Console.WriteLine(
@@ -278,9 +390,29 @@ internal static partial class Program
             {
                 RunWord(client, artifactRoot, initialOnly: true);
             }
+            else if (string.Equals(mode, "powerpoint-context-safety", StringComparison.OrdinalIgnoreCase))
+            {
+                RunPowerPointContextSafetyAcceptance(client, artifactRoot);
+            }
+            else if (string.Equals(mode, "powerpoint-ole-svg-delete", StringComparison.OrdinalIgnoreCase))
+            {
+                RunPowerPointOleSvgDeleteAcceptance(client, artifactRoot);
+            }
+            else if (string.Equals(mode, "powerpoint-font-size", StringComparison.OrdinalIgnoreCase))
+            {
+                RunPowerPointFontSizeAcceptance(client, artifactRoot);
+            }
+            else if (string.Equals(mode, "powerpoint-picture-edit", StringComparison.OrdinalIgnoreCase))
+            {
+                RunPowerPoint(client, artifactRoot, stopAfterPictureEdit: true);
+            }
             else if (string.Equals(mode, "powerpoint", StringComparison.OrdinalIgnoreCase))
             {
                 RunPowerPoint(client, artifactRoot);
+            }
+            else if (string.Equals(mode, "word-omml-double-click-event-probe", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordOmmlDoubleClickEventProbe(client, artifactRoot);
             }
             else if (string.Equals(mode, "word-omml-double-click-fixtures", StringComparison.OrdinalIgnoreCase))
             {
@@ -290,6 +422,22 @@ internal static partial class Program
             {
                 RunWordOleRealDoubleClick(client, artifactRoot);
             }
+            else if (string.Equals(mode, "word-double-click-hit-test-existing", StringComparison.OrdinalIgnoreCase))
+            {
+                RunExistingWordDoubleClickHitTest(client);
+            }
+            else if (string.Equals(mode, "word-font-size", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordFontSizeAcceptance(client, artifactRoot);
+            }
+            else if (string.Equals(mode, "word-native-omml-source", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordNativeOmmlSourceProbe(client, artifactRoot);
+            }
+            else if (string.Equals(mode, "word-ole-picture-roundtrip", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWord(client, artifactRoot, stopAfterOlePictureRoundTrip: true);
+            }
             else if (string.Equals(mode, "word-unchanged", StringComparison.OrdinalIgnoreCase))
             {
                 RunWord(client, artifactRoot, stopAfterUnchanged: true);
@@ -297,6 +445,38 @@ internal static partial class Program
             else if (string.Equals(mode, "word-100-performance", StringComparison.OrdinalIgnoreCase))
             {
                 RunWordHundredFormulaPerformance(client, artifactRoot);
+            }
+            else if (string.Equals(mode, "word-latex-redraw-omml-only", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordLatexRedrawOmmlOnly(client, artifactRoot);
+            }
+            else if (string.Equals(mode, "word-latex-redraw-source-context", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordLatexRedrawSourceContextStress();
+            }
+            else if (string.Equals(mode, "word-omml-boundary-digit-direct", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordOmmlBoundaryDigitDirect(artifactRoot);
+            }
+            else if (string.Equals(mode, "word-inline-ole-visual-baseline", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordInlineOleVisualBaseline(client, artifactRoot);
+            }
+            else if (string.Equals(mode, "word-inline-ole-visual-baseline-existing", StringComparison.OrdinalIgnoreCase))
+            {
+                RunExistingWordInlineOleVisualBaseline(artifactRoot);
+            }
+            else if (string.Equals(mode, "word-select-existing-inline-ole", StringComparison.OrdinalIgnoreCase))
+            {
+                SelectExistingWordInlineOle();
+            }
+            else if (string.Equals(mode, "word-inline-ole-typing-baseline", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordInlineOleTypingBaseline(client, artifactRoot);
+            }
+            else if (string.Equals(mode, "word-inline-ole-font-style-existing", StringComparison.OrdinalIgnoreCase))
+            {
+                RunExistingWordInlineOleFontStyle(artifactRoot);
             }
             else if (string.Equals(mode, "word-latex-redraw", StringComparison.OrdinalIgnoreCase))
             {
@@ -310,6 +490,32 @@ internal static partial class Program
             {
                 RunWordBulkImportLatexSpacing(artifactRoot);
             }
+            else if (string.Equals(mode, "word-bulk-import-multiline", StringComparison.OrdinalIgnoreCase))
+            {
+                var objectMode = args
+                    .FirstOrDefault(argument => argument.StartsWith(
+                        "--object-mode=",
+                        StringComparison.OrdinalIgnoreCase))
+                    ?.Substring("--object-mode=".Length)
+                    ?? "omml";
+                RunWordBulkImportMultiline(client, artifactRoot, objectMode);
+            }
+            else if (string.Equals(mode, "office-package-command-probe", StringComparison.OrdinalIgnoreCase))
+            {
+                RunOfficePackageCommandProbe(client);
+            }
+            else if (string.Equals(mode, "office-ole-viewbox-probe", StringComparison.OrdinalIgnoreCase))
+            {
+                RunOfficeOleViewBoxProbe(client, artifactRoot);
+            }
+            else if (string.Equals(mode, "word-bulk-import-ole-viewbox", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordBulkImportOleViewBox(client, artifactRoot);
+            }
+            else if (string.Equals(mode, "word-editor-native-close", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordEditorNativeClose(client, artifactRoot);
+            }
             else if (string.Equals(mode, "word-display-spacing", StringComparison.OrdinalIgnoreCase))
             {
                 RunWordDisplaySpacing(client, artifactRoot);
@@ -317,6 +523,18 @@ internal static partial class Program
             else if (string.Equals(mode, "word-equation-number-format", StringComparison.OrdinalIgnoreCase))
             {
                 RunWordEquationNumberFormat(client, artifactRoot);
+            }
+            else if (string.Equals(mode, "word-batch-equation-numbering", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordBatchEquationNumbering(client, artifactRoot);
+            }
+            else if (string.Equals(mode, "word-batch-equation-numbering-current-clone", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordBatchEquationNumberingCurrentClone(artifactRoot);
+            }
+            else if (string.Equals(mode, "word-batch-equation-numbering-safety", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordBatchEquationNumberingSafety(client, artifactRoot);
             }
             else if (string.Equals(mode, "word-bulk-import-performance", StringComparison.OrdinalIgnoreCase))
             {
@@ -327,6 +545,10 @@ internal static partial class Program
                     ?.Substring("--object-mode=".Length)
                     ?? "omml";
                 RunWordBulkImportPerformance(client, artifactRoot, objectMode);
+            }
+            else if (string.Equals(mode, "targeted-powerpoint-46", StringComparison.OrdinalIgnoreCase))
+            {
+                RunTargetedPowerPoint46(client, artifactRoot);
             }
             else if (string.Equals(mode, "targeted-2364", StringComparison.OrdinalIgnoreCase))
             {
@@ -358,11 +580,7 @@ internal static partial class Program
         Word.Fields? fields = null;
         try
         {
-            application = new Word.Application
-            {
-                Visible = false,
-                DisplayAlerts = Word.WdAlertLevel.wdAlertsNone,
-            };
+            application = CreateWordApplication(visible: false);
             document = application.Documents.Add();
             range = document.Range(0, 0);
             range.InsertCaption(
@@ -530,10 +748,7 @@ internal static partial class Program
                 try { document.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
             }
             Release(document);
-            if (application is not null)
-            {
-                try { application.Quit(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
-            }
+            try { QuitWordApplicationIfOwned(application); } catch { }
             Release(application);
             ForceComCleanup();
         }
@@ -551,11 +766,7 @@ internal static partial class Program
         try
         {
             Console.WriteLine("[Native cross-reference 1/7] Starting Word...");
-            application = new Word.Application
-            {
-                Visible = false,
-                DisplayAlerts = Word.WdAlertLevel.wdAlertsNone,
-            };
+            application = CreateWordApplication(visible: false);
             document = application.Documents.Add();
             addIn = new VisualTeX.WordVsto.ThisAddIn();
             addIn.OnConnection(application, ext_ConnectMode.ext_cm_AfterStartup, addIn, ref custom);
@@ -659,10 +870,257 @@ internal static partial class Program
                 try { document.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
             }
             Release(document);
-            if (application is not null)
+            try { QuitWordApplicationIfOwned(application); } catch { }
+            Release(application);
+            ForceComCleanup();
+        }
+    }
+
+    private static void RunExistingWordDoubleClickHitTest(
+        VisualTeXSessionClient client)
+    {
+        Word.Application? application = null;
+        Word.Document? document = null;
+        Word.Window? window = null;
+        Word.OMaths? maths = null;
+        Word.OMath? math = null;
+        Word.Range? ommlRange = null;
+        Word.InlineShapes? shapes = null;
+        Word.InlineShape? shape = null;
+        Word.Range? oleRange = null;
+        VisualTeX.WordVsto.ThisAddIn? addIn = null;
+        Array custom = Array.Empty<object>();
+        try
+        {
+            application = Marshal.GetActiveObject("Word.Application") as Word.Application
+                ?? throw new InvalidOperationException("No active Word instance is available.");
+            document = application.ActiveDocument;
+            window = application.ActiveWindow;
+            maths = document.OMaths;
+            shapes = document.InlineShapes;
+            if (maths.Count < 1 || shapes.Count < 1)
+                throw new InvalidDataException(
+                    "The active Word document must contain at least one OMML and one inline formula.");
+
+            addIn = new VisualTeX.WordVsto.ThisAddIn();
+            addIn.OnConnection(
+                application,
+                ext_ConnectMode.ext_cm_AfterStartup,
+                addIn,
+                ref custom);
+            var service = new VisualTeX.WordVsto.WordFormulaService(application);
+            var callback = typeof(VisualTeX.WordVsto.ThisAddIn).GetMethod(
+                "OnNativeWordDoubleClick",
+                System.Reflection.BindingFlags.Instance
+                    | System.Reflection.BindingFlags.NonPublic)
+                ?? throw new MissingMethodException(
+                    "The coordinate-aware Word double-click callback is missing.");
+
+            math = maths[1];
+            ommlRange = math.Range;
+            window.GetPoint(
+                out var ommlLeft,
+                out var ommlTop,
+                out var ommlWidth,
+                out var ommlHeight,
+                ommlRange);
+            if (ommlWidth <= 0 || ommlHeight <= 0)
+                throw new InvalidDataException("Word did not return the OMML screen rectangle.");
+            var ommlX = ommlLeft + ommlWidth / 2;
+            var ommlY = ommlTop + ommlHeight / 2;
+            var ommlSelection = service.ReadVisualTeXOmmlAtScreenPoint(ommlX, ommlY)
+                ?? throw new InvalidDataException(
+                    "The OMML center was not resolved as a VisualTeX formula.");
+            AssertEqual(
+                FormulaOleContract.WordOmmlMode,
+                ommlSelection.ObjectMode,
+                "The OMML center resolved to the wrong object mode.");
+
+            shape = shapes[1];
+            oleRange = shape.Range;
+            oleRange.Select();
+            WinForms.Application.DoEvents();
+            Thread.Sleep(200);
+            var oleSelection = service.ReadSelection();
+            AssertEqual(
+                FormulaOleContract.NativeOleMode,
+                oleSelection.ObjectMode,
+                "The selected inline formula is not a native VisualTeX OLE object.");
+            window.GetPoint(
+                out var oleLeft,
+                out var oleTop,
+                out var oleWidth,
+                out var oleHeight,
+                oleRange);
+            if (oleWidth <= 0 || oleHeight <= 0)
+                throw new InvalidDataException("Word did not return the OLE screen rectangle.");
+            var oleX = oleLeft + oleWidth / 2;
+            var oleY = oleTop + oleHeight / 2;
+            AssertTrue(
+                service.IsFormulaAtScreenPoint(oleSelection, oleX, oleY),
+                "The OLE center did not hit its real screen rectangle.");
+
+            if (!GetWindowRect(new IntPtr(window.Hwnd), out var wordRectangle))
+                throw new InvalidDataException("Word did not return its window rectangle.");
+            var candidates = new[]
             {
-                try { application.Quit(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
+                (X: wordRectangle.Left + 70, Y: ommlY),
+                (X: wordRectangle.Right - 120, Y: ommlY),
+                (X: ommlX, Y: wordRectangle.Bottom - 90),
+                (X: oleX, Y: wordRectangle.Bottom - 90),
+            };
+            var blankFound = false;
+            var blankX = 0;
+            var blankY = 0;
+            foreach (var candidate in candidates)
+            {
+                if (service.ReadVisualTeXOmmlAtScreenPoint(candidate.X, candidate.Y) is not null)
+                    continue;
+                if (service.IsFormulaAtScreenPoint(ommlSelection, candidate.X, candidate.Y)
+                    || service.IsFormulaAtScreenPoint(oleSelection, candidate.X, candidate.Y))
+                    continue;
+                blankX = candidate.X;
+                blankY = candidate.Y;
+                blankFound = true;
+                break;
             }
+            if (!blankFound)
+                throw new InvalidDataException(
+                    "No unambiguous blank Word screen point was available for the hit-test acceptance.");
+
+            void AssertBlankCallbackDoesNotOpen(
+                Word.Range selectedFormulaRange,
+                string description)
+            {
+                selectedFormulaRange.Select();
+                WinForms.Application.DoEvents();
+                Thread.Sleep(200);
+                var existing = SnapshotSessionIds();
+                callback.Invoke(addIn, new object[] { false, blankX, blankY });
+                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+                while (DateTime.UtcNow < deadline)
+                {
+                    WinForms.Application.DoEvents();
+                    Thread.Sleep(50);
+                }
+                var created = SnapshotSessionIds()
+                    .Except(existing, StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                if (created.Length == 0) return;
+                foreach (var sessionId in created)
+                {
+                    try
+                    {
+                        client.CloseEditorAsync(sessionId, CancellationToken.None)
+                            .GetAwaiter().GetResult();
+                    }
+                    catch { }
+                }
+                throw new InvalidDataException(
+                    description + " incorrectly created an editor Session at blank coordinates: "
+                    + string.Join(", ", created));
+            }
+
+            AssertBlankCallbackDoesNotOpen(
+                ommlRange,
+                "A stale OMML selection");
+            AssertBlankCallbackDoesNotOpen(
+                oleRange,
+                "A stale OLE selection");
+
+            void AssertFormulaCallbackOpens(
+                Word.Range formulaRange,
+                bool interceptedNativeOle,
+                int screenX,
+                int screenY,
+                string expectedObjectMode,
+                string description)
+            {
+                formulaRange.Select();
+                WinForms.Application.DoEvents();
+                Thread.Sleep(200);
+                var existing = SnapshotSessionIds();
+                callback.Invoke(
+                    addIn,
+                    new object[]
+                    {
+                        interceptedNativeOle,
+                        screenX,
+                        screenY,
+                    });
+                var sessionId = WaitForNewSession(
+                    existing,
+                    "word",
+                    TimeSpan.FromSeconds(30));
+                var session = WaitForUnchangedEditorReady(
+                    client,
+                    sessionId,
+                    TimeSpan.FromSeconds(15));
+                AssertEqual(
+                    "edit",
+                    session.Mode,
+                    description + " did not create an edit Session.");
+                AssertEqual(
+                    expectedObjectMode,
+                    session.ObjectMode,
+                    description + " created the wrong object mode.");
+                client.CloseEditorAsync(sessionId, CancellationToken.None)
+                    .GetAwaiter().GetResult();
+                var terminal = WaitForTerminal(
+                    client,
+                    sessionId,
+                    TimeSpan.FromSeconds(30));
+                AssertEqual(
+                    "completed",
+                    terminal.Status,
+                    terminal.Error
+                        ?? description + " unchanged editor did not close cleanly.");
+                client.CloseEditorAsync(sessionId, CancellationToken.None)
+                    .GetAwaiter().GetResult();
+                WaitForAddInIdle(addIn, TimeSpan.FromSeconds(10));
+            }
+
+            AssertFormulaCallbackOpens(
+                ommlRange,
+                interceptedNativeOle: false,
+                ommlX,
+                ommlY,
+                FormulaOleContract.WordOmmlMode,
+                "The real OMML center callback");
+            AssertFormulaCallbackOpens(
+                oleRange,
+                interceptedNativeOle: true,
+                oleX,
+                oleY,
+                FormulaOleContract.NativeOleMode,
+                "The real OLE center callback");
+
+            Console.WriteLine(
+                "Existing Word double-click hit-test passed: OMML/OLE centers opened "
+                + "the correct editor, blank point "
+                + $"{blankX},{blankY} missed both, and stale formula selections "
+                + "created no editor Session.");
+        }
+        finally
+        {
+            if (addIn is not null)
+            {
+                try
+                {
+                    addIn.OnDisconnection(
+                        ext_DisconnectMode.ext_dm_UserClosed,
+                        ref custom);
+                }
+                catch { }
+            }
+            Release(oleRange);
+            Release(shape);
+            Release(shapes);
+            Release(ommlRange);
+            Release(math);
+            Release(maths);
+            Release(window);
+            Release(document);
             Release(application);
             ForceComCleanup();
         }
@@ -688,11 +1146,7 @@ internal static partial class Program
         try
         {
             Console.WriteLine("[Word real OLE 1/8] Starting visible Word...");
-            application = new Word.Application
-            {
-                Visible = true,
-                DisplayAlerts = Word.WdAlertLevel.wdAlertsNone,
-            };
+            application = CreateWordApplication(visible: true);
 
             // This acceptance must exercise the current source assembly, not the
             // formally installed previous build. Disconnect the registered add-in
@@ -916,27 +1370,76 @@ internal static partial class Program
             if (width <= 0 || height <= 0)
                 throw new InvalidDataException("Word did not return a visible OLE formula rectangle.");
 
-            Console.WriteLine("[Word real OLE 6/8] Sending a real mouse double-click...");
-            existing = SnapshotSessionIds();
+            Console.WriteLine("[Word real OLE 6/9] Rejecting a blank-area double-click after selecting the formula...");
             if (consoleWindow != IntPtr.Zero) ShowWindow(consoleWindow, 0);
             var wordWindowHandle = new IntPtr(window.Hwnd);
             const uint noMoveNoSizeShow = 0x0001 | 0x0002 | 0x0040;
             SetWindowPos(wordWindowHandle, new IntPtr(-1), 0, 0, 0, 0, noMoveNoSizeShow);
             var foregroundSet = SetForegroundWindow(wordWindowHandle);
-            if (GetWindowRect(wordWindowHandle, out var wordWindowRectangle))
-            {
-                var titleX = wordWindowRectangle.Left
-                    + Math.Max(40, (wordWindowRectangle.Right - wordWindowRectangle.Left) / 2);
-                var titleY = wordWindowRectangle.Top + 18;
-                SetCursorPos(titleX, titleY);
-                mouse_event(MouseLeftDown, 0, 0, 0, UIntPtr.Zero);
-                mouse_event(MouseLeftUp, 0, 0, 0, UIntPtr.Zero);
-            }
+            if (!GetWindowRect(wordWindowHandle, out var wordWindowRectangle))
+                throw new InvalidDataException("Word did not return its window rectangle.");
+            var titleX = wordWindowRectangle.Left
+                + Math.Max(40, (wordWindowRectangle.Right - wordWindowRectangle.Left) / 2);
+            var titleY = wordWindowRectangle.Top + 18;
+            SetCursorPos(titleX, titleY);
+            mouse_event(MouseLeftDown, 0, 0, 0, UIntPtr.Zero);
+            mouse_event(MouseLeftUp, 0, 0, 0, UIntPtr.Zero);
             WinForms.Application.DoEvents();
             Thread.Sleep(600);
             Console.WriteLine($"  Word foreground request accepted={foregroundSet}.");
+
             var x = left + width / 2;
             var y = top + height / 2;
+            SetCursorPos(x, y);
+            mouse_event(MouseLeftDown, 0, 0, 0, UIntPtr.Zero);
+            mouse_event(MouseLeftUp, 0, 0, 0, UIntPtr.Zero);
+            WinForms.Application.DoEvents();
+            Thread.Sleep(250);
+
+            var leftBlankX = wordWindowRectangle.Left + 80;
+            var rightBlankX = wordWindowRectangle.Right - 120;
+            var blankX = Math.Abs(leftBlankX - x) >= Math.Abs(rightBlankX - x)
+                ? leftBlankX
+                : rightBlankX;
+            var blankY = y;
+            if (VisualTeX.WindowsOffice.VstoShared.WordDoubleClickRouting
+                    .ScreenPointHitsFormulaRectangle(
+                    blankX,
+                    blankY,
+                    left,
+                    top,
+                    width,
+                    height))
+                throw new InvalidDataException("The OLE blank-area probe still overlaps the formula rectangle.");
+
+            var blankSessionsBefore = SnapshotSessionIds();
+            SetCursorPos(blankX, blankY);
+            Thread.Sleep(120);
+            for (var click = 0; click < 2; click++)
+            {
+                mouse_event(MouseLeftDown, 0, 0, 0, UIntPtr.Zero);
+                mouse_event(MouseLeftUp, 0, 0, 0, UIntPtr.Zero);
+                Thread.Sleep(90);
+            }
+            var blankDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+            while (DateTime.UtcNow < blankDeadline)
+            {
+                WinForms.Application.DoEvents();
+                Thread.Sleep(50);
+            }
+            var unexpectedBlankSessions = SnapshotSessionIds()
+                .Except(blankSessionsBefore, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (unexpectedBlankSessions.Length > 0)
+                throw new InvalidDataException(
+                    "Double-clicking blank Word space after selecting an OLE formula "
+                    + "incorrectly created an editor Session: "
+                    + string.Join(", ", unexpectedBlankSessions));
+            Console.WriteLine(
+                $"  Blank-area double-click rejected at {blankX},{blankY}; no Session created.");
+
+            Console.WriteLine("[Word real OLE 7/9] Sending a real formula double-click...");
+            existing = SnapshotSessionIds();
             SetCursorPos(x, y);
             Thread.Sleep(150);
             for (var click = 0; click < 2; click++)
@@ -965,7 +1468,7 @@ internal static partial class Program
             Console.WriteLine(
                 $"  Real mouse OLE Session={editSessionId}; rectangle={left},{top},{width},{height}.");
 
-            Console.WriteLine("[Word real OLE 7/8] Closing the unchanged editor...");
+            Console.WriteLine("[Word real OLE 8/9] Closing the unchanged editor...");
             var ready = WaitForUnchangedEditorReady(
                 client,
                 editSessionId,
@@ -980,8 +1483,8 @@ internal static partial class Program
 
             document.Save();
             Console.WriteLine(
-                $"[Word real OLE 8/8] Saved {path}; production \\oiint vector, "
-                + "save/reopen metadata, and real mouse edit checks passed.");
+                $"[Word real OLE 9/9] Saved {path}; production \\oiint vector, "
+                + "blank-space rejection, save/reopen metadata, and real mouse edit checks passed.");
         }
         finally
         {
@@ -1014,10 +1517,106 @@ internal static partial class Program
                 try { document.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
             }
             Release(document);
-            if (application is not null)
+            try { QuitWordApplicationIfOwned(application); } catch { }
+            Release(application);
+            ForceComCleanup();
+        }
+    }
+
+    private static void RunWordOmmlDoubleClickEventProbe(
+        VisualTeXSessionClient client,
+        string artifactRoot)
+    {
+        var path = Path.Combine(artifactRoot, "VisualTeX-Word-OMML-DoubleClick-Fixtures.docx");
+        if (!File.Exists(path))
+            throw new FileNotFoundException("The OMML double-click fixture document is missing.", path);
+
+        Word.Application? application = null;
+        Word.Document? document = null;
+        Word.OMaths? maths = null;
+        Word.OMath? math = null;
+        Word.Range? range = null;
+        Word.Selection? selection = null;
+        COMAddIns? installedAddIns = null;
+        COMAddIn? installedAddIn = null;
+        VisualTeX.WordVsto.ThisAddIn? addIn = null;
+        Array custom = Array.Empty<object>();
+        try
+        {
+            application = CreateWordApplication(visible: true);
+            installedAddIns = application.COMAddIns;
+            try
             {
-                try { application.Quit(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
+                object addInIndex = "VisualTeX.WordVsto";
+                installedAddIn = installedAddIns.Item(ref addInIndex);
+                if (installedAddIn.Connect) installedAddIn.Connect = false;
             }
+            catch
+            {
+                Release(installedAddIn);
+                installedAddIn = null;
+            }
+
+            document = application.Documents.Open(path, ReadOnly: false, Visible: true);
+            document.Activate();
+            addIn = new VisualTeX.WordVsto.ThisAddIn();
+            addIn.OnConnection(application, ext_ConnectMode.ext_cm_AfterStartup, addIn, ref custom);
+            maths = document.OMaths;
+            math = maths[1];
+            range = math.Range;
+            range.Select();
+            selection = application.Selection;
+
+            var sessionsBefore = SnapshotSessionIds();
+            var handler = typeof(VisualTeX.WordVsto.ThisAddIn).GetMethod(
+                "OnWindowBeforeDoubleClick",
+                System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)
+                ?? throw new MissingMethodException("Word OMML double-click callback is missing.");
+            var arguments = new object[] { selection, false };
+            handler.Invoke(addIn, arguments);
+            var sessionId = WaitForNewSession(
+                sessionsBefore,
+                "word",
+                TimeSpan.FromSeconds(30));
+            var session = WaitForUnchangedEditorReady(
+                client,
+                sessionId,
+                TimeSpan.FromSeconds(15));
+            AssertEqual("edit", session.Mode,
+                "Direct OMML double-click callback did not create an edit Session.");
+            AssertEqual(FormulaOleContract.WordOmmlMode, session.ObjectMode,
+                "Direct OMML double-click callback changed the object mode.");
+            if (!string.Equals(session.Lines.FirstOrDefault()?.Latex, "x+y", StringComparison.Ordinal))
+                throw new InvalidDataException(
+                    $"Direct OMML double-click callback opened the wrong source: '{session.Lines.FirstOrDefault()?.Latex}'.");
+            client.CloseEditorAsync(sessionId, CancellationToken.None).GetAwaiter().GetResult();
+            WaitForAddInIdle(addIn, TimeSpan.FromSeconds(10));
+            Console.WriteLine(
+                "Word OMML direct double-click callback probe passed; handler logic opened the correct OMML formula.");
+        }
+        finally
+        {
+            if (addIn is not null)
+            {
+                try { addIn.OnDisconnection(ext_DisconnectMode.ext_dm_UserClosed, ref custom); } catch { }
+            }
+            if (installedAddIn is not null)
+            {
+                try { installedAddIn.Connect = true; } catch { }
+            }
+            Release(selection);
+            Release(range);
+            Release(math);
+            Release(maths);
+            if (document is not null)
+            {
+                try { document.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
+            }
+            Release(document);
+            Release(installedAddIn);
+            Release(installedAddIns);
+            try { QuitWordApplicationIfOwned(application); } catch { }
             Release(application);
             ForceComCleanup();
         }
@@ -1038,11 +1637,7 @@ internal static partial class Program
         try
         {
             Console.WriteLine("[OMML fixtures 1/8] Starting Word...");
-            application = new Word.Application
-            {
-                Visible = false,
-                DisplayAlerts = Word.WdAlertLevel.wdAlertsNone,
-            };
+            application = CreateWordApplication(visible: false);
             installedAddIns = application.COMAddIns;
             try
             {
@@ -1281,7 +1876,76 @@ internal static partial class Program
             AssertEqual(1, document.OMaths.Count,
                 "Inline OMML-to-OLE-to-OMML round-trip lost or duplicated the equation.");
 
-            Console.WriteLine("[OMML fixtures 3/7] Creating unnumbered display OMML...");
+            Console.WriteLine("[OMML fixtures 3/8] Reopening inline OMML and appending digit 1...");
+            document.OMaths[1].Range.Select();
+            var boundaryExisting = SnapshotSessionIds();
+            addIn.OnEditSelected(new object());
+            var boundaryEditSessionId = WaitForNewSession(
+                boundaryExisting,
+                "word",
+                TimeSpan.FromSeconds(30));
+            var boundaryEditSession = WaitForUnchangedEditorReady(
+                client,
+                boundaryEditSessionId,
+                TimeSpan.FromSeconds(15));
+            var reopenedLatex = string.Join(
+                "\n",
+                boundaryEditSession.Lines.Select(line => line.Latex));
+            AssertTrue(
+                reopenedLatex.IndexOf('\u200B') < 0
+                && reopenedLatex.IndexOf('\u200C') < 0
+                && reopenedLatex.IndexOf('\u2060') < 0,
+                "Inline OMML edit session imported a VisualTeX typing anchor into LaTeX: "
+                + reopenedLatex);
+            AssertEqual("x+y", reopenedLatex,
+                "Inline OMML edit session duplicated or changed the original formula.");
+            Commit(
+                client,
+                boundaryEditSession,
+                "inline",
+                FormulaOleContract.WordOmmlMode,
+                "x+y1",
+                numbered: false,
+                mathMl: "<math xmlns=\"http://www.w3.org/1998/Math/MathML\">"
+                    + "<mi>x</mi><mo>+</mo><mi>y</mi>"
+                    + "<mrow data-mjx-texclass=\"ORD\"><mo>&#x200C;</mo></mrow>"
+                    + "<mn>1</mn></math>");
+            var boundaryFinal = WaitForTerminal(
+                client,
+                boundaryEditSessionId,
+                TimeSpan.FromSeconds(45));
+            AssertEqual("completed", boundaryFinal.Status,
+                boundaryFinal.Error ?? "Appending digit 1 to inline OMML did not complete.");
+            client.CloseEditorAsync(boundaryEditSessionId, CancellationToken.None)
+                .GetAwaiter().GetResult();
+            WaitForAddInIdle(addIn!, TimeSpan.FromSeconds(10));
+            AssertEqual(1, document.OMaths.Count,
+                "Appending digit 1 duplicated the inline OMML equation.");
+            Word.OMath? updatedInlineMath = null;
+            Word.Range? updatedInlineRange = null;
+            try
+            {
+                updatedInlineMath = document.OMaths[1];
+                updatedInlineRange = updatedInlineMath.Range;
+                var updatedText = updatedInlineRange.Text ?? string.Empty;
+                AssertTrue(updatedText.IndexOf('1') >= 0,
+                    "The appended digit 1 was not written to Word OMML.");
+                AssertTrue(
+                    updatedText.IndexOf('\u200B') < 0
+                    && updatedText.IndexOf('\u200C') < 0
+                    && updatedText.IndexOf('\u2060') < 0,
+                    "The updated Word OMML still contains a VisualTeX typing anchor.");
+                AssertTrue(
+                    updatedInlineRange.WordOpenXML.IndexOf("200C", StringComparison.OrdinalIgnoreCase) < 0,
+                    "The updated Word OMML XML still contains U+200C.");
+            }
+            finally
+            {
+                Release(updatedInlineRange);
+                Release(updatedInlineMath);
+            }
+
+            Console.WriteLine("[OMML fixtures 4/8] Creating unnumbered display OMML...");
             MoveToNewLabeledParagraph("2. Display OMML (unnumbered):");
             CreateOmml(
                 addIn.OnInsertDisplayOmml,
@@ -1765,10 +2429,7 @@ internal static partial class Program
                 try { document.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
             }
             Release(document);
-            if (application is not null)
-            {
-                try { application.Quit(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
-            }
+            try { QuitWordApplicationIfOwned(application); } catch { }
             Release(application);
             ForceComCleanup();
         }
@@ -1792,11 +2453,7 @@ internal static partial class Program
         try
         {
             Console.WriteLine("[Targeted Word 1/6] Starting Word from the clean baseline...");
-            application = new Word.Application
-            {
-                Visible = false,
-                DisplayAlerts = Word.WdAlertLevel.wdAlertsNone,
-            };
+            application = CreateWordApplication(visible: false);
             installedAddIns = application.COMAddIns;
             try
             {
@@ -2070,10 +2727,382 @@ internal static partial class Program
                 try { document.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
             }
             Release(document);
-            if (application is not null)
+            try { QuitWordApplicationIfOwned(application); } catch { }
+            Release(application);
+            ForceComCleanup();
+        }
+    }
+
+    private static void RunWordFontSizeAcceptance(
+        VisualTeXSessionClient client,
+        string artifactRoot)
+    {
+        Directory.CreateDirectory(artifactRoot);
+        Word.Application? application = null;
+        Word.Document? document = null;
+        Word.Document? reopened = null;
+        Word.InlineShape? oleShape = null;
+        Word.OMaths? maths = null;
+        Word.OMath? math = null;
+        Word.Range? mathRange = null;
+        Word.Selection? selection = null;
+        COMAddIns? installedAddIns = null;
+        COMAddIn? installedAddIn = null;
+        VisualTeX.WordVsto.ThisAddIn? addIn = null;
+        Array custom = Array.Empty<object>();
+        try
+        {
+            application = CreateWordApplication(visible: true);
+            installedAddIns = application.COMAddIns;
+            try
             {
-                try { application.Quit(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
+                object addInIndex = "VisualTeX.WordVsto";
+                installedAddIn = installedAddIns.Item(ref addInIndex);
+                if (installedAddIn.Connect) installedAddIn.Connect = false;
             }
+            catch
+            {
+                Release(installedAddIn);
+                installedAddIn = null;
+            }
+
+            document = application.Documents.Add();
+            document.Activate();
+            addIn = new VisualTeX.WordVsto.ThisAddIn();
+            addIn.OnConnection(application, ext_ConnectMode.ext_cm_AfterStartup, addIn, ref custom);
+
+            Console.WriteLine("[Word font size 1/6] Creating an inline OLE formula...");
+            var existing = SnapshotSessionIds();
+            addIn.OnInsertInline(new object());
+            var sessionId = WaitForNewSession(existing, "word", TimeSpan.FromSeconds(30));
+            var session = client.GetSessionAsync(sessionId, CancellationToken.None).GetAwaiter().GetResult();
+            Commit(client, session, "inline", FormulaOleContract.NativeOleMode, "x+y");
+            var final = WaitForTerminal(client, sessionId, TimeSpan.FromSeconds(45));
+            AssertEqual("completed", final.Status, final.Error ?? "Word OLE font-size fixture failed.");
+            client.CloseEditorAsync(sessionId, CancellationToken.None).GetAwaiter().GetResult();
+            WaitForAddInIdle(addIn, TimeSpan.FromSeconds(10));
+            oleShape = document.InlineShapes[1];
+            var oleWidth12 = oleShape.Width;
+            var oleHeight12 = oleShape.Height;
+            var oleRatio12 = oleWidth12 / oleHeight12;
+            var olePosition12 = oleShape.Range.Font.Position;
+            oleShape.Range.Select();
+            AssertTrue(addIn.GetFormulaFontSizeEnabled(null!),
+                "Word font-size control was disabled for inline OLE.");
+
+            Console.WriteLine("[Word font size 2/6] Setting OLE to 36 pt, then decreasing and increasing...");
+            addIn.OnFormulaFontSizeChanged(null!, "36");
+            Release(oleShape);
+            oleShape = document.InlineShapes[1];
+            var oleWidth36 = oleShape.Width;
+            var oleHeight36 = oleShape.Height;
+            var oleRatio36 = oleWidth36 / oleHeight36;
+            AssertTrue(oleWidth36 > oleWidth12 && oleHeight36 > oleHeight12,
+                $"Word OLE did not enlarge at 36 pt: {oleWidth12:F2}x{oleHeight12:F2} -> {oleWidth36:F2}x{oleHeight36:F2}.");
+            AssertNear(oleRatio12, oleRatio36, 0.08f,
+                "Word OLE font-size change distorted aspect ratio.");
+            oleShape.Range.Select();
+            var oleSelection36 = new VisualTeX.WordVsto.WordFormulaService(application).ReadSelection();
+            var oleMetadata36 = oleSelection36.Metadata
+                ?? throw new InvalidDataException("Word OLE 36 pt metadata could not be read.");
+            var expectedOlePosition36 = WordInlineAlignment.CalculateFontPositionWithLegacyFallback(
+                oleHeight36,
+                (float)(oleMetadata36.RenderHeightPx ?? 0),
+                oleMetadata36.Baseline.HasValue ? (float?)oleMetadata36.Baseline.Value : null,
+                existingFontPosition: olePosition12,
+                sourceSemanticFontSizePoints: FormulaFontSize.DefaultPt,
+                targetSemanticFontSizePoints: 36);
+            AssertNear(expectedOlePosition36, oleShape.Range.Font.Position, 0.1f,
+                "Word OLE baseline did not follow its stored render geometry.");
+            Console.WriteLine(
+                $"  OLE baseline position: {olePosition12:F0} pt at {FormulaFontSize.DefaultPt:F0} pt -> "
+                + $"{oleShape.Range.Font.Position:F0} pt at 36 pt (expected {expectedOlePosition36}; "
+                + $"renderHeight={oleMetadata36.RenderHeightPx?.ToString("F2", System.Globalization.CultureInfo.InvariantCulture) ?? "null"}, "
+                + $"baseline={oleMetadata36.Baseline?.ToString("F2", System.Globalization.CultureInfo.InvariantCulture) ?? "null"}).");
+            AssertEqual(FormulaFontSize.FormatDisplay(36), addIn.GetFormulaFontSizeText(null!),
+                "Word OLE font-size control did not report 36 pt.");
+            addIn.OnDecreaseFormulaFontSize(new object());
+            Release(oleShape);
+            oleShape = document.InlineShapes[1];
+            oleShape.Range.Select();
+            var oleTextAfterDecrease = addIn.GetFormulaFontSizeText(null!);
+            var oleWidthAfterDecrease = oleShape.Width;
+            var oleHeightAfterDecrease = oleShape.Height;
+            Console.WriteLine(
+                $"  OLE after decrease: control='{oleTextAfterDecrease}', "
+                + $"size={oleWidthAfterDecrease:F2}x{oleHeightAfterDecrease:F2}.");
+            if (!(oleWidthAfterDecrease < oleWidth36 && oleHeightAfterDecrease < oleHeight36))
+                Console.WriteLine(
+                    $"  [DISCREPANCY] Word 2021 OLE decrease did not reduce both dimensions: "
+                    + $"{oleWidth36:F2}x{oleHeight36:F2} -> "
+                    + $"{oleWidthAfterDecrease:F2}x{oleHeightAfterDecrease:F2}; "
+                    + $"control='{oleTextAfterDecrease}'.");
+
+            addIn.OnIncreaseFormulaFontSize(new object());
+            Release(oleShape);
+            oleShape = document.InlineShapes[1];
+            oleShape.Range.Select();
+            var oleTextAfterIncrease = addIn.GetFormulaFontSizeText(null!);
+            Console.WriteLine(
+                $"  OLE after increase: control='{oleTextAfterIncrease}', "
+                + $"size={oleShape.Width:F2}x{oleShape.Height:F2}.");
+            if (!string.Equals(
+                    oleTextAfterIncrease,
+                    FormulaFontSize.FormatDisplay(36),
+                    StringComparison.Ordinal)
+                || Math.Abs(oleShape.Width - oleWidth36) > 1.0f
+                || Math.Abs(oleShape.Height - oleHeight36) > 0.6f)
+                Console.WriteLine(
+                    $"  [DISCREPANCY] Word 2021 OLE decrease/increase did not restore 36 pt: "
+                    + $"control='{oleTextAfterIncrease}', size={oleShape.Width:F2}x{oleShape.Height:F2}.");
+
+            addIn.OnFormulaFontSizeChanged(null!, "36");
+            Release(oleShape);
+            oleShape = document.InlineShapes[1];
+            oleShape.Range.Select();
+            AssertNear(oleWidth36, oleShape.Width, 1.0f,
+                "Word OLE direct 36 pt restore did not recover width.");
+            AssertNear(oleHeight36, oleShape.Height, 0.6f,
+                "Word OLE direct 36 pt restore did not recover height.");
+
+            Console.WriteLine("[Word font size 3/6] Creating an inline OMML formula...");
+            selection = application.Selection;
+            selection.EndKey(Word.WdUnits.wdStory);
+            selection.TypeText(" text ");
+            existing = SnapshotSessionIds();
+            addIn.OnInsertInlineOmml(new object());
+            sessionId = WaitForNewSession(existing, "word", TimeSpan.FromSeconds(30));
+            session = client.GetSessionAsync(sessionId, CancellationToken.None).GetAwaiter().GetResult();
+            const string mathMl =
+                "<math xmlns=\"http://www.w3.org/1998/Math/MathML\"><mi>a</mi><mo>+</mo><mi>b</mi></math>";
+            Commit(
+                client,
+                session,
+                "inline",
+                FormulaOleContract.WordOmmlMode,
+                "a+b",
+                mathMl: mathMl);
+            final = WaitForTerminal(client, sessionId, TimeSpan.FromSeconds(45));
+            AssertEqual("completed", final.Status, final.Error ?? "Word OMML font-size fixture failed.");
+            client.CloseEditorAsync(sessionId, CancellationToken.None).GetAwaiter().GetResult();
+            WaitForAddInIdle(addIn, TimeSpan.FromSeconds(10));
+            maths = document.OMaths;
+            AssertEqual(1, maths.Count, "Word OMML font-size fixture did not create one OMath.");
+            math = maths[1];
+            mathRange = math.Range;
+            mathRange.Select();
+            AssertTrue(addIn.GetFormulaFontSizeEnabled(null!),
+                "Word font-size control was disabled for inline OMML.");
+
+            Console.WriteLine("[Word font size 4/6] Setting OMML to 36 pt, then decreasing and increasing...");
+            addIn.OnFormulaFontSizeChanged(null!, "36");
+            Release(mathRange);
+            Release(math);
+            Release(maths);
+            maths = document.OMaths;
+            math = maths[1];
+            mathRange = math.Range;
+            AssertNear(36f, mathRange.Font.Size, 0.6f,
+                "Word OMML native range did not become 36 pt.");
+            AssertNear(0f, mathRange.Font.Position, 0.1f,
+                "Word OMML range received a manual baseline offset.");
+            mathRange.Select();
+            AssertEqual(FormulaFontSize.FormatDisplay(36), addIn.GetFormulaFontSizeText(null!),
+                "Word OMML font-size control did not report 36 pt.");
+            addIn.OnDecreaseFormulaFontSize(new object());
+            Release(mathRange);
+            Release(math);
+            Release(maths);
+            maths = document.OMaths;
+            math = maths[1];
+            mathRange = math.Range;
+            AssertTrue(mathRange.Font.Size < 36f,
+                "Word OMML decrease did not reduce the native font size.");
+            mathRange.Select();
+            addIn.OnIncreaseFormulaFontSize(new object());
+            Release(mathRange);
+            Release(math);
+            Release(maths);
+            maths = document.OMaths;
+            math = maths[1];
+            mathRange = math.Range;
+            AssertNear(36f, mathRange.Font.Size, 0.6f,
+                "Word OMML decrease/increase did not restore 36 pt.");
+
+            Console.WriteLine("[Word font size 5/6] Saving and reopening both object types...");
+            var path = Path.Combine(artifactRoot, "VisualTeX-Word-Font-Size.docx");
+            document.SaveAs2(path, Word.WdSaveFormat.wdFormatXMLDocument);
+            document.Close(Word.WdSaveOptions.wdSaveChanges);
+            Release(document);
+            document = null;
+            reopened = application.Documents.Open(path, ReadOnly: false, Visible: true);
+            AssertEqual(1, reopened.InlineShapes.Count,
+                "Reopened Word font-size document lost the OLE formula.");
+            AssertEqual(1, reopened.OMaths.Count,
+                "Reopened Word font-size document lost the OMML formula.");
+            Release(oleShape);
+            oleShape = reopened.InlineShapes[1];
+            AssertNear(oleWidth36, oleShape.Width, 1.0f,
+                "Word OLE width changed after save/reopen.");
+            AssertNear(oleHeight36, oleShape.Height, 0.6f,
+                "Word OLE height changed after save/reopen.");
+            AssertNear(expectedOlePosition36, oleShape.Range.Font.Position, 0.1f,
+                "Word OLE baseline position changed after save/reopen.");
+            oleShape.Range.Select();
+            AssertEqual(FormulaFontSize.FormatDisplay(36), addIn.GetFormulaFontSizeText(null!),
+                "Word OLE semantic size was lost after save/reopen.");
+            Release(mathRange);
+            Release(math);
+            Release(maths);
+            maths = reopened.OMaths;
+            math = maths[1];
+            mathRange = math.Range;
+            AssertNear(36f, mathRange.Font.Size, 0.6f,
+                "Word OMML native size changed after save/reopen.");
+            mathRange.Select();
+            AssertEqual(FormulaFontSize.FormatDisplay(36), addIn.GetFormulaFontSizeText(null!),
+                "Word OMML semantic size was lost after save/reopen.");
+
+            Console.WriteLine(
+                $"[Word font size 6/6] OLE {oleWidth12:F1}x{oleHeight12:F1} -> "
+                + $"{oleWidth36:F1}x{oleHeight36:F1}; OMML 36 pt; presets and save/reopen passed. Artifact: {path}");
+        }
+        finally
+        {
+            if (addIn is not null)
+            {
+                try { addIn.OnDisconnection(ext_DisconnectMode.ext_dm_UserClosed, ref custom); } catch { }
+            }
+            if (installedAddIn is not null)
+            {
+                try { installedAddIn.Connect = true; } catch { }
+            }
+            Release(selection);
+            Release(mathRange);
+            Release(math);
+            Release(maths);
+            Release(oleShape);
+            if (reopened is not null)
+            {
+                try { reopened.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
+            }
+            Release(reopened);
+            if (document is not null)
+            {
+                try { document.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
+            }
+            Release(document);
+            Release(installedAddIn);
+            Release(installedAddIns);
+            try { QuitWordApplicationIfOwned(application); } catch { }
+            Release(application);
+            ForceComCleanup();
+        }
+    }
+
+    private static void RunWordNativeOmmlSourceProbe(
+        VisualTeXSessionClient client,
+        string artifactRoot)
+    {
+        Word.Application? application = null;
+        Word.Document? document = null;
+        COMAddIns? installedAddIns = null;
+        COMAddIn? installedAddIn = null;
+        VisualTeX.WordVsto.ThisAddIn? addIn = null;
+        Array custom = Array.Empty<object>();
+        try
+        {
+            application = CreateWordApplication(visible: false);
+            installedAddIns = application.COMAddIns;
+            try
+            {
+                object addInIndex = "VisualTeX.WordVsto";
+                installedAddIn = installedAddIns.Item(ref addInIndex);
+                if (installedAddIn.Connect) installedAddIn.Connect = false;
+            }
+            catch
+            {
+                Release(installedAddIn);
+                installedAddIn = null;
+            }
+
+            document = application.Documents.Add();
+            addIn = new VisualTeX.WordVsto.ThisAddIn();
+            addIn.OnConnection(application, ext_ConnectMode.ext_cm_AfterStartup, addIn, ref custom);
+            const string initialMathMl =
+                "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">"
+                + "<msup><mi>x</mi><mn>2</mn></msup><mo>+</mo>"
+                + "<msup><mi>y</mi><mn>2</mn></msup></math>";
+
+            Console.WriteLine("[Native OMML source 1/4] Creating a VisualTeX OMML formula...");
+            var existing = SnapshotSessionIds();
+            addIn.OnInsertDisplayOmml(new object());
+            var createSessionId = WaitForNewSession(existing, "word", TimeSpan.FromSeconds(30));
+            var createSession = client.GetSessionAsync(createSessionId, CancellationToken.None)
+                .GetAwaiter().GetResult();
+            Commit(
+                client,
+                createSession,
+                "block",
+                FormulaOleContract.WordOmmlMode,
+                "x^2+y^2",
+                numbered: false,
+                mathMl: initialMathMl);
+            var final = WaitForTerminal(client, createSessionId, TimeSpan.FromSeconds(45));
+            AssertEqual("completed", final.Status,
+                final.Error ?? "Native OMML source fixture did not complete.");
+            client.CloseEditorAsync(createSessionId, CancellationToken.None).GetAwaiter().GetResult();
+            WaitForAddInIdle(addIn, TimeSpan.FromSeconds(10));
+
+            Console.WriteLine("[Native OMML source 2/4] Appending +z^3 with Word's native equation object...");
+            AppendToLastWordOmmlAndSelect(document, "+z^3");
+
+            Console.WriteLine("[Native OMML source 3/4] Reopening through the Ribbon edit command...");
+            existing = SnapshotSessionIds();
+            addIn.OnEditSelected(new object());
+            var editSessionId = WaitForNewSession(existing, "word", TimeSpan.FromSeconds(30));
+            var editSession = WaitForUnchangedEditorReady(
+                client,
+                editSessionId,
+                TimeSpan.FromSeconds(15));
+            AssertEqual(FormulaOleContract.WordOmmlMode, editSession.ObjectMode,
+                "Native-edited OMML opened with the wrong object mode.");
+            var imported = string.Join("\n", editSession.Lines.Select(line => line.Latex));
+            if (imported.IndexOf("z", StringComparison.Ordinal) < 0
+                || (imported.IndexOf("z^3", StringComparison.Ordinal) < 0
+                    && imported.IndexOf("z^{3}", StringComparison.Ordinal) < 0))
+                throw new InvalidDataException(
+                    "The editor used stale metadata instead of Word's latest OMML. "
+                    + $"Imported source: {imported}");
+            client.CloseEditorAsync(editSessionId, CancellationToken.None).GetAwaiter().GetResult();
+            final = WaitForTerminal(client, editSessionId, TimeSpan.FromSeconds(30));
+            AssertEqual("completed", final.Status,
+                final.Error ?? "Native-edited OMML unchanged edit did not complete.");
+            WaitForAddInIdle(addIn, TimeSpan.FromSeconds(10));
+
+            var path = Path.Combine(artifactRoot, "VisualTeX-Word-Native-OMML-Latest-Source.docx");
+            document.SaveAs2(path, Word.WdSaveFormat.wdFormatXMLDocument);
+            Console.WriteLine(
+                $"[Native OMML source 4/4] Saved {path}; Ribbon edit imported Word's latest +z^3 source.");
+        }
+        finally
+        {
+            if (addIn is not null)
+            {
+                try { addIn.OnDisconnection(ext_DisconnectMode.ext_dm_UserClosed, ref custom); } catch { }
+            }
+            if (installedAddIn is not null)
+            {
+                try { installedAddIn.Connect = true; } catch { }
+            }
+            Release(installedAddIn);
+            Release(installedAddIns);
+            if (document is not null)
+            {
+                try { document.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
+            }
+            Release(document);
+            try { QuitWordApplicationIfOwned(application); } catch { }
             Release(application);
             ForceComCleanup();
         }
@@ -2083,7 +3112,8 @@ internal static partial class Program
         VisualTeXSessionClient client,
         string artifactRoot,
         bool initialOnly = false,
-        bool stopAfterUnchanged = false)
+        bool stopAfterUnchanged = false,
+        bool stopAfterOlePictureRoundTrip = false)
     {
         Word.Application? application = null;
         Word.Document? document = null;
@@ -2099,11 +3129,7 @@ internal static partial class Program
         try
         {
             Console.WriteLine("[Word 1/12] Starting Word and creating an inline Session...");
-            application = new Word.Application
-            {
-                Visible = false,
-                DisplayAlerts = Word.WdAlertLevel.wdAlertsNone,
-            };
+            application = CreateWordApplication(visible: false);
             installedAddIns = application.COMAddIns;
             try
             {
@@ -2327,6 +3353,17 @@ internal static partial class Program
                 "Word picture-to-OLE conversion changed the formula width.");
             AssertNear(24f, shape.Height, 0.5f,
                 "Word picture-to-OLE conversion changed the formula height.");
+            if (stopAfterOlePictureRoundTrip)
+            {
+                var roundTripPath = Path.Combine(
+                    artifactRoot,
+                    "VisualTeX-Word-OLE-Picture-RoundTrip.docx");
+                document.SaveAs2(roundTripPath, Word.WdSaveFormat.wdFormatXMLDocument);
+                Console.WriteLine(
+                    $"[Word OLE/picture round-trip] Saved {roundTripPath}; edit resize, "
+                    + "picture export, picture-to-OLE conversion, OLE verb, dimensions, and baseline passed.");
+                return;
+            }
             Release(shape);
             shape = null;
 
@@ -2507,10 +3544,7 @@ internal static partial class Program
                 try { document.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
             }
             Release(document);
-            if (application is not null)
-            {
-                try { application.Quit(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
-            }
+            try { QuitWordApplicationIfOwned(application); } catch { }
             Release(application);
             ForceComCleanup();
         }
@@ -2576,8 +3610,8 @@ internal static partial class Program
             AssertEqual(1, slide.Shapes.Count,
                 "PowerPoint targeted fixture did not create one formula shape.");
             shape = slide.Shapes[1];
-            AssertEqual(MsoShapeType.msoPicture, shape.Type,
-                "PowerPoint targeted fixture did not start as a picture.");
+            AssertTrue(IsPowerPointEditablePictureShape(shape),
+                $"PowerPoint targeted fixture did not start as an editable picture/graphic. Actual type: {(int)shape.Type}.");
 
             Console.WriteLine("[Targeted PowerPoint 2/4] Converting picture to OLE without opening the editor...");
             shape.Select(MsoTriState.msoTrue);
@@ -2687,7 +3721,580 @@ internal static partial class Program
         }
     }
 
-    private static void RunPowerPoint(VisualTeXSessionClient client, string artifactRoot)
+    private static void RunPowerPointContextSafetyAcceptance(
+        VisualTeXSessionClient client,
+        string artifactRoot)
+    {
+        Directory.CreateDirectory(artifactRoot);
+        PowerPoint.Application? application = null;
+        PowerPoint.Presentation? firstPresentation = null;
+        PowerPoint.Presentation? secondPresentation = null;
+        PowerPoint.Presentation? readOnlyPresentation = null;
+        PowerPoint.Slide? firstSlide = null;
+        PowerPoint.Slide? secondSlide = null;
+        PowerPoint.Slide? otherSlide = null;
+        PowerPoint.SlideShowWindow? slideShowWindow = null;
+        VisualTeX.PowerPointVsto.ThisAddIn? addIn = null;
+        Array custom = Array.Empty<object>();
+        try
+        {
+            application = new PowerPoint.Application { Visible = MsoTriState.msoTrue };
+            firstPresentation = application.Presentations.Add(MsoTriState.msoTrue);
+            firstSlide = firstPresentation.Slides.Add(1, PowerPoint.PpSlideLayout.ppLayoutBlank);
+            secondSlide = firstPresentation.Slides.Add(2, PowerPoint.PpSlideLayout.ppLayoutBlank);
+            firstPresentation.Windows[1].Activate();
+            application.ActiveWindow.View.GotoSlide(1);
+            addIn = new VisualTeX.PowerPointVsto.ThisAddIn();
+            addIn.OnConnection(application, ext_ConnectMode.ext_cm_AfterStartup, addIn, ref custom);
+
+            Console.WriteLine("[PowerPoint context 1/5] Starting on slide 1, switching to slide 2 before commit...");
+            var existing = SnapshotSessionIds();
+            addIn.OnNewFormula(new object());
+            var sessionId = WaitForNewSession(existing, "powerpoint", TimeSpan.FromSeconds(30));
+            var session = client.GetSessionAsync(sessionId, CancellationToken.None).GetAwaiter().GetResult();
+            application.ActiveWindow.View.GotoSlide(2);
+            Commit(client, session, "block", FormulaOleContract.CrossPlatformPictureMode, "s_1");
+            var final = WaitForTerminal(client, sessionId, TimeSpan.FromSeconds(45));
+            AssertEqual("completed", final.Status,
+                final.Error ?? "PowerPoint source-slide insertion failed.");
+            client.CloseEditorAsync(sessionId, CancellationToken.None).GetAwaiter().GetResult();
+            WaitForAddInIdle(addIn, TimeSpan.FromSeconds(10));
+            var sourceSlideCount = firstSlide.Shapes.Count;
+            var activeSlideCount = secondSlide.Shapes.Count;
+            Console.WriteLine(
+                $"  Source slide shapes={sourceSlideCount}; active slide shapes={activeSlideCount}.");
+            if (sourceSlideCount != 1 || activeSlideCount != 0)
+            {
+                var sourceNames = Enumerable.Range(1, sourceSlideCount)
+                    .Select(index => firstSlide.Shapes[index].Name)
+                    .ToArray();
+                var activeNames = Enumerable.Range(1, activeSlideCount)
+                    .Select(index => secondSlide.Shapes[index].Name)
+                    .ToArray();
+                Console.WriteLine(
+                    $"  [DISCREPANCY] Source-slide routing failed. "
+                    + $"source=[{string.Join(", ", sourceNames)}], active=[{string.Join(", ", activeNames)}].");
+            }
+            while (firstSlide.Shapes.Count > 0) firstSlide.Shapes[1].Delete();
+            while (secondSlide.Shapes.Count > 0) secondSlide.Shapes[1].Delete();
+
+            Console.WriteLine("[PowerPoint context 2/5] Switching presentation before commit and requiring rejection...");
+            firstPresentation.Windows[1].Activate();
+            application.ActiveWindow.View.GotoSlide(1);
+            existing = SnapshotSessionIds();
+            addIn.OnNewFormula(new object());
+            sessionId = WaitForNewSession(existing, "powerpoint", TimeSpan.FromSeconds(30));
+            session = client.GetSessionAsync(sessionId, CancellationToken.None).GetAwaiter().GetResult();
+            secondPresentation = application.Presentations.Add(MsoTriState.msoTrue);
+            otherSlide = secondPresentation.Slides.Add(1, PowerPoint.PpSlideLayout.ppLayoutBlank);
+            secondPresentation.Windows[1].Activate();
+            Commit(client, session, "block", FormulaOleContract.CrossPlatformPictureMode, "must_not_insert");
+            final = WaitForTerminal(client, sessionId, TimeSpan.FromSeconds(45));
+            AssertEqual("failed", final.Status,
+                "PowerPoint accepted a formula after the active presentation changed.");
+            AssertEqual(0, firstSlide.Shapes.Count,
+                "Rejected cross-presentation commit changed the source presentation.");
+            AssertEqual(0, otherSlide.Shapes.Count,
+                "Rejected cross-presentation commit wrote into the wrong presentation.");
+            client.CloseEditorAsync(sessionId, CancellationToken.None).GetAwaiter().GetResult();
+            WaitForAddInIdle(addIn, TimeSpan.FromSeconds(10));
+
+            Console.WriteLine("[PowerPoint context 3/5] Inserting in presentation 2, then Undo and Redo...");
+            secondPresentation.Windows[1].Activate();
+            application.ActiveWindow.View.GotoSlide(1);
+            existing = SnapshotSessionIds();
+            addIn.OnNewFormula(new object());
+            sessionId = WaitForNewSession(existing, "powerpoint", TimeSpan.FromSeconds(30));
+            session = client.GetSessionAsync(sessionId, CancellationToken.None).GetAwaiter().GetResult();
+            Commit(client, session, "block", FormulaOleContract.CrossPlatformPictureMode, "u+v=w");
+            final = WaitForTerminal(client, sessionId, TimeSpan.FromSeconds(45));
+            AssertEqual("completed", final.Status,
+                final.Error ?? "PowerPoint undo/redo fixture insertion failed.");
+            client.CloseEditorAsync(sessionId, CancellationToken.None).GetAwaiter().GetResult();
+            WaitForAddInIdle(addIn, TimeSpan.FromSeconds(10));
+            AssertEqual(1, otherSlide.Shapes.Count,
+                "PowerPoint undo/redo fixture was not inserted.");
+            application.CommandBars.ExecuteMso("Undo");
+            Thread.Sleep(300);
+            AssertEqual(0, otherSlide.Shapes.Count,
+                "PowerPoint Undo did not remove the latest formula.");
+            application.CommandBars.ExecuteMso("Redo");
+            Thread.Sleep(300);
+            AssertEqual(1, otherSlide.Shapes.Count,
+                "PowerPoint Redo did not restore the latest formula.");
+
+            Console.WriteLine("[PowerPoint context 4/5] Rejecting formula creation during slide show...");
+            slideShowWindow = secondPresentation.SlideShowSettings.Run();
+            Thread.Sleep(500);
+            existing = SnapshotSessionIds();
+            addIn.OnNewFormula(new object());
+            Thread.Sleep(800);
+            var slideShowSessions = SnapshotSessionIds().Except(existing, StringComparer.Ordinal).ToArray();
+            AssertEqual(0, slideShowSessions.Length,
+                "PowerPoint created an editor Session during slide show.");
+            AssertTrue(!string.IsNullOrWhiteSpace(addIn.DiagnosticLastError),
+                "PowerPoint slide-show rejection did not report an error.");
+            slideShowWindow.View.Exit();
+            Release(slideShowWindow);
+            slideShowWindow = null;
+
+            Console.WriteLine("[PowerPoint context 5/5] Reopening read-only and requiring insertion rejection...");
+            var path = Path.Combine(artifactRoot, "VisualTeX-PowerPoint-Context-Safety.pptx");
+            secondPresentation.SaveAs(
+                path,
+                PowerPoint.PpSaveAsFileType.ppSaveAsOpenXMLPresentation,
+                MsoTriState.msoFalse);
+            secondPresentation.Close();
+            Release(otherSlide);
+            otherSlide = null;
+            Release(secondPresentation);
+            secondPresentation = null;
+            readOnlyPresentation = application.Presentations.Open(
+                path,
+                ReadOnly: MsoTriState.msoTrue,
+                Untitled: MsoTriState.msoFalse,
+                WithWindow: MsoTriState.msoTrue);
+            otherSlide = readOnlyPresentation.Slides[1];
+            var readOnlyBefore = otherSlide.Shapes.Count;
+            existing = SnapshotSessionIds();
+            addIn.OnNewFormula(new object());
+            Thread.Sleep(800);
+            var readOnlySessionIds = SnapshotSessionIds().Except(existing, StringComparer.Ordinal).ToArray();
+            if (readOnlySessionIds.Length == 0)
+            {
+                AssertTrue(!string.IsNullOrWhiteSpace(addIn.DiagnosticLastError),
+                    "PowerPoint read-only rejection did not report an error.");
+            }
+            else
+            {
+                AssertEqual(1, readOnlySessionIds.Length,
+                    "PowerPoint read-only insertion created multiple Sessions.");
+                session = client.GetSessionAsync(readOnlySessionIds[0], CancellationToken.None)
+                    .GetAwaiter().GetResult();
+                Commit(client, session, "block", FormulaOleContract.CrossPlatformPictureMode, "blocked");
+                final = WaitForTerminal(client, readOnlySessionIds[0], TimeSpan.FromSeconds(45));
+                AssertEqual("failed", final.Status,
+                    "PowerPoint read-only insertion unexpectedly completed.");
+                client.CloseEditorAsync(readOnlySessionIds[0], CancellationToken.None).GetAwaiter().GetResult();
+                WaitForAddInIdle(addIn, TimeSpan.FromSeconds(10));
+            }
+            AssertEqual(readOnlyBefore, otherSlide.Shapes.Count,
+                "PowerPoint wrote a formula into the read-only presentation.");
+            Console.WriteLine(
+                $"PowerPoint slide/presentation context, Undo/Redo, slide-show, and read-only safety passed. Artifact: {path}");
+        }
+        finally
+        {
+            if (slideShowWindow is not null)
+            {
+                try { slideShowWindow.View.Exit(); } catch { }
+            }
+            Release(slideShowWindow);
+            if (addIn is not null)
+            {
+                try { addIn.OnDisconnection(ext_DisconnectMode.ext_dm_UserClosed, ref custom); } catch { }
+            }
+            Release(otherSlide);
+            Release(secondSlide);
+            Release(firstSlide);
+            if (readOnlyPresentation is not null)
+            {
+                try { readOnlyPresentation.Close(); } catch { }
+            }
+            Release(readOnlyPresentation);
+            if (secondPresentation is not null)
+            {
+                try { secondPresentation.Close(); } catch { }
+            }
+            Release(secondPresentation);
+            if (firstPresentation is not null)
+            {
+                try { firstPresentation.Close(); } catch { }
+            }
+            Release(firstPresentation);
+            if (application is not null)
+            {
+                try { application.Quit(); } catch { }
+            }
+            Release(application);
+            ForceComCleanup();
+        }
+    }
+
+    private static void RunPowerPointOleSvgDeleteAcceptance(
+        VisualTeXSessionClient client,
+        string artifactRoot)
+    {
+        Directory.CreateDirectory(artifactRoot);
+        PowerPoint.Application? application = null;
+        PowerPoint.Presentation? presentation = null;
+        PowerPoint.Presentation? reopened = null;
+        PowerPoint.Slide? slide = null;
+        PowerPoint.Shape? shape = null;
+        VisualTeX.PowerPointVsto.ThisAddIn? addIn = null;
+        Array custom = Array.Empty<object>();
+        try
+        {
+            Console.WriteLine("[PowerPoint OLE/SVG/delete 1/6] Creating an editable SVG/graphic formula...");
+            application = new PowerPoint.Application { Visible = MsoTriState.msoTrue };
+            presentation = application.Presentations.Add(MsoTriState.msoTrue);
+            slide = presentation.Slides.Add(1, PowerPoint.PpSlideLayout.ppLayoutBlank);
+            application.ActiveWindow.View.GotoSlide(1);
+            addIn = new VisualTeX.PowerPointVsto.ThisAddIn();
+            addIn.OnConnection(application, ext_ConnectMode.ext_cm_AfterStartup, addIn, ref custom);
+
+            var existing = SnapshotSessionIds();
+            addIn.OnNewFormula(new object());
+            var sessionId = WaitForNewSession(existing, "powerpoint", TimeSpan.FromSeconds(30));
+            var session = client.GetSessionAsync(sessionId, CancellationToken.None).GetAwaiter().GetResult();
+            Commit(
+                client,
+                session,
+                "block",
+                FormulaOleContract.CrossPlatformPictureMode,
+                "\\frac{a+b}{c+d}=1",
+                renderWidth: 320f,
+                renderHeight: 80f,
+                baseline: 60f);
+            var final = WaitForTerminal(client, sessionId, TimeSpan.FromSeconds(45));
+            AssertEqual("completed", final.Status, final.Error ?? "PowerPoint OLE/SVG fixture did not complete.");
+            client.CloseEditorAsync(sessionId, CancellationToken.None).GetAwaiter().GetResult();
+            WaitForAddInIdle(addIn, TimeSpan.FromSeconds(10));
+            shape = slide.Shapes[1];
+            var originalWidth = shape.Width;
+            var originalHeight = shape.Height;
+            var originalMetadata = DecodePowerPointMetadata(shape)
+                ?? throw new InvalidDataException("Initial PowerPoint SVG metadata could not be decoded.");
+            var formulaId = originalMetadata.FormulaId;
+
+            Console.WriteLine("[PowerPoint OLE/SVG/delete 2/6] Converting SVG/graphic to native OLE...");
+            shape.Select(MsoTriState.msoTrue);
+            existing = SnapshotSessionIds();
+            final = WaitForDirectConversion(
+                client,
+                existing,
+                "powerpoint",
+                FormulaOleContract.NativeOleMode,
+                () => addIn.OnConvertSelected(new object()),
+                TimeSpan.FromSeconds(45),
+                out _);
+            AssertEqual("completed", final.Status, final.Error ?? "PowerPoint SVG-to-OLE conversion failed.");
+            Release(shape);
+            shape = slide.Shapes[1];
+            AssertEqual(MsoShapeType.msoEmbeddedOLEObject, shape.Type,
+                "PowerPoint SVG-to-OLE did not create an embedded OLE object.");
+            AssertNear(originalWidth, shape.Width, 1.0f,
+                "PowerPoint SVG-to-OLE changed formula width.");
+            AssertNear(originalHeight, shape.Height, 0.8f,
+                "PowerPoint SVG-to-OLE changed formula height.");
+
+            Console.WriteLine("[PowerPoint OLE/SVG/delete 3/6] Exporting OLE back to editable SVG picture...");
+            application.ActiveWindow.Activate();
+            shape.Select(MsoTriState.msoTrue);
+            existing = SnapshotSessionIds();
+            final = WaitForDirectConversion(
+                client,
+                existing,
+                "powerpoint",
+                FormulaOleContract.CrossPlatformPictureMode,
+                () => addIn.OnExportSelectedAsPicture(new object()),
+                TimeSpan.FromSeconds(45),
+                out _);
+            AssertEqual("completed", final.Status, final.Error ?? "PowerPoint OLE-to-SVG conversion failed.");
+            Release(shape);
+            shape = slide.Shapes[1];
+            AssertTrue(IsPowerPointEditablePictureShape(shape),
+                $"PowerPoint OLE-to-SVG returned the wrong shape type: {(int)shape.Type}.");
+            AssertNear(originalWidth, shape.Width, 1.0f,
+                "PowerPoint OLE-to-SVG changed formula width.");
+            AssertNear(originalHeight, shape.Height, 0.8f,
+                "PowerPoint OLE-to-SVG changed formula height.");
+            AssertTrue(shape.Width > 0 && shape.Height > 0,
+                "PowerPoint OLE-to-SVG produced a zero-size formula.");
+            var svgMetadata = DecodePowerPointMetadata(shape)
+                ?? throw new InvalidDataException("OLE-to-SVG metadata could not be decoded.");
+            AssertEqual(formulaId, svgMetadata.FormulaId,
+                "OLE-to-SVG changed the formula ID.");
+            AssertTrue(svgMetadata.Lines.Any(line => line.Latex.IndexOf("frac", StringComparison.Ordinal) >= 0),
+                "OLE-to-SVG lost the LaTeX source.");
+
+            Console.WriteLine("[PowerPoint OLE/SVG/delete 4/6] Exporting the slide and checking visible formula pixels...");
+            var pngPath = Path.Combine(artifactRoot, "VisualTeX-PowerPoint-OLE-SVG.png");
+            slide.Export(pngPath, "PNG", 960, 540);
+            var pixels = AnalyzeDarkPixels(pngPath);
+            AssertTrue(pixels.Count >= 40,
+                $"PowerPoint OLE-to-SVG slide export is blank or nearly blank ({pixels.Count} dark pixels).");
+
+            Console.WriteLine("[PowerPoint OLE/SVG/delete 5/6] Saving, reopening, and editing the SVG formula...");
+            var path = Path.Combine(artifactRoot, "VisualTeX-PowerPoint-OLE-SVG-Delete.pptx");
+            presentation.SaveAs(path, PowerPoint.PpSaveAsFileType.ppSaveAsOpenXMLPresentation, MsoTriState.msoFalse);
+            presentation.Close();
+            Release(shape);
+            shape = null;
+            Release(slide);
+            slide = null;
+            Release(presentation);
+            presentation = null;
+            reopened = application.Presentations.Open(path, WithWindow: MsoTriState.msoTrue);
+            slide = reopened.Slides[1];
+            shape = slide.Shapes[1];
+            AssertTrue(IsPowerPointEditablePictureShape(shape),
+                "Reopened OLE-to-SVG formula is no longer an editable picture/graphic.");
+            shape.Select(MsoTriState.msoTrue);
+            existing = SnapshotSessionIds();
+            addIn.OnEditSelected(new object());
+            var editSessionId = WaitForNewSession(existing, "powerpoint", TimeSpan.FromSeconds(30));
+            var editSession = WaitForUnchangedEditorReady(client, editSessionId, TimeSpan.FromSeconds(12));
+            AssertEqual(formulaId, editSession.FormulaId,
+                "Reopened SVG edit targeted the wrong formula ID.");
+            AssertTrue(editSession.Lines.Any(line => line.Latex.IndexOf("frac", StringComparison.Ordinal) >= 0),
+                "Reopened SVG edit lost the LaTeX source.");
+            client.CloseEditorAsync(editSessionId, CancellationToken.None).GetAwaiter().GetResult();
+            _ = WaitForTerminal(client, editSessionId, TimeSpan.FromSeconds(30));
+            WaitForAddInIdle(addIn, TimeSpan.FromSeconds(10));
+
+            Console.WriteLine("[PowerPoint OLE/SVG/delete 6/6] Deleting the selected formula and saving the empty slide...");
+            shape.Select(MsoTriState.msoTrue);
+            addIn.OnDeleteSelected(new object());
+            WaitForAddInIdle(addIn, TimeSpan.FromSeconds(10));
+            AssertEqual(0, slide.Shapes.Count,
+                "PowerPoint delete left the formula shape on the slide.");
+            reopened.Save();
+            reopened.Close();
+            Release(reopened);
+            reopened = application.Presentations.Open(path, WithWindow: MsoTriState.msoTrue);
+            slide = reopened.Slides[1];
+            AssertEqual(0, slide.Shapes.Count,
+                "PowerPoint deleted formula reappeared after save/reopen.");
+            Console.WriteLine(
+                $"PowerPoint OLE-to-SVG, visible export, metadata/source, save/reopen, and delete cleanup passed. Artifact: {path}");
+        }
+        finally
+        {
+            if (addIn is not null)
+            {
+                try { addIn.OnDisconnection(ext_DisconnectMode.ext_dm_UserClosed, ref custom); } catch { }
+            }
+            Release(shape);
+            Release(slide);
+            if (reopened is not null)
+            {
+                try { reopened.Close(); } catch { }
+            }
+            Release(reopened);
+            if (presentation is not null)
+            {
+                try { presentation.Close(); } catch { }
+            }
+            Release(presentation);
+            if (application is not null)
+            {
+                try { application.Quit(); } catch { }
+            }
+            Release(application);
+            ForceComCleanup();
+        }
+    }
+
+    private static void RunPowerPointFontSizeAcceptance(
+        VisualTeXSessionClient client,
+        string artifactRoot)
+    {
+        Directory.CreateDirectory(artifactRoot);
+        PowerPoint.Application? application = null;
+        PowerPoint.Presentation? presentation = null;
+        PowerPoint.Presentation? reopened = null;
+        PowerPoint.Slide? slide = null;
+        PowerPoint.Shape? shape = null;
+        VisualTeX.PowerPointVsto.ThisAddIn? addIn = null;
+        Array custom = Array.Empty<object>();
+        try
+        {
+            Console.WriteLine("[PowerPoint font size 1/6] Creating an editable SVG/graphic formula...");
+            application = new PowerPoint.Application { Visible = MsoTriState.msoTrue };
+            presentation = application.Presentations.Add(MsoTriState.msoTrue);
+            slide = presentation.Slides.Add(1, PowerPoint.PpSlideLayout.ppLayoutBlank);
+            application.ActiveWindow.View.GotoSlide(1);
+            addIn = new VisualTeX.PowerPointVsto.ThisAddIn();
+            addIn.OnConnection(application, ext_ConnectMode.ext_cm_AfterStartup, addIn, ref custom);
+
+            var existing = SnapshotSessionIds();
+            addIn.OnNewFormula(new object());
+            var sessionId = WaitForNewSession(existing, "powerpoint", TimeSpan.FromSeconds(30));
+            var session = client.GetSessionAsync(sessionId, CancellationToken.None)
+                .GetAwaiter().GetResult();
+            Commit(client, session, "block", FormulaOleContract.CrossPlatformPictureMode, "x+y=z");
+            var final = WaitForTerminal(client, sessionId, TimeSpan.FromSeconds(45));
+            AssertEqual("completed", final.Status, final.Error ?? "PowerPoint font-size fixture did not complete.");
+            client.CloseEditorAsync(sessionId, CancellationToken.None).GetAwaiter().GetResult();
+            WaitForAddInIdle(addIn, TimeSpan.FromSeconds(10));
+            shape = slide.Shapes[1];
+            AssertTrue(IsPowerPointEditablePictureShape(shape),
+                $"Font-size fixture is not an editable picture/graphic. Actual type: {(int)shape.Type}.");
+            shape.Select(MsoTriState.msoTrue);
+            var originalWidth = shape.Width;
+            var originalHeight = shape.Height;
+            var originalCenterX = shape.Left + shape.Width / 2f;
+            var originalCenterY = shape.Top + shape.Height / 2f;
+
+            Console.WriteLine("[PowerPoint font size 2/6] Setting the picture formula to 36 pt...");
+            addIn.OnFormulaFontSizeChanged(null!, "36");
+            Release(shape);
+            shape = slide.Shapes[1];
+            var width36 = shape.Width;
+            var height36 = shape.Height;
+            AssertTrue(width36 > originalWidth && height36 > originalHeight,
+                $"36 pt did not enlarge the picture formula: {originalWidth:F2}x{originalHeight:F2} -> {width36:F2}x{height36:F2}.");
+            AssertNear(originalWidth / originalHeight, width36 / height36, 0.05f,
+                "Picture font-size change distorted the formula aspect ratio.");
+            AssertNear(originalCenterX, shape.Left + shape.Width / 2f, 0.5f,
+                "Picture font-size change moved the formula horizontally.");
+            AssertNear(originalCenterY, shape.Top + shape.Height / 2f, 0.5f,
+                "Picture font-size change moved the formula vertically.");
+            var metadata36 = FormulaMetadataCodec.Decode(shape.AlternativeText)
+                ?? throw new InvalidDataException("36 pt picture metadata could not be decoded.");
+            AssertNear(36f, (float)(metadata36.FontSizePt ?? 0), 0.1f,
+                "Picture metadata did not store 36 pt.");
+
+            Console.WriteLine("[PowerPoint font size 3/6] Exercising decrease and increase presets...");
+            shape.Select(MsoTriState.msoTrue);
+            addIn.OnDecreaseFormulaFontSize(null!);
+            Release(shape);
+            shape = slide.Shapes[1];
+            var decreasedMetadata = FormulaMetadataCodec.Decode(shape.AlternativeText)
+                ?? throw new InvalidDataException("Decreased picture metadata could not be decoded.");
+            AssertTrue((decreasedMetadata.FontSizePt ?? 0) < 36 && shape.Width < width36,
+                "PowerPoint decrease did not reduce semantic and physical formula size.");
+            shape.Select(MsoTriState.msoTrue);
+            addIn.OnIncreaseFormulaFontSize(null!);
+            Release(shape);
+            shape = slide.Shapes[1];
+            var restoredMetadata = FormulaMetadataCodec.Decode(shape.AlternativeText)
+                ?? throw new InvalidDataException("Restored picture metadata could not be decoded.");
+            AssertNear(36f, (float)(restoredMetadata.FontSizePt ?? 0), 0.1f,
+                "Decrease/increase did not restore 36 pt.");
+            AssertNear(width36, shape.Width, 0.8f,
+                "Decrease/increase did not restore picture width.");
+            AssertNear(height36, shape.Height, 0.5f,
+                "Decrease/increase did not restore picture height.");
+
+            Console.WriteLine("[PowerPoint font size 4/6] Converting the 36 pt picture to OLE...");
+            shape.Select(MsoTriState.msoTrue);
+            existing = SnapshotSessionIds();
+            final = WaitForDirectConversion(
+                client,
+                existing,
+                "powerpoint",
+                FormulaOleContract.NativeOleMode,
+                () => addIn.OnConvertSelected(new object()),
+                TimeSpan.FromSeconds(45),
+                out _);
+            AssertEqual("completed", final.Status, final.Error ?? "36 pt picture-to-OLE conversion failed.");
+            Release(shape);
+            shape = slide.Shapes[1];
+            AssertEqual(MsoShapeType.msoEmbeddedOLEObject, shape.Type,
+                "36 pt conversion did not create an embedded OLE object.");
+            AssertNear(width36, shape.Width, 1.0f,
+                "Picture-to-OLE conversion changed 36 pt width.");
+            AssertNear(height36, shape.Height, 0.6f,
+                "Picture-to-OLE conversion changed 36 pt height.");
+
+            Console.WriteLine("[PowerPoint font size 5/6] Setting the OLE formula to 48 pt...");
+            application.ActiveWindow.Activate();
+            application.ActiveWindow.View.GotoSlide(1);
+            shape.Select(MsoTriState.msoTrue);
+            WinForms.Application.DoEvents();
+            Thread.Sleep(200);
+            var enabledBefore48 = addIn.GetFormulaFontSizeEnabled(null!);
+            var textBefore48 = addIn.GetFormulaFontSizeText(null!);
+            var metadataBefore48 = DecodePowerPointMetadata(shape);
+            Console.WriteLine(
+                $"  OLE before 48 pt: {shape.Width:F2}x{shape.Height:F2}, enabled={enabledBefore48}, "
+                + $"control='{textBefore48}', metadata={metadataBefore48?.FontSizePt?.ToString("F1", System.Globalization.CultureInfo.InvariantCulture) ?? "null"}.");
+            addIn.OnFormulaFontSizeChanged(null!, "48");
+            WinForms.Application.DoEvents();
+            Thread.Sleep(200);
+            Release(shape);
+            shape = slide.Shapes[1];
+            var width48 = shape.Width;
+            var height48 = shape.Height;
+            var metadata48 = DecodePowerPointMetadata(shape);
+            shape.Select(MsoTriState.msoTrue);
+            var textAfter48 = addIn.GetFormulaFontSizeText(null!);
+            Console.WriteLine(
+                $"  OLE after 48 pt: {width48:F2}x{height48:F2}, control='{textAfter48}', "
+                + $"outerMetadata={metadata48?.FontSizePt?.ToString("F1", System.Globalization.CultureInfo.InvariantCulture) ?? "not exposed"}, "
+                + $"diagnostic='{addIn.DiagnosticLastError}'.");
+            AssertTrue(height48 > height36,
+                $"48 pt did not increase the OLE formula height: {height36:F2} -> {height48:F2}; "
+                + $"enabled={enabledBefore48}, controlBefore='{textBefore48}', controlAfter='{textAfter48}', diagnostic='{addIn.DiagnosticLastError}'.");
+            AssertEqual("48", textAfter48,
+                "PowerPoint OLE font-size control did not report 48 pt after resizing.");
+            var ratio36 = width36 / height36;
+            var ratio48 = width48 / height48;
+            AssertNear(ratio36, ratio48, 0.1f,
+                $"PowerPoint OLE font-size change distorted aspect ratio; "
+                + $"width {width36:F2} -> {width48:F2}, height {height36:F2} -> {height48:F2}.");
+
+            Console.WriteLine("[PowerPoint font size 6/6] Saving, reopening, and rechecking OLE size metadata...");
+            var path = Path.Combine(artifactRoot, "VisualTeX-PowerPoint-Font-Size.pptx");
+            presentation.SaveAs(path, PowerPoint.PpSaveAsFileType.ppSaveAsOpenXMLPresentation, MsoTriState.msoFalse);
+            presentation.Close();
+            Release(shape);
+            shape = null;
+            Release(slide);
+            slide = null;
+            Release(presentation);
+            presentation = null;
+            reopened = application.Presentations.Open(path, WithWindow: MsoTriState.msoTrue);
+            slide = reopened.Slides[1];
+            shape = slide.Shapes[1];
+            AssertEqual(MsoShapeType.msoEmbeddedOLEObject, shape.Type,
+                "Reopened 48 pt formula is no longer OLE.");
+            AssertNear(width48, shape.Width, 1.0f,
+                "48 pt OLE width changed after save/reopen.");
+            AssertNear(height48, shape.Height, 0.6f,
+                "48 pt OLE height changed after save/reopen.");
+            shape.Select(MsoTriState.msoTrue);
+            AssertTrue(addIn.GetFormulaFontSizeEnabled(null!),
+                "PowerPoint font-size controls were disabled for reopened OLE.");
+            AssertEqual("48", addIn.GetFormulaFontSizeText(null!),
+                "48 pt semantic size was lost after save/reopen.");
+            Console.WriteLine(
+                $"PowerPoint font-size acceptance passed: picture {originalWidth:F1}x{originalHeight:F1} -> "
+                + $"36 pt {width36:F1}x{height36:F1}; OLE 48 pt {width48:F1}x{height48:F1}; save/reopen stable.");
+        }
+        finally
+        {
+            if (addIn is not null)
+            {
+                try { addIn.OnDisconnection(ext_DisconnectMode.ext_dm_UserClosed, ref custom); } catch { }
+            }
+            Release(shape);
+            Release(slide);
+            if (reopened is not null)
+            {
+                try { reopened.Close(); } catch { }
+            }
+            Release(reopened);
+            if (presentation is not null)
+            {
+                try { presentation.Close(); } catch { }
+            }
+            Release(presentation);
+            if (application is not null)
+            {
+                try { application.Quit(); } catch { }
+            }
+            Release(application);
+            ForceComCleanup();
+        }
+    }
+
+    private static void RunPowerPoint(
+        VisualTeXSessionClient client,
+        string artifactRoot,
+        bool stopAfterPictureEdit = false)
     {
         PowerPoint.Application? application = null;
         PowerPoint.Presentation? presentation = null;
@@ -2722,8 +4329,8 @@ internal static partial class Program
             Console.WriteLine("[PowerPoint 3/10] Checking the inserted editable picture...");
             AssertEqual(1, slide.Shapes.Count, "PowerPoint should contain one formula shape.");
             shape = slide.Shapes[1];
-            AssertEqual(MsoShapeType.msoPicture, shape.Type,
-                "PowerPoint formula must be a picture, not an OLE placeholder.");
+            AssertTrue(IsPowerPointEditablePictureShape(shape),
+                $"PowerPoint formula must be an editable picture/graphic, not an OLE placeholder. Actual type: {(int)shape.Type}.");
             AssertNear(120f, shape.Width, 0.5f, "PowerPoint formula width is incorrect.");
             AssertNear(24f, shape.Height, 0.5f, "PowerPoint formula height is incorrect.");
             AssertNear(5f, shape.Width / shape.Height, 0.05f,
@@ -2813,8 +4420,8 @@ internal static partial class Program
             WaitForAddInIdle(addIn, TimeSpan.FromSeconds(10));
             Release(shape);
             shape = slide.Shapes[1];
-            AssertEqual(MsoShapeType.msoPicture, shape.Type,
-                "PowerPoint edit unexpectedly changed the picture object type.");
+            AssertTrue(IsPowerPointEditablePictureShape(shape),
+                $"PowerPoint edit unexpectedly changed the editable picture/graphic object type. Actual type: {(int)shape.Type}.");
             AssertNear(240f, shape.Width, 0.8f,
                 "PowerPoint edited formula retained the old width.");
             AssertNear(24f, shape.Height, 0.5f,
@@ -2856,6 +4463,20 @@ internal static partial class Program
                 final.Error ?? "PowerPoint double-click Session did not complete.");
             client.CloseEditorAsync(doubleClickSessionId, CancellationToken.None).GetAwaiter().GetResult();
             WaitForAddInIdle(addIn, TimeSpan.FromSeconds(10));
+            if (stopAfterPictureEdit)
+            {
+                var picturePath = Path.Combine(
+                    artifactRoot,
+                    "VisualTeX-PowerPoint-Picture-Edit.pptx");
+                presentation.SaveAs(
+                    picturePath,
+                    PowerPoint.PpSaveAsFileType.ppSaveAsOpenXMLPresentation,
+                    MsoTriState.msoFalse);
+                Console.WriteLine(
+                    $"[PowerPoint picture/edit] Saved {picturePath}; independent create, unchanged close, "
+                    + "Ribbon edit resize, aspect ratio, metadata, and double-click callback passed.");
+                return;
+            }
 
             Console.WriteLine("[PowerPoint 7/10] Converting the selected formula to native OLE...");
             application.ActiveWindow.Activate();
@@ -3412,6 +5033,28 @@ internal static partial class Program
         using var stream = new MemoryStream();
         bitmap.Save(stream, ImageFormat.Png);
         return "data:image/png;base64," + Convert.ToBase64String(stream.ToArray());
+    }
+
+    private static bool IsPowerPointEditablePictureShape(PowerPoint.Shape shape)
+    {
+        const int MsoGraphic = 28;
+        return shape.Type == MsoShapeType.msoPicture
+            || (int)shape.Type == MsoGraphic;
+    }
+
+    private static FormulaMetadata? DecodePowerPointMetadata(PowerPoint.Shape shape)
+    {
+        var decoded = FormulaMetadataCodec.Decode(shape.AlternativeText ?? string.Empty);
+        if (decoded is not null) return decoded;
+        PowerPoint.Tags? tags = null;
+        try
+        {
+            tags = shape.Tags;
+            string value = string.Empty;
+            try { value = tags["VisualTeXMetadata"] ?? string.Empty; } catch { }
+            return FormulaMetadataCodec.Decode(value);
+        }
+        finally { Release(tags); }
     }
 
     private static void ReportPowerPointMetadata(string stage, PowerPoint.Shape shape)

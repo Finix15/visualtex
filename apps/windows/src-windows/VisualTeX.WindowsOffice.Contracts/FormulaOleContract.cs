@@ -46,3 +46,13 @@ public interface IVisualTeXFormulaObject
     [PreserveSig]
     int GetFormulaJson([MarshalAs(UnmanagedType.BStr)] out string metadataJson);
 }
+
+[ComImport]
+[Guid("A59B7798-6F24-4CF0-B378-E951BFFAFB3A")]
+[InterfaceType(ComInterfaceType.InterfaceIsDual)]
+public interface IVisualTeXFormulaMetadata
+{
+    [DispId(1)]
+    [PreserveSig]
+    int SetFormulaJson([MarshalAs(UnmanagedType.BStr)] string metadataJson);
+}

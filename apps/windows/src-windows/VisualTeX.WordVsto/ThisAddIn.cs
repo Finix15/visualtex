@@ -105,6 +105,9 @@ public interface IWordRibbonCallbacks
 
     [DispId(30)]
     void OnRedrawDocumentOmmlToLatex(object control);
+
+    [DispId(31)]
+    void OnBatchEquationNumbering(object control);
 }
 
 [ComVisible(true)]
@@ -114,7 +117,19 @@ public interface IWordRibbonCallbacks
 [ComDefaultInterface(typeof(IWordRibbonCallbacks))]
 public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, IWordRibbonCallbacks
 {
+    private const int AllowAnyProcessToSetForeground = -1;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool AllowSetForegroundWindow(int processId);
+
     static ThisAddIn() => VstoDependencyResolver.Install();
+
+    private static void GrantVisualTeXForegroundActivation()
+    {
+        try { _ = AllowSetForegroundWindow(AllowAnyProcessToSetForeground); }
+        catch { }
+    }
 
     private const string RibbonXml = """
 <customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui" onLoad="OnRibbonLoad">
@@ -128,8 +143,9 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
           <button id="VisualTeX.WordVsto.DisplayOmml" label="OMML 行间公式" size="large" screentip="插入 Word 原生公式" supertip="插入可由 Word 原生公式工具直接编辑、同时保留 VisualTeX LaTeX 元数据的 OMML 行间公式。" tag="ommlDisplay" getImage="GetRibbonImage" onAction="OnInsertDisplayOmml" />
           <button id="VisualTeX.WordVsto.Edit" label="编辑所选公式" size="large" tag="editSelected" getImage="GetRibbonImage" onAction="OnEditSelected" />
           <button id="VisualTeX.WordVsto.ConvertSelected" label="转为原生 OLE" screentip="转为可嵌入编辑的原生 OLE" supertip="转换后对象随 Word 文档保存，并可通过 VisualTeX 双击重新编辑。" tag="convertToOle" getImage="GetRibbonImage" onAction="OnConvertSelected" />
-          <button id="VisualTeX.WordVsto.ConvertSelectedToOmml" label="转为 Word OMML" screentip="转为 Word 原生公式" supertip="将所选 VisualTeX 公式转换为 Word 原生 OMML；可在 Word 中直接编辑，也可继续用 VisualTeX 编辑。" tag="convertToOmml" getImage="GetRibbonImage" onAction="OnConvertSelectedToOmml" />
+          <button id="VisualTeX.WordVsto.ConvertSelectedToOmml" label="转为 Word OMML" size="large" screentip="转为 Word 原生公式" supertip="将所选 VisualTeX 公式转换为 Word 原生 OMML；可在 Word 中直接编辑，也可继续用 VisualTeX 编辑。" tag="convertToOmml" getImage="GetRibbonImage" onAction="OnConvertSelectedToOmml" />
           <button id="VisualTeX.WordVsto.UpdateNumbers" label="更新公式编号" tag="updateNumbers" getImage="GetRibbonImage" onAction="OnUpdateEquationNumbers" />
+          <button id="VisualTeX.WordVsto.BatchNumbers" label="批量编号" size="large" screentip="为全文行间公式批量添加编号" supertip="扫描当前文档中的 VisualTeX OLE 与 OMML 行间公式，选择编号格式后批量添加编号；已有编号可选择重绘，并保持公式 ID、交叉引用和格式转换元数据。" tag="updateNumbers" getImage="GetRibbonImage" onAction="OnBatchEquationNumbering" />
           <menu id="VisualTeX.WordVsto.NumberFormat" label="编号格式" screentip="设置当前文档的公式编号格式" supertip="选择后立即更新当前文档已有的 VisualTeX 公式编号，并应用于后续新插入的带编号公式。">
             <toggleButton id="VisualTeX.WordVsto.NumberFormatContinuous" label="全文连续编号（1）" tag="continuous" getPressed="GetEquationNumberFormatPressed" onAction="OnEquationNumberFormatChanged" />
             <toggleButton id="VisualTeX.WordVsto.NumberFormatHeading1Dot" label="按章编号（1.1）" tag="heading1-dot" getPressed="GetEquationNumberFormatPressed" onAction="OnEquationNumberFormatChanged" />
@@ -208,6 +224,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
     private static readonly object BulkAcceptanceLogGate = new();
     private readonly SemaphoreSlim _operationGate = new(1, 1);
     private readonly object _nativeOleTargetGate = new();
+    private readonly object _mouseDoubleClickGate = new();
     private CancellationTokenSource? _lifetime;
     private string _lastDoubleClickFormulaId = string.Empty;
     private DateTimeOffset _lastDoubleClickAt;
@@ -217,6 +234,10 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
     private int _nativeOleTargetTop;
     private int _nativeOleTargetRight;
     private int _nativeOleTargetBottom;
+    private bool _mouseDoubleClickPointActive;
+    private int _mouseDoubleClickX;
+    private int _mouseDoubleClickY;
+    private DateTimeOffset _mouseDoubleClickAt;
     private int _formulaFontInvalidationPending;
     private int _normalizingTypingCaret;
     private int _typingCaretNormalizationPending;
@@ -266,7 +287,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         {
             _doubleClickHook = new WordDoubleClickHook(
                 ShouldInterceptNativeOleDoubleClick,
-                OnNativeOleDoubleClick);
+                OnNativeWordDoubleClick);
             _doubleClickHook.Start();
         }
         catch (Exception error)
@@ -353,6 +374,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             FormulaOleContract.WordOmmlMode,
             conversionOnly: true);
     public void OnUpdateEquationNumbers(object control) => _ = UpdateEquationNumbersAsync();
+    public void OnBatchEquationNumbering(object control) => _ = BatchEquationNumberingAsync();
     public bool GetEquationNumberFormatPressed(Office.IRibbonControl control)
     {
         try
@@ -616,11 +638,21 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 return;
 
             var shouldOpenVisualTeX = WordDoubleClickRouting.ShouldOpenVisualTeX(selected);
+            var hasMousePoint = TryGetRecentMouseDoubleClickPoint(
+                out var screenX,
+                out var screenY);
+            var pointHitsFormula = !hasMousePoint
+                ? _doubleClickHook is null
+                : _formulaService?.IsFormulaAtScreenPoint(
+                    selected,
+                    screenX,
+                    screenY) == true;
             WordDoubleClickHook.TraceMessage(
                 $"window-before-double-click formulaId={selected.FormulaId} "
                 + $"objectMode={selected.ObjectMode ?? "<null>"} "
-                + $"shouldOpenVisualTeX={shouldOpenVisualTeX}");
-            if (!shouldOpenVisualTeX) return;
+                + $"shouldOpenVisualTeX={shouldOpenVisualTeX} "
+                + $"hasMousePoint={hasMousePoint} pointHitsFormula={pointHitsFormula}");
+            if (!shouldOpenVisualTeX || !pointHitsFormula) return;
 
             cancel = true;
             ClearNativeOleTarget();
@@ -634,6 +666,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
 
     private bool ShouldInterceptNativeOleDoubleClick(int screenX, int screenY)
     {
+        RememberMouseDoubleClickPoint(screenX, screenY);
         lock (_nativeOleTargetGate)
         {
             return _nativeOleTargetActive
@@ -644,9 +677,14 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         }
     }
 
-    private void OnNativeOleDoubleClick()
+    private void OnNativeWordDoubleClick(
+        bool interceptedNativeOle,
+        int screenX,
+        int screenY)
     {
-        WordDoubleClickHook.TraceMessage("addin-callback-received");
+        WordDoubleClickHook.TraceMessage(
+            $"addin-callback-received interceptedNativeOle={interceptedNativeOle} "
+            + $"x={screenX} y={screenY}");
         var dispatcher = _dispatcher;
         var service = _formulaService;
         if (dispatcher is null || service is null) return;
@@ -654,21 +692,46 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         {
             try
             {
-                var selected = service.ReadSelection();
+                var selected = interceptedNativeOle
+                    ? service.ReadSelection()
+                    : service.ReadVisualTeXOmmlAtScreenPoint(screenX, screenY);
                 WordDoubleClickHook.TraceMessage(
-                    $"addin-selection formulaId={selected.FormulaId ?? "<null>"} objectMode={selected.ObjectMode ?? "<null>"}");
-                if (!string.Equals(
-                        selected.ObjectMode,
-                        FormulaOleContract.NativeOleMode,
-                        StringComparison.Ordinal))
+                    $"addin-coordinate-selection formulaId={selected?.FormulaId ?? "<null>"} "
+                    + $"objectMode={selected?.ObjectMode ?? "<null>"}");
+                if (!WordDoubleClickRouting.ShouldOpenVisualTeX(selected))
                     return false;
+
+                if (interceptedNativeOle)
+                {
+                    if (!string.Equals(
+                            selected!.ObjectMode,
+                            FormulaOleContract.NativeOleMode,
+                            StringComparison.Ordinal)
+                        || !service.IsFormulaAtScreenPoint(
+                            selected,
+                            screenX,
+                            screenY))
+                    {
+                        WordDoubleClickHook.TraceMessage(
+                            "addin-coordinate-selection-rejected-native-ole-miss");
+                        return false;
+                    }
+                }
+                else if (!string.Equals(
+                             selected!.ObjectMode,
+                             FormulaOleContract.WordOmmlMode,
+                             StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
                 var started = TryBeginDoubleClickSession(selected);
                 WordDoubleClickHook.TraceMessage($"addin-session-started={started}");
                 return started;
             }
             catch (Exception error)
             {
-                SetStatus($"VisualTeX OLE 双击检测失败：{error.Message}");
+                SetStatus($"VisualTeX Word 双击检测失败：{error.Message}");
                 return false;
             }
         });
@@ -689,6 +752,36 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         _lastDoubleClickAt = now;
         BeginSession("edit", null, null, capturedSelection: selected);
         return true;
+    }
+
+    private void RememberMouseDoubleClickPoint(int screenX, int screenY)
+    {
+        lock (_mouseDoubleClickGate)
+        {
+            _mouseDoubleClickX = screenX;
+            _mouseDoubleClickY = screenY;
+            _mouseDoubleClickAt = DateTimeOffset.UtcNow;
+            _mouseDoubleClickPointActive = true;
+        }
+    }
+
+    private bool TryGetRecentMouseDoubleClickPoint(
+        out int screenX,
+        out int screenY)
+    {
+        lock (_mouseDoubleClickGate)
+        {
+            screenX = _mouseDoubleClickX;
+            screenY = _mouseDoubleClickY;
+            if (!_mouseDoubleClickPointActive
+                || DateTimeOffset.UtcNow - _mouseDoubleClickAt
+                    > TimeSpan.FromSeconds(1))
+            {
+                _mouseDoubleClickPointActive = false;
+                return false;
+            }
+            return true;
+        }
     }
 
     private void ClearNativeOleTarget()
@@ -754,6 +847,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             {
                 try
                 {
+                    GrantVisualTeXForegroundActivation();
                     await _sessionClient.OpenEditorAsync(activeSessionId!, cancellationToken)
                         .ConfigureAwait(false);
                     SetStatus("已有 VisualTeX 编辑任务，已将编辑窗口切换到前台。");
@@ -861,6 +955,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             }
             else
             {
+                GrantVisualTeXForegroundActivation();
                 await client.OpenEditorAsync(session.Id, cancellationToken)
                     .ConfigureAwait(false);
                 TraceOpenPerformance("open-editor-window");
@@ -1430,6 +1525,14 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         var converterSessionIds = new List<string>();
         var operationStopwatch = Stopwatch.StartNew();
         string? bulkImportSessionId = null;
+        var operationGateHeld = true;
+        void ReleaseOperationGate()
+        {
+            if (!operationGateHeld) return;
+            operationGateHeld = false;
+            _operationGate.Release();
+            WriteBulkAcceptanceLog("bulk-operation-gate-released");
+        }
         try
         {
             var selection = await dispatcher.InvokeAsync(service.ReadSelection)
@@ -1574,24 +1677,6 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             WriteBulkAcceptanceLog(
                 $"bulk-insert-complete blocks={result.BlockCount} "
                 + $"formulas={result.FormulaCount} elapsedMs={insertStopwatch.ElapsedMilliseconds}");
-            foreach (var sessionId in converterSessionIds)
-            {
-                try
-                {
-                    await client.CompleteAsync(sessionId, lifetime.Token)
-                        .ConfigureAwait(false);
-                }
-                catch { }
-            }
-            if (!string.IsNullOrWhiteSpace(bulkImportSessionId))
-            {
-                try
-                {
-                    await client.CompleteAsync(bulkImportSessionId!, lifetime.Token)
-                        .ConfigureAwait(false);
-                }
-                catch { }
-            }
             operationStopwatch.Stop();
             WriteBulkAcceptanceLog(
                 $"bulk-import-complete blocks={result.BlockCount} formulas={result.FormulaCount} "
@@ -1599,6 +1684,19 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             SetStatus(
                 $"批量导入完成：{result.BlockCount} 个内容块，{result.FormulaCount} 个独立公式；"
                 + $"耗时 {operationStopwatch.Elapsed.TotalSeconds:0.0} 秒。");
+
+            // Session finalization and temporary-file cleanup are companion-side
+            // bookkeeping. They must never keep Word's single-operation gate
+            // locked after the document has already been modified successfully.
+            // A stalled local PATCH previously made every later Ribbon command
+            // report that another Word operation was still running forever.
+            ReleaseOperationGate();
+            QueueBulkSessionCleanup(
+                client,
+                converterSessionIds,
+                bulkImportSessionId,
+                completed: true,
+                error: null);
         }
         catch (OperationCanceledException error)
         {
@@ -1608,24 +1706,6 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         catch (Exception error)
         {
             WriteBulkAcceptanceLog("bulk-import-failed " + error);
-            foreach (var sessionId in converterSessionIds)
-            {
-                try
-                {
-                    await client.FailAsync(sessionId, error.Message, CancellationToken.None)
-                        .ConfigureAwait(false);
-                }
-                catch { }
-            }
-            if (!string.IsNullOrWhiteSpace(bulkImportSessionId))
-            {
-                try
-                {
-                    await client.FailAsync(bulkImportSessionId!, error.Message, CancellationToken.None)
-                        .ConfigureAwait(false);
-                }
-                catch { }
-            }
             SetStatus($"VisualTeX 批量导入失败：{error.Message}");
             if (!string.Equals(
                     Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE"),
@@ -1646,16 +1726,80 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 }
                 catch { }
             }
+            ReleaseOperationGate();
+            QueueBulkSessionCleanup(
+                client,
+                converterSessionIds,
+                bulkImportSessionId,
+                completed: false,
+                error: error.Message);
         }
         finally
         {
+            ReleaseOperationGate();
             foreach (var template in rendered.Values)
             {
                 TryDeleteFile(template.EmfPath);
                 TryDeleteFile(template.SvgPath);
                 TryDeleteFile(template.PngPath);
             }
-            _operationGate.Release();
+        }
+    }
+
+    private static void QueueBulkSessionCleanup(
+        VisualTeXSessionClient client,
+        IEnumerable<string> converterSessionIds,
+        string? bulkImportSessionId,
+        bool completed,
+        string? error)
+    {
+        var sessionIds = converterSessionIds
+            .Concat(string.IsNullOrWhiteSpace(bulkImportSessionId)
+                ? Array.Empty<string>()
+                : new[] { bulkImportSessionId! })
+            .Where(sessionId => !string.IsNullOrWhiteSpace(sessionId))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (sessionIds.Length == 0) return;
+
+        _ = CleanupAsync();
+        async Task CleanupAsync()
+        {
+            try
+            {
+                if (int.TryParse(
+                        Environment.GetEnvironmentVariable(
+                            "VISUALTEX_VSTO_BULK_CLEANUP_DELAY_MS"),
+                        out var delayMilliseconds)
+                    && delayMilliseconds > 0
+                    && string.Equals(
+                        Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE"),
+                        "1",
+                        StringComparison.Ordinal))
+                {
+                    await Task.Delay(Math.Min(delayMilliseconds, 30_000))
+                        .ConfigureAwait(false);
+                }
+
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                var cleanupTasks = sessionIds.Select(sessionId => completed
+                    ? client.CompleteAsync(sessionId, timeout.Token)
+                    : client.FailAsync(
+                        sessionId,
+                        string.IsNullOrWhiteSpace(error)
+                            ? "VisualTeX bulk import failed."
+                            : error!,
+                        timeout.Token));
+                await Task.WhenAll(cleanupTasks).ConfigureAwait(false);
+                WriteBulkAcceptanceLog(
+                    $"bulk-session-cleanup-complete sessions={sessionIds.Length} completed={completed}");
+            }
+            catch (Exception cleanupError)
+            {
+                WriteBulkAcceptanceLog(
+                    $"bulk-session-cleanup-best-effort-failed sessions={sessionIds.Length} "
+                    + $"completed={completed} error={cleanupError.Message}");
+            }
         }
     }
 
@@ -1729,6 +1873,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             },
             cancellationToken).ConfigureAwait(false);
         WriteBulkAcceptanceLog($"bulk-import-ui-created sessionId={session.Id}");
+        GrantVisualTeXForegroundActivation();
         await client.OpenBulkImportAsync(session.Id, cancellationToken)
             .ConfigureAwait(false);
         WriteBulkAcceptanceLog($"bulk-import-ui-opened sessionId={session.Id}");
@@ -1913,10 +2058,25 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         {
             template.PngPath = client.MaterializePng(session);
             template.SvgPath = client.MaterializeSvg(session);
-            template.EmfPath = OfficeOlePreview.CreateVectorEmfFromSvg(
-                template.SvgPath,
-                export.Width,
-                export.Height);
+            try
+            {
+                template.EmfPath = OfficeOlePreview.CreateVectorEmfFromSvg(
+                    template.SvgPath,
+                    export.Width,
+                    export.Height);
+            }
+            catch (Exception error)
+            {
+                var formula = run.Latex
+                    .Replace("\r", " ")
+                    .Replace("\n", " ")
+                    .Trim();
+                if (formula.Length > 240)
+                    formula = formula.Substring(0, 237) + "...";
+                throw new InvalidDataException(
+                    $"OLE 公式预览生成失败：{formula}\r\n原因：{error.Message}",
+                    error);
+            }
         }
         return template;
     }
@@ -2029,6 +2189,119 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
     {
         if (string.IsNullOrWhiteSpace(path)) return;
         try { File.Delete(path!); } catch { }
+    }
+
+    private async Task BatchEquationNumberingAsync()
+    {
+        var dispatcher = _dispatcher;
+        var service = _formulaService;
+        var application = _application;
+        if (dispatcher is null || service is null || application is null) return;
+        try
+        {
+            var result = await dispatcher.InvokeAsync(() =>
+            {
+                Window? window = null;
+                try
+                {
+                    var stats = service.GetBatchEquationNumberingStats();
+                    if (stats.TotalCount == 0)
+                    {
+                        System.Windows.Forms.MessageBox.Show(
+                            "当前文档没有可编号的 VisualTeX 行间公式。行内公式不会参与批量编号。",
+                            "VisualTeX 批量编号",
+                            System.Windows.Forms.MessageBoxButtons.OK,
+                            System.Windows.Forms.MessageBoxIcon.Information);
+                        return null;
+                    }
+
+                    var acceptance = string.Equals(
+                        Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE"),
+                        "1",
+                        StringComparison.Ordinal);
+                    var redrawExisting = false;
+                    if (stats.NumberedCount > 0)
+                    {
+                        if (acceptance)
+                        {
+                            redrawExisting = string.Equals(
+                                Environment.GetEnvironmentVariable(
+                                    "VISUALTEX_VSTO_BATCH_NUMBER_REDRAW"),
+                                "1",
+                                StringComparison.Ordinal);
+                        }
+                        else
+                        {
+                            var prompt = System.Windows.Forms.MessageBox.Show(
+                                $"检测到 {stats.TotalCount} 个 VisualTeX 行间公式，其中 "
+                                + $"{stats.NumberedCount} 个已有编号。\r\n\r\n"
+                                + "是否重绘全部公式编号？\r\n\r\n"
+                                + "“是”：重建全部编号，公式 ID 与交叉引用保持不变。\r\n"
+                                + "“否”：只给未编号公式补编号；已有编号结构保持不变。",
+                                "VisualTeX 批量编号",
+                                System.Windows.Forms.MessageBoxButtons.YesNoCancel,
+                                System.Windows.Forms.MessageBoxIcon.Question);
+                            if (prompt == System.Windows.Forms.DialogResult.Cancel)
+                                return null;
+                            redrawExisting = prompt == System.Windows.Forms.DialogResult.Yes;
+                        }
+                    }
+
+                    string selectedFormatId;
+                    if (acceptance)
+                    {
+                        selectedFormatId = EquationNumberFormat.Resolve(
+                            Environment.GetEnvironmentVariable(
+                                "VISUALTEX_VSTO_BATCH_NUMBER_FORMAT")
+                            ?? stats.CurrentFormatId).Id;
+                    }
+                    else
+                    {
+                        using var dialog = new BatchEquationNumberDialog(
+                            stats,
+                            redrawExisting);
+                        System.Windows.Forms.DialogResult dialogResult;
+                        try
+                        {
+                            window = application.ActiveWindow;
+                            dialogResult = dialog.ShowDialog(
+                                new NativeWindowOwner(new IntPtr(window.Hwnd)));
+                        }
+                        catch
+                        {
+                            dialogResult = dialog.ShowDialog();
+                        }
+                        if (dialogResult != System.Windows.Forms.DialogResult.OK)
+                            return null;
+                        selectedFormatId = dialog.SelectedFormatId;
+                    }
+
+                    return service.ApplyBatchEquationNumbering(
+                        selectedFormatId,
+                        redrawExisting);
+                }
+                finally { ReleaseComObject(window); }
+            }).ConfigureAwait(false);
+
+            if (result is null)
+            {
+                SetStatus("已取消 VisualTeX 批量编号，Word 文档未修改。");
+                return;
+            }
+
+            var format = EquationNumberFormat.Resolve(result.FormatId);
+            var redrawSuffix = result.RedrawnCount > 0
+                ? $"，重绘 {result.RedrawnCount} 个已有编号"
+                : string.Empty;
+            SetStatus(
+                $"批量编号完成：共 {result.NumberedCount} 个行间公式使用“{format.DisplayName}”，"
+                + $"新增 {result.AddedCount} 个编号{redrawSuffix}；交叉引用已同步更新。");
+        }
+        catch (Exception error)
+        {
+            SetStatus($"VisualTeX 批量编号失败：{error.Message}");
+        }
+        finally { InvalidateEquationNumberFormatControls(); }
     }
 
     private async Task UpdateEquationNumbersAsync()

@@ -17,10 +17,10 @@ public sealed class WordInlineAlignmentTests
     }
 
     [Fact]
-    public void CompleteMetadataKeepsTheStructureAwareScaledBaseline()
+    public void CompleteMetadataAppliesLargeFontOpticalLiftAt42Pt()
     {
         Assert.Equal(
-            -10,
+            -8,
             WordInlineAlignment.CalculateFontPositionWithLegacyFallback(
                 43,
                 18.9867f,
@@ -28,6 +28,25 @@ public sealed class WordInlineAlignmentTests
                 existingFontPosition: -4,
                 sourceSemanticFontSizePoints: 14,
                 targetSemanticFontSizePoints: 42));
+    }
+
+    [Theory]
+    [InlineData(12d, -2)]
+    [InlineData(18d, -4)]
+    [InlineData(24d, -5)]
+    public void CommonTextSizesDoNotReceiveLargeFontLift(
+        double targetFontSize,
+        int expectedPosition)
+    {
+        Assert.Equal(
+            expectedPosition,
+            WordInlineAlignment.CalculateFontPositionWithLegacyFallback(
+                (float)targetFontSize,
+                exportedHeight: 20,
+                exportedBaseline: 15,
+                existingFontPosition: null,
+                sourceSemanticFontSizePoints: targetFontSize,
+                targetSemanticFontSizePoints: targetFontSize));
     }
 
     [Fact]

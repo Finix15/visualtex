@@ -134,23 +134,37 @@ async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> 
   }
   if (token) headers.set("X-VisualTeX-Install-Token", token);
 
-  const response = await fetch(path, {
-    ...init,
-    credentials: "same-origin",
-    cache: "no-store",
-    headers,
-  });
-  if (!response.ok) {
-    const detail = await readResponseErrorMessage(
-      response,
-      "VisualTeX companion request failed.",
-    );
-    throw new Error(
-      `VisualTeX companion request failed (${response.status}): ${detail}`,
-    );
+  const timeoutController = new AbortController();
+  const timeout = globalThis.setTimeout(() => timeoutController.abort(), 12_000);
+  try {
+    const response = await fetch(path, {
+      ...init,
+      credentials: "same-origin",
+      cache: "no-store",
+      headers,
+      signal: init.signal ?? timeoutController.signal,
+    });
+    if (!response.ok) {
+      const detail = await readResponseErrorMessage(
+        response,
+        "VisualTeX companion request failed.",
+      );
+      throw new Error(
+        `VisualTeX companion request failed (${response.status}): ${detail}`,
+      );
+    }
+    if (response.status === 204) return undefined as T;
+    return (await response.json()) as T;
+  } catch (reason) {
+    if (timeoutController.signal.aborted && !init.signal?.aborted) {
+      throw new Error(
+        "VisualTeX Office Session 请求超时。请重试；若仍失败，请重启 VisualTeX。",
+      );
+    }
+    throw reason;
+  } finally {
+    globalThis.clearTimeout(timeout);
   }
-  if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
 }
 
 export function createOfficeSession(input: CreateOfficeSessionInput) {

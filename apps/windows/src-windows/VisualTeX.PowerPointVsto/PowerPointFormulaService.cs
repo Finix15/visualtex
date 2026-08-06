@@ -11,6 +11,42 @@ using VisualTeX.WindowsOffice.VstoShared;
 
 namespace VisualTeX.PowerPointVsto;
 
+[ComImport]
+[Guid("00000112-0000-0000-C000-000000000046")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IOleObjectNative
+{
+    [PreserveSig] int SetClientSite(IntPtr clientSite);
+    [PreserveSig] int GetClientSite(out IntPtr clientSite);
+    [PreserveSig] int SetHostNames(IntPtr containerApp, IntPtr containerObject);
+    [PreserveSig] int Close(uint saveOption);
+    [PreserveSig] int SetMoniker(uint whichMoniker, IntPtr moniker);
+    [PreserveSig] int GetMoniker(uint assign, uint whichMoniker, out IntPtr moniker);
+    [PreserveSig] int InitFromData(IntPtr dataObject, int creation, uint reserved);
+    [PreserveSig] int GetClipboardData(uint reserved, out IntPtr dataObject);
+    [PreserveSig] int DoVerb(
+        int verb,
+        IntPtr message,
+        IntPtr activeSite,
+        int index,
+        IntPtr parentWindow,
+        IntPtr positionRect);
+    [PreserveSig] int EnumVerbs(out IntPtr enumerator);
+    [PreserveSig] int Update();
+    [PreserveSig] int IsUpToDate();
+    [PreserveSig] int GetUserClassId(out Guid classId);
+    [PreserveSig] int GetUserType(uint formOfType, out IntPtr userType);
+    [PreserveSig] int SetExtent(uint drawAspect, ref OleSize size);
+    [PreserveSig] int GetExtent(uint drawAspect, out OleSize size);
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct OleSize
+{
+    internal int Cx;
+    internal int Cy;
+}
+
 internal sealed class PowerPointFormulaService
 {
     private const string FormulaIdTag = "VisualTeXFormulaId";
@@ -188,14 +224,26 @@ internal sealed class PowerPointFormulaService
                 throw new InvalidOperationException("The selected PowerPoint formula no longer exists.");
 
             var metadata = selected.Metadata;
+            var currentFontSize = FormulaFontSize.ResolveSemanticFontSize(metadata);
+            var fontScale = target / Math.Max(0.5f, currentFontSize);
+            var size = ScaleCurrentShapeSize(
+                shape.Width,
+                shape.Height,
+                fontScale,
+                600f,
+                400f);
             metadata.FontSizePt = target;
-            var size = FormulaFontSize.OleSizeAt(metadata, target, 600f, 400f);
             var centerX = shape.Left + shape.Width / 2f;
             var centerY = shape.Top + shape.Height / 2f;
-            shape.LockAspectRatio = MsoTriState.msoFalse;
-            shape.Width = size.Width;
-            shape.Height = size.Height;
-            shape.LockAspectRatio = MsoTriState.msoTrue;
+            if (IsNativeOle(shape))
+                ApplyOleSizeAndRefresh(shape, size.Width, size.Height);
+            else
+            {
+                shape.LockAspectRatio = MsoTriState.msoFalse;
+                shape.Width = size.Width;
+                shape.Height = size.Height;
+                shape.LockAspectRatio = MsoTriState.msoTrue;
+            }
             shape.Left = centerX - size.Width / 2f;
             shape.Top = centerY - size.Height / 2f;
             Configure(shape, metadata);
@@ -631,17 +679,21 @@ internal sealed class PowerPointFormulaService
             var rotation = oldShape.Rotation;
             var zOrder = oldShape.ZOrderPosition;
             var originalMetadata = ReadMetadata(oldShape) ?? session.OriginalMetadata;
-            var editedSize = OfficeFormulaSizing.EditedSize(
-                oldWidth,
-                oldHeight,
-                originalMetadata?.RenderWidthPx,
-                originalMetadata?.RenderHeightPx,
-                session.ExportResult?.Width ?? oldWidth / 0.75f,
-                session.ExportResult?.Height ?? oldHeight / 0.75f,
-                600f,
-                400f,
-                originalMetadata?.FontSizePt,
-                originalMetadata?.RenderFontSizePt);
+            var convertingOleToPicture = IsNativeOle(oldShape);
+            var editedSize = convertingOleToPicture
+                && FormulaContentEquivalent(originalMetadata, metadata)
+                    ? (Width: oldWidth, Height: oldHeight)
+                    : OfficeFormulaSizing.EditedSize(
+                        oldWidth,
+                        oldHeight,
+                        originalMetadata?.RenderWidthPx,
+                        originalMetadata?.RenderHeightPx,
+                        session.ExportResult?.Width ?? oldWidth / 0.75f,
+                        session.ExportResult?.Height ?? oldHeight / 0.75f,
+                        600f,
+                        400f,
+                        originalMetadata?.FontSizePt,
+                        originalMetadata?.RenderFontSizePt);
             var newLeft = left + (oldWidth - editedSize.Width) / 2f;
             var newTop = top + (oldHeight - editedSize.Height) / 2f;
 
@@ -653,6 +705,13 @@ internal sealed class PowerPointFormulaService
                 newTop,
                 editedSize.Width,
                 editedSize.Height);
+            // PowerPoint 2021 can ignore one of the AddPicture dimensions for
+            // SVG and immediately restore the file's intrinsic aspect ratio.
+            // Reapply the exact formula box after the SVG shape exists so a
+            // lossless OLE→picture conversion keeps the user's physical size.
+            ApplyPictureSize(replacement, editedSize.Width, editedSize.Height);
+            replacement.Left = newLeft;
+            replacement.Top = newTop;
             TryApplyRotation(replacement, rotation);
             Configure(replacement, metadata);
             MoveToZOrder(replacement, zOrder + 1);
@@ -894,20 +953,88 @@ internal sealed class PowerPointFormulaService
         finally { Release(format); }
     }
 
-    private static void ApplyOleSizeAndRefresh(Shape shape, float width, float height)
+    private static (float Width, float Height) ScaleCurrentShapeSize(
+        float currentWidth,
+        float currentHeight,
+        float requestedScale,
+        float maximumWidth,
+        float maximumHeight)
     {
-        // PowerPoint initially caches the FormulaOleServer placeholder. Force
-        // the final formula bounds and ask the OLE host to refresh its content
-        // presentation after the custom object has been initialized.
+        var scale = requestedScale;
+        if (float.IsNaN(scale) || float.IsInfinity(scale) || scale <= 0)
+            scale = 1f;
+        scale = Math.Max(0.1f, Math.Min(10f, scale));
+        var width = Math.Max(1f, currentWidth) * scale;
+        var height = Math.Max(1f, currentHeight) * scale;
+        var fit = Math.Min(
+            1f,
+            Math.Min(
+                maximumWidth > 0 ? maximumWidth / width : 1f,
+                maximumHeight > 0 ? maximumHeight / height : 1f));
+        if (!float.IsNaN(fit) && !float.IsInfinity(fit) && fit > 0 && fit < 1f)
+        {
+            width *= fit;
+            height *= fit;
+        }
+        return (Math.Max(1f, width), Math.Max(1f, height));
+    }
+
+    private static void ApplyPictureSize(Shape shape, float width, float height)
+    {
         shape.LockAspectRatio = MsoTriState.msoFalse;
         shape.Width = Math.Max(1f, width);
         shape.Height = Math.Max(1f, height);
         shape.LockAspectRatio = MsoTriState.msoTrue;
+    }
+
+    private static void ApplyOleSizeAndRefresh(Shape shape, float width, float height)
+    {
+        // PowerPoint 2021 may resize the outer Shape first, then restore the OLE
+        // server's previous HIMETRIC extent when the data-change notification
+        // arrives. Keep both sides synchronized, then reapply the host box after
+        // the server notification so width and height remain uniformly scaled.
+        ApplyPictureSize(shape, width, height);
+        SetOleServerExtent(shape, width, height);
+        ApplyPictureSize(shape, width, height);
         // Do not invoke an OLE verb here. PowerPoint's DoVerb API accepts only
         // host verb indexes (0..n), not OLEIVERB_SHOW (-1), and the primary
         // verb would activate the editor. The LocalServer data-change
         // notification plus CF_ENHMETAFILE/CF_METAFILEPICT presentations own
         // the preview refresh instead.
+    }
+
+    private static void SetOleServerExtent(Shape shape, float width, float height)
+    {
+        const uint dvaspectContent = 1;
+        const double himetricPerPoint = 2540.0 / 72.0;
+        OLEFormat? format = null;
+        object? oleObject = null;
+        try
+        {
+            format = shape.OLEFormat;
+            if (!string.Equals(
+                    format.ProgID,
+                    FormulaOleContract.ProgId,
+                    StringComparison.OrdinalIgnoreCase))
+                return;
+            oleObject = format.Object;
+            if (oleObject is not IOleObjectNative nativeOle)
+                throw new InvalidCastException(
+                    "The VisualTeX OLE object does not expose IOleObject.");
+            var size = new OleSize
+            {
+                Cx = Math.Max(1, (int)Math.Round(Math.Max(1f, width) * himetricPerPoint)),
+                Cy = Math.Max(1, (int)Math.Round(Math.Max(1f, height) * himetricPerPoint)),
+            };
+            var result = nativeOle.SetExtent(dvaspectContent, ref size);
+            if (result < 0)
+                Marshal.ThrowExceptionForHR(result);
+        }
+        finally
+        {
+            Release(oleObject);
+            Release(format);
+        }
     }
 
     private static void RestoreOlePosition(Shape shape, float left, float top)

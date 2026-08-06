@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Text;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Xml.Linq;
 using Extensibility;
@@ -25,11 +26,7 @@ internal static partial class Program
 
         internal WordPerformanceHost(string? documentPath)
         {
-            Application = new Word.Application
-            {
-                Visible = false,
-                DisplayAlerts = Word.WdAlertLevel.wdAlertsNone,
-            };
+            Application = CreateWordApplication(visible: false);
             _installedAddIns = Application.COMAddIns;
             try
             {
@@ -50,7 +47,15 @@ internal static partial class Program
                     ReadOnly: false,
                     AddToRecentFiles: false,
                     Visible: false);
-            Document.Activate();
+            try { Document.Activate(); }
+            catch (COMException error) when (
+                error.HResult == unchecked((int)0x80010001)
+                || error.HResult == unchecked((int)0x8001010A))
+            {
+                // Office 2021 can reject explicit activation in a hidden
+                // automation instance even though the newly created/opened
+                // document is already that instance's ActiveDocument.
+            }
             AddIn = new ThisAddIn();
             AddIn.OnConnection(
                 Application,
@@ -79,7 +84,7 @@ internal static partial class Program
                 try { _installedAddIn.Connect = true; } catch { }
             }
             try { Document.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
-            try { Application.Quit(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
+            try { QuitWordApplicationIfOwned(Application); } catch { }
             Release(_installedAddIn);
             Release(_installedAddIns);
             Release(Document);

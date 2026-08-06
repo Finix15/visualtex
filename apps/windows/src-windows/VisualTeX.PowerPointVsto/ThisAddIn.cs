@@ -60,7 +60,19 @@ public interface IPowerPointRibbonCallbacks
 [ComDefaultInterface(typeof(IPowerPointRibbonCallbacks))]
 public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, IPowerPointRibbonCallbacks
 {
+    private const int AllowAnyProcessToSetForeground = -1;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool AllowSetForegroundWindow(int processId);
+
     static ThisAddIn() => VstoDependencyResolver.Install();
+
+    private static void GrantVisualTeXForegroundActivation()
+    {
+        try { _ = AllowSetForegroundWindow(AllowAnyProcessToSetForeground); }
+        catch { }
+    }
 
     private const string RibbonXml = """
 <customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui" onLoad="OnRibbonLoad">
@@ -390,6 +402,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             {
                 try
                 {
+                    GrantVisualTeXForegroundActivation();
                     await _sessionClient.OpenEditorAsync(activeSessionId!, cancellationToken)
                         .ConfigureAwait(false);
                     SetStatus("已有 VisualTeX 编辑任务，已将编辑窗口切换到前台。");
@@ -475,6 +488,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             }
             else
             {
+                GrantVisualTeXForegroundActivation();
                 await client.OpenEditorAsync(session.Id, cancellationToken)
                     .ConfigureAwait(false);
                 SetStatus("VisualTeX 编辑器已打开。");

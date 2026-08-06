@@ -1,11 +1,15 @@
 using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Imaging;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using VisualTeX.WindowsOffice.Contracts;
 using VisualTeX.WindowsOffice.VstoShared;
 using VisualTeX.WordVsto;
 using WinForms = System.Windows.Forms;
+using PowerPoint = Microsoft.Office.Interop.PowerPoint;
 using Word = Microsoft.Office.Interop.Word;
 
 namespace VisualTeX.VstoFlowAcceptance;
@@ -13,6 +17,124 @@ namespace VisualTeX.VstoFlowAcceptance;
 internal static partial class Program
 {
     private const int LatexRedrawPerformanceLimitMilliseconds = 250;
+    private const uint WordObjIdNativeOm = 0xFFFFFFF0;
+
+    [DllImport("oleacc.dll")]
+    private static extern int AccessibleObjectFromWindow(
+        IntPtr windowHandle,
+        uint objectId,
+        ref Guid interfaceId,
+        [MarshalAs(UnmanagedType.Interface)] out object nativeObject);
+
+    private static T RetryRejectedOfficeCall<T>(Func<T> action)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        while (true)
+        {
+            try { return action(); }
+            catch (COMException error) when (
+                (error.HResult == unchecked((int)0x80010001)
+                    || error.HResult == unchecked((int)0x8001010A))
+                && DateTime.UtcNow < deadline)
+            {
+                WinForms.Application.DoEvents();
+                Thread.Sleep(100);
+            }
+        }
+    }
+
+    private static void RetryRejectedOfficeCall(Action action) =>
+        RetryRejectedOfficeCall(() =>
+        {
+            action();
+            return true;
+        });
+
+    private sealed class WordSourceContextStressHost : IDisposable
+    {
+        private readonly bool _ownsApplication;
+        private Word.Document? _previousDocument;
+        private bool _disposed;
+
+        internal WordSourceContextStressHost()
+        {
+            if (AttachActiveWord)
+            {
+                Application = Marshal.GetActiveObject("Word.Application") as Word.Application
+                    ?? throw new InvalidOperationException("No active Word instance is available.");
+                try
+                {
+                    _previousDocument = RetryRejectedOfficeCall(
+                        () => Application.ActiveDocument);
+                }
+                catch
+                {
+                    _previousDocument = null;
+                }
+            }
+            else
+            {
+                Application = new Word.Application
+                {
+                    Visible = false,
+                    DisplayAlerts = Word.WdAlertLevel.wdAlertsNone,
+                };
+                _ownsApplication = true;
+            }
+
+            Document = RetryRejectedOfficeCall(
+                () => Application.Documents.Add(Visible: false));
+            if (AttachActiveWord)
+            {
+                RetryRejectedOfficeCall(() => Document.Activate());
+                Word.Windows? windows = null;
+                Word.Window? window = null;
+                try
+                {
+                    windows = RetryRejectedOfficeCall(() => Document.Windows);
+                    if (RetryRejectedOfficeCall(() => windows.Count) > 0)
+                    {
+                        window = RetryRejectedOfficeCall(() => windows[1]);
+                        RetryRejectedOfficeCall(() => window.Visible = false);
+                    }
+                }
+                finally
+                {
+                    Release(window);
+                    Release(windows);
+                }
+            }
+        }
+
+        internal Word.Application Application { get; }
+        internal Word.Document Document { get; }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            try
+            {
+                RetryRejectedOfficeCall(
+                    () => Document.Close(Word.WdSaveOptions.wdDoNotSaveChanges));
+            }
+            catch { }
+            if (_previousDocument is not null)
+            {
+                try { RetryRejectedOfficeCall(() => _previousDocument.Activate()); }
+                catch { }
+            }
+            if (_ownsApplication)
+            {
+                try { Application.Quit(Word.WdSaveOptions.wdDoNotSaveChanges); }
+                catch { }
+            }
+            Release(_previousDocument);
+            Release(Document);
+            Release(Application);
+            ForceComCleanup();
+        }
+    }
 
     private static void RunWordLatexRedraw(
         VisualTeXSessionClient client,
@@ -39,9 +161,976 @@ internal static partial class Program
             Path.Combine(artifactRoot, oleFileName));
     }
 
+    private static void RunWordLatexRedrawOmmlOnly(
+        VisualTeXSessionClient client,
+        string artifactRoot)
+    {
+        Console.WriteLine("[Word LaTeX redraw OMML] Prewarming reusable hidden converter...");
+        client.PrewarmConverterAsync(CancellationToken.None).GetAwaiter().GetResult();
+        Thread.Sleep(700);
+        WinForms.Application.DoEvents();
+        RunWordLatexRedrawScenario(
+            artifactRoot,
+            objectMode: FormulaOleContract.WordOmmlMode,
+            wholeDocument: false,
+            expectedFileName: "VisualTeX-Word-Latex-Redraw-OMML-Only.docx");
+    }
+
+    private static void RunWordInlineOleTypingBaseline(
+        VisualTeXSessionClient client,
+        string artifactRoot)
+    {
+        Console.WriteLine("[Word inline OLE baseline] Prewarming reusable hidden converter...");
+        client.PrewarmConverterAsync(CancellationToken.None).GetAwaiter().GetResult();
+        Thread.Sleep(700);
+        WinForms.Application.DoEvents();
+
+        const string oleFileName = "VisualTeX-Word-Inline-OLE-Typing-Baseline.docx";
+        RunWordLatexRedrawScenario(
+            artifactRoot,
+            objectMode: FormulaOleContract.NativeOleMode,
+            wholeDocument: true,
+            expectedFileName: oleFileName);
+        AssertSavedInlineOleTypingAnchor(Path.Combine(artifactRoot, oleFileName));
+    }
+
+    private static void RunExistingWordInlineOleFontStyle(string artifactRoot)
+    {
+        var buildLogsRoot = Path.Combine(
+            Environment.CurrentDirectory,
+            "build-logs");
+        var fixture = Directory
+            .EnumerateFiles(
+                buildLogsRoot,
+                "VisualTeX-Word-Latex-Redraw-OLE.docx",
+                SearchOption.AllDirectories)
+            .Where(path => !path.StartsWith(
+                artifactRoot,
+                StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .FirstOrDefault()
+            ?? throw new FileNotFoundException(
+                "No previously verified Word OLE redraw fixture is available.");
+
+        Console.WriteLine(
+            "[Word inline OLE font] Opening existing verified fixture: "
+            + fixture);
+        using var host = new WordPerformanceHost(fixture);
+        AssertInlineOleResizeKeepsTrailingProseBaseline(host);
+        Console.WriteLine(
+            "[Word inline OLE font] Existing fixture passed: "
+            + "anchor bookmark preserved, body font inherited, "
+            + "typing baseline preserved for trailing prose and paragraph end.");
+    }
+
+    private static void RunWordOmmlBoundaryDigitDirect(string artifactRoot)
+    {
+        using var host = new WordSourceContextStressHost();
+        var formulaId = Guid.NewGuid().ToString("D");
+        var lineId = Guid.NewGuid().ToString("D");
+        var service = new WordFormulaService(host.Application);
+        Word.Selection? selection = null;
+        Word.Range? bodyRange = null;
+        Microsoft.Office.Interop.Word.Font? bodyFont = null;
+        Word.Bookmark? bookmark = null;
+        Word.Range? equationRange = null;
+        Word.Range? trailingFormulaCharacter = null;
+        Word.Range? documentContent = null;
+        Word.Range? trailingTextRange = null;
+        Microsoft.Office.Interop.Word.Font? trailingFormulaFont = null;
+        Microsoft.Office.Interop.Word.Font? trailingTextFont = null;
+        Word.OMaths? maths = null;
+        try
+        {
+            bodyRange = RetryRejectedOfficeCall(() => host.Document.Range(0, 0));
+            RetryRejectedOfficeCall(() => bodyRange.Text = "正文前 ");
+            bodyFont = RetryRejectedOfficeCall(() => bodyRange.Font);
+            RetryRejectedOfficeCall(() => bodyFont.Name = "宋体");
+            RetryRejectedOfficeCall(() => bodyFont.Size = 11f);
+            host.Application.Visible = true;
+            WinForms.Application.DoEvents();
+            Thread.Sleep(700);
+            RetryRejectedOfficeCall(() => host.Document.Activate());
+            selection = RetryRejectedOfficeCall(() => host.Application.Selection);
+            RetryRejectedOfficeCall(() => selection.SetRange(bodyRange.End, bodyRange.End));
+
+            var insertSession = new OfficeSessionDocument
+            {
+                Id = Guid.NewGuid().ToString("D"),
+                Host = "word",
+                Mode = "create",
+                FormulaId = formulaId,
+                Title = "Word Formula",
+                DisplayMode = "inline",
+                ObjectMode = FormulaOleContract.WordOmmlMode,
+                CodeFormat = "latex",
+                FontSizePt = 11,
+                Lines = new List<FormulaLine>
+                {
+                    new() { Id = lineId, Latex = "x+y" },
+                },
+            };
+            const string initialMathMl =
+                "<math xmlns=\"http://www.w3.org/1998/Math/MathML\">"
+                + "<mi>x</mi><mo>+</mo><mi>y</mi></math>";
+            service.InsertOmml(insertSession, initialMathMl);
+            RetryRejectedOfficeCall(() => selection.TypeText(" 后方正文"));
+
+            bookmark = WordOmmlFormulaStore.FindByFormulaId(host.Document, formulaId)
+                ?? throw new InvalidDataException(
+                    "Direct OMML boundary acceptance could not find the inserted formula bookmark.");
+            var stored = WordOmmlFormulaStore.TryRead(host.Document, bookmark)
+                ?? throw new InvalidDataException(
+                    "Direct OMML boundary acceptance could not read inserted metadata.");
+            equationRange = WordOmmlFormulaStore.GetEquationRange(bookmark);
+            var insertedText = equationRange.Text ?? string.Empty;
+            if (insertedText.IndexOf('\u200B') >= 0
+                || insertedText.IndexOf('\u200C') >= 0
+                || insertedText.IndexOf('\u2060') >= 0)
+                throw new InvalidDataException(
+                    "Initial inline OMML retained a temporary VisualTeX boundary character.");
+            Word.Bookmarks? allBookmarks = null;
+            try
+            {
+                allBookmarks = host.Document.Bookmarks;
+                var boundaryName = "VTBL_" + Guid.Parse(formulaId).ToString("N");
+                if (allBookmarks.Exists(boundaryName))
+                    throw new InvalidDataException(
+                        "Initial inline OMML retained its temporary VTBL bookmark.");
+            }
+            finally { Release(allBookmarks); }
+
+            Release(equationRange);
+            equationRange = null;
+            Release(bookmark);
+            bookmark = null;
+
+            var editSession = new OfficeSessionDocument
+            {
+                Id = Guid.NewGuid().ToString("D"),
+                Host = "word",
+                Mode = "edit",
+                FormulaId = formulaId,
+                Title = "Word Formula",
+                DisplayMode = "inline",
+                ObjectMode = FormulaOleContract.WordOmmlMode,
+                CodeFormat = "latex",
+                FontSizePt = 11,
+                OriginalMetadata = stored,
+                Lines = new List<FormulaLine>
+                {
+                    new() { Id = lineId, Latex = "x+y\u200C1" },
+                },
+            };
+            const string dirtyMathMl =
+                "<math xmlns=\"http://www.w3.org/1998/Math/MathML\">"
+                + "<mi>x</mi><mo>+</mo><mi>y</mi>"
+                + "<mrow data-mjx-texclass=\"ORD\"><mo>&#x200C;</mo></mrow>"
+                + "<mn>1</mn></math>";
+            service.ReplaceOmml(editSession, dirtyMathMl);
+
+            maths = host.Document.OMaths;
+            if (maths.Count != 1)
+                throw new InvalidDataException(
+                    $"Direct OMML boundary update created {maths.Count} equations instead of one.");
+            Release(maths);
+            maths = null;
+
+            bookmark = WordOmmlFormulaStore.FindByFormulaId(host.Document, formulaId)
+                ?? throw new InvalidDataException(
+                    "Direct OMML boundary update lost the formula bookmark.");
+            equationRange = WordOmmlFormulaStore.GetEquationRange(bookmark);
+            var equationText = equationRange.Text ?? string.Empty;
+            if (equationText.IndexOf('1') < 0)
+                throw new InvalidDataException(
+                    "Direct OMML boundary update did not write the appended digit 1.");
+            if (equationText.IndexOf('\u200B') >= 0
+                || equationText.IndexOf('\u200C') >= 0
+                || equationText.IndexOf('\u2060') >= 0)
+                throw new InvalidDataException(
+                    "Direct OMML boundary update left a VisualTeX boundary character inside OMath.");
+            if (equationText.EndsWith(" ", StringComparison.Ordinal))
+                throw new InvalidDataException(
+                    "Direct OMML boundary update left an ordinary trailing space inside OMath.");
+            if (equationRange.End > equationRange.Start)
+            {
+                trailingFormulaCharacter = host.Document.Range(
+                    equationRange.End - 1,
+                    equationRange.End);
+                trailingFormulaFont = trailingFormulaCharacter.Font;
+                if (string.Equals(
+                        trailingFormulaCharacter.Text,
+                        " ",
+                        StringComparison.Ordinal)
+                    && trailingFormulaFont.Hidden != 0)
+                    throw new InvalidDataException(
+                        "Direct OMML boundary update retained a hidden ASCII guard at OMath.End.");
+            }
+
+            documentContent = host.Document.Content;
+            var documentText = documentContent.Text ?? string.Empty;
+            var trailingTextOffset = documentText.IndexOf(
+                "后方正文",
+                StringComparison.Ordinal);
+            if (trailingTextOffset < 0)
+                throw new InvalidDataException(
+                    "Direct OMML boundary update deleted the trailing body text.");
+            trailingTextRange = host.Document.Range(
+                documentContent.Start + trailingTextOffset,
+                documentContent.Start + trailingTextOffset + "后方正文".Length);
+            trailingTextFont = trailingTextRange.Font;
+            if (trailingTextFont.Hidden != 0)
+                throw new InvalidDataException(
+                    "Direct OMML boundary update propagated hidden guard formatting to trailing body text.");
+
+            var openXml = equationRange.WordOpenXML;
+            if (openXml.IndexOf("200C", StringComparison.OrdinalIgnoreCase) >= 0
+                || openXml.IndexOf("8204", StringComparison.OrdinalIgnoreCase) >= 0)
+                throw new InvalidDataException(
+                    "Direct OMML boundary update left U+200C in Word Open XML.");
+
+            var storedAfter = WordOmmlFormulaStore.TryRead(host.Document, bookmark)
+                ?? throw new InvalidDataException(
+                    "Direct OMML boundary update lost stored metadata.");
+            if (!string.Equals(storedAfter.Latex, "x+y1", StringComparison.Ordinal)
+                || storedAfter.Latex.IndexOf('\u200C') >= 0)
+                throw new InvalidDataException(
+                    "Direct OMML boundary update stored dirty LaTeX: " + storedAfter.Latex);
+            var reopened = WordOmmlNativeSource.RefreshForVisualTeX(
+                host.Document,
+                bookmark,
+                storedAfter);
+            var reopenedLatex = string.Join(
+                "\n",
+                reopened.Lines.Select(line => line.Latex));
+            if (!string.Equals(reopenedLatex, "x+y1", StringComparison.Ordinal)
+                || reopenedLatex.IndexOf('\u200C') >= 0)
+                throw new InvalidDataException(
+                    "Reopening updated OMML returned dirty or duplicated LaTeX: "
+                    + reopenedLatex);
+
+            var staleBookmarks = new List<Word.Bookmark>();
+            var staleFormulaIds = new List<string> { formulaId };
+            try
+            {
+                for (var staleIndex = 0; staleIndex < 2; staleIndex++)
+                {
+                    var staleMetadata = FormulaMetadataCodec.Decode(
+                        FormulaMetadataCodec.Encode(storedAfter))
+                        ?? throw new InvalidDataException(
+                            "Could not clone OMML metadata for stale-anchor acceptance.");
+                    staleMetadata.FormulaId = Guid.NewGuid().ToString("D");
+                    staleMetadata.Lines = staleMetadata.Lines
+                        .Select(line => new FormulaLine
+                        {
+                            Id = Guid.NewGuid().ToString("D"),
+                            Latex = line.Latex,
+                        })
+                        .ToList();
+                    staleMetadata.Validate();
+                    staleFormulaIds.Add(staleMetadata.FormulaId);
+                    var staleBookmark = WordOmmlFormulaStore.Wrap(
+                        host.Document,
+                        equationRange,
+                        staleMetadata);
+                    WordOmmlFormulaStore.Save(host.Document, staleMetadata);
+                    staleBookmarks.Add(staleBookmark);
+                }
+
+                foreach (var staleFormulaId in staleFormulaIds)
+                    DeleteOmmlMetadataPartExternally(
+                        host.Document,
+                        staleFormulaId);
+
+                if (WordOmmlFormulaStore.TryRead(host.Document, bookmark) is not null)
+                    throw new InvalidDataException(
+                        "OMML metadata cache revived an externally deleted CustomXMLPart.");
+                foreach (var staleBookmark in staleBookmarks)
+                {
+                    if (WordOmmlFormulaStore.TryRead(
+                            host.Document,
+                            staleBookmark) is not null)
+                        throw new InvalidDataException(
+                            "A stale duplicate VTOMML anchor retained cached metadata.");
+                }
+
+                var detectedCount = service.CountFormulaObjectsForLatex(
+                    wholeDocument: true,
+                    objectMode: FormulaOleContract.WordOmmlMode);
+                if (detectedCount != 1)
+                    throw new InvalidDataException(
+                        $"One visible OMath with stale duplicate VTOMML anchors was counted as {detectedCount} formulas.");
+
+                var converted = service.ConvertFormulaObjectsToLatex(
+                    wholeDocument: true,
+                    objectMode: FormulaOleContract.WordOmmlMode);
+                if (converted.FormulaCount != 1)
+                    throw new InvalidDataException(
+                        $"One visible OMath was converted to {converted.FormulaCount} LaTeX sources.");
+                Release(maths);
+                maths = host.Document.OMaths;
+                if (maths.Count != 0)
+                    throw new InvalidDataException(
+                        "OMML-to-LaTeX conversion left a visible native equation behind.");
+
+                Release(documentContent);
+                documentContent = host.Document.Content;
+                var convertedDocumentText = documentContent.Text ?? string.Empty;
+                var sourceOccurrenceCount = 0;
+                for (var searchIndex = 0;
+                     (searchIndex = convertedDocumentText.IndexOf(
+                         "x+y1",
+                         searchIndex,
+                         StringComparison.Ordinal)) >= 0;
+                     searchIndex += "x+y1".Length)
+                    sourceOccurrenceCount++;
+                if (sourceOccurrenceCount != 1)
+                    throw new InvalidDataException(
+                        $"OMML-to-LaTeX conversion emitted x+y1 {sourceOccurrenceCount} times instead of once.");
+            }
+            finally
+            {
+                foreach (var staleBookmark in staleBookmarks)
+                    Release(staleBookmark);
+            }
+
+            var artifactPath = Path.Combine(
+                artifactRoot,
+                "VisualTeX-Word-OMML-Boundary-Digit-Direct.docx");
+            RetryRejectedOfficeCall(() => host.Document.SaveAs2(
+                artifactPath,
+                Word.WdSaveFormat.wdFormatXMLDocument));
+            Console.WriteLine(
+                "[Word OMML boundary] Real Word InsertOmml/ReplaceOmml passed: "
+                + "digit 1 preserved, U+200C and trailing hidden space excluded, "
+                + "trailing prose stayed visible, stale duplicate anchors counted/converted once.");
+            Console.WriteLine("[Word OMML boundary] Artifact: " + artifactPath);
+        }
+        finally
+        {
+            Release(maths);
+            Release(trailingTextFont);
+            Release(trailingFormulaFont);
+            Release(trailingTextRange);
+            Release(documentContent);
+            Release(trailingFormulaCharacter);
+            Release(equationRange);
+            Release(bookmark);
+            Release(bodyFont);
+            Release(bodyRange);
+            Release(selection);
+        }
+    }
+
+    private static void DeleteOmmlMetadataPartExternally(
+        Word.Document document,
+        string formulaId)
+    {
+        Microsoft.Office.Core.CustomXMLParts? parts = null;
+        Microsoft.Office.Core.CustomXMLParts? selected = null;
+        Microsoft.Office.Core.CustomXMLPart? matched = null;
+        try
+        {
+            parts = document.CustomXMLParts;
+            selected = parts.SelectByNamespace(
+                WordOmmlFormulaStore.NamespaceUri);
+            for (var index = 1; index <= selected.Count; index++)
+            {
+                Microsoft.Office.Core.CustomXMLPart? part = null;
+                try
+                {
+                    part = selected[index];
+                    if (!WordOmmlFormulaStore.TryDecodePartXml(
+                            part.XML,
+                            out var metadata)
+                        || !string.Equals(
+                            metadata.FormulaId,
+                            formulaId,
+                            StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    matched = part;
+                    part = null;
+                    break;
+                }
+                finally { Release(part); }
+            }
+            if (matched is null)
+                throw new InvalidDataException(
+                    "Stale-anchor acceptance could not find the OMML metadata part to delete.");
+            matched.Delete();
+        }
+        finally
+        {
+            Release(matched);
+            Release(selected);
+            Release(parts);
+        }
+    }
+
+    private readonly struct PixelBounds
+    {
+        internal PixelBounds(int minX, int minY, int maxX, int maxY, int count)
+        {
+            MinX = minX;
+            MinY = minY;
+            MaxX = maxX;
+            MaxY = maxY;
+            Count = count;
+        }
+
+        internal int MinX { get; }
+        internal int MinY { get; }
+        internal int MaxX { get; }
+        internal int MaxY { get; }
+        internal int Count { get; }
+        internal int Width => MaxX - MinX + 1;
+        internal int Height => MaxY - MinY + 1;
+    }
+
+    private static void SelectExistingWordInlineOle()
+    {
+        var handleText = Environment.GetEnvironmentVariable(
+            "VISUALTEX_TEST_WORD_DOCUMENT_HWND");
+        if (!long.TryParse(handleText, out var handleValue) || handleValue == 0)
+            throw new InvalidOperationException(
+                "VISUALTEX_TEST_WORD_DOCUMENT_HWND must identify the visible Word document window.");
+
+        object? nativeObject = null;
+        Word.Window? window = null;
+        Word.Selection? selection = null;
+        Word.Range? content = null;
+        Word.InlineShapes? shapes = null;
+        Word.InlineShape? shape = null;
+        Word.Range? shapeRange = null;
+        try
+        {
+            var dispatchId = new Guid("00020400-0000-0000-C000-000000000046");
+            var result = AccessibleObjectFromWindow(
+                new IntPtr(handleValue),
+                WordObjIdNativeOm,
+                ref dispatchId,
+                out nativeObject);
+            Marshal.ThrowExceptionForHR(result);
+            window = (Word.Window)nativeObject;
+            RetryRejectedOfficeCall(window.Activate);
+            _ = SetForegroundWindow(new IntPtr(
+                RetryRejectedOfficeCall(() => window.Hwnd)));
+            selection = RetryRejectedOfficeCall(() => window.Selection);
+            RetryRejectedOfficeCall(selection.WholeStory);
+            content = RetryRejectedOfficeCall(() => selection.Range);
+            shapes = RetryRejectedOfficeCall(() => content.InlineShapes);
+            var count = RetryRejectedOfficeCall(() => shapes.Count);
+            if (count != 1)
+                throw new InvalidDataException(
+                    $"Expected one existing inline OLE, found {count}.");
+            shape = RetryRejectedOfficeCall(() => shapes[1]);
+            shapeRange = RetryRejectedOfficeCall(() => shape.Range);
+            var start = RetryRejectedOfficeCall(() => shapeRange.Start);
+            var end = RetryRejectedOfficeCall(() => shapeRange.End);
+            RetryRejectedOfficeCall(() => selection.SetRange(start, end));
+            Console.WriteLine(
+                $"Selected existing inline OLE at range {start}-{end} in the visible Word window.");
+        }
+        finally
+        {
+            Release(shapeRange);
+            Release(shape);
+            Release(shapes);
+            Release(content);
+            Release(selection);
+            Release(window);
+            Release(nativeObject);
+        }
+    }
+
+    private static void RunExistingWordInlineOleVisualBaseline(string artifactRoot)
+    {
+        Directory.CreateDirectory(artifactRoot);
+        var handleText = Environment.GetEnvironmentVariable(
+            "VISUALTEX_TEST_WORD_DOCUMENT_HWND");
+        if (!long.TryParse(handleText, out var handleValue) || handleValue == 0)
+            throw new InvalidOperationException(
+                "VISUALTEX_TEST_WORD_DOCUMENT_HWND must identify the visible Word document window.");
+
+        object? nativeObject = null;
+        Word.Window? window = null;
+        Word.Application? wordApplication = null;
+        Word.InlineShapes? inlineShapes = null;
+        Word.InlineShape? shape = null;
+        Word.Range? formulaRange = null;
+        Microsoft.Office.Interop.Word.Font? formulaFont = null;
+        Word.Paragraphs? paragraphs = null;
+        Word.Paragraph? paragraph = null;
+        Word.Range? paragraphRange = null;
+        Word.Selection? selection = null;
+        Word.Range? content = null;
+        Word.Range? preceding = null;
+        Word.Range? trailing = null;
+        Microsoft.Office.Interop.Word.Font? precedingFont = null;
+        Microsoft.Office.Interop.Word.Font? trailingFont = null;
+        try
+        {
+            var dispatchId = new Guid("00020400-0000-0000-C000-000000000046");
+            var result = AccessibleObjectFromWindow(
+                new IntPtr(handleValue),
+                WordObjIdNativeOm,
+                ref dispatchId,
+                out nativeObject);
+            Marshal.ThrowExceptionForHR(result);
+            window = (Word.Window)nativeObject;
+            RetryRejectedOfficeCall(window.Activate);
+            var windowHandle = RetryRejectedOfficeCall(() => window.Hwnd);
+            _ = SetForegroundWindow(new IntPtr(windowHandle));
+            WinForms.Application.DoEvents();
+            Thread.Sleep(500);
+            selection = RetryRejectedOfficeCall(() => window.Selection);
+            RetryRejectedOfficeCall(selection.WholeStory);
+            content = RetryRejectedOfficeCall(() => selection.Range);
+            inlineShapes = RetryRejectedOfficeCall(() => content.InlineShapes);
+            var inlineShapeCount = RetryRejectedOfficeCall(() => inlineShapes.Count);
+            if (inlineShapeCount != 1)
+                throw new InvalidDataException(
+                    $"Existing visible baseline fixture expected one inline OLE, found {inlineShapeCount}.");
+
+            var contentText = RetryRejectedOfficeCall(() => content.Text) ?? string.Empty;
+            if (!contentText.Contains('X'))
+                throw new InvalidDataException(
+                    "Existing visible baseline fixture does not contain adjacent text.");
+            if (!contentText.TrimEnd('\r', '\a').EndsWith("X", StringComparison.Ordinal))
+            {
+                var insertionPosition = RetryRejectedOfficeCall(() =>
+                    Math.Max(content.Start, content.End - 1));
+                RetryRejectedOfficeCall(() =>
+                    selection.SetRange(insertionPosition, insertionPosition));
+                RetryRejectedOfficeCall(() => selection.Font.Name = "Times New Roman");
+                RetryRejectedOfficeCall(() => selection.Font.Size = 42);
+                RetryRejectedOfficeCall(() => selection.Font.Position = 0);
+                RetryRejectedOfficeCall(() => selection.Font.Superscript = 0);
+                RetryRejectedOfficeCall(() => selection.Font.Subscript = 0);
+                RetryRejectedOfficeCall(() =>
+                    selection.Font.Color = Word.WdColor.wdColorRed);
+                RetryRejectedOfficeCall(() => selection.TypeText(" X"));
+            }
+
+            shape = RetryRejectedOfficeCall(() => inlineShapes[1]);
+            formulaRange = RetryRejectedOfficeCall(() => shape.Range);
+            var resizeText = Environment.GetEnvironmentVariable(
+                "VISUALTEX_TEST_RESIZE_FONT_SIZE");
+            if (double.TryParse(
+                    resizeText,
+                    NumberStyles.Float,
+                    CultureInfo.InvariantCulture,
+                    out var resizeFontSize)
+                && resizeFontSize > 0)
+            {
+                var formulaStart = RetryRejectedOfficeCall(() => formulaRange.Start);
+                var formulaEnd = RetryRejectedOfficeCall(() => formulaRange.End);
+                preceding = RetryRejectedOfficeCall(() => content.Duplicate);
+                trailing = RetryRejectedOfficeCall(() => content.Duplicate);
+                RetryRejectedOfficeCall(() => preceding.End = formulaStart);
+                var contentEnd = RetryRejectedOfficeCall(() => content.End);
+                RetryRejectedOfficeCall(() => trailing.Start = formulaEnd);
+                var trailingStart = RetryRejectedOfficeCall(() => trailing.Start);
+                RetryRejectedOfficeCall(() =>
+                    trailing.End = Math.Max(trailingStart, contentEnd - 1));
+                precedingFont = RetryRejectedOfficeCall(() => preceding.Font);
+                trailingFont = RetryRejectedOfficeCall(() => trailing.Font);
+                foreach (var font in new[] { precedingFont, trailingFont })
+                {
+                    RetryRejectedOfficeCall(() => font.Name = "Times New Roman");
+                    RetryRejectedOfficeCall(() => font.Size = (float)resizeFontSize);
+                    RetryRejectedOfficeCall(() => font.Position = 0);
+                    RetryRejectedOfficeCall(() => font.Superscript = 0);
+                    RetryRejectedOfficeCall(() => font.Subscript = 0);
+                    RetryRejectedOfficeCall(() =>
+                        font.Color = Word.WdColor.wdColorRed);
+                }
+                RetryRejectedOfficeCall(() =>
+                    selection.SetRange(formulaStart, formulaEnd));
+                wordApplication = RetryRejectedOfficeCall(() => window.Application);
+                var service = new WordFormulaService(wordApplication);
+                service.SetSelectedFormulaFontSize(resizeFontSize);
+                Release(formulaRange);
+                formulaRange = null;
+                Release(shape);
+                shape = null;
+                Release(inlineShapes);
+                inlineShapes = null;
+                RetryRejectedOfficeCall(selection.WholeStory);
+                Release(content);
+                content = RetryRejectedOfficeCall(() => selection.Range);
+                inlineShapes = RetryRejectedOfficeCall(() => content.InlineShapes);
+                shape = RetryRejectedOfficeCall(() => inlineShapes[1]);
+                formulaRange = RetryRejectedOfficeCall(() => shape.Range);
+            }
+            formulaFont = RetryRejectedOfficeCall(() => formulaRange.Font);
+            var metadata = RetryRejectedOfficeCall(() =>
+                WordFormulaMetadataReader.TryRead(shape));
+            paragraphs = RetryRejectedOfficeCall(() => formulaRange.Paragraphs);
+            paragraph = RetryRejectedOfficeCall(() => paragraphs[1]);
+            var sourceParagraphRange = RetryRejectedOfficeCall(() => paragraph.Range);
+            try
+            {
+                paragraphRange = RetryRejectedOfficeCall(() =>
+                    sourceParagraphRange.Duplicate);
+            }
+            finally { Release(sourceParagraphRange); }
+            var paragraphStart = RetryRejectedOfficeCall(() => paragraphRange.Start);
+            var paragraphEnd = RetryRejectedOfficeCall(() => paragraphRange.End);
+            RetryRejectedOfficeCall(() =>
+                paragraphRange.End = Math.Max(paragraphStart, paragraphEnd - 1));
+
+            var finalParagraphStart = RetryRejectedOfficeCall(() => paragraphRange.Start);
+            var finalParagraphEnd = RetryRejectedOfficeCall(() => paragraphRange.End);
+            RetryRejectedOfficeCall(() =>
+                selection.SetRange(finalParagraphStart, finalParagraphEnd));
+            RetryRejectedOfficeCall(window.Activate);
+            _ = SetForegroundWindow(new IntPtr(windowHandle));
+            WinForms.Application.DoEvents();
+            Thread.Sleep(300);
+            WinForms.Clipboard.Clear();
+            RetryRejectedOfficeCall(selection.CopyAsPicture);
+            WinForms.Application.DoEvents();
+            Thread.Sleep(500);
+
+            var imagePath = Path.Combine(
+                artifactRoot,
+                "word-inline-ole-visual-baseline-existing-42pt.png");
+            ExportClipboardPictureThroughPowerPoint(imagePath);
+            using var bitmap = new Bitmap(imagePath);
+            var red = FindPixelBounds(bitmap, static color =>
+                color.A > 0
+                && color.R >= 120
+                && color.R >= color.G + 45
+                && color.R >= color.B + 45);
+            var black = FindPixelBounds(bitmap, static color =>
+                color.A > 0
+                && color.R <= 95
+                && color.G <= 95
+                && color.B <= 95);
+            if (red.Count < 20 || black.Count < 10)
+                throw new InvalidDataException(
+                    $"Existing 42 pt pixel classification was insufficient: red={red.Count}, black={black.Count}.");
+            var bottomDelta = black.MaxY - red.MaxY;
+            var centerDelta = ((black.MinY + black.MaxY) / 2.0)
+                - ((red.MinY + red.MaxY) / 2.0);
+            var shapeWidth = RetryRejectedOfficeCall(() => shape.Width);
+            var shapeHeight = RetryRejectedOfficeCall(() => shape.Height);
+            var formulaPosition = RetryRejectedOfficeCall(() => formulaFont.Position);
+            Console.WriteLine(
+                $"[Word existing inline OLE visual baseline] 42.0 pt: "
+                + $"shape={shapeWidth:F2}x{shapeHeight:F2}pt, "
+                + $"fontPosition={formulaPosition}, "
+                + $"metadataFont={metadata?.FontSizePt?.ToString("F2", CultureInfo.InvariantCulture) ?? "null"}, "
+                + $"render={metadata?.RenderWidthPx?.ToString("F2", CultureInfo.InvariantCulture) ?? "null"}x"
+                + $"{metadata?.RenderHeightPx?.ToString("F2", CultureInfo.InvariantCulture) ?? "null"}px, "
+                + $"baseline={metadata?.Baseline?.ToString("F2", CultureInfo.InvariantCulture) ?? "null"}px, "
+                + $"red=({red.MinX},{red.MinY})-({red.MaxX},{red.MaxY}), "
+                + $"black=({black.MinX},{black.MinY})-({black.MaxX},{black.MaxY}), "
+                + $"bottomDelta={bottomDelta}px, centerDelta={centerDelta:F1}px, image={imagePath}");
+            if (Math.Abs(bottomDelta) > 1)
+                throw new InvalidDataException(
+                    $"Office 2021 visible 42 pt OLE baseline still differs by {bottomDelta}px. Screenshot: {imagePath}");
+        }
+        finally
+        {
+            Release(trailingFont);
+            Release(precedingFont);
+            Release(trailing);
+            Release(preceding);
+            Release(content);
+            Release(selection);
+            Release(paragraphRange);
+            Release(paragraph);
+            Release(paragraphs);
+            Release(formulaFont);
+            Release(formulaRange);
+            Release(shape);
+            Release(inlineShapes);
+            Release(wordApplication);
+            Release(window);
+            Release(nativeObject);
+        }
+    }
+
+    private static void RunWordInlineOleVisualBaseline(
+        VisualTeXSessionClient client,
+        string artifactRoot)
+    {
+        Directory.CreateDirectory(artifactRoot);
+        Console.WriteLine("[Word inline OLE visual baseline] Prewarming converter...");
+        client.PrewarmConverterAsync(CancellationToken.None).GetAwaiter().GetResult();
+        Thread.Sleep(700);
+        WinForms.Application.DoEvents();
+
+        var logPath = Path.Combine(artifactRoot, "word-inline-ole-visual-baseline.log");
+        TryDeleteAcceptanceFile(logPath);
+        Environment.SetEnvironmentVariable("VISUALTEX_VSTO_REDRAW_ACCEPTANCE_LOG", logPath);
+        try
+        {
+            using var host = new WordPerformanceHost(documentPath: null);
+            var selection = host.Application.Selection;
+            selection.HomeKey(Word.WdUnits.wdStory);
+            selection.Font.Name = "Times New Roman";
+            selection.Font.Size = 12;
+            selection.Font.Color = Word.WdColor.wdColorRed;
+            selection.TypeText("X ");
+            selection.Font.Color = Word.WdColor.wdColorAutomatic;
+            selection.TypeText("$X$");
+            selection.Font.Color = Word.WdColor.wdColorRed;
+            selection.TypeText(" X");
+
+            var content = host.Document.Content;
+            try
+            {
+                selection.SetRange(content.Start, content.End - 1);
+                host.AddIn.OnRedrawSelectionToOle(new object());
+            }
+            finally { Release(content); }
+
+            _ = WaitForLatexRedraw(logPath, TimeSpan.FromMinutes(2));
+            WaitForAddInIdle(host.AddIn, TimeSpan.FromSeconds(30));
+            if (host.Document.InlineShapes.Count != 1)
+                throw new InvalidDataException(
+                    $"Visual baseline fixture expected one OLE formula, found {host.Document.InlineShapes.Count}.");
+
+            foreach (var fontSize in new[] { 12d, 18d, 42d })
+                MeasureInlineOleVisualBaseline(host, fontSize, artifactRoot);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("VISUALTEX_VSTO_REDRAW_ACCEPTANCE_LOG", null);
+        }
+    }
+
+    private static void MeasureInlineOleVisualBaseline(
+        WordPerformanceHost host,
+        double fontSize,
+        string artifactRoot)
+    {
+        Word.InlineShape? shape = null;
+        Word.Range? formulaRange = null;
+        Word.Paragraphs? paragraphs = null;
+        Word.Paragraph? paragraph = null;
+        Word.Range? paragraphRange = null;
+        Word.Range? preceding = null;
+        Word.Range? trailing = null;
+        Word.Selection? selection = null;
+        Microsoft.Office.Interop.Word.Font? precedingFont = null;
+        Microsoft.Office.Interop.Word.Font? trailingFont = null;
+        Microsoft.Office.Interop.Word.Font? formulaFont = null;
+        try
+        {
+            shape = host.Document.InlineShapes[1];
+            formulaRange = shape.Range;
+            paragraphs = formulaRange.Paragraphs;
+            paragraph = paragraphs[1];
+            paragraphRange = paragraph.Range.Duplicate;
+            paragraphRange.End = Math.Max(paragraphRange.Start, paragraphRange.End - 1);
+            preceding = host.Document.Range(paragraphRange.Start, formulaRange.Start);
+            trailing = host.Document.Range(formulaRange.End, paragraphRange.End);
+            precedingFont = preceding.Font;
+            trailingFont = trailing.Font;
+            foreach (var font in new[] { precedingFont, trailingFont })
+            {
+                font.Name = "Times New Roman";
+                font.Size = (float)fontSize;
+                font.Position = 0;
+                font.Superscript = 0;
+                font.Subscript = 0;
+                font.Color = Word.WdColor.wdColorRed;
+            }
+
+            selection = host.Application.Selection;
+            selection.SetRange(formulaRange.Start, formulaRange.End);
+            var service = new WordFormulaService(host.Application);
+            service.SetSelectedFormulaFontSize(fontSize);
+
+            Release(shape);
+            shape = host.Document.InlineShapes[1];
+            Release(formulaRange);
+            formulaRange = shape.Range;
+            formulaFont = formulaRange.Font;
+            selection.SetRange(formulaRange.Start, formulaRange.End);
+            var selectedFormula = service.ReadSelection();
+            Console.WriteLine(
+                $"[Word inline OLE visual baseline structure] {fontSize:F1} pt: "
+                + $"shape={shape.Width:F2}x{shape.Height:F2}pt, "
+                + $"fontPosition={formulaFont.Position}, "
+                + $"metadataFont={selectedFormula.Metadata?.FontSizePt?.ToString("F2", CultureInfo.InvariantCulture) ?? "null"}, "
+                + $"render={selectedFormula.Metadata?.RenderWidthPx?.ToString("F2", CultureInfo.InvariantCulture) ?? "null"}x"
+                + $"{selectedFormula.Metadata?.RenderHeightPx?.ToString("F2", CultureInfo.InvariantCulture) ?? "null"}px, "
+                + $"baseline={selectedFormula.Metadata?.Baseline?.ToString("F2", CultureInfo.InvariantCulture) ?? "null"}px.");
+            Release(paragraphs);
+            paragraphs = formulaRange.Paragraphs;
+            Release(paragraph);
+            paragraph = paragraphs[1];
+            Release(paragraphRange);
+            paragraphRange = paragraph.Range.Duplicate;
+            paragraphRange.End = Math.Max(paragraphRange.Start, paragraphRange.End - 1);
+
+            host.Application.Visible = true;
+            host.Document.Activate();
+            host.Application.ActiveWindow.Activate();
+            _ = SetForegroundWindow(new IntPtr(host.Application.ActiveWindow.Hwnd));
+            WinForms.Application.DoEvents();
+            Thread.Sleep(300);
+
+            selection.SetRange(paragraphRange.Start, paragraphRange.End);
+            WinForms.Clipboard.Clear();
+            selection.CopyAsPicture();
+            WinForms.Application.DoEvents();
+            Thread.Sleep(500);
+
+            var imagePath = Path.Combine(
+                artifactRoot,
+                $"word-inline-ole-visual-baseline-{fontSize.ToString("0.#", CultureInfo.InvariantCulture).Replace('.', '_')}pt.png");
+            ExportClipboardPictureThroughPowerPoint(imagePath);
+            using var bitmap = new Bitmap(imagePath);
+
+            var red = FindPixelBounds(bitmap, static color =>
+                color.A > 0
+                && color.R >= 120
+                && color.R >= color.G + 45
+                && color.R >= color.B + 45);
+            var black = FindPixelBounds(bitmap, static color =>
+                color.A > 0
+                && color.R <= 95
+                && color.G <= 95
+                && color.B <= 95);
+            if (red.Count < 20 || black.Count < 10)
+                throw new InvalidDataException(
+                    $"Visual baseline pixel classification was insufficient at {fontSize:F1} pt: "
+                    + $"red={red.Count}, black={black.Count}, image={bitmap.Width}x{bitmap.Height}.");
+
+            var bottomDelta = black.MaxY - red.MaxY;
+            var centerDelta = ((black.MinY + black.MaxY) / 2.0)
+                - ((red.MinY + red.MaxY) / 2.0);
+            Console.WriteLine(
+                $"[Word inline OLE visual baseline] {fontSize:F1} pt: "
+                + $"red=({red.MinX},{red.MinY})-({red.MaxX},{red.MaxY}), "
+                + $"black=({black.MinX},{black.MinY})-({black.MaxX},{black.MaxY}), "
+                + $"bottomDelta={bottomDelta}px, centerDelta={centerDelta:F1}px, image={imagePath}");
+            if (Math.Abs(bottomDelta) > 3)
+                throw new InvalidDataException(
+                    $"Office 2021 visible inline OLE baseline differs from adjacent text at {fontSize:F1} pt: "
+                    + $"formula bottom minus text bottom = {bottomDelta}px. Screenshot: {imagePath}");
+        }
+        finally
+        {
+            Release(formulaFont);
+            Release(trailingFont);
+            Release(precedingFont);
+            Release(selection);
+            Release(trailing);
+            Release(preceding);
+            Release(paragraphRange);
+            Release(paragraph);
+            Release(paragraphs);
+            Release(formulaRange);
+            Release(shape);
+        }
+    }
+
+    private static void ExportClipboardPictureThroughPowerPoint(string imagePath)
+    {
+        PowerPoint.Application? application = null;
+        PowerPoint.Presentation? presentation = null;
+        PowerPoint.Slide? slide = null;
+        PowerPoint.ShapeRange? pasted = null;
+        PowerPoint.Shape? shape = null;
+        try
+        {
+            application = new PowerPoint.Application
+            {
+                Visible = Microsoft.Office.Core.MsoTriState.msoTrue,
+            };
+            presentation = application.Presentations.Add(
+                Microsoft.Office.Core.MsoTriState.msoFalse);
+            slide = presentation.Slides.Add(
+                1,
+                PowerPoint.PpSlideLayout.ppLayoutBlank);
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(8);
+            Exception? lastError = null;
+            while (DateTime.UtcNow < deadline)
+            {
+                try
+                {
+                    pasted = slide.Shapes.PasteSpecial(
+                        PowerPoint.PpPasteDataType.ppPasteEnhancedMetafile);
+                    if (pasted.Count > 0) break;
+                }
+                catch (Exception error)
+                {
+                    lastError = error;
+                    Release(pasted);
+                    pasted = null;
+                }
+                WinForms.Application.DoEvents();
+                Thread.Sleep(150);
+            }
+            if (pasted is null || pasted.Count == 0)
+                throw new InvalidDataException(
+                    "PowerPoint could not paste Word CopyAsPicture as an enhanced metafile.",
+                    lastError);
+            shape = pasted[1];
+            shape.Export(imagePath, PowerPoint.PpShapeFormat.ppShapeFormatPNG);
+            if (!File.Exists(imagePath) || new FileInfo(imagePath).Length == 0)
+                throw new InvalidDataException(
+                    $"PowerPoint did not export the visual baseline image: {imagePath}");
+        }
+        finally
+        {
+            Release(shape);
+            Release(pasted);
+            Release(slide);
+            if (presentation is not null)
+            {
+                try { presentation.Close(); } catch { }
+            }
+            Release(presentation);
+            if (application is not null)
+            {
+                try { application.Quit(); } catch { }
+            }
+            Release(application);
+            ForceComCleanup();
+        }
+    }
+
+    private static PixelBounds FindPixelBounds(
+        Bitmap bitmap,
+        Func<Color, bool> predicate,
+        int minX = 0,
+        int? maxXExclusive = null)
+    {
+        var maxExclusive = Math.Min(bitmap.Width, maxXExclusive ?? bitmap.Width);
+        var left = bitmap.Width;
+        var top = bitmap.Height;
+        var right = -1;
+        var bottom = -1;
+        var count = 0;
+        for (var y = 0; y < bitmap.Height; y++)
+        {
+            for (var x = Math.Max(0, minX); x < maxExclusive; x++)
+            {
+                var color = bitmap.GetPixel(x, y);
+                if (!predicate(color)) continue;
+                left = Math.Min(left, x);
+                top = Math.Min(top, y);
+                right = Math.Max(right, x);
+                bottom = Math.Max(bottom, y);
+                count++;
+            }
+        }
+        return count == 0
+            ? new PixelBounds(0, 0, -1, -1, 0)
+            : new PixelBounds(left, top, right, bottom, count);
+    }
+
     private static void RunWordLatexRedrawSourceContextStress()
     {
-        using var host = new WordPerformanceHost(documentPath: null);
+        using var host = new WordSourceContextStressHost();
         var builder = new StringBuilder(120_000);
         var sourceFormats = new List<(int Start, int Length, float Size)>(1000);
         for (var index = 1; index <= 500; index++)
@@ -64,23 +1153,23 @@ internal static partial class Program
         Microsoft.Office.Interop.Word.Font? contentFont = null;
         try
         {
-            content = host.Document.Content;
-            var documentStart = content.Start;
-            content.Text = builder.ToString();
-            contentFont = content.Font;
-            contentFont.Name = "宋体";
-            contentFont.Size = 10.5f;
+            content = RetryRejectedOfficeCall(() => host.Document.Content);
+            var documentStart = RetryRejectedOfficeCall(() => content.Start);
+            RetryRejectedOfficeCall(() => content.Text = builder.ToString());
+            contentFont = RetryRejectedOfficeCall(() => content.Font);
+            RetryRejectedOfficeCall(() => contentFont.Name = "宋体");
+            RetryRejectedOfficeCall(() => contentFont.Size = 10.5f);
             foreach (var sourceFormat in sourceFormats)
             {
                 Word.Range? sourceRange = null;
                 Microsoft.Office.Interop.Word.Font? sourceFont = null;
                 try
                 {
-                    sourceRange = host.Document.Range(
+                    sourceRange = RetryRejectedOfficeCall(() => host.Document.Range(
                         documentStart + sourceFormat.Start,
-                        documentStart + sourceFormat.Start + sourceFormat.Length);
-                    sourceFont = sourceRange.Font;
-                    sourceFont.Size = sourceFormat.Size;
+                        documentStart + sourceFormat.Start + sourceFormat.Length));
+                    sourceFont = RetryRejectedOfficeCall(() => sourceRange.Font);
+                    RetryRejectedOfficeCall(() => sourceFont.Size = sourceFormat.Size);
                 }
                 finally
                 {
@@ -95,6 +1184,7 @@ internal static partial class Program
             Release(content);
         }
 
+        RetryRejectedOfficeCall(() => host.Document.Activate());
         var service = new WordFormulaService(host.Application);
         var stopwatch = Stopwatch.StartNew();
         var plan = service.CaptureLatexRedrawPlan(wholeDocument: true);
@@ -427,7 +1517,8 @@ internal static partial class Program
                 host.Document,
                 target,
                 metadata,
-                expectedPosition);
+                expectedPosition,
+                precedingFont);
 
             host.Application.Visible = true;
             host.Application.ActiveWindow.Activate();
@@ -453,6 +1544,10 @@ internal static partial class Program
                 throw new InvalidDataException(
                     "Typing after save/reopen inherited the resized OLE baseline. "
                     + $"Expected {expectedPosition}, actual {typedFont.Position}.");
+            AssertBodyCharacterFormattingMatches(
+                precedingFont,
+                typedFont,
+                "Typing after save/reopen inline OLE");
             Console.WriteLine(
                 "[Word LaTeX redraw] Saved/reopened inline OLE zero-width typing anchor passed real keyboard input.");
         }
@@ -483,6 +1578,7 @@ internal static partial class Program
         Word.Range? trailing = null;
         Word.Range? paragraphTail = null;
         Word.Selection? typingSelection = null;
+        Word.Window? inputWindow = null;
         Word.Range? typedRange = null;
         Microsoft.Office.Interop.Word.Font? precedingFont = null;
         Microsoft.Office.Interop.Word.Font? trailingFont = null;
@@ -490,14 +1586,19 @@ internal static partial class Program
         Microsoft.Office.Interop.Word.Font? typedFont = null;
         try
         {
+            Console.WriteLine("[Word inline OLE font] Stage 1: enumerate inline shapes.");
             shapes = host.Document.InlineShapes;
+            Console.WriteLine($"[Word inline OLE font] Inline shape count: {shapes.Count}.");
             for (var index = 1; index <= shapes.Count; index++)
             {
                 Word.InlineShape? candidate = null;
                 try
                 {
+                    Console.WriteLine($"[Word inline OLE font] Inspect shape {index}/{shapes.Count}.");
                     candidate = shapes[index];
                     var metadata = WordFormulaMetadataReader.TryRead(candidate);
+                    Console.WriteLine(
+                        $"[Word inline OLE font] Shape {index} latex={metadata?.Latex ?? "<null>"}.");
                     if (!WordFormulaMetadataReader.IsNativeOle(candidate)
                         || !string.Equals(metadata?.Latex, "UVI>2", StringComparison.Ordinal))
                         continue;
@@ -512,6 +1613,7 @@ internal static partial class Program
                 throw new InvalidDataException(
                     "Inline OLE baseline acceptance could not find the UVI formula.");
 
+            Console.WriteLine("[Word inline OLE font] Stage 2: target UVI formula located.");
             formulaRange = target.Range;
             paragraphs = formulaRange.Paragraphs;
             paragraph = paragraphs[1];
@@ -534,14 +1636,30 @@ internal static partial class Program
             trailingFont.Position = -9;
             host.Application.Selection.SetRange(formulaRange.Start, formulaRange.End);
             var service = new WordFormulaService(host.Application);
+            Console.WriteLine("[Word inline OLE font] Stage 3: resize target to 42 pt.");
             service.SetSelectedFormulaFontSize(42);
+            Console.WriteLine("[Word inline OLE font] Stage 3 complete.");
+            Release(formulaRange);
+            formulaRange = target.Range;
+            Release(paragraphRange);
+            Release(paragraph);
+            Release(paragraphs);
+            paragraphs = formulaRange.Paragraphs;
+            paragraph = paragraphs[1];
+            paragraphRange = paragraph.Range;
+            Release(trailing);
+            trailing = host.Document.Range(
+                formulaRange.End,
+                Math.Max(formulaRange.End, paragraphRange.End - 1));
+            Console.WriteLine("[Word inline OLE font] Stage 4: verify typing anchor formatting.");
             AssertInlineOleTypingAnchor(
                 host.Document,
                 target,
                 targetMetadata
                     ?? throw new InvalidDataException(
                         "Inline OLE baseline acceptance lost formula metadata."),
-                expectedPosition);
+                expectedPosition,
+                precedingFont);
 
             Release(trailingFont);
             trailingFont = trailing.Font;
@@ -557,29 +1675,64 @@ internal static partial class Program
             // A collapsed Word insertion point can report Position=0 while the
             // next character still inherits the OLE object's negative baseline.
             // Validate the actual typed run rather than trusting caret metadata.
+            Console.WriteLine("[Word inline OLE font] Stage 5: activate test window and type probe.");
             host.Application.Visible = true;
-            host.Application.ActiveWindow.Activate();
-            _ = SetForegroundWindow(new IntPtr(host.Application.ActiveWindow.Hwnd));
+            Console.WriteLine("[Word inline OLE font] Stage 5a: application visible.");
+            host.Document.Activate();
+            Console.WriteLine("[Word inline OLE font] Stage 5b: document activated.");
+            var documentWindows = host.Document.Windows;
+            try
+            {
+                inputWindow = documentWindows[1];
+                inputWindow.Visible = true;
+                Console.WriteLine("[Word inline OLE font] Stage 5c: document window visible.");
+                inputWindow.Activate();
+                Console.WriteLine("[Word inline OLE font] Stage 5d: document window activated.");
+                _ = SetForegroundWindow(new IntPtr(inputWindow.Hwnd));
+                Console.WriteLine("[Word inline OLE font] Stage 5e: foreground requested.");
+            }
+            finally { Release(documentWindows); }
             WinForms.Application.DoEvents();
             Thread.Sleep(300);
             typingSelection = host.Application.Selection;
+            Console.WriteLine("[Word inline OLE font] Stage 5f: selection acquired.");
             typingSelection.SetRange(formulaRange.End, formulaRange.End);
-            service.NormalizeTypingCaretAfterInlineFormula(typingSelection);
+            Console.WriteLine("[Word inline OLE font] Stage 5g: selection moved to formula end.");
+            Release(typingSelection);
+            typingSelection = null;
             WinForms.Application.DoEvents();
-            Thread.Sleep(300);
+            Thread.Sleep(500);
+            typingSelection = host.Application.Selection;
+            Console.WriteLine("[Word inline OLE font] Stage 5h: event-driven caret normalization completed.");
             var typedStart = typingSelection.Start;
             const string typedText = "typedafterlargeole";
-            WinForms.SendKeys.SendWait(typedText);
+            Console.WriteLine($"[Word inline OLE font] Stage 5i: type at {typedStart}.");
+            typingSelection.TypeText(typedText);
+            Console.WriteLine("[Word inline OLE font] Stage 5j: TypeText returned.");
             WinForms.Application.DoEvents();
-            Thread.Sleep(300);
+            Thread.Sleep(100);
             typedRange = host.Document.Range(
                 typedStart,
                 typedStart + typedText.Length);
+            if (!string.Equals(typedRange.Text, typedText, StringComparison.Ordinal))
+                throw new InvalidDataException(
+                    "Word did not insert the resize typing probe at the normalized OLE boundary. "
+                    + $"Expected '{typedText}', actual '{typedRange.Text}', "
+                    + $"formulaEnd={formulaRange.End}, typedStart={typedStart}.");
             typedFont = typedRange.Font;
             if (typedFont.Position != expectedPosition)
                 throw new InvalidDataException(
                     "Typing after a resized inline OLE inherited the formula baseline. "
-                    + $"Expected {expectedPosition}, actual {typedFont.Position}.");
+                    + $"Expected {expectedPosition}, actual {typedFont.Position}; "
+                    + $"formulaEnd={formulaRange.End}, typedStart={typedStart}; "
+                    + DescribeCharacterFormatting(
+                        host.Document,
+                        Math.Max(0, formulaRange.End - 1),
+                        typedStart + typedText.Length + 1));
+            AssertBodyCharacterFormattingMatches(
+                precedingFont,
+                typedFont,
+                "Typing after resized inline OLE");
 
             // Repeat with the OLE as the final content in its paragraph. Without
             // an existing prose run after the object, Word can display a normal
@@ -596,37 +1749,57 @@ internal static partial class Program
                 formulaRange.End,
                 Math.Max(formulaRange.End, paragraphRange.End - 1));
             paragraphTail.Delete();
+            Release(formulaRange);
+            formulaRange = target.Range;
             host.Application.Selection.SetRange(formulaRange.Start, formulaRange.End);
             service.SetSelectedFormulaFontSize(44);
+            Release(formulaRange);
+            formulaRange = target.Range;
             AssertInlineOleTypingAnchor(
                 host.Document,
                 target,
                 targetMetadata!,
-                expectedPosition);
+                expectedPosition,
+                precedingFont);
 
             typingSelection = host.Application.Selection;
             typingSelection.SetRange(formulaRange.End, formulaRange.End);
-            service.NormalizeTypingCaretAfterInlineFormula(typingSelection);
+            Release(typingSelection);
+            typingSelection = null;
             WinForms.Application.DoEvents();
-            Thread.Sleep(300);
+            Thread.Sleep(500);
+            typingSelection = host.Application.Selection;
             var paragraphEndTypedStart = typingSelection.Start;
             const string paragraphEndTypedText = "typedatparagraphend";
-            WinForms.SendKeys.SendWait(paragraphEndTypedText);
+            typingSelection.TypeText(paragraphEndTypedText);
             WinForms.Application.DoEvents();
-            Thread.Sleep(300);
+            Thread.Sleep(100);
             typedRange = host.Document.Range(
                 paragraphEndTypedStart,
                 paragraphEndTypedStart + paragraphEndTypedText.Length);
+            if (!string.Equals(
+                    typedRange.Text,
+                    paragraphEndTypedText,
+                    StringComparison.Ordinal))
+                throw new InvalidDataException(
+                    "Word did not insert the paragraph-end typing probe at the normalized OLE boundary. "
+                    + $"Expected '{paragraphEndTypedText}', actual '{typedRange.Text}', "
+                    + $"formulaEnd={formulaRange.End}, typedStart={paragraphEndTypedStart}.");
             typedFont = typedRange.Font;
             if (typedFont.Position != expectedPosition)
                 throw new InvalidDataException(
                     "Typing after a paragraph-final resized inline OLE inherited the formula baseline. "
                     + $"Expected {expectedPosition}, actual {typedFont.Position}.");
+            AssertBodyCharacterFormattingMatches(
+                precedingFont,
+                typedFont,
+                "Typing after paragraph-final inline OLE");
         }
         finally
         {
             Release(typedFont);
             Release(typedRange);
+            Release(inputWindow);
             Release(typingSelection);
             Release(formulaFont);
             Release(trailingFont);
@@ -647,7 +1820,8 @@ internal static partial class Program
         Word.Document document,
         Word.InlineShape shape,
         FormulaMetadata metadata,
-        int expectedPosition)
+        int expectedPosition,
+        Microsoft.Office.Interop.Word.Font expectedBodyFont)
     {
         Word.Bookmarks? bookmarks = null;
         Word.Bookmark? bookmark = null;
@@ -682,6 +1856,10 @@ internal static partial class Program
                     "Inline OLE typing anchor does not carry ordinary body-text formatting. "
                     + $"Position={anchorFont.Position}, Hidden={anchorFont.Hidden}, "
                     + $"Subscript={anchorFont.Subscript}, Superscript={anchorFont.Superscript}.");
+            AssertBodyCharacterFormattingMatches(
+                expectedBodyFont,
+                anchorFont,
+                "Inline OLE typing anchor");
         }
         finally
         {
@@ -690,6 +1868,79 @@ internal static partial class Program
             Release(formulaRange);
             Release(bookmark);
             Release(bookmarks);
+        }
+    }
+
+    private static string DescribeCharacterFormatting(
+        Word.Document document,
+        int start,
+        int end)
+    {
+        var builder = new StringBuilder();
+        Word.Range? content = null;
+        try
+        {
+            content = document.Content;
+            var safeStart = Math.Max(content.Start, start);
+            var safeEnd = Math.Min(content.End, Math.Max(safeStart, end));
+            for (var position = safeStart; position < safeEnd; position++)
+            {
+                Word.Range? characterRange = null;
+                Microsoft.Office.Interop.Word.Font? characterFont = null;
+                try
+                {
+                    characterRange = document.Range(position, position + 1);
+                    characterFont = characterRange.Font;
+                    var text = characterRange.Text ?? string.Empty;
+                    var codePoint = text.Length == 0
+                        ? "empty"
+                        : $"U+{(int)text[0]:X4}";
+                    if (builder.Length > 0) builder.Append(" | ");
+                    builder.Append($"{position}:{codePoint}")
+                        .Append($",pos={characterFont.Position}")
+                        .Append($",name={characterFont.Name}")
+                        .Append($",ascii={characterFont.NameAscii}")
+                        .Append($",east={characterFont.NameFarEast}")
+                        .Append($",size={characterFont.Size}")
+                        .Append($",bold={characterFont.Bold}")
+                        .Append($",italic={characterFont.Italic}");
+                }
+                finally
+                {
+                    Release(characterFont);
+                    Release(characterRange);
+                }
+            }
+        }
+        finally { Release(content); }
+        return builder.ToString();
+    }
+
+    private static void AssertBodyCharacterFormattingMatches(
+        Microsoft.Office.Interop.Word.Font expected,
+        Microsoft.Office.Interop.Word.Font actual,
+        string stage)
+    {
+        static bool SameName(string? left, string? right) =>
+            string.Equals(left ?? string.Empty, right ?? string.Empty,
+                StringComparison.OrdinalIgnoreCase);
+
+        var sameSize = Math.Abs(expected.Size - actual.Size) <= 0.1f;
+        if (!SameName(expected.Name, actual.Name)
+            || !SameName(expected.NameAscii, actual.NameAscii)
+            || !SameName(expected.NameFarEast, actual.NameFarEast)
+            || !sameSize
+            || expected.Bold != actual.Bold
+            || expected.Italic != actual.Italic)
+        {
+            throw new InvalidDataException(
+                $"{stage} inherited a different body-text font. "
+                + $"Expected Name={expected.Name}, ASCII={expected.NameAscii}, "
+                + $"FarEast={expected.NameFarEast}, Size={expected.Size}, "
+                + $"Bold={expected.Bold}, Italic={expected.Italic}; "
+                + $"actual Name={actual.Name}, ASCII={actual.NameAscii}, "
+                + $"FarEast={actual.NameFarEast}, Size={actual.Size}, "
+                + $"Bold={actual.Bold}, Italic={actual.Italic}.");
         }
     }
 

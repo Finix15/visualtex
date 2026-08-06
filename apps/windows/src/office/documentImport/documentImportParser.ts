@@ -599,8 +599,22 @@ function parseInline(
     : merged;
 }
 
+function normalizeDisplayFormulaBody(body: string) {
+  return body
+    .replace(/\\label\s*\{[^{}]*\}/gi, "")
+    .replace(/\\(?:notag|nonumber)\b/gi, "");
+}
+
 function normalizeDisplayEnvironment(environment: string, body: string) {
-  const normalized = body.replace(/\r\n?/g, "\n").trim();
+  // Physical source line breaks inside TeX math are ordinary whitespace.
+  // Preserve only explicit mathematical row breaks such as `\\\\`; otherwise
+  // a prettified equation/equation* source is incorrectly reopened as several
+  // VisualTeX rows, and a complete aligned environment can be truncated by a
+  // single-line editor field.
+  const normalized = normalizeDisplayFormulaBody(body)
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]*\n+[ \t]*/g, " ")
+    .trim();
   switch (environment.replace(/\*$/, "").toLowerCase()) {
     case "align":
       return `\\begin{aligned}${normalized}\\end{aligned}`;
@@ -616,7 +630,7 @@ function normalizeDelimitedDisplay(body: string) {
   // Newlines inside $$...$$ and \\[...\\] are TeX whitespace, not
   // VisualTeX row boundaries. Collapsing them keeps paired \\left/\\right
   // delimiters in one expression while explicit \\\\ row breaks remain.
-  return body
+  return normalizeDisplayFormulaBody(body)
     .replace(/\r\n?/g, "\n")
     .replace(/[ \t]*\n+[ \t]*/g, " ")
     .trim();
@@ -750,7 +764,10 @@ function appendMixedBlocks(
 }
 
 function detectFormat(source: string): ResolvedDocumentSourceFormat {
-  return /\\(?:documentclass|begin\{document\}|\[|\(|text(?:bf|it|tt)\{|emph\{|item(?:\s|\[)|(?:part|chapter|section|subsection)\*?\{|begin\{(?:equation|align|itemize|enumerate|quote|quotation|verbatim|lstlisting))/i.test(
+  // A LaTeX fragment may consist only of a proof/theorem/custom environment or
+  // a preamble macro definition. Do not require one of a tiny fixed set of
+  // environments before enabling the LaTeX parser.
+  return /\\(?:documentclass|usepackage|RequirePackage|newcommand|renewcommand|providecommand|DeclareMathOperator\*?|DeclarePairedDelimiter\w*|newtheorem\*?|begin\{[A-Za-z@*]+\}|\[|\(|text(?:bf|it|tt)\{|emph\{|item(?:\s|\[)|(?:part|chapter|section|subsection|subsubsection|paragraph|subparagraph)\*?\{)/i.test(
     source,
   )
     ? "latex"
@@ -962,59 +979,277 @@ function replaceLatexTableEnvironment(body: string, warnings: string[]) {
   return result;
 }
 
+type LatexDocumentMacro = {
+  argumentCount: number;
+  replacement: string;
+  optionalDefault?: string;
+};
+
+function skipLatexSpaces(source: string, index: number) {
+  while (index < source.length && /\s/.test(source[index])) index += 1;
+  return index;
+}
+
+function readLatexDelimitedGroup(
+  source: string,
+  start: number,
+  open: "{" | "[",
+  close: "}" | "]",
+) {
+  if (source[start] !== open) return null;
+  let depth = 0;
+  for (let index = start; index < source.length; index += 1) {
+    if (source[index] === "\\") {
+      index += 1;
+      continue;
+    }
+    if (source[index] === open) depth += 1;
+    else if (source[index] === close) {
+      depth -= 1;
+      if (depth === 0) {
+        return {
+          content: source.slice(start + 1, index),
+          end: index + 1,
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function readLatexMacroArgument(source: string, start: number) {
+  const position = skipLatexSpaces(source, start);
+  if (source[position] === "{") {
+    return readLatexDelimitedGroup(source, position, "{", "}");
+  }
+  if (source[position] === "\\") {
+    const command = source.slice(position).match(/^\\(?:[A-Za-z@]+|.)/);
+    return command
+      ? { content: command[0], end: position + command[0].length }
+      : null;
+  }
+  return position < source.length
+    ? { content: source[position], end: position + 1 }
+    : null;
+}
+
+function collectLatexDocumentMacros(
+  source: string,
+  macros: Map<string, LatexDocumentMacro>,
+) {
+  const definitionStart = /\\(?:newcommand|renewcommand|providecommand|def|DeclareMathOperator|DeclarePairedDelimiter(?:X)?)(?:\*?)(?![A-Za-z@])/g;
+  let output = "";
+  let cursor = 0;
+  while (cursor < source.length) {
+    definitionStart.lastIndex = cursor;
+    const candidate = definitionStart.exec(source);
+    if (!candidate) {
+      output += source.slice(cursor);
+      break;
+    }
+    output += source.slice(cursor, candidate.index);
+    const start = candidate.index;
+    const command = candidate[0].replace(/\*$/, "");
+    let position = start + candidate[0].length;
+    let parsed = false;
+
+    if (/^\\(?:newcommand|renewcommand|providecommand)$/.test(command)) {
+      position = skipLatexSpaces(source, position);
+      const nameGroup = readLatexDelimitedGroup(source, position, "{", "}");
+      const nameMatch = nameGroup?.content.match(/^\\([A-Za-z@]+)$/);
+      if (nameGroup && nameMatch) {
+        position = skipLatexSpaces(source, nameGroup.end);
+        let argumentCount = 0;
+        let optionalDefault: string | undefined;
+        if (source[position] === "[") {
+          const countGroup = readLatexDelimitedGroup(source, position, "[", "]");
+          if (countGroup && /^\d+$/.test(countGroup.content.trim())) {
+            argumentCount = Math.max(0, Math.min(9, Number(countGroup.content.trim())));
+            position = skipLatexSpaces(source, countGroup.end);
+            if (source[position] === "[") {
+              const defaultGroup = readLatexDelimitedGroup(source, position, "[", "]");
+              if (defaultGroup) {
+                optionalDefault = defaultGroup.content;
+                argumentCount = Math.max(1, argumentCount);
+                position = skipLatexSpaces(source, defaultGroup.end);
+              }
+            }
+          }
+        }
+        const replacement = readLatexDelimitedGroup(source, position, "{", "}");
+        if (replacement) {
+          macros.set(nameMatch[1], {
+            argumentCount,
+            replacement: replacement.content,
+            ...(optionalDefault !== undefined ? { optionalDefault } : {}),
+          });
+          cursor = replacement.end;
+          parsed = true;
+        }
+      }
+    } else if (command === "\\def") {
+      position = skipLatexSpaces(source, position);
+      const nameMatch = source.slice(position).match(/^\\([A-Za-z@]+)/);
+      if (nameMatch) {
+        position += nameMatch[0].length;
+        let argumentCount = 0;
+        while (true) {
+          position = skipLatexSpaces(source, position);
+          const parameter = source.slice(position).match(/^#([1-9])/);
+          if (!parameter) break;
+          argumentCount = Math.max(argumentCount, Number(parameter[1]));
+          position += parameter[0].length;
+        }
+        position = skipLatexSpaces(source, position);
+        const replacement = readLatexDelimitedGroup(source, position, "{", "}");
+        if (replacement) {
+          macros.set(nameMatch[1], {
+            argumentCount,
+            replacement: replacement.content,
+          });
+          cursor = replacement.end;
+          parsed = true;
+        }
+      }
+    } else if (command === "\\DeclareMathOperator") {
+      position = skipLatexSpaces(source, position);
+      const nameGroup = readLatexDelimitedGroup(source, position, "{", "}");
+      const nameMatch = nameGroup?.content.match(/^\\([A-Za-z@]+)$/);
+      if (nameGroup && nameMatch) {
+        position = skipLatexSpaces(source, nameGroup.end);
+        const label = readLatexDelimitedGroup(source, position, "{", "}");
+        if (label) {
+          macros.set(nameMatch[1], {
+            argumentCount: 0,
+            replacement: `${candidate[0].endsWith("*") ? "\\operatorname*" : "\\operatorname"}{${label.content}}`,
+          });
+          cursor = label.end;
+          parsed = true;
+        }
+      }
+    } else if (command === "\\DeclarePairedDelimiter" || command === "\\DeclarePairedDelimiterX") {
+      position = skipLatexSpaces(source, position);
+      const nameGroup = readLatexDelimitedGroup(source, position, "{", "}");
+      const nameMatch = nameGroup?.content.match(/^\\([A-Za-z@]+)$/);
+      if (nameGroup && nameMatch) {
+        position = skipLatexSpaces(source, nameGroup.end);
+        let argumentCount = command === "\\DeclarePairedDelimiterX" ? 1 : 1;
+        if (source[position] === "[") {
+          const countGroup = readLatexDelimitedGroup(source, position, "[", "]");
+          if (countGroup && /^\d+$/.test(countGroup.content.trim())) {
+            argumentCount = Math.max(1, Math.min(9, Number(countGroup.content.trim())));
+            position = skipLatexSpaces(source, countGroup.end);
+          }
+        }
+        const left = readLatexDelimitedGroup(source, position, "{", "}");
+        position = left ? skipLatexSpaces(source, left.end) : position;
+        const right = left ? readLatexDelimitedGroup(source, position, "{", "}") : null;
+        position = right ? skipLatexSpaces(source, right.end) : position;
+        const bodyGroup = command === "\\DeclarePairedDelimiterX" && right
+          ? readLatexDelimitedGroup(source, position, "{", "}")
+          : null;
+        if (left && right && (command !== "\\DeclarePairedDelimiterX" || bodyGroup)) {
+          macros.set(nameMatch[1], {
+            argumentCount,
+            replacement: `\\left${left.content}${bodyGroup?.content ?? "#1"}\\right${right.content}`,
+          });
+          cursor = bodyGroup?.end ?? right.end;
+          parsed = true;
+        }
+      }
+    }
+
+    if (!parsed) {
+      output += source[start];
+      cursor = start + 1;
+    }
+  }
+  return output;
+}
+
+function expandLatexDocumentMacro(
+  source: string,
+  name: string,
+  macro: LatexDocumentMacro,
+) {
+  const token = `\\${name}`;
+  let output = "";
+  let cursor = 0;
+  let changed = false;
+  while (cursor < source.length) {
+    const start = source.indexOf(token, cursor);
+    if (start < 0) {
+      output += source.slice(cursor);
+      break;
+    }
+    output += source.slice(cursor, start);
+    const boundary = source[start + token.length];
+    if (isEscaped(source, start) || /[A-Za-z@]/.test(boundary ?? "")) {
+      output += token;
+      cursor = start + token.length;
+      continue;
+    }
+
+    let position = start + token.length;
+    if (source[position] === "*") position += 1;
+    const arguments_: string[] = [];
+    if (macro.optionalDefault !== undefined) {
+      position = skipLatexSpaces(source, position);
+      if (source[position] === "[") {
+        const optional = readLatexDelimitedGroup(source, position, "[", "]");
+        if (!optional) {
+          output += token;
+          cursor = start + token.length;
+          continue;
+        }
+        arguments_.push(optional.content);
+        position = optional.end;
+      } else {
+        arguments_.push(macro.optionalDefault);
+      }
+    }
+
+    let valid = true;
+    while (arguments_.length < macro.argumentCount) {
+      const argument = readLatexMacroArgument(source, position);
+      if (!argument) {
+        valid = false;
+        break;
+      }
+      arguments_.push(argument.content);
+      position = argument.end;
+    }
+    if (!valid) {
+      output += token;
+      cursor = start + token.length;
+      continue;
+    }
+
+    output += macro.replacement.replace(/#([1-9])/g, (_match, index: string) =>
+      arguments_[Number(index) - 1] ?? "",
+    );
+    cursor = position;
+    changed = true;
+  }
+  return { source: output, changed };
+}
+
 function normalizeLatexExtensions(source: string, warnings: string[]) {
   let body = source.replace(/\r\n?/g, "\n");
-  const macros = new Map<string, { argumentCount: number; replacement: string }>();
-  const commandDefinition = /\\(?:newcommand|renewcommand|providecommand)\*?\s*\{\\([A-Za-z@]+)\}\s*(?:\[(\d+)\])?\s*\{((?:[^{}]|\{[^{}]*\})*)\}/g;
-  body = body.replace(commandDefinition, (_match, name: string, count: string | undefined, replacement: string) => {
-    macros.set(name, {
-      argumentCount: Math.max(0, Math.min(2, Number(count ?? "0") || 0)),
-      replacement,
-    });
-    return "";
-  });
-  body = body.replace(
-    /\\def\\([A-Za-z@]+)\s*\{((?:[^{}]|\{[^{}]*\})*)\}/g,
-    (_match, name: string, replacement: string) => {
-      macros.set(name, { argumentCount: 0, replacement });
-      return "";
-    },
-  );
+  const macros = new Map<string, LatexDocumentMacro>();
+  body = collectLatexDocumentMacros(body, macros);
 
-  for (let pass = 0; pass < 8; pass += 1) {
+  for (let pass = 0; pass < 12; pass += 1) {
     let changed = false;
     for (const [name, macro] of macros) {
-      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      if (macro.argumentCount === 0) {
-        const pattern = new RegExp(`\\\\${escaped}(?![A-Za-z@])`, "g");
-        body = body.replace(pattern, () => {
-          changed = true;
-          return macro.replacement;
-        });
-      } else if (macro.argumentCount === 1) {
-        const pattern = new RegExp(
-          `\\\\${escaped}\\s*\\{((?:[^{}]|\\{[^{}]*\\})*)\\}`,
-          "g",
-        );
-        body = body.replace(pattern, (_match, argument: string) => {
-          changed = true;
-          return macro.replacement.replace(/#1/g, argument);
-        });
-      } else if (macro.argumentCount === 2) {
-        const pattern = new RegExp(
-          `\\\\${escaped}\\s*\\{((?:[^{}]|\\{[^{}]*\\})*)\\}\\s*\\{((?:[^{}]|\\{[^{}]*\\})*)\\}`,
-          "g",
-        );
-        body = body.replace(pattern, (_match, first: string, second: string) => {
-          changed = true;
-          return macro.replacement.replace(/#1/g, first).replace(/#2/g, second);
-        });
-      }
+      const expanded = expandLatexDocumentMacro(body, name, macro);
+      body = expanded.source;
+      changed ||= expanded.changed;
     }
     if (!changed) break;
   }
   if (macros.size) {
-    warnings.push(`已展开 ${macros.size} 个简单 LaTeX 自定义宏（最多支持两个参数）。`);
+    warnings.push(`已展开 ${macros.size} 个 LaTeX 自定义宏（支持嵌套内容、默认参数和最多九个参数）。`);
   }
 
   const takeCommand = (name: string) => {
@@ -1029,6 +1264,13 @@ function normalizeLatexExtensions(source: string, warnings: string[]) {
     });
     return value;
   };
+  body = body
+    .replace(/\\(?:documentclass|usepackage|RequirePackage)(?:\s*\[[^\]]*\])?\s*\{[^{}]*\}/gi, "")
+    .replace(/\\(?:geometry|hypersetup|graphicspath)\s*\{(?:[^{}]|\{[^{}]*\})*\}/gi, "")
+    .replace(/\\(?:pagestyle|thispagestyle|bibliographystyle|setcounter)\s*\{[^{}]*\}(?:\s*\{[^{}]*\})?/gi, "")
+    .replace(/\\(?:setlength|addtolength)\s*\{[^{}]*\}\s*\{[^{}]*\}/gi, "")
+    .replace(/\\(?:allowdisplaybreaks|sloppy|fussy)\b(?:\s*\[[^\]]*\])?/gi, "");
+
   const title = takeCommand("title");
   const author = takeCommand("author");
   const date = takeCommand("date");
@@ -1083,19 +1325,41 @@ function normalizeLatexExtensions(source: string, warnings: string[]) {
     remark: "注记",
     example: "例",
     exercise: "练习",
+    assumption: "假设",
+    axiom: "公理",
+    claim: "断言",
+    conjecture: "猜想",
+    criterion: "判据",
+    fact: "事实",
+    notation: "记号",
+    observation: "观察",
+    problem: "问题",
+    question: "问题",
+    solution: "解",
   };
+  body = body.replace(
+    /\\newtheorem(\*?)\s*\{([A-Za-z@]+)\}(?:\s*\[[^\]]+\])?\s*\{((?:[^{}]|\{[^{}]*\})*)\}(?:\s*\[[^\]]+\])?/gi,
+    (_match, _star: string, environment: string, label: string) => {
+      theoremLabels[environment] = label.trim() || environment;
+      return "";
+    },
+  );
   for (const [environment, label] of Object.entries(theoremLabels)) {
+    const escapedEnvironment = environment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const begin = new RegExp(
-      `\\\\begin\\{${environment}\\}(?:\\[([^\\]]*)\\])?`,
+      `\\\\begin\\{${escapedEnvironment}\\*?\\}(?:\\[([^\\]]*)\\])?`,
       "gi",
     );
-    const end = new RegExp(`\\\\end\\{${environment}\\}`, "gi");
+    const end = new RegExp(`\\\\end\\{${escapedEnvironment}\\*?\\}`, "gi");
     body = body
       .replace(begin, (_match, title: string | undefined) =>
         `\\begin{quote}\n\\textbf{${label}${title?.trim() ? `（${title.trim()}）` : ""}：} `,
       )
       .replace(end, "\n\\end{quote}");
   }
+  body = body
+    .replace(/\\qedhere\b/g, " □")
+    .replace(/\\qed\b/g, " □");
 
   body = replaceLatexTableEnvironment(body, warnings);
 

@@ -124,6 +124,98 @@ internal static class WordOmmlConverter
         }
     }
 
+    internal sealed class WholeDocumentSource : IDisposable
+    {
+        private Document? _document;
+        private readonly string _path;
+
+        internal WholeDocumentSource(Document document, string path)
+        {
+            _document = document;
+            _path = path;
+        }
+
+        internal Range Insert(Document targetDocument, Range insertionRange)
+        {
+            var sourceDocument = _document
+                ?? throw new ObjectDisposedException(nameof(WholeDocumentSource));
+            Range? sourceRange = null;
+            Range? formattedSource = null;
+            Range? target = null;
+            Range? result = null;
+            try
+            {
+                sourceRange = sourceDocument.Content.Duplicate;
+                // Exclude the source document's final paragraph mark/section
+                // boundary while retaining the explicit VisualTeX end marker.
+                if (sourceRange.End > sourceRange.Start)
+                    sourceRange.End--;
+                formattedSource = sourceRange.FormattedText;
+                target = insertionRange.Duplicate;
+                target.Collapse(WdCollapseDirection.wdCollapseStart);
+                var insertionStart = target.Start;
+                target.FormattedText = formattedSource;
+                result = targetDocument.Range(insertionStart, target.End);
+                var returned = result;
+                result = null;
+                return returned;
+            }
+            finally
+            {
+                Release(result);
+                Release(target);
+                Release(formattedSource);
+                Release(sourceRange);
+            }
+        }
+
+        public void Dispose()
+        {
+            var document = _document;
+            _document = null;
+            if (document is not null)
+            {
+                try { document.Saved = true; } catch { }
+                try { document.Close(WdSaveOptions.wdDoNotSaveChanges); } catch { }
+                Release(document);
+            }
+            try { File.Delete(_path); } catch { }
+        }
+    }
+
+    internal static WholeDocumentSource CreateWholeDocumentSource(
+        Application application,
+        string documentXml)
+    {
+        if (application is null) throw new ArgumentNullException(nameof(application));
+        if (string.IsNullOrWhiteSpace(documentXml))
+            throw new InvalidDataException("The bulk OMML document XML is empty.");
+        var path = CreateTemporaryDocumentDocx(documentXml);
+        Document? document = null;
+        try
+        {
+            document = application.Documents.Open(
+                FileName: path,
+                ConfirmConversions: false,
+                ReadOnly: true,
+                AddToRecentFiles: false,
+                Visible: false,
+                OpenAndRepair: false);
+            var source = new WholeDocumentSource(document, path);
+            document = null;
+            return source;
+        }
+        finally
+        {
+            if (document is not null)
+            {
+                try { document.Close(WdSaveOptions.wdDoNotSaveChanges); } catch { }
+                Release(document);
+                try { File.Delete(path); } catch { }
+            }
+        }
+    }
+
     internal sealed class BatchEntry
     {
         internal BatchEntry(
@@ -304,6 +396,7 @@ internal static class WordOmmlConverter
             // were linear equation text and can introduce dotted placeholder
             // slots, especially around matrices and nested scripts.
             result = insertedMath.Range.Duplicate;
+            RemoveImportedFormulaBookmark(targetDocument, result);
             var returned = result;
             result = null;
             return returned;
@@ -393,6 +486,7 @@ internal static class WordOmmlConverter
             if (insertedMath.Type != WdOMathType.wdOMathInline)
                 insertedMath.Type = WdOMathType.wdOMathInline;
             result = insertedMath.Range.Duplicate;
+            RemoveImportedFormulaBookmark(targetDocument, result);
             try { scratchDocument.Saved = true; } catch { }
             var returned = result;
             result = null;
@@ -486,6 +580,7 @@ internal static class WordOmmlConverter
             // BuildUp again reparses an already-built tree and adds substantial
             // latency without changing the equation structure.
             result = insertedMath.Range.Duplicate;
+            RemoveImportedFormulaBookmark(targetDocument, result);
             var returned = result;
             result = null;
             return returned;
@@ -495,6 +590,37 @@ internal static class WordOmmlConverter
             Release(result);
             Release(insertedMath);
             Release(target);
+        }
+    }
+
+    private static void RemoveImportedFormulaBookmark(
+        Document targetDocument,
+        Range insertedRange)
+    {
+        Bookmarks? bookmarks = null;
+        Bookmark? bookmark = null;
+        Range? bookmarkRange = null;
+        try
+        {
+            bookmarks = targetDocument.Bookmarks;
+            if (!bookmarks.Exists(FormulaBookmarkName)) return;
+            bookmark = bookmarks[FormulaBookmarkName];
+            bookmarkRange = bookmark.Range;
+            var overlapsInsertedEquation = bookmarkRange.Start <= insertedRange.End
+                && bookmarkRange.End >= insertedRange.Start;
+            if (overlapsInsertedEquation) bookmark.Delete();
+        }
+        catch
+        {
+            // This bookmark exists only to locate the formula inside the temporary
+            // DOCX. The native equation remains valid if cleanup is rejected by
+            // an older Word build.
+        }
+        finally
+        {
+            Release(bookmarkRange);
+            Release(bookmark);
+            Release(bookmarks);
         }
     }
 
@@ -576,6 +702,7 @@ internal static class WordOmmlConverter
     {
         if (string.IsNullOrWhiteSpace(mathMl))
             throw new InvalidDataException("VisualTeX did not provide MathML for the Word OMML formula.");
+        mathMl = RemoveVisualTeXBoundaryArtifactsFromMathMl(mathMl);
         ValidateMathMlForOmml(mathMl);
         mathMl = NormalizeFencedMathMlTables(mathMl);
         mathMl = NormalizeNestedEmptyBaseScripts(mathMl);
@@ -610,6 +737,44 @@ internal static class WordOmmlConverter
         omml = NormalizeDisplayNaryOmml(omml, display);
         ValidateOmmlResult(omml, mathMl);
         return omml;
+    }
+
+    private static string RemoveVisualTeXBoundaryArtifactsFromMathMl(string mathMl)
+    {
+        static bool IsBoundaryArtifact(char character) =>
+            character is '\u200B' or '\u200C' or '\u2060' or '\uFEFF';
+
+        if (mathMl.IndexOf('\u200B') < 0
+            && mathMl.IndexOf('\u200C') < 0
+            && mathMl.IndexOf('\u2060') < 0
+            && mathMl.IndexOf('\uFEFF') < 0
+            && mathMl.IndexOf("200B", StringComparison.OrdinalIgnoreCase) < 0
+            && mathMl.IndexOf("200C", StringComparison.OrdinalIgnoreCase) < 0
+            && mathMl.IndexOf("2060", StringComparison.OrdinalIgnoreCase) < 0
+            && mathMl.IndexOf("FEFF", StringComparison.OrdinalIgnoreCase) < 0)
+            return mathMl;
+
+        var document = XDocument.Parse(mathMl, LoadOptions.PreserveWhitespace);
+        var affectedAncestors = new HashSet<XElement>();
+        foreach (var textNode in document.DescendantNodes().OfType<XText>().ToList())
+        {
+            var original = textNode.Value;
+            if (!original.Any(IsBoundaryArtifact)) continue;
+            foreach (var ancestor in textNode.Ancestors())
+                affectedAncestors.Add(ancestor);
+            textNode.Value = new string(
+                original.Where(character => !IsBoundaryArtifact(character)).ToArray());
+        }
+
+        foreach (var element in document.Descendants().Reverse().ToList())
+        {
+            if (!affectedAncestors.Contains(element)) continue;
+            if (element.Elements().Any()) continue;
+            if (!string.IsNullOrWhiteSpace(element.Value)) continue;
+            if (element.Parent is null) continue;
+            element.Remove();
+        }
+        return document.ToString(SaveOptions.DisableFormatting);
     }
 
     internal static void ValidateMathMlForOmml(string mathMl)
@@ -1780,6 +1945,37 @@ internal static class WordOmmlConverter
             new XsltSettings(enableDocumentFunction: false, enableScript: false),
             null);
         return transform;
+    }
+
+    private static string CreateTemporaryDocumentDocx(string documentXml)
+    {
+        var path = Path.Combine(
+            Path.GetTempPath(),
+            $"visualtex-omml-document-{Guid.NewGuid():N}.docx");
+        using var stream = new FileStream(
+            path,
+            FileMode.CreateNew,
+            FileAccess.ReadWrite,
+            FileShare.None);
+        using var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: false);
+        WriteEntry(
+            archive,
+            "[Content_Types].xml",
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
+            + "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
+            + "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>"
+            + "<Default Extension=\"xml\" ContentType=\"application/xml\"/>"
+            + "<Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/>"
+            + "</Types>");
+        WriteEntry(
+            archive,
+            "_rels/.rels",
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
+            + "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+            + "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/>"
+            + "</Relationships>");
+        WriteEntry(archive, "word/document.xml", documentXml);
+        return path;
     }
 
     private static string CreateTemporaryBatchDocx(

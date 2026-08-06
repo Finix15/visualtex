@@ -36,6 +36,56 @@ public sealed class WordDoubleClickRoutingTests
         Assert.False(WordDoubleClickRouting.ShouldOpenVisualTeX(new OfficeSelection()));
     }
 
+    [Theory]
+    [InlineData(100, 200)]
+    [InlineData(150, 230)]
+    [InlineData(200, 260)]
+    public void FormulaRectangleAcceptsPointsOnOrInsideItsBounds(int x, int y)
+    {
+        Assert.True(WordDoubleClickRouting.ScreenPointHitsFormulaRectangle(
+            x,
+            y,
+            left: 100,
+            top: 200,
+            width: 100,
+            height: 60));
+    }
+
+    [Theory]
+    [InlineData(99, 230)]
+    [InlineData(201, 230)]
+    [InlineData(150, 199)]
+    [InlineData(150, 261)]
+    public void FormulaRectangleRejectsNearbyBlankPoints(int x, int y)
+    {
+        Assert.False(WordDoubleClickRouting.ScreenPointHitsFormulaRectangle(
+            x,
+            y,
+            left: 100,
+            top: 200,
+            width: 100,
+            height: 60));
+    }
+
+    [Fact]
+    public void FormulaRectangleRejectsInvalidGeometry()
+    {
+        Assert.False(WordDoubleClickRouting.ScreenPointHitsFormulaRectangle(
+            100,
+            200,
+            left: 100,
+            top: 200,
+            width: 0,
+            height: 60));
+        Assert.False(WordDoubleClickRouting.ScreenPointHitsFormulaRectangle(
+            100,
+            200,
+            left: 100,
+            top: 200,
+            width: 100,
+            height: -1));
+    }
+
     private static OfficeSelection FormulaSelection(string objectMode)
     {
         var formulaId = Guid.NewGuid().ToString();

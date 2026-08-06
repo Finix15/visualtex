@@ -285,18 +285,24 @@ internal static class WordOmmlFormulaStore
 
     internal static FormulaMetadata? TryRead(Document document, string formulaId)
     {
-        var cache = MetadataCaches.GetValue(document, _ => new DocumentMetadataCache());
-        lock (cache.Gate)
-        {
-            if (cache.Entries.TryGetValue(formulaId, out var cached))
-                return CloneMetadata(cached.Metadata);
-        }
-
         object? part = null;
         try
         {
+            // A cached metadata entry is only an acceleration hint. Word users can
+            // undo, paste, or externally delete a CustomXMLPart while the document
+            // RCW remains alive; returning the ConditionalWeakTable value directly
+            // then revives an orphan VTOMML bookmark as a second logical formula.
+            // FindPart validates the cached part id first and forgets stale entries.
             part = FindPart(document, formulaId);
             if (part is null) return null;
+
+            var cache = MetadataCaches.GetValue(document, _ => new DocumentMetadataCache());
+            lock (cache.Gate)
+            {
+                if (cache.Entries.TryGetValue(formulaId, out var cached))
+                    return CloneMetadata(cached.Metadata);
+            }
+
             var partXml = (string?)((dynamic)part).XML;
             if (!TryDecodePartXml(partXml, out var metadata)
                 || !string.Equals(metadata.FormulaId, formulaId, StringComparison.OrdinalIgnoreCase))

@@ -24,6 +24,18 @@ interface IVisualTeXFormulaObject : IDispatch
 };
 
 [
+    object,
+    dual,
+    uuid(A59B7798-6F24-4CF0-B378-E951BFFAFB3A),
+    oleautomation,
+    pointer_default(unique)
+]
+interface IVisualTeXFormulaMetadata : IDispatch
+{
+    [id(1)] HRESULT SetFormulaJson([in] BSTR metadataJson);
+};
+
+[
     uuid(DF66EC66-3B3A-4675-A7BE-30456A04EB96),
     version(1.0),
     helpstring("VisualTeX Formula OLE Type Library")
@@ -39,5 +51,6 @@ library VisualTeXFormulaOleLib
     coclass VisualTeXFormula
     {
         [default] interface IVisualTeXFormulaObject;
+        interface IVisualTeXFormulaMetadata;
     };
 };

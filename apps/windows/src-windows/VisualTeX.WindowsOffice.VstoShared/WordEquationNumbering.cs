@@ -95,9 +95,16 @@ internal static class WordEquationNumbering
 
     internal static int SetEquationNumberFormat(Document document, string formatId)
     {
+        SetEquationNumberFormatPreference(document, formatId);
+        return Reconcile(document);
+    }
+
+    internal static void SetEquationNumberFormatPreference(
+        Document document,
+        string formatId)
+    {
         var format = EquationNumberFormat.Resolve(formatId);
         WriteEquationNumberFormat(document, format.Id);
-        return Reconcile(document);
     }
 
     private static EquationNumberFormat ReadEquationNumberFormat(Document document)
@@ -263,6 +270,22 @@ internal static class WordEquationNumbering
             return bookmarks.Exists(EquationBookmarkName(formulaId))
                 || bookmarks.Exists(NativeCaptionBookmarkName(formulaId))
                 || bookmarks.Exists(NativeNumberBookmarkName(formulaId));
+        }
+        catch { return false; }
+        finally { Release(bookmarks); }
+    }
+
+    internal static bool HasCompleteFormulaNumberingArtifacts(
+        Document document,
+        string formulaId)
+    {
+        Bookmarks? bookmarks = null;
+        try
+        {
+            bookmarks = document.Bookmarks;
+            return bookmarks.Exists(EquationBookmarkName(formulaId))
+                && bookmarks.Exists(NativeCaptionBookmarkName(formulaId))
+                && bookmarks.Exists(NativeNumberBookmarkName(formulaId));
         }
         catch { return false; }
         finally { Release(bookmarks); }
@@ -452,6 +475,13 @@ internal static class WordEquationNumbering
             // field. Otherwise a REF can continue displaying the removed
             // formula's old ordinal until Word performs a later global update.
             UpdateNativeEquationSequenceFields(document);
+            // Newly batch-numbered formulas create their visible REF fields
+            // before the native number bookmarks are rewritten with the final
+            // chapter/section prefix. Word can temporarily cache "reference
+            // source not found" for those fresh fields. Refresh the complete
+            // main story once after all target bookmarks are stable, then apply
+            // formula-specific alignment below.
+            UpdateMainStoryFields(document);
 
             for (var index = 1; index <= inlineCount; index++)
             {
@@ -504,12 +534,9 @@ internal static class WordEquationNumbering
         string formulaId)
     {
         EnsureNumberedOmmlIsDisplay(formulaRange);
-        var tableLayout = IsNumberedEquationTable(formulaRange);
-        ConfigureEquationParagraph(formulaRange, numbered: !tableLayout);
-        if (tableLayout)
-            ConfigureNumberedEquationTable(formulaRange);
-        else
-            EnsureLeadingEquationTab(document, formulaRange);
+        EnsureStandardNumberedEquationTable(document, formulaRange, formulaId);
+        ConfigureEquationParagraph(formulaRange, numbered: false);
+        ConfigureNumberedEquationTable(formulaRange);
         var sequenceName = GetNativeEquationSequenceName(document);
         EnsureNativeCaption(document, formulaRange, formulaId, sequenceName);
         EnsureVisibleEquationNumber(
@@ -518,6 +545,493 @@ internal static class WordEquationNumbering
             formulaHeightPoints,
             formulaFontSizePoints,
             formulaId);
+    }
+
+    private static void EnsureStandardNumberedEquationTable(
+        Document document,
+        Range formulaRange,
+        string formulaId)
+    {
+        if (IsNumberedEquationTable(formulaRange)) return;
+        RemoveVisibleEquationNumber(document, formulaId);
+
+        Paragraphs? paragraphs = null;
+        Paragraph? paragraph = null;
+        Range? paragraphRange = null;
+        Range? prefixRange = null;
+        Range? suffixRange = null;
+        Range? sourceContent = null;
+        Range? formattedContent = null;
+        Range? tableAnchor = null;
+        Range? documentContent = null;
+        Range? sourceDeleteRange = null;
+        Cell? centerCell = null;
+        Range? centerCellRange = null;
+        Range? centerInsertion = null;
+        Table? table = null;
+        Columns? columns = null;
+        Column? addedColumn = null;
+        var sourceDeleted = false;
+        try
+        {
+            paragraphs = formulaRange.Paragraphs;
+            if (paragraphs.Count != 1)
+                throw new InvalidOperationException(
+                    "VisualTeX cannot safely number a display formula spanning multiple paragraphs.");
+            paragraph = paragraphs[1];
+            paragraphRange = paragraph.Range.Duplicate;
+            if ((bool)paragraphRange.get_Information(WdInformation.wdWithInTable))
+                throw new InvalidOperationException(
+                    "VisualTeX cannot safely migrate this nonstandard table formula to the numbered layout.");
+
+            object prefixStart = paragraphRange.Start;
+            object prefixEnd = Math.Max(paragraphRange.Start, formulaRange.Start);
+            prefixRange = document.Range(ref prefixStart, ref prefixEnd);
+            var suffixStartPosition = Math.Min(formulaRange.End, paragraphRange.End);
+            object suffixStart = suffixStartPosition;
+            object suffixEnd = Math.Max(suffixStartPosition, paragraphRange.End - 1);
+            suffixRange = document.Range(ref suffixStart, ref suffixEnd);
+            if (!IsNumberingParagraphAdornment(prefixRange.Text)
+                || !IsNumberingParagraphAdornment(suffixRange.Text))
+                throw new InvalidOperationException(
+                    "VisualTeX only batch-numbers display formulas that occupy their own paragraph.");
+
+            var sourceStart = paragraphRange.Start;
+            var sourceIsOmml = formulaRange.OMaths.Count > 0;
+            if (!sourceIsOmml)
+            {
+                ConvertStandaloneOleParagraphToNumberedTable(
+                    document,
+                    paragraphRange,
+                    formulaId,
+                    formulaRange);
+                return;
+            }
+            sourceContent = paragraphRange.Duplicate;
+            sourceContent.End = Math.Max(sourceContent.Start, sourceContent.End - 1);
+            formattedContent = sourceContent.FormattedText;
+
+            // Insert one ordinary paragraph after the source formula. Word expands
+            // paragraphRange to include that new paragraph, so paragraphRange.End
+            // becomes the start of the following paragraph (which may itself begin
+            // with another OMath). Keep the pre-insertion end as the table anchor;
+            // using the expanded End would ask Tables.Add to operate inside the next
+            // mathematical formula.
+            var insertedParagraphStart = paragraphRange.End;
+            paragraphRange.InsertParagraphAfter();
+            documentContent = document.Content;
+            var tableAnchorPosition = Math.Max(
+                documentContent.Start,
+                Math.Min(insertedParagraphStart, documentContent.End - 1));
+            object anchorStart = tableAnchorPosition;
+            object anchorEnd = tableAnchorPosition;
+            tableAnchor = document.Range(ref anchorStart, ref anchorEnd);
+            try
+            {
+                table = document.Tables.Add(tableAnchor, 1, 3);
+            }
+            catch (Exception error)
+            {
+                throw new InvalidOperationException(
+                    $"Word could not create the numbered OMML table for {formulaId} "
+                    + $"at {sourceStart} (paragraph {paragraphRange.Start}-{paragraphRange.End}, "
+                    + $"story {(int)paragraphRange.StoryType}).",
+                    error);
+            }
+            columns = table.Columns;
+            while (columns.Count < 3)
+            {
+                object appendAtRight = Type.Missing;
+                addedColumn = columns.Add(ref appendAtRight);
+                Release(addedColumn);
+                addedColumn = null;
+            }
+            centerCell = table.Cell(1, 2);
+            centerCellRange = centerCell.Range;
+            centerInsertion = centerCellRange.Duplicate;
+            centerInsertion.End = Math.Max(
+                centerInsertion.Start,
+                centerInsertion.End - 1);
+            centerInsertion.Collapse(WdCollapseDirection.wdCollapseStart);
+            centerInsertion.FormattedText = formattedContent;
+
+            RefreshFormulaRangeInNumberedTable(
+                document,
+                table,
+                formulaId,
+                formulaRange,
+                allowUnanchoredOmml: true);
+
+            DeleteOriginalStandaloneFormulaContent(
+                document,
+                table,
+                formulaId,
+                sourceIsOmml);
+            sourceDeleted = true;
+
+            RefreshFormulaRangeInNumberedTable(
+                document,
+                table,
+                formulaId,
+                formulaRange,
+                allowUnanchoredOmml: true);
+            RemoveNumberingTableCenterDecorations(document, table, formulaRange);
+            RefreshFormulaRangeInNumberedTable(
+                document,
+                table,
+                formulaId,
+                formulaRange,
+                allowUnanchoredOmml: true);
+
+            var ommlMetadata = WordOmmlFormulaStore.TryRead(document, formulaId);
+            if (ommlMetadata is not null && formulaRange.OMaths.Count > 0)
+            {
+                Bookmark? migratedBookmark = null;
+                try
+                {
+                    migratedBookmark = WordOmmlFormulaStore.Wrap(
+                        document,
+                        formulaRange,
+                        ommlMetadata,
+                        replaceExisting: true);
+                }
+                finally { Release(migratedBookmark); }
+            }
+        }
+        catch
+        {
+            if (!sourceDeleted && table is not null)
+            {
+                Range? rollbackRange = null;
+                try
+                {
+                    rollbackRange = table.Range;
+                    rollbackRange.Delete();
+                }
+                catch { }
+                finally { Release(rollbackRange); }
+            }
+            throw;
+        }
+        finally
+        {
+            Release(addedColumn);
+            Release(columns);
+            Release(table);
+            Release(centerInsertion);
+            Release(centerCellRange);
+            Release(centerCell);
+            Release(sourceDeleteRange);
+            Release(documentContent);
+            Release(tableAnchor);
+            Release(formattedContent);
+            Release(sourceContent);
+            Release(suffixRange);
+            Release(prefixRange);
+            Release(paragraphRange);
+            Release(paragraph);
+            Release(paragraphs);
+        }
+    }
+
+    private static void ConvertStandaloneOleParagraphToNumberedTable(
+        Document document,
+        Range paragraphRange,
+        string formulaId,
+        Range formulaRange)
+    {
+        Range? conversionRange = null;
+        Table? table = null;
+        Columns? columns = null;
+        Column? originalColumn = null;
+        Column? addedColumn = null;
+        try
+        {
+            conversionRange = paragraphRange.Duplicate;
+            object separator = WdTableFieldSeparator.wdSeparateByParagraphs;
+            object numRows = 1;
+            object numColumns = 1;
+            object initialColumnWidth = Type.Missing;
+            object format = Type.Missing;
+            object applyBorders = Type.Missing;
+            object applyShading = Type.Missing;
+            object applyFont = Type.Missing;
+            object applyColor = Type.Missing;
+            object applyHeadingRows = Type.Missing;
+            object applyLastRow = Type.Missing;
+            object applyFirstColumn = Type.Missing;
+            object applyLastColumn = Type.Missing;
+            object autoFit = false;
+            object autoFitBehavior = WdAutoFitBehavior.wdAutoFitFixed;
+            object defaultTableBehavior = WdDefaultTableBehavior.wdWord9TableBehavior;
+            table = conversionRange.ConvertToTable(
+                ref separator,
+                ref numRows,
+                ref numColumns,
+                ref initialColumnWidth,
+                ref format,
+                ref applyBorders,
+                ref applyShading,
+                ref applyFont,
+                ref applyColor,
+                ref applyHeadingRows,
+                ref applyLastRow,
+                ref applyFirstColumn,
+                ref applyLastColumn,
+                ref autoFit,
+                ref autoFitBehavior,
+                ref defaultTableBehavior);
+
+            columns = table.Columns;
+            if (columns.Count != 1)
+                throw new InvalidOperationException(
+                    "Word did not create the expected one-column OLE migration table.");
+            originalColumn = columns[1];
+            object beforeOriginal = originalColumn;
+            addedColumn = columns.Add(ref beforeOriginal);
+            Release(addedColumn);
+            addedColumn = null;
+            object appendAtRight = Type.Missing;
+            addedColumn = columns.Add(ref appendAtRight);
+
+            RefreshFormulaRangeInNumberedTable(
+                document,
+                table,
+                formulaId,
+                formulaRange);
+            RemoveNumberingTableCenterDecorations(document, table, formulaRange);
+            RefreshFormulaRangeInNumberedTable(
+                document,
+                table,
+                formulaId,
+                formulaRange);
+        }
+        finally
+        {
+            Release(addedColumn);
+            Release(originalColumn);
+            Release(columns);
+            Release(table);
+            Release(conversionRange);
+        }
+    }
+
+    private static void DeleteOriginalStandaloneFormulaContent(
+        Document document,
+        Table migratedTable,
+        string formulaId,
+        bool sourceIsOmml)
+    {
+        Bookmark? bookmark = null;
+        Range? originalFormulaRange = null;
+        InlineShapes? shapes = null;
+        InlineShape? shape = null;
+        Paragraphs? paragraphs = null;
+        Paragraph? paragraph = null;
+        Range? paragraphRange = null;
+        Range? editableRange = null;
+        Range? migratedTableRange = null;
+        try
+        {
+            migratedTableRange = migratedTable.Range;
+            var migratedTableStart = migratedTableRange.Start;
+            if (sourceIsOmml)
+            {
+                bookmark = WordOmmlFormulaStore.FindByFormulaId(document, formulaId)
+                    ?? throw new InvalidOperationException(
+                        "Word lost the original VisualTeX OMML anchor during numbered-layout migration.");
+                originalFormulaRange = WordOmmlFormulaStore.GetEquationRange(bookmark);
+            }
+            else
+            {
+                shapes = document.InlineShapes;
+                for (var index = 1; index <= shapes.Count; index++)
+                {
+                    Release(shape);
+                    shape = shapes[index];
+                    var metadata = WordFormulaMetadataReader.TryRead(shape);
+                    if (metadata is null
+                        || !string.Equals(
+                            metadata.FormulaId,
+                            formulaId,
+                            StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    Range? candidate = null;
+                    try
+                    {
+                        candidate = shape.Range;
+                        var isMigratedCopy =
+                            (bool)candidate.get_Information(WdInformation.wdWithInTable)
+                            && candidate.Tables.Count > 0
+                            && candidate.Tables[1].Range.Start == migratedTableStart;
+                        if (isMigratedCopy) continue;
+                        originalFormulaRange = candidate;
+                        candidate = null;
+                        break;
+                    }
+                    finally { Release(candidate); }
+                }
+                if (originalFormulaRange is null)
+                    throw new InvalidOperationException(
+                        "Word lost the original VisualTeX OLE object during numbered-layout migration.");
+            }
+
+            if ((bool)originalFormulaRange.get_Information(WdInformation.wdWithInTable)
+                && originalFormulaRange.Tables.Count > 0
+                && originalFormulaRange.Tables[1].Range.Start == migratedTableStart)
+                throw new InvalidOperationException(
+                    "Word could not distinguish the original formula from its numbered-layout copy.");
+
+            paragraphs = originalFormulaRange.Paragraphs;
+            if (paragraphs.Count != 1)
+                throw new InvalidOperationException(
+                    "The original VisualTeX display formula no longer occupies one paragraph.");
+            paragraph = paragraphs[1];
+            paragraphRange = paragraph.Range;
+            editableRange = paragraphRange.Duplicate;
+            editableRange.End = Math.Max(
+                editableRange.Start,
+                editableRange.End - 1);
+            editableRange.Delete();
+        }
+        finally
+        {
+            Release(migratedTableRange);
+            Release(editableRange);
+            Release(paragraphRange);
+            Release(paragraph);
+            Release(paragraphs);
+            Release(shape);
+            Release(shapes);
+            Release(originalFormulaRange);
+            Release(bookmark);
+        }
+    }
+
+    private static bool IsNumberingParagraphAdornment(string? text)
+    {
+        foreach (var character in text ?? string.Empty)
+        {
+            if (character is '\t' or '\r' or '\n' or '\v'
+                or '\u200b' or '\u200c' or '\u200d' or '\ufeff'
+                || char.IsWhiteSpace(character))
+                continue;
+            return false;
+        }
+        return true;
+    }
+
+    private static void RefreshFormulaRangeInNumberedTable(
+        Document document,
+        Table table,
+        string formulaId,
+        Range formulaRange,
+        bool allowUnanchoredOmml = false)
+    {
+        Cell? centerCell = null;
+        Range? centerRange = null;
+        InlineShapes? shapes = null;
+        InlineShape? shape = null;
+        OMaths? maths = null;
+        OMath? math = null;
+        Bookmark? bookmark = null;
+        Range? refreshed = null;
+        try
+        {
+            centerCell = table.Cell(1, 2);
+            centerRange = centerCell.Range;
+            shapes = centerRange.InlineShapes;
+            for (var index = 1; index <= shapes.Count; index++)
+            {
+                Release(shape);
+                shape = shapes[index];
+                var metadata = WordFormulaMetadataReader.TryRead(shape);
+                if (metadata is null
+                    || !string.Equals(
+                        metadata.FormulaId,
+                        formulaId,
+                        StringComparison.OrdinalIgnoreCase))
+                    continue;
+                refreshed = shape.Range;
+                formulaRange.SetRange(refreshed.Start, refreshed.End);
+                return;
+            }
+
+            if (allowUnanchoredOmml)
+            {
+                maths = centerRange.OMaths;
+                if (maths.Count == 1)
+                {
+                    math = maths[1];
+                    refreshed = math.Range;
+                    formulaRange.SetRange(refreshed.Start, refreshed.End);
+                    return;
+                }
+            }
+
+            bookmark = WordOmmlFormulaStore.FindByFormulaId(document, formulaId);
+            if (bookmark is not null)
+            {
+                refreshed = WordOmmlFormulaStore.GetEquationRange(bookmark);
+                if ((bool)refreshed.get_Information(WdInformation.wdWithInTable)
+                    && refreshed.Tables.Count > 0
+                    && refreshed.Tables[1].Range.Start == table.Range.Start)
+                {
+                    formulaRange.SetRange(refreshed.Start, refreshed.End);
+                    return;
+                }
+            }
+
+            throw new InvalidOperationException(
+                "Word did not preserve the VisualTeX formula while creating its numbered layout.");
+        }
+        finally
+        {
+            Release(refreshed);
+            Release(bookmark);
+            Release(math);
+            Release(maths);
+            Release(shape);
+            Release(shapes);
+            Release(centerRange);
+            Release(centerCell);
+        }
+    }
+
+    private static void RemoveNumberingTableCenterDecorations(
+        Document document,
+        Table table,
+        Range formulaRange)
+    {
+        Cell? centerCell = null;
+        Range? centerRange = null;
+        Range? characterRange = null;
+        try
+        {
+            centerCell = table.Cell(1, 2);
+            centerRange = centerCell.Range;
+            for (var position = centerRange.End - 2;
+                 position >= centerRange.Start;
+                 position--)
+            {
+                if (position >= formulaRange.Start && position < formulaRange.End)
+                    continue;
+                object characterStart = position;
+                object characterEnd = position + 1;
+                characterRange = document.Range(ref characterStart, ref characterEnd);
+                if (string.Equals(characterRange.Text, "\t", StringComparison.Ordinal)
+                    || string.Equals(characterRange.Text, "\v", StringComparison.Ordinal))
+                    characterRange.Delete();
+                Release(characterRange);
+                characterRange = null;
+            }
+        }
+        finally
+        {
+            Release(characterRange);
+            Release(centerRange);
+            Release(centerCell);
+        }
     }
 
     private static void EnsureNumberedOmmlIsDisplay(Range formulaRange)

@@ -26,6 +26,7 @@ export function useOfficeSession() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const loadRunIdRef = useRef(0);
 
   useEffect(() => {
     const handleSessionChange = (event: Event) => {
@@ -33,6 +34,7 @@ export function useOfficeSession() {
       const next = detail?.sessionId?.trim() ?? "";
       (window as OfficeSessionWindow).__VISUALTEX_OFFICE_SESSION_ID__ = next || undefined;
       saveQueueRef.current = Promise.resolve();
+      loadRunIdRef.current += 1;
       setSession(null);
       setError("");
       setLoading(Boolean(next));
@@ -45,28 +47,48 @@ export function useOfficeSession() {
   }, []);
 
   const reload = useCallback(async () => {
+    const loadRunId = ++loadRunIdRef.current;
     if (!sessionId) {
-      setError("Missing VisualTeX Office session id.");
-      setLoading(false);
+      if (loadRunId === loadRunIdRef.current) {
+        setError("Missing VisualTeX Office session id.");
+        setLoading(false);
+      }
       return null;
     }
     setLoading(true);
     try {
       const next = await getOfficeSession(sessionId);
+      if (loadRunId !== loadRunIdRef.current) return null;
       setSession(next);
       setError("");
       return next;
     } catch (reason) {
+      if (loadRunId !== loadRunIdRef.current) return null;
       setError(readErrorMessage(reason, "Unable to load Office session."));
       return null;
     } finally {
-      setLoading(false);
+      if (loadRunId === loadRunIdRef.current) setLoading(false);
     }
   }, [sessionId]);
 
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  useEffect(() => {
+    if (!loading || !sessionId) return;
+    const expectedLoadRunId = loadRunIdRef.current;
+    const watchdog = window.setTimeout(() => {
+      if (loadRunIdRef.current !== expectedLoadRunId) return;
+      loadRunIdRef.current += 1;
+      setSession(null);
+      setError(
+        "VisualTeX Office Session 加载超过 15 秒。请点击重新加载；若仍失败，请重启 VisualTeX。",
+      );
+      setLoading(false);
+    }, 15_000);
+    return () => window.clearTimeout(watchdog);
+  }, [loading, sessionId]);
 
   const save = useCallback(
     (update: UpdateOfficeSessionInput) => {

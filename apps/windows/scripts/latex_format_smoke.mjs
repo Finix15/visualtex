@@ -5,6 +5,16 @@ import {
   parseLatexSource,
   parseLatexSourceDraft,
 } from "../src/clipboard/LatexCopyService.ts";
+import { normalizeFormulaLinePhysicalWhitespace } from "../src/math/formulaLineLatex.ts";
+
+const importedAlignedSource = String.raw`\begin{aligned}
+  a&=b+c \\
+  d&=e-f
+\end{aligned}`;
+const normalizedImportedAligned = normalizeFormulaLinePhysicalWhitespace(importedAlignedSource);
+assert.doesNotMatch(normalizedImportedAligned, /\n/);
+assert.match(normalizedImportedAligned, /a&=b\+c \\\\ d&=e-f/);
+assert.match(normalizedImportedAligned, /\\end\{aligned\}$/);
 
 const formulas = [
   "a=b+c",

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Security;
@@ -1376,12 +1377,17 @@ public sealed class OfficeSessionDocument
     public FormulaMetadata ToMetadata()
     {
         var now = DateTimeOffset.UtcNow.ToString("O");
+        var sanitizedLines = Lines.ConvertAll(line => new FormulaLine
+        {
+            Id = line.Id,
+            Latex = SanitizeFormulaBoundaryArtifacts(line.Latex),
+        });
         return new FormulaMetadata
         {
             FormulaId = FormulaId,
             Title = Title,
-            Latex = string.Join("\n", Lines.ConvertAll(line => line.Latex)),
-            Lines = Lines,
+            Latex = string.Join("\n", sanitizedLines.ConvertAll(line => line.Latex)),
+            Lines = sanitizedLines,
             CodeFormat = CodeFormat,
             DisplayMode = DisplayMode,
             Numbered = Numbered,
@@ -1402,6 +1408,29 @@ public sealed class OfficeSessionDocument
             CreatedAt = OriginalMetadata?.CreatedAt ?? now,
             UpdatedAt = now,
         };
+    }
+
+    private static string SanitizeFormulaBoundaryArtifacts(string? latex)
+    {
+        if (string.IsNullOrEmpty(latex)) return string.Empty;
+        static bool IsBoundaryArtifact(char character) =>
+            character is '\u200B' or '\u200C' or '\u2060' or '\uFEFF';
+
+        var value = latex!;
+        for (var index = 0; index < value.Length; index++)
+        {
+            if (!IsBoundaryArtifact(value[index])) continue;
+            var runEnd = index + 1;
+            while (runEnd < value.Length && IsBoundaryArtifact(value[runEnd]))
+                runEnd++;
+            var left = value.Substring(0, index).Trim();
+            var right = value.Substring(runEnd).Trim();
+            if (left.Length > 0 && string.Equals(left, right, StringComparison.Ordinal))
+                return left;
+            index = runEnd - 1;
+        }
+
+        return new string(value.Where(character => !IsBoundaryArtifact(character)).ToArray());
     }
 }
 

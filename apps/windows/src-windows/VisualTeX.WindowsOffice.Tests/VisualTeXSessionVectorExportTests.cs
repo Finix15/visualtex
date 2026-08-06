@@ -63,6 +63,54 @@ public sealed class VisualTeXSessionVectorExportTests
     }
 
     [Fact]
+    public void ToMetadataRemovesTypingAnchorWithoutDroppingFollowingDigit()
+    {
+        var line = new FormulaLine
+        {
+            Id = Guid.NewGuid().ToString("D"),
+            Latex = "a^2+b^2=c^2\u200C1",
+        };
+        var session = new OfficeSessionDocument
+        {
+            FormulaId = Guid.NewGuid().ToString("D"),
+            Title = "Word Formula",
+            DisplayMode = "inline",
+            Lines = new List<FormulaLine> { line },
+        };
+
+        var metadata = session.ToMetadata();
+
+        Assert.Equal("a^2+b^2=c^21", metadata.Latex);
+        Assert.Equal("a^2+b^2=c^21", metadata.Lines.Single().Latex);
+        Assert.Equal("a^2+b^2=c^2\u200C1", line.Latex);
+    }
+
+    [Fact]
+    public void ToMetadataCollapsesFormulaDuplicatedAcrossTypingAnchors()
+    {
+        const string latex = @"\mathrm{e}^{\mathrm{i}\pi}+1=0";
+        var session = new OfficeSessionDocument
+        {
+            FormulaId = Guid.NewGuid().ToString("D"),
+            Title = "Word Formula",
+            DisplayMode = "inline",
+            Lines = new List<FormulaLine>
+            {
+                new()
+                {
+                    Id = Guid.NewGuid().ToString("D"),
+                    Latex = latex + "\u200C\u200C" + latex,
+                },
+            },
+        };
+
+        var metadata = session.ToMetadata();
+
+        Assert.Equal(latex, metadata.Latex);
+        Assert.Equal(latex, metadata.Lines.Single().Latex);
+    }
+
+    [Fact]
     public void MaterializeSvgRejectsEmbeddedRasterContent()
     {
         using var client = new VisualTeXSessionClient();

@@ -20,6 +20,38 @@ internal static class WordFormulaMetadataReader
         return FormulaMetadataCodec.Decode(encoded);
     }
 
+    public static void Write(InlineShape shape, FormulaMetadata metadata)
+    {
+        if (shape is null) throw new ArgumentNullException(nameof(shape));
+        if (metadata is null) throw new ArgumentNullException(nameof(metadata));
+        metadata.Validate();
+
+        if (IsNativeOle(shape))
+        {
+            OLEFormat? format = null;
+            object? oleObject = null;
+            try
+            {
+                format = shape.OLEFormat;
+                oleObject = WordOleObjectAccessor.GetRunningObject(format);
+                if (oleObject is not IVisualTeXFormulaObject formula)
+                    throw new InvalidOperationException(
+                        "The VisualTeX native OLE object is unavailable.");
+                FormulaOleInterop.UpdateMetadata(formula, metadata);
+                return;
+            }
+            finally
+            {
+                Release(oleObject);
+                Release(format);
+            }
+        }
+
+        var encoded = FormulaMetadataCodec.Encode(metadata);
+        shape.Title = encoded;
+        shape.AlternativeText = encoded;
+    }
+
     public static bool IsNativeOle(InlineShape shape)
     {
         OLEFormat? format = null;

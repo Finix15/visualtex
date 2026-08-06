@@ -3863,6 +3863,24 @@ pub fn run() {
             label,
             event: tauri::WindowEvent::CloseRequested { api, .. },
             ..
+        } if label == "office-session-editor" => {
+            // Do not let the native title-bar close destroy the reusable editor
+            // before its Office Session reaches a terminal state. The page
+            // performs an awaited commit/cancel and then calls the companion's
+            // close endpoint, which hides the editor only after the Session is
+            // safe for Word/PowerPoint to release its operation gate.
+            api.prevent_close();
+            if let Err(error) = office::server::request_desktop_editor_window_close(app) {
+                app_lifecycle::append_lifecycle_log(format!(
+                    "Office editor close request could not finalize the active Session: {error}"
+                ));
+            }
+        }
+        #[cfg(target_os = "windows")]
+        tauri::RunEvent::WindowEvent {
+            label,
+            event: tauri::WindowEvent::CloseRequested { api, .. },
+            ..
         } if label == "main" => {
             if app_lifecycle::background_retention_enabled() {
                 api.prevent_close();

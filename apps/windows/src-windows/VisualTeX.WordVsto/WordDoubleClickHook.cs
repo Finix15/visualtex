@@ -13,7 +13,7 @@ internal sealed class WordDoubleClickHook : IDisposable
     private const int SmCyDoubleClick = 37;
     private static readonly object TraceGate = new();
     private readonly Func<int, int, bool> _shouldHandle;
-    private readonly Action _callbackAction;
+    private readonly Action<bool, int, int> _callbackAction;
     private readonly Thread _thread;
     private readonly ManualResetEventSlim _ready = new(false);
     private HookProc? _hookCallback;
@@ -25,14 +25,14 @@ internal sealed class WordDoubleClickHook : IDisposable
 
     public WordDoubleClickHook(
         Func<int, int, bool> shouldHandle,
-        Action callbackAction)
+        Action<bool, int, int> callbackAction)
     {
         _shouldHandle = shouldHandle;
         _callbackAction = callbackAction;
         _thread = new Thread(Run)
         {
             IsBackground = true,
-            Name = "VisualTeX Word OLE Double Click",
+            Name = "VisualTeX Word Double Click",
         };
     }
 
@@ -40,11 +40,11 @@ internal sealed class WordDoubleClickHook : IDisposable
     {
         _thread.Start();
         if (!_ready.Wait(TimeSpan.FromSeconds(5)))
-            throw new TimeoutException("Word OLE double-click hook did not start.");
+            throw new TimeoutException("Word double-click hook did not start.");
         if (_hook == IntPtr.Zero)
             throw new Win32Exception(
                 Marshal.GetLastWin32Error(),
-                "Word OLE double-click hook could not be installed.");
+                "Word double-click hook could not be installed.");
         TraceMessage($"hook-started handle=0x{_hook.ToInt64():X}");
     }
 
@@ -108,28 +108,30 @@ internal sealed class WordDoubleClickHook : IDisposable
             return CallNextHookEx(_hook, code, wParam, lParam);
 
         Interlocked.Exchange(ref _lastClickTimestamp, 0);
-        bool handle;
-        try { handle = _shouldHandle(input.Pt.X, input.Pt.Y); }
+        bool interceptNativeOle;
+        try { interceptNativeOle = _shouldHandle(input.Pt.X, input.Pt.Y); }
         catch (Exception error)
         {
             TraceMessage($"hit-test-error {error.GetType().Name}: {error.Message}");
-            handle = false;
+            interceptNativeOle = false;
         }
         TraceMessage(
-            $"double-click elapsedMs={elapsedMilliseconds:0.###} withinX={withinX} withinY={withinY} handle={handle}");
-        if (!handle)
-            return CallNextHookEx(_hook, code, wParam, lParam);
+            $"double-click elapsedMs={elapsedMilliseconds:0.###} withinX={withinX} withinY={withinY} interceptNativeOle={interceptNativeOle}");
 
         ThreadPool.QueueUserWorkItem(_ =>
         {
-            // The first click already selected the inline OLE object. Suppress
-            // the second button-down so Word cannot invoke the OLE default verb,
-            // then open the VisualTeX Session on the Office UI thread.
-            Thread.Sleep(40);
+            // OLE needs its second button-down suppressed so Word cannot invoke
+            // the object's default verb. OMML must keep Word's native click
+            // processing, then be identified from the settled Selection on the
+            // Office UI thread because Office 2021 does not reliably raise
+            // WindowBeforeDoubleClick for native equations.
+            Thread.Sleep(interceptNativeOle ? 40 : 90);
             try
             {
-                TraceMessage("callback-begin");
-                _callbackAction();
+                TraceMessage(
+                    $"callback-begin interceptedNativeOle={interceptNativeOle} "
+                    + $"x={input.Pt.X} y={input.Pt.Y}");
+                _callbackAction(interceptNativeOle, input.Pt.X, input.Pt.Y);
                 TraceMessage("callback-end");
             }
             catch (Exception error)
@@ -137,6 +139,10 @@ internal sealed class WordDoubleClickHook : IDisposable
                 TraceMessage($"callback-error {error.GetType().Name}: {error.Message}");
             }
         });
+
+        if (!interceptNativeOle)
+            return CallNextHookEx(_hook, code, wParam, lParam);
+
         TraceMessage("second-button-down-suppressed");
         return new IntPtr(1);
     }

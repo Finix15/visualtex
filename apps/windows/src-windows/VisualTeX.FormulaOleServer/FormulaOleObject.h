@@ -47,6 +47,12 @@ class ATL_NO_VTABLE CFormulaOleObject
           &__uuidof(IVisualTeXFormulaObject),
           &LIBID_VisualTeXFormulaOleLib,
           1,
+          0>,
+      public ATL::IDispatchImpl<
+          IVisualTeXFormulaMetadata,
+          &__uuidof(IVisualTeXFormulaMetadata),
+          &LIBID_VisualTeXFormulaOleLib,
+          1,
           0>
 {
 public:
@@ -65,7 +71,8 @@ public:
         COM_INTERFACE_ENTRY(IViewObject2)
         COM_INTERFACE_ENTRY2(IViewObject, IViewObject2)
         COM_INTERFACE_ENTRY(IVisualTeXFormulaObject)
-        COM_INTERFACE_ENTRY(IDispatch)
+        COM_INTERFACE_ENTRY(IVisualTeXFormulaMetadata)
+        COM_INTERFACE_ENTRY2(IDispatch, IVisualTeXFormulaObject)
     END_COM_MAP()
 
     HRESULT FinalConstruct() noexcept;
@@ -157,6 +164,9 @@ public:
     HRESULT STDMETHODCALLTYPE InitializeFromFiles(BSTR metadataJson, BSTR emfPath, BSTR pngPath) override;
     HRESULT STDMETHODCALLTYPE UpdateFromFiles(BSTR metadataJson, BSTR emfPath, BSTR pngPath) override;
     HRESULT STDMETHODCALLTYPE GetFormulaJson(BSTR* metadataJson) override;
+
+    // IVisualTeXFormulaMetadata
+    HRESULT STDMETHODCALLTYPE SetFormulaJson(BSTR metadataJson) override;
 
 private:
     HRESULT InitializeOrUpdate(BSTR metadataJson, BSTR emfPath, BSTR pngPath, bool requireUninitialized);

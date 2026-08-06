@@ -153,6 +153,12 @@ internal static class WordBulkImportParser
     private static readonly Regex LatexItem = new(
         @"^\s*\\item(?:\s*\[[^\]]*\])?\s*(?<text>.*)$",
         RegexOptions.Compiled);
+    private static readonly Regex LatexTheoremEnvironmentStart = new(
+        @"^\s*\\begin\{(?<name>theorem|lemma|proposition|corollary|definition|proof|remark|example|exercise|assumption|axiom|claim|conjecture|criterion|fact|notation|observation|problem|question|solution)\*?\}(?:\s*\[(?<title>[^\]]*)\])?\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex LatexTheoremEnvironmentEnd = new(
+        @"^\s*\\end\{(?:theorem|lemma|proposition|corollary|definition|proof|remark|example|exercise|assumption|axiom|claim|conjecture|criterion|fact|notation|observation|problem|question|solution)\*?\}\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     internal static WordBulkImportDocument ParseSerialized(
         string serialized,
@@ -448,7 +454,7 @@ internal static class WordBulkImportParser
     {
         if (Regex.IsMatch(
                 source,
-                @"\\(?:documentclass|begin\{document\}|\[|\(|text(?:bf|it|tt)\{|emph\{|item(?:\s|\[)|(?:part|chapter|section|subsection)\*?\{|begin\{(?:equation|align|itemize|enumerate|quote|quotation|verbatim|lstlisting))",
+                @"\\(?:documentclass|usepackage|RequirePackage|newcommand|renewcommand|providecommand|DeclareMathOperator\*?|DeclarePairedDelimiter\w*|newtheorem\*?|begin\{[A-Za-z@*]+\}|\[|\(|text(?:bf|it|tt)\{|emph\{|item(?:\s|\[)|(?:part|chapter|section|subsection|subsubsection|paragraph|subparagraph)\*?\{)",
                 RegexOptions.IgnoreCase))
             return WordBulkSourceFormat.Latex;
         return WordBulkSourceFormat.Markdown;
@@ -790,6 +796,36 @@ internal static class WordBulkImportParser
 
             if (format == WordBulkSourceFormat.Latex)
             {
+                var theoremStart = LatexTheoremEnvironmentStart.Match(trimmed);
+                if (theoremStart.Success)
+                {
+                    FlushParagraph();
+                    FlushQuote();
+                    var label = LatexTheoremLabel(theoremStart.Groups["name"].Value);
+                    var title = theoremStart.Groups["title"].Value.Trim();
+                    blocks.Add(new WordBulkBlock
+                    {
+                        Kind = WordBulkBlockKind.Paragraph,
+                        Runs = new List<WordBulkRun>
+                        {
+                            new()
+                            {
+                                Text = title.Length > 0
+                                    ? $"{label}（{title}）："
+                                    : $"{label}：",
+                                Bold = true,
+                            },
+                        },
+                    });
+                    continue;
+                }
+                if (LatexTheoremEnvironmentEnd.IsMatch(trimmed))
+                {
+                    FlushParagraph();
+                    FlushQuote();
+                    continue;
+                }
+
                 if (Regex.IsMatch(
                         trimmed,
                         @"^\\begin\{(?:quote|quotation)\}\s*$",
@@ -957,6 +993,32 @@ internal static class WordBulkImportParser
         return blocks;
     }
 
+    private static string LatexTheoremLabel(string environment) =>
+        environment.Trim().ToLowerInvariant() switch
+        {
+            "theorem" => "定理",
+            "lemma" => "引理",
+            "proposition" => "命题",
+            "corollary" => "推论",
+            "definition" => "定义",
+            "proof" => "证明",
+            "remark" => "注记",
+            "example" => "例",
+            "exercise" => "练习",
+            "assumption" => "假设",
+            "axiom" => "公理",
+            "claim" => "断言",
+            "conjecture" => "猜想",
+            "criterion" => "判据",
+            "fact" => "事实",
+            "notation" => "记号",
+            "observation" => "观察",
+            "problem" => "问题",
+            "question" => "问题",
+            "solution" => "解",
+            _ => environment,
+        };
+
     private static int MarkdownListLevel(string indentation)
     {
         if (string.IsNullOrEmpty(indentation)) return 0;
@@ -1093,9 +1155,24 @@ internal static class WordBulkImportParser
         string environment,
         string body)
     {
-        var normalizedBody = body
-            .Replace("\r\n", "\n")
-            .Replace('\r', '\n')
+        // Physical source line breaks inside TeX math are ordinary whitespace.
+        // Preserve explicit row commands such as `\\\\`, but do not reinterpret
+        // pretty-printed equation/equation* source as VisualTeX formula rows.
+        var formulaBody = Regex.Replace(
+            Regex.Replace(
+                body,
+                @"\\label\s*\{[^{}]*\}",
+                string.Empty,
+                RegexOptions.IgnoreCase),
+            @"\\(?:notag|nonumber)\b",
+            string.Empty,
+            RegexOptions.IgnoreCase);
+        var normalizedBody = Regex.Replace(
+                formulaBody
+                    .Replace("\r\n", "\n")
+                    .Replace('\r', '\n'),
+                @"[ \t]*\n+[ \t]*",
+                " ")
             .Trim();
         var baseEnvironment = environment.TrimEnd('*').ToLowerInvariant();
         return baseEnvironment switch
@@ -1115,7 +1192,15 @@ internal static class WordBulkImportParser
 
     private static string NormalizeDelimitedDisplayLatex(string body)
     {
-        var normalized = body
+        var normalized = Regex.Replace(
+                Regex.Replace(
+                    body,
+                    @"\\label\s*\{[^{}]*\}",
+                    string.Empty,
+                    RegexOptions.IgnoreCase),
+                @"\\(?:notag|nonumber)\b",
+                string.Empty,
+                RegexOptions.IgnoreCase)
             .Replace("\r\n", "\n")
             .Replace('\r', '\n');
         // Newlines inside $$...$$ and \[...\] are ordinary TeX whitespace.

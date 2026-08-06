@@ -83,6 +83,25 @@ public sealed class WordOmmlTests
     }
 
     [Fact]
+    public void OfficeMathMlTransformRemovesVisualTeXTypingAnchorButKeepsFollowingDigit()
+    {
+        const string mathMl =
+            "<math xmlns=\"http://www.w3.org/1998/Math/MathML\">"
+            + "<msup><mi>c</mi><mn>2</mn></msup>"
+            + "<mrow data-mjx-texclass=\"ORD\"><mo>&#x200C;</mo></mrow>"
+            + "<mn>1</mn></math>";
+
+        var omml = WordOmmlConverter.TransformMathMlToOmml(mathMl);
+        var document = XDocument.Parse(omml);
+        XNamespace math = MathNamespace;
+        var visibleText = string.Concat(document.Descendants(math + "t").Select(node => node.Value));
+
+        Assert.DoesNotContain("\u200C", omml, StringComparison.Ordinal);
+        Assert.DoesNotContain("200C", omml, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("1", visibleText, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void AlignedMathMlPreservesRightLeftAlignmentAroundAmpersandColumn()
     {
         const string mathMl =

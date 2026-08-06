@@ -31,11 +31,7 @@ internal static partial class Program
         Array custom = Array.Empty<object>();
         try
         {
-            application = new Word.Application
-            {
-                Visible = false,
-                DisplayAlerts = Word.WdAlertLevel.wdAlertsNone,
-            };
+            application = CreateWordApplication(visible: false);
             document = application.Documents.Add();
             addIn = new VisualTeX.WordVsto.ThisAddIn();
             addIn.OnConnection(
@@ -119,7 +115,7 @@ internal static partial class Program
             }
             try { reopened?.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
             try { document?.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
-            try { application?.Quit(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
+            try { QuitWordApplicationIfOwned(application); } catch { }
             Release(reopened);
             Release(document);
             Release(application);
@@ -276,6 +272,16 @@ internal static partial class Program
             document,
             markerIndex,
             $"{(numbered ? "numbered " : string.Empty)}{objectMode}");
+        Word.Font? contaminatedTypingFont = null;
+        try
+        {
+            contaminatedTypingFont = application.Selection.Font;
+            contaminatedTypingFont.Bold = 1;
+            contaminatedTypingFont.Italic = 1;
+            contaminatedTypingFont.StrikeThrough = 1;
+            contaminatedTypingFont.Underline = Word.WdUnderline.wdUnderlineSingle;
+        }
+        finally { Release(contaminatedTypingFont); }
         var existing = SnapshotSessionIds();
         if (string.Equals(
                 objectMode,
@@ -308,6 +314,10 @@ internal static partial class Program
             final.Error ?? "The display spacing formula did not complete.");
         client.CloseEditorAsync(sessionId, CancellationToken.None).GetAwaiter().GetResult();
         WaitForAddInIdle(addIn, TimeSpan.FromSeconds(10));
+        AssertDisplayFormulaFollowingTypingIsUpright(
+            application,
+            document,
+            $"{objectMode}-{(numbered ? "numbered" : "unnumbered")}-{markerIndex}");
 
         var result = new DisplaySpacingCase
         {
@@ -319,6 +329,42 @@ internal static partial class Program
         };
         AssertDisplaySpacingCase(document, result);
         return result;
+    }
+
+    private static void AssertDisplayFormulaFollowingTypingIsUpright(
+        Word.Application application,
+        Word.Document document,
+        string label)
+    {
+        const string probe = "VT_DISPLAY_UPRIGHT_PROBE";
+        Word.Selection? selection = null;
+        Word.Range? range = null;
+        Word.Font? font = null;
+        try
+        {
+            selection = application.Selection;
+            selection.Collapse(Word.WdCollapseDirection.wdCollapseEnd);
+            var start = selection.Start;
+            selection.TypeText(probe);
+            range = document.Range(start, start + probe.Length);
+            font = range.Font;
+            AssertEqual(0, font.Bold,
+                $"{label}: text typed after the display formula inherited bold formatting.");
+            AssertEqual(0, font.Italic,
+                $"{label}: text typed after the display formula inherited italic formatting.");
+            AssertEqual(0, font.StrikeThrough,
+                $"{label}: text typed after the display formula inherited strike formatting.");
+            AssertEqual(Word.WdUnderline.wdUnderlineNone, font.Underline,
+                $"{label}: text typed after the display formula inherited underline formatting.");
+            range.Delete();
+            selection.SetRange(start, start);
+        }
+        finally
+        {
+            Release(font);
+            Release(range);
+            Release(selection);
+        }
     }
 
     private static string InsertDisplaySpacingMarker(

@@ -1,3 +1,4 @@
+using System.Linq;
 using Microsoft.Office.Interop.Word;
 using VisualTeX.WindowsOffice.Contracts;
 using Range = Microsoft.Office.Interop.Word.Range;
@@ -19,7 +20,8 @@ internal static class WordOmmlNativeSource
         var mathMl = WordOmmlConverter.TransformOmmlToMathMl(
             wordOpenXml,
             display: string.Equals(displayMode, "block", StringComparison.Ordinal));
-        var latex = MathMlToLatexConverter.Convert(mathMl);
+        var latex = SanitizeFormulaBoundaryArtifacts(
+            MathMlToLatexConverter.Convert(mathMl));
         if (string.IsNullOrWhiteSpace(latex))
             throw new InvalidDataException(
                 "The Word-native OMML equation could not be converted back to editable LaTeX.");
@@ -59,6 +61,8 @@ internal static class WordOmmlNativeSource
         try
         {
             equationRange = WordOmmlFormulaStore.GetEquationRange(bookmark);
+            var sanitizedStored = Clone(stored);
+            SanitizeMetadataBoundaryArtifacts(sanitizedStored);
             var wordOpenXml = ReadCompleteEquationWordOpenXml(
                 document,
                 equationRange,
@@ -68,7 +72,7 @@ internal static class WordOmmlNativeSource
                     stored.NativeOmmlFingerprint,
                     fingerprint,
                     StringComparison.OrdinalIgnoreCase))
-                return stored;
+                return sanitizedStored;
 
             var mathMl = WordOmmlConverter.TransformOmmlToMathMl(
                 wordOpenXml,
@@ -76,7 +80,8 @@ internal static class WordOmmlNativeSource
                     stored.DisplayMode,
                     "block",
                     StringComparison.Ordinal));
-            var latex = MathMlToLatexConverter.Convert(mathMl);
+            var latex = SanitizeFormulaBoundaryArtifacts(
+                MathMlToLatexConverter.Convert(mathMl));
             if (string.IsNullOrWhiteSpace(latex))
                 throw new InvalidDataException(
                     "The Word-native OMML equation could not be converted back to editable LaTeX.");
@@ -137,7 +142,10 @@ internal static class WordOmmlNativeSource
                 {
                     boundaryBookmark = bookmarks[boundaryName];
                     boundaryRange = boundaryBookmark.Range;
-                    probeEnd = Math.Max(probeEnd, boundaryRange.End);
+                    // VTBL owns the ordinary-text typing anchor immediately after
+                    // an inline formula. The anchor is a hard serialization bound,
+                    // never part of the native equation.
+                    probeEnd = Math.Max(probeEnd, boundaryRange.Start);
                 }
             }
 
@@ -219,6 +227,38 @@ internal static class WordOmmlNativeSource
         }
         catch { return FormulaFontSize.DefaultPt; }
         finally { Release(font); }
+    }
+
+    private static void SanitizeMetadataBoundaryArtifacts(FormulaMetadata metadata)
+    {
+        foreach (var line in metadata.Lines)
+            line.Latex = SanitizeFormulaBoundaryArtifacts(line.Latex);
+        metadata.Latex = metadata.Lines.Count > 0
+            ? string.Join("\n", metadata.Lines.Select(line => line.Latex))
+            : SanitizeFormulaBoundaryArtifacts(metadata.Latex);
+    }
+
+    private static string SanitizeFormulaBoundaryArtifacts(string? latex)
+    {
+        if (string.IsNullOrEmpty(latex)) return string.Empty;
+        static bool IsBoundaryArtifact(char character) =>
+            character is '\u200B' or '\u200C' or '\u2060' or '\uFEFF';
+
+        var value = latex!;
+        for (var index = 0; index < value.Length; index++)
+        {
+            if (!IsBoundaryArtifact(value[index])) continue;
+            var runEnd = index + 1;
+            while (runEnd < value.Length && IsBoundaryArtifact(value[runEnd]))
+                runEnd++;
+            var left = value.Substring(0, index).Trim();
+            var right = value.Substring(runEnd).Trim();
+            if (left.Length > 0 && string.Equals(left, right, StringComparison.Ordinal))
+                return left;
+            index = runEnd - 1;
+        }
+
+        return new string(value.Where(character => !IsBoundaryArtifact(character)).ToArray());
     }
 
     private static FormulaMetadata Clone(FormulaMetadata metadata)

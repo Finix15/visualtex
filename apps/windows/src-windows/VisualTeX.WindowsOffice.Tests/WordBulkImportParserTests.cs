@@ -78,6 +78,84 @@ public sealed class WordBulkImportParserTests
     }
 
     [Fact]
+    public void ProofOnlyFragmentAutoDetectsLatexAndPreservesHeadingAndBody()
+    {
+        const string source = """
+            \begin{proof}[谱展开]
+            对任意 $N$，部分和收敛。
+            \end{proof}
+            """;
+
+        var document = WordBulkImportParser.Parse(
+            source,
+            WordBulkSourceFormat.Auto,
+            WordBulkFormulaObjectMode.Omml);
+
+        Assert.Equal(WordBulkSourceFormat.Latex, document.SourceFormat);
+        Assert.Equal(2, document.Blocks.Count);
+        var heading = Assert.Single(document.Blocks[0].Runs);
+        Assert.True(heading.Bold);
+        Assert.False(heading.Italic);
+        Assert.Equal("证明（谱展开）：", heading.Text);
+        var body = Assert.Single(document.Blocks[1].Runs, run =>
+            !run.IsFormula && run.Text.Contains("对任意", StringComparison.Ordinal));
+        Assert.False(body.Bold);
+        Assert.False(body.Italic);
+        Assert.Contains(document.Blocks[1].Runs, run => run.IsFormula && run.Latex == "N");
+        Assert.DoesNotContain(document.Blocks.SelectMany(block => block.Runs), run => run.Text.Contains("begin{proof}", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void EquationStarPhysicalSourceLinesRemainOneFormulaExpression()
+    {
+        const string source = """
+            \begin{equation*}
+            \lim_{N\to +\infty}\bigl\|\,|\psi\rangle-|s_N\rangle\,\bigr\|
+            =
+            \lim_{N\to +\infty}
+            \left\|\,|\psi\rangle-\sum_{i=1}^{N} c_i |u_i\rangle\,\right\|
+            =0.
+            \end{equation*}
+            """;
+
+        var document = WordBulkImportParser.Parse(
+            source,
+            WordBulkSourceFormat.Latex,
+            WordBulkFormulaObjectMode.Omml);
+
+        var formula = Assert.Single(document.Blocks).Runs.Single();
+        Assert.True(formula.IsFormula);
+        Assert.Equal("block", formula.DisplayMode);
+        Assert.DoesNotContain('\n', formula.Latex);
+        Assert.Equal(
+            "\\lim_{N\\to +\\infty}\\bigl\\|\\,|\\psi\\rangle-|s_N\\rangle\\,\\bigr\\| = \\lim_{N\\to +\\infty} \\left\\|\\,|\\psi\\rangle-\\sum_{i=1}^{N} c_i |u_i\\rangle\\,\\right\\| =0.",
+            formula.Latex);
+    }
+
+    [Fact]
+    public void AlignPhysicalSourceLinesKeepEveryExplicitMathRow()
+    {
+        const string source = """
+            \begin{align*}
+            a &= b+c \\
+            d &= e-f \\
+            g &= h
+            \end{align*}
+            """;
+
+        var document = WordBulkImportParser.Parse(
+            source,
+            WordBulkSourceFormat.Latex,
+            WordBulkFormulaObjectMode.Ole);
+
+        var formula = Assert.Single(document.Blocks).Runs.Single();
+        Assert.DoesNotContain('\n', formula.Latex);
+        Assert.StartsWith("\\begin{aligned}", formula.Latex, StringComparison.Ordinal);
+        Assert.EndsWith("\\end{aligned}", formula.Latex, StringComparison.Ordinal);
+        Assert.Contains("a &= b+c \\\\ d &= e-f \\\\ g &= h", formula.Latex, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void LatexCjkInlineMathWhitespaceFollowsTexSemantics()
     {
         const string source =
@@ -226,22 +304,13 @@ public sealed class WordBulkImportParserTests
             .Select(block => block.Runs.Single().Latex.Replace("\r", string.Empty))
             .ToArray();
         Assert.Equal(
-            """
-            \begin{aligned}a+b &= c \\
-            d &= e+f\end{aligned}
-            """.Replace("\r", string.Empty),
+            "\\begin{aligned}a+b &= c \\\\ d &= e+f\\end{aligned}",
             formulas[0]);
         Assert.Equal(
-            """
-            \begin{gathered}x=1 \\
-            y=2\end{gathered}
-            """.Replace("\r", string.Empty),
+            "\\begin{gathered}x=1 \\\\ y=2\\end{gathered}",
             formulas[1]);
         Assert.Equal(
-            """
-            \begin{gathered}p+q+r \\
-            = s+t\end{gathered}
-            """.Replace("\r", string.Empty),
+            "\\begin{gathered}p+q+r \\\\ = s+t\\end{gathered}",
             formulas[2]);
     }
 

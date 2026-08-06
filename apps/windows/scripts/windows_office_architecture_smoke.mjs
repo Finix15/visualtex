@@ -79,6 +79,7 @@ for (const identity of [
   "VisualTeX.Formula",
   "8FF7F5AA-0D60-48D5-ADBD-65A64B4C827B",
   "6C672AF0-7321-4D21-B325-868CB34592C2",
+  "A59B7798-6F24-4CF0-B378-E951BFFAFB3A",
   "3C72FF7F-B04A-4FD0-AA7D-61D110D8B3C1",
   "DF66EC66-3B3A-4675-A7BE-30456A04EB96",
   "VisualTeX.Formula.json",
@@ -94,6 +95,7 @@ for (const requiredInterface of [
   "public IViewObject2",
   "IDispatchImpl<",
   "IVisualTeXFormulaObject",
+  "IVisualTeXFormulaMetadata",
 ]) {
   assert.ok(
     nativeOleHeader.includes(requiredInterface),
@@ -106,6 +108,9 @@ assert.ok(nativeOleIdl.includes("IVisualTeXFormulaObject : IDispatch"));
 assert.ok(nativeOleIdl.includes("[id(1)] HRESULT InitializeFromFiles"));
 assert.ok(nativeOleIdl.includes("[id(2)] HRESULT UpdateFromFiles"));
 assert.ok(nativeOleIdl.includes("[id(3)] HRESULT GetFormulaJson"));
+assert.ok(nativeOleIdl.includes("IVisualTeXFormulaMetadata : IDispatch"));
+assert.ok(nativeOleIdl.includes("[id(1)] HRESULT SetFormulaJson"));
+assert.ok(nativeOleSource.includes("CFormulaOleObject::SetFormulaJson"));
 assert.ok(nativeOleIdl.includes("DF66EC66-3B3A-4675-A7BE-30456A04EB96"));
 assert.ok(nativeOleProject.includes("<Midl Include=\"FormulaOleServer.idl\""));
 assert.ok(nativeOleProject.includes("VisualTeX.FormulaOleServer.tlb"));
@@ -648,6 +653,11 @@ for (const command of [
   assert.ok(powerpointVsto.includes(command), `PowerPoint Ribbon is missing ${command}`);
 }
 assert.ok(wordVsto.includes("OnUpdateEquationNumbers"));
+assert.ok(wordVsto.includes("OnBatchEquationNumbering"));
+assert.ok(wordVsto.includes("BatchEquationNumberingAsync"));
+assert.ok(wordVsto.includes('id="VisualTeX.WordVsto.BatchNumbers"'));
+assert.ok(wordVsto.includes("VISUALTEX_VSTO_BATCH_NUMBER_REDRAW"));
+assert.ok(wordVsto.includes("VISUALTEX_VSTO_BATCH_NUMBER_FORMAT"));
 assert.ok(wordVsto.includes("GetEquationNumberFormatPressed"));
 assert.ok(wordVsto.includes("OnEquationNumberFormatChanged"));
 assert.ok(wordVsto.includes('id="VisualTeX.WordVsto.NumberFormat"'));

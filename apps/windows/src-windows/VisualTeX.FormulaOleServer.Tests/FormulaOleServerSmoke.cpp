@@ -457,6 +457,31 @@ void RunSmoke(const std::filesystem::path& server)
         "InitializeFromFiles");
     VerifyDataAndView(formula);
 
+    CComQIPtr<IVisualTeXFormulaMetadata> metadataWriter(formula);
+    if (metadataWriter == nullptr)
+        throw std::runtime_error("IVisualTeXFormulaMetadata is unavailable");
+    const std::wstring numberedMetadata =
+        LR"({"schemaVersion":1,"formulaId":"11111111-2222-4333-8444-555555555555","title":"Smoke","latex":"x=y+1","lines":[{"id":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee","latex":"x=y+1"}],"codeFormat":"raw","displayMode":"block","numbered":true,"renderWidthPx":320,"renderHeightPx":80,"baseline":62})";
+    Check(
+        metadataWriter->SetFormulaJson(CComBSTR(numberedMetadata.c_str())),
+        "SetFormulaJson");
+    CComBSTR afterMetadataOnlyUpdate;
+    Check(
+        formula->GetFormulaJson(&afterMetadataOnlyUpdate),
+        "GetFormulaJson(after metadata-only update)");
+    if (std::wstring(afterMetadataOnlyUpdate, afterMetadataOnlyUpdate.Length()) != numberedMetadata)
+        throw std::runtime_error("Metadata-only update did not persist in memory");
+
+    const HRESULT invalidMetadataUpdate = metadataWriter->SetFormulaJson(CComBSTR(L"{}"));
+    if (SUCCEEDED(invalidMetadataUpdate))
+        throw std::runtime_error("Invalid metadata-only update unexpectedly succeeded");
+    CComBSTR afterFailedMetadataUpdate;
+    Check(
+        formula->GetFormulaJson(&afterFailedMetadataUpdate),
+        "GetFormulaJson(after failed metadata-only update)");
+    if (std::wstring(afterFailedMetadataUpdate, afterFailedMetadataUpdate.Length()) != numberedMetadata)
+        throw std::runtime_error("Failed metadata-only update mutated the formula");
+
     CComBSTR beforeFailedUpdate;
     Check(formula->GetFormulaJson(&beforeFailedUpdate), "GetFormulaJson(before failed update)");
     const HRESULT invalidUpdate = formula->UpdateFromFiles(
@@ -478,6 +503,7 @@ void RunSmoke(const std::filesystem::path& server)
     VerifyStream(storage, kVisualTeXEmfPreviewStream);
     VerifyStream(storage, kVisualTeXPngPreviewStream);
 
+    metadataWriter.Release();
     formula.Release();
     persist.Release();
     storage.Release();
@@ -499,8 +525,8 @@ void RunSmoke(const std::filesystem::path& server)
 
     CComBSTR loadedMetadata;
     Check(formula->GetFormulaJson(&loadedMetadata), "GetFormulaJson(loaded)");
-    if (std::wstring(loadedMetadata, loadedMetadata.Length()) != metadata)
-        throw std::runtime_error("Metadata did not round-trip through structured storage");
+    if (std::wstring(loadedMetadata, loadedMetadata.Length()) != numberedMetadata)
+        throw std::runtime_error("Metadata-only update did not round-trip through structured storage");
     VerifyDataAndView(formula);
 
     formula.Release();

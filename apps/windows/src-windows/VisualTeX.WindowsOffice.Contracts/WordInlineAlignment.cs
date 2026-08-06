@@ -19,7 +19,8 @@ public static class WordInlineAlignment
             return CalculateFontPosition(
                 actualHeightPoints,
                 exportedHeight,
-                exportedBaseline);
+                exportedBaseline,
+                targetSemanticFontSizePoints);
 
         var sourceSize = FormulaFontSize.Normalize(sourceSemanticFontSizePoints);
         var targetSize = FormulaFontSize.Normalize(targetSemanticFontSizePoints);
@@ -55,7 +56,18 @@ public static class WordInlineAlignment
     public static int CalculateFontPosition(
         float actualHeightPoints,
         float exportedHeight,
-        float? exportedBaseline)
+        float? exportedBaseline) =>
+        CalculateFontPosition(
+            actualHeightPoints,
+            exportedHeight,
+            exportedBaseline,
+            semanticFontSizePoints: null);
+
+    private static int CalculateFontPosition(
+        float actualHeightPoints,
+        float exportedHeight,
+        float? exportedBaseline,
+        double? semanticFontSizePoints)
     {
         if (!(actualHeightPoints > 0)
             || !IsFinite(actualHeightPoints)
@@ -75,7 +87,25 @@ public static class WordInlineAlignment
         var roundedDescent = Math.Max(
             0,
             (int)Math.Round(downwardShiftPoints, MidpointRounding.AwayFromZero));
-        return -Math.Max(0, roundedDescent - OpticalBaselineLiftPoints);
+        var largeFontLift = CalculateLargeFontOpticalLift(semanticFontSizePoints);
+        return -Math.Max(
+            0,
+            roundedDescent - OpticalBaselineLiftPoints - largeFontLift);
+    }
+
+    private static int CalculateLargeFontOpticalLift(double? semanticFontSizePoints)
+    {
+        if (!semanticFontSizePoints.HasValue
+            || double.IsNaN(semanticFontSizePoints.Value)
+            || double.IsInfinity(semanticFontSizePoints.Value))
+            return 0;
+        var fontSize = FormulaFontSize.Normalize(semanticFontSizePoints.Value);
+        // Office 2021's inline OLE box starts to sit visibly below adjacent
+        // Times New Roman text only at large display sizes. Keep 12/18/24 pt
+        // untouched; add one point around 33–41 pt and two points at 42 pt+.
+        return Math.Max(
+            0,
+            Math.Min(2, (int)Math.Floor((fontSize - 24.0) / 9.0)));
     }
 
     private static bool HasValidExportedBaseline(

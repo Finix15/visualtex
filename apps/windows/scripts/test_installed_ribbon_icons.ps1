@@ -1,5 +1,7 @@
 ﻿param(
-    [string]$ArtifactRoot = "src-windows/artifacts/installed-ribbon-icons"
+    [string]$ArtifactRoot = "src-windows/artifacts/installed-ribbon-icons",
+    [switch]$PowerPointOnly,
+    [switch]$AllowBlank
 )
 
 $ErrorActionPreference = "Stop"
@@ -135,11 +137,16 @@ function Measure-ButtonArtwork(
                     if ($sum -lt 480) { $darkPixels++ }
                 }
             }
-            if ($nonWhitePixels -lt 30 -or $darkPixels -lt 8) {
+            $appearsBlank = $nonWhitePixels -lt 30 -or $darkPixels -lt 8
+            if ($appearsBlank -and -not $AllowBlank) {
                 throw "Ribbon button '$name' appears blank: nonWhite=$nonWhitePixels dark=$darkPixels."
+            }
+            if ($appearsBlank) {
+                Write-Warning "Ribbon button '$name' appears blank: nonWhite=$nonWhitePixels dark=$darkPixels."
             }
             $results += [pscustomobject]@{
                 Name = $name
+                AppearsBlank = $appearsBlank
                 Left = [int]$bounds.Left
                 Top = [int]$bounds.Top
                 Width = [int]$bounds.Width
@@ -168,44 +175,46 @@ $powerPointAddIn = $null
 try {
     if ($consoleWindow -ne [IntPtr]::Zero) { [void][VisualTeXRibbonNative]::ShowWindow($consoleWindow, 0) }
 
-    $word = New-Object -ComObject Word.Application
-    $word.Visible = $true
-    $word.DisplayAlerts = 0
-    $wordDocument = $word.Documents.Add()
-    $wordAddIns = $word.COMAddIns
-    $wordAddIn = $wordAddIns.Item("VisualTeX.WordVsto")
-    if (-not $wordAddIn.Connect) {
-        $wordAddIn.Connect = $true
-        Start-Sleep -Milliseconds 800
-    }
-    if (-not $wordAddIn.Connect) { throw "Installed Word add-in is not connected." }
-    $wordHwnd = Wait-OfficeProcessWindowHandle "WINWORD"
-    $wordRoot = Select-VisualTeXTab $wordHwnd
-    $wordScreenshot = Join-Path $artifactPath "VisualTeX-Word-Ribbon.png"
-    Save-WindowRibbonScreenshot $wordRoot $wordScreenshot
-    $wordResults = Measure-ButtonArtwork $wordRoot $wordScreenshot @(
-        "OLE 行内公式",
-        "OLE 行间公式",
-        "OMML 行内公式",
-        "OMML 行间公式",
-        "编辑所选公式",
-        "转为原生 OLE",
-        "转为 Word OMML",
-        "更新公式编号",
-        "批量导入"
-    )
+    if (-not $PowerPointOnly) {
+        $word = New-Object -ComObject Word.Application
+        $word.Visible = $true
+        $word.DisplayAlerts = 0
+        $wordDocument = $word.Documents.Add()
+        $wordAddIns = $word.COMAddIns
+        $wordAddIn = $wordAddIns.Item("VisualTeX.WordVsto")
+        if (-not $wordAddIn.Connect) {
+            $wordAddIn.Connect = $true
+            Start-Sleep -Milliseconds 800
+        }
+        if (-not $wordAddIn.Connect) { throw "Installed Word add-in is not connected." }
+        $wordHwnd = Wait-OfficeProcessWindowHandle "WINWORD"
+        $wordRoot = Select-VisualTeXTab $wordHwnd
+        $wordScreenshot = Join-Path $artifactPath "VisualTeX-Word-Ribbon.png"
+        Save-WindowRibbonScreenshot $wordRoot $wordScreenshot
+        $wordResults = Measure-ButtonArtwork $wordRoot $wordScreenshot @(
+            "OLE 行内公式",
+            "OLE 行间公式",
+            "OMML 行内公式",
+            "OMML 行间公式",
+            "编辑所选公式",
+            "转为原生 OLE",
+            "转为 Word OMML",
+            "更新公式编号",
+            "批量导入"
+        )
 
-    $wordDocument.Close(0)
-    Release-ComObject $wordDocument
-    $wordDocument = $null
-    $word.Quit()
-    Release-ComObject $wordAddIn
-    $wordAddIn = $null
-    Release-ComObject $wordAddIns
-    $wordAddIns = $null
-    Release-ComObject $word
-    $word = $null
-    [GC]::Collect(); [GC]::WaitForPendingFinalizers()
+        $wordDocument.Close(0)
+        Release-ComObject $wordDocument
+        $wordDocument = $null
+        $word.Quit()
+        Release-ComObject $wordAddIn
+        $wordAddIn = $null
+        Release-ComObject $wordAddIns
+        $wordAddIns = $null
+        Release-ComObject $word
+        $word = $null
+        [GC]::Collect(); [GC]::WaitForPendingFinalizers()
+    }
 
     $powerPoint = New-Object -ComObject PowerPoint.Application
     $powerPoint.Visible = -1
@@ -228,8 +237,10 @@ try {
         "转为原生 OLE"
     )
 
-    Write-Output "WORD_RIBBON_SCREENSHOT=$wordScreenshot"
-    $wordResults | Format-Table -AutoSize
+    if (-not $PowerPointOnly) {
+        Write-Output "WORD_RIBBON_SCREENSHOT=$wordScreenshot"
+        $wordResults | Format-Table -AutoSize
+    }
     Write-Output "POWERPOINT_RIBBON_SCREENSHOT=$powerPointScreenshot"
     $powerPointResults | Format-Table -AutoSize
     Write-Output "Installed VisualTeX Ribbon icon UI probe passed."

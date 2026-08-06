@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Xml.Linq;
 using Microsoft.Office.Interop.Word;
 using Application = Microsoft.Office.Interop.Word.Application;
 using VisualTeX.WindowsOffice.Contracts;
@@ -45,6 +46,12 @@ internal sealed class WordFormulaService
         internal string ExpectedSource { get; set; } = string.Empty;
     }
 
+    private sealed class LatexRedrawSourceContext
+    {
+        internal bool HasVisibleSurroundingText { get; set; }
+        internal int FontContextRelativePosition { get; set; } = -1;
+    }
+
     private sealed class FormulaToLatexTarget
     {
         internal FormulaMetadata Metadata { get; set; } = new();
@@ -54,6 +61,12 @@ internal sealed class WordFormulaService
         internal Range FormulaRange { get; set; } = null!;
         internal InlineShape? OleShape { get; set; }
         internal Bookmark? OmmlBookmark { get; set; }
+    }
+
+    private sealed class InlineFollowingTextVisibility
+    {
+        internal int CharacterCount { get; set; }
+        internal int Hidden { get; set; }
     }
 
     public WordFormulaService(Application application)
@@ -173,6 +186,160 @@ internal sealed class WordFormulaService
             Release(range);
             if (ownsSelection) Release(selection);
             Release(document);
+        }
+    }
+
+    public OfficeSelection? ReadVisualTeXOmmlAtScreenPoint(
+        int screenX,
+        int screenY)
+    {
+        Document? document = null;
+        Window? window = null;
+        object? pointObject = null;
+        Range? pointRange = null;
+        Range? equationRange = null;
+        Bookmark? bookmark = null;
+        try
+        {
+            document = _application.ActiveDocument
+                ?? throw new InvalidOperationException("No active Word document.");
+            window = _application.ActiveWindow;
+            pointObject = window.RangeFromPoint(screenX, screenY);
+            pointRange = pointObject as Range;
+            if (pointRange is null) return null;
+            pointObject = null;
+
+            equationRange = TryResolveNativeOmmlAtRange(document, pointRange);
+            if (equationRange is null
+                || !ScreenPointHitsRange(window, equationRange, screenX, screenY))
+                return null;
+
+            bookmark = WordOmmlFormulaStore.FindAtRange(document, equationRange);
+            if (bookmark is null) return null;
+            var metadata = WordOmmlFormulaStore.TryRead(document, bookmark);
+            if (metadata is null) return null;
+            metadata = WordOmmlNativeSource.RefreshForVisualTeX(
+                document,
+                bookmark,
+                metadata);
+            metadata.FontSizePt = ReadOmmlFontSize(bookmark, metadata);
+            return new OfficeSelection
+            {
+                Host = "word",
+                DocumentId = DocumentIdentity(document),
+                ObjectId = RangeReference(equationRange),
+                ReadOnly = document.ReadOnly,
+                FormulaId = metadata.FormulaId,
+                Metadata = metadata,
+                ObjectMode = FormulaOleContract.WordOmmlMode,
+            };
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            Release(bookmark);
+            Release(equationRange);
+            Release(pointRange);
+            Release(pointObject);
+            Release(window);
+            Release(document);
+        }
+    }
+
+    public bool IsFormulaAtScreenPoint(
+        OfficeSelection? selected,
+        int screenX,
+        int screenY)
+    {
+        if (selected?.Metadata is null
+            || string.IsNullOrWhiteSpace(selected.FormulaId))
+            return false;
+
+        Document? document = null;
+        Window? window = null;
+        InlineShape? shape = null;
+        Bookmark? bookmark = null;
+        Range? formulaRange = null;
+        try
+        {
+            document = _application.ActiveDocument;
+            if (document is null
+                || !string.Equals(
+                    DocumentIdentity(document),
+                    selected.DocumentId,
+                    StringComparison.Ordinal))
+                return false;
+            window = _application.ActiveWindow;
+
+            if (string.Equals(
+                    selected.ObjectMode,
+                    FormulaOleContract.WordOmmlMode,
+                    StringComparison.Ordinal))
+            {
+                bookmark = WordOmmlFormulaStore.FindByFormulaId(
+                    document,
+                    selected.FormulaId!);
+                if (bookmark is null) return false;
+                formulaRange = WordOmmlFormulaStore.GetEquationRange(bookmark);
+            }
+            else
+            {
+                shape = FindByFormulaId(
+                    document,
+                    selected.FormulaId!,
+                    selected.ObjectId);
+                if (shape is null) return false;
+                formulaRange = shape.Range;
+            }
+
+            return ScreenPointHitsRange(
+                window,
+                formulaRange,
+                screenX,
+                screenY);
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            Release(formulaRange);
+            Release(bookmark);
+            Release(shape);
+            Release(window);
+            Release(document);
+        }
+    }
+
+    private static bool ScreenPointHitsRange(
+        Window window,
+        Range range,
+        int screenX,
+        int screenY)
+    {
+        try
+        {
+            window.GetPoint(
+                out var left,
+                out var top,
+                out var width,
+                out var height,
+                range);
+            return WordDoubleClickRouting.ScreenPointHitsFormulaRectangle(
+                screenX,
+                screenY,
+                left,
+                top,
+                width,
+                height);
+        }
+        catch
+        {
+            return false;
         }
     }
 
@@ -379,22 +546,26 @@ internal sealed class WordFormulaService
                         document,
                         formulaRange,
                         metadata.FormulaId);
-                    if (selection.Start != boundaryPosition
-                        || selection.End != boundaryPosition)
-                        selection.SetRange(boundaryPosition, boundaryPosition);
-                    font = selection.Font;
-                    font.Position = 0;
-                    font.Hidden = 0;
+                    PositionSelectionAfterInlineTypingAnchor(
+                        selection,
+                        formulaRange,
+                        boundaryPosition);
+                    ApplyInlineTypingFormattingToSelection(
+                        selection,
+                        formulaRange);
                     return true;
                 }
             }
 
             if (caretPosition != formulaRange.End) return false;
             var target = EnsureInlineBaselineSentinel(formulaRange, metadata.FormulaId);
-            selection.SetRange(target, target);
-            font = selection.Font;
-            font.Position = 0;
-            font.Hidden = 0;
+            PositionSelectionAfterInlineTypingAnchor(
+                selection,
+                formulaRange,
+                target);
+            ApplyInlineTypingFormattingToSelection(
+                selection,
+                formulaRange);
             return true;
         }
         finally
@@ -405,6 +576,75 @@ internal sealed class WordFormulaService
             Release(bookmarks);
             Release(document);
             Release(formulaRange);
+        }
+    }
+
+    private static void PositionSelectionAfterInlineTypingAnchor(
+        Selection selection,
+        Range formulaRange,
+        int boundaryPosition)
+    {
+        if (selection.Start == boundaryPosition
+            && selection.End == boundaryPosition)
+            return;
+
+        selection.SetRange(formulaRange.End, formulaRange.End);
+        if (boundaryPosition > formulaRange.End)
+        {
+            _ = selection.MoveRight(
+                WdUnits.wdCharacter,
+                Math.Max(1, boundaryPosition - formulaRange.End),
+                WdMovementType.wdMove);
+        }
+        if (selection.Start != boundaryPosition
+            || selection.End != boundaryPosition)
+            selection.SetRange(boundaryPosition, boundaryPosition);
+    }
+
+    private static void ApplyInlineTypingFormattingToSelection(
+        Selection selection,
+        Range formulaRange)
+    {
+        Range? source = null;
+        Range? caret = null;
+        Microsoft.Office.Interop.Word.Font? sourceFont = null;
+        Microsoft.Office.Interop.Word.Font? selectionFont = null;
+        try
+        {
+            caret = selection.Range;
+            source = FindInlineTypingFormatSource(formulaRange, caret);
+            if (source is not null)
+            {
+                sourceFont = source.Font;
+                selectionFont = selection.Font;
+                selectionFont.Name = sourceFont.Name;
+                try { selectionFont.NameAscii = sourceFont.NameAscii; } catch { }
+                try { selectionFont.NameFarEast = sourceFont.NameFarEast; } catch { }
+                try { selectionFont.NameOther = sourceFont.NameOther; } catch { }
+                selectionFont.Size = sourceFont.Size;
+                selectionFont.Bold = sourceFont.Bold;
+                selectionFont.Italic = sourceFont.Italic;
+                try { selectionFont.Underline = sourceFont.Underline; } catch { }
+                try { selectionFont.Color = sourceFont.Color; } catch { }
+            }
+            else
+            {
+                selectionFont = selection.Font;
+            }
+
+            selectionFont.Position = 0;
+            selectionFont.Hidden = 0;
+            selectionFont.Subscript = 0;
+            selectionFont.Superscript = 0;
+            try { selectionFont.Spacing = 0; } catch { }
+            try { selectionFont.Scaling = 100; } catch { }
+        }
+        finally
+        {
+            Release(selectionFont);
+            Release(sourceFont);
+            Release(source);
+            Release(caret);
         }
     }
 
@@ -732,6 +972,339 @@ internal sealed class WordFormulaService
         }
     }
 
+    public WordBatchEquationNumberingStats GetBatchEquationNumberingStats()
+    {
+        Document? document = null;
+        try
+        {
+            document = _application.ActiveDocument
+                ?? throw new InvalidOperationException("No active Word document.");
+            return CaptureBatchEquationNumberingStats(document);
+        }
+        finally { Release(document); }
+    }
+
+    private sealed class BatchNumberingMetadataSnapshot
+    {
+        internal string FormulaId { get; set; } = string.Empty;
+        internal bool IsOmml { get; set; }
+        internal FormulaMetadata Metadata { get; set; } = new();
+    }
+
+    public WordBatchEquationNumberingResult ApplyBatchEquationNumbering(
+        string formatId,
+        bool redrawExisting)
+    {
+        Document? document = null;
+        InlineShapes? inlineShapes = null;
+        UndoRecord? undoRecord = null;
+        List<BatchNumberingMetadataSnapshot>? metadataSnapshots = null;
+        string? previousFormatId = null;
+        try
+        {
+            document = _application.ActiveDocument
+                ?? throw new InvalidOperationException("No active Word document.");
+            EnsureWritable(document);
+            var stats = CaptureBatchEquationNumberingStats(document);
+            var format = EquationNumberFormat.Resolve(formatId);
+            previousFormatId = WordEquationNumbering.GetEquationNumberFormatId(document);
+            metadataSnapshots = CaptureBatchNumberingMetadataSnapshots(document);
+            if (stats.TotalCount == 0)
+            {
+                return new WordBatchEquationNumberingResult
+                {
+                    FormatId = format.Id,
+                };
+            }
+
+            undoRecord = BeginUndoRecord("VisualTeX Batch Equation Numbering");
+            WordEquationNumbering.SetEquationNumberFormatPreference(document, format.Id);
+
+            var added = 0;
+            var redrawn = 0;
+            var seenFormulaIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            inlineShapes = document.InlineShapes;
+            for (var index = 1; index <= inlineShapes.Count; index++)
+            {
+                InlineShape? shape = null;
+                try
+                {
+                    shape = inlineShapes[index];
+                    var metadata = WordFormulaMetadataReader.TryRead(shape);
+                    if (metadata?.DisplayMode != "block"
+                        || !seenFormulaIds.Add(metadata.FormulaId))
+                        continue;
+
+                    var hasCompleteNumbering =
+                        WordEquationNumbering.HasCompleteFormulaNumberingArtifacts(
+                            document,
+                            metadata.FormulaId);
+                    if (hasCompleteNumbering)
+                    {
+                        if (!redrawExisting)
+                        {
+                            if (!metadata.Numbered)
+                            {
+                                StampBatchNumberingMetadata(metadata);
+                                WordFormulaMetadataReader.Write(shape, metadata);
+                            }
+                            continue;
+                        }
+
+                        WordEquationNumbering.RemoveFormulaNumberingArtifacts(
+                            document,
+                            metadata.FormulaId);
+                        redrawn++;
+                    }
+                    else
+                    {
+                        added++;
+                    }
+
+                    StampBatchNumberingMetadata(metadata);
+                    WordFormulaMetadataReader.Write(shape, metadata);
+                }
+                finally { Release(shape); }
+            }
+
+            foreach (var formulaId in WordOmmlFormulaStore.FormulaIds(document))
+            {
+                if (!seenFormulaIds.Add(formulaId)) continue;
+                var metadata = WordOmmlFormulaStore.TryRead(document, formulaId);
+                if (metadata?.DisplayMode != "block") continue;
+                var hasCompleteNumbering =
+                    WordEquationNumbering.HasCompleteFormulaNumberingArtifacts(
+                        document,
+                        formulaId);
+                if (hasCompleteNumbering)
+                {
+                    if (!redrawExisting)
+                    {
+                        if (!metadata.Numbered)
+                        {
+                            StampBatchNumberingMetadata(metadata);
+                            WordOmmlFormulaStore.Save(document, metadata);
+                        }
+                        continue;
+                    }
+
+                    WordEquationNumbering.RemoveFormulaNumberingArtifacts(document, formulaId);
+                    redrawn++;
+                }
+                else
+                {
+                    added++;
+                }
+
+                StampBatchNumberingMetadata(metadata);
+                WordOmmlFormulaStore.Save(document, metadata);
+            }
+
+            var numbered = WordEquationNumbering.Reconcile(document);
+            return new WordBatchEquationNumberingResult
+            {
+                TotalCount = stats.TotalCount,
+                AddedCount = added,
+                RedrawnCount = redrawn,
+                NumberedCount = numbered,
+                FormatId = format.Id,
+            };
+        }
+        catch
+        {
+            if (undoRecord is not null)
+            {
+                EndUndoRecord(undoRecord);
+                Release(undoRecord);
+                undoRecord = null;
+                if (document is not null)
+                    TryUndoBatchEquationNumbering(document);
+            }
+            if (document is not null && metadataSnapshots is not null)
+            {
+                RestoreBatchNumberingMetadata(
+                    document,
+                    metadataSnapshots,
+                    previousFormatId);
+            }
+            throw;
+        }
+        finally
+        {
+            EndUndoRecord(undoRecord);
+            Release(undoRecord);
+            Release(inlineShapes);
+            Release(document);
+        }
+    }
+
+    private static WordBatchEquationNumberingStats CaptureBatchEquationNumberingStats(
+        Document document)
+    {
+        var total = 0;
+        var numbered = 0;
+        var seenFormulaIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        InlineShapes? inlineShapes = null;
+        try
+        {
+            inlineShapes = document.InlineShapes;
+            for (var index = 1; index <= inlineShapes.Count; index++)
+            {
+                InlineShape? shape = null;
+                try
+                {
+                    shape = inlineShapes[index];
+                    var metadata = WordFormulaMetadataReader.TryRead(shape);
+                    if (metadata?.DisplayMode != "block"
+                        || !seenFormulaIds.Add(metadata.FormulaId))
+                        continue;
+                    total++;
+                    if (WordEquationNumbering.HasCompleteFormulaNumberingArtifacts(
+                            document,
+                            metadata.FormulaId))
+                        numbered++;
+                }
+                finally { Release(shape); }
+            }
+
+            foreach (var formulaId in WordOmmlFormulaStore.FormulaIds(document))
+            {
+                if (!seenFormulaIds.Add(formulaId)) continue;
+                var metadata = WordOmmlFormulaStore.TryRead(document, formulaId);
+                if (metadata?.DisplayMode != "block") continue;
+                total++;
+                if (WordEquationNumbering.HasCompleteFormulaNumberingArtifacts(
+                        document,
+                        formulaId))
+                    numbered++;
+            }
+        }
+        finally { Release(inlineShapes); }
+
+        return new WordBatchEquationNumberingStats
+        {
+            TotalCount = total,
+            NumberedCount = numbered,
+            CurrentFormatId = WordEquationNumbering.GetEquationNumberFormatId(document),
+        };
+    }
+
+    private static void StampBatchNumberingMetadata(FormulaMetadata metadata)
+    {
+        metadata.Numbered = true;
+        metadata.UpdatedWithVersion = "1.2.4";
+        metadata.UpdatedAt = DateTimeOffset.UtcNow.ToString("O");
+        metadata.Validate();
+    }
+
+    private static List<BatchNumberingMetadataSnapshot>
+        CaptureBatchNumberingMetadataSnapshots(Document document)
+    {
+        var snapshots = new List<BatchNumberingMetadataSnapshot>();
+        var seenFormulaIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        InlineShapes? inlineShapes = null;
+        try
+        {
+            inlineShapes = document.InlineShapes;
+            for (var index = 1; index <= inlineShapes.Count; index++)
+            {
+                InlineShape? shape = null;
+                try
+                {
+                    shape = inlineShapes[index];
+                    var metadata = WordFormulaMetadataReader.TryRead(shape);
+                    if (metadata?.DisplayMode != "block"
+                        || !seenFormulaIds.Add(metadata.FormulaId))
+                        continue;
+                    snapshots.Add(new BatchNumberingMetadataSnapshot
+                    {
+                        FormulaId = metadata.FormulaId,
+                        IsOmml = false,
+                        Metadata = CloneBatchNumberingMetadata(metadata),
+                    });
+                }
+                finally { Release(shape); }
+            }
+
+            foreach (var formulaId in WordOmmlFormulaStore.FormulaIds(document))
+            {
+                if (!seenFormulaIds.Add(formulaId)) continue;
+                var metadata = WordOmmlFormulaStore.TryRead(document, formulaId);
+                if (metadata?.DisplayMode != "block") continue;
+                snapshots.Add(new BatchNumberingMetadataSnapshot
+                {
+                    FormulaId = formulaId,
+                    IsOmml = true,
+                    Metadata = CloneBatchNumberingMetadata(metadata),
+                });
+            }
+        }
+        finally { Release(inlineShapes); }
+        return snapshots;
+    }
+
+    private static FormulaMetadata CloneBatchNumberingMetadata(
+        FormulaMetadata metadata) =>
+        FormulaMetadataCodec.DeserializeJson(
+            FormulaMetadataCodec.SerializeJson(metadata))
+        ?? throw new InvalidDataException(
+            "VisualTeX could not snapshot formula metadata before batch numbering.");
+
+    private void TryUndoBatchEquationNumbering(Document document)
+    {
+        object count = 1;
+        try { document.Undo(ref count); }
+        catch
+        {
+            // Metadata restoration below still prevents a failed operation from
+            // leaving formulas falsely marked as numbered.
+        }
+    }
+
+    private static void RestoreBatchNumberingMetadata(
+        Document document,
+        IReadOnlyList<BatchNumberingMetadataSnapshot> snapshots,
+        string? previousFormatId)
+    {
+        foreach (var snapshot in snapshots)
+        {
+            try
+            {
+                var metadata = CloneBatchNumberingMetadata(snapshot.Metadata);
+                if (snapshot.IsOmml)
+                {
+                    WordOmmlFormulaStore.Save(document, metadata);
+                    continue;
+                }
+
+                InlineShape? shape = null;
+                try
+                {
+                    shape = FindByFormulaId(document, snapshot.FormulaId);
+                    if (shape is not null)
+                        WordFormulaMetadataReader.Write(shape, metadata);
+                }
+                finally { Release(shape); }
+            }
+            catch
+            {
+                // Preserve the original batch-numbering exception. Restoration is
+                // best effort for documents that Word itself has already made invalid.
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(previousFormatId))
+        {
+            try
+            {
+                WordEquationNumbering.SetEquationNumberFormatPreference(
+                    document,
+                    previousFormatId!);
+            }
+            catch { }
+        }
+    }
+
     public string ExportSelectedOleAsPicture()
     {
         var selected = ReadSelection();
@@ -883,9 +1456,21 @@ internal sealed class WordFormulaService
             {
                 TryReconcileShape(document, shape, metadata);
                 if (session.Numbered)
+                {
                     MoveCaretToNormalTypingParagraphAfterNumberedDisplay(
                         document,
                         metadata.FormulaId);
+                }
+                else
+                {
+                    Range? shapeRange = null;
+                    try
+                    {
+                        shapeRange = shape.Range;
+                        MoveSelectionAfterDisplayFormula(selection, shapeRange);
+                    }
+                    finally { Release(shapeRange); }
+                }
             }
             return Result(session, document);
         }
@@ -986,9 +1571,21 @@ internal sealed class WordFormulaService
             {
                 TryReconcileShape(document, shape, metadata);
                 if (session.Numbered)
+                {
                     MoveCaretToNormalTypingParagraphAfterNumberedDisplay(
                         document,
                         metadata.FormulaId);
+                }
+                else
+                {
+                    Range? shapeRange = null;
+                    try
+                    {
+                        shapeRange = shape.Range;
+                        MoveSelectionAfterDisplayFormula(selection, shapeRange);
+                    }
+                    finally { Release(shapeRange); }
+                }
             }
             return Result(session, document);
         }
@@ -1028,6 +1625,7 @@ internal sealed class WordFormulaService
         Bookmark? bookmark = null;
         Table? numberedTable = null;
         UndoRecord? undoRecord = null;
+        InlineFollowingTextVisibility? inlineFollowingTextVisibility = null;
         var metadataSaved = false;
         try
         {
@@ -1044,6 +1642,8 @@ internal sealed class WordFormulaService
             insertion.Collapse(WdCollapseDirection.wdCollapseEnd);
             if (session.DisplayMode == "inline")
             {
+                inlineFollowingTextVisibility =
+                    CaptureInlineFollowingTextVisibility(insertion);
                 var placeholder = PrepareInlineBaselineSentinelBeforeInsert(
                     document,
                     insertion,
@@ -1096,15 +1696,22 @@ internal sealed class WordFormulaService
                     document,
                     equationRange,
                     metadata.FormulaId,
-                    moveCaretOutsideMath: true);
+                    moveCaretOutsideMath: true,
+                    followingTextVisibility: inlineFollowingTextVisibility);
             }
             else
             {
                 TryReconcileOmml(document, bookmark!, equationRange, metadata);
                 if (session.Numbered)
+                {
                     MoveCaretToNormalTypingParagraphAfterNumberedDisplay(
                         document,
                         metadata.FormulaId);
+                }
+                else
+                {
+                    MoveSelectionAfterDisplayFormula(selection, equationRange);
+                }
             }
             return Result(session, document);
         }
@@ -1180,7 +1787,19 @@ internal sealed class WordFormulaService
             // Unicode characters. The exact ranges are also required to inherit the
             // surrounding prose size instead of the deliberately smaller LaTeX source
             // run used by many generated documents.
+            var sourceContexts = BuildLatexRedrawSourceContexts(
+                plan.SourceText,
+                plan.Targets);
+            var sourceFontSizes = TryBuildWordOpenXmlFontSizeIndex(
+                scope,
+                plan.SourceText);
+            var wordStoryOffsets = BuildWordStoryOffsetIndex(plan.SourceText);
             var resolvedForFormatting = new List<ResolvedLatexRedrawTarget>(plan.Targets.Count);
+            long rangeResolutionTicks = 0;
+            long fontResolutionTicks = 0;
+            var openXmlFontHitCount = 0;
+            var contextComFontHitCount = 0;
+            var fontFallbackCount = 0;
             try
             {
                 foreach (var target in plan.Targets.OrderBy(item => item.RelativeStart))
@@ -1188,32 +1807,104 @@ internal sealed class WordFormulaService
                     var expectedSource = plan.SourceText.Substring(
                         target.RelativeStart,
                         target.SourceLength);
-                    var sourceRange = ResolveExactLatexSourceRange(
-                        document,
-                        plan,
-                        target,
-                        expectedSource,
-                        resolvedForFormatting);
-                    target.AbsoluteStart = sourceRange.Start;
-                    target.AbsoluteEnd = sourceRange.End;
+                    var targetRelativeEnd = target.RelativeStart + target.SourceLength;
+                    var sourceStart = plan.ScopeStart
+                        + wordStoryOffsets[target.RelativeStart];
+                    var sourceEnd = plan.ScopeStart
+                        + wordStoryOffsets[targetRelativeEnd];
+                    target.AbsoluteStart = sourceStart;
+                    target.AbsoluteEnd = sourceEnd;
+                    Range? sourceRange = null;
+                    if (sourceStart < plan.ScopeStart
+                        || sourceEnd <= sourceStart
+                        || sourceEnd > plan.ScopeEnd)
+                    {
+                        var rangeStarted = Stopwatch.GetTimestamp();
+                        sourceRange = ResolveExactLatexSourceRange(
+                            document,
+                            plan,
+                            target,
+                            expectedSource,
+                            resolvedForFormatting);
+                        rangeResolutionTicks += Stopwatch.GetTimestamp() - rangeStarted;
+                        sourceStart = target.AbsoluteStart;
+                        sourceEnd = target.AbsoluteEnd;
+                    }
+
                     var display = string.Equals(
                         target.DisplayMode,
                         "block",
                         StringComparison.Ordinal);
+                    var sourceContext = sourceContexts[target.Id];
                     target.PreserveDisplayParagraphBoundary =
-                        display && !HasVisibleSurroundingText(sourceRange);
-                    target.FontSizePt = ResolveSourceFormulaFontSize(
-                        document,
-                        sourceRange,
-                        display);
+                        display && !sourceContext.HasVisibleSurroundingText;
+                    var fontStarted = Stopwatch.GetTimestamp();
+                    var fontContextPosition = sourceContext.FontContextRelativePosition;
+                    if (sourceFontSizes is not null
+                        && fontContextPosition >= 0
+                        && fontContextPosition < sourceFontSizes.Length
+                        && sourceFontSizes[fontContextPosition] is double openXmlFontSize
+                        && openXmlFontSize > 0)
+                    {
+                        openXmlFontHitCount++;
+                        target.FontSizePt = openXmlFontSize;
+                    }
+                    else if (TryResolveSourceFormulaFontSizeFromContext(
+                                 document,
+                                 plan,
+                                 target,
+                                 sourceStart,
+                                 sourceEnd,
+                                 fontContextPosition,
+                                 out var contextFontSize))
+                    {
+                        contextComFontHitCount++;
+                        target.FontSizePt = contextFontSize;
+                    }
+                    else
+                    {
+                        fontFallbackCount++;
+                        if (sourceRange is null)
+                        {
+                            var rangeStarted = Stopwatch.GetTimestamp();
+                            sourceRange = ResolveExactLatexSourceRange(
+                                document,
+                                plan,
+                                target,
+                                expectedSource,
+                                resolvedForFormatting);
+                            rangeResolutionTicks += Stopwatch.GetTimestamp() - rangeStarted;
+                            sourceStart = target.AbsoluteStart;
+                            sourceEnd = target.AbsoluteEnd;
+                        }
+                        target.FontSizePt = ResolveSourceFormulaFontSize(
+                            document,
+                            sourceRange,
+                            display);
+                    }
+                    fontResolutionTicks += Stopwatch.GetTimestamp() - fontStarted;
                     resolvedForFormatting.Add(new ResolvedLatexRedrawTarget
                     {
                         Target = target,
-                        SourceRange = sourceRange,
-                        SourceStart = sourceRange.Start,
-                        SourceEnd = sourceRange.End,
+                        SourceRange = sourceRange!,
+                        SourceStart = sourceStart,
+                        SourceEnd = sourceEnd,
                         ExpectedSource = expectedSource,
                     });
+                }
+                if (string.Equals(
+                        Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE"),
+                        "1",
+                        StringComparison.Ordinal))
+                {
+                    var ticksToMilliseconds = 1000d / Stopwatch.Frequency;
+                    Console.WriteLine(
+                        "    [perf] latex-redraw-capture: "
+                        + $"range={rangeResolutionTicks * ticksToMilliseconds:F1}ms, "
+                        + $"font={fontResolutionTicks * ticksToMilliseconds:F1}ms, "
+                        + $"openXmlFontHits={openXmlFontHitCount}, "
+                        + $"contextComFontHits={contextComFontHitCount}, "
+                        + $"fontFallbacks={fontFallbackCount}/{plan.Targets.Count}.");
                 }
             }
             finally
@@ -1525,6 +2216,14 @@ internal sealed class WordFormulaService
                             formulaRange,
                             scope,
                             wholeDocument))
+                        continue;
+                    // Word can leave multiple collapsed VTOMML anchors near one
+                    // physical OMath after undo/paste or an interrupted edit. A
+                    // formula-to-LaTeX operation is defined by the visible native
+                    // equation, not by the number of stale logical anchors.
+                    if (targets.Any(target => FormulaRangesMatch(
+                            target.FormulaRange,
+                            formulaRange)))
                         continue;
                     targets.Add(new FormulaToLatexTarget
                     {
@@ -1892,6 +2591,8 @@ internal sealed class WordFormulaService
                         StringComparison.Ordinal)
                     && !OverlapsResolvedLatexRange(direct, alreadyResolved))
                 {
+                    target.AbsoluteStart = approximateStart;
+                    target.AbsoluteEnd = approximateEnd;
                     var result = direct;
                     direct = null;
                     return result;
@@ -1910,7 +2611,12 @@ internal sealed class WordFormulaService
             approximateStart,
             expectedSource,
             alreadyResolved);
-        if (located is not null) return located;
+        if (located is not null)
+        {
+            target.AbsoluteStart = located.Start;
+            target.AbsoluteEnd = located.End;
+            return located;
+        }
 
         located = FindExactLatexSourceRange(
             document,
@@ -1919,7 +2625,12 @@ internal sealed class WordFormulaService
             approximateStart,
             expectedSource,
             alreadyResolved);
-        if (located is not null) return located;
+        if (located is not null)
+        {
+            target.AbsoluteStart = located.Start;
+            target.AbsoluteEnd = located.End;
+            return located;
+        }
 
         throw new InvalidOperationException(
             $"无法在原位置附近重新定位公式：{target.Latex}。为避免替换错误内容，本次重绘已停止。");
@@ -2084,6 +2795,420 @@ internal sealed class WordFormulaService
             builder.Append(token);
         }
         return builder.ToString();
+    }
+
+    private static double?[]? TryBuildWordOpenXmlFontSizeIndex(
+        Range scope,
+        string sourceText)
+    {
+        const string packageNamespace =
+            "http://schemas.microsoft.com/office/2006/xmlPackage";
+        const string wordNamespace =
+            "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        try
+        {
+            var package = XDocument.Parse(
+                scope.WordOpenXML,
+                LoadOptions.PreserveWhitespace);
+            XNamespace packageNs = packageNamespace;
+            XNamespace word = wordNamespace;
+            var documentPart = package
+                .Descendants(packageNs + "part")
+                .FirstOrDefault(part => string.Equals(
+                    (string?)part.Attribute(packageNs + "name"),
+                    "/word/document.xml",
+                    StringComparison.OrdinalIgnoreCase));
+            var body = documentPart?
+                .Descendants(word + "body")
+                .FirstOrDefault();
+            if (body is null) return null;
+
+            var reconstructed = new StringBuilder(sourceText.Length + 16);
+            var fontSizes = new List<double?>(sourceText.Length + 16);
+            foreach (var paragraph in body.Descendants(word + "p"))
+            {
+                var paragraphFontSize = ReadWordOpenXmlFontSize(
+                    paragraph.Element(word + "pPr")?.Element(word + "rPr"),
+                    word);
+                foreach (var token in paragraph.Descendants())
+                {
+                    string? tokenText = null;
+                    if (token.Name == word + "t"
+                        || token.Name == word + "delText")
+                    {
+                        tokenText = token.Value;
+                    }
+                    else if (token.Name == word + "tab")
+                    {
+                        tokenText = "\t";
+                    }
+                    else if (token.Name == word + "br"
+                        || token.Name == word + "cr")
+                    {
+                        tokenText = "\v";
+                    }
+                    else if (token.Name == word + "noBreakHyphen")
+                    {
+                        tokenText = "\u2011";
+                    }
+                    else if (token.Name == word + "softHyphen")
+                    {
+                        tokenText = "\u00AD";
+                    }
+                    if (tokenText is null) continue;
+
+                    var run = token.Ancestors(word + "r").FirstOrDefault();
+                    var runFontSize = ReadWordOpenXmlFontSize(
+                        run?.Element(word + "rPr"),
+                        word)
+                        ?? paragraphFontSize;
+                    reconstructed.Append(tokenText);
+                    for (var index = 0; index < tokenText.Length; index++)
+                        fontSizes.Add(runFontSize);
+                }
+                reconstructed.Append('\r');
+                fontSizes.Add(paragraphFontSize);
+            }
+
+            var reconstructedText = reconstructed.ToString();
+            if (string.Equals(
+                    reconstructedText,
+                    sourceText,
+                    StringComparison.Ordinal))
+                return fontSizes.ToArray();
+
+            // A Word Open XML fragment can include one mandatory trailing empty
+            // paragraph that is outside the requested story range. Accept only that
+            // exact, unambiguous difference; every other mismatch falls back to COM.
+            if (reconstructedText.Length == sourceText.Length + 1
+                && reconstructedText[reconstructedText.Length - 1] == '\r'
+                && string.Equals(
+                    reconstructedText.Substring(0, sourceText.Length),
+                    sourceText,
+                    StringComparison.Ordinal))
+            {
+                fontSizes.RemoveAt(fontSizes.Count - 1);
+                return fontSizes.ToArray();
+            }
+            return null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static double? ReadWordOpenXmlFontSize(
+        XElement? runProperties,
+        XNamespace word)
+    {
+        if (runProperties is null) return null;
+        var value = (string?)runProperties
+            .Element(word + "sz")?
+            .Attribute(word + "val")
+            ?? (string?)runProperties
+                .Element(word + "szCs")?
+                .Attribute(word + "val");
+        if (!double.TryParse(
+                value,
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var halfPoints)
+            || halfPoints <= 0
+            || double.IsNaN(halfPoints)
+            || double.IsInfinity(halfPoints))
+            return null;
+        return halfPoints / 2d;
+    }
+
+    private static IReadOnlyDictionary<string, LatexRedrawSourceContext>
+        BuildLatexRedrawSourceContexts(
+            string sourceText,
+            IReadOnlyList<WordLatexRedrawTarget> targets)
+    {
+        var contexts = new Dictionary<string, LatexRedrawSourceContext>(
+            targets.Count,
+            StringComparer.Ordinal);
+        var formulaMask = new bool[sourceText.Length];
+        foreach (var target in targets)
+        {
+            var start = Math.Max(0, Math.Min(sourceText.Length, target.RelativeStart));
+            var end = Math.Max(start, Math.Min(
+                sourceText.Length,
+                target.RelativeStart + target.SourceLength));
+            for (var index = start; index < end; index++)
+                formulaMask[index] = true;
+        }
+
+        foreach (var target in targets)
+        {
+            var start = Math.Max(0, Math.Min(sourceText.Length, target.RelativeStart));
+            var end = Math.Max(start, Math.Min(
+                sourceText.Length,
+                target.RelativeStart + target.SourceLength));
+            var paragraphStart = FindSourceParagraphStart(sourceText, start);
+            var paragraphEnd = FindSourceParagraphEnd(sourceText, end);
+            var previousInParagraph = FindPreviousVisibleSourcePosition(
+                sourceText,
+                start - 1,
+                paragraphStart,
+                formulaMask);
+            var nextInParagraph = FindNextVisibleSourcePosition(
+                sourceText,
+                end,
+                paragraphEnd,
+                formulaMask);
+            var hasVisibleSurroundingText =
+                previousInParagraph >= 0 || nextInParagraph >= 0;
+            var display = string.Equals(
+                target.DisplayMode,
+                "block",
+                StringComparison.Ordinal);
+
+            int fontContextPosition;
+            if (!display || hasVisibleSurroundingText)
+            {
+                fontContextPosition = previousInParagraph >= 0
+                    ? previousInParagraph
+                    : nextInParagraph;
+            }
+            else
+            {
+                var previousParagraph = FindPreviousVisibleSourcePosition(
+                    sourceText,
+                    paragraphStart - 1,
+                    0,
+                    formulaMask);
+                var nextParagraph = FindNextVisibleSourcePosition(
+                    sourceText,
+                    paragraphEnd,
+                    sourceText.Length,
+                    formulaMask);
+                fontContextPosition = previousParagraph >= 0
+                    ? previousParagraph
+                    : nextParagraph;
+            }
+
+            contexts[target.Id] = new LatexRedrawSourceContext
+            {
+                HasVisibleSurroundingText = hasVisibleSurroundingText,
+                FontContextRelativePosition = fontContextPosition,
+            };
+        }
+        return contexts;
+    }
+
+    private static int FindSourceParagraphStart(string sourceText, int position)
+    {
+        for (var index = Math.Min(position, sourceText.Length) - 1;
+             index >= 0;
+             index--)
+        {
+            if (IsSourceParagraphBoundary(sourceText[index]))
+                return index + 1;
+        }
+        return 0;
+    }
+
+    private static int FindSourceParagraphEnd(string sourceText, int position)
+    {
+        for (var index = Math.Max(0, position);
+             index < sourceText.Length;
+             index++)
+        {
+            if (IsSourceParagraphBoundary(sourceText[index]))
+                return index;
+        }
+        return sourceText.Length;
+    }
+
+    private static int FindPreviousVisibleSourcePosition(
+        string sourceText,
+        int startPosition,
+        int minimumPosition,
+        IReadOnlyList<bool> formulaMask)
+    {
+        for (var index = Math.Min(startPosition, sourceText.Length - 1);
+             index >= Math.Max(0, minimumPosition);
+             index--)
+        {
+            if (char.IsLowSurrogate(sourceText[index])
+                && index > minimumPosition
+                && char.IsHighSurrogate(sourceText[index - 1]))
+                index--;
+            if (formulaMask[index]) continue;
+            if (char.IsHighSurrogate(sourceText[index])
+                && index + 1 < sourceText.Length
+                && char.IsLowSurrogate(sourceText[index + 1])
+                && formulaMask[index + 1])
+                continue;
+            if (IsVisibleSourceCharacter(sourceText[index])) return index;
+        }
+        return -1;
+    }
+
+    private static int FindNextVisibleSourcePosition(
+        string sourceText,
+        int startPosition,
+        int maximumPosition,
+        IReadOnlyList<bool> formulaMask)
+    {
+        var maximum = Math.Min(sourceText.Length, maximumPosition);
+        for (var index = Math.Max(0, startPosition);
+             index < maximum;
+             index++)
+        {
+            if (char.IsLowSurrogate(sourceText[index])
+                && index > 0
+                && char.IsHighSurrogate(sourceText[index - 1]))
+                continue;
+            if (formulaMask[index]) continue;
+            if (char.IsHighSurrogate(sourceText[index])
+                && index + 1 < sourceText.Length
+                && char.IsLowSurrogate(sourceText[index + 1])
+                && formulaMask[index + 1])
+                continue;
+            if (IsVisibleSourceCharacter(sourceText[index])) return index;
+            if (char.IsHighSurrogate(sourceText[index])
+                && index + 1 < maximum
+                && char.IsLowSurrogate(sourceText[index + 1]))
+                index++;
+        }
+        return -1;
+    }
+
+    private static bool IsSourceParagraphBoundary(char character) =>
+        character is '\r' or '\n' or '\v' or '\a';
+
+    private static bool IsVisibleSourceCharacter(char character)
+    {
+        if (character is '\r' or '\n' or '\t' or '\v' or '\a'
+            or '\u0001' or '\u200B' or '\u200C')
+            return false;
+        return !char.IsWhiteSpace(character);
+    }
+
+    private static bool TryResolveSourceFormulaFontSizeFromContext(
+        Document document,
+        WordLatexRedrawPlan plan,
+        WordLatexRedrawTarget target,
+        int sourceStart,
+        int sourceEnd,
+        int contextRelativePosition,
+        out float fontSizePt)
+    {
+        fontSizePt = FormulaFontSize.DefaultPt;
+        if (contextRelativePosition < 0
+            || contextRelativePosition >= plan.SourceText.Length)
+            return false;
+
+        var targetEnd = target.RelativeStart + target.SourceLength;
+        int wordPosition;
+        if (contextRelativePosition < target.RelativeStart)
+        {
+            wordPosition = sourceStart - CountWordStoryCharacters(
+                plan.SourceText,
+                contextRelativePosition,
+                target.RelativeStart);
+        }
+        else if (contextRelativePosition >= targetEnd)
+        {
+            wordPosition = sourceEnd + CountWordStoryCharacters(
+                plan.SourceText,
+                targetEnd,
+                contextRelativePosition);
+        }
+        else
+        {
+            return false;
+        }
+
+        if (wordPosition < plan.ScopeStart || wordPosition >= plan.ScopeEnd)
+            return false;
+
+        Range? probe = null;
+        Microsoft.Office.Interop.Word.Font? font = null;
+        try
+        {
+            probe = document.Range(wordPosition, wordPosition + 1);
+            var expectedText = ReadSourceCharacterAt(
+                plan.SourceText,
+                contextRelativePosition);
+            var probeText = probe.Text ?? string.Empty;
+            if (!string.Equals(
+                    probeText,
+                    expectedText,
+                    StringComparison.Ordinal)
+                || !ContainsVisibleBodyText(probeText))
+                return false;
+            font = probe.Font;
+            return TryResolveWordFontSize(font.Size, out fontSizePt);
+        }
+        catch (COMException)
+        {
+            return false;
+        }
+        finally
+        {
+            Release(font);
+            Release(probe);
+        }
+    }
+
+    private static int[] BuildWordStoryOffsetIndex(string sourceText)
+    {
+        var offsets = new int[sourceText.Length + 1];
+        var sourceIndex = 0;
+        var wordOffset = 0;
+        while (sourceIndex < sourceText.Length)
+        {
+            offsets[sourceIndex] = wordOffset;
+            if (char.IsHighSurrogate(sourceText[sourceIndex])
+                && sourceIndex + 1 < sourceText.Length
+                && char.IsLowSurrogate(sourceText[sourceIndex + 1]))
+            {
+                // Word counts a valid UTF-16 surrogate pair as one story
+                // character. The intermediate boundary is not a valid formula
+                // boundary, but mapping it to the pair start keeps the table total.
+                offsets[sourceIndex + 1] = wordOffset;
+                sourceIndex += 2;
+                wordOffset++;
+                offsets[sourceIndex] = wordOffset;
+                continue;
+            }
+            sourceIndex++;
+            wordOffset++;
+            offsets[sourceIndex] = wordOffset;
+        }
+        return offsets;
+    }
+
+    private static int CountWordStoryCharacters(
+        string sourceText,
+        int startPosition,
+        int endPosition)
+    {
+        var start = Math.Max(0, Math.Min(sourceText.Length, startPosition));
+        var end = Math.Max(start, Math.Min(sourceText.Length, endPosition));
+        var count = 0;
+        for (var index = start; index < end; index++, count++)
+        {
+            if (char.IsHighSurrogate(sourceText[index])
+                && index + 1 < end
+                && char.IsLowSurrogate(sourceText[index + 1]))
+                index++;
+        }
+        return count;
+    }
+
+    private static string ReadSourceCharacterAt(string sourceText, int position)
+    {
+        if (position < 0 || position >= sourceText.Length) return string.Empty;
+        if (char.IsHighSurrogate(sourceText[position])
+            && position + 1 < sourceText.Length
+            && char.IsLowSurrogate(sourceText[position + 1]))
+            return sourceText.Substring(position, 2);
+        return sourceText[position].ToString();
     }
 
     private static float ResolveSourceFormulaFontSize(
@@ -2271,6 +3396,11 @@ internal sealed class WordFormulaService
                 selection.Text = string.Empty;
             selection.Collapse(WdCollapseDirection.wdCollapseEnd);
             insertionStart = selection.Start;
+            var nativeOmmlBulk = prepared.Count > 0
+                && prepared.Values.All(item => string.Equals(
+                    item.Session.ObjectMode,
+                    FormulaOleContract.WordOmmlMode,
+                    StringComparison.Ordinal));
             var ommlFormulas = prepared.Values
                 .Where(item => string.Equals(
                     item.Session.ObjectMode,
@@ -2282,11 +3412,19 @@ internal sealed class WordFormulaService
                         ?? throw new InvalidDataException(
                             $"公式 {item.Session.FormulaId} 没有可用的 MathML。")))
                 .ToList();
-            if (ommlFormulas.Count > 0)
+            if (ommlFormulas.Count > 0 && !nativeOmmlBulk)
             {
+                var batchSourceStopwatch = Stopwatch.StartNew();
                 ommlBatchSource = WordOmmlConverter.CreateBatchSource(
                     _application,
                     ommlFormulas);
+                batchSourceStopwatch.Stop();
+                if (string.Equals(
+                        Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE"),
+                        "1",
+                        StringComparison.Ordinal))
+                    Console.WriteLine(
+                        $"    [perf] BulkOmml.CreateBatchSource: {batchSourceStopwatch.ElapsedMilliseconds}ms formulas={ommlFormulas.Count}");
                 document.Activate();
                 Release(selection);
                 selection = _application.Selection;
@@ -2307,6 +3445,16 @@ internal sealed class WordFormulaService
                     source,
                     prepared,
                     insertedFormulaIds);
+            }
+            else if (nativeOmmlBulk)
+            {
+                InsertBulkOmmlDocumentOneShot(
+                    document,
+                    selection,
+                    source,
+                    prepared,
+                    insertedFormulaIds,
+                    deferredOmmlMetadata);
             }
             else
             {
@@ -2396,7 +3544,17 @@ internal sealed class WordFormulaService
             }
 
             if (deferredOmmlMetadata.Count > 0)
+            {
+                var metadataStopwatch = Stopwatch.StartNew();
                 WordOmmlFormulaStore.SaveNewBatch(document, deferredOmmlMetadata);
+                metadataStopwatch.Stop();
+                if (string.Equals(
+                        Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE"),
+                        "1",
+                        StringComparison.Ordinal))
+                    Console.WriteLine(
+                        $"    [perf] BulkOmml.SaveNewBatch: {metadataStopwatch.ElapsedMilliseconds}ms formulas={deferredOmmlMetadata.Count}");
+            }
 
             return new WordBulkInsertResult
             {
@@ -2446,6 +3604,505 @@ internal sealed class WordFormulaService
         }
     }
 
+    private void InsertBulkOmmlDocumentOneShot(
+        Document document,
+        Selection selection,
+        WordBulkImportDocument source,
+        IReadOnlyDictionary<string, PreparedWordBulkFormula> prepared,
+        ICollection<string> insertedFormulaIds,
+        ICollection<FormulaMetadata> deferredOmmlMetadata)
+    {
+        const string wordNamespace =
+            "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        const string mathNamespace =
+            "http://schemas.openxmlformats.org/officeDocument/2006/math";
+        XNamespace word = wordNamespace;
+        XNamespace math = mathNamespace;
+        var marker = "VTBIEND_" + Guid.NewGuid().ToString("N");
+        var body = new XElement(word + "body");
+        var orderedFormulas = new List<(
+            PreparedWordBulkFormula Formula,
+            bool Display)>();
+
+        void AppendFormula(
+            XElement paragraph,
+            PreparedWordBulkFormula formula,
+            bool display)
+        {
+            var mathMl = formula.MathMl;
+            if (string.IsNullOrWhiteSpace(mathMl))
+                throw new InvalidDataException(
+                    $"公式 {formula.Session.FormulaId} 没有可用的 MathML。");
+            var omml = WordOmmlConverter.TransformMathMlToOmml(mathMl!);
+            var equation = XElement.Parse(
+                WordOmmlConverter.ExtractSingleOMath(omml),
+                LoadOptions.PreserveWhitespace);
+            ApplyBulkOmmlFontSizeXml(
+                equation,
+                formula.Session.FontSizePt,
+                word,
+                math);
+            paragraph.Add(equation);
+            orderedFormulas.Add((formula, display));
+        }
+
+        foreach (var block in source.Blocks)
+        {
+            var paragraph = new XElement(word + "p");
+            var paragraphProperties =
+                BuildBulkOmmlParagraphPropertiesXml(block, word);
+            if (paragraphProperties is not null)
+                paragraph.Add(paragraphProperties);
+
+            if (block.Kind == WordBulkBlockKind.DisplayFormula)
+            {
+                var formulaRun = block.Runs.Single(run => run.IsFormula);
+                if (!prepared.TryGetValue(formulaRun.Id, out var formula))
+                    throw new InvalidDataException(
+                        $"缺少行间公式 {formulaRun.Id} 的渲染结果。");
+                AppendFormula(paragraph, formula, display: true);
+            }
+            else
+            {
+                foreach (var run in block.Runs)
+                {
+                    if (!run.IsFormula)
+                    {
+                        paragraph.Add(BuildBulkOmmlTextRunXml(
+                            run,
+                            block.Kind,
+                            word));
+                        continue;
+                    }
+                    if (!prepared.TryGetValue(run.Id, out var formula))
+                        throw new InvalidDataException(
+                            $"缺少行内公式 {run.Id} 的渲染结果。");
+                    AppendFormula(paragraph, formula, display: false);
+                }
+            }
+            body.Add(paragraph);
+        }
+        body.Add(
+            new XElement(
+                word + "p",
+                BuildBulkOmmlTextRunXml(
+                    new WordBulkRun { Text = marker },
+                    WordBulkBlockKind.Paragraph,
+                    word)));
+        var root = new XElement(
+            word + "document",
+            new XAttribute(XNamespace.Xmlns + "w", wordNamespace),
+            new XAttribute(XNamespace.Xmlns + "m", mathNamespace),
+            body);
+        var documentXml =
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
+            + root.ToString(SaveOptions.DisableFormatting);
+
+        WordOmmlConverter.WholeDocumentSource? wholeDocumentSource = null;
+        Range? insertionAnchor = null;
+        Range? markerSearch = null;
+        Microsoft.Office.Interop.Word.Find? find = null;
+        Range? insertedRange = null;
+        OMaths? maths = null;
+        try
+        {
+            EnsureWritableParagraph(selection);
+            insertionAnchor = selection.Range.Duplicate;
+            insertionAnchor.Collapse(WdCollapseDirection.wdCollapseStart);
+            var insertionStart = insertionAnchor.Start;
+            if (string.Equals(
+                    Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE"),
+                    "1",
+                    StringComparison.Ordinal))
+            {
+                try
+                {
+                    File.WriteAllText(
+                        Path.Combine(Path.GetTempPath(), "visualtex-bulk-omml-oneshot.xml"),
+                        documentXml,
+                        new UTF8Encoding(false));
+                }
+                catch { }
+            }
+            var sourceStopwatch = Stopwatch.StartNew();
+            wholeDocumentSource = WordOmmlConverter.CreateWholeDocumentSource(
+                _application,
+                documentXml);
+            sourceStopwatch.Stop();
+            document.Activate();
+            var insertStopwatch = Stopwatch.StartNew();
+            insertedRange = wholeDocumentSource.Insert(
+                document,
+                insertionAnchor);
+            insertStopwatch.Stop();
+
+            markerSearch = insertedRange.Duplicate;
+            find = markerSearch.Find;
+            find.ClearFormatting();
+            find.Text = marker;
+            find.Forward = true;
+            find.Wrap = WdFindWrap.wdFindStop;
+            if (!find.Execute())
+                throw new InvalidOperationException(
+                    "Word 未能定位批量 OMML 导入的结束标记。");
+            var insertionEnd = markerSearch.Start;
+            markerSearch.Text = string.Empty;
+            Release(insertedRange);
+            insertedRange = document.Range(insertionStart, insertionEnd);
+            ApplyBulkOmmlDestinationParagraphFormatting(
+                document,
+                insertedRange,
+                source);
+            maths = insertedRange.OMaths;
+            if (maths.Count != orderedFormulas.Count)
+                throw new InvalidDataException(
+                    $"批量 OMML 一次性写入生成了 {maths.Count} 个公式，"
+                    + $"预期 {orderedFormulas.Count} 个。");
+            // Word normalizes imported OMML (especially aligned/equation-array
+            // structures) after insertion. First finalize inline/display types,
+            // then fingerprint the actual Word XML in one batch. Persisting the
+            // pre-insertion transform fingerprint makes the very first reopen look
+            // like a native Word edit and replaces the original aligned LaTeX with
+            // a lossy matrix reconstruction.
+            for (var index = 0; index < orderedFormulas.Count; index++)
+            {
+                OMath? mathObject = null;
+                try
+                {
+                    mathObject = maths[index + 1];
+                    var targetType = orderedFormulas[index].Display
+                        ? WdOMathType.wdOMathDisplay
+                        : WdOMathType.wdOMathInline;
+                    if (mathObject.Type != targetType)
+                        mathObject.Type = targetType;
+                }
+                finally { Release(mathObject); }
+            }
+
+            var insertedFingerprints = ComputeBulkInsertedOmmlFingerprints(
+                insertedRange,
+                orderedFormulas.Count);
+            for (var index = 0; index < orderedFormulas.Count; index++)
+            {
+                var ordered = orderedFormulas[index];
+                OMath? mathObject = null;
+                Range? equationRange = null;
+                Bookmark? bookmark = null;
+                try
+                {
+                    mathObject = maths[index + 1];
+                    equationRange = mathObject.Range.Duplicate;
+                    var metadata = ordered.Formula.Session.ToMetadata();
+                    metadata.Validate();
+                    if (insertedFingerprints.Count == orderedFormulas.Count)
+                        metadata.NativeOmmlFingerprint = insertedFingerprints[index];
+                    else
+                        WordOmmlNativeSource.StampFingerprint(metadata, equationRange);
+                    bookmark = WordOmmlFormulaStore.Wrap(
+                        document,
+                        equationRange,
+                        metadata,
+                        replaceExisting: false);
+                    deferredOmmlMetadata.Add(metadata);
+                    insertedFormulaIds.Add(metadata.FormulaId);
+                }
+                finally
+                {
+                    Release(bookmark);
+                    Release(equationRange);
+                    Release(mathObject);
+                }
+            }
+            selection.SetRange(insertionEnd, insertionEnd);
+            selection.Collapse(WdCollapseDirection.wdCollapseStart);
+            ResetSelectionTransientFormatting(selection);
+            if (string.Equals(
+                    Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE"),
+                    "1",
+                    StringComparison.Ordinal))
+                Console.WriteLine(
+                    $"    [perf] BulkOmml.OneShotSource: {sourceStopwatch.ElapsedMilliseconds}ms; "
+                    + $"copy={insertStopwatch.ElapsedMilliseconds}ms formulas={orderedFormulas.Count}");
+        }
+        finally
+        {
+            Release(maths);
+            Release(insertedRange);
+            Release(find);
+            Release(markerSearch);
+            Release(insertionAnchor);
+            wholeDocumentSource?.Dispose();
+        }
+    }
+
+    private static IReadOnlyList<string> ComputeBulkInsertedOmmlFingerprints(
+        Range insertedRange,
+        int expectedCount)
+    {
+        try
+        {
+            XNamespace math =
+                "http://schemas.openxmlformats.org/officeDocument/2006/math";
+            var document = XDocument.Parse(
+                insertedRange.WordOpenXML,
+                LoadOptions.PreserveWhitespace);
+            var equations = document
+                .Descendants(math + "oMath")
+                .Where(equation => !equation.Ancestors(math + "oMath").Any())
+                .ToArray();
+            if (equations.Length != expectedCount)
+                return Array.Empty<string>();
+            return equations
+                .Select(equation => WordOmmlConverter.ComputeOmmlFingerprint(
+                    equation.ToString(SaveOptions.DisableFormatting)))
+                .ToArray();
+        }
+        catch
+        {
+            // Exceptional fallback: stamp each exact equation range separately.
+            // The normal path performs one WordOpenXML read for the whole batch.
+            return Array.Empty<string>();
+        }
+    }
+
+    private static void ApplyBulkOmmlDestinationParagraphFormatting(
+        Document document,
+        Range insertedRange,
+        WordBulkImportDocument source)
+    {
+        Paragraphs? paragraphs = null;
+        Paragraph? paragraph = null;
+        Range? paragraphRange = null;
+        try
+        {
+            paragraphs = insertedRange.Paragraphs;
+            if (paragraphs.Count < source.Blocks.Count)
+                throw new InvalidDataException(
+                    $"批量 OMML 一次性写入生成了 {paragraphs.Count} 个段落，"
+                    + $"预期至少 {source.Blocks.Count} 个。");
+            for (var index = 0; index < source.Blocks.Count; index++)
+            {
+                var block = source.Blocks[index];
+                if (block.Kind is not (
+                        WordBulkBlockKind.Heading
+                        or WordBulkBlockKind.Bullet
+                        or WordBulkBlockKind.Numbered))
+                    continue;
+                Release(paragraphRange);
+                paragraphRange = null;
+                Release(paragraph);
+                paragraph = null;
+                paragraph = paragraphs[index + 1];
+                paragraphRange = paragraph.Range;
+                ApplyBulkParagraphFormatting(
+                    document,
+                    paragraphRange.Start,
+                    paragraphRange.End,
+                    block);
+            }
+        }
+        finally
+        {
+            Release(paragraphRange);
+            Release(paragraph);
+            Release(paragraphs);
+        }
+    }
+
+    private static XElement? BuildBulkOmmlParagraphPropertiesXml(
+        WordBulkBlock block,
+        XNamespace word)
+    {
+        var properties = new XElement(word + "pPr");
+        switch (block.Kind)
+        {
+            case WordBulkBlockKind.Heading:
+                var headingLevel = Math.Max(1, Math.Min(4, block.Level <= 0 ? 1 : block.Level));
+                properties.Add(
+                    new XElement(
+                        word + "pStyle",
+                        new XAttribute(word + "val", $"Heading{headingLevel}")));
+                break;
+            case WordBulkBlockKind.Bullet:
+                var bulletLevel = Math.Max(1, Math.Min(9, block.Level + 1));
+                properties.Add(
+                    new XElement(
+                        word + "pStyle",
+                        new XAttribute(
+                            word + "val",
+                            bulletLevel == 1 ? "ListBullet" : $"ListBullet{bulletLevel}")));
+                break;
+            case WordBulkBlockKind.Numbered:
+                var numberLevel = Math.Max(1, Math.Min(9, block.Level + 1));
+                properties.Add(
+                    new XElement(
+                        word + "pStyle",
+                        new XAttribute(
+                            word + "val",
+                            numberLevel == 1 ? "ListNumber" : $"ListNumber{numberLevel}")));
+                break;
+            case WordBulkBlockKind.Quote:
+                properties.Add(
+                    new XElement(
+                        word + "ind",
+                        new XAttribute(word + "left", "360"),
+                        new XAttribute(word + "right", "180")));
+                break;
+            case WordBulkBlockKind.Code:
+                properties.Add(
+                    new XElement(
+                        word + "ind",
+                        new XAttribute(word + "left", "360")),
+                    new XElement(
+                        word + "spacing",
+                        new XAttribute(word + "before", "60"),
+                        new XAttribute(word + "after", "60")));
+                break;
+            case WordBulkBlockKind.DisplayFormula:
+                properties.Add(
+                    new XElement(
+                        word + "jc",
+                        new XAttribute(word + "val", "center")));
+                break;
+        }
+        return properties.HasElements ? properties : null;
+    }
+
+    private static XElement BuildBulkOmmlTextRunXml(
+        WordBulkRun run,
+        WordBulkBlockKind blockKind,
+        XNamespace word)
+    {
+        var result = new XElement(word + "r");
+        var properties = new XElement(word + "rPr");
+        var bold = run.Bold;
+        var italic = run.Italic || blockKind == WordBulkBlockKind.Quote;
+        // A document fragment inserted at a formatted Word caret inherits the
+        // destination paragraph mark unless every semantic toggle is explicit.
+        // In particular, omitting <w:i> for ordinary prose makes an italic caret
+        // turn the whole imported document italic. Emit both the enabled and
+        // disabled forms so source semantics, never destination typing state,
+        // determine the imported native Word text.
+        properties.Add(
+            new XElement(
+                word + "b",
+                new XAttribute(word + "val", bold ? "1" : "0")),
+            new XElement(
+                word + "bCs",
+                new XAttribute(word + "val", bold ? "1" : "0")),
+            new XElement(
+                word + "i",
+                new XAttribute(word + "val", italic ? "1" : "0")),
+            new XElement(
+                word + "iCs",
+                new XAttribute(word + "val", italic ? "1" : "0")),
+            new XElement(
+                word + "strike",
+                new XAttribute(word + "val", run.Strike ? "1" : "0")),
+            new XElement(
+                word + "dstrike",
+                new XAttribute(word + "val", "0")),
+            new XElement(
+                word + "u",
+                new XAttribute(word + "val", run.Underline ? "single" : "none")),
+            new XElement(
+                word + "vertAlign",
+                new XAttribute(word + "val", "baseline")),
+            new XElement(
+                word + "position",
+                new XAttribute(word + "val", "0")),
+            new XElement(
+                word + "vanish",
+                new XAttribute(word + "val", "0")));
+        if (run.Code || blockKind == WordBulkBlockKind.Code)
+            properties.Add(
+                new XElement(
+                    word + "rFonts",
+                    new XAttribute(word + "ascii", "Consolas"),
+                    new XAttribute(word + "hAnsi", "Consolas"),
+                    new XAttribute(word + "eastAsia", "Microsoft YaHei UI")));
+        result.Add(properties);
+
+        var normalized = (run.Text ?? string.Empty)
+            .Replace("\r\n", "\n")
+            .Replace('\r', '\n');
+        var text = new StringBuilder();
+        void FlushText()
+        {
+            if (text.Length == 0) return;
+            result.Add(
+                new XElement(
+                    word + "t",
+                    new XAttribute(XNamespace.Xml + "space", "preserve"),
+                    text.ToString()));
+            text.Clear();
+        }
+        foreach (var character in normalized)
+        {
+            if (character == '\n')
+            {
+                FlushText();
+                result.Add(new XElement(word + "br"));
+            }
+            else if (character == '\t')
+            {
+                FlushText();
+                result.Add(new XElement(word + "tab"));
+            }
+            else
+            {
+                text.Append(character);
+            }
+        }
+        FlushText();
+        return result;
+    }
+
+    private static void ApplyBulkOmmlFontSizeXml(
+        XElement equation,
+        double fontSizePt,
+        XNamespace word,
+        XNamespace math)
+    {
+        var halfPoints = ((int)Math.Round(
+            FormulaFontSize.Normalize(fontSizePt) * 2.0))
+            .ToString(System.Globalization.CultureInfo.InvariantCulture);
+        foreach (var mathRun in equation.DescendantsAndSelf(math + "r"))
+        {
+            var properties = mathRun.Element(word + "rPr");
+            if (properties is null)
+            {
+                properties = new XElement(word + "rPr");
+                var mathProperties = mathRun.Element(math + "rPr");
+                if (mathProperties is null)
+                    mathRun.AddFirst(properties);
+                else
+                    mathProperties.AddAfterSelf(properties);
+            }
+            var size = properties.Element(word + "sz");
+            if (size is null)
+            {
+                size = new XElement(word + "sz");
+                properties.Add(size);
+            }
+            size.SetAttributeValue(word + "val", halfPoints);
+            var complexSize = properties.Element(word + "szCs");
+            if (complexSize is null)
+            {
+                complexSize = new XElement(word + "szCs");
+                properties.Add(complexSize);
+            }
+            complexSize.SetAttributeValue(word + "val", halfPoints);
+            var position = properties.Element(word + "position");
+            if (position is null)
+            {
+                position = new XElement(word + "position");
+                properties.Add(position);
+            }
+            position.SetAttributeValue(word + "val", "0");
+        }
+    }
+
     private void InsertBulkOleDocumentTwoPhase(
         Document document,
         Selection selection,
@@ -2486,27 +4143,11 @@ internal sealed class WordFormulaService
 
                 EnsureWritableParagraph(selection);
                 var paragraphStart = selection.Start;
-                var plainTextBlock = block.Runs
-                    .Where(run => !run.IsFormula)
-                    .All(run =>
-                        !run.Bold
-                        && !run.Italic
-                        && !run.Strike
-                        && !run.Underline
-                        && !run.Code);
                 foreach (var run in block.Runs)
                 {
                     if (!run.IsFormula)
                     {
-                        if (plainTextBlock)
-                        {
-                            if (!string.IsNullOrEmpty(run.Text))
-                                selection.TypeText(run.Text);
-                        }
-                        else
-                        {
-                            InsertNativeTextRun(document, selection, run);
-                        }
+                        InsertNativeTextRun(document, selection, run);
                         continue;
                     }
                     if (!prepared.TryGetValue(run.Id, out var formula))
@@ -2652,6 +4293,21 @@ internal sealed class WordFormulaService
 
             if (nativeOmml)
             {
+                var ommlPerformance = string.Equals(
+                    Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE"),
+                    "1",
+                    StringComparison.Ordinal)
+                    ? Stopwatch.StartNew()
+                    : null;
+                long ommlCheckpoint = 0;
+                void TraceOmmlStage(string stage)
+                {
+                    if (ommlPerformance is null) return;
+                    var elapsed = ommlPerformance.ElapsedMilliseconds;
+                    Console.WriteLine(
+                        $"    [perf] BulkOmml.Formula.{stage}: +{elapsed - ommlCheckpoint}ms ({elapsed}ms total) display={display}");
+                    ommlCheckpoint = elapsed;
+                }
                 var mathMl = prepared.MathMl;
                 if (string.IsNullOrWhiteSpace(mathMl))
                     throw new InvalidDataException(
@@ -2661,10 +4317,12 @@ internal sealed class WordFormulaService
                     var placeholder = PrepareInlineBaselineSentinelBeforeInsert(
                         document,
                         insertion,
-                        metadata.FormulaId);
+                        metadata.FormulaId,
+                        createBookmark: !bulkImport);
                     Release(insertion);
                     insertion = placeholder;
                 }
+                TraceOmmlStage("prepare-boundary");
                 equationRange = ommlBatchSource is not null
                     ? ommlBatchSource.Insert(
                         document,
@@ -2681,17 +4339,21 @@ internal sealed class WordFormulaService
                         display,
                         sourceFingerprint: out sourceFingerprint,
                         replaceTarget: !display);
+                TraceOmmlStage("insert");
                 ApplyOmmlFontSize(equationRange, session.FontSizePt);
+                TraceOmmlStage("font-size");
                 metadata.NativeOmmlFingerprint = sourceFingerprint;
                 bookmark = WordOmmlFormulaStore.Wrap(
                     document,
                     equationRange,
                     metadata,
                     replaceExisting: !bulkImport);
+                TraceOmmlStage("wrap-bookmark");
                 if (ommlBatchSource is not null && deferredOmmlMetadata is not null)
                     deferredOmmlMetadata.Add(metadata);
                 else
                     WordOmmlFormulaStore.Save(document, metadata);
+                TraceOmmlStage("metadata");
                 if (display)
                 {
                     TryReconcileOmml(document, bookmark, equationRange, metadata);
@@ -2713,6 +4375,7 @@ internal sealed class WordFormulaService
                         metadata.FormulaId,
                         moveCaretOutsideMath: true);
                 }
+                TraceOmmlStage("finalize-boundary");
                 return;
             }
 
@@ -3018,6 +4681,67 @@ internal sealed class WordFormulaService
         object normal = WdBuiltinStyle.wdStyleNormal;
         try { selection.Range.set_Style(ref normal); } catch { }
         try { selection.Range.ListFormat.RemoveNumbers(); } catch { }
+        ResetSelectionTransientFormatting(selection);
+    }
+
+    private static void ResetSelectionTransientFormatting(Selection selection)
+    {
+        Range? caret = null;
+        Paragraphs? paragraphs = null;
+        Paragraph? paragraph = null;
+        Range? paragraphRange = null;
+        Range? paragraphMark = null;
+        Microsoft.Office.Interop.Word.Font? selectionFont = null;
+        Microsoft.Office.Interop.Word.Font? paragraphMarkFont = null;
+        try
+        {
+            selectionFont = selection.Font;
+            ResetTransientFont(selectionFont);
+
+            // A collapsed Word Selection can report neutral formatting while the
+            // paragraph mark still stores the old direct italic/bold state. The
+            // next typed character inherits the paragraph mark, not the temporary
+            // Selection.Font value. Clear that mark only when the caret is at the
+            // paragraph boundary used for subsequent typing.
+            if (selection.Start != selection.End) return;
+            caret = selection.Range;
+            paragraphs = caret.Paragraphs;
+            if (paragraphs.Count == 0) return;
+            paragraph = paragraphs[1];
+            paragraphRange = paragraph.Range;
+            if (selection.Start < paragraphRange.End - 1) return;
+            paragraphMark = paragraphRange.Duplicate;
+            paragraphMark.SetRange(
+                Math.Max(paragraphRange.Start, paragraphRange.End - 1),
+                paragraphRange.End);
+            paragraphMarkFont = paragraphMark.Font;
+            ResetTransientFont(paragraphMarkFont);
+        }
+        finally
+        {
+            Release(paragraphMarkFont);
+            Release(paragraphMark);
+            Release(paragraphRange);
+            Release(paragraph);
+            Release(paragraphs);
+            Release(caret);
+            Release(selectionFont);
+        }
+    }
+
+    private static void ResetTransientFont(Microsoft.Office.Interop.Word.Font font)
+    {
+        font.Bold = 0;
+        font.Italic = 0;
+        font.StrikeThrough = 0;
+        try { font.DoubleStrikeThrough = 0; } catch { }
+        font.Underline = WdUnderline.wdUnderlineNone;
+        font.Hidden = 0;
+        font.Subscript = 0;
+        font.Superscript = 0;
+        font.Position = 0;
+        try { font.AllCaps = 0; } catch { }
+        try { font.SmallCaps = 0; } catch { }
     }
 
     private static void InsertNativeTextRun(
@@ -3026,6 +4750,7 @@ internal sealed class WordFormulaService
         WordBulkRun run)
     {
         if (string.IsNullOrEmpty(run.Text)) return;
+        ResetSelectionTransientFormatting(selection);
         var start = selection.Start;
         selection.TypeText(run.Text);
         Range? inserted = null;
@@ -3037,9 +4762,16 @@ internal sealed class WordFormulaService
             font.Bold = run.Bold ? 1 : 0;
             font.Italic = run.Italic ? 1 : 0;
             font.StrikeThrough = run.Strike ? 1 : 0;
+            try { font.DoubleStrikeThrough = 0; } catch { }
             font.Underline = run.Underline
                 ? WdUnderline.wdUnderlineSingle
                 : WdUnderline.wdUnderlineNone;
+            font.Hidden = 0;
+            font.Subscript = 0;
+            font.Superscript = 0;
+            font.Position = 0;
+            try { font.AllCaps = 0; } catch { }
+            try { font.SmallCaps = 0; } catch { }
             if (run.Code)
             {
                 font.Name = "Consolas";
@@ -3051,6 +4783,10 @@ internal sealed class WordFormulaService
         {
             Release(font);
             Release(inserted);
+            // Range formatting can update Word's collapsed typing state. Keep
+            // placeholders, following runs and the next paragraph neutral; the
+            // next source run reapplies its own explicit semantics.
+            ResetSelectionTransientFormatting(selection);
         }
     }
 
@@ -3131,7 +4867,13 @@ internal sealed class WordFormulaService
         var continuingList =
             current == WordBulkBlockKind.Bullet && next == WordBulkBlockKind.Bullet
             || current == WordBulkBlockKind.Numbered && next == WordBulkBlockKind.Numbered;
-        if (continuingList) return;
+        if (continuingList)
+        {
+            // Preserve list numbering/indentation, but never carry the previous
+            // item's final bold/italic run into the next list item.
+            ResetSelectionTransientFormatting(selection);
+            return;
+        }
         try { selection.Range.ListFormat.RemoveNumbers(); } catch { }
         selection.ParagraphFormat.Alignment = WdParagraphAlignment.wdAlignParagraphLeft;
         selection.ParagraphFormat.LeftIndent = 0;
@@ -3139,6 +4881,7 @@ internal sealed class WordFormulaService
         selection.ParagraphFormat.FirstLineIndent = 0;
         object normal = WdBuiltinStyle.wdStyleNormal;
         try { selection.Range.set_Style(ref normal); } catch { }
+        ResetSelectionTransientFormatting(selection);
     }
 
     public OfficeObjectResult ReplaceOle(
@@ -3488,6 +5231,7 @@ internal sealed class WordFormulaService
         var previousScreenUpdating = true;
         var screenUpdatingSuspended = false;
         var metadataSaved = false;
+        InlineFollowingTextVisibility? inlineFollowingTextVisibility = null;
         var sourceOmmlManagedByVisualTeX = false;
         var oldNumberingArtifactsRemoved = false;
         var performanceWatch = Stopwatch.StartNew();
@@ -3601,10 +5345,14 @@ internal sealed class WordFormulaService
                 metadata.Validate();
             }
             if (session.DisplayMode == "inline")
+            {
+                inlineFollowingTextVisibility =
+                    CaptureInlineFollowingTextVisibility(oldRange);
                 PrepareInlineBaselineSentinelAfterFormula(
                     document,
                     oldRange,
                     metadata.FormulaId);
+            }
             if (oldShape is null)
             {
                 // Never ask Word to overwrite a live OMath range directly.
@@ -3693,7 +5441,8 @@ internal sealed class WordFormulaService
                     document,
                     equationRange,
                     metadata.FormulaId,
-                    moveCaretOutsideMath: false);
+                    moveCaretOutsideMath: false,
+                    followingTextVisibility: inlineFollowingTextVisibility);
             if (session.DisplayMode == "block")
                 TryReconcileOmml(document, replacement!, equationRange, metadata);
             TraceAcceptancePerformance(
@@ -4176,6 +5925,7 @@ internal sealed class WordFormulaService
             if (caret is null) return;
             selection = _application.Selection;
             selection.SetRange(caret.Start, caret.End);
+            ResetSelectionTransientFormatting(selection);
         }
         finally
         {
@@ -4295,9 +6045,14 @@ internal sealed class WordFormulaService
         Range equationRange,
         FormulaMetadata metadata)
     {
-        RemoveInlineBaselineSentinel(document, metadata.FormulaId);
-        if (string.Equals(metadata.DisplayMode, "block", StringComparison.Ordinal))
+        var display = string.Equals(
+            metadata.DisplayMode,
+            "block",
+            StringComparison.Ordinal);
+        if (display)
             ResetDisplayFormulaPosition(equationRange);
+        else
+            RemoveInlineBaselineSentinel(document, metadata.FormulaId);
         if (!metadata.Numbered) return;
         // The exact equation range is already available. Re-reading it through
         // the bookmark and enumerating all document OMaths only to estimate a
@@ -4657,9 +6412,11 @@ internal sealed class WordFormulaService
     private Range PrepareInlineBaselineSentinelBeforeInsert(
         Document document,
         Range insertionRange,
-        string formulaId)
+        string formulaId,
+        bool createBookmark = true)
     {
-        RemoveInlineBaselineSentinel(document, formulaId);
+        if (createBookmark)
+            RemoveInlineBaselineSentinel(document, formulaId);
         Bookmarks? bookmarks = null;
         Bookmark? bookmark = null;
         Range? placeholders = null;
@@ -4687,8 +6444,11 @@ internal sealed class WordFormulaService
                 guard.End + InlineBaselineSentinel.Length);
             ConfigureInlineBaselineSentinel(guard);
             ConfigureInlineBaselineSentinel(sentinel);
-            bookmarks = document.Bookmarks;
-            bookmark = bookmarks.Add(InlineBaselineBookmarkName(formulaId), sentinel);
+            if (createBookmark)
+            {
+                bookmarks = document.Bookmarks;
+                bookmark = bookmarks.Add(InlineBaselineBookmarkName(formulaId), sentinel);
+            }
             var result = formulaPlaceholder;
             formulaPlaceholder = null;
             return result;
@@ -4719,12 +6479,14 @@ internal sealed class WordFormulaService
         try
         {
             var name = InlineBaselineBookmarkName(formulaId);
+            var temporaryNativeMathBoundary = RangeContainsMath(formulaRange);
             bookmarks = document.Bookmarks;
             if (bookmarks.Exists(name))
             {
                 bookmark = bookmarks[name];
                 sentinel = bookmark.Range;
-                if (IsUsableInlineBaselineSentinel(sentinel, formulaRange))
+                if (!temporaryNativeMathBoundary
+                    && IsUsableInlineBaselineSentinel(sentinel, formulaRange))
                     return NormalizeInlineBaselineBoundary(
                         document,
                         formulaRange,
@@ -4756,6 +6518,13 @@ internal sealed class WordFormulaService
                 break;
             }
 
+            if (temporaryNativeMathBoundary)
+                return CreateInlineOmmlTemporaryBoundary(
+                    document,
+                    bookmarks,
+                    name,
+                    insertionPosition);
+
             object sentinelStart = insertionPosition;
             object sentinelEnd = insertionPosition;
             sentinel = document.Range(ref sentinelStart, ref sentinelEnd);
@@ -4778,6 +6547,40 @@ internal sealed class WordFormulaService
             Release(sentinel);
             Release(bookmark);
             Release(bookmarks);
+        }
+    }
+
+    private static int CreateInlineOmmlTemporaryBoundary(
+        Document document,
+        Bookmarks bookmarks,
+        string bookmarkName,
+        int insertionPosition)
+    {
+        Range? boundary = null;
+        Range? guard = null;
+        Range? sentinel = null;
+        Bookmark? bookmark = null;
+        try
+        {
+            boundary = document.Range(insertionPosition, insertionPosition);
+            boundary.Text = InlineMathGuard + InlineBaselineSentinel;
+            guard = document.Range(
+                insertionPosition,
+                insertionPosition + InlineMathGuard.Length);
+            sentinel = document.Range(
+                guard.End,
+                guard.End + InlineBaselineSentinel.Length);
+            ConfigureInlineBaselineSentinel(guard);
+            ConfigureInlineBaselineSentinel(sentinel);
+            bookmark = bookmarks.Add(bookmarkName, sentinel);
+            return sentinel.End;
+        }
+        finally
+        {
+            Release(bookmark);
+            Release(sentinel);
+            Release(guard);
+            Release(boundary);
         }
     }
 
@@ -4817,6 +6620,114 @@ internal sealed class WordFormulaService
         finally { Release(font); }
     }
 
+    private static InlineFollowingTextVisibility?
+        CaptureInlineFollowingTextVisibility(Range boundaryRange)
+    {
+        Document? document = null;
+        Paragraphs? paragraphs = null;
+        Paragraph? paragraph = null;
+        Range? paragraphRange = null;
+        Range? following = null;
+        Range? trailingFormulaCharacter = null;
+        Microsoft.Office.Interop.Word.Font? font = null;
+        try
+        {
+            document = boundaryRange.Document;
+            paragraphs = boundaryRange.Paragraphs;
+            if (paragraphs.Count == 0) return null;
+            paragraph = paragraphs[1];
+            paragraphRange = paragraph.Range;
+            var start = Math.Max(boundaryRange.End, paragraphRange.Start);
+            var end = paragraphRange.End;
+            if (end <= start) return null;
+            following = document.Range(start, end);
+            font = following.Font;
+            var hidden = font.Hidden;
+            if (hidden is not (0 or -1)) return null;
+
+            // A previous buggy inline OMML update can leave its hidden ASCII
+            // guard as the last native-math character and propagate Hidden=-1 to
+            // all following prose. Such a run was ordinary visible body text
+            // before VisualTeX touched it, so repair it while replacing again.
+            var inheritedVisualTeXHiddenState = false;
+            if (boundaryRange.End > boundaryRange.Start)
+            {
+                trailingFormulaCharacter = document.Range(
+                    boundaryRange.End - 1,
+                    boundaryRange.End);
+                inheritedVisualTeXHiddenState = string.Equals(
+                        trailingFormulaCharacter.Text,
+                        InlineMathGuard,
+                        StringComparison.Ordinal)
+                    && IsHiddenTextRange(trailingFormulaCharacter)
+                    && RangeContainsMath(trailingFormulaCharacter);
+            }
+
+            return new InlineFollowingTextVisibility
+            {
+                CharacterCount = end - start,
+                Hidden = inheritedVisualTeXHiddenState ? 0 : hidden,
+            };
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            Release(font);
+            Release(trailingFormulaCharacter);
+            Release(following);
+            Release(paragraphRange);
+            Release(paragraph);
+            Release(paragraphs);
+            Release(document);
+        }
+    }
+
+    private static void RestoreInlineFollowingTextVisibility(
+        Range formulaRange,
+        InlineFollowingTextVisibility? visibility)
+    {
+        if (visibility is null || visibility.CharacterCount <= 0) return;
+        Document? document = null;
+        Paragraphs? paragraphs = null;
+        Paragraph? paragraph = null;
+        Range? paragraphRange = null;
+        Range? following = null;
+        Microsoft.Office.Interop.Word.Font? font = null;
+        try
+        {
+            document = formulaRange.Document;
+            paragraphs = formulaRange.Paragraphs;
+            if (paragraphs.Count == 0) return;
+            paragraph = paragraphs[1];
+            paragraphRange = paragraph.Range;
+            var start = Math.Max(formulaRange.End, paragraphRange.Start);
+            var end = Math.Min(
+                paragraphRange.End,
+                start + visibility.CharacterCount);
+            if (end <= start) return;
+            following = document.Range(start, end);
+            font = following.Font;
+            font.Hidden = visibility.Hidden;
+        }
+        catch
+        {
+            // Visibility restoration is protective cleanup. A stale paragraph
+            // range must never invalidate the already committed native formula.
+        }
+        finally
+        {
+            Release(font);
+            Release(following);
+            Release(paragraphRange);
+            Release(paragraph);
+            Release(paragraphs);
+            Release(document);
+        }
+    }
+
     private static int NormalizeInlineBaselineBoundary(
         Document document,
         Range formulaRange,
@@ -4840,7 +6751,7 @@ internal sealed class WordFormulaService
                         InlineOleTypingAnchor,
                         StringComparison.Ordinal))
                 {
-                    ConfigureInlineOleTypingAnchor(sentinel);
+                    ConfigureInlineOleTypingAnchor(sentinel, formulaRange);
                     return sentinel.End;
                 }
 
@@ -4881,7 +6792,7 @@ internal sealed class WordFormulaService
             sentinel.SetRange(
                 boundaryPosition,
                 boundaryPosition + InlineOleTypingAnchor.Length);
-            ConfigureInlineOleTypingAnchor(sentinel);
+            ConfigureInlineOleTypingAnchor(sentinel, formulaRange);
             Release(bookmark);
             bookmark = bookmarks.Add(name, sentinel);
             return sentinel.End;
@@ -5089,20 +7000,175 @@ internal sealed class WordFormulaService
         finally { Release(font); }
     }
 
-    private static void ConfigureInlineOleTypingAnchor(Range range)
+    private static void ConfigureInlineOleTypingAnchor(
+        Range range,
+        Range formulaRange)
     {
+        Range? formattingSource = null;
         Microsoft.Office.Interop.Word.Font? font = null;
         try
         {
+            // While replacing native OMML, Word can still treat the boundary
+            // character at OMath.Range.End as part of the math zone. Applying
+            // ordinary-text properties such as Subscript/Superscript then raises
+            // 0x800A1863 and aborts the update. That boundary is only a temporary
+            // insertion guard; the persistent OLE typing anchor is configured
+            // again after the new InlineShape exists outside native math.
+            if (RangeContainsMath(range))
+            {
+                ConfigureInlineBaselineSentinel(range);
+                return;
+            }
+
+            formattingSource = FindInlineTypingFormatSource(formulaRange, range);
+            if (formattingSource is not null)
+                CopyInlineTypingCharacterFormatting(formattingSource, range);
+
             font = range.Font;
             font.Position = 0;
             font.Hidden = 0;
-            font.Subscript = 0;
-            font.Superscript = 0;
+            try { font.Subscript = 0; } catch { }
+            try { font.Superscript = 0; } catch { }
             try { font.Spacing = 0; } catch { }
             try { font.Scaling = 100; } catch { }
         }
-        finally { Release(font); }
+        finally
+        {
+            Release(font);
+            Release(formattingSource);
+        }
+    }
+
+    private static Range? FindInlineTypingFormatSource(
+        Range formulaRange,
+        Range typingAnchor)
+    {
+        Document? document = null;
+        Paragraphs? paragraphs = null;
+        Paragraph? paragraph = null;
+        Range? paragraphRange = null;
+        try
+        {
+            document = formulaRange.Document;
+            paragraphs = formulaRange.Paragraphs;
+            if (paragraphs.Count == 0) return null;
+            paragraph = paragraphs[1];
+            paragraphRange = paragraph.Range;
+            var paragraphBodyEnd = Math.Max(
+                paragraphRange.Start,
+                paragraphRange.End - 1);
+
+            // The prose before an inline formula is the authoritative typing
+            // style. Word can already have polluted the run after an OLE with the
+            // object's font, so copying the following run would preserve the bug.
+            var preceding = FindOrdinaryVisibleCharacterRange(
+                document,
+                formulaRange.Start - 1,
+                paragraphRange.Start,
+                step: -1);
+            if (preceding is not null) return preceding;
+
+            // Paragraph-leading formulas have no preceding prose. In that case,
+            // inherit from the first ordinary character after the formula.
+            return FindOrdinaryVisibleCharacterRange(
+                document,
+                Math.Max(typingAnchor.End, formulaRange.End),
+                paragraphBodyEnd,
+                step: 1);
+        }
+        finally
+        {
+            Release(paragraphRange);
+            Release(paragraph);
+            Release(paragraphs);
+            Release(document);
+        }
+    }
+
+    private static Range? FindOrdinaryVisibleCharacterRange(
+        Document document,
+        int startPosition,
+        int boundaryPosition,
+        int step)
+    {
+        if (step is not (-1 or 1)) return null;
+        const int maximumProbeCharacters = 256;
+        var position = startPosition;
+        for (var probeIndex = 0;
+             probeIndex < maximumProbeCharacters
+             && (step > 0
+                 ? position < boundaryPosition
+                 : position >= boundaryPosition);
+             probeIndex++, position += step)
+        {
+            Range? probe = null;
+            InlineShapes? shapes = null;
+            OMaths? maths = null;
+            try
+            {
+                if (position < 0) break;
+                probe = document.Range(position, position + 1);
+                if (!ContainsVisibleBodyText(probe.Text)) continue;
+                shapes = probe.InlineShapes;
+                maths = probe.OMaths;
+                if (shapes.Count > 0 || maths.Count > 0) continue;
+                var result = probe.Duplicate;
+                return result;
+            }
+            catch (COMException)
+            {
+                // Keep probing nearby ordinary prose.
+            }
+            finally
+            {
+                Release(maths);
+                Release(shapes);
+                Release(probe);
+            }
+        }
+        return null;
+    }
+
+    private static void CopyInlineTypingCharacterFormatting(
+        Range source,
+        Range target)
+    {
+        Microsoft.Office.Interop.Word.Font? sourceFont = null;
+        Microsoft.Office.Interop.Word.Font? targetFont = null;
+        try
+        {
+            var targetStart = target.Start;
+            var alreadyTypingAnchor = target.End == targetStart + InlineOleTypingAnchor.Length
+                && string.Equals(
+                    target.Text,
+                    InlineOleTypingAnchor,
+                    StringComparison.Ordinal);
+            if (!alreadyTypingAnchor)
+            {
+                target.SetRange(targetStart, target.End);
+                target.Text = InlineOleTypingAnchor;
+            }
+            target.SetRange(
+                targetStart,
+                targetStart + InlineOleTypingAnchor.Length);
+
+            sourceFont = source.Font;
+            targetFont = target.Font;
+            targetFont.Name = sourceFont.Name;
+            try { targetFont.NameAscii = sourceFont.NameAscii; } catch { }
+            try { targetFont.NameFarEast = sourceFont.NameFarEast; } catch { }
+            try { targetFont.NameOther = sourceFont.NameOther; } catch { }
+            targetFont.Size = sourceFont.Size;
+            targetFont.Bold = sourceFont.Bold;
+            targetFont.Italic = sourceFont.Italic;
+            try { targetFont.Underline = sourceFont.Underline; } catch { }
+            try { targetFont.Color = sourceFont.Color; } catch { }
+        }
+        finally
+        {
+            Release(targetFont);
+            Release(sourceFont);
+        }
     }
 
     private static void ResetRangeFontPosition(Range range)
@@ -5281,61 +7347,19 @@ internal sealed class WordFormulaService
         Range formulaRange,
         string formulaId)
     {
-        Bookmarks? bookmarks = null;
-        Bookmark? bookmark = null;
-        Range? sentinel = null;
-        Range? cleanup = null;
-        try
+        _ = formulaId;
+        // Bulk import creates every formula with a fresh id and already owns the
+        // live OMath range. Do not create or search a document-level VTBL
+        // bookmark: Word 2021 makes Bookmarks.Exists progressively slower as the
+        // imported document grows. The two guards are immediately adjacent to
+        // the live OMath end and can be removed locally.
+        for (var attempt = 0; attempt < 4; attempt++)
         {
-            bookmarks = document.Bookmarks;
-            var name = InlineBaselineBookmarkName(formulaId);
-            if (!bookmarks.Exists(name))
-            {
-                RemoveInlineOmmlTemporaryBoundary(
+            if (!TryDeleteInlineOmmlGuardAtBoundary(
                     document,
                     formulaRange,
-                    formulaId,
-                    forceTextReplacement: false);
-                return;
-            }
-
-            bookmark = bookmarks[name];
-            sentinel = bookmark.Range;
-            var cleanupStart = Math.Min(sentinel.Start, formulaRange.End);
-            var cleanupEnd = Math.Max(cleanupStart, sentinel.End);
-            bookmark.Delete();
-            Release(bookmark);
-            bookmark = null;
-            if (cleanupEnd <= cleanupStart) return;
-
-            cleanup = document.Range(cleanupStart, cleanupEnd);
-            var temporaryText = cleanup.Text ?? string.Empty;
-            var ownsOnlyTemporaryGuards = temporaryText.All(character =>
-                character == InlineMathGuard[0]
-                || character == LegacyInlineMathGuard[0]
-                || character == LegacyInlineBaselineSentinel[0]);
-            if (!ownsOnlyTemporaryGuards)
-            {
-                RemoveInlineOmmlTemporaryBoundary(
-                    document,
-                    formulaRange,
-                    formulaId,
-                    forceTextReplacement: false);
-                return;
-            }
-
-            // The VTBL bookmark and the live OMath end delimit only the two
-            // sacrificial hidden guards created for this bulk replacement. One
-            // Range deletion avoids repeated Font/OMaths COM probes while the
-            // complete paragraph text is already present on both sides.
-            cleanup.Delete();
-        }
-        finally
-        {
-            Release(cleanup);
-            Release(sentinel);
-            Release(bookmark);
-            Release(bookmarks);
+                    forceTextReplacement: false))
+                break;
         }
     }
 
@@ -5367,9 +7391,9 @@ internal sealed class WordFormulaService
                 // still re-resolves the durable bookmark after every deletion.
                 for (var attempt = 0; attempt < 4; attempt++)
                 {
-                    if (!TryDeleteInlineOmmlGuardAt(
+                    if (!TryDeleteInlineOmmlGuardAtBoundary(
                             document,
-                            formulaRange.End,
+                            formulaRange,
                             forceTextReplacement: false))
                         break;
                 }
@@ -5383,14 +7407,35 @@ internal sealed class WordFormulaService
                     document,
                     formulaRange,
                     formulaId);
-                if (!TryDeleteInlineOmmlGuardAt(
+                if (!TryDeleteInlineOmmlGuardAtBoundary(
                         document,
-                        currentRange.End,
+                        currentRange,
                         forceTextReplacement: true))
                     break;
             }
         }
         finally { Release(currentRange); }
+    }
+
+    private static bool TryDeleteInlineOmmlGuardAtBoundary(
+        Document document,
+        Range formulaRange,
+        bool forceTextReplacement)
+    {
+        // Word 2021 has two boundary representations after FormattedText/InsertFile:
+        // the hidden guard can remain outside at OMath.End, or it can be swallowed
+        // as the final hidden m:r and make OMath.End advance by one. Probe both
+        // locations, deleting only VisualTeX legacy markers or hidden ASCII space.
+        if (TryDeleteInlineOmmlGuardAt(
+                document,
+                formulaRange.End,
+                forceTextReplacement))
+            return true;
+        return formulaRange.End > formulaRange.Start
+            && TryDeleteInlineOmmlGuardAt(
+                document,
+                formulaRange.End - 1,
+                forceTextReplacement);
     }
 
     private static bool TryDeleteInlineOmmlGuardAt(
@@ -5442,7 +7487,8 @@ internal sealed class WordFormulaService
         Document document,
         Range formulaRange,
         string formulaId,
-        bool moveCaretOutsideMath)
+        bool moveCaretOutsideMath,
+        InlineFollowingTextVisibility? followingTextVisibility = null)
     {
         Range? currentRange = null;
         try
@@ -5452,6 +7498,9 @@ internal sealed class WordFormulaService
                 document,
                 formulaRange,
                 formulaId);
+            RestoreInlineFollowingTextVisibility(
+                currentRange,
+                followingTextVisibility);
             ResetParagraphTypingPosition(currentRange);
             if (moveCaretOutsideMath)
                 MoveCaretOutsideInlineOmml(currentRange);

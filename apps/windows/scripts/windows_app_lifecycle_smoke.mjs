@@ -68,6 +68,11 @@ assert(!officeLifecycle.includes("prewarm_desktop_session_window"));
 assert(!officeServer.includes("prewarm_desktop_session_window"));
 assert(officeServer.includes("open_desktop_session_window"));
 assert(officeServer.includes("WebviewWindowBuilder::new"));
+assert(officeServer.includes("creating hidden Office editor WebView"));
+assert(officeServer.includes(".visible(false)"));
+assert(officeServer.includes(".on_page_load"));
+assert(officeServer.includes("navigating hidden reused Office editor WebView"));
+assert(officeServer.includes("Office editor page-load reveal fallback"));
 assert(officeLifecycle.includes("office-bootstrap completed without creating a WebView"));
 
 assert(certificateScript.includes('ArgumentList "--office-bootstrap"'));

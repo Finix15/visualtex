@@ -15,6 +15,7 @@ import {
   assertNoUnfilledStructuralPlaceholders,
   assertResolvedMathJaxSvg,
   assertResolvedPresentationMathMl,
+  normalizePackageLatexCommands,
   VISUALTEX_MATHML_MACROS,
   VISUALTEX_SVG_MACROS,
   type VisualTexMathJaxMacro,
@@ -104,7 +105,9 @@ function isSingleCompleteEnvironment(source: string) {
 
 function prepareLatex(latex: string) {
   const normalized = normalizeMathLiveCanonicalUprightCommands(
-    normalizeExtendedIntegralLatexCommands(latex.replace(/\r\n?/g, "\n")),
+    normalizeExtendedIntegralLatexCommands(
+      normalizePackageLatexCommands(latex.replace(/\r\n?/g, "\n")),
+    ),
   ).trim();
   if (!normalized) throw new Error("Cannot export an empty formula.");
   assertNoUnfilledStructuralPlaceholders(normalized);
@@ -137,13 +140,46 @@ function extractSvg(markup: string) {
   return markup.slice(start, end + "</svg>".length);
 }
 
-function parseViewBox(svg: string) {
-  const match = svg.match(
-    /\bviewBox=["']\s*([-+\d.eE]+)\s+([-+\d.eE]+)\s+([-+\d.eE]+)\s+([-+\d.eE]+)\s*["']/,
+type SvgViewBox = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+type SvgRootGeometry = {
+  viewBox: SvgViewBox;
+  unitsPerPx: number;
+  baselinePx: number | null;
+  fullViewportNestedSvg: boolean;
+};
+
+function readSvgAttribute(opening: string, name: string) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return opening.match(new RegExp(`\\s${escaped}=["']([^"']*)["']`, "i"))?.[1] ?? null;
+}
+
+function readStyleDeclaration(style: string | null, name: string) {
+  if (!style) return null;
+  const normalizedName = name.toLowerCase();
+  for (const declaration of style.split(";")) {
+    const separator = declaration.indexOf(":");
+    if (separator <= 0) continue;
+    if (declaration.slice(0, separator).trim().toLowerCase() === normalizedName) {
+      return declaration.slice(separator + 1).trim();
+    }
+  }
+  return null;
+}
+
+function parseSvgViewBox(value: string | null) {
+  if (!value) return null;
+  const match = value.match(
+    /^\s*([-+\d.eE]+)[\s,]+([-+\d.eE]+)[\s,]+([-+\d.eE]+)[\s,]+([-+\d.eE]+)\s*$/,
   );
-  if (!match) throw new Error("Exported SVG is missing a valid viewBox.");
+  if (!match) throw new Error("Exported SVG has an invalid viewBox.");
   const values = match.slice(1).map(Number);
-  if (values.some((value) => !Number.isFinite(value))) {
+  if (values.some((number) => !Number.isFinite(number))) {
     throw new Error("Exported SVG has an invalid viewBox.");
   }
   const [x, y, width, height] = values;
@@ -151,6 +187,110 @@ function parseViewBox(svg: string) {
     throw new Error("Exported SVG has non-positive dimensions.");
   }
   return { x, y, width, height };
+}
+
+function parseCssSvgLength(
+  value: string | null,
+  fontSizePx: number,
+  exPx: number,
+) {
+  if (!value) return null;
+  const match = value.trim().match(/^([-+\d.eE]+)\s*(px|ex|em)?$/i);
+  if (!match) return null;
+  const number = Number(match[1]);
+  if (!Number.isFinite(number)) return null;
+  const unit = (match[2] ?? "px").toLowerCase();
+  return unit === "ex" ? number * exPx : unit === "em" ? number * fontSizePx : number;
+}
+
+function resolveSvgRootGeometry(
+  svg: string,
+  fontSizePx: number,
+  exPx: number,
+): SvgRootGeometry {
+  const rootOpening = svg.match(/^<svg\b[^>]*>/i)?.[0];
+  if (!rootOpening) throw new Error("MathJax did not produce an SVG root element.");
+
+  const rootViewBox = parseSvgViewBox(readSvgAttribute(rootOpening, "viewBox"));
+  if (rootViewBox) {
+    return {
+      viewBox: rootViewBox,
+      unitsPerPx: 1000 / fontSizePx,
+      baselinePx: null,
+      fullViewportNestedSvg: false,
+    };
+  }
+
+  // MathJax renders a top-level equation tag as a full-width labeled table.
+  // In that special layout the root SVG intentionally has width="100%" and no
+  // viewBox; its intrinsic width is carried in style.min-width, while the table
+  // and label are nested SVG viewports. Materialized Office SVGs have no CSS
+  // layout container, so make that implicit CSS-pixel viewport explicit.
+  const style = readSvgAttribute(rootOpening, "style");
+  const widthPx = parseCssSvgLength(
+    readStyleDeclaration(style, "min-width") ?? readSvgAttribute(rootOpening, "width"),
+    fontSizePx,
+    exPx,
+  );
+  const heightPx = parseCssSvgLength(
+    readSvgAttribute(rootOpening, "height"),
+    fontSizePx,
+    exPx,
+  );
+  const verticalAlignPx = parseCssSvgLength(
+    readStyleDeclaration(style, "vertical-align"),
+    fontSizePx,
+    exPx,
+  ) ?? 0;
+  if (!widthPx || widthPx <= 0 || !heightPx || heightPx <= 0) {
+    throw new Error("Exported SVG is missing a valid root viewBox and intrinsic size.");
+  }
+  return {
+    viewBox: { x: 0, y: 0, width: widthPx, height: heightPx },
+    unitsPerPx: 1,
+    baselinePx: Math.max(0, Math.min(heightPx, heightPx + verticalAlignPx)),
+    fullViewportNestedSvg: true,
+  };
+}
+
+function normalizeFullViewportNestedSvg(
+  svg: string,
+  width: number,
+  height: number,
+) {
+  return svg.replace(
+    /<svg\b([^>]*\bdata-(?:table|labels)=["'][^"']+["'][^>]*)>/gi,
+    (_opening, rawAttributes: string) => {
+      let attributes = rawAttributes;
+      const append: string[] = [];
+      if (!/\swidth=["']/i.test(attributes)) append.push(`width="${width}"`);
+      if (!/\sheight=["']/i.test(attributes)) append.push(`height="${height}"`);
+      if (!/\sx=["']/i.test(attributes)) append.push('x="0"');
+      if (!/\sy=["']/i.test(attributes)) append.push('y="0"');
+      if (!/\soverflow=["']/i.test(attributes)) append.push('overflow="visible"');
+      attributes = attributes.trim();
+      return `<svg${attributes ? ` ${attributes}` : ""}${append.length ? ` ${append.join(" ")}` : ""}>`;
+    },
+  );
+}
+
+function rewriteRootSvgOpening(
+  svg: string,
+  width: number,
+  height: number,
+  viewBox: SvgViewBox,
+) {
+  return svg.replace(/^<svg\b([^>]*)>/i, (_opening, rawAttributes: string) => {
+    const attributes = rawAttributes
+      .replace(
+        /\s(?:xmlns|width|height|role|focusable|style|viewBox)=["'][^"']*["']/gi,
+        "",
+      )
+      .trim();
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" role="img" focusable="false" viewBox="${viewBox.x} ${viewBox.y} ${viewBox.width} ${viewBox.height}"${
+      attributes ? ` ${attributes}` : ""
+    }>`;
+  });
 }
 
 function assertSelfContained(svg: string) {
@@ -214,36 +354,26 @@ export function latexToSvg(
   });
   let svg = extractSvg(adaptor.outerHTML(container));
   svg = applyVisualTexIntegralSvgGlyphs(svg, options.displayMode);
-  const viewBox = parseViewBox(svg);
+  const rootGeometry = resolveSvgRootGeometry(svg, fontSizePx, exPx);
+  const viewBox = rootGeometry.viewBox;
+  if (rootGeometry.fullViewportNestedSvg) {
+    svg = normalizeFullViewportNestedSvg(svg, viewBox.width, viewBox.height);
+  }
 
-  const unitsPerPx = 1000 / fontSizePx;
-  const paddingUnits = paddingPx * unitsPerPx;
+  const paddingUnits = paddingPx * rootGeometry.unitsPerPx;
   const padded = {
     x: viewBox.x - paddingUnits,
     y: viewBox.y - paddingUnits,
     width: viewBox.width + 2 * paddingUnits,
     height: viewBox.height + 2 * paddingUnits,
   };
-  const width = Math.max(1, padded.width / unitsPerPx);
-  const height = Math.max(1, padded.height / unitsPerPx);
-  const baseline = Math.max(0, Math.min(height, -padded.y / unitsPerPx));
+  const width = Math.max(1, padded.width / rootGeometry.unitsPerPx);
+  const height = Math.max(1, padded.height / rootGeometry.unitsPerPx);
+  const baseline = rootGeometry.baselinePx === null
+    ? Math.max(0, Math.min(height, -padded.y / rootGeometry.unitsPerPx))
+    : Math.max(0, Math.min(height, paddingPx + rootGeometry.baselinePx));
 
-  svg = svg
-    .replace(
-      /\bviewBox=["'][^"']+["']/,
-      `viewBox="${padded.x} ${padded.y} ${padded.width} ${padded.height}"`,
-    )
-    .replace(/^<svg\b([^>]*)>/, (_opening, rawAttributes: string) => {
-      const attributes = rawAttributes
-        .replace(
-          /\s(?:xmlns|width|height|role|focusable|style)=["'][^"']*["']/g,
-          "",
-        )
-        .trim();
-      return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" role="img" focusable="false"${
-        attributes ? ` ${attributes}` : ""
-      }>`;
-    })
+  svg = rewriteRootSvgOpening(svg, width, height, padded)
     .replaceAll("currentColor", "#111111");
 
   const openingEnd = svg.indexOf(">");

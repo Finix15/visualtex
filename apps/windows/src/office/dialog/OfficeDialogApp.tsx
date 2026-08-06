@@ -98,6 +98,24 @@ function delay(milliseconds: number) {
   return new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
+function officeExportCanCommit(
+  session: Pick<OfficeFormulaSession, "host" | "objectMode">,
+  exportResult: OfficeExportResult | null | undefined,
+) {
+  if (!exportResult) return false;
+  const hasSvg = Boolean(exportResult.svg?.trim() || exportResult.svgBase64?.trim());
+  if (session.host === "powerpoint" && USE_NATIVE_POWERPOINT_COMMIT) {
+    return hasSvg;
+  }
+  if (session.objectMode === "wordOmml") {
+    return exportResult.mathMl?.trimStart().startsWith("<math") === true;
+  }
+  if (session.objectMode === "nativeOle") {
+    return hasSvg && Boolean(exportResult.pngBase64?.trim());
+  }
+  return Boolean(exportResult.pngBase64?.trim());
+}
+
 async function waitForOfficeCommitResult(
   sessionId: string,
   host: OfficeHost,
@@ -219,6 +237,7 @@ export function OfficeDialogApp() {
   const readyMessageSentRef = useRef(false);
   const finalizingRef = useRef(false);
   const commitFromShortcutRef = useRef<() => void>(() => undefined);
+  const closeFromNativeWindowRef = useRef<() => void>(() => undefined);
   const exportRunIdRef = useRef(0);
   const conversionStartedRef = useRef(false);
   const batchConversionQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -254,7 +273,7 @@ export function OfficeDialogApp() {
   const inlineOcrCancelRequestedRef = useRef(false);
   const inlineOcrRunIdRef = useRef(0);
   const inlineOcrClearTimerRef = useRef<number | null>(null);
-  const { sessionId, session, loading, error, save } = useOfficeSession();
+  const { sessionId, session, loading, error, reload, save } = useOfficeSession();
 
   useEffect(() => {
     loadedSessionIdRef.current = "";
@@ -1059,6 +1078,7 @@ export function OfficeDialogApp() {
         dirty,
         status,
         autoCommitOnClose,
+        explicitCancel: false,
         exportResult,
         exportWidth: exportResult?.width ?? 0,
         exportHeight: exportResult?.height ?? 0,
@@ -1076,36 +1096,47 @@ export function OfficeDialogApp() {
         // The regular save path reports export errors while the page is open.
       }
     };
+    const cancelFinalDraft = () => {
+      try {
+        void saveOfficeSessionKeepalive(sessionId, {
+          ...finalDraftUpdate("editing"),
+          status: "cancelled",
+          explicitCancel: true,
+        }).catch(() => undefined);
+      } catch {
+        void saveOfficeSessionKeepalive(sessionId, {
+          status: "cancelled",
+          explicitCancel: true,
+          error: null,
+        }).catch(() => undefined);
+      }
+    };
     const commitFinalDraft = () => {
-      const cached = latestCompleteExportRef.current;
-      const nativePowerPoint =
-        session?.host === "powerpoint" && USE_NATIVE_POWERPOINT_COMMIT;
+      if (finalizingRef.current) return;
       const unchangedEdit = session?.mode === "edit" && !dirty;
-      if (
-        finalizingRef.current ||
-        !autoCommitOnClose ||
-        (!unchangedEdit && !latex.trim()) ||
-        (!unchangedEdit &&
-          !nativePowerPoint &&
-          (cached?.fingerprint !== currentFingerprint ||
-            !cached.exportResult.pngBase64))
-      ) {
-        persistFinalDraft();
+      if (!autoCommitOnClose || (!unchangedEdit && !latex.trim())) {
+        cancelFinalDraft();
         return;
       }
       try {
-        finalizingRef.current = true;
         const update = finalDraftUpdate("committing");
-        // The hidden Office command page owns every host mutation. The dialog
-        // only persists a complete committing Session, including for native
-        // PowerPoint. Directly mutating PowerPoint from this child window used
-        // to bypass the adapter's durable name/tag decoration and produced
-        // uneditable generic `Graphic N` shapes.
+        if (
+          !session ||
+          (!unchangedEdit && !officeExportCanCommit(session, update.exportResult))
+        ) {
+          cancelFinalDraft();
+          return;
+        }
+        finalizingRef.current = true;
+        // This is only the browser-unload fallback. The Windows native title-bar
+        // close is intercepted and uses the awaited normal commit path below.
         void saveOfficeSessionKeepalive(sessionId, update).catch(
           () => undefined,
         );
       } catch {
-        // Closing a dialog is best-effort; the explicit insert button reports errors.
+        // Never leave a disappearing editor in `created`/`editing`: cancelling
+        // preserves the draft Session on disk and releases the Office host.
+        cancelFinalDraft();
       }
     };
     const persistWhenHidden = () => {
@@ -1122,6 +1153,9 @@ export function OfficeDialogApp() {
   }, [
     sessionId,
     session?.host,
+    session?.mode,
+    session?.objectMode,
+    session?.exportResult,
     title,
     lines,
     activeLineId,
@@ -1406,7 +1440,8 @@ export function OfficeDialogApp() {
       const exportResult =
         status === "cancelled"
           ? session.exportResult
-          : session.host === "powerpoint" && USE_NATIVE_POWERPOINT_COMMIT
+          : session.objectMode === "wordOmml" ||
+              (session.host === "powerpoint" && USE_NATIVE_POWERPOINT_COMMIT)
             ? generateSvgExportResult()
             : await generateExportResult();
       if (status === "committing" && !exportResult) {
@@ -1529,6 +1564,40 @@ export function OfficeDialogApp() {
     }
   };
 
+  closeFromNativeWindowRef.current = () => {
+    if (finalizingRef.current || !session) return;
+    if (
+      !autoCommitOnClose ||
+      (session.mode === "create" && !latex.trim())
+    ) {
+      void handleCancel().catch((reason) => {
+        setToast(readErrorMessage(
+          reason,
+          isEn ? "Unable to close the Office editor" : "无法关闭 Office 编辑器",
+        ));
+      });
+      return;
+    }
+    void handleCommit();
+  };
+
+  useEffect(() => {
+    if (!IS_VSTO_DESKTOP_RUNTIME || !sessionId) return;
+    const handleNativeCloseRequest = () => {
+      closeFromNativeWindowRef.current();
+    };
+    window.addEventListener(
+      "visualtex-office-close-requested",
+      handleNativeCloseRequest,
+    );
+    return () => {
+      window.removeEventListener(
+        "visualtex-office-close-requested",
+        handleNativeCloseRequest,
+      );
+    };
+  }, [sessionId]);
+
   const handleCopy = async () => {
     await copyLatex(latex, latexCodeFormat);
     addHistory(latex);
@@ -1557,6 +1626,9 @@ export function OfficeDialogApp() {
         <X size={28} />
         <strong>{isEn ? "Unable to open VisualTeX" : "无法打开 VisualTeX"}</strong>
         <p>{error || (isEn ? "Session not found" : "Session 不存在")}</p>
+        <button type="button" onClick={() => void reload()}>
+          {isEn ? "Retry" : "重新加载"}
+        </button>
       </div>
     );
   }

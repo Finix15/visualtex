@@ -346,6 +346,45 @@ const latexBaseline: CoverageCase[] = [
     check: (parsed) => formulas(parsed).filter((run) => run.display).length === 2,
   },
   {
+    name: "equation* formatting newlines are TeX whitespace",
+    format: "latex",
+    source: String.raw`\begin{equation*}
+\lim_{N\to +\infty}\bigl\|\,|\psi\rangle-|s_N\rangle\,\bigr\|
+=
+\lim_{N\to +\infty}
+\left\|\,|\psi\rangle-\sum_{i=1}^{N}c_i|u_i\rangle\,\right\|
+=0.
+\end{equation*}`,
+    check: (parsed) => {
+      const formula = formulas(parsed).find((run) => run.display);
+      return Boolean(
+        formula &&
+        !formula.latex.includes("\n") &&
+        formula.latex.includes(String.raw`\lim_{N\to +\infty}`) &&
+        formula.latex.endsWith("=0."),
+      );
+    },
+  },
+  {
+    name: "align source newlines preserve explicit math rows",
+    format: "latex",
+    source: String.raw`\begin{align*}
+a &= b+c \\
+d &= e-f \\
+g &= h
+\end{align*}`,
+    check: (parsed) => {
+      const formula = formulas(parsed).find((run) => run.display);
+      return Boolean(
+        formula &&
+        !formula.latex.includes("\n") &&
+        formula.latex.startsWith(String.raw`\begin{aligned}`) &&
+        formula.latex.includes(String.raw`a &= b+c \\ d &= e-f \\ g &= h`) &&
+        formula.latex.endsWith(String.raw`\end{aligned}`),
+      );
+    },
+  },
+  {
     name: "align gather multline and displaymath environments",
     format: "latex",
     source: String.raw`\begin{align}a&=1\\b&=2\end{align}
@@ -667,6 +706,46 @@ const latexExtended: CoverageCase[] = [
     check: (parsed) => !text(parsed).includes("\\cite") && !text(parsed).includes("\\ref"),
   },
   {
+    name: "proof-only fragments are auto-detected as LaTeX",
+    format: "auto",
+    source: String.raw`\begin{proof}[Spectral argument]
+For every $N$, the partial sum converges.
+\qedhere
+\end{proof}`,
+    check: (parsed) =>
+      parsed.format === "latex" &&
+      blocksOf(parsed, "quote").length === 1 &&
+      text(parsed).includes("证明（Spectral argument）：") &&
+      text(parsed).includes("partial sum converges") &&
+      text(parsed).includes("□") &&
+      formulas(parsed).some((run) => run.latex === "N"),
+  },
+  {
+    name: "starred theorem-like environments",
+    format: "latex",
+    source: String.raw`\begin{lemma*}A starred lemma.\end{lemma*}`,
+    check: (parsed) =>
+      blocksOf(parsed, "quote").length === 1 &&
+      text(parsed).includes("引理：") &&
+      text(parsed).includes("A starred lemma."),
+  },
+  {
+    name: "custom newtheorem environments",
+    format: "auto",
+    source: String.raw`\newtheorem{spectralclaim}[theorem]{Spectral Claim}
+\begin{document}
+\begin{spectralclaim}[Finite truncation]
+The approximation error tends to zero.
+\end{spectralclaim}
+\end{document}`,
+    check: (parsed) =>
+      parsed.format === "latex" &&
+      blocksOf(parsed, "quote").length === 1 &&
+      text(parsed).includes("Spectral Claim（Finite truncation）：") &&
+      text(parsed).includes("approximation error tends to zero") &&
+      !text(parsed).includes("newtheorem"),
+  },
+  {
     name: "theorem-like environments",
     format: "latex",
     source: String.raw`\begin{theorem}Every finite subgroup is...\end{theorem}`,
@@ -680,6 +759,72 @@ const latexExtended: CoverageCase[] = [
     format: "latex",
     source: String.raw`\newcommand{\R}{\mathbb{R}}\begin{document}$x\in\R$\end{document}`,
     check: (parsed) => formulas(parsed).some((run) => run.latex.includes("\\mathbb{R}")),
+  },
+  {
+    name: "four argument nested custom macros",
+    format: "latex",
+    source: String.raw`\newcommand{\four}[4]{\frac{#1_{#2}}{#3^{#4}}}
+\begin{document}$\four{a+b}{i}{c+d}{2}$\end{document}`,
+    check: (parsed) =>
+      formulas(parsed).some((run) => run.latex === String.raw`\frac{a+b_{i}}{c+d^{2}}`),
+  },
+  {
+    name: "custom macros with default first argument",
+    format: "latex",
+    source: String.raw`\newcommand{\decorate}[2][*]{#1#2#1}
+$\decorate{x}+\decorate[!]{y}$`,
+    check: (parsed) => formulas(parsed).some((run) => run.latex === "*x*+!y!"),
+  },
+  {
+    name: "def macros with parameters",
+    format: "latex",
+    source: String.raw`\def\tensor#1#2#3{#1_{#2}^{#3}} $\tensor{T}{ij}{k}$`,
+    check: (parsed) => formulas(parsed).some((run) => run.latex === "T_{ij}^{k}"),
+  },
+  {
+    name: "DeclareMathOperator definitions",
+    format: "latex",
+    source: String.raw`\DeclareMathOperator{\Spec}{Spec} $\Spec(A)$`,
+    check: (parsed) => formulas(parsed).some((run) =>
+      run.latex.includes(String.raw`\operatorname{Spec}(A)`),
+    ),
+  },
+  {
+    name: "DeclarePairedDelimiter definitions",
+    format: "latex",
+    source: String.raw`\DeclarePairedDelimiter{\ceil}{\lceil}{\rceil} $\ceil*{x+y}$`,
+    check: (parsed) => formulas(parsed).some((run) =>
+      run.latex.includes(String.raw`\left\lceilx+y\right\rceil`),
+    ),
+  },
+  {
+    name: "preamble commands in fragments are hidden",
+    format: "auto",
+    source: String.raw`\documentclass{article}
+\usepackage[amsmath]{mathtools}
+\geometry{margin=2cm}
+\begin{proof}Visible body.\end{proof}`,
+    check: (parsed) =>
+      parsed.format === "latex" &&
+      text(parsed).includes("Visible body.") &&
+      !text(parsed).includes("documentclass") &&
+      !text(parsed).includes("usepackage") &&
+      !text(parsed).includes("margin=2cm"),
+  },
+  {
+    name: "formula labels and no-number controls are removed",
+    format: "latex",
+    source: String.raw`\begin{align}
+a&=b\label{eq:a}\notag\\
+c&=d\nonumber
+\end{align}`,
+    check: (parsed) => {
+      const formula = formulas(parsed)[0]?.latex ?? "";
+      return formula.includes("a&=b") && formula.includes("c&=d") &&
+        !formula.includes(String.raw`\label`) &&
+        !formula.includes(String.raw`\notag`) &&
+        !formula.includes(String.raw`\nonumber`);
+    },
   },
   {
     name: "verb and verb star commands",

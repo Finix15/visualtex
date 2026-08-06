@@ -42,11 +42,7 @@ internal static partial class Program
         Array custom = Array.Empty<object>();
         try
         {
-            application = new Word.Application
-            {
-                Visible = false,
-                DisplayAlerts = Word.WdAlertLevel.wdAlertsNone,
-            };
+            application = CreateWordApplication(visible: false);
             document = application.Documents.Add();
             addIn = new VisualTeX.WordVsto.ThisAddIn();
             addIn.OnConnection(
@@ -196,7 +192,7 @@ internal static partial class Program
             }
             try { reopened?.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
             try { document?.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
-            try { application?.Quit(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
+            try { QuitWordApplicationIfOwned(application); } catch { }
             Release(reopened);
             Release(document);
             Release(application);
@@ -239,7 +235,8 @@ internal static partial class Program
         Word.Application application,
         VisualTeX.WordVsto.ThisAddIn addIn,
         string objectMode,
-        string latex)
+        string latex,
+        bool numbered = true)
     {
         const string mathMlPrefix =
             "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">";
@@ -261,7 +258,7 @@ internal static partial class Program
             "block",
             objectMode,
             latex,
-            numbered: true,
+            numbered: numbered,
             mathMl: mathMl);
         var final = WaitForTerminal(client, sessionId, TimeSpan.FromSeconds(45));
         AssertEqual("completed", final.Status,

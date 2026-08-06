@@ -30,6 +30,8 @@ use tower_http::services::ServeDir;
 use uuid::Uuid;
 
 #[cfg(target_os = "windows")]
+use tauri::webview::PageLoadEvent;
+#[cfg(target_os = "windows")]
 use tauri::{Manager, UserAttentionType, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 const INSTALL_TOKEN_HEADER: &str = "x-visualtex-install-token";
@@ -38,6 +40,8 @@ static POWERPOINT_COMMIT_LOCK: Mutex<()> = Mutex::new(());
 static WINDOWS_OFFICE_COMMIT_LOCK: Mutex<()> = Mutex::new(());
 static OFFICE_BATCH_CONVERSION_QUEUE: OnceLock<Mutex<VecDeque<Vec<String>>>> =
     OnceLock::new();
+#[cfg(target_os = "windows")]
+static OFFICE_EDITOR_ACTIVE_SESSION: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 
 #[derive(Clone)]
 struct ServerContext {
@@ -265,66 +269,368 @@ const OFFICE_EDITOR_WINDOW_LABEL: &str = "office-session-editor";
 const OFFICE_CONVERTER_WINDOW_LABEL: &str = "office-session-converter";
 
 #[cfg(target_os = "windows")]
-fn bring_session_window_to_front(window: &WebviewWindow) -> Result<(), String> {
+fn office_editor_session_is_active(session_id: &str) -> bool {
+    OFFICE_EDITOR_ACTIVE_SESSION
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .map(|current| current.as_deref() == Some(session_id))
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "windows")]
+fn office_editor_session_id_from_url(url: &tauri::Url) -> Option<String> {
+    let mut segments = url.path_segments()?;
+    if segments.next()? != "dialog" {
+        return None;
+    }
+    let session_id = segments.next()?.to_string();
+    valid_session_id(&session_id).then_some(session_id)
+}
+
+#[cfg(target_os = "windows")]
+fn schedule_office_editor_reveal_fallback(app: tauri::AppHandle, session_id: String) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+        if !office_editor_session_is_active(&session_id) {
+            return;
+        }
+        let Some(window) = app.get_webview_window(OFFICE_EDITOR_WINDOW_LABEL) else {
+            return;
+        };
+        if window.is_visible().unwrap_or(false) {
+            return;
+        }
+        crate::app_lifecycle::append_lifecycle_log(format!(
+            "Office editor page-load reveal fallback used for session={session_id}"
+        ));
+        if let Err(error) = bring_session_window_to_front(&window, Some(session_id.clone())) {
+            crate::app_lifecycle::append_lifecycle_log(format!(
+                "Office editor reveal fallback failed for session={session_id}: {error}"
+            ));
+        }
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn office_session_export_is_committable(session: &OfficeFormulaSession) -> bool {
+    if session.mode == OfficeSessionMode::Edit && !session.dirty {
+        return true;
+    }
+    if !session.lines.iter().any(|line| !line.latex.trim().is_empty()) {
+        return false;
+    }
+    let Some(export) = session.export_result.as_ref() else {
+        return false;
+    };
+    let has_svg = !export.svg.trim().is_empty() || !export.svg_base64.trim().is_empty();
+    if session.host == OfficeHost::Powerpoint {
+        return has_svg;
+    }
+    match session.object_mode.as_str() {
+        "wordOmml" => export
+            .math_ml
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|math_ml| math_ml.starts_with("<math")),
+        "nativeOle" => has_svg
+            && export
+                .png_base64
+                .as_deref()
+                .is_some_and(|png| !png.trim().is_empty()),
+        "crossPlatformPicture" => export
+            .png_base64
+            .as_deref()
+            .is_some_and(|png| !png.trim().is_empty()),
+        _ => false,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn close_patch_for_office_editor(session: &OfficeFormulaSession) -> Option<serde_json::Value> {
+    if !matches!(
+        session.status,
+        OfficeSessionStatus::Created | OfficeSessionStatus::Editing
+    ) {
+        return None;
+    }
+    if session.auto_commit_on_close && office_session_export_is_committable(session) {
+        return Some(serde_json::json!({
+            "status": "committing",
+            "explicitCancel": false,
+            "error": null
+        }));
+    }
+    Some(serde_json::json!({
+        "status": "cancelled",
+        "explicitCancel": true,
+        "error": null
+    }))
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn request_desktop_editor_window_close(app: &tauri::AppHandle) -> Result<(), String> {
+    let Some(window) = app.get_webview_window(OFFICE_EDITOR_WINDOW_LABEL) else {
+        return Ok(());
+    };
+    let active_session = OFFICE_EDITOR_ACTIVE_SESSION
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .map_err(|_| "VisualTeX Office editor Session state is unavailable.".to_string())?
+        .clone();
+    let Some(session_id) = active_session else {
+        let _ = window.hide();
+        return Ok(());
+    };
+
+    crate::app_lifecycle::append_lifecycle_log(format!(
+        "native Office editor close requested for session={session_id}"
+    ));
+    let page_dispatch_error = window
+        .eval(
+            "window.dispatchEvent(new CustomEvent('visualtex-office-close-requested'));",
+        )
+        .err()
+        .map(|error| error.to_string());
+
+    let dispatch_session_id = session_id.clone();
+    let companion = app
+        .try_state::<OfficeCompanionState>()
+        .map(|state| state.inner().clone())
+        .ok_or_else(|| "VisualTeX Office companion state is unavailable.".to_string())?;
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        // Give the page's normal awaited commit/cancel path the first chance to
+        // finish. WebView2 can occasionally lose a synthetic event while its
+        // renderer is busy or navigating, so the persistent Session store is
+        // the authoritative fallback rather than leaving Word blocked forever.
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        let store = companion.session_store.clone();
+        let fallback_session_id = session_id.clone();
+        let fallback = tokio::task::spawn_blocking(move || {
+            let session = store.get(&fallback_session_id)?;
+            if let Some(patch) = close_patch_for_office_editor(&session) {
+                let next = store.patch(&fallback_session_id, patch)?;
+                Ok::<_, SessionError>(Some(next.status))
+            } else {
+                Ok::<_, SessionError>(None)
+            }
+        })
+        .await;
+        match fallback {
+            Ok(Ok(Some(status))) => crate::app_lifecycle::append_lifecycle_log(format!(
+                "native Office editor close fallback finalized session={session_id} status={status:?}"
+            )),
+            Ok(Ok(None)) => {}
+            Ok(Err(error)) => crate::app_lifecycle::append_lifecycle_log(format!(
+                "native Office editor close fallback could not finalize session={session_id}: {error}"
+            )),
+            Err(error) => crate::app_lifecycle::append_lifecycle_log(format!(
+                "native Office editor close fallback task failed for session={session_id}: {error}"
+            )),
+        }
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+        loop {
+            let store = companion.session_store.clone();
+            let poll_session_id = session_id.clone();
+            let status = tokio::task::spawn_blocking(move || {
+                store.get(&poll_session_id).map(|session| session.status)
+            })
+            .await;
+            let terminal = matches!(
+                status,
+                Ok(Ok(
+                    OfficeSessionStatus::Completed
+                        | OfficeSessionStatus::Cancelled
+                        | OfficeSessionStatus::Failed
+                ))
+            );
+            if terminal || std::time::Instant::now() >= deadline {
+                if let Ok(mut current) = OFFICE_EDITOR_ACTIVE_SESSION
+                    .get_or_init(|| Mutex::new(None))
+                    .lock()
+                {
+                    if current.as_deref() == Some(session_id.as_str()) {
+                        *current = None;
+                    }
+                }
+                if let Some(editor) = app.get_webview_window(OFFICE_EDITOR_WINDOW_LABEL) {
+                    let _ = editor.set_always_on_top(false);
+                    let _ = editor.request_user_attention(None);
+                    let _ = editor.hide();
+                    let _ = editor.eval(
+                        "window.__VISUALTEX_OFFICE_SESSION_ID__=undefined;history.replaceState(null,'','/dialog?runtime=vsto-desktop');window.dispatchEvent(new CustomEvent('visualtex-office-session',{detail:{sessionId:''}}));",
+                    );
+                }
+                if !terminal {
+                    crate::app_lifecycle::append_lifecycle_log(format!(
+                        "native Office editor close timed out waiting for terminal session={session_id}"
+                    ));
+                }
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    });
+
+    if let Some(error) = page_dispatch_error {
+        crate::app_lifecycle::append_lifecycle_log(format!(
+            "native Office editor close page dispatch failed for session={dispatch_session_id}: {error}"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn bring_session_window_to_front(
+    window: &WebviewWindow,
+    guarded_editor_session: Option<String>,
+) -> Result<(), String> {
     window
         .show()
         .map_err(|error| format!("Unable to show the VisualTeX Session window: {error}"))?;
     let _ = window.unminimize();
-    // Windows can refuse an ordinary focus request after the user has spent
-    // time in Office. Briefly toggling top-most status makes an already-created
-    // editor visible without leaving it permanently above every application.
+    // A Word/PowerPoint Ribbon callback can return after the first focus request
+    // and immediately activate Office again. Keep the editor temporarily above
+    // Office and repair focus several times after the callback has unwound.
     let _ = window.set_always_on_top(true);
     let _ = window.request_user_attention(Some(UserAttentionType::Informational));
-    let focus_result = window.set_focus();
-    std::thread::sleep(std::time::Duration::from_millis(90));
-    let _ = window.set_always_on_top(false);
-    let _ = window.request_user_attention(None);
-    focus_result
-        .map_err(|error| format!("Unable to focus the VisualTeX Session window: {error}"))
+    let _ = window.set_focus();
+
+    let repair_window = window.clone();
+    tauri::async_runtime::spawn(async move {
+        for delay_ms in [140_u64, 260, 520, 900] {
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            if let Some(session_id) = guarded_editor_session.as_deref() {
+                if !office_editor_session_is_active(session_id) {
+                    let _ = repair_window.set_always_on_top(false);
+                    let _ = repair_window.request_user_attention(None);
+                    return;
+                }
+            }
+            let _ = repair_window.show();
+            let _ = repair_window.unminimize();
+            let _ = repair_window.set_always_on_top(true);
+            let _ = repair_window.set_focus();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(260)).await;
+        let _ = repair_window.set_always_on_top(false);
+        let _ = repair_window.request_user_attention(None);
+    });
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]
-fn open_desktop_session_window(
-    app: tauri::AppHandle,
-    session_id: String,
-) -> Result<(), String> {
+fn open_desktop_session_window(app: tauri::AppHandle, session_id: String) -> Result<(), String> {
     let label = OFFICE_EDITOR_WINDOW_LABEL.to_string();
     let url = tauri::Url::parse(&format!(
-        "https://127.0.0.1:{}/dialog?runtime=vsto-desktop&sessionId={}",
+        "https://127.0.0.1:{}/dialog/{}?runtime=vsto-desktop",
         crate::office::state::OFFICE_PORT,
         session_id
     ))
     .map_err(|error| format!("Unable to construct the VisualTeX Session URL: {error}"))?;
 
     if let Some(window) = app.get_webview_window(&label) {
+        let active_session = OFFICE_EDITOR_ACTIVE_SESSION
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .map_err(|_| "VisualTeX Office editor Session state is unavailable.".to_string())?
+            .clone();
+        if active_session.as_deref() == Some(session_id.as_str()) {
+            crate::app_lifecycle::append_lifecycle_log(format!(
+                "reusing active Office editor WebView for session={session_id}"
+            ));
+            return bring_session_window_to_front(&window, Some(session_id));
+        }
+
         crate::app_lifecycle::append_lifecycle_log(format!(
-            "reusing on-demand Office editor WebView for session={session_id}"
+            "navigating hidden reused Office editor WebView to session={session_id}"
         ));
-        let encoded = serde_json::to_string(&session_id)
-            .map_err(|error| format!("Unable to encode the Office Session id: {error}"))?;
-        let script = format!(
-            "window.__VISUALTEX_OFFICE_SESSION_ID__={encoded};history.replaceState(null,'','/dialog?runtime=vsto-desktop&sessionId='+encodeURIComponent({encoded}));window.dispatchEvent(new CustomEvent('visualtex-office-session',{{detail:{{sessionId:{encoded}}}}}));"
-        );
-        window
-            .eval(&script)
-            .map_err(|error| format!("Unable to switch the VisualTeX Session window: {error}"))?;
-        return bring_session_window_to_front(&window);
+        let _ = window.set_always_on_top(false);
+        let _ = window.request_user_attention(None);
+        let _ = window.hide();
+        if let Ok(mut current) = OFFICE_EDITOR_ACTIVE_SESSION
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+        {
+            *current = Some(session_id.clone());
+        }
+        if let Err(error) = window.navigate(url.clone()) {
+            if let Ok(mut current) = OFFICE_EDITOR_ACTIVE_SESSION
+                .get_or_init(|| Mutex::new(None))
+                .lock()
+            {
+                if current.as_deref() == Some(session_id.as_str()) {
+                    *current = None;
+                }
+            }
+            return Err(format!(
+                "Unable to navigate the VisualTeX Session window: {error}"
+            ));
+        }
+        schedule_office_editor_reveal_fallback(app, session_id);
+        return Ok(());
     }
 
     crate::app_lifecycle::append_lifecycle_log(format!(
-        "creating Office editor WebView on demand for session={session_id}"
+        "creating hidden Office editor WebView on demand for session={session_id}"
     ));
-    let window = WebviewWindowBuilder::new(&app, label, WebviewUrl::External(url))
+    if let Ok(mut current) = OFFICE_EDITOR_ACTIVE_SESSION
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+    {
+        *current = Some(session_id.clone());
+    }
+    let build_result = WebviewWindowBuilder::new(&app, label, WebviewUrl::External(url))
         .title("VisualTeX · Office 公式编辑器")
         .inner_size(1240.0, 820.0)
         .min_inner_size(640.0, 480.0)
         .resizable(true)
         .center()
-        .focused(true)
-        .visible(true)
-        .build()
-        .map_err(|error| format!("Unable to create the VisualTeX Session window: {error}"))?;
-    bring_session_window_to_front(&window)
+        .focused(false)
+        .visible(false)
+        .on_page_load(|window, payload| {
+            crate::app_lifecycle::append_lifecycle_log(format!(
+                "Office editor page-load event={:?} url={}",
+                payload.event(),
+                payload.url()
+            ));
+            if !matches!(payload.event(), PageLoadEvent::Finished) {
+                return;
+            }
+            let Some(loaded_session_id) = office_editor_session_id_from_url(payload.url()) else {
+                return;
+            };
+            if !office_editor_session_is_active(&loaded_session_id) {
+                crate::app_lifecycle::append_lifecycle_log(format!(
+                    "Office editor ignored stale page-load completion for session={loaded_session_id}"
+                ));
+                return;
+            }
+            if let Err(error) =
+                bring_session_window_to_front(&window, Some(loaded_session_id.clone()))
+            {
+                crate::app_lifecycle::append_lifecycle_log(format!(
+                    "Office editor could not reveal loaded session={loaded_session_id}: {error}"
+                ));
+            }
+        })
+        .build();
+    if let Err(error) = build_result {
+        if let Ok(mut current) = OFFICE_EDITOR_ACTIVE_SESSION
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+        {
+            if current.as_deref() == Some(session_id.as_str()) {
+                *current = None;
+            }
+        }
+        return Err(format!(
+            "Unable to create the VisualTeX Session window: {error}"
+        ));
+    }
+    schedule_office_editor_reveal_fallback(app, session_id);
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]
@@ -344,7 +650,7 @@ fn open_desktop_bulk_import_window(
         window
             .navigate(url)
             .map_err(|error| format!("Unable to navigate the VisualTeX import window: {error}"))?;
-        return bring_session_window_to_front(&window);
+        return bring_session_window_to_front(&window, None);
     }
 
     let window = WebviewWindowBuilder::new(&app, label, WebviewUrl::External(url))
@@ -357,7 +663,7 @@ fn open_desktop_bulk_import_window(
         .visible(true)
         .build()
         .map_err(|error| format!("Unable to create the VisualTeX import window: {error}"))?;
-    bring_session_window_to_front(&window)
+    bring_session_window_to_front(&window, None)
 }
 
 #[cfg(target_os = "windows")]
@@ -459,27 +765,18 @@ async fn close_desktop_session(
 
     #[cfg(target_os = "windows")]
     {
-        // The desktop Office editor is a reusable WebView. Hiding it does not
-        // fire pagehide/beforeunload, so an unchanged edit would otherwise stay
-        // in `editing` forever and keep the host add-in locked. Dirty edits and
-        // create sessions still rely on the editor's normal save/commit path;
-        // only a pristine edit can safely transition without an export payload.
+        // The desktop Office editor is reusable and is hidden rather than
+        // destroyed after a formula finishes. Finalize every still-active
+        // Session before hiding it: a committable auto-apply draft becomes
+        // `committing`; an empty, incomplete, or explicitly non-auto-apply
+        // draft becomes `cancelled`. Leaving `created`/`editing` here strands
+        // the Word add-in's operation gate even though the native window is gone.
         let store = context.companion.session_store.clone();
         let closing_session_id = session_id.clone();
         if let Err(error) = run_session_operation(move || {
             let session = store.get(&closing_session_id)?;
-            if session.mode == OfficeSessionMode::Edit
-                && !session.dirty
-                && session.auto_commit_on_close
-                && matches!(
-                    session.status,
-                    OfficeSessionStatus::Created | OfficeSessionStatus::Editing
-                )
-            {
-                store.patch(
-                    &closing_session_id,
-                    serde_json::json!({ "status": "committing" }),
-                )?;
+            if let Some(patch) = close_patch_for_office_editor(&session) {
+                store.patch(&closing_session_id, patch)?;
             }
             Ok(())
         })
@@ -488,6 +785,18 @@ async fn close_desktop_session(
             return session_error_response(error);
         }
 
+        let editor_was_active = OFFICE_EDITOR_ACTIVE_SESSION
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .map(|mut current| {
+                if current.as_deref() == Some(session_id.as_str()) {
+                    *current = None;
+                    true
+                } else {
+                    false
+                }
+            })
+            .unwrap_or(false);
         let Some(app) = context.companion.app.clone() else {
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         };
@@ -498,11 +807,20 @@ async fn close_desktop_session(
             // the request; otherwise WebView2 can cancel the fetch and leave a
             // blank native window behind.
             tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-            if let Some(window) = app.get_webview_window(OFFICE_EDITOR_WINDOW_LABEL) {
-                let _ = window.hide();
-                let _ = window.eval(
-                    "window.__VISUALTEX_OFFICE_SESSION_ID__=undefined;history.replaceState(null,'','/dialog?runtime=vsto-desktop');window.dispatchEvent(new CustomEvent('visualtex-office-session',{detail:{sessionId:''}}));",
-                );
+            let editor_still_inactive = OFFICE_EDITOR_ACTIVE_SESSION
+                .get_or_init(|| Mutex::new(None))
+                .lock()
+                .map(|current| current.is_none())
+                .unwrap_or(false);
+            if editor_was_active && editor_still_inactive {
+                if let Some(window) = app.get_webview_window(OFFICE_EDITOR_WINDOW_LABEL) {
+                    let _ = window.set_always_on_top(false);
+                    let _ = window.request_user_attention(None);
+                    let _ = window.hide();
+                    let _ = window.eval(
+                        "window.__VISUALTEX_OFFICE_SESSION_ID__=undefined;history.replaceState(null,'','/dialog?runtime=vsto-desktop');window.dispatchEvent(new CustomEvent('visualtex-office-session',{detail:{sessionId:''}}));",
+                    );
+                }
             }
             for label in disposable_labels {
                 if let Some(window) = app.get_webview_window(&label) {
@@ -1806,6 +2124,7 @@ fn add_security_headers(mut response: Response, request_path: &str) -> Response 
     if request_path == "/health"
         || request_path.starts_with("/api/")
         || request_path.ends_with(".html")
+        || request_path == "/dialog"
         || request_path.starts_with("/dialog/")
     {
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -2162,6 +2481,123 @@ mod tests {
             formula_cache,
             true,
         )
+    }
+
+    fn close_policy_session(
+        object_mode: &str,
+        dirty: bool,
+        math_ml: Option<&str>,
+        png_base64: Option<&str>,
+    ) -> OfficeFormulaSession {
+        OfficeFormulaSession {
+            id: Uuid::new_v4().to_string(),
+            mode: OfficeSessionMode::Edit,
+            host: OfficeHost::Word,
+            formula_id: Uuid::new_v4().to_string(),
+            source_document_id: Some(Uuid::new_v4().to_string()),
+            source_object_id: Some("0:1".to_string()),
+            title: "Formula".to_string(),
+            lines: vec![crate::office::sessions::FormulaLine {
+                id: Uuid::new_v4().to_string(),
+                latex: "x+y".to_string(),
+            }],
+            active_line_id: None,
+            code_format: "latex".to_string(),
+            display_mode: "inline".to_string(),
+            object_mode: object_mode.to_string(),
+            numbered: false,
+            font_size_pt: 11.0,
+            export_width: 120.0,
+            export_height: 30.0,
+            export_result: Some(crate::office::sessions::OfficeExportResult {
+                svg: "<svg viewBox=\"0 0 120 30\"></svg>".to_string(),
+                svg_base64: "PHN2Zz48L3N2Zz4=".to_string(),
+                math_ml: math_ml.map(str::to_string),
+                png_base64: png_base64.map(str::to_string),
+                width: 120.0,
+                height: 30.0,
+                baseline: Some(22.0),
+            }),
+            original_metadata: None,
+            dirty,
+            status: OfficeSessionStatus::Editing,
+            auto_commit_on_close: true,
+            explicit_cancel: false,
+            error: None,
+            created_at: 1,
+            updated_at: 1,
+            expires_at: u64::MAX,
+        }
+    }
+
+    #[test]
+    fn dirty_word_omml_close_commits_without_png() {
+        let session = close_policy_session(
+            "wordOmml",
+            true,
+            Some("<math xmlns=\"http://www.w3.org/1998/Math/MathML\"><mi>x</mi></math>"),
+            None,
+        );
+        assert!(office_session_export_is_committable(&session));
+        assert_eq!(
+            close_patch_for_office_editor(&session)
+                .and_then(|patch| patch.get("status").cloned()),
+            Some(serde_json::json!("committing")),
+        );
+    }
+
+    #[test]
+    fn dirty_native_ole_close_without_png_cancels_instead_of_stranding() {
+        let session = close_policy_session("nativeOle", true, None, None);
+        assert!(!office_session_export_is_committable(&session));
+        let patch = close_patch_for_office_editor(&session).expect("close patch");
+        assert_eq!(patch.get("status"), Some(&serde_json::json!("cancelled")));
+        assert_eq!(patch.get("explicitCancel"), Some(&serde_json::json!(true)));
+    }
+
+    #[test]
+    fn unchanged_edit_close_commits_without_export() {
+        let mut session = close_policy_session("wordOmml", false, None, None);
+        session.export_result = None;
+        assert!(office_session_export_is_committable(&session));
+        assert_eq!(
+            close_patch_for_office_editor(&session)
+                .and_then(|patch| patch.get("status").cloned()),
+            Some(serde_json::json!("committing")),
+        );
+    }
+
+    #[test]
+    fn dialog_shell_disables_html_caching() {
+        let response = add_security_headers(StatusCode::OK.into_response(), "/dialog");
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("no-store")),
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn editor_page_load_url_resolves_only_valid_session_routes() {
+        let session_id = "550e8400-e29b-41d4-a716-446655440000";
+        let valid = tauri::Url::parse(&format!(
+            "https://127.0.0.1:43127/dialog/{session_id}?runtime=vsto-desktop"
+        ))
+        .expect("valid editor URL");
+        assert_eq!(
+            office_editor_session_id_from_url(&valid).as_deref(),
+            Some(session_id),
+        );
+
+        let shell = tauri::Url::parse("https://127.0.0.1:43127/dialog?runtime=vsto-desktop")
+            .expect("valid shell URL");
+        assert_eq!(office_editor_session_id_from_url(&shell), None);
+
+        let invalid = tauri::Url::parse(
+            "https://127.0.0.1:43127/dialog/not-a-session?runtime=vsto-desktop",
+        )
+        .expect("valid URL with invalid Session id");
+        assert_eq!(office_editor_session_id_from_url(&invalid), None);
     }
 
     #[test]
