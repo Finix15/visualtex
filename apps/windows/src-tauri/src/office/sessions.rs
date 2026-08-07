@@ -460,11 +460,6 @@ impl SessionStore {
                     .to_string(),
             ));
         }
-        if object_mode == "wordOmml" && input.host != OfficeHost::Word {
-            return Err(SessionError::Invalid(
-                "wordOmml objectMode is only supported by Word".to_string(),
-            ));
-        }
         let numbered = input.numbered.unwrap_or(false);
         if numbered && (input.host != OfficeHost::Word || display_mode != "block") {
             return Err(SessionError::Invalid(
@@ -596,11 +591,6 @@ impl SessionStore {
             return Err(SessionError::Invalid(
                 "Office Session objectMode must be nativeOle, wordOmml, or crossPlatformPicture"
                     .to_string(),
-            ));
-        }
-        if next.object_mode == "wordOmml" && next.host != OfficeHost::Word {
-            return Err(SessionError::Invalid(
-                "wordOmml objectMode is only supported by Word".to_string(),
             ));
         }
         if next.numbered && (next.host != OfficeHost::Word || next.display_mode != "block") {
@@ -853,6 +843,34 @@ mod tests {
             "height": 10.0,
             "baseline": 8.0
         })
+    }
+
+    #[test]
+    fn powerpoint_can_use_native_office_math_object_mode() {
+        let temp = TempDir::new().unwrap();
+        let store = SessionStore::new(&paths(&temp)).unwrap();
+        let mut input = create_input();
+        input.host = OfficeHost::Powerpoint;
+        input.display_mode = Some("block".to_string());
+        input.object_mode = Some("wordOmml".to_string());
+        let session = store.create(input).unwrap();
+        assert_eq!(session.host, OfficeHost::Powerpoint);
+        assert_eq!(session.object_mode, "wordOmml");
+
+        let picture = store
+            .patch(
+                &session.id,
+                serde_json::json!({ "objectMode": "crossPlatformPicture" }),
+            )
+            .unwrap();
+        assert_eq!(picture.object_mode, "crossPlatformPicture");
+        let native_math = store
+            .patch(
+                &session.id,
+                serde_json::json!({ "objectMode": "wordOmml" }),
+            )
+            .unwrap();
+        assert_eq!(native_math.object_mode, "wordOmml");
     }
 
     #[test]

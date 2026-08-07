@@ -22,6 +22,7 @@
     <Compile Include="..\VisualTeX.WindowsOffice.VstoShared\RibbonIconProvider.cs" Link="RibbonIconProvider.cs" />
     <Compile Include="..\VisualTeX.WindowsOffice.VstoShared\RibbonVectorIconRenderer.cs" Link="RibbonVectorIconRenderer.cs" />
     <Compile Include="..\VisualTeX.WindowsOffice.VstoShared\OlePngPreviewExtractor.cs" Link="OlePngPreviewExtractor.cs" />
+    <Compile Include="..\VisualTeX.WindowsOffice.VstoShared\MathMlToLatexConverter.cs" Link="MathMlToLatexConverter.cs" />
     <ProjectReference Include="..\VisualTeX.WindowsOffice.Contracts\VisualTeX.WindowsOffice.Contracts.csproj" />
     <Reference Include="Microsoft.CSharp" />
     <COMReference Include="Extensibility">

@@ -10,13 +10,19 @@ internal static class WordOleObjectAccessor
         if (format is null) throw new ArgumentNullException(nameof(format));
         try
         {
-            return format.Object;
+            var runningObject = format.Object;
+            if (runningObject is not null) return runningObject;
         }
         catch (Exception error) when (error is COMException or InvalidCastException)
         {
-            object showVerb = (int)WdOLEVerb.wdOLEVerbShow;
-            format.DoVerb(ref showVerb);
-            return format.Object;
+            // A freshly pasted embedded OLE object can be dormant until Word
+            // activates it. Fall through to the same activation path below.
         }
+
+        object showVerb = (int)WdOLEVerb.wdOLEVerbShow;
+        format.DoVerb(ref showVerb);
+        return format.Object
+            ?? throw new COMException(
+                "Word activated the VisualTeX OLE object but did not expose its running COM object.");
     }
 }

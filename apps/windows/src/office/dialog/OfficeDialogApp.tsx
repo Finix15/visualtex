@@ -104,11 +104,11 @@ function officeExportCanCommit(
 ) {
   if (!exportResult) return false;
   const hasSvg = Boolean(exportResult.svg?.trim() || exportResult.svgBase64?.trim());
-  if (session.host === "powerpoint" && USE_NATIVE_POWERPOINT_COMMIT) {
-    return hasSvg;
-  }
   if (session.objectMode === "wordOmml") {
     return exportResult.mathMl?.trimStart().startsWith("<math") === true;
+  }
+  if (session.host === "powerpoint" && USE_NATIVE_POWERPOINT_COMMIT) {
+    return hasSvg;
   }
   if (session.objectMode === "nativeOle") {
     return hasSvg && Boolean(exportResult.pngBase64?.trim());
@@ -677,6 +677,32 @@ export function OfficeDialogApp() {
       sourceSession.host,
     );
     const sourceEquationTag = sourceSession.originalMetadata?.equationTag;
+    if (sourceSession.objectMode === "wordOmml") {
+      const renderedLatex = sourceSession.displayMode === "block"
+        ? attachFormulaEquationTag(conversionLatex, sourceEquationTag)
+        : conversionLatex;
+      const mathMl = latexToMathMl(
+        renderedLatex,
+        sourceSession.displayMode === "block",
+      );
+      if (!mathMl?.trim()) {
+        throw new Error("Unable to generate MathML for Office conversion.");
+      }
+      const width =
+        sourceSession.originalMetadata?.renderWidthPx ??
+        (sourceSession.exportWidth > 0 ? sourceSession.exportWidth : 240);
+      const height =
+        sourceSession.originalMetadata?.renderHeightPx ??
+        (sourceSession.exportHeight > 0 ? sourceSession.exportHeight : 80);
+      return {
+        svg: "",
+        svgBase64: "",
+        mathMl,
+        width,
+        height,
+        baseline: sourceSession.originalMetadata?.baseline ?? height * 0.75,
+      };
+    }
     const base = generateSvgExportResult(
       conversionLatex,
       sourceSession.displayMode,
@@ -685,9 +711,6 @@ export function OfficeDialogApp() {
     );
     if (!base?.mathMl) {
       throw new Error("Unable to generate MathML for Office conversion.");
-    }
-    if (sourceSession.objectMode === "wordOmml") {
-      return base;
     }
     const complete = await rasterizeSvgExportResult(base);
     if (!complete?.mathMl || !complete.pngBase64) {

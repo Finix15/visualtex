@@ -291,6 +291,55 @@ internal static class WordEquationNumbering
         finally { Release(bookmarks); }
     }
 
+    internal static bool FormulaRangeOwnsNumberingArtifacts(
+        Document document,
+        Range formulaRange,
+        string formulaId)
+    {
+        Bookmarks? bookmarks = null;
+        Bookmark? numberBookmark = null;
+        Range? numberRange = null;
+        Tables? formulaTables = null;
+        Tables? numberTables = null;
+        Table? formulaTable = null;
+        Table? numberTable = null;
+        Range? formulaTableRange = null;
+        Range? numberTableRange = null;
+        try
+        {
+            bookmarks = document.Bookmarks;
+            var numberName = EquationBookmarkName(formulaId);
+            if (!bookmarks.Exists(numberName)) return false;
+            numberBookmark = bookmarks[numberName];
+            numberRange = numberBookmark.Range;
+
+            formulaTables = formulaRange.Tables;
+            numberTables = numberRange.Tables;
+            if (formulaTables.Count == 0 || numberTables.Count == 0)
+                return formulaRange.Start <= numberRange.Start
+                    && formulaRange.End >= numberRange.End;
+
+            formulaTable = formulaTables[1];
+            numberTable = numberTables[1];
+            formulaTableRange = formulaTable.Range;
+            numberTableRange = numberTable.Range;
+            return formulaTableRange.Start == numberTableRange.Start;
+        }
+        catch { return false; }
+        finally
+        {
+            Release(numberTableRange);
+            Release(formulaTableRange);
+            Release(numberTable);
+            Release(formulaTable);
+            Release(numberTables);
+            Release(formulaTables);
+            Release(numberRange);
+            Release(numberBookmark);
+            Release(bookmarks);
+        }
+    }
+
     private static void UpdateMainStoryFields(Document document)
     {
         Fields? fields = null;
@@ -805,6 +854,9 @@ internal static class WordEquationNumbering
         Columns? columns = null;
         Column? originalColumn = null;
         Column? addedColumn = null;
+        Column? leftColumn = null;
+        Column? centerColumn = null;
+        Column? rightColumn = null;
         try
         {
             conversionRange = paragraphRange.Duplicate;
@@ -847,12 +899,42 @@ internal static class WordEquationNumbering
                 throw new InvalidOperationException(
                     "Word did not create the expected one-column OLE migration table.");
             originalColumn = columns[1];
+            var originalTableWidth = originalColumn.Width;
             object beforeOriginal = originalColumn;
             addedColumn = columns.Add(ref beforeOriginal);
             Release(addedColumn);
             addedColumn = null;
             object appendAtRight = Type.Missing;
             addedColumn = columns.Add(ref appendAtRight);
+            Release(addedColumn);
+            addedColumn = null;
+            Release(originalColumn);
+            originalColumn = null;
+            Release(columns);
+            columns = table.Columns;
+            if (columns.Count != 3)
+                throw new InvalidOperationException(
+                    "Word did not preserve the expected three-column OLE migration table.");
+
+            // ConvertToTable starts with one column that already spans the full
+            // text width. Word clones that physical width when Columns.Add is
+            // used, so the temporary three-column table becomes 300% wide.
+            // PreferredWidth percentages written later do not reliably shrink a
+            // fixed-layout converted table, leaving both the OLE and its number
+            // off the visible page. Normalize the physical widths immediately
+            // while the original one-column width is still known.
+            leftColumn = columns[1];
+            centerColumn = columns[2];
+            rightColumn = columns[3];
+            leftColumn.SetWidth(
+                originalTableWidth * 0.2f,
+                WdRulerStyle.wdAdjustNone);
+            centerColumn.SetWidth(
+                originalTableWidth * 0.6f,
+                WdRulerStyle.wdAdjustNone);
+            rightColumn.SetWidth(
+                originalTableWidth * 0.2f,
+                WdRulerStyle.wdAdjustNone);
 
             RefreshFormulaRangeInNumberedTable(
                 document,
@@ -868,6 +950,9 @@ internal static class WordEquationNumbering
         }
         finally
         {
+            Release(rightColumn);
+            Release(centerColumn);
+            Release(leftColumn);
             Release(addedColumn);
             Release(originalColumn);
             Release(columns);

@@ -118,6 +118,10 @@ internal sealed class WordFormulaService
                 metadata = WordFormulaMetadataReader.TryRead(shape);
                 if (metadata is not null)
                 {
+                    metadata = EnsureUniqueInlineFormulaIdentity(
+                        document,
+                        shape,
+                        metadata);
                     metadata.FontSizePt = FormulaFontSize.InferOleFontSize(
                         shape.Width,
                         shape.Height,
@@ -161,6 +165,33 @@ internal sealed class WordFormulaService
                         document,
                         ommlEquationRange);
                     objectMode = FormulaOleContract.WordOmmlMode;
+                    if (!document.ReadOnly)
+                    {
+                        try
+                        {
+                            ommlBookmark = WordOmmlFormulaStore.Wrap(
+                                document,
+                                ommlEquationRange,
+                                metadata,
+                                replaceExisting: false);
+                            WordOmmlFormulaStore.Save(document, metadata);
+                        }
+                        catch
+                        {
+                            try { ommlBookmark?.Delete(); } catch { }
+                            Release(ommlBookmark);
+                            ommlBookmark = null;
+                            try
+                            {
+                                WordOmmlFormulaStore.Delete(
+                                    document,
+                                    metadata.FormulaId);
+                            }
+                            catch { }
+                            // The native equation is still readable even if Word
+                            // refuses to persist the VisualTeX adoption metadata.
+                        }
+                    }
                 }
             }
             return new OfficeSelection
@@ -187,6 +218,132 @@ internal sealed class WordFormulaService
             if (ownsSelection) Release(selection);
             Release(document);
         }
+    }
+
+    private static FormulaMetadata EnsureUniqueInlineFormulaIdentity(
+        Document document,
+        InlineShape shape,
+        FormulaMetadata metadata)
+    {
+        if (document.ReadOnly || string.IsNullOrWhiteSpace(metadata.FormulaId))
+            return metadata;
+
+        Bookmarks? bookmarks = null;
+        Bookmark? ownerBookmark = null;
+        Range? ownerRange = null;
+        Range? shapeRange = null;
+        try
+        {
+            shapeRange = shape.Range;
+            bookmarks = document.Bookmarks;
+            var currentName = WordFormulaMetadataReader.IdentityBookmarkName(metadata.FormulaId);
+            if (bookmarks.Exists(currentName))
+            {
+                ownerBookmark = bookmarks[currentName];
+                ownerRange = ownerBookmark.Range;
+                if (RangesIdentifySameInlineFormula(ownerRange, shapeRange))
+                {
+                    // A shape replacement can collapse a bookmark at the same
+                    // insertion point. Refresh the anchor to cover the live OLE
+                    // object so the identity remains durable across later edits.
+                    if (ownerRange.Start != shapeRange.Start
+                        || ownerRange.End != shapeRange.End)
+                    {
+                        ownerBookmark.Delete();
+                        Release(ownerBookmark);
+                        ownerBookmark = null;
+                        var refreshedIdentity = bookmarks.Add(currentName, shapeRange);
+                        Release(refreshedIdentity);
+                    }
+                    return metadata;
+                }
+
+                return RekeyCopiedInlineFormula(
+                    document,
+                    shape,
+                    shapeRange,
+                    bookmarks,
+                    metadata);
+            }
+
+            // Existing numbered formulas already have durable VisualTeX
+            // bookmarks. If those bookmarks belong to another table, this is a
+            // copied formula even when the newer VTO_ identity bookmark did not
+            // exist in an older document yet. Preserve the original equation's
+            // FormulaId and re-key the copy.
+            if (metadata.Numbered
+                && WordEquationNumbering.HasCompleteFormulaNumberingArtifacts(
+                    document,
+                    metadata.FormulaId)
+                && !WordEquationNumbering.FormulaRangeOwnsNumberingArtifacts(
+                    document,
+                    shapeRange,
+                    metadata.FormulaId))
+            {
+                return RekeyCopiedInlineFormula(
+                    document,
+                    shape,
+                    shapeRange,
+                    bookmarks,
+                    metadata);
+            }
+
+            var identityBookmark = bookmarks.Add(currentName, shapeRange);
+            Release(identityBookmark);
+            return metadata;
+        }
+        catch
+        {
+            // Identity repair must never make an otherwise readable formula
+            // impossible to open. Targeted edit operations still carry the
+            // exact source range as a secondary lookup hint.
+            return metadata;
+        }
+        finally
+        {
+            Release(shapeRange);
+            Release(ownerRange);
+            Release(ownerBookmark);
+            Release(bookmarks);
+        }
+    }
+
+    private static FormulaMetadata RekeyCopiedInlineFormula(
+        Document document,
+        InlineShape shape,
+        Range shapeRange,
+        Bookmarks bookmarks,
+        FormulaMetadata metadata)
+    {
+        var newFormulaId = Guid.NewGuid().ToString("D");
+        var rekeyed = WordFormulaMetadataReader.CloneWithFormulaId(
+            metadata,
+            newFormulaId);
+        var identityBookmark = bookmarks.Add(
+            WordFormulaMetadataReader.IdentityBookmarkName(newFormulaId),
+            shapeRange);
+        Release(identityBookmark);
+
+        if (rekeyed.Numbered
+            && string.Equals(rekeyed.DisplayMode, "block", StringComparison.Ordinal))
+        {
+            // Copying an entire numbered Word table can disturb the original
+            // formula's same-name bookmarks before VisualTeX sees the pasted
+            // copy. Once the copy has its own effective FormulaId, rebuild the
+            // complete document inventory so both the original and the copy get
+            // independent caption/number/reference anchors.
+            WordEquationNumbering.Reconcile(document);
+        }
+        return rekeyed;
+    }
+
+    private static bool RangesIdentifySameInlineFormula(Range owner, Range candidate)
+    {
+        if (owner.Start == candidate.Start && owner.End == candidate.End)
+            return true;
+        if (owner.Start == owner.End && owner.Start == candidate.Start)
+            return true;
+        return owner.Start <= candidate.Start && owner.End >= candidate.End;
     }
 
     public OfficeSelection? ReadVisualTeXOmmlAtScreenPoint(

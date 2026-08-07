@@ -101,35 +101,39 @@ internal static partial class Program
         }
     }
 
-    private sealed class UserWordAddInAutoLoadSuppression : IDisposable
+    private sealed class UserOfficeAddInAutoLoadSuppression : IDisposable
     {
-        private const string KeyPath =
-            @"Software\Microsoft\Office\Word\Addins\VisualTeX.WordVsto";
+        private readonly string _keyPath;
         private readonly bool _keyExisted;
         private readonly bool _loadBehaviorExisted;
         private readonly object? _loadBehavior;
         private readonly RegistryValueKind _loadBehaviorKind;
         private bool _disposed;
 
-        private UserWordAddInAutoLoadSuppression(
+        private UserOfficeAddInAutoLoadSuppression(
+            string keyPath,
             bool keyExisted,
             bool loadBehaviorExisted,
             object? loadBehavior,
             RegistryValueKind loadBehaviorKind)
         {
+            _keyPath = keyPath;
             _keyExisted = keyExisted;
             _loadBehaviorExisted = loadBehaviorExisted;
             _loadBehavior = loadBehavior;
             _loadBehaviorKind = loadBehaviorKind;
         }
 
-        internal static UserWordAddInAutoLoadSuppression Create()
+        internal static UserOfficeAddInAutoLoadSuppression Create(
+            string applicationName,
+            string progId)
         {
-            using var existingKey = Registry.CurrentUser.OpenSubKey(KeyPath);
+            var keyPath = $@"Software\Microsoft\Office\{applicationName}\Addins\{progId}";
+            using var existingKey = Registry.CurrentUser.OpenSubKey(keyPath);
             var keyExisted = existingKey is not null;
-            using var key = Registry.CurrentUser.CreateSubKey(KeyPath, writable: true)
+            using var key = Registry.CurrentUser.CreateSubKey(keyPath, writable: true)
                 ?? throw new InvalidOperationException(
-                    "The per-user Word add-in acceptance override could not be created.");
+                    $"The per-user {applicationName} add-in acceptance override could not be created.");
             var valueNames = key.GetValueNames();
             var loadBehaviorExisted = valueNames.Any(name =>
                 string.Equals(name, "LoadBehavior", StringComparison.OrdinalIgnoreCase));
@@ -148,7 +152,8 @@ internal static partial class Program
                     RegistryValueKind.String);
             }
             key.SetValue("LoadBehavior", 0, RegistryValueKind.DWord);
-            return new UserWordAddInAutoLoadSuppression(
+            return new UserOfficeAddInAutoLoadSuppression(
+                keyPath,
                 keyExisted,
                 loadBehaviorExisted,
                 loadBehavior,
@@ -161,14 +166,14 @@ internal static partial class Program
             _disposed = true;
             if (!_keyExisted)
             {
-                try { Registry.CurrentUser.DeleteSubKeyTree(KeyPath, throwOnMissingSubKey: false); }
+                try { Registry.CurrentUser.DeleteSubKeyTree(_keyPath, throwOnMissingSubKey: false); }
                 catch { }
                 return;
             }
 
             try
             {
-                using var key = Registry.CurrentUser.OpenSubKey(KeyPath, writable: true);
+                using var key = Registry.CurrentUser.OpenSubKey(_keyPath, writable: true);
                 if (key is null) return;
                 if (_loadBehaviorExisted && _loadBehavior is not null)
                     key.SetValue("LoadBehavior", _loadBehavior, _loadBehaviorKind);
@@ -362,9 +367,11 @@ internal static partial class Program
 
         using var officeMessageFilter = OfficeComMessageFilter.Register();
         using var installedWordAutoLoadSuppression =
-            UserWordAddInAutoLoadSuppression.Create();
+            UserOfficeAddInAutoLoadSuppression.Create("Word", "VisualTeX.WordVsto");
+        using var installedPowerPointAutoLoadSuppression =
+            UserOfficeAddInAutoLoadSuppression.Create("PowerPoint", "VisualTeX.PowerPointVsto");
         Console.WriteLine(
-            "Installed Word add-in auto-load is suppressed for this isolated acceptance process.");
+            "Installed Word and PowerPoint add-in auto-load is suppressed for this isolated acceptance process.");
 
         try
         {
@@ -401,6 +408,14 @@ internal static partial class Program
             else if (string.Equals(mode, "powerpoint-font-size", StringComparison.OrdinalIgnoreCase))
             {
                 RunPowerPointFontSizeAcceptance(client, artifactRoot);
+            }
+            else if (string.Equals(mode, "powerpoint-copy-conversion", StringComparison.OrdinalIgnoreCase))
+            {
+                RunPowerPointCopyConversionAcceptance(client, artifactRoot);
+            }
+            else if (string.Equals(mode, "powerpoint-direct-omml-stress", StringComparison.OrdinalIgnoreCase))
+            {
+                RunPowerPointDirectOmmlStressAcceptance(artifactRoot);
             }
             else if (string.Equals(mode, "powerpoint-picture-edit", StringComparison.OrdinalIgnoreCase))
             {
@@ -527,6 +542,14 @@ internal static partial class Program
             else if (string.Equals(mode, "word-office2019-sequential-numbered-insertion", StringComparison.OrdinalIgnoreCase))
             {
                 RunWordOffice2019SequentialNumberedInsertion(artifactRoot);
+            }
+            else if (string.Equals(mode, "word-ole-numbering-migration", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordOleNumberingMigration(artifactRoot);
+            }
+            else if (string.Equals(mode, "word-ole-copy-edit", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordOleCopyEditAcceptance(artifactRoot);
             }
             else if (string.Equals(mode, "word-bulk-import-performance", StringComparison.OrdinalIgnoreCase))
             {
@@ -4842,7 +4865,8 @@ internal static partial class Program
         string expectedObjectMode,
         Action command,
         TimeSpan timeout,
-        out TimeSpan elapsed)
+        out TimeSpan elapsed,
+        Func<string?>? errorProvider = null)
     {
         var baselineWindows = VisibleVisualTeXWindowTitles();
         var stopwatch = Stopwatch.StartNew();
@@ -4850,7 +4874,8 @@ internal static partial class Program
         var sessionId = WaitForNewSession(
             existingSessionIds,
             expectedHost,
-            TimeSpan.FromSeconds(30));
+            TimeSpan.FromSeconds(30),
+            errorProvider);
         var deadline = DateTime.UtcNow + timeout;
         OfficeSessionDocument? session = null;
         while (DateTime.UtcNow < deadline)

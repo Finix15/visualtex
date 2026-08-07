@@ -47,10 +47,11 @@ internal struct OleSize
     internal int Cy;
 }
 
-internal sealed class PowerPointFormulaService
+public sealed class PowerPointFormulaService
 {
     private const string FormulaIdTag = "VisualTeXFormulaId";
     private const string MetadataTag = "VisualTeXMetadata";
+    private const string IdentityOwnerTag = "VisualTeXIdentityOwner";
     private const string SlideReferencePrefix = "visualtex-ppt-vsto-slide:";
     private readonly Application _application;
 
@@ -84,23 +85,39 @@ internal sealed class PowerPointFormulaService
             FormulaMetadata? metadata = null;
             string? objectMode = null;
             string? objectId = SlideReference(slide);
-            if (selection.Type == PpSelectionType.ppSelectionShapes)
+            if (selection.Type is PpSelectionType.ppSelectionShapes or PpSelectionType.ppSelectionText)
             {
-                range = selection.ShapeRange;
-                if (range.Count == 1)
+                try { range = selection.ShapeRange; } catch { range = null; }
+                if (range?.Count == 1)
                 {
                     shape = range[1];
                     objectId = shape.Name;
                     metadata = ReadMetadata(shape);
                     if (metadata is not null)
                     {
-                        metadata.FontSizePt = FormulaFontSize.InferOleFontSize(
-                            shape.Width,
-                            shape.Height,
-                            metadata);
-                        objectMode = IsNativeOle(shape)
-                            ? "nativeOle"
-                            : "crossPlatformPicture";
+                        metadata = EnsureUniqueFormulaIdentity(presentation, slide, shape, metadata);
+                        if (PowerPointOmmlBridge.IsNativeEquation(shape))
+                        {
+                            var currentLatex = PowerPointOmmlBridge.TryReadCurrentLatex(shape);
+                            if (!string.IsNullOrWhiteSpace(currentLatex))
+                            {
+                                metadata = CloneWithLatex(metadata, currentLatex!);
+                                Configure(shape, metadata);
+                            }
+                            metadata.FontSizePt = PowerPointOmmlBridge.ReadFontSize(shape)
+                                ?? FormulaFontSize.ResolveSemanticFontSize(metadata);
+                            objectMode = "wordOmml";
+                        }
+                        else
+                        {
+                            metadata.FontSizePt = FormulaFontSize.InferOleFontSize(
+                                shape.Width,
+                                shape.Height,
+                                metadata);
+                            objectMode = IsNativeOle(shape)
+                                ? "nativeOle"
+                                : "crossPlatformPicture";
+                        }
                     }
                 }
             }
@@ -224,6 +241,13 @@ internal sealed class PowerPointFormulaService
                 throw new InvalidOperationException("The selected PowerPoint formula no longer exists.");
 
             var metadata = selected.Metadata;
+            if (PowerPointOmmlBridge.IsNativeEquation(shape))
+            {
+                PowerPointOmmlBridge.SetFontSize(shape, target);
+                metadata.FontSizePt = target;
+                Configure(shape, metadata);
+                return target;
+            }
             var currentFontSize = FormulaFontSize.ResolveSemanticFontSize(metadata);
             var fontScale = target / Math.Max(0.5f, currentFontSize);
             var size = ScaleCurrentShapeSize(
@@ -233,6 +257,10 @@ internal sealed class PowerPointFormulaService
                 600f,
                 400f);
             metadata.FontSizePt = target;
+            // Persist the semantic size before changing PowerPoint geometry.
+            // Width/Height mutations can synchronously dispatch selection events;
+            // those event handlers must not observe and re-save the old font size.
+            Configure(shape, metadata);
             var centerX = shape.Left + shape.Width / 2f;
             var centerY = shape.Top + shape.Height / 2f;
             if (IsNativeOle(shape))
@@ -560,6 +588,146 @@ internal sealed class PowerPointFormulaService
         }
     }
 
+    public OfficeObjectResult InsertOmml(OfficeSessionDocument session)
+    {
+        var metadata = session.ToMetadata();
+        metadata.Validate();
+        var mathMl = session.ExportResult?.MathMl;
+        if (string.IsNullOrWhiteSpace(mathMl))
+            throw new InvalidDataException("VisualTeX Session has no MathML export for PowerPoint OMML.");
+        Presentation? presentation = null;
+        DocumentWindow? window = null;
+        View? view = null;
+        Slide? slide = null;
+        Shape? shape = null;
+        try
+        {
+            EnsureNotSlideShow();
+            StartNewUndoEntry();
+            presentation = _application.ActivePresentation
+                ?? throw new InvalidOperationException("No active PowerPoint presentation.");
+            EnsureWritable(presentation);
+            EnsureSourceDocument(presentation, session.SourceDocumentId);
+            window = _application.ActiveWindow
+                ?? throw new InvalidOperationException("No active PowerPoint window.");
+            view = window.View;
+            slide = ResolveTargetSlide(presentation, session.SourceObjectId, view);
+            var width = Math.Max(12f, (session.ExportResult?.Width ?? 240) * 0.75f);
+            var height = Math.Max(12f, (session.ExportResult?.Height ?? 80) * 0.75f);
+            var scale = Math.Min(1f, Math.Min(600f / width, 400f / height));
+            width *= scale;
+            height *= scale;
+            var left = Math.Max(0f, (presentation.PageSetup.SlideWidth - width) / 2f);
+            var top = Math.Max(0f, (presentation.PageSetup.SlideHeight - height) / 2f);
+            shape = PowerPointOmmlBridge.AddNativeEquation(
+                _application,
+                slide,
+                mathMl!,
+                metadata,
+                left,
+                top,
+                width,
+                height);
+            Configure(shape, metadata);
+            return Result(session, presentation, shape.Name);
+        }
+        catch
+        {
+            TryDelete(shape);
+            throw;
+        }
+        finally
+        {
+            StartNewUndoEntry();
+            Release(shape);
+            Release(slide);
+            Release(view);
+            Release(window);
+            Release(presentation);
+        }
+    }
+
+    public OfficeObjectResult ReplaceOmml(OfficeSessionDocument session)
+    {
+        var metadata = session.ToMetadata();
+        metadata.Validate();
+        var mathMl = session.ExportResult?.MathMl;
+        if (string.IsNullOrWhiteSpace(mathMl))
+            throw new InvalidDataException("VisualTeX Session has no MathML export for PowerPoint OMML.");
+        Presentation? presentation = null;
+        Slide? slide = null;
+        Shape? oldShape = null;
+        Shape? replacement = null;
+        try
+        {
+            EnsureNotSlideShow();
+            StartNewUndoEntry();
+            presentation = _application.ActivePresentation
+                ?? throw new InvalidOperationException("No active PowerPoint presentation.");
+            EnsureWritable(presentation);
+            EnsureSourceDocument(presentation, session.SourceDocumentId);
+            (slide, oldShape) = FindFormula(
+                presentation,
+                session.FormulaId,
+                session.SourceObjectId);
+            if (slide is null || oldShape is null)
+                throw new InvalidOperationException("The target PowerPoint formula no longer exists.");
+
+            var left = oldShape.Left;
+            var top = oldShape.Top;
+            var oldWidth = oldShape.Width;
+            var oldHeight = oldShape.Height;
+            var rotation = oldShape.Rotation;
+            var zOrder = oldShape.ZOrderPosition;
+            var originalMetadata = ReadMetadata(oldShape) ?? session.OriginalMetadata;
+            var convertingToOmml = !PowerPointOmmlBridge.IsNativeEquation(oldShape);
+            var editedSize = convertingToOmml
+                && FormulaContentEquivalent(originalMetadata, metadata)
+                    ? (Width: oldWidth, Height: oldHeight)
+                    : OfficeFormulaSizing.EditedSize(
+                        oldWidth,
+                        oldHeight,
+                        originalMetadata?.RenderWidthPx,
+                        originalMetadata?.RenderHeightPx,
+                        session.ExportResult?.Width ?? oldWidth / 0.75f,
+                        session.ExportResult?.Height ?? oldHeight / 0.75f,
+                        600f,
+                        400f,
+                        originalMetadata?.FontSizePt,
+                        originalMetadata?.RenderFontSizePt);
+            var newLeft = left + (oldWidth - editedSize.Width) / 2f;
+            var newTop = top + (oldHeight - editedSize.Height) / 2f;
+
+            replacement = PowerPointOmmlBridge.AddNativeEquation(
+                _application,
+                slide,
+                mathMl!,
+                metadata,
+                newLeft,
+                newTop,
+                editedSize.Width,
+                editedSize.Height);
+            TryApplyRotation(replacement, rotation);
+            Configure(replacement, metadata);
+            MoveToZOrder(replacement, zOrder + 1);
+            oldShape.Delete();
+            return Result(session, presentation, replacement.Name);
+        }
+        catch
+        {
+            TryDelete(replacement);
+            throw;
+        }
+        finally
+        {
+            StartNewUndoEntry();
+            Release(replacement);
+            Release(oldShape);
+            Release(slide);
+            Release(presentation);
+        }
+    }
+
     public OfficeObjectResult ReplaceOle(
         OfficeSessionDocument session,
         string pngPath,
@@ -679,8 +847,9 @@ internal sealed class PowerPointFormulaService
             var rotation = oldShape.Rotation;
             var zOrder = oldShape.ZOrderPosition;
             var originalMetadata = ReadMetadata(oldShape) ?? session.OriginalMetadata;
-            var convertingOleToPicture = IsNativeOle(oldShape);
-            var editedSize = convertingOleToPicture
+            var convertingEditableObjectToPicture = IsNativeOle(oldShape)
+                || PowerPointOmmlBridge.IsNativeEquation(oldShape);
+            var editedSize = convertingEditableObjectToPicture
                 && FormulaContentEquivalent(originalMetadata, metadata)
                     ? (Width: oldWidth, Height: oldHeight)
                     : OfficeFormulaSizing.EditedSize(
@@ -857,28 +1026,132 @@ internal sealed class PowerPointFormulaService
         finally { Release(slides); }
     }
 
+    private static FormulaMetadata EnsureUniqueFormulaIdentity(
+        Presentation presentation,
+        Slide selectedSlide,
+        Shape selectedShape,
+        FormulaMetadata metadata)
+    {
+        var currentOwner = ShapeIdentityToken(selectedShape);
+        var storedOwner = ReadIdentityOwner(selectedShape);
+        if (!string.IsNullOrWhiteSpace(storedOwner))
+        {
+            if (string.Equals(storedOwner, currentOwner, StringComparison.OrdinalIgnoreCase))
+            {
+                Configure(selectedShape, metadata);
+                return metadata;
+            }
+
+            var copied = CloneWithFormulaId(metadata, Guid.NewGuid().ToString());
+            Configure(selectedShape, copied);
+            return copied;
+        }
+
+        var expectedName = $"VisualTeX_{metadata.FormulaId}";
+        var duplicateExists = false;
+        Slides? slides = null;
+        try
+        {
+            slides = presentation.Slides;
+            for (var slideIndex = 1; slideIndex <= slides.Count && !duplicateExists; slideIndex++)
+            {
+                Slide? slide = null;
+                Shapes? shapes = null;
+                try
+                {
+                    slide = slides[slideIndex];
+                    shapes = slide.Shapes;
+                    for (var shapeIndex = 1; shapeIndex <= shapes.Count; shapeIndex++)
+                    {
+                        Shape? candidate = null;
+                        try
+                        {
+                            candidate = shapes[shapeIndex];
+                            if (slide.SlideID == selectedSlide.SlideID
+                                && candidate.Id == selectedShape.Id)
+                                continue;
+                            var candidateMetadata = ReadMetadata(candidate);
+                            if (!string.Equals(
+                                    candidateMetadata?.FormulaId,
+                                    metadata.FormulaId,
+                                    StringComparison.OrdinalIgnoreCase))
+                                continue;
+                            duplicateExists = true;
+                            break;
+                        }
+                        finally { Release(candidate); }
+                    }
+                }
+                finally
+                {
+                    Release(shapes);
+                    Release(slide);
+                }
+            }
+        }
+        finally { Release(slides); }
+
+        if (!duplicateExists || string.Equals(selectedShape.Name, expectedName, StringComparison.Ordinal))
+        {
+            Configure(selectedShape, metadata);
+            return metadata;
+        }
+
+        var rekeyed = CloneWithFormulaId(metadata, Guid.NewGuid().ToString());
+        Configure(selectedShape, rekeyed);
+        return rekeyed;
+    }
+
+    private static FormulaMetadata CloneWithFormulaId(FormulaMetadata metadata, string formulaId)
+    {
+        var clone = FormulaMetadataCodec.Decode(FormulaMetadataCodec.Encode(metadata))
+            ?? throw new InvalidDataException("VisualTeX PowerPoint metadata could not be cloned.");
+        clone.FormulaId = formulaId;
+        clone.UpdatedAt = DateTimeOffset.UtcNow.ToString("O");
+        return clone;
+    }
+
+    private static FormulaMetadata CloneWithLatex(FormulaMetadata metadata, string latex)
+    {
+        var clone = FormulaMetadataCodec.Decode(FormulaMetadataCodec.Encode(metadata))
+            ?? throw new InvalidDataException("VisualTeX PowerPoint metadata could not be cloned.");
+        clone.Latex = latex;
+        clone.Lines = new List<FormulaLine>
+        {
+            new()
+            {
+                Id = clone.Lines.FirstOrDefault()?.Id ?? Guid.NewGuid().ToString(),
+                Latex = latex,
+            },
+        };
+        clone.CodeFormat = "latex";
+        clone.UpdatedAt = DateTimeOffset.UtcNow.ToString("O");
+        return clone;
+    }
+
     private static FormulaMetadata? ReadMetadata(Shape shape)
     {
+        var overlay = ReadPictureMetadata(shape);
+        if (overlay is not null) return overlay;
         if (shape.Type is not MsoShapeType.msoEmbeddedOLEObject
             and not MsoShapeType.msoLinkedOLEObject)
-            return ReadPictureMetadata(shape);
+            return null;
 
         OLEFormat? format = null;
         object? oleObject = null;
         try
         {
             try { format = shape.OLEFormat; }
-            catch { return ReadPictureMetadata(shape); }
+            catch { return null; }
             string? progId;
             try { progId = format.ProgID; }
-            catch { return ReadPictureMetadata(shape); }
+            catch { return null; }
             if (!string.Equals(
                     progId,
                     FormulaOleContract.ProgId,
                     StringComparison.OrdinalIgnoreCase))
-                return ReadPictureMetadata(shape);
-            try { oleObject = format.Object; }
-            catch { return null; }
+                return null;
+            oleObject = GetRunningOleObject(format);
             return oleObject is IVisualTeXFormulaObject formula
                 ? FormulaOleInterop.ReadMetadata(formula)
                 : null;
@@ -892,6 +1165,44 @@ internal sealed class PowerPointFormulaService
             Release(oleObject);
             Release(format);
         }
+    }
+
+    private static object? GetRunningOleObject(OLEFormat format)
+    {
+        object? value = null;
+        try { value = format.Object; } catch { }
+        if (value is not null) return value;
+        try { format.DoVerb(); } catch { }
+        try { value = format.Object; } catch { value = null; }
+        return value;
+    }
+
+    private static string? ReadIdentityOwner(Shape shape)
+    {
+        Tags? tags = null;
+        try
+        {
+            tags = shape.Tags;
+            try { return tags[IdentityOwnerTag]; }
+            catch { return null; }
+        }
+        finally { Release(tags); }
+    }
+
+    private static string ShapeIdentityToken(Shape shape)
+    {
+        object? parent = null;
+        try
+        {
+            parent = shape.Parent;
+            var slideId = Convert.ToInt32(((dynamic)parent).SlideID);
+            return $"{slideId}:{shape.Id}";
+        }
+        catch
+        {
+            return $"shape:{shape.Id}";
+        }
+        finally { Release(parent); }
     }
 
     private static FormulaMetadata? ReadPictureMetadata(Shape shape)
@@ -1048,10 +1359,8 @@ internal sealed class PowerPointFormulaService
 
     private static void Configure(Shape shape, FormulaMetadata metadata)
     {
-        shape.LockAspectRatio = MsoTriState.msoTrue;
+        try { shape.LockAspectRatio = MsoTriState.msoTrue; } catch { }
         shape.Name = $"VisualTeX_{metadata.FormulaId}";
-        if (IsNativeOle(shape)) return;
-
         var encoded = FormulaMetadataCodec.Encode(metadata);
         Tags? tags = null;
         try
@@ -1059,9 +1368,10 @@ internal sealed class PowerPointFormulaService
             tags = shape.Tags;
             tags.Add(FormulaIdTag, metadata.FormulaId);
             tags.Add(MetadataTag, encoded);
+            tags.Add(IdentityOwnerTag, ShapeIdentityToken(shape));
         }
         finally { Release(tags); }
-        shape.AlternativeText = encoded;
+        try { shape.AlternativeText = encoded; } catch { }
     }
 
     private static void TryApplyRotation(Shape shape, float rotation)

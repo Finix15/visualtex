@@ -51,6 +51,9 @@ public interface IPowerPointRibbonCallbacks
 
     [DispId(13)]
     void OnIncreaseFormulaFontSize(Office.IRibbonControl control);
+
+    [DispId(14)]
+    void OnConvertSelectedOmml(object control);
 }
 
 [ComVisible(true)]
@@ -82,6 +85,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         <group id="VisualTeX.PowerPointVsto.Group" label="VisualTeX">
           <button id="VisualTeX.PowerPointVsto.New" label="新建公式" size="large" tag="insertFormula" getImage="GetRibbonImage" onAction="OnNewFormula" />
           <button id="VisualTeX.PowerPointVsto.Edit" label="编辑所选公式" size="large" tag="editSelected" getImage="GetRibbonImage" onAction="OnEditSelected" />
+          <button id="VisualTeX.PowerPointVsto.ConvertOmml" label="转为 OMML" screentip="转为 PowerPoint 原生公式" supertip="转换为 PowerPoint 原生 Office Math（PPTX 内部以 OMML 保存），可继续使用 PowerPoint 公式工具编辑。" imageMso="EquationInsertNew" onAction="OnConvertSelectedOmml" />
           <button id="VisualTeX.PowerPointVsto.ConvertSelected" label="转为原生 OLE" screentip="转为可嵌入编辑的原生 OLE" supertip="转换后外观应保持不变，但对象会嵌入 PowerPoint 文件，并可通过 VisualTeX 双击重新编辑。" tag="convertToOle" getImage="GetRibbonImage" onAction="OnConvertSelected" />
           <button id="VisualTeX.PowerPointVsto.ExportPicture" label="转为 SVG 图片" imageMso="PictureInsertFromFile" onAction="OnExportSelectedAsPicture" />
           <button id="VisualTeX.PowerPointVsto.Delete" label="删除所选公式" imageMso="Delete" onAction="OnDeleteSelected" />
@@ -165,6 +169,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         _dispatcher = new OfficeUiDispatcher();
         _sessionClient = new VisualTeXSessionClient();
         _lifetime = new CancellationTokenSource();
+        _ = PrewarmCompanionAsync(_sessionClient, _lifetime.Token);
         _application.WindowSelectionChange += OnWindowSelectionChange;
         _application.PresentationBeforeClose += OnPresentationBeforeClose;
         string? doubleClickError = null;
@@ -236,6 +241,8 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
     }
     public void OnNewFormula(object control) => BeginSession("create", "crossPlatformPicture", null);
     public void OnEditSelected(object control) => BeginSelectedSession(null);
+    public void OnConvertSelectedOmml(object control) =>
+        BeginSelectedSession("wordOmml", conversionOnly: true);
     public void OnConvertSelected(object control) =>
         BeginSelectedSession("nativeOle", conversionOnly: true);
     public void OnExportSelectedAsPicture(object control) =>
@@ -252,6 +259,22 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         catch (Exception error)
         {
             SetStatus($"无法打开 VisualTeX：{error.Message}");
+        }
+    }
+
+    private static async Task PrewarmCompanionAsync(
+        VisualTeXSessionClient client,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await client.EnsureHealthyAsync(cancellationToken).ConfigureAwait(false);
+            await client.PrewarmConverterAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Keep PowerPoint startup non-blocking. Any explicit VisualTeX action
+            // will retry the companion path and report a real error to the user.
         }
     }
 
@@ -431,6 +454,8 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             var client = _sessionClient ?? throw new InvalidOperationException("VisualTeX Session client is unavailable.");
             SetStatus("正在连接 VisualTeX 本地服务…");
             await client.EnsureHealthyAsync(cancellationToken).ConfigureAwait(false);
+            if (conversionOnly)
+                await client.PrewarmConverterAsync(cancellationToken).ConfigureAwait(false);
             var selection = capturedSelection?.Metadata is not null
                 ? capturedSelection
                 : await dispatcher.InvokeAsync(
@@ -526,9 +551,13 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                     export.Width,
                     export.Height);
             }
-            else
+            else if (session.ObjectMode == "crossPlatformPicture")
             {
                 imagePath = client.MaterializeSvg(session);
+            }
+            else if (session.ObjectMode != "wordOmml")
+            {
+                throw new InvalidOperationException($"Unsupported PowerPoint object mode: {session.ObjectMode}");
             }
             var writeResult = await dispatcher.InvokeAsync(() =>
             {
@@ -540,12 +569,20 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                     throw new InvalidOperationException("活动演示文稿已切换，未写入公式。");
                 if (session.ObjectMode == "nativeOle")
                 {
-                    if (emfPath is null)
-                        throw new InvalidOperationException("VisualTeX native OLE vector preview is unavailable.");
+                    if (imagePath is null || emfPath is null)
+                        throw new InvalidOperationException("VisualTeX native OLE preview is unavailable.");
                     return session.Mode == "edit"
                         ? service.ReplaceOle(session, imagePath, emfPath)
                         : service.InsertOle(session, imagePath, emfPath);
                 }
+                if (session.ObjectMode == "wordOmml")
+                {
+                    return session.Mode == "edit"
+                        ? service.ReplaceOmml(session)
+                        : service.InsertOmml(session);
+                }
+                if (imagePath is null)
+                    throw new InvalidOperationException("VisualTeX picture export is unavailable.");
                 return session.Mode == "edit"
                     ? service.Replace(session, imagePath)
                     : service.Insert(session, imagePath);
@@ -563,9 +600,11 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             await client.CompleteAsync(session.Id, cancellationToken).ConfigureAwait(false);
             SetStatus(requiresObjectModeChange && session.ObjectMode == "nativeOle"
                 ? "已转换为原生 OLE：外观保持不变，可双击编辑，并嵌入 PowerPoint 文件。"
-                : requiresObjectModeChange && session.ObjectMode == "crossPlatformPicture"
-                    ? "已转换为嵌入式 SVG 图片，可跨平台显示并保持矢量清晰度。"
-                    : session.Mode == "edit" ? "PowerPoint 公式已更新。" : "PowerPoint 公式已插入。");
+                : requiresObjectModeChange && session.ObjectMode == "wordOmml"
+                    ? "已转换为 PowerPoint 原生 Office Math（OMML），可继续使用 PowerPoint 公式工具编辑。"
+                    : requiresObjectModeChange && session.ObjectMode == "crossPlatformPicture"
+                        ? "已转换为嵌入式 SVG 图片，可跨平台显示并保持矢量清晰度。"
+                        : session.Mode == "edit" ? "PowerPoint 公式已更新。" : "PowerPoint 公式已插入。");
         }
         catch (OperationCanceledException)
         {

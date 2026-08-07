@@ -1,23 +1,72 @@
 using System.Runtime.InteropServices;
 using Microsoft.Office.Interop.Word;
 using VisualTeX.WindowsOffice.Contracts;
+using Range = Microsoft.Office.Interop.Word.Range;
 
 namespace VisualTeX.WordVsto;
 
 internal static class WordFormulaMetadataReader
 {
+    private const string IdentityBookmarkPrefix = "VTO_";
+
     public static FormulaMetadata? TryRead(InlineShape shape)
     {
         if (shape is null) return null;
+        FormulaMetadata? metadata;
         if (IsNativeOle(shape))
-            return TryReadNativeOle(shape);
+        {
+            metadata = TryReadNativeOle(shape);
+        }
+        else
+        {
+            string? encoded = null;
+            try { encoded = shape.AlternativeText; } catch { }
+            metadata = FormulaMetadataCodec.Decode(encoded);
+            if (metadata is null)
+            {
+                try { encoded = shape.Title; } catch { encoded = null; }
+                metadata = FormulaMetadataCodec.Decode(encoded);
+            }
+        }
+        return ApplyIdentityBookmark(shape, metadata);
+    }
 
-        string? encoded = null;
-        try { encoded = shape.AlternativeText; } catch { }
-        var metadata = FormulaMetadataCodec.Decode(encoded);
-        if (metadata is not null) return metadata;
-        try { encoded = shape.Title; } catch { encoded = null; }
-        return FormulaMetadataCodec.Decode(encoded);
+    internal static string IdentityBookmarkName(string formulaId)
+    {
+        if (!Guid.TryParse(formulaId, out var value))
+            throw new InvalidOperationException("VisualTeX formulaId must be a UUID.");
+        return $"{IdentityBookmarkPrefix}{value:N}";
+    }
+
+    internal static bool TryFormulaIdFromIdentityBookmark(
+        string? bookmarkName,
+        out string formulaId)
+    {
+        formulaId = string.Empty;
+        if (string.IsNullOrWhiteSpace(bookmarkName)
+            || !bookmarkName!.StartsWith(IdentityBookmarkPrefix, StringComparison.Ordinal)
+            || !Guid.TryParseExact(
+                bookmarkName.Substring(IdentityBookmarkPrefix.Length),
+                "N",
+                out var value))
+            return false;
+        formulaId = value.ToString("D");
+        return true;
+    }
+
+    internal static FormulaMetadata CloneWithFormulaId(
+        FormulaMetadata metadata,
+        string formulaId)
+    {
+        var clone = FormulaMetadataCodec.DeserializeJson(
+            FormulaMetadataCodec.SerializeJson(metadata))
+            ?? throw new InvalidOperationException(
+                "Unable to clone VisualTeX formula metadata.");
+        clone.FormulaId = formulaId;
+        clone.UpdatedWithVersion = "1.2.4";
+        clone.UpdatedAt = DateTimeOffset.UtcNow.ToString("O");
+        clone.Validate();
+        return clone;
     }
 
     public static void Write(InlineShape shape, FormulaMetadata metadata)
@@ -97,6 +146,46 @@ internal static class WordFormulaMetadataReader
             Release(oleObject);
             Release(format);
         }
+    }
+
+    private static FormulaMetadata? ApplyIdentityBookmark(
+        InlineShape shape,
+        FormulaMetadata? metadata)
+    {
+        if (metadata is null) return null;
+        Range? range = null;
+        Bookmarks? bookmarks = null;
+        Bookmark? bookmark = null;
+        try
+        {
+            range = shape.Range;
+            bookmarks = range.Bookmarks;
+            for (var index = 1; index <= bookmarks.Count; index++)
+            {
+                Release(bookmark);
+                bookmark = bookmarks[index];
+                if (!TryFormulaIdFromIdentityBookmark(bookmark.Name, out var formulaId))
+                    continue;
+                if (string.Equals(
+                        metadata.FormulaId,
+                        formulaId,
+                        StringComparison.OrdinalIgnoreCase))
+                    return metadata;
+                return CloneWithFormulaId(metadata, formulaId);
+            }
+        }
+        catch
+        {
+            // A missing/invalid local identity bookmark must not hide otherwise
+            // valid VisualTeX metadata.
+        }
+        finally
+        {
+            Release(bookmark);
+            Release(bookmarks);
+            Release(range);
+        }
+        return metadata;
     }
 
     private static void Release(object? value)
