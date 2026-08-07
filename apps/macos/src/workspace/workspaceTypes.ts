@@ -1,4 +1,5 @@
 import type { ReactNode, RefObject } from "react";
+import type { QuickOcrCaptureMode } from "../ocr/quickOcr";
 import type {
   MathEditorHandle,
   MathEditorInsertionTarget,
@@ -57,6 +58,8 @@ export interface EditorWorkspaceProps {
   ocrBusy?: boolean;
   onOcrModelChange?: (model: string) => void;
   onQuickOcr?: () => void;
+  quickOcrCaptureMode?: QuickOcrCaptureMode;
+  onQuickOcrCaptureModeChange?: (mode: QuickOcrCaptureMode) => void;
   silentOcrEnabled?: boolean;
   onSilentOcrEnabledChange?: (enabled: boolean) => void;
   ocrOverlay?: ReactNode;

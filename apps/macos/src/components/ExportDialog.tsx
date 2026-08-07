@@ -34,8 +34,6 @@ interface ExportFormatDefinition {
   mime: string;
   labelZh: string;
   labelEn: string;
-  descriptionZh: string;
-  descriptionEn: string;
 }
 
 const EXPORT_FORMATS: Record<ExportFormat, ExportFormatDefinition> = {
@@ -44,24 +42,18 @@ const EXPORT_FORMATS: Record<ExportFormat, ExportFormatDefinition> = {
     mime: "text/markdown;charset=utf-8",
     labelZh: "Markdown",
     labelEn: "Markdown",
-    descriptionZh: "按行导出为独立的块级 LaTeX 公式",
-    descriptionEn: "Export every line as a separate display LaTeX block",
   },
   svg: {
     extension: "svg",
     mime: "image/svg+xml;charset=utf-8",
     labelZh: "SVG",
     labelEn: "SVG",
-    descriptionZh: "自包含矢量图，适合排版和继续缩放",
-    descriptionEn: "Self-contained vector artwork for publishing and scaling",
   },
   png: {
     extension: "png",
     mime: "image/png",
     labelZh: "PNG",
     labelEn: "PNG",
-    descriptionZh: "高分辨率位图，背景颜色由界面自定义设置控制",
-    descriptionEn: "High-resolution bitmap using the configured PNG background",
   },
 };
 
@@ -277,11 +269,6 @@ export function ExportDialog({
         <header>
           <div>
             <strong id="export-dialog-title">{isEn ? "Export formula" : "导出公式"}</strong>
-            <span>
-              {isEn
-                ? "Choose a format and an exact destination path."
-                : "选择导出格式和准确的保存路径。"}
-            </span>
           </div>
           <button
             type="button"
@@ -316,7 +303,6 @@ export function ExportDialog({
                 <Icon size={22} />
                 <span>
                   <strong>{isEn ? item.labelEn : item.labelZh}</strong>
-                  <small>{isEn ? item.descriptionEn : item.descriptionZh}</small>
                 </span>
               </button>
             );
@@ -369,11 +355,6 @@ export function ExportDialog({
               {isEn ? "Browse" : "浏览"}
             </button>
           </div>
-          <small>
-            {isEn
-              ? `The filename will use .${definition.extension}. Choose an existing parent folder.`
-              : `文件将使用 .${definition.extension} 扩展名；请选择已存在的上级文件夹。`}
-          </small>
         </label>
 
         {error && <div className="export-error" role="alert">{error}</div>}

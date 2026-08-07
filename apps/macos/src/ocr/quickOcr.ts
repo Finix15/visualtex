@@ -4,6 +4,13 @@ import type { OcrModelName } from "./ocrService";
 
 export const SILENT_OCR_STORAGE_KEY = "visualtex.silent-ocr.enabled";
 export const SILENT_OCR_SHORTCUT = "⌘⇧O";
+export const QUICK_OCR_CAPTURE_MODE_STORAGE_KEY = "visualtex.quick-ocr.capture-mode";
+
+export type QuickOcrCaptureMode = "immediate" | "system-screenshot";
+
+export function isQuickOcrCaptureMode(value: unknown): value is QuickOcrCaptureMode {
+  return value === "immediate" || value === "system-screenshot";
+}
 
 export interface QuickOcrCapture {
   dataBase64: string;
@@ -12,6 +19,10 @@ export interface QuickOcrCapture {
 
 export async function captureQuickOcrScreenshot() {
   return invoke<QuickOcrCapture | null>("capture_quick_ocr_screenshot");
+}
+
+export async function waitForQuickOcrSystemScreenshot() {
+  return invoke<QuickOcrCapture | null>("wait_for_quick_ocr_system_screenshot");
 }
 
 export async function configureSilentOcr(

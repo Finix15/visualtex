@@ -40,6 +40,7 @@ const configurationStorageKeys = [
   "visualtex-office-editor-tiles-open",
   "visualtex.ocr.model",
   "visualtex.silent-ocr.enabled",
+  "visualtex.quick-ocr.capture-mode",
 ] as const;
 
 const booleanConfigurationStorageKeys = new Set<string>([
@@ -151,6 +152,11 @@ function normalizeStorage(value: unknown) {
     } else if (
       key === "visualtex.ocr.model" &&
       !OCR_MODELS.some((item) => item.id === raw)
+    ) {
+      continue;
+    } else if (
+      key === "visualtex.quick-ocr.capture-mode" &&
+      !["immediate", "system-screenshot"].includes(raw)
     ) {
       continue;
     }

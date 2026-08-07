@@ -775,11 +775,17 @@ async function main() {
         options: [...document.querySelectorAll(".input-behavior-option")].map((option) => ({
           title: option.querySelector("strong")?.textContent?.trim() ?? "",
           checked: option.querySelector('input[type="checkbox"]')?.checked ?? null,
+          hasDescription: Boolean(option.querySelector("small")),
         })),
+        headingDescriptionCount: document.querySelectorAll(
+          ".input-behavior-heading > span",
+        ).length,
       }), 50);
     })`);
     assert.match(menu.triggerText, /操作逻辑|Input behavior/);
     assert.equal(menu.options.length, 7);
+    assert.equal(menu.headingDescriptionCount, 0);
+    assert.ok(menu.options.every(({ hasDescription }) => !hasDescription));
     for (const expectedTitle of [
       /常用数学快捷转义|Common math shortcuts/,
       /上标输入后跳出|Exit superscript after input/,

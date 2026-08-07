@@ -1754,6 +1754,7 @@ pub fn run() {
             write_export_file,
             copy_png_to_clipboard,
             quick_ocr::capture_quick_ocr_screenshot,
+            quick_ocr::wait_for_quick_ocr_system_screenshot,
             quick_ocr::configure_silent_ocr,
             set_app_theme,
             get_app_window_configuration,

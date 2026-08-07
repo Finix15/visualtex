@@ -2,19 +2,21 @@ use crate::{OcrImageRequest, OcrState, ALLOWED_MODELS, MAX_IMAGE_BYTES};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::utils::config::BackgroundThrottlingPolicy;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 const QUICK_OCR_HUD_LABEL: &str = "quick-ocr-hud";
 const QUICK_OCR_HUD_EVENT: &str = "quick-ocr-status";
 const DEFAULT_SILENT_OCR_MODEL: &str = "PP-FormulaNet_plus-M";
+const SYSTEM_SCREENSHOT_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
 const DEFAULT_SILENT_OCR_COPY_FORMAT: &str = "display-dollar";
 const ALLOWED_SILENT_OCR_COPY_FORMATS: &[&str] = &[
     "raw",
@@ -124,6 +126,243 @@ fn capture_selection_png() -> Result<Option<Vec<u8>>, String> {
     {
         Err("Quick OCR screenshot capture is currently supported on macOS only".to_string())
     }
+}
+
+#[cfg(target_os = "macos")]
+fn expand_home_path(value: &str) -> PathBuf {
+    let trimmed = value.trim();
+    if trimmed == "~" {
+        return std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/tmp"));
+    }
+    if let Some(relative) = trimmed.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home).join(relative);
+        }
+    }
+    PathBuf::from(trimmed)
+}
+
+#[cfg(target_os = "macos")]
+fn screenshot_directory() -> PathBuf {
+    let default = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join("Desktop");
+    let output = Command::new("/usr/bin/defaults")
+        .args(["read", "com.apple.screencapture", "location"])
+        .output();
+    let Ok(output) = output else {
+        return default;
+    };
+    if !output.status.success() {
+        return default;
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if value.is_empty() {
+        return default;
+    }
+    let candidate = expand_home_path(&value);
+    if candidate.is_dir() {
+        candidate
+    } else {
+        default
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn supported_system_screenshot_extension(path: &Path) -> Option<String> {
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    matches!(
+        extension.as_str(),
+        "png" | "jpg" | "jpeg" | "webp" | "bmp" | "tif" | "tiff"
+    )
+    .then_some(extension)
+}
+
+#[cfg(target_os = "macos")]
+fn screenshot_directory_snapshot(directory: &Path) -> HashMap<PathBuf, (SystemTime, u64)> {
+    let mut snapshot = HashMap::new();
+    let Ok(entries) = fs::read_dir(directory) else {
+        return snapshot;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if supported_system_screenshot_extension(&path).is_none() {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        snapshot.insert(
+            path,
+            (metadata.modified().unwrap_or(UNIX_EPOCH), metadata.len()),
+        );
+    }
+    snapshot
+}
+
+#[cfg(target_os = "macos")]
+fn read_stable_screenshot_file(path: &Path) -> Result<Option<(Vec<u8>, String)>, String> {
+    let Some(extension) = supported_system_screenshot_extension(path) else {
+        return Ok(None);
+    };
+    let first = fs::metadata(path)
+        .map_err(|error| format!("Unable to inspect the system screenshot: {error}"))?;
+    if first.len() == 0 {
+        return Ok(None);
+    }
+    if first.len() > MAX_IMAGE_BYTES as u64 {
+        return Err("The system screenshot is too large for OCR".to_string());
+    }
+    std::thread::sleep(Duration::from_millis(120));
+    let second = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(_) => return Ok(None),
+    };
+    if second.len() != first.len() || second.len() == 0 {
+        return Ok(None);
+    }
+    let bytes = fs::read(path)
+        .map_err(|error| format!("Unable to read the system screenshot: {error}"))?;
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some((bytes, extension)))
+}
+
+#[cfg(target_os = "macos")]
+fn copy_nsdata_bytes(data: &objc2_foundation::NSData) -> Option<Vec<u8>> {
+    use std::ffi::c_void;
+    use std::ptr::NonNull;
+
+    let length = data.length() as usize;
+    if length == 0 || length > MAX_IMAGE_BYTES {
+        return None;
+    }
+    let mut bytes = vec![0u8; length];
+    let pointer = NonNull::new(bytes.as_mut_ptr().cast::<c_void>())?;
+    unsafe {
+        data.getBytes_length(pointer, length);
+    }
+    Some(bytes)
+}
+
+#[cfg(target_os = "macos")]
+fn pasteboard_image_if_changed(initial_change_count: isize) -> Option<(Vec<u8>, String)> {
+    use objc2_app_kit::{NSPasteboard, NSPasteboardTypePNG, NSPasteboardTypeTIFF};
+
+    let pasteboard = NSPasteboard::generalPasteboard();
+    if pasteboard.changeCount() == initial_change_count {
+        return None;
+    }
+    unsafe {
+        if let Some(data) = pasteboard.dataForType(NSPasteboardTypePNG) {
+            if let Some(bytes) = copy_nsdata_bytes(&data) {
+                return Some((bytes, "png".to_string()));
+            }
+        }
+        if let Some(data) = pasteboard.dataForType(NSPasteboardTypeTIFF) {
+            if let Some(bytes) = copy_nsdata_bytes(&data) {
+                return Some((bytes, "tiff".to_string()));
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "macos")]
+struct SystemScreenshotBaseline {
+    directory: PathBuf,
+    files: HashMap<PathBuf, (SystemTime, u64)>,
+    pasteboard_change_count: isize,
+}
+
+#[cfg(target_os = "macos")]
+fn create_system_screenshot_baseline() -> SystemScreenshotBaseline {
+    use objc2_app_kit::NSPasteboard;
+
+    let directory = screenshot_directory();
+    let files = screenshot_directory_snapshot(&directory);
+    let pasteboard_change_count = NSPasteboard::generalPasteboard().changeCount();
+    SystemScreenshotBaseline {
+        directory,
+        files,
+        pasteboard_change_count,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn wait_for_next_system_screenshot(
+    baseline: SystemScreenshotBaseline,
+) -> Result<Option<(Vec<u8>, String)>, String> {
+    let deadline = Instant::now() + SYSTEM_SCREENSHOT_WAIT_TIMEOUT;
+
+    while Instant::now() < deadline {
+        if let Some(capture) = pasteboard_image_if_changed(baseline.pasteboard_change_count) {
+            return Ok(Some(capture));
+        }
+
+        let mut newest_candidate: Option<(PathBuf, SystemTime)> = None;
+        if let Ok(entries) = fs::read_dir(&baseline.directory) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if supported_system_screenshot_extension(&path).is_none() {
+                    continue;
+                }
+                let Ok(metadata) = entry.metadata() else {
+                    continue;
+                };
+                if !metadata.is_file() || metadata.len() == 0 {
+                    continue;
+                }
+                let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
+                let changed = baseline
+                    .files
+                    .get(&path)
+                    .map(|(old_modified, old_len)| {
+                        modified > *old_modified || metadata.len() != *old_len
+                    })
+                    .unwrap_or(true);
+                if !changed {
+                    continue;
+                }
+                if newest_candidate
+                    .as_ref()
+                    .is_none_or(|(_, current_modified)| modified > *current_modified)
+                {
+                    newest_candidate = Some((path, modified));
+                }
+            }
+        }
+        if let Some((path, _)) = newest_candidate {
+            if let Some(capture) = read_stable_screenshot_file(&path)? {
+                return Ok(Some(capture));
+            }
+        }
+        std::thread::sleep(Duration::from_millis(120));
+    }
+
+    Ok(None)
+}
+
+#[cfg(not(target_os = "macos"))]
+struct SystemScreenshotBaseline;
+
+#[cfg(not(target_os = "macos"))]
+fn create_system_screenshot_baseline() -> SystemScreenshotBaseline {
+    SystemScreenshotBaseline
+}
+
+#[cfg(not(target_os = "macos"))]
+fn wait_for_next_system_screenshot(
+    _baseline: SystemScreenshotBaseline,
+) -> Result<Option<(Vec<u8>, String)>, String> {
+    Err("Waiting for the next system screenshot is currently supported on macOS only".to_string())
 }
 
 fn write_text_clipboard(text: &str) -> Result<(), String> {
@@ -806,6 +1045,30 @@ pub(crate) async fn capture_quick_ocr_screenshot(
     Ok(capture?.map(|bytes| QuickOcrCapture {
         data_base64: BASE64_STANDARD.encode(bytes),
         extension: "png".to_string(),
+    }))
+}
+
+#[tauri::command]
+pub(crate) async fn wait_for_quick_ocr_system_screenshot(
+    app: AppHandle,
+) -> Result<Option<QuickOcrCapture>, String> {
+    let baseline = create_system_screenshot_baseline();
+    if let Some(window) = app.get_webview_window("main") {
+        window
+            .minimize()
+            .map_err(|error| format!("Unable to minimize VisualTeX while waiting for a system screenshot: {error}"))?;
+    }
+    tokio::time::sleep(Duration::from_millis(180)).await;
+    let capture = tauri::async_runtime::spawn_blocking(move || wait_for_next_system_screenshot(baseline))
+        .await
+        .map_err(|error| format!("System screenshot watcher failed: {error}"))?;
+    let reveal_result = crate::office::background::reveal_main_window(&app);
+    if let Err(error) = reveal_result {
+        return Err(format!("Unable to restore VisualTeX after waiting for the system screenshot: {error}"));
+    }
+    Ok(capture?.map(|(bytes, extension)| QuickOcrCapture {
+        data_base64: BASE64_STANDARD.encode(bytes),
+        extension,
     }))
 }
 

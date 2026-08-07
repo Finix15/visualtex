@@ -14,6 +14,7 @@ import {
   Bold,
   Braces,
   Camera,
+  ChevronDown,
   Code2,
   Copy,
   FileDown,
@@ -154,11 +155,15 @@ export function EditorWorkspace({
   ocrBusy = false,
   onOcrModelChange,
   onQuickOcr,
+  quickOcrCaptureMode = "immediate",
+  onQuickOcrCaptureModeChange,
   silentOcrEnabled = false,
   onSilentOcrEnabledChange,
   ocrOverlay,
 }: EditorWorkspaceProps) {
   const [primaryBusy, setPrimaryBusy] = useState(false);
+  const [quickOcrModeMenuOpen, setQuickOcrModeMenuOpen] = useState(false);
+  const quickOcrModeMenuRef = useRef<HTMLDivElement>(null);
   const [classicDockOpen, setClassicDockOpenState] = useState(() =>
     readWorkspacePanelOpen(mode, "toolbar"),
   );
@@ -310,6 +315,28 @@ export function EditorWorkspace({
     sourceDraftFallbackRef.current = null;
     setSourceDraftFallback(null);
   }, [latexCodeFormat]);
+
+  useEffect(() => {
+    if (!quickOcrModeMenuOpen) return;
+    const close = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        quickOcrModeMenuRef.current?.contains(event.target)
+      ) {
+        return;
+      }
+      setQuickOcrModeMenuOpen(false);
+    };
+    const closeFromKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setQuickOcrModeMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", close, true);
+    document.addEventListener("keydown", closeFromKey, true);
+    return () => {
+      document.removeEventListener("pointerdown", close, true);
+      document.removeEventListener("keydown", closeFromKey, true);
+    };
+  }, [quickOcrModeMenuOpen]);
 
   useEffect(() => {
     if (!formulaColorMenu) return;
@@ -1229,21 +1256,75 @@ export function EditorWorkspace({
               <InputBehaviorMenu />
               {showOcrActions && onQuickOcr && (
                 <div className="quick-ocr-controls">
-                  <button
-                    type="button"
-                    className="quick-ocr-button"
-                    onClick={onQuickOcr}
-                    disabled={ocrBusy}
-                    data-quick-ocr-button
-                    title={
-                      isEn
-                        ? "Hide VisualTeX, capture a formula region, then recognize and insert it"
-                        : "隐藏 VisualTeX 后框选公式区域，识别完成后自动插入"
-                    }
-                  >
-                    <Camera size={15} />
-                    <span>{isEn ? "Quick OCR" : "快捷 OCR"}</span>
-                  </button>
+                  <div className="quick-ocr-split" ref={quickOcrModeMenuRef}>
+                    <button
+                      type="button"
+                      className="quick-ocr-button quick-ocr-primary"
+                      onClick={() => {
+                        setQuickOcrModeMenuOpen(false);
+                        onQuickOcr();
+                      }}
+                      disabled={ocrBusy}
+                      data-quick-ocr-button
+                      title={
+                        quickOcrCaptureMode === "system-screenshot"
+                          ? isEn
+                            ? "Minimize VisualTeX and wait for your next macOS screenshot"
+                            : "最小化 VisualTeX，等待你下一次使用 macOS 系统截图键截图"
+                          : isEn
+                            ? "Minimize VisualTeX and immediately select a formula region"
+                            : "最小化 VisualTeX 后立即框选公式区域"
+                      }
+                    >
+                      <Camera size={15} />
+                      <span>{isEn ? "Quick OCR" : "快捷 OCR"}</span>
+                    </button>
+                    {onQuickOcrCaptureModeChange && (
+                      <button
+                        type="button"
+                        className={`quick-ocr-mode-trigger${quickOcrModeMenuOpen ? " is-open" : ""}${quickOcrCaptureMode === "system-screenshot" ? " is-system-screenshot" : ""}`}
+                        onClick={() => setQuickOcrModeMenuOpen((open) => !open)}
+                        disabled={ocrBusy}
+                        aria-label={isEn ? "Choose Quick OCR capture mode" : "选择快捷 OCR 截图模式"}
+                        aria-expanded={quickOcrModeMenuOpen}
+                        data-quick-ocr-mode-trigger
+                      >
+                        <ChevronDown size={12} />
+                      </button>
+                    )}
+                    {quickOcrModeMenuOpen && onQuickOcrCaptureModeChange && (
+                      <div className="quick-ocr-mode-menu" role="menu" data-quick-ocr-mode-menu>
+                        <button
+                          type="button"
+                          className={quickOcrCaptureMode === "immediate" ? "is-active" : ""}
+                          onClick={() => {
+                            onQuickOcrCaptureModeChange("immediate");
+                            setQuickOcrModeMenuOpen(false);
+                          }}
+                          role="menuitemradio"
+                          aria-checked={quickOcrCaptureMode === "immediate"}
+                          data-quick-ocr-mode-option="immediate"
+                        >
+                          <strong>{isEn ? "Immediate selection" : "立即框选"}</strong>
+                          <span>{isEn ? "Start the macOS selection tool right away" : "点击后立即进入 macOS 框选截图"}</span>
+                        </button>
+                        <button
+                          type="button"
+                          className={quickOcrCaptureMode === "system-screenshot" ? "is-active" : ""}
+                          onClick={() => {
+                            onQuickOcrCaptureModeChange("system-screenshot");
+                            setQuickOcrModeMenuOpen(false);
+                          }}
+                          role="menuitemradio"
+                          aria-checked={quickOcrCaptureMode === "system-screenshot"}
+                          data-quick-ocr-mode-option="system-screenshot"
+                        >
+                          <strong>{isEn ? "Wait for system screenshot" : "等待系统截图"}</strong>
+                          <span>{isEn ? "Switch pages first, then use ⌘⇧3 / 4 / 5" : "先切到目标页面，再使用 ⌘⇧3 / 4 / 5"}</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
                   {onSilentOcrEnabledChange && (
                     <label
                       className={`silent-ocr-toggle${silentOcrEnabled ? " is-active" : ""}`}

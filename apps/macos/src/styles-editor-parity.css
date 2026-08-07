@@ -378,12 +378,6 @@
   font-size: 13px;
 }
 
-.input-behavior-popover.is-compact .input-behavior-heading span,
-.input-behavior-popover.is-compact .input-behavior-option small {
-  font-size: 10px;
-  line-height: 1.35;
-}
-
 .input-behavior-popover.is-compact .input-behavior-section-heading {
   margin-top: 6px;
   padding-top: 8px;
@@ -394,7 +388,7 @@
 }
 
 .input-behavior-popover.is-compact .input-behavior-option {
-  min-height: 54px;
+  min-height: 48px;
   gap: 8px;
   padding: 7px 8px;
 }
@@ -858,12 +852,6 @@
   font-weight: 750;
 }
 
-.export-dialog > header span {
-  color: var(--text-faint);
-  font-size: 10px;
-  line-height: 1.45;
-}
-
 .export-format-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -872,9 +860,9 @@
 
 .export-format-option {
   min-width: 0;
-  min-height: 104px;
+  min-height: 72px;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 10px;
   padding: 13px;
   border: 1px solid var(--border);
@@ -904,18 +892,11 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 5px;
 }
 
 .export-format-option strong {
   color: var(--text);
   font-size: 12px;
-}
-
-.export-format-option small {
-  color: var(--text-faint);
-  font-size: 9px;
-  line-height: 1.45;
 }
 
 .export-copy-png-row {
@@ -996,12 +977,6 @@
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
-.export-path-field > small {
-  color: var(--text-faint);
-  font-size: 8px;
-  line-height: 1.4;
-}
-
 .export-browse-button,
 .export-confirm-button {
   display: inline-flex;
@@ -1050,7 +1025,7 @@
   }
 
   .export-format-option {
-    min-height: 76px;
+    min-height: 64px;
   }
 
   .export-path-field > div {

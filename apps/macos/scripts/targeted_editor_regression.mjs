@@ -4,9 +4,9 @@ import { rm, writeFile } from "node:fs/promises";
 import process from "node:process";
 
 const scenario = process.argv[2];
-if (!new Set(["wrapper", "wrapper-bm", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "native-structure-audit", "native-structure-input-over", "native-structure-input-under", "native-structure-input-multi", "native-structure-input-core", "native-space-selection", "candidate-query-reset", "limit-candidate", "raw-placeholder-visual", "placeholder-selection", "pointer-release-stability", "structural-placeholder", "structured-chinese-ime", "accent-placeholder", "caret-probe", "vertical-structure-probe", "vertical-structure-navigation", "scripts", "upright", "formula-formatting", "context-style", "suggestions", "navigation", "geometry", "source-layout", "source-preview-only", "toolbar-compact", "formula-tiles", "cursor-placement", "font-settings", "output-fonts", "configuration", "settings", "layout", "delete", "export"]).has(scenario)) {
+if (!new Set(["wrapper", "wrapper-bm", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "native-structure-audit", "native-structure-input-over", "native-structure-input-under", "native-structure-input-multi", "native-structure-input-core", "native-space-selection", "candidate-query-reset", "limit-candidate", "raw-placeholder-visual", "placeholder-selection", "pointer-release-stability", "structural-placeholder", "structured-chinese-ime", "accent-placeholder", "caret-probe", "vertical-structure-probe", "vertical-structure-navigation", "scripts", "upright", "formula-formatting", "context-style", "suggestions", "navigation", "geometry", "source-layout", "source-preview-only", "toolbar-compact", "formula-tiles", "cursor-placement", "font-settings", "output-fonts", "configuration", "ocr-model-selection", "settings", "layout", "delete", "export"]).has(scenario)) {
   throw new Error(
-    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-bm|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|native-structure-audit|native-structure-input-over|native-structure-input-under|native-structure-input-multi|native-structure-input-core|native-space-selection|candidate-query-reset|limit-candidate|raw-placeholder-visual|placeholder-selection|pointer-release-stability|structural-placeholder|structured-chinese-ime|accent-placeholder|caret-probe|vertical-structure-probe|vertical-structure-navigation|scripts|upright|formula-formatting|context-style|suggestions|navigation|geometry|source-layout|source-preview-only|toolbar-compact|formula-tiles|cursor-placement|font-settings|output-fonts|configuration|settings|layout|delete|export>",
+    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-bm|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|native-structure-audit|native-structure-input-over|native-structure-input-under|native-structure-input-multi|native-structure-input-core|native-space-selection|candidate-query-reset|limit-candidate|raw-placeholder-visual|placeholder-selection|pointer-release-stability|structural-placeholder|structured-chinese-ime|accent-placeholder|caret-probe|vertical-structure-probe|vertical-structure-navigation|scripts|upright|formula-formatting|context-style|suggestions|navigation|geometry|source-layout|source-preview-only|toolbar-compact|formula-tiles|cursor-placement|font-settings|output-fonts|configuration|ocr-model-selection|settings|layout|delete|export>",
   );
 }
 
@@ -205,6 +205,54 @@ async function main() {
       }
     };
 
+    if (scenario === "ocr-model-selection") {
+      await client.send("Page.addScriptToEvaluateOnNewDocument", {
+        source: `(() => {
+          const callbacks = new Map();
+          let callbackId = 1;
+          window.__visualtexOcrModelSelectionProbe = { prewarmed: [] };
+          window.__TAURI_INTERNALS__ = {
+            metadata: {
+              currentWindow: { label: "main" },
+              currentWebview: { label: "main" },
+            },
+            transformCallback(callback, once = false) {
+              const id = callbackId++;
+              callbacks.set(id, { callback, once });
+              return id;
+            },
+            unregisterCallback(id) {
+              callbacks.delete(id);
+            },
+            async invoke(command, args) {
+              if (command === "get_ocr_runtime_status") {
+                return {
+                  installed: true,
+                  pythonPath: "/fake/python",
+                  pythonVersion: "3.10.0",
+                  paddleVersion: "3.3.1",
+                  paddleocrVersion: "3.7.0",
+                  runtimePath: "/fake/runtime",
+                  offlineBundleAvailable: true,
+                  installedModels: ["PP-FormulaNet_plus-M"],
+                  defaultModel: "PP-FormulaNet_plus-M",
+                  message: "Fake M-only OCR runtime",
+                };
+              }
+              if (command === "prewarm_ocr_model") {
+                window.__visualtexOcrModelSelectionProbe.prewarmed.push(args?.model ?? null);
+                return null;
+              }
+              if (command === "configure_silent_ocr") return null;
+              if (command === "plugin:event|listen") return 1;
+              if (command === "plugin:event|unlisten") return null;
+              return null;
+            },
+          };
+        })();`,
+      });
+    }
+
     await client.send("Page.navigate", { url: baseUrl });
     await sleep(650);
     await evaluate(`(() => {
@@ -270,6 +318,89 @@ async function main() {
       await sleep(100);
       await focusField();
     };
+
+    if (scenario === "ocr-model-selection") {
+      await waitForEvaluation(`(() => ({
+        ready: Boolean(document.querySelector(".canvas-ocr-model select")),
+      }))()`, "OCR model selector");
+
+      await sleep(1500);
+      const selectModel = async (model) => {
+        await evaluate(`(() => {
+          const select = document.querySelector(".canvas-ocr-model select");
+          if (!select) return;
+          const setter = Object.getOwnPropertyDescriptor(
+            HTMLSelectElement.prototype,
+            "value",
+          )?.set;
+          setter?.call(select, ${JSON.stringify(model)});
+          select.dispatchEvent(new Event("change", { bubbles: true }));
+        })()`);
+        await sleep(650);
+        return evaluate(`(() => {
+          const select = document.querySelector(".canvas-ocr-model select");
+          return {
+            selected: select?.value ?? "",
+            stored: localStorage.getItem("visualtex.ocr.model"),
+            prewarmed: window.__visualtexOcrModelSelectionProbe?.prewarmed ?? [],
+          };
+        })()`);
+      };
+
+      const sState = await selectModel("PP-FormulaNet_plus-S");
+      assert.equal(sState.selected, "PP-FormulaNet_plus-S", JSON.stringify(sState));
+      assert.equal(sState.stored, "PP-FormulaNet_plus-S", JSON.stringify(sState));
+      assert.ok(
+        sState.prewarmed.includes("PP-FormulaNet_plus-M"),
+        JSON.stringify(sState),
+      );
+
+      await evaluate(`document.querySelector('button[aria-label="图片公式识别"]')?.click()`);
+      const sDialogState = await waitForEvaluation(`(() => {
+        const dialog = document.querySelector(".ocr-dialog");
+        const select = dialog?.querySelector(".ocr-model-field select");
+        const warning = dialog?.querySelector(".ocr-model-warning strong")?.textContent ?? "";
+        const importButton = [...(dialog?.querySelectorAll(".ocr-install-actions button") ?? [])]
+          .find((button) => button.textContent?.includes("导入模型包"));
+        return {
+          ready:
+            Boolean(dialog) &&
+            select?.value === "PP-FormulaNet_plus-S" &&
+            warning.includes("尚未安装") &&
+            Boolean(importButton),
+          selected: select?.value ?? "",
+          warning,
+          importButton: importButton?.textContent?.trim() ?? "",
+        };
+      })()`, "S model remains selected in OCR model manager");
+
+      await evaluate(`(() => {
+        const select = document.querySelector(".ocr-dialog .ocr-model-field select");
+        if (!select) return;
+        const setter = Object.getOwnPropertyDescriptor(
+          HTMLSelectElement.prototype,
+          "value",
+        )?.set;
+        setter?.call(select, "PP-FormulaNet_plus-L");
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      })()`);
+      await sleep(650);
+      const lState = await evaluate(`(() => ({
+        selected: document.querySelector(".ocr-dialog .ocr-model-field select")?.value ?? "",
+        toolbarSelected: document.querySelector(".canvas-ocr-model select")?.value ?? "",
+        stored: localStorage.getItem("visualtex.ocr.model"),
+        warning: document.querySelector(".ocr-dialog .ocr-model-warning strong")?.textContent ?? "",
+        prewarmed: window.__visualtexOcrModelSelectionProbe?.prewarmed ?? [],
+      }))()`);
+      assert.equal(lState.selected, "PP-FormulaNet_plus-L", JSON.stringify(lState));
+      assert.equal(lState.toolbarSelected, "PP-FormulaNet_plus-L", JSON.stringify(lState));
+      assert.equal(lState.stored, "PP-FormulaNet_plus-L", JSON.stringify(lState));
+      assert.match(lState.warning, /尚未安装/);
+
+      console.log(JSON.stringify({ sState, sDialogState, lState }, null, 2));
+      console.log("Targeted OCR model selection persistence regression passed");
+      return;
+    }
 
     if (scenario === "source-preview-only") {
       await evaluate(`(() => {
@@ -8185,6 +8316,7 @@ async function main() {
         ready:
           Boolean(document.querySelector(".settings-toggle")) &&
           Boolean(document.querySelector("[data-quick-ocr-button]")) &&
+          Boolean(document.querySelector("[data-quick-ocr-mode-trigger]")) &&
           Boolean(document.querySelector("[data-silent-ocr-toggle]")),
       }))()`, "settings and quick OCR controls for configuration regression");
 
@@ -8201,16 +8333,18 @@ async function main() {
           const header = document.querySelector(".editor-pane-header");
           const group = document.querySelector(".canvas-tool-group");
           const quick = document.querySelector("[data-quick-ocr-button]");
+          const modeTrigger = document.querySelector("[data-quick-ocr-mode-trigger]");
           const silentInput = document.querySelector("[data-silent-ocr-toggle]");
           const silent = silentInput?.closest("label");
           const model = document.querySelector(".canvas-ocr-model");
-          if (!header || !group || !quick || !silent || !model) return { ready: false };
+          if (!header || !group || !quick || !modeTrigger || !silent || !model) return { ready: false };
           const headerRect = header.getBoundingClientRect();
           const groupRect = group.getBoundingClientRect();
           const quickRect = quick.getBoundingClientRect();
+          const modeTriggerRect = modeTrigger.getBoundingClientRect();
           const silentRect = silent.getBoundingClientRect();
           const modelRect = model.getBoundingClientRect();
-          const contained = [groupRect, quickRect, silentRect, modelRect].every(
+          const contained = [groupRect, quickRect, modeTriggerRect, silentRect, modelRect].every(
             (rect) =>
               rect.left >= headerRect.left - 1 &&
               rect.right <= headerRect.right + 1 &&
@@ -8221,6 +8355,7 @@ async function main() {
             ready:
               contained &&
               quickRect.width >= 28 &&
+              modeTriggerRect.width >= 18 &&
               silentRect.width >= 28 &&
               modelRect.width >= 100 &&
               document.documentElement.scrollWidth <= window.innerWidth + 1 &&
@@ -8234,6 +8369,11 @@ async function main() {
               clientWidth: group.clientWidth,
             },
             quick: { left: quickRect.left, right: quickRect.right, width: quickRect.width },
+            modeTrigger: {
+              left: modeTriggerRect.left,
+              right: modeTriggerRect.right,
+              width: modeTriggerRect.width,
+            },
             silent: {
               left: silentRect.left,
               right: silentRect.right,
@@ -8253,6 +8393,17 @@ async function main() {
         mobile: false,
       });
       await sleep(90);
+
+      await evaluate(`document.querySelector("[data-quick-ocr-mode-trigger]")?.click()`);
+      await waitForEvaluation(`(() => ({
+        ready: Boolean(document.querySelector("[data-quick-ocr-mode-menu]")),
+      }))()`, "Quick OCR capture mode menu");
+      await evaluate(`document.querySelector('[data-quick-ocr-mode-option="system-screenshot"]')?.click()`);
+      const quickOcrModeState = await waitForEvaluation(`(() => ({
+        ready: localStorage.getItem("visualtex.quick-ocr.capture-mode") === "system-screenshot",
+        value: localStorage.getItem("visualtex.quick-ocr.capture-mode"),
+        menuOpen: Boolean(document.querySelector("[data-quick-ocr-mode-menu]")),
+      }))()`, "persisted system-screenshot Quick OCR mode");
 
       await evaluate(`document.querySelector(".settings-toggle")?.click()`);
       await waitForEvaluation(`(() => ({
@@ -8378,6 +8529,7 @@ async function main() {
         localStorage.setItem("visualtex-desktop-editor-tiles-open", "true");
         localStorage.setItem("visualtex.ocr.model", "PP-FormulaNet_plus-L");
         localStorage.setItem("visualtex.silent-ocr.enabled", "true");
+        localStorage.setItem("visualtex.quick-ocr.capture-mode", "system-screenshot");
         window.__visualtexConfigurationProbe = { text: "", filename: "" };
         const originalCreateObjectURL = URL.createObjectURL.bind(URL);
         URL.createObjectURL = (blob) => {
@@ -8409,6 +8561,7 @@ async function main() {
             Boolean(configuration.storage?.["visualtex-formula-hotkeys-v1"]) &&
             configuration.storage?.["visualtex.ocr.model"] === "PP-FormulaNet_plus-L" &&
             configuration.storage?.["visualtex.silent-ocr.enabled"] === "true" &&
+            configuration.storage?.["visualtex.quick-ocr.capture-mode"] === "system-screenshot" &&
             configuration.windows?.main?.width > 0 &&
             configuration.windows?.main?.height > 0 &&
             probe.filename.endsWith(".vtxconfig"),
@@ -8430,6 +8583,7 @@ async function main() {
         localStorage.setItem("visualtex-desktop-editor-toolbar-open", "true");
         localStorage.setItem("visualtex.ocr.model", "PP-FormulaNet_plus-M");
         localStorage.setItem("visualtex.silent-ocr.enabled", "false");
+        localStorage.setItem("visualtex.quick-ocr.capture-mode", "immediate");
       })()`);
       const exportedText = exported.text;
       await evaluate(`(() => {
@@ -8457,7 +8611,8 @@ async function main() {
             localStorage.getItem("visualtex-desktop-editor-toolbar-open") === "false" &&
             localStorage.getItem("visualtex-desktop-editor-tiles-open") === "true" &&
             localStorage.getItem("visualtex.ocr.model") === "PP-FormulaNet_plus-L" &&
-            localStorage.getItem("visualtex.silent-ocr.enabled") === "true",
+            localStorage.getItem("visualtex.silent-ocr.enabled") === "true" &&
+            localStorage.getItem("visualtex.quick-ocr.capture-mode") === "system-screenshot",
           state: {
             theme: state.theme,
             formulaLetterFont: state.formulaLetterFont,
@@ -8470,10 +8625,11 @@ async function main() {
           tilesOpen: localStorage.getItem("visualtex-desktop-editor-tiles-open"),
           ocrModel: localStorage.getItem("visualtex.ocr.model"),
           silentOcr: localStorage.getItem("visualtex.silent-ocr.enabled"),
+          quickOcrCaptureMode: localStorage.getItem("visualtex.quick-ocr.capture-mode"),
         };
       })()`, "configuration import round trip");
 
-      console.log(JSON.stringify({ quickOcrLayouts, layoutState, exported, imported }, null, 2));
+      console.log(JSON.stringify({ quickOcrLayouts, quickOcrModeState, layoutState, exported, imported }, null, 2));
       console.log("Targeted VisualTeX configuration round-trip regression passed");
       return;
     }

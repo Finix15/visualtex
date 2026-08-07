@@ -440,7 +440,6 @@ export function OcrDialog({
       const nextRuntime = await installOcrRuntime();
       setRuntime(nextRuntime);
       const availableModel = resolveAvailableOcrModel(nextRuntime, model);
-      if (availableModel !== model) onModelChange(availableModel);
       void prewarmOcrModel(availableModel).catch(() => undefined);
       onNotify(isEn ? "OCR runtime installed" : "OCR 运行环境安装完成");
     } catch (installError) {

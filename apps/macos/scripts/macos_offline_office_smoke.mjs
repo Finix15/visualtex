@@ -104,6 +104,8 @@ const workspacePanelPreferences = read(
 );
 const editorStore = read("src/stores/editorStore.ts");
 const settingsDialog = read("src/components/SettingsDialog.tsx");
+const inputBehaviorMenu = read("src/components/InputBehaviorMenu.tsx");
+const updateDialog = read("src/components/UpdateDialog.tsx");
 const applicationConfiguration = read(
   "src/runtime/applicationConfiguration.ts",
 );
@@ -1368,6 +1370,12 @@ expectIncludes(capabilities, '"core:window:allow-close"', "Dedicated native Offi
 expectIncludes(capabilities, '"dialog:allow-save"', "Settings configuration backup must be allowed to open the native macOS save dialog");
 expectIncludes(capabilities, '"quick-ocr-hud"', "The silent OCR HUD window must receive Tauri core permissions");
 expectIncludes(quickOcrRuntime, 'Command::new("/usr/sbin/screencapture")', "Quick OCR must use the native macOS interactive screenshot tool");
+expectIncludes(appRuntime, "quick_ocr::wait_for_quick_ocr_system_screenshot", "The Tauri command handler must expose the deferred system-screenshot Quick OCR mode");
+expectIncludes(quickOcrRuntime, 'Command::new("/usr/bin/defaults")', "Deferred Quick OCR must read the user's current macOS screenshot destination instead of assuming Desktop");
+expectIncludes(quickOcrRuntime, '"com.apple.screencapture"', "Deferred Quick OCR must resolve the macOS screenshot preference domain");
+expectIncludes(quickOcrRuntime, "NSPasteboardTypePNG", "Deferred Quick OCR must also detect system screenshots routed to the clipboard");
+expectIncludes(quickOcrRuntime, "create_system_screenshot_baseline", "Deferred Quick OCR must snapshot screenshot state before minimizing so fast captures are not missed");
+expectIncludes(quickOcrRuntime, "SYSTEM_SCREENSHOT_WAIT_TIMEOUT", "Deferred Quick OCR must have a bounded wait instead of blocking forever");
 expectIncludes(quickOcrRuntime, ".minimize()", "Quick OCR must minimize the main window before interactive capture");
 expectIncludes(backgroundRuntime, ".unminimize()", "Quick OCR restoration must reuse the proven main-window unminimize path");
 expectIncludes(quickOcrRuntime, 'Command::new("/usr/bin/pbcopy")', "Silent OCR must copy recognized LaTeX without revealing the main WebView");
@@ -1376,12 +1384,25 @@ expectIncludes(quickOcrRuntime, "write_text_clipboard(&formatted_latex)", "Silen
 expectIncludes(quickOcrRuntime, '"display-bracket"', "Silent OCR formatting must support the VisualTeX display-bracket source format");
 expectIncludes(quickOcrRuntime, '"equation-star-split"', "Silent OCR formatting must support the full VisualTeX environment format set");
 expectIncludes(desktopApp, "configureSilentOcr(silentOcrEnabled, ocrModel, latexCodeFormat)", "The desktop app must synchronize the current LaTeX source format into the native silent OCR runtime");
+expectIncludes(desktopApp, "if (!runtime.installedModels.includes(ocrModel))", "The desktop OCR path must preserve an unavailable user-selected model and route the user to model installation instead of silently switching to M");
+expect(!desktopApp.includes("setOcrModel(availableModel)"), "Desktop OCR prewarm must not overwrite the user's selected S/L model with an installed fallback");
+expectIncludes(dialogApp, "if (!runtime.installedModels.includes(ocrModel))", "The native Office OCR path must preserve an unavailable user-selected model and route the user to model installation instead of silently switching to M");
+expect(!dialogApp.includes("setOcrModel(availableModel)"), "Office OCR prewarm must not overwrite the user's selected S/L model with an installed fallback");
 expectIncludes(quickOcrRuntime, "RegisterEventHotKey", "Silent OCR must register a true macOS global hotkey instead of relying on foreground DOM keyboard events");
 expectIncludes(quickOcrRuntime, "run_on_main_thread", "Carbon hotkey registration must run on the AppKit main thread because RegisterEventHotKey is not thread safe");
 expectIncludes(quickOcrRuntime, 'WebviewUrl::App("index.html?view=quick-ocr-hud".into())', "Silent OCR progress must use the dedicated lightweight HUD rather than revealing the main application");
 expectIncludes(editorWorkspace, "data-quick-ocr-button", "The desktop editor toolbar must expose a Quick OCR capture button");
+expectIncludes(editorWorkspace, "data-quick-ocr-mode-trigger", "Quick OCR must expose a compact capture-mode selector");
+expectIncludes(editorWorkspace, 'data-quick-ocr-mode-option="system-screenshot"', "Quick OCR must let the user choose the deferred system-screenshot mode");
+expectIncludes(editorWorkspace, 'data-quick-ocr-mode-option="immediate"', "Quick OCR must preserve the immediate-selection mode");
 expectIncludes(editorWorkspace, "data-silent-ocr-toggle", "The desktop editor toolbar must expose a silent OCR mode toggle");
 expectIncludes(applicationConfiguration, '"visualtex.silent-ocr.enabled"', "Silent OCR enablement must migrate with VisualTeX user configuration backups");
+expectIncludes(applicationConfiguration, '"visualtex.quick-ocr.capture-mode"', "Quick OCR capture mode must migrate with VisualTeX user configuration backups");
+expect(!inputBehaviorMenu.includes("option.descriptionEn"), "Input behavior cards must not render explanatory subtext below each option title");
+expect(!inputBehaviorMenu.includes("控制普通数学输入是否使用快捷转义"), "Input behavior section headings must not render explanatory subtext");
+expect(!inputBehaviorMenu.includes("分别选择哪些单槽结构"), "Caret auto-exit heading must not render explanatory subtext");
+expect(!inputBehaviorMenu.includes("这里只控制 VisualTeX 的大型命令候选框"), "Command suggestion heading must not render explanatory subtext");
+expect(!updateDialog.includes("关闭后不会自动联网检查"), "Update preference must not render the removed explanatory subtext");
 expectIncludes(dialogApp, "isMacosOfflineTauriTransport()", "Native Office formula editors must avoid Office.js parent messaging");
 expectIncludes(dialogApp, "const residentEditorWorkspace", "The native Office window must keep its editor workspace mounted while parked");
 expectIncludes(dialogApp, 'className="office-resident-editor-workspace"', "The resident Office editor wrapper must have an explicit layout class instead of becoming an anonymous Grid item");

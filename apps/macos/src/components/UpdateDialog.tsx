@@ -304,15 +304,6 @@ export function UpdateDialog({
                     ? "Check automatically on startup"
                     : "启动时自动检查更新"}
               </strong>
-              <small>
-                {automaticPrompt
-                  ? isEn
-                    ? "Automatic update notifications will stay off. You can turn them back on in Settings."
-                    : "以后不会再主动弹出更新提示，可在设置中重新开启。"
-                  : isEn
-                    ? "When disabled, VisualTeX will not make automatic update requests or show update notifications."
-                    : "关闭后不会自动联网检查，也不会主动显示更新弹窗。"}
-              </small>
             </span>
           </label>
         </div>

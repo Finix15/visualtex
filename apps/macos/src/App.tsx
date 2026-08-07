@@ -110,9 +110,13 @@ import {
 import {
   captureQuickOcrScreenshot,
   configureSilentOcr,
+  isQuickOcrCaptureMode,
   quickOcrCaptureToFile,
+  QUICK_OCR_CAPTURE_MODE_STORAGE_KEY,
   SILENT_OCR_SHORTCUT,
   SILENT_OCR_STORAGE_KEY,
+  waitForQuickOcrSystemScreenshot,
+  type QuickOcrCaptureMode,
 } from "./ocr/quickOcr";
 
 type InlineOcrStatus = "running" | "cancelling" | "success" | "error" | "cancelled";
@@ -194,6 +198,11 @@ function App() {
   const [silentOcrEnabled, setSilentOcrEnabled] = useState(
     () => readLocalStorage(SILENT_OCR_STORAGE_KEY) === "true",
   );
+  const [quickOcrCaptureMode, setQuickOcrCaptureMode] = useState<QuickOcrCaptureMode>(() => {
+    const stored = readLocalStorage(QUICK_OCR_CAPTURE_MODE_STORAGE_KEY);
+    return isQuickOcrCaptureMode(stored) ? stored : "immediate";
+  });
+  const [quickOcrCaptureBusy, setQuickOcrCaptureBusy] = useState(false);
   const [inlineOcr, setInlineOcr] = useState<InlineOcrState | null>(null);
   const inlineOcrBusyRef = useRef(false);
   const inlineOcrCancelRequestedRef = useRef(false);
@@ -516,10 +525,6 @@ function App() {
         .then((runtime) => {
           if (cancelled || !runtime.installed) return;
           const availableModel = resolveAvailableOcrModel(runtime, ocrModel);
-          if (availableModel !== ocrModel) {
-            setOcrModel(availableModel);
-            writeLocalStorage(OCR_MODEL_STORAGE_KEY, availableModel);
-          }
           return prewarmOcrModel(availableModel);
         })
         .catch(() => undefined);
@@ -621,11 +626,15 @@ function App() {
         );
       }
 
-      const availableOcrModel = resolveAvailableOcrModel(runtime, ocrModel);
-      if (availableOcrModel !== ocrModel) {
-        setOcrModel(availableOcrModel);
-        writeLocalStorage(OCR_MODEL_STORAGE_KEY, availableOcrModel);
+      if (!runtime.installedModels.includes(ocrModel)) {
+        setOcrOpen(true);
+        throw new Error(
+          isEn
+            ? `Install ${selectedOcrModel.labelEn} before using it for OCR`
+            : `请先安装${selectedOcrModel.labelZh}模型，再使用该模型进行 OCR`,
+        );
       }
+      const availableOcrModel = ocrModel;
 
       unlisten = await listenOcrRecognitionProgress((progress) => {
         if (
@@ -729,7 +738,7 @@ function App() {
   };
 
   const handleQuickOcr = async () => {
-    if (inlineOcrBusyRef.current) {
+    if (inlineOcrBusyRef.current || quickOcrCaptureBusy) {
       setToast(isEn ? "OCR is already running" : "已有 OCR 任务正在进行");
       return;
     }
@@ -738,11 +747,31 @@ function App() {
       setToast(isEn ? "Click a formula field before quick OCR" : "请先点击一个公式输入框再使用快捷 OCR");
       return;
     }
+    setQuickOcrCaptureBusy(true);
     try {
-      setToast(isEn ? "Select a formula area to capture" : "请框选要识别的公式区域");
-      const capture = await captureQuickOcrScreenshot();
+      const waitingForSystemScreenshot = quickOcrCaptureMode === "system-screenshot";
+      setToast(
+        waitingForSystemScreenshot
+          ? isEn
+            ? "VisualTeX will minimize. Switch to the target page and take a macOS screenshot within 60 seconds."
+            : "VisualTeX 将最小化；请切到目标页面，并在 60 秒内使用 macOS 系统截图键截图"
+          : isEn
+            ? "Select a formula area to capture"
+            : "请框选要识别的公式区域",
+      );
+      const capture = waitingForSystemScreenshot
+        ? await waitForQuickOcrSystemScreenshot()
+        : await captureQuickOcrScreenshot();
       if (!capture) {
-        setToast(isEn ? "Screenshot cancelled" : "已取消截图");
+        setToast(
+          waitingForSystemScreenshot
+            ? isEn
+              ? "No system screenshot was detected within 60 seconds"
+              : "60 秒内未检测到新的系统截图"
+            : isEn
+              ? "Screenshot cancelled"
+              : "已取消截图",
+        );
         return;
       }
       await handleEditorImagePaste(quickOcrCaptureToFile(capture), target, "quick");
@@ -756,7 +785,23 @@ function App() {
               ? "Quick OCR failed"
               : "快捷 OCR 失败";
       setToast(message);
+    } finally {
+      setQuickOcrCaptureBusy(false);
     }
+  };
+
+  const handleQuickOcrCaptureModeChange = (mode: QuickOcrCaptureMode) => {
+    setQuickOcrCaptureMode(mode);
+    writeLocalStorage(QUICK_OCR_CAPTURE_MODE_STORAGE_KEY, mode);
+    setToast(
+      mode === "system-screenshot"
+        ? isEn
+          ? "Quick OCR mode: wait for macOS screenshot"
+          : "快捷 OCR 已切换为：等待系统截图"
+        : isEn
+          ? "Quick OCR mode: immediate selection"
+          : "快捷 OCR 已切换为：立即框选",
+    );
   };
 
   const handleSilentOcrEnabledChange = (enabled: boolean) => {
@@ -1428,11 +1473,13 @@ function App() {
         onReplaceDocument={replaceDocumentWithHistory}
         ocrModel={ocrModel}
         ocrModels={OCR_MODELS}
-        ocrBusy={inlineOcrIsBusy}
+        ocrBusy={inlineOcrIsBusy || quickOcrCaptureBusy}
         onOcrModelChange={(model) =>
           handleOcrModelChange(model as OcrModelName)
         }
         onQuickOcr={() => void handleQuickOcr()}
+        quickOcrCaptureMode={quickOcrCaptureMode}
+        onQuickOcrCaptureModeChange={handleQuickOcrCaptureModeChange}
         silentOcrEnabled={silentOcrEnabled}
         onSilentOcrEnabledChange={handleSilentOcrEnabledChange}
         ocrOverlay={

@@ -1264,10 +1264,6 @@ export function OfficeDialogApp() {
         .then((runtime) => {
           if (cancelled || !runtime.installed) return;
           const availableModel = resolveAvailableOcrModel(runtime, ocrModel);
-          if (availableModel !== ocrModel) {
-            setOcrModel(availableModel);
-            writeLocalStorage(OCR_MODEL_STORAGE_KEY, availableModel);
-          }
           return prewarmOcrModel(availableModel);
         })
         .catch(() => undefined);
@@ -1347,11 +1343,15 @@ export function OfficeDialogApp() {
         );
       }
 
-      const availableOcrModel = resolveAvailableOcrModel(runtime, ocrModel);
-      if (availableOcrModel !== ocrModel) {
-        setOcrModel(availableOcrModel);
-        writeLocalStorage(OCR_MODEL_STORAGE_KEY, availableOcrModel);
+      if (!runtime.installedModels.includes(ocrModel)) {
+        setOcrOpen(true);
+        throw new Error(
+          isEn
+            ? `Install ${selectedOcrModel.labelEn} before using it for OCR`
+            : `请先安装${selectedOcrModel.labelZh}模型，再使用该模型进行 OCR`,
+        );
       }
+      const availableOcrModel = ocrModel;
 
       unlisten = await listenOcrRecognitionProgress((progress) => {
         if (
