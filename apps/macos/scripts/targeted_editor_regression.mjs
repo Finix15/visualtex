@@ -8182,8 +8182,78 @@ async function main() {
 
     if (scenario === "configuration") {
       await waitForEvaluation(`(() => ({
-        ready: Boolean(document.querySelector(".settings-toggle")),
-      }))()`, "settings button for configuration regression");
+        ready:
+          Boolean(document.querySelector(".settings-toggle")) &&
+          Boolean(document.querySelector("[data-quick-ocr-button]")) &&
+          Boolean(document.querySelector("[data-silent-ocr-toggle]")),
+      }))()`, "settings and quick OCR controls for configuration regression");
+
+      const quickOcrLayouts = [];
+      for (const width of [1400, 1040, 900]) {
+        await client.send("Emulation.setDeviceMetricsOverride", {
+          width,
+          height: 1000,
+          deviceScaleFactor: 1,
+          mobile: false,
+        });
+        await sleep(90);
+        quickOcrLayouts.push(await waitForEvaluation(`(() => {
+          const header = document.querySelector(".editor-pane-header");
+          const group = document.querySelector(".canvas-tool-group");
+          const quick = document.querySelector("[data-quick-ocr-button]");
+          const silentInput = document.querySelector("[data-silent-ocr-toggle]");
+          const silent = silentInput?.closest("label");
+          const model = document.querySelector(".canvas-ocr-model");
+          if (!header || !group || !quick || !silent || !model) return { ready: false };
+          const headerRect = header.getBoundingClientRect();
+          const groupRect = group.getBoundingClientRect();
+          const quickRect = quick.getBoundingClientRect();
+          const silentRect = silent.getBoundingClientRect();
+          const modelRect = model.getBoundingClientRect();
+          const contained = [groupRect, quickRect, silentRect, modelRect].every(
+            (rect) =>
+              rect.left >= headerRect.left - 1 &&
+              rect.right <= headerRect.right + 1 &&
+              rect.width > 0,
+          );
+          const silentStyle = getComputedStyle(silent);
+          return {
+            ready:
+              contained &&
+              quickRect.width >= 28 &&
+              silentRect.width >= 28 &&
+              modelRect.width >= 100 &&
+              document.documentElement.scrollWidth <= window.innerWidth + 1 &&
+              group.scrollWidth <= group.clientWidth + 1,
+            width: window.innerWidth,
+            header: { left: headerRect.left, right: headerRect.right },
+            group: {
+              left: groupRect.left,
+              right: groupRect.right,
+              scrollWidth: group.scrollWidth,
+              clientWidth: group.clientWidth,
+            },
+            quick: { left: quickRect.left, right: quickRect.right, width: quickRect.width },
+            silent: {
+              left: silentRect.left,
+              right: silentRect.right,
+              width: silentRect.width,
+              display: silentStyle.display,
+              className: silent.className,
+              html: silent.outerHTML,
+            },
+            model: { left: modelRect.left, right: modelRect.right, width: modelRect.width },
+          };
+        })()`, `quick OCR toolbar layout at ${width}px`));
+      }
+      await client.send("Emulation.setDeviceMetricsOverride", {
+        width: 1400,
+        height: 1000,
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
+      await sleep(90);
+
       await evaluate(`document.querySelector(".settings-toggle")?.click()`);
       await waitForEvaluation(`(() => ({
         ready:
@@ -8237,21 +8307,54 @@ async function main() {
             labelWidth: label?.getBoundingClientRect().width ?? 0,
           };
         });
+        const settingsDialog = document.querySelector(".settings-dialog");
+        const dialogRect = dialog?.getBoundingClientRect();
+        const settingsRect = settingsDialog?.getBoundingClientRect();
+        const rows = [...document.querySelectorAll(
+          "[data-interface-customization-dialog] .formula-inset-range",
+        )].map((row) => {
+          const rect = row.getBoundingClientRect();
+          return {
+            left: rect.left,
+            right: rect.right,
+            scrollWidth: row.scrollWidth,
+            clientWidth: row.clientWidth,
+          };
+        });
         return {
           ready:
-            Boolean(dialog) &&
-            dialog.getBoundingClientRect().width >= 640 &&
+            Boolean(dialogRect) &&
+            Boolean(settingsRect) &&
+            dialogRect.left >= settingsRect.left - 1 &&
+            dialogRect.right <= settingsRect.right + 1 &&
+            dialogRect.left >= -1 &&
+            dialogRect.right <= window.innerWidth + 1 &&
+            dialog.scrollWidth <= dialog.clientWidth + 1 &&
+            rows.every(
+              (row) =>
+                row.left >= dialogRect.left - 1 &&
+                row.right <= dialogRect.right + 1 &&
+                row.scrollWidth <= row.clientWidth + 1,
+            ) &&
             controls.every(
               (item) =>
                 item.width >= 48 &&
                 item.height <= 28 &&
                 item.whiteSpace === "nowrap" &&
-                item.labelWidth >= 240,
+                item.labelWidth >= 300,
             ),
-          dialogWidth: dialog?.getBoundingClientRect().width ?? 0,
+          dialogWidth: dialogRect?.width ?? 0,
+          settingsWidth: settingsRect?.width ?? 0,
+          dialogBounds: dialogRect
+            ? { left: dialogRect.left, right: dialogRect.right }
+            : null,
+          settingsBounds: settingsRect
+            ? { left: settingsRect.left, right: settingsRect.right }
+            : null,
+          rows,
           controls,
         };
-      })()`, "horizontal interface customization slider layout");
+      })()`, "contained interface customization slider layout");
 
       await evaluate(`document.querySelector("[data-interface-customization-close]")?.click()`);
       await evaluate(`(() => {
@@ -8274,6 +8377,7 @@ async function main() {
         localStorage.setItem("visualtex-desktop-editor-toolbar-open", "false");
         localStorage.setItem("visualtex-desktop-editor-tiles-open", "true");
         localStorage.setItem("visualtex.ocr.model", "PP-FormulaNet_plus-L");
+        localStorage.setItem("visualtex.silent-ocr.enabled", "true");
         window.__visualtexConfigurationProbe = { text: "", filename: "" };
         const originalCreateObjectURL = URL.createObjectURL.bind(URL);
         URL.createObjectURL = (blob) => {
@@ -8304,6 +8408,7 @@ async function main() {
             Boolean(configuration.storage?.["visualtex-custom-formula-tiles"]) &&
             Boolean(configuration.storage?.["visualtex-formula-hotkeys-v1"]) &&
             configuration.storage?.["visualtex.ocr.model"] === "PP-FormulaNet_plus-L" &&
+            configuration.storage?.["visualtex.silent-ocr.enabled"] === "true" &&
             configuration.windows?.main?.width > 0 &&
             configuration.windows?.main?.height > 0 &&
             probe.filename.endsWith(".vtxconfig"),
@@ -8324,6 +8429,7 @@ async function main() {
         localStorage.removeItem("visualtex-custom-formula-background-colors");
         localStorage.setItem("visualtex-desktop-editor-toolbar-open", "true");
         localStorage.setItem("visualtex.ocr.model", "PP-FormulaNet_plus-M");
+        localStorage.setItem("visualtex.silent-ocr.enabled", "false");
       })()`);
       const exportedText = exported.text;
       await evaluate(`(() => {
@@ -8350,7 +8456,8 @@ async function main() {
             textColors.includes("#123456") &&
             localStorage.getItem("visualtex-desktop-editor-toolbar-open") === "false" &&
             localStorage.getItem("visualtex-desktop-editor-tiles-open") === "true" &&
-            localStorage.getItem("visualtex.ocr.model") === "PP-FormulaNet_plus-L",
+            localStorage.getItem("visualtex.ocr.model") === "PP-FormulaNet_plus-L" &&
+            localStorage.getItem("visualtex.silent-ocr.enabled") === "true",
           state: {
             theme: state.theme,
             formulaLetterFont: state.formulaLetterFont,
@@ -8362,10 +8469,11 @@ async function main() {
           toolbarOpen: localStorage.getItem("visualtex-desktop-editor-toolbar-open"),
           tilesOpen: localStorage.getItem("visualtex-desktop-editor-tiles-open"),
           ocrModel: localStorage.getItem("visualtex.ocr.model"),
+          silentOcr: localStorage.getItem("visualtex.silent-ocr.enabled"),
         };
       })()`, "configuration import round trip");
 
-      console.log(JSON.stringify({ layoutState, exported, imported }, null, 2));
+      console.log(JSON.stringify({ quickOcrLayouts, layoutState, exported, imported }, null, 2));
       console.log("Targeted VisualTeX configuration round-trip regression passed");
       return;
     }

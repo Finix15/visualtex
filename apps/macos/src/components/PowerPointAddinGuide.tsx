@@ -51,18 +51,13 @@ export function PowerPointAddinGuide({ language, compact = false, loaded = false
           ) : (
             <span className="powerpoint-addins-empty-copy">
               <strong>{isEn ? "VisualTeX is not listed yet" : "此时列表中没有 VisualTeX 是正常的"}</strong>
-              <small>{isEn ? "Click + below and select VisualTeX.ppam" : "请点击下方＋，再选择 VisualTeX.ppam"}</small>
             </span>
           )}
         </div>
         <div className="powerpoint-addins-controls">
           <span className={loaded ? "" : "is-next-action"} aria-hidden="true"><Plus size={13} /></span>
           <span aria-hidden="true">−</span>
-          <small>
-            {loaded
-              ? isEn ? "VisualTeX is registered" : "VisualTeX 已登记"
-              : isEn ? "Start here: click +" : "从这里开始：点击＋"}
-          </small>
+
         </div>
       </div>
 

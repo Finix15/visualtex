@@ -14,6 +14,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 mod ocr_offline;
 mod office;
+mod quick_ocr;
 
 const PADDLE_VERSION: &str = "3.3.1";
 const PADDLEOCR_VERSION: &str = "3.7.0";
@@ -581,6 +582,7 @@ impl OcrWorker {
             .map_err(|error| self.worker_failure(error))?;
             if response.get("event").and_then(Value::as_str) == Some("progress") {
                 let _ = app.emit("ocr-recognition-progress", &response);
+                quick_ocr::handle_ocr_progress(app, &response);
                 if let Some(state) = app.try_state::<OcrState>() {
                     state.events.publish("ocr-recognition-progress", &response);
                 }
@@ -1647,6 +1649,7 @@ pub fn run() {
         std::env::args().find(|argument| argument.starts_with("visualtex://office/open?session="));
     let ocr_state = OcrState::default();
     let office_ocr_state = ocr_state.clone();
+    let quick_ocr_state = quick_ocr::QuickOcrState::default();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(
             |app, arguments, _cwd| {
@@ -1672,6 +1675,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(ocr_state)
+        .manage(quick_ocr_state)
         .setup(move |app| {
             if maintenance_install {
                 match office::macos_offline_installer::install(app.handle()) {
@@ -1711,6 +1715,9 @@ pub fn run() {
             office::background::install_application_icon(app.handle())
                 .map_err(std::io::Error::other)?;
             restore_main_window_size(app.handle()).map_err(std::io::Error::other)?;
+            if let Err(error) = quick_ocr::initialize(app.handle()) {
+                eprintln!("VisualTeX quick OCR initialization warning: {error}");
+            }
             let office_state = office::initialize(app.handle(), office_ocr_state.clone())
                 .map_err(std::io::Error::other)?;
             if let Err(error) = office::powerpoint_native::start_double_click_monitor(
@@ -1746,6 +1753,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             write_export_file,
             copy_png_to_clipboard,
+            quick_ocr::capture_quick_ocr_screenshot,
+            quick_ocr::configure_silent_ocr,
             set_app_theme,
             get_app_window_configuration,
             apply_app_window_configuration,

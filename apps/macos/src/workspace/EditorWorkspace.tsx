@@ -13,6 +13,7 @@ import {
   AlignRight,
   Bold,
   Braces,
+  Camera,
   Code2,
   Copy,
   FileDown,
@@ -152,6 +153,9 @@ export function EditorWorkspace({
   ocrModels = [],
   ocrBusy = false,
   onOcrModelChange,
+  onQuickOcr,
+  silentOcrEnabled = false,
+  onSilentOcrEnabledChange,
   ocrOverlay,
 }: EditorWorkspaceProps) {
   const [primaryBusy, setPrimaryBusy] = useState(false);
@@ -1223,6 +1227,47 @@ export function EditorWorkspace({
                 </button>
               )}
               <InputBehaviorMenu />
+              {showOcrActions && onQuickOcr && (
+                <div className="quick-ocr-controls">
+                  <button
+                    type="button"
+                    className="quick-ocr-button"
+                    onClick={onQuickOcr}
+                    disabled={ocrBusy}
+                    data-quick-ocr-button
+                    title={
+                      isEn
+                        ? "Hide VisualTeX, capture a formula region, then recognize and insert it"
+                        : "隐藏 VisualTeX 后框选公式区域，识别完成后自动插入"
+                    }
+                  >
+                    <Camera size={15} />
+                    <span>{isEn ? "Quick OCR" : "快捷 OCR"}</span>
+                  </button>
+                  {onSilentOcrEnabledChange && (
+                    <label
+                      className={`silent-ocr-toggle${silentOcrEnabled ? " is-active" : ""}`}
+                      title={
+                        isEn
+                          ? "When enabled, press ⌘⇧O anywhere to capture, recognize, and copy LaTeX without opening the main window"
+                          : "开启后可在任意应用中按 ⌘⇧O 框选截图，后台识别并复制 LaTeX，无需打开主窗口"
+                      }
+                    >
+                      <input
+                        type="checkbox"
+                        checked={silentOcrEnabled}
+                        onChange={(event) =>
+                          onSilentOcrEnabledChange(event.target.checked)
+                        }
+                        data-silent-ocr-toggle
+                      />
+                      <span className="silent-ocr-indicator" aria-hidden="true" />
+                      <span>{isEn ? "Silent" : "静默"}</span>
+                      <kbd>⌘⇧O</kbd>
+                    </label>
+                  )}
+                </div>
+              )}
               {showOcrActions && ocrModels.length > 0 && ocrModel && (
                 <label
                   className="canvas-ocr-model"

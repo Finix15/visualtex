@@ -129,6 +129,7 @@ export interface MathEditorHandle {
     selection: MathSelectionSnapshot | null,
   ) => Promise<boolean>;
   captureSelectionTarget: () => MathEditorSelectionTarget | null;
+  captureInsertionTarget: () => MathEditorInsertionTarget | null;
   applySelectionStyle: (
     style: MathEditorSelectionStyle,
     target?: MathEditorSelectionTarget | null,
@@ -8079,6 +8080,17 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         }),
       );
 
+    const captureInsertionTarget = (): MathEditorInsertionTarget | null => {
+      const target = resolveTargetField();
+      if (!target) return null;
+      const selection = captureSelection(target.field);
+      return {
+        lineId: target.lineId,
+        ranges: selection.ranges,
+        direction: selection.direction,
+      };
+    };
+
     const captureSelectionTarget = (): MathEditorSelectionTarget | null => {
       const selections = linesRef.current.flatMap((line) => {
         const field = fieldRefs.current.get(line.id);
@@ -8506,6 +8518,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       getSelectionMap,
       restoreSelection,
       captureSelectionTarget,
+      captureInsertionTarget,
       applySelectionStyle,
       refreshLayout: () => {
         // Resident Office rows deliberately survive native window parking, but

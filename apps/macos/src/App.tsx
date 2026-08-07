@@ -1,5 +1,5 @@
 import { ChangeEvent, useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import {
   AlertCircle,
   Braces,
@@ -107,6 +107,13 @@ import {
   readLocalStorage,
   writeLocalStorage,
 } from "./runtime/safeStorage";
+import {
+  captureQuickOcrScreenshot,
+  configureSilentOcr,
+  quickOcrCaptureToFile,
+  SILENT_OCR_SHORTCUT,
+  SILENT_OCR_STORAGE_KEY,
+} from "./ocr/quickOcr";
 
 type InlineOcrStatus = "running" | "cancelling" | "success" | "error" | "cancelled";
 
@@ -184,6 +191,9 @@ function App() {
       ? (stored as OcrModelName)
       : DEFAULT_OCR_MODEL;
   });
+  const [silentOcrEnabled, setSilentOcrEnabled] = useState(
+    () => readLocalStorage(SILENT_OCR_STORAGE_KEY) === "true",
+  );
   const [inlineOcr, setInlineOcr] = useState<InlineOcrState | null>(null);
   const inlineOcrBusyRef = useRef(false);
   const inlineOcrCancelRequestedRef = useRef(false);
@@ -521,6 +531,28 @@ function App() {
     };
   }, [ocrModel]);
 
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    void configureSilentOcr(silentOcrEnabled, ocrModel, latexCodeFormat).catch((error) => {
+      if (cancelled || !silentOcrEnabled) return;
+      const message =
+        error instanceof Error
+          ? error.message
+          : typeof error === "string"
+            ? error
+            : isEn
+              ? "Unable to enable silent OCR"
+              : "无法启用静默 OCR";
+      setSilentOcrEnabled(false);
+      writeLocalStorage(SILENT_OCR_STORAGE_KEY, "false");
+      setToast(message);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [silentOcrEnabled, ocrModel, latexCodeFormat, isEn]);
+
   const handleOcrModelChange = (nextModel: OcrModelName) => {
     if (inlineOcrBusyRef.current || nextModel === ocrModel) return;
     setOcrModel(nextModel);
@@ -550,6 +582,7 @@ function App() {
   const handleEditorImagePaste = async (
     file: File,
     target: MathEditorInsertionTarget,
+    source: "paste" | "quick" = "paste",
   ) => {
     if (inlineOcrBusyRef.current) {
       setToast(isEn ? "Another pasted image is being recognized" : "已有一张粘贴图片正在识别");
@@ -651,7 +684,15 @@ function App() {
         seconds: current?.seconds ?? 0,
         model: ocrModel,
       }));
-      setToast(isEn ? "Pasted image converted to LaTeX" : "粘贴图片已转换为 LaTeX");
+      setToast(
+        source === "quick"
+          ? isEn
+            ? "Screenshot converted to LaTeX"
+            : "截图已转换为 LaTeX"
+          : isEn
+            ? "Pasted image converted to LaTeX"
+            : "粘贴图片已转换为 LaTeX",
+      );
       scheduleInlineOcrClear(1800);
     } catch (error) {
       const errorMessage =
@@ -685,6 +726,51 @@ function App() {
         inlineOcrCancelRequestedRef.current = false;
       }
     }
+  };
+
+  const handleQuickOcr = async () => {
+    if (inlineOcrBusyRef.current) {
+      setToast(isEn ? "OCR is already running" : "已有 OCR 任务正在进行");
+      return;
+    }
+    const target = editorRef.current?.captureInsertionTarget();
+    if (!target) {
+      setToast(isEn ? "Click a formula field before quick OCR" : "请先点击一个公式输入框再使用快捷 OCR");
+      return;
+    }
+    try {
+      setToast(isEn ? "Select a formula area to capture" : "请框选要识别的公式区域");
+      const capture = await captureQuickOcrScreenshot();
+      if (!capture) {
+        setToast(isEn ? "Screenshot cancelled" : "已取消截图");
+        return;
+      }
+      await handleEditorImagePaste(quickOcrCaptureToFile(capture), target, "quick");
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : typeof error === "string"
+            ? error
+            : isEn
+              ? "Quick OCR failed"
+              : "快捷 OCR 失败";
+      setToast(message);
+    }
+  };
+
+  const handleSilentOcrEnabledChange = (enabled: boolean) => {
+    setSilentOcrEnabled(enabled);
+    writeLocalStorage(SILENT_OCR_STORAGE_KEY, String(enabled));
+    setToast(
+      enabled
+        ? isEn
+          ? `Silent OCR enabled · ${SILENT_OCR_SHORTCUT}`
+          : `静默 OCR 已开启 · ${SILENT_OCR_SHORTCUT}`
+        : isEn
+          ? "Silent OCR disabled"
+          : "静默 OCR 已关闭",
+    );
   };
 
   const handleCodeFormatChange = (format: LatexCodeFormat) => {
@@ -1346,6 +1432,9 @@ function App() {
         onOcrModelChange={(model) =>
           handleOcrModelChange(model as OcrModelName)
         }
+        onQuickOcr={() => void handleQuickOcr()}
+        silentOcrEnabled={silentOcrEnabled}
+        onSilentOcrEnabledChange={handleSilentOcrEnabledChange}
         ocrOverlay={
           inlineOcr ? (
             <div

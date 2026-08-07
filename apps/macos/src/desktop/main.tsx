@@ -11,6 +11,7 @@ import { WordLatexRedrawApp } from "../office/redraw/WordLatexRedrawApp";
 import { DesktopApp } from "./DesktopApp";
 import { applyDocumentTheme, readSynchronizedTheme } from "../themeSync";
 import { VisualTexErrorBoundary } from "../runtime/VisualTexErrorBoundary";
+import { QuickOcrHud } from "../ocr/QuickOcrHud";
 
 configureOcrTransport(desktopOcrTransport);
 
@@ -21,15 +22,22 @@ const view = new URLSearchParams(window.location.search).get("view");
 const officeFormulaView = view === "office-formula";
 const officeDocumentImportView = view === "office-document-import";
 const officeWordLatexRedrawView = view === "office-word-latex-redraw";
+const quickOcrHudView = view === "quick-ocr-hud";
 if (officeFormulaView || officeDocumentImportView || officeWordLatexRedrawView) {
   document.body.classList.add("office-dialog-page");
+  applyDocumentTheme(readSynchronizedTheme());
+}
+if (quickOcrHudView) {
+  document.body.classList.add("quick-ocr-hud-page");
   applyDocumentTheme(readSynchronizedTheme());
 }
 
 createRoot(root).render(
   <StrictMode>
     <VisualTexErrorBoundary>
-      {officeFormulaView ? (
+      {quickOcrHudView ? (
+        <QuickOcrHud />
+      ) : officeFormulaView ? (
         <OfficeDialogApp />
       ) : officeDocumentImportView ? (
         <OfficeDocumentImportApp />

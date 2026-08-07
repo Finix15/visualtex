@@ -56,5 +56,8 @@ export interface EditorWorkspaceProps {
   ocrModels?: readonly WorkspaceOcrModelOption[];
   ocrBusy?: boolean;
   onOcrModelChange?: (model: string) => void;
+  onQuickOcr?: () => void;
+  silentOcrEnabled?: boolean;
+  onSilentOcrEnabledChange?: (enabled: boolean) => void;
   ocrOverlay?: ReactNode;
 }

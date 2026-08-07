@@ -39,6 +39,7 @@ const configurationStorageKeys = [
   "visualtex-office-editor-toolbar-open",
   "visualtex-office-editor-tiles-open",
   "visualtex.ocr.model",
+  "visualtex.silent-ocr.enabled",
 ] as const;
 
 const booleanConfigurationStorageKeys = new Set<string>([
@@ -46,6 +47,7 @@ const booleanConfigurationStorageKeys = new Set<string>([
   "visualtex-desktop-editor-tiles-open",
   "visualtex-office-editor-toolbar-open",
   "visualtex-office-editor-tiles-open",
+  "visualtex.silent-ocr.enabled",
 ]);
 
 const jsonConfigurationStorageKeys = new Set<string>([

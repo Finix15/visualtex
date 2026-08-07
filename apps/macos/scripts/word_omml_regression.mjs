@@ -150,6 +150,24 @@ async function main() {
     await client.connect();
     await client.send("Runtime.enable");
 
+    const evaluateWithNavigationRetry = async (params) => {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          return await client.send("Runtime.evaluate", params);
+        } catch (error) {
+          if (
+            attempt >= 2 ||
+            !String(error?.message ?? error).includes("Execution context was destroyed")
+          ) {
+            throw error;
+          }
+          await sleep(250);
+          await client.send("Runtime.enable");
+        }
+      }
+      throw new Error("Runtime evaluation retry exhausted.");
+    };
+
     const formulas = [
       String.raw`\frac{a}{b}+dddc`,
       String.raw`\int_a^b x\,dy`,
@@ -186,7 +204,7 @@ async function main() {
         );
       })()
     `;
-    const evaluation = await client.send("Runtime.evaluate", {
+    const evaluation = await evaluateWithNavigationRetry({
       expression,
       awaitPromise: true,
       returnByValue: true,
@@ -251,7 +269,7 @@ async function main() {
         );
       })()
     `;
-    const uncommonIntegralEvaluation = await client.send("Runtime.evaluate", {
+    const uncommonIntegralEvaluation = await evaluateWithNavigationRetry({
       expression: uncommonIntegralExpression,
       awaitPromise: true,
       returnByValue: true,
@@ -421,7 +439,7 @@ async function main() {
         return module.latexLinesToOmml(['a=b', 'c=d'], 'block');
       })()
     `;
-    const multiLineEvaluation = await client.send("Runtime.evaluate", {
+    const multiLineEvaluation = await evaluateWithNavigationRetry({
       expression: multiLineExpression,
       awaitPromise: true,
       returnByValue: true,
@@ -439,7 +457,7 @@ async function main() {
         return module.latexLinesToOmml(['a=b+c', 'long=d'], 'block', 'align');
       })()
     `;
-    const alignedEvaluation = await client.send("Runtime.evaluate", {
+    const alignedEvaluation = await evaluateWithNavigationRetry({
       expression: alignedExpression,
       awaitPromise: true,
       returnByValue: true,
@@ -484,7 +502,7 @@ async function main() {
         };
       })()
     `;
-    const docxEvaluation = await client.send("Runtime.evaluate", {
+    const docxEvaluation = await evaluateWithNavigationRetry({
       expression: docxExpression,
       awaitPromise: true,
       returnByValue: true,

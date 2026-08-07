@@ -152,11 +152,6 @@ export function MacOfficeIntegrationSettings() {
       <div className="settings-section-heading office-settings-heading">
         <div>
           <strong>{isEn ? "Word and PowerPoint native add-ins" : "Word 与 PowerPoint 原生加载项"}</strong>
-          <p>
-            {isEn
-              ? "Install, update and check the VisualTeX add-ins for Word and PowerPoint."
-              : "安装、更新并检查 Word 和 PowerPoint 中的 VisualTeX 插件。"}
-          </p>
         </div>
         <button
           type="button"
@@ -305,15 +300,6 @@ export function MacOfficeIntegrationSettings() {
           <div className="settings-section-heading">
             <div>
               <strong>{isEn ? "Load VisualTeX in PowerPoint" : "在 PowerPoint 中加载 VisualTeX"}</strong>
-              <p>
-                {!status.powerpoint.filesInstalled
-                  ? isEn
-                    ? "Install the add-in first."
-                    : "请先安装插件。"
-                  : isEn
-                    ? "Open PowerPoint and refresh. If the VisualTeX tab is still missing, add VisualTeX.ppam once."
-                    : "先打开 PowerPoint 并刷新；如果仍没有 VisualTeX 选项卡，再手动添加一次 VisualTeX.ppam。"}
-              </p>
             </div>
           </div>
           <PowerPointAddinGuide language={language} loaded={status.powerpoint.loaded} />

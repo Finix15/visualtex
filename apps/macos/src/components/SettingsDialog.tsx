@@ -296,12 +296,17 @@ export function SettingsDialog({
         isEn ? "Configuration saved." : "配置文件已保存。",
       );
     } catch (reason) {
-      setConfigurationStatus(
+      const message =
         reason instanceof Error
           ? reason.message
-          : isEn
+          : typeof reason === "string"
+            ? reason
+            : "";
+      setConfigurationStatus(
+        message ||
+          (isEn
             ? "Unable to save the configuration."
-            : "无法保存配置文件。",
+            : "无法保存配置文件。"),
       );
     } finally {
       setConfigurationBusy(false);
@@ -548,11 +553,6 @@ export function SettingsDialog({
               <Download size={18} />
               <div>
                 <h3>{isEn ? "Configuration backup" : "配置备份与迁移"}</h3>
-                <p>
-                  {isEn
-                    ? "Save your VisualTeX preferences, tiles, hotkeys, colours, fonts and window sizes, then restore them on another installation."
-                    : "保存 VisualTeX 的设置、磁贴、快捷键、颜色、字体和窗口尺寸，可在另一台设备或新安装中直接恢复。"}
-                </p>
               </div>
             </div>
             <div className="configuration-transfer-actions">
@@ -597,7 +597,6 @@ export function SettingsDialog({
               <Languages size={18} />
               <div>
                 <h3>{isEn ? "Interface language" : "界面语言"}</h3>
-                <p>{isEn ? "Switch between English and Chinese." : "切换中文或英文界面。"}</p>
               </div>
             </div>
             <div className="theme-segment">
@@ -629,11 +628,6 @@ export function SettingsDialog({
                     ? "PowerPoint formula defaults"
                     : "PowerPoint 公式默认值"}
                 </h3>
-                <p>
-                  {isEn
-                    ? "New PowerPoint formulas use this size. The insert window can still override it each time."
-                    : "新建 PowerPoint 公式时默认使用此字号，插入弹窗中仍可逐次调整。"}
-                </p>
               </div>
             </div>
             <label className="number-setting office-default-font-size-setting">
@@ -694,21 +688,11 @@ export function SettingsDialog({
               <RefreshCw size={18} />
               <div>
                 <h3>{isEn ? "Application updates" : "应用更新"}</h3>
-                <p>
-                  {isEn
-                    ? "Automatically check GitHub Releases and show localized update details when a newer stable version is published."
-                    : "自动检查 GitHub Releases；发布新稳定版本时，按当前语言显示更新内容。"}
-                </p>
               </div>
             </div>
             <label className="switch-row">
               <span>
                 <strong>{isEn ? "Automatic update notifications" : "自动更新提醒"}</strong>
-                <small>
-                  {isEn
-                    ? "When disabled, VisualTeX will never check or notify automatically. Manual checks remain available."
-                    : "关闭后将永久停止自动检查和主动弹窗，但仍可手动检查。"}
-                </small>
               </span>
               <input
                 type="checkbox"
