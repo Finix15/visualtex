@@ -27,6 +27,21 @@ assert.deepEqual(
 for (const span of mixed) assertExactSpan(mixedSource, span);
 assert.equal(mixed[0].start, "前😀缀 ".length);
 
+const wordStyledQuadratic = String.raw`$𝑥=\\𝑓𝑟𝑎𝑐{−𝑏\\𝑝𝑚 \\𝑠𝑞𝑟𝑡{𝑏^{2}−4𝑎𝑐}}{2𝑎}$`;
+const wordStyledQuadraticSpan =
+  findWindowsWordLatexRedrawSpans(wordStyledQuadratic)[0];
+assertExactSpan(wordStyledQuadratic, wordStyledQuadraticSpan);
+assert.equal(
+  wordStyledQuadraticSpan.sourceText,
+  wordStyledQuadratic,
+  "Word range verification must retain the exact styled source text",
+);
+assert.equal(
+  wordStyledQuadraticSpan.latex,
+  String.raw`x=\frac{-b\pm \sqrt{b^{2}-4ac}}{2a}`,
+  "Word mathematical Unicode and duplicated command slashes must normalize back to standard LaTeX",
+);
+
 const displayWhitespace = "before $$\n  x +\n y  \n$$ after";
 assert.equal(
   findWindowsWordLatexRedrawSpans(displayWhitespace)[0].latex,

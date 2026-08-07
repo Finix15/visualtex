@@ -48,6 +48,7 @@ import { UpdateDialog } from "./components/UpdateDialog";
 import { VisualTeXLogo } from "./components/VisualTeXLogo";
 import { EditorWorkspace } from "./workspace/EditorWorkspace";
 import {
+  EDITOR_ZOOM_STEP,
   MAX_EDITOR_ZOOM,
   MIN_EDITOR_ZOOM,
   joinFormulaLines,
@@ -78,6 +79,7 @@ import {
 import { normalizeChineseLatex } from "./editor/normalizeChineseLatex";
 import type { FormulaDocument, LatexCodeFormat } from "./types/formula";
 import { publishSynchronizedTheme } from "./themeSync";
+import { copyFormulaDocumentPngToClipboard } from "./export/pngClipboard";
 import {
   OCR_MODELS,
   cancelOcrRecognition,
@@ -191,6 +193,7 @@ function App() {
   const ocrPrewarmStartedRef = useRef(false);
   const macOfficeInstallStatusCheckedRef = useRef(false);
   const initialEditorFocusDoneRef = useRef(false);
+  const pngClipboardBusyRef = useRef(false);
 
   const title = useEditorStore((state) => state.title);
   const setTitle = useEditorStore((state) => state.setTitle);
@@ -203,6 +206,11 @@ function App() {
   const zoom = useEditorStore((state) => state.zoom);
   const setZoom = useEditorStore((state) => state.setZoom);
   const editorLayout = useEditorStore((state) => state.editorLayout);
+  const pngExportBackground = useEditorStore(
+    (state) => state.pngExportBackground,
+  );
+  const formulaLetterFont = useEditorStore((state) => state.formulaLetterFont);
+  const formulaChineseFont = useEditorStore((state) => state.formulaChineseFont);
   const sourceOpen = useEditorStore((state) => state.sourceOpen);
   const setSourceOpen = useEditorStore((state) => state.setSourceOpen);
   const latexCodeFormat = useEditorStore((state) => state.latexCodeFormat);
@@ -709,6 +717,28 @@ function App() {
     }
   };
 
+  const handleCopyPng = async () => {
+    if (pngClipboardBusyRef.current) return;
+    pngClipboardBusyRef.current = true;
+    try {
+      await copyFormulaDocumentPngToClipboard(lines.map((line) => line.latex), {
+        background: pngExportBackground,
+        formulaLetterFont,
+        formulaChineseFont,
+      });
+      setToast(isEn ? "PNG copied to Clipboard" : "PNG 已复制到剪贴板");
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setToast(
+        isEn
+          ? `Unable to copy PNG: ${message}`
+          : `复制 PNG 失败：${message}`,
+      );
+    } finally {
+      pngClipboardBusyRef.current = false;
+    }
+  };
+
   const getSafeDocumentTitle = () =>
     title.trim().replace(/[\\/:*?"<>|]/g, "-") ||
     (isEn ? "Untitled Formula" : "未命名公式");
@@ -928,10 +958,10 @@ function App() {
         setZoom(1);
       } else if (key === "=" || key === "+") {
         event.preventDefault();
-        setZoom(zoom + 0.1);
+        setZoom(zoom + EDITOR_ZOOM_STEP);
       } else if (key === "-") {
         event.preventDefault();
-        setZoom(zoom - 0.1);
+        setZoom(zoom - EDITOR_ZOOM_STEP);
       }
     };
 
@@ -1307,6 +1337,7 @@ function App() {
         onSidebarOpenChange={setSidebarOpen}
         onHistoryBusyChange={setEditorHistoryBusy}
         onPasteImage={handleEditorImagePaste}
+        onCopyPng={handleCopyPng}
         onCopy={handleCopy}
         onReplaceDocument={replaceDocumentWithHistory}
         ocrModel={ocrModel}

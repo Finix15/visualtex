@@ -1,22 +1,91 @@
-import { useEffect, useRef } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type CSSProperties,
+} from "react";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 import {
   BrainCircuit,
+  ChevronRight,
+  Download,
+  Eye,
   Keyboard,
   Languages,
   Presentation,
   RefreshCw,
   RotateCcw,
   SlidersHorizontal,
+  Upload,
   X,
 } from "lucide-react";
-import { useEditorStore } from "../stores/editorStore";
+import {
+  DEFAULT_FORMULA_INSET,
+  DEFAULT_FORMULA_ROW_VERTICAL_INSET,
+  DEFAULT_FORMULA_TOOL_BUTTON_PADDING,
+  DEFAULT_FORMULA_TOOL_BUTTON_SIZE,
+  EDITOR_ZOOM_STEP,
+  MAX_FORMULA_INSET,
+  MAX_FORMULA_ROW_VERTICAL_INSET,
+  MAX_FORMULA_TOOL_BUTTON_PADDING,
+  MAX_FORMULA_TOOL_BUTTON_SIZE,
+  MIN_FORMULA_INSET,
+  MIN_FORMULA_ROW_VERTICAL_INSET,
+  MIN_FORMULA_TOOL_BUTTON_PADDING,
+  MIN_FORMULA_TOOL_BUTTON_SIZE,
+  useEditorStore,
+} from "../stores/editorStore";
+import { MathPreview } from "./MathPreview";
 import { OfficeIntegrationSettings } from "./OfficeIntegrationSettings";
+import { pngExportBackgroundPickerValue } from "../export/pngBackground";
+import {
+  DEFAULT_FORMULA_CHINESE_FONT,
+  DEFAULT_FORMULA_LETTER_FONT,
+  FORMULA_CHINESE_FONT_OPTIONS,
+  FORMULA_LETTER_FONT_OPTIONS,
+  formulaChineseFontFamily,
+  formulaLetterFontFamilies,
+  type FormulaChineseFont,
+  type FormulaLetterFont,
+} from "../editor/formulaFontPreferences";
+import {
+  applyVisualTexConfiguration,
+  buildVisualTexConfiguration,
+  parseVisualTexConfiguration,
+  VISUALTEX_CONFIGURATION_EXTENSION,
+} from "../runtime/applicationConfiguration";
 
 interface Props {
   open: boolean;
   onClose: () => void;
   onCheckForUpdates: () => void;
   onOpenFormulaHotkeys: () => void;
+}
+
+function encodeUtf8Base64(value: string) {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function configurationFilename() {
+  return `VisualTeX-Configuration-${new Date().toISOString().slice(0, 10)}.${VISUALTEX_CONFIGURATION_EXTENSION}`;
+}
+
+function downloadConfigurationInBrowser(contents: string, filename: string) {
+  const blob = new Blob([contents], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 export function SettingsDialog({
@@ -26,7 +95,14 @@ export function SettingsDialog({
   onOpenFormulaHotkeys,
 }: Props) {
   const dialogRef = useRef<HTMLElement>(null);
+  const interfaceCustomizationDialogRef = useRef<HTMLElement>(null);
+  const interfaceCustomizationOpenRef = useRef(false);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  const configurationInputRef = useRef<HTMLInputElement>(null);
+  const [interfaceCustomizationOpen, setInterfaceCustomizationOpen] =
+    useState(false);
+  const [configurationBusy, setConfigurationBusy] = useState(false);
+  const [configurationStatus, setConfigurationStatus] = useState("");
   const theme = useEditorStore((state) => state.theme);
   const setTheme = useEditorStore((state) => state.setTheme);
   const language = useEditorStore((state) => state.language);
@@ -38,8 +114,58 @@ export function SettingsDialog({
   const autoPairDelimiters = useEditorStore(
     (state) => state.autoPairDelimiters,
   );
+  const showLineNumbers = useEditorStore((state) => state.showLineNumbers);
+  const highlightActiveLine = useEditorStore(
+    (state) => state.highlightActiveLine,
+  );
+  const formulaInsetLeft = useEditorStore((state) => state.formulaInsetLeft);
+  const formulaInsetRight = useEditorStore((state) => state.formulaInsetRight);
+  const formulaToolButtonSize = useEditorStore(
+    (state) => state.formulaToolButtonSize,
+  );
+  const formulaToolButtonPadding = useEditorStore(
+    (state) => state.formulaToolButtonPadding,
+  );
+  const formulaRowVerticalInset = useEditorStore(
+    (state) => state.formulaRowVerticalInset,
+  );
+  const pngExportBackground = useEditorStore(
+    (state) => state.pngExportBackground,
+  );
+  const formulaLetterFont = useEditorStore((state) => state.formulaLetterFont);
+  const formulaChineseFont = useEditorStore((state) => state.formulaChineseFont);
   const setAutoPairDelimiters = useEditorStore(
     (state) => state.setAutoPairDelimiters,
+  );
+  const setShowLineNumbers = useEditorStore(
+    (state) => state.setShowLineNumbers,
+  );
+  const setHighlightActiveLine = useEditorStore(
+    (state) => state.setHighlightActiveLine,
+  );
+  const setFormulaInsetLeft = useEditorStore(
+    (state) => state.setFormulaInsetLeft,
+  );
+  const setFormulaInsetRight = useEditorStore(
+    (state) => state.setFormulaInsetRight,
+  );
+  const setFormulaToolButtonSize = useEditorStore(
+    (state) => state.setFormulaToolButtonSize,
+  );
+  const setFormulaToolButtonPadding = useEditorStore(
+    (state) => state.setFormulaToolButtonPadding,
+  );
+  const setFormulaRowVerticalInset = useEditorStore(
+    (state) => state.setFormulaRowVerticalInset,
+  );
+  const setPngExportBackground = useEditorStore(
+    (state) => state.setPngExportBackground,
+  );
+  const setFormulaLetterFont = useEditorStore(
+    (state) => state.setFormulaLetterFont,
+  );
+  const setFormulaChineseFont = useEditorStore(
+    (state) => state.setFormulaChineseFont,
   );
   const personalize = useEditorStore((state) => state.personalize);
   const setPersonalize = useEditorStore((state) => state.setPersonalize);
@@ -59,6 +185,8 @@ export function SettingsDialog({
     (state) => state.setCheckUpdatesOnStartup,
   );
   const isEn = language === "en";
+  const formulaLetterFamilies = formulaLetterFontFamilies(formulaLetterFont);
+  const formulaChineseFamily = formulaChineseFontFamily(formulaChineseFont);
 
   useEffect(() => {
     if (!open) return;
@@ -70,13 +198,21 @@ export function SettingsDialog({
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        onClose();
+        if (interfaceCustomizationOpenRef.current) {
+          interfaceCustomizationOpenRef.current = false;
+          setInterfaceCustomizationOpen(false);
+        } else {
+          onClose();
+        }
         return;
       }
-      if (event.key !== "Tab" || !dialogRef.current) return;
+      const activeDialog = interfaceCustomizationOpenRef.current
+        ? interfaceCustomizationDialogRef.current
+        : dialogRef.current;
+      if (event.key !== "Tab" || !activeDialog) return;
 
       const focusable = Array.from(
-        dialogRef.current.querySelectorAll<HTMLElement>(
+        activeDialog.querySelectorAll<HTMLElement>(
           'button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])',
         ),
       );
@@ -100,6 +236,106 @@ export function SettingsDialog({
       previousFocusRef.current?.focus({ preventScroll: true });
     };
   }, [open]);
+
+  useEffect(() => {
+    interfaceCustomizationOpenRef.current = interfaceCustomizationOpen;
+    if (!interfaceCustomizationOpen) return;
+    const frame = window.requestAnimationFrame(() => {
+      interfaceCustomizationDialogRef.current
+        ?.querySelector<HTMLElement>("button, input")
+        ?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [interfaceCustomizationOpen]);
+
+  useEffect(() => {
+    if (open) return;
+    interfaceCustomizationOpenRef.current = false;
+    setInterfaceCustomizationOpen(false);
+  }, [open]);
+
+  const openInterfaceCustomization = () => {
+    interfaceCustomizationOpenRef.current = true;
+    setInterfaceCustomizationOpen(true);
+  };
+  const closeInterfaceCustomization = () => {
+    interfaceCustomizationOpenRef.current = false;
+    setInterfaceCustomizationOpen(false);
+  };
+
+  const saveConfiguration = async () => {
+    if (configurationBusy) return;
+    setConfigurationBusy(true);
+    setConfigurationStatus("");
+    try {
+      const configuration = await buildVisualTexConfiguration();
+      const contents = JSON.stringify(configuration, null, 2);
+      const filename = configurationFilename();
+      if (isTauri()) {
+        const selectedPath = await save({
+          defaultPath: filename,
+          filters: [
+            {
+              name: "VisualTeX Configuration",
+              extensions: [VISUALTEX_CONFIGURATION_EXTENSION],
+            },
+          ],
+        });
+        if (!selectedPath) return;
+        const path = selectedPath.toLowerCase().endsWith(`.${VISUALTEX_CONFIGURATION_EXTENSION}`)
+          ? selectedPath
+          : `${selectedPath}.${VISUALTEX_CONFIGURATION_EXTENSION}`;
+        await invoke("write_export_file", {
+          path,
+          dataBase64: encodeUtf8Base64(contents),
+        });
+      } else {
+        downloadConfigurationInBrowser(contents, filename);
+      }
+      setConfigurationStatus(
+        isEn ? "Configuration saved." : "配置文件已保存。",
+      );
+    } catch (reason) {
+      setConfigurationStatus(
+        reason instanceof Error
+          ? reason.message
+          : isEn
+            ? "Unable to save the configuration."
+            : "无法保存配置文件。",
+      );
+    } finally {
+      setConfigurationBusy(false);
+    }
+  };
+
+  const importConfigurationFile = async (
+    event: ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file || configurationBusy) return;
+    setConfigurationBusy(true);
+    setConfigurationStatus("");
+    try {
+      const configuration = parseVisualTexConfiguration(await file.text());
+      await applyVisualTexConfiguration(configuration);
+      setConfigurationStatus(
+        isEn
+          ? "Configuration imported. Reloading VisualTeX…"
+          : "配置已导入，正在重新载入 VisualTeX…",
+      );
+      window.setTimeout(() => window.location.reload(), 450);
+    } catch (reason) {
+      setConfigurationStatus(
+        reason instanceof Error
+          ? reason.message
+          : isEn
+            ? "Unable to import the configuration."
+            : "无法导入配置文件。",
+      );
+      setConfigurationBusy(false);
+    }
+  };
 
   if (!open) return null;
 
@@ -134,19 +370,11 @@ export function SettingsDialog({
               <BrainCircuit size={18} />
               <div>
                 <h3>{isEn ? "Personalized commands" : "个性化命令推荐"}</h3>
-                <p>
-                  {isEn
-                    ? "Rank suggestions using frequency, accepted prefixes and recency."
-                    : "根据使用频率、前缀选择和最近使用时间调整候选顺序。"}
-                </p>
               </div>
             </div>
             <label className="switch-row">
               <span>
                 <strong>{isEn ? "Enable personalized ranking" : "启用个性化排序"}</strong>
-                <small>
-                  {isEn ? "Turn off to restore the default order" : "关闭后恢复系统默认顺序"}
-                </small>
               </span>
               <input
                 type="checkbox"
@@ -185,11 +413,6 @@ export function SettingsDialog({
               <Keyboard size={18} />
               <div>
                 <h3>{isEn ? "Formula hotkeys" : "公式快捷键"}</h3>
-                <p>
-                  {isEn
-                    ? "Review the hotkeys assigned from formula tools and tiles."
-                    : "查看和管理通过公式工具与磁贴设置的快捷键。"}
-                </p>
               </div>
             </div>
             <button
@@ -207,21 +430,11 @@ export function SettingsDialog({
               <SlidersHorizontal size={18} />
               <div>
                 <h3>{isEn ? "Appearance & editor" : "外观与编辑"}</h3>
-                <p>
-                  {isEn
-                    ? "Appearance settings are saved automatically."
-                    : "外观设置会自动保存在当前设备。"}
-                </p>
               </div>
             </div>
             <div className="editor-layout-setting">
               <span>
                 <strong>{isEn ? "Editor layout" : "编辑器布局"}</strong>
-                <small>
-                  {isEn
-                    ? "Keep the current sidebar layout or use a classic bottom-tools layout."
-                    : "保留当前侧栏布局，或切换为底部工具栏与右侧磁贴的经典布局。"}
-                </small>
               </span>
               <div
                 className="theme-segment editor-layout-segment"
@@ -251,11 +464,6 @@ export function SettingsDialog({
             <div className="theme-choice-setting">
               <span>
                 <strong>{isEn ? "Colour theme" : "界面配色"}</strong>
-                <small>
-                  {isEn
-                    ? "Choose a complete semantic colour system for the app and formula canvas."
-                    : "选择整套界面、公式画布、Placeholder 与光标配色。"}
-                </small>
               </span>
               <div
                 className="theme-segment theme-choice-segment"
@@ -294,11 +502,6 @@ export function SettingsDialog({
                 <strong>
                   {isEn ? "Auto-pair delimiters" : "自动补全成对符号"}
                 </strong>
-                <small>
-                  {isEn
-                    ? "Automatically add the matching bracket, brace or vertical bar"
-                    : "输入括号、花括号或竖线时自动添加匹配符号"}
-                </small>
               </span>
               <input
                 type="checkbox"
@@ -318,11 +521,75 @@ export function SettingsDialog({
                 type="range"
                 min="0.5"
                 max="1.6"
-                step="0.1"
+                step={EDITOR_ZOOM_STEP}
                 value={zoom}
                 onChange={(event) => setZoom(Number(event.target.value))}
               />
             </label>
+          </div>
+
+          <div className="settings-section">
+            <button
+              type="button"
+              className="settings-subdialog-trigger"
+              data-interface-customization-trigger
+              onClick={openInterfaceCustomization}
+            >
+              <Eye size={18} />
+              <span>
+                <strong>{isEn ? "Interface customization" : "界面自定义"}</strong>
+              </span>
+              <ChevronRight size={18} aria-hidden="true" />
+            </button>
+          </div>
+
+          <div className="settings-section" data-configuration-transfer>
+            <div className="settings-section-title">
+              <Download size={18} />
+              <div>
+                <h3>{isEn ? "Configuration backup" : "配置备份与迁移"}</h3>
+                <p>
+                  {isEn
+                    ? "Save your VisualTeX preferences, tiles, hotkeys, colours, fonts and window sizes, then restore them on another installation."
+                    : "保存 VisualTeX 的设置、磁贴、快捷键、颜色、字体和窗口尺寸，可在另一台设备或新安装中直接恢复。"}
+                </p>
+              </div>
+            </div>
+            <div className="configuration-transfer-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                data-save-configuration
+                disabled={configurationBusy}
+                onClick={() => void saveConfiguration()}
+              >
+                <Download size={15} />
+                {isEn ? "Save current configuration" : "保存目前配置"}
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                data-import-configuration
+                disabled={configurationBusy}
+                onClick={() => configurationInputRef.current?.click()}
+              >
+                <Upload size={15} />
+                {isEn ? "Import configuration" : "导入配置"}
+              </button>
+              <input
+                ref={configurationInputRef}
+                className="configuration-file-input"
+                type="file"
+                accept={`.${VISUALTEX_CONFIGURATION_EXTENSION},application/json`}
+                onChange={importConfigurationFile}
+                tabIndex={-1}
+              />
+            </div>
+            {configurationStatus && (
+              <p className="configuration-transfer-status" role="status">
+                {configurationStatus}
+              </p>
+            )}
           </div>
 
           <div className="settings-section">
@@ -469,6 +736,448 @@ export function SettingsDialog({
             {isEn ? "Done" : "完成"}
           </button>
         </footer>
+
+        {interfaceCustomizationOpen && (
+          <div
+            className="settings-subdialog-backdrop"
+            role="presentation"
+            onMouseDown={(event) => {
+              event.stopPropagation();
+              closeInterfaceCustomization();
+            }}
+          >
+            <section
+              ref={interfaceCustomizationDialogRef}
+              className="settings-subdialog"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="interface-customization-title"
+              data-interface-customization-dialog
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              <header className="dialog-header">
+                <div>
+                  <span className="eyebrow">INTERFACE</span>
+                  <h2 id="interface-customization-title">
+                    {isEn ? "Interface customization" : "界面自定义"}
+                  </h2>
+                </div>
+                <button
+                  type="button"
+                  className="icon-button"
+                  data-interface-customization-close
+                  onClick={closeInterfaceCustomization}
+                  aria-label={
+                    isEn
+                      ? "Close interface customization"
+                      : "关闭界面自定义"
+                  }
+                >
+                  <X size={18} />
+                </button>
+              </header>
+
+              <div className="settings-subdialog-content">
+                <label className="switch-row">
+                  <span>
+                    <strong>
+                      {isEn
+                        ? "Highlight formula rows"
+                        : "高亮当前公式行"}
+                    </strong>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={highlightActiveLine}
+                    data-highlight-active-line-setting
+                    onChange={(event) =>
+                      setHighlightActiveLine(event.target.checked)
+                    }
+                  />
+                  <span className="switch-control" />
+                </label>
+
+                <label className="switch-row">
+                  <span>
+                    <strong>
+                      {isEn
+                        ? "Show formula row numbers"
+                        : "显示公式行序号"}
+                    </strong>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={showLineNumbers}
+                    data-show-line-numbers-setting
+                    onChange={(event) =>
+                      setShowLineNumbers(event.target.checked)
+                    }
+                  />
+                  <span className="switch-control" />
+                </label>
+
+                <section
+                  className="formula-toolbar-customization"
+                  aria-labelledby="formula-toolbar-customization-title"
+                >
+                  <header className="formula-inset-customization-header">
+                    <div>
+                      <strong id="formula-toolbar-customization-title">
+                        {isEn
+                          ? "Formula toolbar buttons"
+                          : "公式工具栏按钮"}
+                      </strong>
+                    </div>
+                    <button
+                      type="button"
+                      className="secondary-button formula-inset-reset"
+                      data-formula-tool-button-reset="true"
+                      onClick={() => {
+                        setFormulaToolButtonSize(
+                          DEFAULT_FORMULA_TOOL_BUTTON_SIZE,
+                        );
+                        setFormulaToolButtonPadding(
+                          DEFAULT_FORMULA_TOOL_BUTTON_PADDING,
+                        );
+                      }}
+                    >
+                      {isEn ? "Reset" : "恢复默认"}
+                    </button>
+                  </header>
+
+                  <div className="formula-inset-range-grid">
+                    <label className="range-setting formula-inset-range">
+                      <span>
+                        <strong>{isEn ? "Button size" : "按钮尺寸"}</strong>
+                        <small>{formulaToolButtonSize}px</small>
+                      </span>
+                      <input
+                        type="range"
+                        min={MIN_FORMULA_TOOL_BUTTON_SIZE}
+                        max={MAX_FORMULA_TOOL_BUTTON_SIZE}
+                        step="1"
+                        value={formulaToolButtonSize}
+                        data-formula-tool-button-size-setting
+                        onChange={(event) =>
+                          setFormulaToolButtonSize(Number(event.target.value))
+                        }
+                      />
+                    </label>
+                    <label className="range-setting formula-inset-range">
+                      <span>
+                        <strong>
+                          {isEn ? "Content inset" : "字符边距"}
+                        </strong>
+                        <small>{formulaToolButtonPadding}px</small>
+                      </span>
+                      <input
+                        type="range"
+                        min={MIN_FORMULA_TOOL_BUTTON_PADDING}
+                        max={MAX_FORMULA_TOOL_BUTTON_PADDING}
+                        step="1"
+                        value={formulaToolButtonPadding}
+                        data-formula-tool-button-padding-setting
+                        onChange={(event) =>
+                          setFormulaToolButtonPadding(
+                            Number(event.target.value),
+                          )
+                        }
+                      />
+                    </label>
+                  </div>
+                </section>
+
+                <section
+                  className="formula-inset-customization"
+                  aria-labelledby="formula-inset-customization-title"
+                >
+                  <header className="formula-inset-customization-header">
+                    <div>
+                      <strong id="formula-inset-customization-title">
+                        {isEn
+                          ? "Formula area spacing"
+                          : "公式区间距"}
+                      </strong>
+                    </div>
+                    <button
+                      type="button"
+                      className="secondary-button formula-inset-reset"
+                      data-formula-inset-reset="true"
+                      onClick={() => {
+                        setFormulaInsetLeft(DEFAULT_FORMULA_INSET);
+                        setFormulaInsetRight(DEFAULT_FORMULA_INSET);
+                        setFormulaRowVerticalInset(
+                          DEFAULT_FORMULA_ROW_VERTICAL_INSET,
+                        );
+                      }}
+                    >
+                      {isEn ? "Reset" : "恢复默认"}
+                    </button>
+                  </header>
+
+                  <div className="formula-inset-range-grid">
+                    <label className="range-setting formula-inset-range">
+                      <span>
+                        <strong>{isEn ? "Left spacing" : "左侧距离"}</strong>
+                        <small>{formulaInsetLeft}px</small>
+                      </span>
+                      <input
+                        type="range"
+                        min={MIN_FORMULA_INSET}
+                        max={MAX_FORMULA_INSET}
+                        step="1"
+                        value={formulaInsetLeft}
+                        data-formula-inset-left-setting
+                        onChange={(event) =>
+                          setFormulaInsetLeft(Number(event.target.value))
+                        }
+                      />
+                    </label>
+                    <label className="range-setting formula-inset-range">
+                      <span>
+                        <strong>{isEn ? "Right spacing" : "右侧距离"}</strong>
+                        <small>{formulaInsetRight}px</small>
+                      </span>
+                      <input
+                        type="range"
+                        min={MIN_FORMULA_INSET}
+                        max={MAX_FORMULA_INSET}
+                        step="1"
+                        value={formulaInsetRight}
+                        data-formula-inset-right-setting
+                        onChange={(event) =>
+                          setFormulaInsetRight(Number(event.target.value))
+                        }
+                      />
+                    </label>
+                    <label className="range-setting formula-inset-range">
+                      <span>
+                        <strong>
+                          {isEn ? "Formula row vertical spacing" : "公式行上下距离"}
+                        </strong>
+                        <small>{formulaRowVerticalInset}px</small>
+                      </span>
+                      <input
+                        type="range"
+                        min={MIN_FORMULA_ROW_VERTICAL_INSET}
+                        max={MAX_FORMULA_ROW_VERTICAL_INSET}
+                        step="1"
+                        value={formulaRowVerticalInset}
+                        data-formula-row-vertical-inset-setting
+                        onChange={(event) =>
+                          setFormulaRowVerticalInset(Number(event.target.value))
+                        }
+                      />
+                    </label>
+                  </div>
+
+                  <div
+                    className="formula-inset-preview-window"
+                    data-formula-inset-preview
+                    style={
+                      {
+                        "--preview-formula-inset-left": `${formulaInsetLeft}px`,
+                        "--preview-formula-inset-right": `${formulaInsetRight}px`,
+                        "--preview-toolbar-button-size": `${formulaToolButtonSize}px`,
+                        "--preview-toolbar-button-padding": `${formulaToolButtonPadding}px`,
+                        "--preview-formula-row-vertical-inset": `${formulaRowVerticalInset}px`,
+                      } as CSSProperties
+                    }
+                  >
+                    <div className="formula-inset-preview-titlebar">
+                      <i />
+                      <i />
+                      <i />
+                      <span>{isEn ? "Live preview" : "实时预览"}</span>
+                    </div>
+                    <div className="formula-inset-preview-toolbar">
+                      <span>
+                        <MathPreview
+                          latex={String.raw`\frac{a}{b}`}
+                          fit
+                          maximumFitScale={1}
+                          fitInsetRatio={0.9}
+                        />
+                      </span>
+                      <span>
+                        <MathPreview
+                          latex={String.raw`\sqrt{x}`}
+                          fit
+                          maximumFitScale={1}
+                          fitInsetRatio={0.9}
+                        />
+                      </span>
+                      <span>
+                        <MathPreview
+                          latex={String.raw`\int_a^b`}
+                          fit
+                          maximumFitScale={1}
+                          fitInsetRatio={0.9}
+                        />
+                      </span>
+                    </div>
+                    <div className="formula-inset-preview-canvas">
+                      <div className="formula-inset-preview-row">
+                        <MathPreview
+                          latex={String.raw`x=\frac{-b\pm\sqrt{b^2-4ac}}{2a}`}
+                          fit
+                          maximumFitScale={1}
+                          fitInsetRatio={0.88}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                <section
+                  className="formula-font-customization"
+                  aria-labelledby="formula-font-customization-title"
+                >
+                  <header className="formula-inset-customization-header">
+                    <div>
+                      <strong id="formula-font-customization-title">
+                        {isEn ? "Formula fonts" : "可视化公式字体"}
+                      </strong>
+                    </div>
+                    <button
+                      type="button"
+                      className="secondary-button formula-inset-reset"
+                      data-formula-font-reset
+                      onClick={() => {
+                        setFormulaLetterFont(DEFAULT_FORMULA_LETTER_FONT);
+                        setFormulaChineseFont(DEFAULT_FORMULA_CHINESE_FONT);
+                      }}
+                    >
+                      {isEn ? "Reset" : "恢复默认"}
+                    </button>
+                  </header>
+
+                  <div className="formula-font-select-grid">
+                    <label className="formula-font-setting">
+                      <span>
+                        <strong>{isEn ? "Math letter font" : "数学字母字体"}</strong>
+                      </span>
+                      <select
+                        value={formulaLetterFont}
+                        data-formula-letter-font-setting
+                        onChange={(event) =>
+                          setFormulaLetterFont(
+                            event.currentTarget.value as FormulaLetterFont,
+                          )
+                        }
+                      >
+                        {FORMULA_LETTER_FONT_OPTIONS.map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {item.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label className="formula-font-setting">
+                      <span>
+                        <strong>{isEn ? "Chinese font" : "中文字体"}</strong>
+                      </span>
+                      <select
+                        value={formulaChineseFont}
+                        data-formula-chinese-font-setting
+                        onChange={(event) =>
+                          setFormulaChineseFont(
+                            event.currentTarget.value as FormulaChineseFont,
+                          )
+                        }
+                      >
+                        {FORMULA_CHINESE_FONT_OPTIONS.map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {isEn ? item.labelEn : item.labelZh}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+
+                  <div
+                    className="formula-font-live-preview"
+                    data-formula-font-preview
+                    style={
+                      {
+                        "--visualtex-formula-upright-font-family":
+                          formulaLetterFamilies.upright,
+                        "--visualtex-formula-italic-font-family":
+                          formulaLetterFamilies.italic,
+                        "--visualtex-formula-chinese-font-family":
+                          formulaChineseFamily,
+                      } as CSSProperties
+                    }
+                  >
+                    <span>{isEn ? "Live preview" : "实时预览"}</span>
+                    <MathPreview
+                      latex={String.raw`E=mc^2,\quad \alpha+\beta=\gamma,\quad \text{中文公式}`}
+                      staticLayout
+                    />
+                  </div>
+                </section>
+
+                <section
+                  className="png-background-customization"
+                  aria-labelledby="png-background-customization-title"
+                >
+                  <header className="formula-inset-customization-header">
+                    <div>
+                      <strong id="png-background-customization-title">
+                        {isEn ? "PNG background" : "PNG 背景颜色"}
+                      </strong>
+                    </div>
+                  </header>
+                  <div className="png-background-controls">
+                    <button
+                      type="button"
+                      className={`png-background-transparent${pngExportBackground === "transparent" ? " is-active" : ""}`}
+                      data-png-background-transparent
+                      aria-pressed={pngExportBackground === "transparent"}
+                      onClick={() => setPngExportBackground("transparent")}
+                    >
+                      <span className="png-transparent-swatch" aria-hidden="true" />
+                      <span>
+                        <strong>{isEn ? "Transparent" : "透明"}</strong>
+                      </span>
+                    </button>
+                    <label
+                      className={`png-background-color${pngExportBackground !== "transparent" ? " is-active" : ""}`}
+                    >
+                      <input
+                        type="color"
+                        value={pngExportBackgroundPickerValue(pngExportBackground)}
+                        data-png-background-color-setting
+                        onChange={(event) =>
+                          setPngExportBackground(event.currentTarget.value as `#${string}`)
+                        }
+                      />
+                      <span>
+                        <strong>{isEn ? "Custom colour" : "自定义颜色"}</strong>
+                      </span>
+                    </label>
+                  </div>
+                </section>
+              </div>
+
+              <footer className="dialog-footer">
+                <span>
+                  {isEn
+                    ? "Changes apply immediately"
+                    : "修改会立即生效"}
+                </span>
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={closeInterfaceCustomization}
+                >
+                  {isEn ? "Done" : "完成"}
+                </button>
+              </footer>
+            </section>
+          </div>
+        )}
       </section>
     </div>
   );

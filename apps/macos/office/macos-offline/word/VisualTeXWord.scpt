@@ -7,6 +7,7 @@ use framework "Foundation"
 property runtimeSuffix : "Library/Application Scripts/com.microsoft.Word/VisualTeXRuntime"
 property maximumRelativePathLength : 1024
 property expectedHost : "word"
+property cachedVisualTeXExecutable : ""
 
 on OpenVisualTeXSession(sessionId)
     try
@@ -38,11 +39,98 @@ on WriteAndOpenVisualTeXSession(argumentText)
     end try
 end WriteAndOpenVisualTeXSession
 
+on WriteFormulaRestoreAndOpenVisualTeXSession(argumentText)
+    set startedAt to my monotonicSeconds()
+    try
+        set {requestedHost, sessionId, encodedRequest, encodedSource} to my splitQuadruple(argumentText as text)
+        set safeHost to my validateHostName(requestedHost)
+        set safeSessionId to my validateSessionId(sessionId)
+        set sessionDirectory to "OfficeSessions/" & safeSessionId
+        set requestPath to my absoluteRuntimePath(sessionDirectory & "/request.json")
+        set sourcePath to my absoluteRuntimePath(sessionDirectory & "/formula-restore-source.txt")
+        set validatedAt to my monotonicSeconds()
+        my writeEncodedFileAtomically(requestPath, encodedRequest)
+        my writeEncodedFileAtomically(sourcePath, encodedSource)
+        set writtenAt to my monotonicSeconds()
+        set visualTeXURL to "visualtex://office/open?session=" & safeSessionId
+        my launchVisualTeXURL(visualTeXURL)
+        set launchedAt to my monotonicSeconds()
+        return "ok|host=" & safeHost & ";validationMs=" & my elapsedMilliseconds(startedAt, validatedAt) & ";writeMs=" & my elapsedMilliseconds(validatedAt, writtenAt) & ";launchMs=" & my elapsedMilliseconds(writtenAt, launchedAt) & ";totalMs=" & my elapsedMilliseconds(startedAt, launchedAt)
+    on error errorMessage number errorNumber
+        return my errorResponse(errorNumber, errorMessage)
+    end try
+end WriteFormulaRestoreAndOpenVisualTeXSession
+
+on ConvertOmmlBatch(argumentText)
+    set startedAt to my monotonicSeconds()
+    try
+        set rawArgument to argumentText as text
+        if rawArgument contains "|" then
+            set {sessionId, encodedSource} to my splitPair(rawArgument)
+        else
+            set sessionId to rawArgument
+            set encodedSource to ""
+        end if
+        set safeSessionId to my validateSessionId(sessionId)
+        set sessionDirectory to "OfficeSessions/" & safeSessionId
+        set inputPath to my absoluteRuntimePath(sessionDirectory & "/formula-restore-source.txt")
+        set outputPath to my absoluteRuntimePath(sessionDirectory & "/omml-latex-result.txt")
+        if encodedSource is not "" then
+            my writeEncodedFileAtomically(inputPath, encodedSource)
+        end if
+        set writtenAt to my monotonicSeconds()
+        set executablePath to "/Applications/VisualTeX.app/Contents/MacOS/visualtex"
+        set fileManager to current application's NSFileManager's defaultManager()
+        if not ((fileManager's isExecutableFileAtPath:executablePath) as boolean) then
+            set executablePath to my runningVisualTeXExecutable()
+        end if
+        set errorPipe to current application's NSPipe's pipe()
+        set convertTask to current application's NSTask's alloc()'s init()
+        convertTask's setLaunchPath:executablePath
+        convertTask's setArguments:{"--office-omml-to-latex-batch", inputPath, outputPath}
+        convertTask's setStandardOutput:(current application's NSFileHandle's fileHandleWithNullDevice())
+        convertTask's setStandardError:errorPipe
+        convertTask's |launch|()
+        convertTask's waitUntilExit()
+        set finishedAt to my monotonicSeconds()
+        if (convertTask's terminationStatus() as integer) is not 0 then
+            set errorData to errorPipe's fileHandleForReading()'s readDataToEndOfFile()
+            set errorText to current application's NSString's alloc()'s initWithData:errorData encoding:(current application's NSUTF8StringEncoding)
+            if errorText is missing value then set errorText to "VisualTeX OMML conversion failed"
+            error (errorText as text) number 7130
+        end if
+        set resultData to current application's NSData's dataWithContentsOfFile:outputPath
+        if resultData is missing value or (resultData's |length|() as integer) is 0 then error "VisualTeX OMML conversion returned no result" number 7131
+        set encodedResult to (resultData's base64EncodedStringWithOptions:0) as text
+        set encodedResult to my replaceText(encodedResult, "+", "-")
+        set encodedResult to my replaceText(encodedResult, "/", "_")
+        repeat while encodedResult ends with "="
+            if (count characters of encodedResult) is 1 then
+                set encodedResult to ""
+            else
+                set encodedResult to text 1 thru -2 of encodedResult
+            end if
+        end repeat
+        return "ok|writeMs=" & my elapsedMilliseconds(startedAt, writtenAt) & ";convertMs=" & my elapsedMilliseconds(writtenAt, finishedAt) & ";totalMs=" & my elapsedMilliseconds(startedAt, finishedAt) & "|" & encodedResult
+    on error errorMessage number errorNumber
+        return my errorResponse(errorNumber, errorMessage)
+    end try
+end ConvertOmmlBatch
+
 on PrewarmVisualTeXApplication(hostName)
     set startedAt to my monotonicSeconds()
     try
         set safeHost to my validateHostName(hostName as text)
-        do shell script "/usr/bin/open -gj -b " & quoted form of "com.visualtex.studio" & " --args --office-background"
+        -- Reuse an already-running VisualTeX process. Calling `open` for a
+        -- visible desktop window reactivates the whole application and covers
+        -- Word during both cold startup and the first document open.
+        set executableSuffix to "/VisualTeX.app/Contents/MacOS/visualtex"
+        if my firstRunningVisualTeXExecutable(executableSuffix) is "" then
+            do shell script "/usr/bin/open -gj -b " & quoted form of "com.visualtex.studio" & " --args --office-background"
+        end if
+        -- Resolve and cache the executable while Office is starting, outside
+        -- the user-visible create/edit path.
+        set cachedVisualTeXExecutable to my runningVisualTeXExecutable()
         set finishedAt to my monotonicSeconds()
         return "ok|host=" & safeHost & ";prewarmMs=" & my elapsedMilliseconds(startedAt, finishedAt)
     on error errorMessage number errorNumber
@@ -162,17 +250,28 @@ on launchVisualTeXURL(visualTeXURL)
     -- Launch a short second process with the validated URL in argv. Tauri's
     -- single-instance Unix socket forwards argv to the already-prewarmed app;
     -- a LaunchServices URL AppleEvent would be lost when the second process
-    -- exits before RunEvent::Opened on macOS.
-    do shell script "/usr/bin/nohup " & quoted form of executablePath & space & quoted form of safeURL & " >/dev/null 2>&1 &"
+    -- exits before RunEvent::Opened on macOS. NSTask avoids an extra shell,
+    -- nohup and redirection process on every editor open.
+    set launchTask to current application's NSTask's alloc()'s init()
+    launchTask's setLaunchPath:executablePath
+    launchTask's setArguments:{safeURL}
+    launchTask's setStandardOutput:(current application's NSFileHandle's fileHandleWithNullDevice())
+    launchTask's setStandardError:(current application's NSFileHandle's fileHandleWithNullDevice())
+    launchTask's |launch|()
 end launchVisualTeXURL
 
 on runningVisualTeXExecutable()
+    if cachedVisualTeXExecutable is not "" then return cachedVisualTeXExecutable
     set executableSuffix to "/VisualTeX.app/Contents/MacOS/visualtex"
     set standardExecutable to "/Applications/VisualTeX.app/Contents/MacOS/visualtex"
     set runningExecutable to my firstRunningVisualTeXExecutable(executableSuffix)
-    if runningExecutable is not "" then return runningExecutable
+    if runningExecutable is not "" then
+        set cachedVisualTeXExecutable to runningExecutable
+        return runningExecutable
+    end if
     try
         do shell script "/bin/test -x " & quoted form of standardExecutable
+        set cachedVisualTeXExecutable to standardExecutable
         return standardExecutable
     end try
     repeat with attemptIndex from 1 to 40
@@ -181,7 +280,10 @@ on runningVisualTeXExecutable()
         end if
         delay 0.05
         set runningExecutable to my firstRunningVisualTeXExecutable(executableSuffix)
-        if runningExecutable is not "" then return runningExecutable
+        if runningExecutable is not "" then
+            set cachedVisualTeXExecutable to runningExecutable
+            return runningExecutable
+        end if
     end repeat
     error "The prewarmed VisualTeX executable is not running" number 7128
 end runningVisualTeXExecutable
@@ -221,21 +323,16 @@ on isDecimalProcessId(candidate)
 end isDecimalProcessId
 
 on writeEncodedFileAtomically(targetPath, encodedData)
-    set temporaryPath to ""
     try
-        set parentPath to do shell script "/usr/bin/dirname " & quoted form of targetPath
+        set parentPath to ((current application's NSString's stringWithString:targetPath)'s stringByDeletingLastPathComponent()) as text
         my ensureDirectory(parentPath)
         set normalizedData to my normalizeBase64Url(encodedData)
-        set temporaryPath to do shell script "/usr/bin/mktemp " & quoted form of (targetPath & ".tmp.XXXXXX")
-        do shell script "/usr/bin/printf %s " & quoted form of normalizedData & " | /usr/bin/base64 -D > " & quoted form of temporaryPath
-        do shell script "/bin/chmod 600 " & quoted form of temporaryPath & " && /bin/mv -f " & quoted form of temporaryPath & space & quoted form of targetPath
-        set temporaryPath to ""
+        set decodedData to current application's NSData's alloc()'s initWithBase64EncodedString:normalizedData options:0
+        if decodedData is missing value then error "VisualTeX file bridge Base64URL payload is invalid" number 7125
+        set writeSucceeded to (decodedData's writeToFile:targetPath atomically:true) as boolean
+        if not writeSucceeded then error "VisualTeX could not write the local Session request" number 7129
+        do shell script "/bin/chmod 600 " & quoted form of targetPath
     on error errorMessage number errorNumber
-        if temporaryPath is not "" then
-            try
-                do shell script "/bin/rm -f " & quoted form of temporaryPath
-            end try
-        end if
         error errorMessage number errorNumber
     end try
 end writeEncodedFileAtomically
@@ -269,6 +366,15 @@ on splitTriple(value)
     if (count fields) is not 3 then error "VisualTeX write-and-launch payload is invalid" number 7126
     return {item 1 of fields, item 2 of fields, item 3 of fields}
 end splitTriple
+
+on splitQuadruple(value)
+    set previousDelimiters to AppleScript's text item delimiters
+    set AppleScript's text item delimiters to "|"
+    set fields to text items of value
+    set AppleScript's text item delimiters to previousDelimiters
+    if (count fields) is not 4 then error "VisualTeX formula-restore write-and-launch payload is invalid" number 7127
+    return {item 1 of fields, item 2 of fields, item 3 of fields, item 4 of fields}
+end splitQuadruple
 
 on normalizeBase64Url(encodedData)
     set normalizedData to my replaceText(encodedData as text, "-", "+")

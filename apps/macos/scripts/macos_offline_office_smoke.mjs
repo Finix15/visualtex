@@ -43,6 +43,7 @@ const requiredFiles = [
   "office/macos-offline/powerpoint/customUI14.xml",
   "office/macos-offline/powerpoint/VisualTeXPowerPoint.scpt",
   "src-tauri/src/office/macos_offline.rs",
+  "src-tauri/src/office/omml_batch.rs",
   "src-tauri/src/office/background.rs",
   "src-tauri/src/office/macos_offline_installer.rs",
   "src-tauri/Info.macos.plist",
@@ -80,6 +81,7 @@ const launcher = read("office/macos-offline/shared/VTLauncher.bas");
 const wordScript = read("office/macos-offline/word/VisualTeXWord.scpt");
 const powerpointScript = read("office/macos-offline/powerpoint/VisualTeXPowerPoint.scpt");
 const rustRuntime = read("src-tauri/src/office/macos_offline.rs");
+const ommlBatchRuntime = read("src-tauri/src/office/omml_batch.rs");
 const backgroundRuntime = read("src-tauri/src/office/background.rs");
 const nativeInteraction = read("src-tauri/src/office/powerpoint_native.rs");
 const appRuntime = read("src-tauri/src/lib.rs");
@@ -91,6 +93,25 @@ const documentImportWordIntegration = read(
 const nativeHtml = read("office-native-dialog.html");
 const nativeMain = read("src/office/native-dialog-main.tsx");
 const dialogApp = read("src/office/dialog/OfficeDialogApp.tsx");
+const formulaRenderArtifacts = read(
+  "src/office/shared/formulaRenderArtifacts.ts",
+);
+const editorWorkspace = read("src/workspace/EditorWorkspace.tsx");
+const mathEditor = read("src/editor/MathEditor.tsx");
+const workspacePanelPreferences = read(
+  "src/workspace/workspacePanelPreferences.ts",
+);
+const editorStore = read("src/stores/editorStore.ts");
+const settingsDialog = read("src/components/SettingsDialog.tsx");
+const applicationConfiguration = read(
+  "src/runtime/applicationConfiguration.ts",
+);
+const formulaToolbar = read("src/toolbar/FormulaToolbar.tsx");
+const additionalCommands = read("src/autocomplete/additionalCommands.ts");
+const toolbarCommandOmmlRegression = read(
+  "scripts/toolbar_command_omml_regression.mjs",
+);
+const styles = read("src/styles.css");
 const dialogMessages = read("src/office/dialog/dialogMessages.ts");
 const documentImportApp = read(
   "src/office/documentImport/OfficeDocumentImportApp.tsx",
@@ -98,6 +119,7 @@ const documentImportApp = read(
 const wordLatexRedrawApp = read("src/office/redraw/WordLatexRedrawApp.tsx");
 const wordLatexRedrawParser = read("src/office/redraw/wordLatexRedrawParser.ts");
 const wordLatexRedrawRenderer = read("src/office/redraw/wordLatexRedrawRenderer.ts");
+const mathMlToLatex = read("src/office/redraw/mathMlToLatex.ts");
 const tauriTransport = read("src/office/shared/tauriTransport.ts");
 const capabilities = read("src-tauri/capabilities/default.json");
 const infoPlist = read("src-tauri/Info.macos.plist");
@@ -119,6 +141,10 @@ for (const callback of [
   "VTWordRibbonNumbering",
   "VTWordRibbonCrossReference",
   "VTWordRibbonOpen",
+  "VTWordRibbonRestoreSelectionOmmlToLatex",
+  "VTWordRibbonRestoreSelectionImageToLatex",
+  "VTWordRibbonRestoreDocumentOmmlToLatex",
+  "VTWordRibbonRestoreDocumentImageToLatex",
 ]) {
   expectIncludes(wordRibbon, `onAction=\"${callback}\"`, `Word Ribbon is missing ${callback}`);
 }
@@ -276,8 +302,9 @@ expectIncludes(wordAdapter, "nativeEquation", "Word requests must preserve the d
 expectIncludes(wordAdapter, "VT_WORD_IMAGE_SCALE_VARIABLE_PREFIX", "Word must persist formula point size and reference image geometry per formula id");
 expectIncludes(wordAdapter, "VTPreferredWordFormulaFontSize(Selection.Range.Duplicate)", "New Word formulas must inherit the current selection point size");
 expectIncludes(wordEvents, "VisualTeX_SynchronizeSelectedImageFormulaSize Sel", "Word selection changes must synchronize the point-size drop-down with image geometry");
-expectIncludes(wordAdapter, "Abs(currentWordFontSizePt - normalFontSizePt) <= 0.05", "Word image selection must ignore the Normal-style font size that macOS reports for a selected InlineShape");
-expectIncludes(wordAdapter, "Abs(formulaShape.Width - expectedWidthPt) <= 0.5", "Word must ignore that selection font artifact only while the stored image geometry is unchanged");
+expect(!wordAdapter.includes("currentWordFontSizePt - normalFontSizePt"), "Word image selection must not depend on the document Normal style when detecting a transient selected-InlineShape font value");
+expectIncludes(wordAdapter, "Geometry is", "Word image selection must treat persisted image geometry as the authoritative point-size signal");
+expectIncludes(wordAdapter, "Abs(formulaShape.Width - expectedWidthPt) <= 0.5", "Word must ignore a transient selected-InlineShape font value while the stored image geometry is unchanged");
 expectIncludes(wordAdapter, 'name:="VisualTeX_WatchSelectedImageFormulaSize"', "Word must run a lightweight selected-image point-size watcher when events are insufficient");
 expectIncludes(wordAdapter, "formulaShape.Range.Font.Size = CSng(requestedFontSizePt)", "The shared scaling path must attempt the native Word Range.Font.Size property");
 expectIncludes(wordAdapter, "formulaShape.Width = CSng(targetWidth)", "Image formula point sizes must map to proportional width");
@@ -306,6 +333,63 @@ expectIncludes(wordAdapter, 'VTRequireDispatchValue dispatch, "vectorDocumentPat
 expectIncludes(wordAdapter, 'fallbackImagePath = VTDispatchOptional', "Word must retain the PNG preview only as an image-formula compatibility fallback");
 expectIncludes(wordAdapter, "VTProbeInlineShapeRangeFontSizeBehavior", "Word must expose a real-host probe for InlineShape.Range.Font.Size behavior");
 expectIncludes(wordAdapter, "VisualTeX_ConvertSelectedToImageFormula", "Native OMML formulas must support conversion back to an image formula");
+expectIncludes(wordAdapter, "ElseIf VTWordConvertNativeBookmarkToImageFast(nativeBookmark) Then", "Unmodified unnumbered VisualTeX OMML must use the formula-scoped cached image fast path");
+expectIncludes(wordAdapter, 'VTWordOpenNativeSession nativeBookmark, False, "nativeToImage"', "Modified, numbered, legacy, or uncached OMML must retain the dedicated silent automatic fallback instead of a visible edit Session");
+expectIncludes(wordAdapter, "VTWordNativeSignatureMatches", "The cached OMML-to-image path must reject stale image artifacts after native Word edits");
+expectIncludes(wordAdapter, "cached SVG drawing and all formula metadata are validated", "OMML-to-image fast conversion must keep the source OMath live until its cached picture is validated");
+expectIncludes(metadata, 'Optional ByVal operationName As String = "formula"', "Formula requests must carry an explicit immutable operation discriminator");
+expectIncludes(metadata, '"""operation"":" & VTJsonString(operationName)', "The VBA request must serialize the direct conversion operation for the native runtime");
+expectIncludes(rustRuntime, '"formula" | "nativeToImage" | "imageToNative"', "The native runtime must validate both dedicated direct-conversion operations");
+expectIncludes(rustRuntime, "fn word_image_cache_paths", "Every Word formula export must have a formula-scoped SVG package cache for sub-second OMML-to-image conversion");
+expectIncludes(rustRuntime, "let prepared_image_artifacts = materialize_word_svg_package", "Native OMML commits must refresh their future image-conversion cache without changing the current output kind");
+expectIncludes(rustRuntime, 'Some("nativeToImage" | "imageToNative")', "The native URL handler must route both direct conversions through the parked renderer");
+expectIncludes(rustRuntime, "if !silent {\n        wake_resident_editor_for_hydration", "Only ordinary Office editing may reveal the resident editor during hydration");
+expectIncludes(dialogApp, 'session.operation !== "nativeToImage" &&', "The resident frontend must detect silent native-to-image Sessions");
+expectIncludes(dialogApp, 'session.operation !== "imageToNative"', "The resident frontend must detect silent image-to-native Sessions");
+expectIncludes(dialogApp, "void handleCommit().then", "A silent direct-conversion Session must commit automatically after hydration");
+expectIncludes(dialogApp, "await cancelMacosOfflineOfficeSession(session.id)", "A failed direct conversion must cancel without revealing the formula editor");
+expect(!dialogApp.includes('"present_macos_offline_office_editor_window"'), "A failed direct conversion must never reveal the resident editor");
+expectIncludes(wordAdapter, 'VTWordEditInlineShape target, True, "imageToNative"', "A missing native staging DOCX must be regenerated by a silent image-to-native Session");
+expectIncludes(wordAdapter, "If VTWordConvertInlineShapeToNativeFast(selectedShape) Then Exit Sub", "The Ribbon image-to-OMML command must use the narrow cached fast path before any compatibility workflow");
+expectIncludes(wordAdapter, "VTWordConvertInlineShapeToNativeEquation selectedShape", "Numbered or legacy image formulas must retain the established compatible in-Word conversion transaction");
+expectIncludes(wordAdapter, "The image remains the rollback", "The cached image-to-OMML fast path must keep the source image live until the new OMath is validated");
+expectIncludes(wordAdapter, "Private Function VTInsertCachedNativeEquationFast", "Cached image-to-OMML conversion must use a local native insertion helper instead of the generic full-document scanner");
+expectIncludes(wordAdapter, "If probeRange.OMaths.Count <> 1 Then", "Cached native insertion must validate exactly one OMath near the insertion point");
+expectIncludes(wordAdapter, 'VTWordEditInlineShape target, True, "imageToNative"', "The cached image-to-OMML fast path must preserve the silent hidden-renderer fallback for older formulas without a native DOCX");
+expectIncludes(wordAdapter, "Private Function VTRestoreCachedImageFormulasToLatex", "VisualTeX image formulas with durable LaTeX payloads must restore without launching the hidden renderer");
+expectIncludes(wordAdapter, "Private Function VTRestoreCachedNativeFormulasToLatex", "Unmodified VisualTeX OMML formulas with durable LaTeX payloads must restore without launching the hidden renderer");
+expectIncludes(wordAdapter, "Private Function VTDocumentHasVisualTeXNativeBookmark", "Pure Word-native documents must skip the VisualTeX signature scan before OMML batch conversion");
+expectIncludes(wordAdapter, "If Not VTDocumentHasVisualTeXNativeBookmark(targetDocument) Then", "Cached native restoration must exit before enumerating OMath when no VisualTeX native identity exists");
+expectIncludes(wordAdapter, "Private Function VTTryRestoreOmmlBatchSynchronously", "Word-native or modified OMML formulas must use the synchronous no-window batch converter before the hidden fallback");
+expectIncludes(wordAdapter, "VTConvertOmmlBatch", "The Word VBA bridge must delegate OMML translation to the VisualTeX native converter");
+expectIncludes(wordAdapter, "Private Sub VTCommitSynchronousOmmlLatexResult", "Synchronous OMML conversion must use the lightweight transactional Word text replacement");
+expectIncludes(wordAdapter, "Private Function VTTryWriteOmmlBatchManifestDirect", "Word must write the ASCII-safe OMML batch manifest directly before using the AppleScript fallback");
+expectIncludes(wordAdapter, "VTParseDocumentImportManifestText", "Synchronous OMML conversion must parse the returned manifest in memory instead of rereading it through AppleScriptTask");
+expectIncludes(launcher, "Public Function VTConvertOmmlBatch", "The shared Word launcher must expose the synchronous OMML batch bridge");
+expectIncludes(launcher, "Optional ByVal restoreSource As String", "The compatibility OMML bridge must accept an already-written runtime manifest without re-encoding it");
+expectIncludes(wordScript, "on ConvertOmmlBatch(argumentText)", "The Word AppleScriptTask source must run the no-window OMML batch command");
+expectIncludes(wordScript, '"--office-omml-to-latex-batch"', "The Word AppleScriptTask source must invoke the reviewed native CLI argument");
+expectIncludes(wordScript, "base64EncodedStringWithOptions:0", "The Word AppleScriptTask source must return the native LaTeX result in the same bridge call");
+expectIncludes(wordScript, 'set executablePath to "/Applications/VisualTeX.app/Contents/MacOS/visualtex"', "The synchronous OMML converter must avoid per-call process discovery when the installed app is available");
+expectIncludes(rustRuntime, "pub(crate) fn word_omml_to_mathml", "The native batch converter must reuse the reviewed Word OMML-to-MathML transform");
+expectIncludes(ommlBatchRuntime, "pub fn run_cli_if_requested", "The native runtime must expose the no-window OMML batch CLI");
+expectIncludes(ommlBatchRuntime, "pub fn mathml_to_latex", "The native runtime must translate MathML to LaTeX without opening the frontend");
+expectIncludes(wordAdapter, "VTWordNativeSignatureMatches", "Cached native-to-LaTeX restoration must reject formulas modified by the Word native editor");
+expectIncludes(wordAdapter, "For itemIndex = formulaCount To 1 Step -1", "Bulk cached formula-to-LaTeX restoration must replace formulas from the end so Word ranges stay stable");
+expectIncludes(wordAdapter, "VTWriteFormulaRestoreAndLaunchSession", "Small native OMML restore requests must write both payloads and launch VisualTeX in one AppleScriptTask");
+expectIncludes(wordAdapter, "VT_WORD_FORMULA_RESTORE_COMBINED_MAX_BYTES", "Large formula restore manifests must retain the chunked compatibility fallback");
+expectIncludes(launcher, "Public Function VTWriteFormulaRestoreAndLaunchSession", "The shared Office launcher must expose the atomic formula-restore write-and-launch bridge");
+expectIncludes(wordScript, "on WriteFormulaRestoreAndOpenVisualTeXSession", "The Word AppleScriptTask must atomically write request and restore source before launching VisualTeX");
+expectIncludes(wordAdapter, "Set selectedShape = VTVisualTeXInlineShapeAtSelection(Selection)", "The image-to-OMML Ribbon command must resolve the selected formula without unsafe collection indexing");
+expect(!wordAdapter.includes("VTWordEditInlineShape target, True\n"), "Image-to-native conversion must not fall back to an ordinary visible edit Session");
+expectIncludes(wordAdapter, "VTDetachWordFormulaPictureFromMath", "Native-to-image conversion must detach the final picture from Word's OMath container");
+expectIncludes(wordAdapter, "VTDeleteTrailingNativeImageArtifact", "Native-to-image conversion must remove only its invisible trailing boundary characters");
+expectIncludes(wordAdapter, "trailingText = ChrW(8288)", "Native-to-image cleanup must explicitly remove Word's word-joiner artifact");
+expectIncludes(wordAdapter, "contentEnd = paragraphRange.End", "Native-to-image cleanup must resolve the real Word paragraph content boundary");
+expectIncludes(wordAdapter, "terminalSuffixRange.Fields.Count = 0", "Native-to-image cleanup must preserve every suffix containing a Word field");
+expectIncludes(wordAdapter, "Not VTWordRangeHasMeaningfulText(terminalSuffixRange)", "Only a whitespace-only terminal suffix may be removed after conversion");
+expectIncludes(wordAdapter, 'If displayMode = "inline" And mode = "create" Then', "Only a newly created inline native formula may manufacture an after-formula caret anchor");
+expectIncludes(wordAdapter, "Editing or direct conversion must not manufacture a U+2060 caret", "Existing formula conversion must preserve surrounding Word text without a synthetic caret character");
 expectIncludes(wordAdapter, "finalFormulaRange.Font.Size = CSng(sourceFontSizePt)", "Direct image-to-OMML conversion must preserve the source point size");
 expectIncludes(wordAdapter, "InlineShapes.AddPicture", "Word formula insertion must create an InlineShape");
 expectIncludes(wordAdapter, "placeholder.Width = 1", "Word pending placeholders must remain a one-pixel transaction target");
@@ -375,7 +459,7 @@ expectIncludes(wordAdapter, "Type:=wdFieldEmpty", "Numbered Word formulas must c
 expectIncludes(wordAdapter, "numberRange.Text <> \"(\" & expectedText & \")\"", "Single-paragraph verification must reject incomplete visible Equation parentheses");
 expectIncludes(wordAdapter, ".Font.Hidden = False", "The native Equation SEQ must remain non-hidden so Word for Mac produces a usable field result");
 expect(!wordAdapter.includes(".Font.Hidden = True"), "The native Equation numbering path must never hide the SEQ result with Word's Hidden font property");
-expectIncludes(wordAdapter, 'numberRange.Text <> "(" & expectedText & ")" Or _', "Image single-paragraph numbering must retain complete ordinary parentheses around the native SEQ result");
+expectIncludes(wordAdapter, 'numberRange.Text <> "(" & expectedNumberText & ")" Or _', "Image single-paragraph numbering must retain complete ordinary parentheses around the complete formatted Equation number");
 expectIncludes(wordAdapter, 'rightContent.Text = "()"', "Legacy right-cell formulas must retain ordinary parentheses around their native REF field");
 expectIncludes(wordAdapter, "VTRefreshEquationNumberMirror", "Numbering must refresh the native SEQ target and remove legacy mirror artifacts");
 expectIncludes(wordAdapter, "VTEquationSequenceFieldHasOrdinal", "Numbering must validate the native SEQ through its retained legal ordinal field code");
@@ -507,6 +591,12 @@ expectIncludes(wordAdapter, "VTIsDetachedVisualTeXNativeSequenceHelper", "Delete
 expectIncludes(wordAdapter, "Abs(.LeftIndent + 360!) > 0.2", "Detached native helper cleanup must require VisualTeX's unique off-margin paragraph signature");
 expectIncludes(wordAdapter, "VTPruneDetachedVisualTeXNativeSequenceHelpers documentObject", "Refresh numbering must remove detached native SEQ helpers before recounting fields");
 expectIncludes(wordAdapter, "sequenceAnchors() As Long", "Equation reconciliation must snapshot stable SEQ anchors before updating fields");
+expectIncludes(wordAdapter, "sequenceAnchors(previousIndex) > anchorValue", "Mixed image and OMML Equation helpers must be sorted by document anchor before ordinal assignment");
+expectIncludes(wordAdapter, "sequenceAnchors(sequenceCount) = _\n                            nativeFormulaRange.Start", "VisualTeX numbering must prefer the visible formula position over a potentially displaced helper-field position");
+expectIncludes(wordAdapter, "Private Function VTRepairMixedNumberHelperOrder", "Mixed image and OMML numbering must restore each native SEQ helper beside its visible formula before manual refresh");
+expectIncludes(wordAdapter, "helperParagraph.Start <> formulaParagraph.End", "A displaced Equation helper must be detected from the visible formula paragraph boundary");
+expectIncludes(wordAdapter, "movedHelpers = VTRepairMixedNumberHelperOrder", "Manual Equation refresh must repair mixed-format helper order before assigning ordinals");
+expectIncludes(wordAdapter, "sequenceBookmarkNames(previousIndex + 1) =", "Equation anchor sorting must keep each VT_N_ identity paired with its field position");
 expectIncludes(wordAdapter, "referenceAnchors() As Long", "Legacy visible REF reconciliation must snapshot stable anchors before rebuilding fields");
 expectIncludes(wordAdapter, "VTNormalizePlainWordParagraph paragraphRange", "Orphan cleanup must restore an ordinary body-text paragraph and caret");
 expectIncludes(wordAdapter, "Public Sub VisualTeX_WatchOrphanedNumberedDisplay()", "Word must run a lightweight adapter-local orphan watcher without adding another modified source module");
@@ -625,7 +715,106 @@ expect(!wordAdapter.includes('"Image-to-OMML conversion lost the surviving formu
 expectIncludes(wordAdapter, "Private Function VTHelperParagraphOwnsNativeEquationSequence", "Orphan cleanup must verify a helper paragraph owns exactly one native Equation SEQ before deleting it");
 expectIncludes(wordAdapter, "Private Sub VTPruneUnbookmarkedEmptyNumberTables", "Document-wide cleanup must remove empty VisualTeX number tables even after VT_R_ is lost");
 expectIncludes(wordAdapter, "Private Sub VTRepairLiveNumberedTableScaffolds", "Number refresh must repair missing VT_R_/VT_N_/VT_C_ for a still-live formula instead of deleting it");
-expectIncludes(wordAdapter, '"(" & CStr(ordinal) & ")  " & previewText', "The Equation picker must show each live number together with its formula preview");
+expectIncludes(wordAdapter, '"(" & Trim$(numberText) & ")  " & previewText', "The Equation picker must show each complete live number together with its formula preview");
+expectIncludes(wordAdapter, "VT_WORD_NUMBERING_MODE_CHAPTER", "Word must support document-level chapter Equation numbering");
+expectIncludes(wordAdapter, "VT_WORD_NUMBERING_MODE_SECTION", "Word must support document-level section Equation numbering");
+expectIncludes(wordAdapter, '" \\s " & CStr(restartLevel)', "Chapter and section Equation sequences must use Word's native heading-level reset switch");
+expectIncludes(wordAdapter, "VTRefreshFormattedSequenceBookmark", "Visible image, OMath and body references must share one complete formatted number Bookmark");
+expectIncludes(wordAdapter, "VTComparableEquationNumberText(expectedNumberText)", "Final native OMath acceptance must compare the visible REF with the complete formatted Equation number rather than the local ordinal only");
+expectIncludes(wordAdapter, 'If nativeEquation And numbered And mode = "create" Then', "A failed numbered OMML create must remove its formula-specific numbering scaffold before restoring the placeholder");
+expectIncludes(wordAdapter, "VTWordRibbonNumberingFormat", "Word must expose the Equation numbering-format Ribbon callback");
+expectIncludes(wordRibbon, 'label="编号格式"', "The compact Windows-parity Word Ribbon must expose the numbering-format command beside number refresh");
+expectIncludes(wordRibbon, 'onAction="VTWordRibbonNumberingFormat"', "The compact numbering-format control must retain its existing VBA callback");
+expectIncludes(wordRibbon, '<group id="VisualTeX.Mac.Word.Group" label="VisualTeX">', "The macOS Word Ribbon must use the Windows-parity primary VisualTeX group");
+for (const rowId of [
+  "VisualTeX.Mac.Word.ConvertRow",
+  "VisualTeX.Mac.Word.NumberingRow",
+  "VisualTeX.Mac.Word.ReferenceRow",
+]) {
+  expectIncludes(wordRibbon, `<box id="${rowId}" boxStyle="horizontal">`, `The compact Word Ribbon must define ${rowId}`);
+}
+expectIncludes(wordRibbon, 'id="VisualTeX.Mac.Word.NumberingFormat"', "Number format must remain in the dedicated compact numbering row");
+const compactConvertRow = wordRibbon.slice(
+  wordRibbon.indexOf('<box id="VisualTeX.Mac.Word.ConvertRow"'),
+  wordRibbon.indexOf('</box>', wordRibbon.indexOf('<box id="VisualTeX.Mac.Word.ConvertRow"')),
+);
+expect((compactConvertRow.match(/<button\b/g) ?? []).length === 2, "The first compact Ribbon row must contain only the two direct conversion commands");
+expectIncludes(wordRibbon, 'id="VisualTeX.Mac.Word.DocumentImport"\n                  label="批量导入"\n                  size="large"', "Batch import must be an independent large Ribbon button with the same visual weight as the primary formula commands");
+expect(!compactConvertRow.includes('id="VisualTeX.Mac.Word.DocumentImport"'), "Batch import must not remain compressed inside the small conversion row");
+const redesignedWordIcons = [
+  ["VisualTeXWordImageInline", "image-inline.svg"],
+  ["VisualTeXWordImageDisplay", "image-display.svg"],
+  ["VisualTeXWordOmmlInline", "omml-inline.svg"],
+  ["VisualTeXWordOmmlDisplay", "omml-display.svg"],
+  ["VisualTeXWordEditSelected", "edit-selected.svg"],
+  ["VisualTeXWordConvertOmml", "convert-omml.svg"],
+  ["VisualTeXWordConvertImage", "convert-image.svg"],
+  ["VisualTeXWordDocumentImport", "document-import.svg"],
+  ["VisualTeXWordUpdateNumbers", "update-numbers.svg"],
+  ["VisualTeXWordNumberingFormat", "numbering-format.svg"],
+  ["VisualTeXWordCrossReference", "cross-reference.svg"],
+  ["VisualTeXWordOpenApp", "open-visualtex.svg"],
+  ["VisualTeXWordRedrawSelection", "redraw-selection.svg"],
+  ["VisualTeXWordRedrawDocument", "redraw-document.svg"],
+];
+for (const [imageId, svgName] of redesignedWordIcons) {
+  expectIncludes(wordRibbon, `image="${imageId}"`, `The redesigned Word Ribbon must reference ${imageId}`);
+  expectIncludes(packager, `${imageId}: { svg: "${svgName}" }`, `The macOS packager must render the original VisualTeX SVG ${svgName}`);
+  const iconSource = read(`office/macos-offline/word/ribbon-icons/${svgName}`);
+  expectIncludes(iconSource, "#1F638E", `${svgName} must use the VisualTeX deep-blue brand color`);
+  expect(!iconSource.includes("#41474D") && !iconSource.includes("#7A8793"), `${svgName} must not retain the previous gray palette`);
+}
+expect(!/image="VisualTeXIcon(?:02|04|06|07|08|09)"/.test(wordRibbon), "The redesigned Word Ribbon must not reuse the previous macOS formula icon set");
+expect(!wordRibbon.includes("imageMso="), "Every visible VisualTeX Word command must use its own designed icon rather than a built-in Office icon");
+expectIncludes(packager, 'const wordRibbonIconRoot = join(offlineRoot, "word", "ribbon-icons")', "The Word packager must read the reviewed original SVG icon set");
+expectIncludes(packager, '"/usr/bin/sips"', "The Word packager must rasterize the original SVG artwork into embedded PNG Ribbon resources");
+expect(!packager.includes("windowsRibbonIconBytes"), "The Word packager must not reuse the Windows Ribbon icon data");
+expect(!packager.includes("RibbonIconData.cs"), "The Word packager must be independent from the old Windows icon source file");
+expectIncludes(wordRibbon, '<group id="VisualTeX.Mac.Word.RedrawGroup" label="LaTeX 重绘">', "LaTeX redraw must remain an independent Ribbon group after the primary tools");
+for (const label of [
+  "将 OMML 公式转为 LaTeX",
+  "将图片公式转为 LaTeX",
+  "将全文 OMML 公式转为 LaTeX",
+  "将全文图片公式转为 LaTeX",
+]) {
+  expectIncludes(wordRibbon, `label="${label}"`, `Word redraw menus must expose ${label}`);
+}
+expectIncludes(wordAdapter, "payload = sourceRange.WordOpenXML", "Native Word formulas must be restored from their current WordOpenXML instead of VisualTeX metadata");
+expectIncludes(wordAdapter, 'VTStartWordFormulaRestore "selection", "omml", "image"', "Native OMML without a VisualTeX Bookmark must use the hidden direct image conversion path");
+expectIncludes(wordAdapter, "VTTryResolveVisualTeXInlineShapeReference", "Image-to-LaTeX must accept only recoverable VisualTeX image formulas");
+expectIncludes(rustRuntime, '"/Applications/Microsoft Word.app/Contents/Resources/omml2mathml.xsl"', "Native OMML restoration must use Microsoft Word's own OMML-to-MathML stylesheet");
+expectIncludes(rustRuntime, 'Command::new("/usr/bin/xsltproc")', "Native OMML restoration must execute the reviewed local XSL transform without network access");
+expectIncludes(rustRuntime, '"formulaRestore"', "The native Office runtime must support the hidden formula restore operation");
+expectIncludes(wordLatexRedrawApp, 'request.operation === "formulaRestore"', "The hidden Word renderer must automatically process formula restore sessions");
+expectIncludes(wordLatexRedrawApp, 'displayMode === "block" ? `$$${latex}$$` : `$${latex}$`', "Restored LaTeX must use dollar delimiters for display and inline formulas");
+expectIncludes(mathMlToLatex, "export function mathMlToLatex", "The macOS frontend must contain a dedicated MathML-to-LaTeX converter");
+expectIncludes(mathMlToLatex, 'case "mfrac"', "The MathML converter must preserve Word fractions");
+expectIncludes(mathMlToLatex, 'case "msubsup"', "The MathML converter must preserve combined scripts");
+expectIncludes(styles, ".doc-import-primary:disabled", "The batch-import primary action must define a readable disabled state");
+expectIncludes(styles, "opacity: 1", "Batch-import disabled actions must not disappear through low global opacity");
+expectIncludes(styles, "border-top: 1px solid color-mix", "The batch-import footer must have a distinct high-contrast boundary");
+expectIncludes(wordRibbon, '<group id="VisualTeX.Mac.Word.FontSizeGroup" label="公式字号">', "Image formula point sizes must live in an independent Windows-parity Ribbon group");
+const numberingFormatStart = wordAdapter.indexOf(
+  "Public Sub VisualTeX_ConfigureEquationNumberingFormat()",
+);
+const numberingFormatEnd = wordAdapter.indexOf(
+  "Public Sub VisualTeX_UpdateEquationNumbers()",
+  numberingFormatStart,
+);
+const numberingFormatSource = wordAdapter.slice(
+  numberingFormatStart,
+  numberingFormatEnd,
+);
+expect(
+  numberingFormatStart >= 0 && numberingFormatEnd > numberingFormatStart,
+  "The Equation numbering-format procedure must remain discoverable for source-encoding regression checks",
+);
+expect(
+  !/[\u3400-\u9fff]/u.test(numberingFormatSource),
+  "The macOS VBA numbering-format dialog must generate every Chinese string through VTUnicodeText instead of source-code-page text",
+);
+expectIncludes(numberingFormatSource, "VTUnicodeText(", "The numbering-format dialog must construct its labels and prompts at runtime as Unicode");
+expectIncludes(wordAdapter, "numberFontSizePt = VTVisibleEquationNumberFontSize", "Image Equation numbers must use the same document-level number size as native OMath numbers");
 expectIncludes(wordAdapter, "sourceHeightPoints = target.Height", "Image-to-OMML conversion must preserve the source formula height for number alignment");
 expectIncludes(wordAdapter, "VTEnsureNativeEquationNumber", "Image-to-OMML conversion must rebuild the shared numbered table around the native formula");
 expectIncludes(wordAdapter, "target.Delete", "Word replacement must delete the old object only after candidate setup");
@@ -636,6 +825,12 @@ expectIncludes(wordAdapter, "insertionAnchor.Collapse wdCollapseEnd", "Word imag
 expectIncludes(wordAdapter, "Set sourceImage = VTFindUniqueInlineShape(encodedMetadata)", "Word image-to-native conversion must resolve a fresh picture object after hidden DOCX staging");
 expectIncludes(wordAdapter, "VTDeleteVisualTeXImageContainer sourceImage", "Word image-to-native conversion must transactionally remove either a current plain image or a legacy field container before resolving the final OMath Range");
 expectIncludes(wordAdapter, "sourceBackupRange.FormattedText", "Word image-to-native conversion must retain an exact source-image rollback copy");
+expectIncludes(wordAdapter, "replaceSourceContainer = (sourceContainerRange.OMaths.Count = 1)", "An image retained inside Word's empty OMath compatibility container must use an in-place replacement transaction");
+expectIncludes(wordAdapter, "If replaceSourceContainer Then", "Image-to-OMML conversion must branch between compatibility-container replacement and standalone-image insertion");
+expectIncludes(wordAdapter, "sourceContainerRange, _", "The compatibility-container path must replace the original formula Range rather than nesting a second OMath beside it");
+expectIncludes(wordAdapter, "Not VTIsVisualTeXInlineShape", "The image backup must validate the copied VisualTeX image identity without requiring a legacy Word Field wrapper");
+expect(!wordAdapter.includes("sourceBackupDocument.OMaths.Count <> 0"), "The image backup must accept a VisualTeX picture that Word keeps inside an empty OMath compatibility container");
+expect(!wordAdapter.includes("sourceBackupDocument.Fields.Count <> 1"), "Current plain VisualTeX images must not fail conversion merely because they have no legacy Field wrapper");
 expectIncludes(wordAdapter, "replacementBackupRange.FormattedText", "Word native Range replacement must keep a formatted backup for rollback");
 expectIncludes(wordAdapter, "Documents.Open( _", "Word native conversion must open a real DOCX staging package");
 expectIncludes(wordAdapter, "FileName:=nativeDocumentPath", "Word native conversion must use the Session's native DOCX path");
@@ -773,7 +968,8 @@ expect(!wordAdapter.includes("originalNativeMath.Range.Delete"), "Word replaceme
 expect(!wordAdapter.includes("candidate.Range.End + originalNativeLength"), "Word replacement must not reconstruct a deletion Range from stale OMath length arithmetic");
 expectIncludes(wordAdapter, "VTSetNativeFormulaBookmark", "Word native formulas must retain a persistent VisualTeX identity bookmark");
 expectIncludes(wordAdapter, "VTSetWordMetadataPayload", "Word native formulas must retain their complete VisualTeX edit metadata");
-expect(!wordAdapter.includes("VTWordConvertNativeBookmarkToImage"), "Word conversion must remain one-way from a VisualTeX image to native OMML");
+expectIncludes(wordAdapter, "Private Function VTWordConvertNativeBookmarkToImageFast", "Word may convert unmodified cached VisualTeX OMML back to an image without revealing the editor");
+expectIncludes(wordAdapter, "If numbered Then Exit Function", "Numbered OMML must bypass the narrow cached image fast path and retain the full compatibility workflow");
 expectIncludes(wordAdapter, "VTWordEditNativeBookmark nativeBookmark", "Word native VisualTeX formulas must pass the already-resolved Bookmark directly into the edit path");
 expect(!wordAdapter.includes("VTNativeMathForBookmark(nativeBookmark) Is Nothing"), "Word VBA must assign object-returning functions before testing Is Nothing");
 expect(!wordAdapter.includes("If Not VTNativeMathForBookmark(candidate) Is Nothing Then"), "Word VBA must avoid ambiguous Not/function-call/Is Nothing expressions");
@@ -840,7 +1036,8 @@ expectIncludes(protocol, "Public Function VTBase64UrlDecodeUtf8", "VBA protocol 
 expectIncludes(protocol, "VTBase64UrlEncodeUtf8", "VBA must encode runtime file payloads for AppleScriptTask transport");
 expectIncludes(protocol, 'VTFileBridgeCall("WriteVisualTeXFile"', "VBA runtime writes must use the fixed AppleScriptTask file bridge");
 expectIncludes(protocol, "WriteVisualTeXFile creates the Session parent directory atomically", "Request writes must avoid a redundant directory-creation AppleScriptTask round trip");
-expectIncludes(protocol, 'VTFileBridgeCall("ReadVisualTeXFile"', "VBA runtime reads must use the fixed AppleScriptTask file bridge");
+expectIncludes(protocol, "Private Function VTTryReadTextDirect", "VBA runtime reads must use a direct local-file fast path before crossing AppleScriptTask");
+expectIncludes(protocol, 'VTFileBridgeCall("ReadVisualTeXFile"', "VBA runtime reads must retain the fixed AppleScriptTask fallback for sandbox compatibility");
 expectIncludes(protocol, "For attempt = 1 To 3", "The Office file bridge must retry transient empty AppleScriptTask responses");
 expectIncludes(protocol, "If Len(response) > 0 Then Exit For", "The Office file bridge retry must stop immediately after a valid response");
 expectIncludes(protocol, "VisualTeX file-existence self-test failed", "The host self-test must exercise the file-existence bridge handler");
@@ -858,22 +1055,38 @@ expectIncludes(wordScript, "my launchVisualTeXURL(visualTeXURL)", "Word AppleScr
 expectIncludes(powerpointScript, "my launchVisualTeXURL(visualTeXURL)", "PowerPoint AppleScriptTask must route the validated Session URL through the prewarmed executable");
 expectIncludes(wordScript, 'do shell script "/usr/bin/open -b " & quoted form of "com.visualtex.studio"', "Word must open only the fixed VisualTeX bundle identifier");
 expectIncludes(powerpointScript, 'do shell script "/usr/bin/open -b " & quoted form of "com.visualtex.studio"', "PowerPoint must open only the fixed VisualTeX bundle identifier");
+const wordPrewarmStart = wordScript.indexOf("on PrewarmVisualTeXApplication(hostName)");
+const wordPrewarmEnd = wordScript.indexOf("end PrewarmVisualTeXApplication", wordPrewarmStart);
+const wordPrewarmSource = wordScript.slice(wordPrewarmStart, wordPrewarmEnd);
+expectIncludes(wordPrewarmSource, "firstRunningVisualTeXExecutable", "Word startup prewarming must reuse an already-running VisualTeX process");
+expect(
+  wordPrewarmSource.indexOf("firstRunningVisualTeXExecutable") < wordPrewarmSource.indexOf('/usr/bin/open -gj -b '),
+  "Word startup prewarming must inspect the running process before asking LaunchServices to open VisualTeX",
+);
+expectIncludes(wordPrewarmSource, 'if my firstRunningVisualTeXExecutable(executableSuffix) is "" then', "Word startup prewarming must launch VisualTeX only when no matching process exists");
 expect(!wordScript.includes("System Events"), "Word AppleScriptTask must not use UI automation");
 expect(!powerpointScript.includes("System Events"), "PowerPoint AppleScriptTask must not use UI automation");
 for (const [host, script] of [["Word", wordScript], ["PowerPoint", powerpointScript]]) {
   expectIncludes(script, "validateRelativePath", `${host} file bridge must validate every runtime-relative path`);
   expectIncludes(script, "absoluteRuntimePath", `${host} file bridge must join paths only beneath its fixed runtime root`);
-  expectIncludes(script, 'set parentPath to do shell script "/usr/bin/dirname " & quoted form of targetPath', `${host} file bridge must quote the validated destination before resolving its parent`);
-  expectIncludes(script, 'set temporaryPath to do shell script "/usr/bin/mktemp " & quoted form of (targetPath & ".tmp.XXXXXX")', `${host} file bridge must create its temporary file beside the validated destination`);
-  expectIncludes(script, 'quoted form of normalizedData & " | /usr/bin/base64 -D > " & quoted form of temporaryPath', `${host} file bridge must quote both encoded data and the temporary path`);
-  expectIncludes(script, 'do shell script "/bin/chmod 600 " & quoted form of temporaryPath & " && /bin/mv -f " & quoted form of temporaryPath & space & quoted form of targetPath', `${host} file bridge must atomically move a permission-restricted temporary file`);
+  expectIncludes(script, "stringByDeletingLastPathComponent", `${host} file bridge must resolve the validated destination parent without spawning dirname`);
+  expectIncludes(script, "initWithBase64EncodedString:normalizedData options:0", `${host} file bridge must decode the validated request in-process`);
+  expectIncludes(script, "writeToFile:targetPath atomically:true", `${host} file bridge must atomically replace the validated destination through Foundation`);
+  expectIncludes(script, 'do shell script "/bin/chmod 600 " & quoted form of targetPath', `${host} file bridge must restrict the final request file permissions`);
+  expect(!script.includes("/usr/bin/mktemp"), `${host} request writes must not spawn mktemp on the latency-critical editor-open path`);
+  expect(!script.includes("set temporaryPath to do shell script"), `${host} request writes must not materialize a shell-managed temporary file on the latency-critical editor-open path`);
+  expect(!script.includes('" && /bin/mv -f " & quoted form of temporaryPath'), `${host} request writes must not spawn a shell move on the latency-critical editor-open path`);
   expectIncludes(script, 'set encodedData to do shell script "/usr/bin/base64 < " & quoted form of targetPath', `${host} file bridge must quote the validated read path`);
   expectIncludes(script, 'do shell script "/bin/mkdir -p " & quoted form of targetPath & " && /bin/chmod 700 " & quoted form of targetPath', `${host} runtime directory creation must quote its validated path`);
   expectIncludes(script, "on launchVisualTeXURL(visualTeXURL)", `${host} Session launch must use the fixed argv-forwarding helper`);
   expectIncludes(script, 'do shell script "/usr/bin/pgrep -x " & quoted form of "visualtex"', `${host} Session launch must resolve the already-prewarmed VisualTeX process`);
   expectIncludes(script, 'set candidatePath to do shell script "/bin/ps -p " & quoted form of processId & " -o comm="', `${host} Session launch must obtain the exact running executable path without parsing arguments`);
   expectIncludes(script, 'if candidatePath ends with executableSuffix then', `${host} Session launch must reject unrelated processes named visualtex`);
-  expectIncludes(script, 'do shell script "/usr/bin/nohup " & quoted form of executablePath & space & quoted form of safeURL', `${host} Session launch must put the validated URL in argv for Tauri single-instance IPC`);
+  expectIncludes(script, "setLaunchPath:executablePath", `${host} Session launch must execute only the resolved VisualTeX binary`);
+  expectIncludes(script, "setArguments:{safeURL}", `${host} Session launch must put the validated URL in argv for Tauri single-instance IPC`);
+  expectIncludes(script, "launchTask's |launch|()", `${host} Session launch must avoid a shell and nohup process`);
+  expectIncludes(script, "cachedVisualTeXExecutable", `${host} Session launch must cache the executable resolved during prewarm`);
+  expect(!script.includes("/usr/bin/nohup"), `${host} Session launch must not spawn nohup on the latency-critical editor-open path`);
   expect(!script.includes('do shell script "/usr/bin/open " & quoted form of visualTeXURL'), `${host} Session launch must not use a LaunchServices URL AppleEvent that the macOS second instance can lose`);
   expect(!script.includes("openURL:targetURL"), `${host} Session launch must not pass NSURL objects through AppleScriptTask`);
   expectIncludes(script, 'use framework "Foundation"', `${host} AppleScriptTask must use NSProcessInfo only for monotonic timing`);
@@ -912,6 +1125,12 @@ expectIncludes(rustRuntime, 'xmlns:asvg="http://schemas.microsoft.com/office/dra
 expectIncludes(rustRuntime, '"vectorDocumentPath"', "Word dispatches must carry the generated SVG staging DOCX path");
 expectIncludes(rustRuntime, '"fallbackImagePath"', "Word and PowerPoint dispatches must retain PNG only as a compatibility fallback");
 expectIncludes(rustRuntime, "materialize_powerpoint_svg(session)?", "PowerPoint commits must insert the vector SVG export");
+expectIncludes(powerpointAdapter, "Set targetPresentation = VTFindPowerPointPresentation(expectedPresentation)", "PowerPoint Apply must resolve the Session's target presentation without depending on the currently active document");
+expectIncludes(powerpointAdapter, "Set currentSlide = targetPresentation.Slides(slideIndex)", "PowerPoint Apply must mutate the slide belonging to the resolved Session target");
+expectIncludes(powerpointAdapter, "VTPresentationIdentityFor(candidatePresentation)", "PowerPoint target matching must use the same full-path-or-name identity rule as Session creation");
+expect(!powerpointAdapter.includes("VTActivatePowerPointPresentation"), "PowerPoint Apply must not switch document windows as part of Session commit");
+expectIncludes(powerpointAdapter, "For Each currentPresentation In Presentations", "PowerPoint create cancellation must locate its pending placeholder across all open presentations");
+expect(!powerpointAdapter.includes("For Each currentSlide In ActivePresentation.Slides"), "PowerPoint create cancellation must not depend on the currently active presentation");
 expectIncludes(rustRuntime, "decode_svg", "PowerPoint SVG exports must be validated before Office receives them");
 expectIncludes(rustRuntime, "POWERPOINT_REFERENCE_FONT_SIZE_PT", "The native runtime must scale PowerPoint SVG geometry from a fixed point-size reference");
 expectIncludes(rustRuntime, "previous_reference_height", "PowerPoint edits must infer the current point size from existing SVG geometry");
@@ -920,6 +1139,31 @@ expectIncludes(rustRuntime, "let font_size_pt = session", "Word commits must pre
 expect(
   (dialogApp.match(/fontSizePt: officeFontSizePt/g) ?? []).length >= 3,
   "Office explicit apply, autosave, and close-commit drafts must all persist the selected point size",
+);
+expectIncludes(
+  formulaRenderArtifacts,
+  "export function tryRenderOfficeFormulaDraftArtifacts",
+  "Office draft rendering must provide a non-throwing path for temporary MathLive source",
+);
+expectIncludes(
+  dialogApp,
+  "const generateDraftExportResult = useCallback",
+  "The Office editor must isolate best-effort draft rendering from strict explicit apply",
+);
+expectIncludes(
+  dialogApp,
+  "const exportResult = generateDraftExportResult();",
+  "Office autosave must tolerate placeholders and other incomplete LaTeX without showing an export error",
+);
+expectIncludes(
+  dialogApp,
+  'status === "editing"\n            ? generateDraftExportResult()\n            : generateSvgExportResult()',
+  "Close-time draft persistence must remain tolerant while a committing write remains strict",
+);
+expectIncludes(
+  dialogApp,
+  'const update = await buildCurrentSessionUpdate("committing");',
+  "Explicit Office apply must continue through the strict artifact generation path",
 );
 expectIncludes(rustRuntime, '("fontSizePt", format!', "PowerPoint dispatches must carry the resolved point size back to VBA");
 expectIncludes(rustRuntime, "metadata.font_size_pt = Some(geometry.font_size_pt)", "PowerPoint metadata must retain the resolved SVG point size");
@@ -955,17 +1199,128 @@ expectIncludes(rustRuntime, "order_main_window_behind_office_editor", "The dedic
 expectIncludes(rustRuntime, "native_window.orderBack(None)", "The main VisualTeX workspace must be ordered behind Office instead of being raised with the editor");
 expect(!rustRuntime.includes("Duration::from_millis(100)"), "Resident editor prewarming must not use a delayed hide that can race a new Office Session");
 expectIncludes(backgroundRuntime, "yieldActivationToApplication", "Closing the Office editor must cooperatively yield activation back to Word or PowerPoint on modern macOS");
-expect(!rustRuntime.includes("native_window.orderFrontRegardless();"), "Office editor hydration must not bypass normal macOS window ordering");
-expectIncludes(backgroundRuntime, "NSApplicationActivationOptions::ActivateAllWindows", "Office formula editing must preserve the proven eb2fcf2a activation behavior so the editor rises above Word or PowerPoint");
+expectIncludes(rustRuntime, "fn make_resident_editor_key", "A fully hydrated Office editor must use one dedicated native key-window presentation path");
+expectIncludes(rustRuntime, "native_window.orderFrontRegardless();", "The ready Office formula window must rise above Word or PowerPoint after the desktop main window is ordered back");
+expectIncludes(rustRuntime, "native_window.makeKeyAndOrderFront(None);", "The ready Office formula window must become the AppKit key window instead of relying only on advisory Tauri focus");
+expectIncludes(backgroundRuntime, "NSApplicationActivationOptions::ActivateAllWindows", "Office formula hydration must preserve the proven eb2fcf2a cooperative activation behavior");
+expectIncludes(rustRuntime, "MainThreadMarker::new()", "Office focus diagnostics must inspect AppKit state only from the native WebView main-thread callback");
+expect(!rustRuntime.includes("activateIgnoringOtherApps"), "The ready Office formula editor must not depend on the macOS 14-deprecated activation override");
+expectIncludes(backgroundRuntime, "activate_foreground_app_via_launch_services", "A ready Office formula editor must cross the Word or PowerPoint application boundary through LaunchServices");
+expectIncludes(backgroundRuntime, 'Command::new("/usr/bin/open")', "LaunchServices activation must use the fixed macOS open executable");
+expectIncludes(backgroundRuntime, '.arg("-b")', "LaunchServices activation must target only the current VisualTeX bundle identifier");
 expectIncludes(backgroundRuntime, "for attempt in 0..4", "Accessory-to-Regular activation must use the short retry sequence from eb2fcf2a");
 expectIncludes(backgroundRuntime, "Duration::from_millis(5)", "Foreground activation retries must remain within the proven short settling interval");
 expectIncludes(rustRuntime, "wake_resident_editor_for_hydration", "An Office request must restore the continuously mounted resident WebView to full native alpha before hydration");
-expectIncludes(rustRuntime, "crate::office::background::activate_foreground_app(app)?", "Office request and ready presentation must force VisualTeX across the Word or PowerPoint application boundary");
+const openEditorWindowStart = rustRuntime.indexOf("fn open_editor_window(");
+const openEditorWindowEnd = rustRuntime.indexOf("fn set_word_document_operation_preparing_status", openEditorWindowStart);
+const openEditorWindowSource = rustRuntime.slice(openEditorWindowStart, openEditorWindowEnd);
+const presentResidentEditorStart = rustRuntime.indexOf("fn present_resident_editor_window(");
+const presentResidentEditorEnd = rustRuntime.indexOf(
+  "#[cfg(not(target_os = \"macos\"))]",
+  presentResidentEditorStart,
+);
+const presentResidentEditorSource = rustRuntime.slice(
+  presentResidentEditorStart,
+  presentResidentEditorEnd,
+);
+expectIncludes(rustRuntime, "make_resident_editor_key(&window)?", "Final ready presentation must combine LaunchServices activation and native key-window ordering");
+expect(!openEditorWindowSource.includes("activate_foreground_app_via_launch_services"), "Office hydration must not create a regular Dock tile while the resident editor is still parked");
+expect(!openEditorWindowSource.includes("crate::office::background::activate_foreground_app(app)?"), "Office hydration must remain accessory-only until the formula window has normal geometry and opacity");
+expect(
+  !openEditorWindowSource.includes("set_size(") &&
+    !openEditorWindowSource.includes("apply_persisted_office_editor_window_size"),
+  "Reusing a resident Office editor must not perform any window-size work in the double-click opening path",
+);
+expect(
+  !presentResidentEditorSource.includes("set_size(") &&
+    !presentResidentEditorSource.includes("apply_persisted_office_editor_window_size"),
+  "Window-size restoration must never sit in the foreground/key-window critical path",
+);
+const readyEditorStart = rustRuntime.indexOf("pub fn report_macos_offline_office_editor_ready");
+const readyEditorEnd = rustRuntime.indexOf("pub fn close_macos_offline_office_editor_window", readyEditorStart);
+const readyEditorSource = rustRuntime.slice(readyEditorStart, readyEditorEnd);
+expect(
+  readyEditorSource.indexOf("set_resident_editor_parked(&window, false)?") < readyEditorSource.indexOf("crate::office::background::activate_foreground_app(&app)?"),
+  "The ready Office editor must restore its real window before macOS creates the regular Dock tile",
+);
+expectIncludes(rustRuntime, "crate::office::background::activate_foreground_app(app)?", "Ready presentation must force VisualTeX across the Word or PowerPoint application boundary");
+expectIncludes(
+  rustRuntime,
+  "native_window.setLevel(objc2_app_kit::NSNormalWindowLevel - 1)",
+  "Opening an Office editor must keep the visible VisualTeX desktop below Word or PowerPoint instead of raising every normal application window",
+);
+expectIncludes(
+  rustRuntime,
+  "objc2_app_kit::NSFloatingWindowLevel",
+  "A ready Office formula editor must use a floating native level so it stays visually above Word or PowerPoint even when macOS rejects cross-application focus",
+);
+expectIncludes(
+  rustRuntime,
+  "if parked {\n                objc2_app_kit::NSNormalWindowLevel\n            } else {\n                objc2_app_kit::NSFloatingWindowLevel",
+  "Only the visible Office editor may be promoted; parked resident windows must return to normal level",
+);
+expectIncludes(
+  rustRuntime,
+  "restore_main_window_level_after_office_editor(&app)?",
+  "Closing the last Office editor must restore the VisualTeX desktop to the normal window level",
+);
+expect(
+  presentResidentEditorSource.indexOf("order_main_window_behind_office_editor(app)?") <
+    presentResidentEditorSource.indexOf("crate::office::background::activate_foreground_app(app)?"),
+  "The desktop workspace must be lowered before ActivateAllWindows can raise the VisualTeX application window group",
+);
+expectIncludes(dialogApp, "readPersistedFormulaFontPreferences()", "The resident Office editor must read the independent global formula-font preferences instead of trusting its stale persisted editor store");
+expectIncludes(dialogApp, "session?.originalMetadata?.formulaChineseFont ??", "Editing an existing Office formula must restore its saved Chinese font before falling back to the global preference");
+expectIncludes(dialogApp, "session?.originalMetadata?.formulaLetterFont ??", "Editing an existing Office formula must restore its saved math-letter font before falling back to the global preference");
+expectIncludes(editorStore, "persistFormulaChineseFontPreference(normalized)", "Changing the global Chinese formula font must persist independently of the resident editor document store");
+expectIncludes(editorStore, "persistFormulaLetterFontPreference(normalized)", "Changing the global math-letter font must persist independently of the resident editor document store");
+expectIncludes(settingsDialog, "data-save-configuration", "Settings must expose a save-current-configuration action");
+expectIncludes(settingsDialog, "data-import-configuration", "Settings must expose a configuration import action");
+expectIncludes(applicationConfiguration, 'VISUALTEX_CONFIGURATION_SCHEMA = "visualtex-user-configuration"', "Portable configuration files must carry a dedicated schema marker");
+expectIncludes(applicationConfiguration, '"visualtex-custom-formula-tiles"', "Portable configuration must include custom formula tiles");
+expectIncludes(applicationConfiguration, '"visualtex-formula-hotkeys-v1"', "Portable configuration must include formula hotkeys");
+expectIncludes(applicationConfiguration, '"visualtex-custom-formula-text-colors"', "Portable configuration must include custom formula text colours");
+expectIncludes(applicationConfiguration, '"visualtex-office-editor-toolbar-open"', "Portable configuration must preserve Office editor panel preferences");
+expectIncludes(applicationConfiguration, '"visualtex.ocr.model"', "Portable configuration must preserve the user's preferred OCR model");
+expectIncludes(applicationConfiguration, '"get_app_window_configuration"', "Configuration export must read native application window sizes");
+expectIncludes(applicationConfiguration, '"apply_app_window_configuration"', "Configuration import must restore native application window sizes");
+expectIncludes(appRuntime, 'const MAIN_WINDOW_SIZE_FILE: &str = "main-window-size.json"', "The main VisualTeX window size must persist independently of document content");
+expectIncludes(appRuntime, "schedule_persist_main_window_size(app, size.width, size.height)", "Resizing the main VisualTeX window must persist its configuration size");
+expectIncludes(appRuntime, "restore_main_window_size(app.handle())", "VisualTeX startup must restore the persisted main window size");
+expectIncludes(appRuntime, "get_app_window_configuration", "The Tauri command registry must expose configuration window export");
+expectIncludes(appRuntime, "apply_app_window_configuration", "The Tauri command registry must expose configuration window import");
+expectIncludes(rustRuntime, "configuration_office_editor_window_size", "Configuration export must include the persisted Office editor size");
+expectIncludes(rustRuntime, "apply_configuration_office_editor_window_size", "Configuration import must normalize, persist and apply the Office editor size");
+expectIncludes(appRuntime, '"md" | "svg" | "png" | "vtxconfig"', "Native export writing must allow VisualTeX configuration files");
+expectIncludes(styles, ".settings-subdialog-content .formula-inset-range strong", "Interface customization sliders must have dedicated label layout rules instead of inheriting the cramped generic range style");
+expectIncludes(styles, "white-space: nowrap", "Interface customization parameter labels must stay horizontal");
 expectIncludes(appRuntime, "office::background::install_application_icon(app.handle())", "macOS setup must install the VisualTeX application icon before any background-to-foreground transition");
+expectIncludes(appRuntime, "Duration::from_secs(2)", "The initial macOS background launch must ignore LaunchServices Reopen before resident Office prewarming settles");
+expectIncludes(appRuntime, "Duration::from_millis(150)", "macOS Reopen handling must wait for single-instance Office Session activation before revealing the desktop window");
+expectIncludes(appRuntime, "focus_open_office_editor(&app)", "Deferred Reopen handling must suppress the desktop window while an Office editor is hydrating");
+expectIncludes(
+  rustRuntime,
+  "pub(crate) fn has_recent_office_editor_request(max_age: Duration) -> bool",
+  "The native runtime must detect an Office request that exists before its editor Session is registered",
+);
+expectIncludes(
+  appRuntime,
+  "has_recent_office_editor_request(\n                    std::time::Duration::from_secs(3)",
+  "A recent Word or PowerPoint request must suppress the desktop workspace during the Reopen race",
+);
+expect(
+  appRuntime.indexOf("has_recent_office_editor_request(") < appRuntime.indexOf("reveal_main_window(&app)"),
+  "The Reopen handler must check for a pending Office request before revealing the desktop workspace",
+);
+expectIncludes(
+  rustRuntime,
+  "if !active.ready {\n                let _ = order_main_window_behind_office_editor(app);",
+  "A LaunchServices Reopen during hydration must demote the desktop main window without focusing transparent editor content",
+);
 expectIncludes(backgroundRuntime, "Every Accessory-to-Regular transition must have the real bundle icon", "Every Office foreground transition must preserve the VisualTeX Dock icon");
-expectIncludes(backgroundRuntime, 'const DOCK_ICON_MIGRATION_MARKER_FILE: &str = "dock-icon-v4.refreshed"', "The repaired Dock icon lifecycle must refresh stale same-version icon cache once");
+expectIncludes(backgroundRuntime, 'const DOCK_ICON_MIGRATION_MARKER_FILE: &str = "dock-icon-v5.refreshed"', "The repaired Dock icon lifecycle must refresh stale same-version icon cache once");
 expectIncludes(backgroundRuntime, "Install the bundle icon before changing activation policy", "Foreground reveal must install the VisualTeX icon before creating a regular Dock tile");
-expectIncludes(rustRuntime, "open_editor_window(app, host, &session_id, received_epoch_ms, received_at)", "Office formula requests must activate the fixed host editor with one generation and timing origin");
+expectIncludes(rustRuntime, "open_editor_window(\n        app,\n        host,\n        &session_id,\n        received_epoch_ms,\n        received_at,\n        silent,", "Office formula requests must activate the fixed host editor with one generation, timing origin and explicit silent mode");
 expectIncludes(rustRuntime, "office-native-dialog.html?transport=tauri", "The resident Office editor must use the direct native-dialog entry so a hidden prewarmed WebView cannot stall on the desktop entry's dynamic import");
 expectIncludes(read("src/desktop/main.tsx"), 'view === "office-formula"', "The desktop entry must select the dedicated Office formula view from the window query");
 expectIncludes(read("src/desktop/main.tsx"), "<OfficeDialogApp />", "The dedicated desktop window must render the Office formula editor");
@@ -1010,6 +1365,87 @@ expectIncludes(lifecycle, "ensure_companion_runtime", "macOS startup must still 
 expectIncludes(capabilities, '"office-native-*"', "Dedicated native Office windows must receive Tauri core permissions");
 expectIncludes(capabilities, '"core:window:allow-close"', "Dedicated native Office windows must be allowed to close after a successful commit or cancel");
 expectIncludes(dialogApp, "isMacosOfflineTauriTransport()", "Native Office formula editors must avoid Office.js parent messaging");
+expectIncludes(dialogApp, "const residentEditorWorkspace", "The native Office window must keep its editor workspace mounted while parked");
+expectIncludes(dialogApp, 'className="office-resident-editor-workspace"', "The resident Office editor wrapper must have an explicit layout class instead of becoming an anonymous Grid item");
+const officeDialogShellStyles =
+  styles.match(/\.office-dialog-shell\s*\{([^}]*)\}/)?.[1] ?? "";
+const officeResidentWorkspaceStyles =
+  styles.match(/\.office-resident-editor-workspace\s*\{([^}]*)\}/)?.[1] ?? "";
+expect(
+  /grid-template-rows:\s*minmax\(0,\s*1fr\)\s*;/.test(
+    officeDialogShellStyles,
+  ),
+  "The Office dialog shell must allocate the full height to the unified resident editor",
+);
+expect(
+  /display:\s*grid\s*;/.test(officeResidentWorkspaceStyles) &&
+    /grid-template-rows:\s*minmax\(0,\s*1fr\)\s+auto\s*;/.test(
+      officeResidentWorkspaceStyles,
+    ),
+  "The compact resident Office editor must allocate only the flexible editor and bottom status rows",
+);
+expectIncludes(
+  dialogApp,
+  "showOfficeActions={false}",
+  "The Office formula window must not render the redundant editing-description action row",
+);
+expectIncludes(
+  dialogApp,
+  "officeHeaderLeadingControls={officeHeaderLeadingControls}",
+  "Office layout, font-size and auto-apply controls must be injected into the unified editor toolbar",
+);
+expectIncludes(
+  dialogApp,
+  "officeHeaderTrailingActions={officeHeaderTrailingActions}",
+  "Office history and apply controls must be injected into the unified editor toolbar",
+);
+expectIncludes(
+  dialogApp,
+  "data-office-cancel-action",
+  "The compact Office header must expose Cancel in its unified action row",
+);
+expectIncludes(
+  dialogApp,
+  "data-office-primary-action",
+  "The compact Office header must expose Update/Insert in its unified action row",
+);
+expectIncludes(
+  dialogApp,
+  "data-office-undo-action",
+  "Undo must use an icon-only button in the unified Office toolbar",
+);
+expectIncludes(
+  dialogApp,
+  "data-office-redo-action",
+  "Redo must use an icon-only button in the unified Office toolbar",
+);
+expectIncludes(dialogApp, "<Undo2", "Undo must render an arrow icon instead of a text label");
+expectIncludes(dialogApp, "<Redo2", "Redo must render an arrow icon instead of a text label");
+expect(
+  !dialogApp.includes('<header className="office-dialog-header"'),
+  "The redundant VisualTeX / Office host title bar must no longer render",
+);
+expectIncludes(
+  editorWorkspace,
+  "is-office-editor-header",
+  "Office controls and formula tools must share the existing editor toolbar row",
+);
+expect(
+  !editorWorkspace.includes('isEn ? "Visual editor" : "可视化编辑"'),
+  "The redundant Visual editor title must be omitted from desktop and Office workspaces",
+);
+expect(
+  !editorWorkspace.includes('<span className="pane-icon" aria-hidden="true">'),
+  "The redundant Visual editor braces icon must be omitted from the desktop editor toolbar",
+);
+expect(
+  !dialogApp.includes("<ScanLine size={15} />"),
+  "The compact Office header must not expose the standalone Image OCR button",
+);
+expectIncludes(dialogApp, 'editorInstanceKey="resident-office-editor"', "Word and PowerPoint Sessions must reuse one host-resident MathLive editor instead of rebuilding it per formula");
+expect(!dialogApp.includes("editorInstanceKey={session.id}"), "A new Office Session must not destroy and remount the resident MathLive editor");
+expectIncludes(dialogApp, "const contentReadyDeadlineMs = origin + 5_000", "Cold MathLive mounting must use a bounded readiness deadline instead of a fixed frame count");
+expect(!dialogApp.includes("!contentMounted && frame < 12"), "The ready probe must not permanently stop after twelve animation frames");
 expectIncludes(dialogApp, "commitMacosOfflineOfficeSession(session.id, update)", "Native Apply must combine its final Session patch and Office commit into one Tauri round trip");
 expectIncludes(dialogApp, "completeExportInFlightRef", "Apply must reuse an in-flight PNG export instead of starting duplicate rasterization");
 expectIncludes(dialogApp, "getCompleteExportResult(currentFingerprint, exportResult)", "Autosave must reuse the SVG export when producing its PNG compatibility result");
@@ -1024,6 +1460,112 @@ expectIncludes(dialogApp, "onCurrentTauriWindowCloseRequested", "Closing a nativ
 expectIncludes(dialogApp, "close_macos_offline_office_editor_window", "A successful native Office transaction must hide and clear the resident Tauri editor window");
 expectIncludes(rustRuntime, '"office-native-word-editor"', "Word must use one fixed resident editor window label");
 expectIncludes(rustRuntime, '"office-native-powerpoint-editor"', "PowerPoint must keep a separate resident editor window label");
+expectIncludes(rustRuntime, "DEFAULT_OFFICE_EDITOR_WIDTH_RATIO", "The Office editor default width must be derived from the measured screen proportion instead of a fixed cross-device pixel size");
+expectIncludes(rustRuntime, "DEFAULT_OFFICE_EDITOR_HEIGHT_RATIO", "The Office editor default height must be derived from the measured screen proportion instead of a fixed cross-device pixel size");
+expectIncludes(rustRuntime, "width_ratio", "User-resized Office editor geometry must persist as a screen-relative width ratio");
+expectIncludes(rustRuntime, "height_ratio", "User-resized Office editor geometry must persist as a screen-relative height ratio");
+expectIncludes(rustRuntime, "current_monitor()", "Office editor resizing must use the monitor that actually contains the window");
+expectIncludes(rustRuntime, "let saved_size = load_office_editor_window_size(app);", "A resident Office editor must restore the saved shared size only when its native window is first created");
+expectIncludes(appRuntime, "WindowEvent::Resized(size)", "Native Office editor resize events must persist the user's screen-relative geometry");
+expectIncludes(editorStore, "zoom: 0.6", "A fresh editor profile must start at 60% zoom");
+expectIncludes(editorStore, "EDITOR_ZOOM_STEP = 0.05", "Desktop and Office formula zoom must use a shared 5% step");
+expectIncludes(editorStore, "zoom / EDITOR_ZOOM_STEP", "Persisted zoom normalization must preserve 5% increments instead of rounding back to 10% steps");
+expectIncludes(editorWorkspace, "zoom - EDITOR_ZOOM_STEP", "The shared zoom-out button must decrease formula zoom by 5%");
+expectIncludes(editorWorkspace, "zoom + EDITOR_ZOOM_STEP", "The shared zoom-in button must increase formula zoom by 5%");
+expectIncludes(desktopApp, "zoom + EDITOR_ZOOM_STEP", "Desktop keyboard zoom-in must use the same 5% step");
+expectIncludes(desktopApp, "zoom - EDITOR_ZOOM_STEP", "Desktop keyboard zoom-out must use the same 5% step");
+expectIncludes(styles, ".office-inline-actions .primary-button,\n.office-inline-actions .secondary-button {\n  align-self: center;", "Cancel and Update Formula must share one vertical alignment rule in the Office header");
+expectIncludes(styles, "min-height: 30px;\n  margin: 0;", "Office header actions must clear the global secondary-button top margin that previously displaced Cancel");
+expectIncludes(editorStore, "showLineNumbers: false", "Formula row numbers must default off for both desktop and Office editors");
+expectIncludes(editorStore, "showLineNumbers: state.showLineNumbers", "The optional formula row-number preference must persist across application restarts");
+expectIncludes(editorStore, "setShowLineNumbers", "The shared editor store must expose an explicit formula row-number setting");
+expectIncludes(settingsDialog, 'data-interface-customization-trigger', "Settings must expose Interface customization as a nested-dialog entry point");
+expectIncludes(settingsDialog, 'data-interface-customization-dialog', "Interface customization options must render inside their own popup dialog");
+expectIncludes(settingsDialog, 'data-show-line-numbers-setting', "The nested Interface customization dialog must expose the formula row-number preference");
+expectIncludes(mathEditor, 'showLineNumbers ? " has-line-numbers" : ""', "The formula canvas must reserve its number column only when the setting is enabled");
+expectIncludes(mathEditor, "{showLineNumbers ? (", "Formula row labels must not render at all while their preference is disabled");
+expectIncludes(styles, ".multi-line-editor.has-line-numbers .formula-line", "The formula number column must be scoped to the optional line-number class");
+expectIncludes(styles, ".multi-line-editor:not(.has-line-numbers)[data-formula-alignment=\"left\"]", "A left-aligned formula must use the full row width when line numbers are hidden");
+expectIncludes(mathEditor, "scheduleUnconsumedMathSpace", "Math input must have a fallback that inserts spacing only after higher-priority Space handlers decline the key");
+expectIncludes(mathEditor, 'field.insert("\\\\ ", {', "The ordinary Space fallback must store an explicit LaTeX control space");
+expectIncludes(mathEditor, "beforeNativeSpace.latex !== afterNativeSpace.latex", "Native Space command completions must take priority over visible-space insertion");
+expectIncludes(mathEditor, "JSON.stringify(beforeNativeSpace.selection)", "Structural Space navigation must take priority when MathLive changes the selection");
+expectIncludes(editorStore, "highlightActiveLine: false", "Active formula-row highlighting must default off for both desktop and Office editors");
+expectIncludes(editorStore, "highlightActiveLine: state.highlightActiveLine", "The active-row highlight preference must persist across application restarts");
+expectIncludes(editorStore, "setHighlightActiveLine", "The shared editor store must expose an explicit active-row highlight setting");
+expectIncludes(editorStore, "DEFAULT_FORMULA_INSET = 34", "Formula-area left and right spacing must have one stable shared default");
+expectIncludes(editorStore, "formulaInsetLeft: state.formulaInsetLeft", "The independent left formula-area spacing must persist across application restarts");
+expectIncludes(editorStore, "formulaInsetRight: state.formulaInsetRight", "The independent right formula-area spacing must persist across application restarts");
+expectIncludes(editorStore, "setFormulaInsetLeft", "The shared editor store must expose an independent left formula-area spacing setter");
+expectIncludes(editorStore, "setFormulaInsetRight", "The shared editor store must expose an independent right formula-area spacing setter");
+expectIncludes(editorStore, "DEFAULT_FORMULA_TOOL_BUTTON_SIZE = 52", "Formula toolbar buttons must have one stable default cell size");
+expectIncludes(editorStore, "DEFAULT_FORMULA_TOOL_BUTTON_PADDING = 2", "Formula toolbar symbols must have one stable content inset");
+expectIncludes(editorStore, "DEFAULT_FORMULA_ROW_VERTICAL_INSET = 5", "Formula rows must have one stable default vertical content inset");
+expectIncludes(editorStore, "formulaToolButtonSize: state.formulaToolButtonSize", "The formula toolbar button size must persist across application restarts");
+expectIncludes(editorStore, "formulaToolButtonPadding: state.formulaToolButtonPadding", "The formula toolbar content inset must persist across application restarts");
+expectIncludes(editorStore, "formulaRowVerticalInset: state.formulaRowVerticalInset", "The visual formula-row vertical spacing must persist across application restarts");
+expectIncludes(settingsDialog, 'data-highlight-active-line-setting', "The nested Interface customization dialog must expose the active-row highlight preference");
+expectIncludes(settingsDialog, 'data-formula-inset-left-setting', "Interface customization must expose an independent left formula-area spacing slider");
+expectIncludes(settingsDialog, 'data-formula-inset-right-setting', "Interface customization must expose an independent right formula-area spacing slider");
+expectIncludes(settingsDialog, 'data-formula-tool-button-size-setting', "Interface customization must expose a formula toolbar button-size slider");
+expectIncludes(settingsDialog, 'data-formula-tool-button-padding-setting', "Interface customization must expose a formula toolbar content-inset slider");
+expectIncludes(settingsDialog, 'data-formula-row-vertical-inset-setting', "Interface customization must expose the visual editor formula-row vertical-spacing slider");
+expectIncludes(settingsDialog, 'data-formula-inset-preview', "Interface customization must include a live simulated editor preview below the spacing sliders");
+expectIncludes(settingsDialog, 'latex={String.raw`x=\\frac{-b\\pm\\sqrt{b^2-4ac}}{2a}`}', "The interface preview must pass single-backslash LaTeX instead of rendering doubled commands as text");
+expectIncludes(mathEditor, '"--formula-area-inset-left"', "The real desktop and Office formula canvas must consume the persisted left spacing preference");
+expectIncludes(mathEditor, '"--formula-area-inset-right"', "The real desktop and Office formula canvas must consume the persisted right spacing preference");
+expectIncludes(mathEditor, '"--formula-row-vertical-inset"', "The real desktop and Office formula rows must consume the persisted top-and-bottom content spacing preference");
+expectIncludes(settingsDialog, 'isEn ? "Interface customization" : "界面自定义"', "Interface customization must remain a dedicated popup entry and dialog title");
+expectIncludes(editorWorkspace, 'highlightActiveLine ? " has-active-line-highlight" : ""', "Desktop and Office workspaces must opt into active-row highlighting only when the preference is enabled");
+expectIncludes(styles, ".workspace.has-active-line-highlight .formula-line.is-active", "Active-row colour and accent styling must be gated by the persisted interface preference");
+expectIncludes(styles, ".workspace.has-active-line-highlight .formula-line:hover", "Mouse-hover row feedback must be disabled together with active-row highlighting");
+expectIncludes(styles, "border-bottom: 1px solid color-mix", "Every formula row, including a single row, must draw its own lower divider");
+expect(
+  !styles.includes(".formula-line + .formula-line {"),
+  "Formula dividers must not depend on a following row",
+);
+expectIncludes(styles, ".workspace.is-classic-layout:not(.is-office-workspace)", "Desktop classic layout must reserve a dedicated full-width toolbar row above the editor and tiles");
+expectIncludes(styles, "> .editor-pane-header {\n  grid-column: 1 / -1;\n  grid-row: 1;", "The desktop editor toolbar must span across the formula canvas and right-side tiles");
+expectIncludes(styles, "> .classic-tile-toolbar {\n  grid-column: 3;\n  grid-row: 2;", "Desktop formula tiles must begin below the full-width editor toolbar");
+expectIncludes(styles, ".editor-pane-scroll > .editor-surface.multi-line-editor {\n  padding-top: 6px;", "Desktop and Office editors must keep only a compact top inset above the first formula row");
+expectIncludes(dialogApp, "OFFICE_EDITOR_ZOOM_60_MIGRATION_KEY", "Existing Office editor profiles must migrate once from the previous saved zoom to the new 60% default");
+expectIncludes(dialogApp, "setZoom(0.6)", "The one-time Office editor zoom migration must apply the requested 60% scale");
+expectIncludes(workspacePanelPreferences, 'toolbar: "visualtex-office-editor-toolbar-open"', "The Office formula toolbar collapsed state must use a durable Office-specific preference");
+expectIncludes(workspacePanelPreferences, 'tiles: "visualtex-office-editor-tiles-open"', "The Office formula tile collapsed state must use a durable Office-specific preference");
+expectIncludes(workspacePanelPreferences, 'mode === "desktop" ? "desktop" : "office"', "Office create and edit windows must share one panel preference scope without affecting the desktop workspace");
+expectIncludes(dialogApp, 'readWorkspacePanelOpen("office-edit", "tiles")', "The resident Office editor must restore its formula-tile state before the first render");
+expectIncludes(dialogApp, 'writeWorkspacePanelOpen("office-edit", "tiles", open)', "Every Office tile expand/collapse action must persist immediately");
+expectIncludes(editorWorkspace, 'readWorkspacePanelOpen(mode, "toolbar")', "The shared workspace must restore the bottom toolbar state before rendering");
+expectIncludes(editorWorkspace, 'writeWorkspacePanelOpen(mode, "toolbar", resolved)', "Every bottom toolbar expand/collapse action must persist immediately");
+expectIncludes(styles, ".formula-toolbar.is-horizontal .template-strip", "The horizontal formula tool strip must have an explicit overflow policy");
+expectIncludes(styles, "grid-auto-columns: var(--formula-toolbar-button-size, 52px)", "The horizontal formula toolbar must consume the persisted user-defined cell width");
+expectIncludes(styles, "align-content: stretch", "Horizontal formula rows must share the available height instead of leaving a large unused gap below three rows");
+expectIncludes(styles, "var(--formula-toolbar-button-padding, 2px)", "Formula command symbols must consume the restored single toolbar content inset");
+expectIncludes(styles, "var(--formula-row-vertical-inset, 5px)", "Formula characters must consume the visual formula-row top-and-bottom spacing preference");
+expectIncludes(formulaToolbar, "maximumToolbarPreviewInsetRatio - formulaToolButtonPadding * 0.03", "The restored toolbar content inset must affect the real MathPreview fit algorithm");
+expectIncludes(formulaToolbar, "formulaToolButtonSize / 42", "Larger formula buttons must allow simple symbols to scale up while complex formulas remain contained");
+expectIncludes(formulaToolbar, "target.scrollBy({ left: pixelDelta", "The horizontal formula toolbar must map every wheel delta directly to continuous horizontal movement without category-boundary gating");
+expectIncludes(formulaToolbar, "scrollToToolbarCategory", "Clicking a category tab must still provide optional smooth navigation to that continuous section");
+expectIncludes(formulaToolbar, 'behavior: "auto"', "Wheel scrolling must remain unsnapped so one gesture can move naturally across multiple categories");
+expectIncludes(formulaToolbar, 'className="toolbar-category-section"', "Every formula category must remain rendered in one continuous horizontal strip");
+expectIncludes(formulaToolbar, "data-toolbar-category-section={category}", "Continuous toolbar sections must expose stable category boundaries for scrolling and testing");
+expect(!formulaToolbar.includes("toolbar-category-transition"), "The obsolete large next-category guide card must not be rendered");
+expectIncludes(styles, ".template-strip.is-continuous-categories", "Horizontal formula categories must share one continuous scroll container");
+expectIncludes(styles, "gap: 14px", "Adjacent formula categories must use only a compact visual gap");
+expectIncludes(formulaToolbar, '"cases-three":', "The three-row piecewise preview must remain registered in the toolbar preview map");
+expectIncludes(formulaToolbar, "is-enlarged-cases-preview", "Piecewise previews must receive dedicated enlarged fitting instead of the generic tiny formula scale");
+expectIncludes(styles, "gap: 0", "Formula command cells must touch without loose gaps");
+expectIncludes(styles, "background: linear-gradient(", "Formula command cells must use a subtle inner highlight gradient");
+expectIncludes(formulaToolbar, 'type MatrixDelimiter =', "The custom matrix picker must keep an explicit supported delimiter set");
+expectIncludes(formulaToolbar, '| "Bmatrix"', "The matrix picker must include brace-delimited matrices");
+expectIncludes(formulaToolbar, '| "Vmatrix"', "The matrix picker must include double-bar matrices");
+expectIncludes(additionalCommands, 'makeCommand("matrix-dots"', "The expanded toolbar must include an ellipsis matrix template");
+expectIncludes(additionalCommands, '["Uparrow", "\\\\Uparrow"', "The expanded toolbar must include additional double-line arrows");
+expectIncludes(additionalCommands, '["plus", "+"', "The expanded relation palette must include the basic plus operator");
+expectIncludes(additionalCommands, '["ni", "\\\\ni"', "The expanded set palette must include reverse membership");
+expectIncludes(toolbarCommandOmmlRegression, "normalizeMathfieldLatexForRegression", "Every newly added toolbar command must be checked after real MathLive insertion normalization");
+expectIncludes(toolbarCommandOmmlRegression, "latexLinesToOmml", "Every newly added toolbar command must be checked through the real Word OMML conversion path");
+expectIncludes(styles, "overflow-y: hidden", "The horizontal formula tool strip must never expose a vertical scrollbar");
 expect(!rustRuntime.includes("native_window.orderOut(None)"), "The resident Office editor must remain in AppKit ordering so WebKit is never suspended between formula edits");
 expect(!rustRuntime.includes("Unable to hide the resident Office editor"), "The macOS resident editor must not use Tauri hide as part of its idle lifecycle");
 expectIncludes(rustRuntime, "setAlphaValue(if parked { 0.01 } else { 1.0 })", "Parking must use the proven eb2fcf2a native alpha transition without removing the WebView from the window list");
@@ -1044,7 +1586,7 @@ expectIncludes(dialogApp, "latex.trim() && autoCommitOnClose", "Closing a non-em
 expectIncludes(dialogApp, "await handleCancel();", "Closing an empty native editor must cancel and remove the pending host object");
 expectIncludes(dialogMessages, 'typeof ui.messageParent !== "function"', "Office parent messaging must tolerate native Tauri windows without Office.js");
 expectIncludes(appRuntime, "initial_office_url", "Cold Office URL launches must be recognized before the main workspace is revealed");
-expectIncludes(appRuntime, "if !office::macos_offline::focus_open_office_editor(app)", "macOS reopen must prefer an Office formula editor over the main workspace");
+expectIncludes(appRuntime, "if office::macos_offline::focus_open_office_editor(&app)", "macOS reopen must prefer an Office formula editor over the main workspace after the single-instance activation grace period");
 expectIncludes(rustRuntime, "refresh_health_signal", "Tauri status refresh must ask a running Office host for a fresh health signal");
 expectIncludes(rustRuntime, 'macro name "AutoExec"', "Word health refresh must call only the fixed AutoExec macro");
 expectIncludes(rustRuntime, 'macro name "Auto_Open"', "PowerPoint health refresh must call only the fixed Auto_Open macro");

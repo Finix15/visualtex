@@ -8,6 +8,17 @@ import type {
   DocumentParagraphStyle,
 } from "./documentImportParser";
 
+export interface MacosFormulaRestoreTarget {
+  sourceStart: number;
+  sourceEnd: number;
+  sourceText: string;
+  displayMode: DocumentFormulaDisplayMode;
+  fontSizePt: number;
+  sourceKind: "omml" | "image";
+  mathMl?: string;
+  latex?: string;
+}
+
 export interface MacosDocumentImportRequest {
   protocolVersion: number;
   sessionId: string;
@@ -15,10 +26,12 @@ export interface MacosDocumentImportRequest {
   sourceDocumentId: string;
   bookmarkName: string;
   defaultFontSizePt: number;
-  operation: "documentImport" | "latexRedraw";
+  operation: "documentImport" | "latexRedraw" | "formulaRestore";
   redrawScope?: "selection" | "document";
-  outputKind?: DocumentFormulaOutputKind;
+  outputKind?: DocumentFormulaOutputKind | "latex";
+  sourceKind?: "omml" | "image";
   source?: string;
+  restoreTargets?: MacosFormulaRestoreTarget[];
 }
 
 export interface DocumentImportParagraphCommitMetadata {
@@ -35,6 +48,9 @@ export interface DocumentImportTextCommitItem
   extends DocumentImportParagraphCommitMetadata {
   kind: "text";
   text: string;
+  sourceStart?: number;
+  sourceEnd?: number;
+  sourceText?: string;
 }
 
 export interface DocumentImportFormulaCommitItem
@@ -63,7 +79,7 @@ export type DocumentImportCommitItem =
   | DocumentImportFormulaCommitItem;
 
 export interface CommitMacosDocumentImportInput {
-  outputKind: DocumentFormulaOutputKind;
+  outputKind: DocumentFormulaOutputKind | "latex";
   items: DocumentImportCommitItem[];
 }
 
@@ -112,7 +128,7 @@ export function resolveMacosLatexRedrawFontSizes(
 }
 
 export function focusMacosDocumentImportTarget(
-  operation: "documentImport" | "latexRedraw" = "documentImport",
+  operation: "documentImport" | "latexRedraw" | "formulaRestore" = "documentImport",
 ) {
   return invokeTauri<void>("focus_macos_offline_document_import_target", {
     operation,

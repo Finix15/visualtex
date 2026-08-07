@@ -40,6 +40,15 @@
   --shadow-sm: 0 1px 2px rgba(24, 31, 40, 0.07);
   --shadow-md: 0 7px 20px rgba(24, 31, 40, 0.13), 0 1px 3px rgba(24, 31, 40, 0.08);
   --shadow-lg: 0 16px 40px rgba(24, 31, 40, 0.18), 0 2px 8px rgba(24, 31, 40, 0.08);
+  --toolbar-category-common: #d5c5b4;
+  --toolbar-category-structure: #c6ddf8;
+  --toolbar-category-calculus: #f6dba7;
+  --toolbar-category-matrix: #c9e8d3;
+  --toolbar-category-relation: #d9c9ef;
+  --toolbar-category-greek: #f1c6d5;
+  --toolbar-category-arrow: #c2e6e8;
+  --toolbar-category-physics: #cad2ef;
+  --toolbar-category-set: #c8e4d9;
   --control-height: 30px;
   --panel-header-height: 52px;
   background: var(--bg);
@@ -113,6 +122,15 @@
   --shadow-sm: 0 1px 2px rgba(53, 44, 36, 0.08);
   --shadow-md: 0 7px 20px rgba(53, 44, 36, 0.14), 0 1px 3px rgba(53, 44, 36, 0.08);
   --shadow-lg: 0 16px 40px rgba(53, 44, 36, 0.18), 0 2px 8px rgba(53, 44, 36, 0.09);
+  --toolbar-category-common: #c8b08f;
+  --toolbar-category-structure: #afc4c9;
+  --toolbar-category-calculus: #d9b978;
+  --toolbar-category-matrix: #b4c99e;
+  --toolbar-category-relation: #c9b0cf;
+  --toolbar-category-greek: #d8aca8;
+  --toolbar-category-arrow: #a9c7c0;
+  --toolbar-category-physics: #b3bdd8;
+  --toolbar-category-set: #adc5a7;
 }
 
 :root[data-theme="dark"] {
@@ -156,6 +174,15 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.18);
   --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.30), 0 1px 3px rgba(0, 0, 0, 0.22);
   --shadow-lg: 0 18px 46px rgba(0, 0, 0, 0.40), 0 2px 8px rgba(0, 0, 0, 0.24);
+  --toolbar-category-common: #a98f79;
+  --toolbar-category-structure: #78a9dc;
+  --toolbar-category-calculus: #d4ab60;
+  --toolbar-category-matrix: #79bd91;
+  --toolbar-category-relation: #aa8bd2;
+  --toolbar-category-greek: #d28da8;
+  --toolbar-category-arrow: #72b8bd;
+  --toolbar-category-physics: #8395d0;
+  --toolbar-category-set: #75b39a;
 }
 
 :root[data-theme="purple"] {
@@ -280,6 +307,15 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.43);
   --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.53);
+  --toolbar-category-common: #b39aa8;
+  --toolbar-category-structure: #829fd4;
+  --toolbar-category-calculus: #c7a36d;
+  --toolbar-category-matrix: #7daf91;
+  --toolbar-category-relation: #c29ce2;
+  --toolbar-category-greek: #d493b6;
+  --toolbar-category-arrow: #78b4bc;
+  --toolbar-category-physics: #929fda;
+  --toolbar-category-set: #79aa91;
 }
 
 :root[data-theme="green"] {
@@ -402,6 +438,15 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.34);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
   --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.48);
+  --toolbar-category-common: #a8a291;
+  --toolbar-category-structure: #77a8c0;
+  --toolbar-category-calculus: #c9aa64;
+  --toolbar-category-matrix: #7fc99a;
+  --toolbar-category-relation: #aa94c8;
+  --toolbar-category-greek: #c58fa2;
+  --toolbar-category-arrow: #70bbb0;
+  --toolbar-category-physics: #8298c8;
+  --toolbar-category-set: #78bd91;
 }
 
 * {
@@ -1036,7 +1081,8 @@ textarea:focus-visible,
   z-index: 90;
 }
 
-.canvas-input-behavior-trigger {
+.canvas-input-behavior-trigger,
+.workspace-export-trigger {
   height: 34px;
   display: flex;
   align-items: center;
@@ -1054,12 +1100,14 @@ textarea:focus-visible,
 }
 
 .canvas-input-behavior-trigger:hover,
-.canvas-input-behavior-trigger.is-active {
+.canvas-input-behavior-trigger.is-active,
+.workspace-export-trigger:hover {
   border-color: var(--border-strong);
   color: var(--text);
 }
 
-.canvas-input-behavior-trigger > svg:first-child {
+.canvas-input-behavior-trigger > svg:first-child,
+.workspace-export-trigger > svg:first-child {
   color: var(--accent);
 }
 
@@ -1073,18 +1121,22 @@ textarea:focus-visible,
 }
 
 .input-behavior-popover {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  width: min(420px, calc(100vw - 28px));
-  max-height: min(560px, calc(100vh - 84px));
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: auto;
+  width: min(420px, calc(100vw - 16px));
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  box-sizing: border-box;
   padding: 18px;
   border: 1px solid var(--border-strong);
   border-radius: 11px;
-  z-index: 100;
+  z-index: 1900;
   background: var(--surface);
   box-shadow: var(--shadow-md);
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .input-behavior-heading {
@@ -1499,7 +1551,11 @@ kbd {
   text-align: center;
   --caret-color: var(--formula-caret);
   --selection-background-color: var(--formula-selection);
-  --contains-highlight-background-color: color-mix(in srgb, var(--accent) 10%, transparent);
+  --contains-highlight-background-color: color-mix(
+    in srgb,
+    var(--accent) 10%,
+    transparent
+  );
   transition: font-size 160ms ease;
 }
 
@@ -1839,6 +1895,427 @@ kbd {
   line-height: 1.45;
 }
 
+.settings-subdialog-trigger {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  padding: 12px 13px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  text-align: left;
+}
+
+.settings-subdialog-trigger:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+}
+
+.settings-subdialog-trigger > svg:first-child {
+  color: var(--accent);
+}
+
+.settings-subdialog-trigger > svg:last-child {
+  color: var(--text-faint);
+}
+
+.settings-subdialog-trigger > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.settings-subdialog-trigger strong {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.settings-subdialog-trigger small {
+  color: var(--text-faint);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.settings-subdialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 130;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(10, 13, 17, 0.48);
+  backdrop-filter: blur(3px);
+}
+
+.settings-subdialog {
+  width: min(520px, calc(100vw - 32px));
+  max-height: min(560px, calc(100vh - 32px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 15px;
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  animation: dialog-in 150ms ease-out;
+}
+
+.settings-subdialog-content {
+  display: grid;
+  gap: 10px;
+  padding: 16px 18px;
+  overflow-y: auto;
+}
+
+.settings-subdialog-content .switch-row {
+  margin: 0;
+}
+
+.formula-toolbar-customization,
+.formula-inset-customization,
+.formula-font-customization,
+.png-background-customization {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--bg-elevated);
+}
+
+.formula-inset-customization-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.formula-inset-customization-header > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.formula-inset-customization-header strong {
+  color: var(--text);
+  font-size: 11px;
+}
+
+.formula-inset-customization-header small {
+  color: var(--text-faint);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.formula-inset-reset {
+  min-height: 28px;
+  margin: 0;
+  padding-inline: 10px;
+  flex: 0 0 auto;
+}
+
+.formula-inset-range-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.formula-toolbar-customization .formula-inset-range-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.formula-inset-range {
+  min-height: 52px;
+  margin: 0;
+  padding: 8px 10px;
+  gap: 10px;
+}
+
+.formula-inset-range input[type="range"] {
+  min-width: 80px;
+  width: 100%;
+}
+
+.formula-inset-preview-window {
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 52%, transparent),
+    var(--shadow-sm);
+}
+
+.formula-inset-preview-titlebar {
+  height: 25px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding-inline: 9px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--surface) 92%, #fff 8%),
+    var(--bg-elevated)
+  );
+}
+
+.formula-inset-preview-titlebar i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border-strong);
+}
+
+.formula-inset-preview-titlebar span {
+  margin-left: 4px;
+  color: var(--text-faint);
+  font-size: 8px;
+}
+
+.formula-inset-preview-toolbar {
+  min-height: calc(var(--preview-toolbar-button-size, 52px) + 8px);
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.formula-inset-preview-toolbar > span {
+  width: var(--preview-toolbar-button-size, 52px);
+  height: var(--preview-toolbar-button-size, 52px);
+  flex: 0 0 var(--preview-toolbar-button-size, 52px);
+  display: grid;
+  place-items: center;
+  padding: var(--preview-toolbar-button-padding, 2px);
+  border: 0;
+  border-radius: 0;
+  outline: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  outline-offset: -1px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--surface) 91%, #fff 9%),
+    color-mix(in srgb, var(--bg-elevated) 88%, var(--surface) 12%)
+  );
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 58%, transparent),
+    inset 0 -1px 0 color-mix(in srgb, var(--border) 44%, transparent);
+}
+
+.formula-inset-preview-toolbar .math-preview {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  font-size: clamp(
+    14px,
+    calc(var(--preview-toolbar-button-size, 52px) * 0.42),
+    28px
+  );
+}
+
+.formula-inset-preview-canvas {
+  padding: 8px var(--preview-formula-inset-right, 34px) 9px
+    var(--preview-formula-inset-left, 34px);
+  background: var(--formula-surface);
+}
+
+.formula-inset-preview-row {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  padding-block: var(--preview-formula-row-vertical-inset, 7px);
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+}
+
+.formula-inset-preview-row .math-preview {
+  width: min(210px, 100%);
+  min-height: 36px;
+  justify-content: flex-start;
+  font-size: 17px;
+}
+
+.formula-font-select-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.formula-font-setting {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+}
+
+.formula-font-setting > span {
+  min-width: 0;
+}
+
+.formula-font-setting strong {
+  color: var(--text);
+  font-size: 10px;
+}
+
+.formula-font-setting select {
+  width: 100%;
+  height: 30px;
+  padding: 0 28px 0 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  outline: none;
+  background: var(--bg-elevated);
+  color: var(--text);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.formula-font-setting select:focus {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.formula-font-live-preview {
+  min-height: 66px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--formula-surface);
+  overflow: hidden;
+}
+
+.formula-font-live-preview > span:first-child {
+  color: var(--text-faint);
+  font-size: 8px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.formula-font-live-preview .math-preview {
+  min-width: 0;
+  min-height: 42px;
+  justify-content: flex-start;
+  overflow: visible;
+  font-size: 19px;
+}
+
+.formula-font-live-preview .ML__cmr,
+.formula-font-live-preview .ML__mathbf {
+  font-family: var(--visualtex-formula-upright-font-family, KaTeX_Main, serif) !important;
+}
+
+.formula-font-live-preview .ML__mathit,
+.formula-font-live-preview .lcGreek.ML__mathbf,
+.formula-font-live-preview .ML__mathbfit {
+  font-family: var(--visualtex-formula-italic-font-family, KaTeX_Math, KaTeX_Main, serif) !important;
+}
+
+.formula-font-live-preview .ML__text {
+  font-family: var(--visualtex-formula-chinese-font-family, sans-serif) !important;
+}
+
+.png-background-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.png-background-transparent,
+.png-background-color {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--text-muted);
+  text-align: left;
+}
+
+.png-background-transparent {
+  font: inherit;
+  cursor: pointer;
+}
+
+.png-background-transparent:hover,
+.png-background-color:hover,
+.png-background-transparent.is-active,
+.png-background-color.is-active {
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--accent-soft) 42%, var(--surface));
+}
+
+.png-background-transparent > span:last-child,
+.png-background-color > span:last-child {
+  min-width: 0;
+}
+
+.png-background-transparent strong,
+.png-background-color strong {
+  color: var(--text);
+  font-size: 10px;
+}
+
+.png-transparent-swatch,
+.png-background-color input[type="color"] {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+}
+
+.png-transparent-swatch {
+  background-color: var(--surface);
+  background-image:
+    linear-gradient(45deg, var(--border) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--border) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--border) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--border) 75%);
+  background-size: 10px 10px;
+  background-position: 0 0, 0 5px, 5px -5px, -5px 0;
+}
+
+.png-background-color {
+  cursor: pointer;
+}
+
+.png-background-color input[type="color"] {
+  padding: 2px;
+  background: var(--bg-elevated);
+  cursor: pointer;
+}
+
+@media (max-width: 760px) {
+  .formula-toolbar-customization .formula-inset-range-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 560px) {
+  .formula-inset-range-grid,
+  .formula-font-select-grid,
+  .png-background-controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .switch-row,
 .range-setting {
   min-height: 56px;
@@ -2157,22 +2634,23 @@ kbd {
 .formula-line {
   min-height: var(--formula-row-height, 69px);
   display: grid;
-  grid-template-columns: 50px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: stretch;
   border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
   border-radius: 0;
   background: transparent;
 }
 
-.formula-line + .formula-line {
-  border-top: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+.multi-line-editor.has-line-numbers .formula-line {
+  grid-template-columns: 50px minmax(0, 1fr);
 }
 
-.formula-line:hover {
+.workspace.has-active-line-highlight .formula-line:hover {
   background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
 }
 
-.formula-line.is-active {
+.workspace.has-active-line-highlight .formula-line.is-active {
   background: color-mix(in srgb, var(--accent-soft) 25%, transparent);
 }
 
@@ -2193,7 +2671,7 @@ kbd {
   user-select: none;
 }
 
-.formula-line.is-active .formula-line-number {
+.workspace.has-active-line-highlight .formula-line.is-active .formula-line-number {
   border-color: var(--accent-border);
   background: var(--accent-soft);
   color: var(--accent);
@@ -3648,6 +4126,14 @@ button:disabled {
   margin-left: 4px;
   padding-left: 8px;
   border-left: 1px solid var(--border);
+}
+
+.workspace:not(.is-office-workspace)
+  .editor-pane-header
+  .formula-alignment-controls {
+  margin-left: 0;
+  padding-left: 0;
+  border-left: 0;
 }
 
 .formula-alignment-button {
@@ -5666,27 +6152,45 @@ textarea:disabled {
 }
 
 .template-strip {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 3px;
+  grid-template-columns: repeat(
+    auto-fill,
+    minmax(var(--formula-toolbar-button-size, 52px), 1fr)
+  );
+  gap: 0;
   padding: 4px 6px 8px;
 }
 
 .template-button {
-  height: 54px;
-  min-height: 54px;
-  padding: 4px 2px;
-  border-color: transparent;
-  border-radius: 5px;
-  background: transparent;
+  position: relative;
+  height: calc(var(--formula-toolbar-button-size, 52px) - 2px);
+  min-height: calc(var(--formula-toolbar-button-size, 52px) - 2px);
+  padding: var(--formula-toolbar-button-padding, 2px);
+  border: 0;
+  border-radius: 0;
+  outline: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  outline-offset: -1px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--surface) 91%, #fff 9%),
+    color-mix(in srgb, var(--bg-elevated) 88%, var(--surface) 12%)
+  );
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 58%, transparent),
+    inset 0 -1px 0 color-mix(in srgb, var(--border) 44%, transparent);
 }
 
 .template-button:hover,
 .template-button:focus-visible {
-  border-color: var(--border);
-  background: var(--surface-hover);
+  z-index: 1;
+  outline-color: var(--accent-border);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent-soft) 54%, #fff 46%),
+    color-mix(in srgb, var(--accent-soft) 82%, var(--surface) 18%)
+  );
 }
 
 .template-button:focus-visible {
+  outline-width: 2px;
   outline-offset: -2px;
 }
 
@@ -5698,7 +6202,11 @@ textarea:disabled {
   height: 100%;
   min-height: 0;
   color: var(--text);
-  font-size: 24px;
+  font-size: clamp(
+    16px,
+    calc(var(--formula-toolbar-button-size, 52px) * 0.46),
+    32px
+  );
   transform: none;
   transform-origin: center;
 }
@@ -5734,21 +6242,57 @@ textarea:disabled {
   min-height: var(--formula-row-height, 69px);
 }
 
-.formula-line:hover {
+.workspace.has-active-line-highlight .formula-line:hover {
   background: color-mix(in srgb, var(--surface-hover) 45%, transparent);
 }
 
-.formula-line.is-active {
+.workspace.has-active-line-highlight .formula-line.is-active {
   background: color-mix(in srgb, var(--accent-soft) 38%, transparent);
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
-.formula-line.is-multi-line-selected {
+.workspace.has-active-line-highlight .formula-line.is-multi-line-selected {
   background: color-mix(in srgb, var(--accent-soft) 58%, transparent);
 }
 
-.formula-line.is-multi-line-selected.is-active {
+.workspace.has-active-line-highlight
+  .formula-line.is-multi-line-selected.is-active {
   background: color-mix(in srgb, var(--accent-soft) 68%, transparent);
+}
+
+.workspace.is-source-editor-focused .formula-line,
+.workspace.is-source-editor-focused .formula-line:hover,
+.workspace.is-source-editor-focused .formula-line.is-active,
+.workspace.is-source-editor-focused .formula-line.is-multi-line-selected,
+.workspace.is-source-editor-focused
+  .formula-line.is-multi-line-selected.is-active {
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: 0 !important;
+}
+
+.workspace.is-source-editor-focused .editor-surface:focus-within {
+  border-color: var(--border);
+  box-shadow: none;
+}
+
+.workspace.is-source-editor-focused
+  .mathfield-host.has-pending-wrapper-placeholder::after {
+  display: none !important;
+}
+
+.multi-line-editor.is-source-preview-only {
+  cursor: default;
+}
+
+:root.visualtex-source-editor-focused .suggestion-popup,
+:root.visualtex-source-editor-focused #mathlive-suggestion-popover,
+:root.visualtex-source-editor-focused
+  #visualtex-native-input-suggestion-popover {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
 }
 
 .formula-line-number {
@@ -5760,7 +6304,7 @@ textarea:disabled {
   font-weight: 600;
 }
 
-.formula-line.is-active .formula-line-number {
+.workspace.has-active-line-highlight .formula-line.is-active .formula-line-number {
   border-color: var(--accent-border);
   background: var(--surface);
 }
@@ -5969,7 +6513,7 @@ textarea:disabled {
     padding: 9px 22px 22px;
   }
 
-  .formula-line {
+  .multi-line-editor.has-line-numbers .formula-line {
     grid-template-columns: 40px minmax(0, 1fr);
   }
 
@@ -6022,7 +6566,7 @@ textarea:disabled {
     padding: 7px 12px 18px;
   }
 
-  .formula-line {
+  .multi-line-editor.has-line-numbers .formula-line {
     grid-template-columns: 34px minmax(0, 1fr);
   }
 
@@ -6473,7 +7017,7 @@ textarea:disabled {
 .formula-line .visual-mathfield {
   display: flex;
   align-items: center;
-  padding: 7px 20px !important;
+  padding: var(--formula-row-vertical-inset, 5px) 20px !important;
   line-height: 1.08;
 }
 
@@ -6491,6 +7035,11 @@ textarea:disabled {
   justify-content: flex-start;
 }
 
+.multi-line-editor:not(.has-line-numbers)[data-formula-alignment="left"]
+  .visual-mathfield {
+  padding-left: 0 !important;
+}
+
 .multi-line-editor[data-formula-alignment="center"] .mathfield-host {
   justify-content: center;
 }
@@ -6500,7 +7049,7 @@ textarea:disabled {
 }
 
 .formula-line .visual-mathfield.is-simple-formula {
-  padding-block: 5px !important;
+  padding-block: var(--formula-row-vertical-inset, 5px) !important;
 }
 
 /* MathLive's in-progress LaTeX recommendation panel is attached to <body>,
@@ -7731,7 +8280,15 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 
 .office-dialog-shell {
   min-height: 100vh;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.office-resident-editor-workspace {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  overflow: hidden;
 }
 
 .office-dialog-header,
@@ -7739,8 +8296,8 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 18px;
-  padding: 10px 16px;
+  gap: 12px;
+  padding: 7px 14px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
@@ -7774,9 +8331,11 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 }
 
 .office-dialog-options {
+  min-width: 0;
   display: flex;
   align-items: center;
-  gap: 12px;
+  justify-content: center;
+  gap: 8px;
 }
 
 .office-display-mode-setting {
@@ -7858,9 +8417,268 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 
 .office-workspace-actions .primary-button,
 .office-workspace-actions .secondary-button,
+.office-history-actions .primary-button,
 .office-history-actions .secondary-button {
-  min-height: 32px;
-  padding: 6px 12px;
+  min-height: 30px;
+  padding: 5px 11px;
+  white-space: nowrap;
+}
+
+.office-history-actions {
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.office-dialog-action-divider {
+  width: 1px;
+  height: 22px;
+  margin-inline: 2px;
+  background: var(--border);
+}
+
+.office-dialog-shell .workspace {
+  --panel-header-height: 46px;
+}
+
+.office-dialog-shell .workspace.is-office-workspace.is-standard-layout,
+.office-dialog-shell .workspace.is-office-workspace.is-classic-layout {
+  grid-template-rows: minmax(0, 1fr);
+  padding-top: var(--panel-header-height);
+}
+
+.office-dialog-shell .workspace.is-office-workspace.is-standard-layout.has-sidebar {
+  grid-template-columns: minmax(0, 1fr) 252px;
+}
+
+.office-dialog-shell
+  .workspace.is-office-workspace.is-standard-layout
+  > .formula-workspace.editor-pane {
+  grid-column: 1;
+  grid-row: 1;
+  grid-template-rows: minmax(0, 1fr);
+  border-right: 1px solid var(--border);
+}
+
+.office-dialog-shell
+  .workspace.is-office-workspace.is-standard-layout:not(.has-sidebar)
+  > .formula-workspace.editor-pane {
+  grid-column: 1 / -1;
+  border-right: 0;
+}
+
+.office-dialog-shell
+  .workspace.is-office-workspace
+  > .formula-workspace.editor-pane
+  > .editor-pane-header {
+  position: fixed;
+  inset: 0 0 auto;
+  width: auto;
+  height: var(--panel-header-height);
+}
+
+.office-dialog-shell
+  .workspace.is-office-workspace.is-classic-layout
+  > .formula-workspace.editor-pane {
+  grid-column: 1;
+  grid-row: 1;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.office-dialog-shell
+  .workspace.is-office-workspace.is-classic-layout
+  > .classic-tile-resizer {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.office-dialog-shell
+  .workspace.is-office-workspace.is-classic-layout
+  > .classic-tile-toolbar {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.office-dialog-shell
+  .workspace.is-office-workspace.is-standard-layout
+  > .formula-toolbar {
+  position: relative;
+  inset: auto;
+  grid-column: 2;
+  grid-row: 1;
+  width: auto;
+  min-width: 0;
+  box-shadow: none;
+  border-right: 0;
+  border-left: 1px solid var(--border);
+}
+
+.editor-pane-header.is-office-editor-header {
+  min-width: 0;
+  gap: 6px;
+  padding: 5px 8px;
+  overflow: visible;
+  white-space: nowrap;
+}
+
+.editor-pane-header.is-office-editor-header .pane-title-group {
+  flex: 0 1 auto;
+  gap: 6px;
+}
+
+.office-inline-options,
+.office-inline-actions {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.office-inline-options {
+  flex: 0 1 auto;
+}
+
+.office-inline-actions {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.editor-pane-header.is-office-editor-header .formula-alignment-controls {
+  margin-left: 0;
+  padding-left: 7px;
+}
+
+.editor-pane-header.is-office-editor-header .canvas-tool-group {
+  flex: 1 1 auto;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.editor-pane-header.is-office-editor-header .office-display-mode-setting {
+  height: 30px;
+  padding: 1px;
+  border-radius: 7px;
+}
+
+.editor-pane-header.is-office-editor-header .office-display-mode-setting button {
+  min-width: 38px;
+  height: 28px;
+  min-height: 28px;
+  padding: 2px 7px;
+  font-size: 10px;
+}
+
+.editor-pane-header.is-office-editor-header .office-font-size-setting {
+  width: 138px;
+  height: 30px;
+  min-height: 30px;
+  gap: 3px;
+  padding: 1px 5px;
+  font-size: 10px;
+}
+
+.editor-pane-header.is-office-editor-header .office-font-size-setting select {
+  width: 104px;
+  height: 26px;
+  min-height: 26px;
+  padding-left: 5px;
+  font-size: 10px;
+}
+
+.editor-pane-header.is-office-editor-header .office-auto-commit-setting {
+  flex: 0 0 auto;
+  gap: 6px;
+  font-size: 10px;
+}
+
+.editor-pane-header.is-office-editor-header .office-auto-commit-setting input {
+  width: 14px;
+  height: 14px;
+}
+
+.office-history-icon-button {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text-muted);
+}
+
+.office-history-icon-button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
+  color: var(--accent);
+}
+
+.office-inline-actions .primary-button,
+.office-inline-actions .secondary-button {
+  align-self: center;
+  box-sizing: border-box;
+  height: 30px;
+  min-height: 30px;
+  margin: 0;
+  padding: 0 9px;
+  border-radius: 7px;
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.editor-pane-header.is-office-editor-header .formula-alignment-button,
+.editor-pane-header.is-office-editor-header .formula-formatting-button {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+}
+
+.editor-pane-header.is-office-editor-header .canvas-input-behavior-trigger {
+  width: 92px;
+  height: 30px;
+  min-height: 30px;
+  gap: 4px;
+  padding: 0 7px;
+  border-radius: 7px;
+  font-size: 11px;
+}
+
+.editor-pane-header.is-office-editor-header .canvas-ocr-model {
+  width: 136px;
+  height: 30px;
+  min-height: 30px;
+  gap: 3px;
+  padding: 0 4px 0 6px;
+  border-radius: 7px;
+}
+
+.editor-pane-header.is-office-editor-header .canvas-ocr-model select {
+  width: 112px;
+  height: 26px;
+  min-height: 26px;
+  padding: 0 18px 0 5px;
+  font-size: 10px;
+}
+
+.editor-pane-header.is-office-editor-header .canvas-controls {
+  height: 30px;
+  min-height: 30px;
+  gap: 0;
+  padding: 0;
+  border-radius: 7px;
+}
+
+.editor-pane-header.is-office-editor-header .canvas-controls .icon-button {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+}
+
+.editor-pane-header.is-office-editor-header .canvas-controls > span {
+  min-width: 34px;
+  font-size: 10px;
 }
 
 .office-dialog-state {
@@ -7886,21 +8704,79 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
   line-height: 1.6;
 }
 
-@media (max-width: 760px) {
-  .office-dialog-header,
-  .office-workspace-actions {
-    align-items: flex-start;
-    flex-wrap: wrap;
+@media (max-width: 1180px) {
+  .editor-pane-header.is-office-editor-header {
+    gap: 4px;
+    padding-inline: 6px;
   }
 
-  .office-dialog-options {
-    order: 3;
-    width: 100%;
-    flex-wrap: wrap;
+  .editor-pane-header.is-office-editor-header .office-font-size-setting {
+    width: 126px;
   }
 
-  .office-auto-commit-setting {
-    width: 100%;
+  .editor-pane-header.is-office-editor-header .office-font-size-setting select {
+    width: 92px;
+  }
+
+  .editor-pane-header.is-office-editor-header .canvas-input-behavior-trigger {
+    width: 84px;
+    padding-inline: 5px;
+  }
+
+  .editor-pane-header.is-office-editor-header .canvas-ocr-model {
+    width: 124px;
+  }
+
+  .editor-pane-header.is-office-editor-header .canvas-ocr-model select {
+    width: 100px;
+  }
+}
+
+@media (max-width: 560px) {
+  .editor-pane-header.is-office-editor-header {
+    gap: 3px;
+    padding-inline: 4px;
+  }
+
+  .editor-pane-header.is-office-editor-header .pane-title-group,
+  .editor-pane-header.is-office-editor-header .office-inline-options,
+  .editor-pane-header.is-office-editor-header .office-inline-actions,
+  .editor-pane-header.is-office-editor-header .canvas-tool-group {
+    gap: 3px;
+  }
+
+  .editor-pane-header.is-office-editor-header .office-font-size-setting {
+    width: 72px;
+    min-width: 72px;
+    padding-inline: 3px;
+  }
+
+  .editor-pane-header.is-office-editor-header .office-font-size-setting > span {
+    display: none;
+  }
+
+  .editor-pane-header.is-office-editor-header .office-font-size-setting select {
+    width: 64px;
+    padding-right: 16px;
+  }
+
+  .editor-pane-header.is-office-editor-header .canvas-controls > span {
+    display: none;
+  }
+
+  .editor-pane-header.is-office-editor-header .canvas-controls {
+    width: 56px;
+    min-width: 56px;
+  }
+
+  .office-inline-actions .primary-button,
+  .office-inline-actions .secondary-button {
+    padding-inline: 7px;
+    font-size: 10px;
+  }
+
+  .office-dialog-action-divider {
+    margin-inline: 1px;
   }
 }
 
@@ -8216,7 +9092,7 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 
 .formula-tile-tabs {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
   gap: 0;
   padding: 0 8px;
   border-bottom: 1px solid var(--border);
@@ -8244,6 +9120,23 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
   background: transparent;
   color: var(--accent);
   box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.formula-tile-tabs .formula-tile-collapse-button {
+  width: 32px;
+  min-width: 32px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-left: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.formula-tile-tabs .formula-tile-collapse-button:hover,
+.formula-tile-tabs .formula-tile-collapse-button:focus-visible {
+  background: var(--surface-hover);
+  color: var(--accent);
+  outline: none;
 }
 
 .custom-formula-tile-controls {
@@ -8386,6 +9279,51 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 :root[data-theme="green"] .formula-tile-button.is-custom.has-custom-color {
   border-color: color-mix(in srgb, var(--custom-tile-color) 24%, var(--tile-border));
   background: color-mix(in srgb, var(--custom-tile-color) 8%, var(--tile-bg));
+}
+
+.formula-editor-context-menu {
+  position: fixed;
+  z-index: 2050;
+  min-width: 176px;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+
+.formula-editor-context-menu button {
+  width: 100%;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.formula-editor-context-menu button > svg {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.formula-editor-context-menu button:hover,
+.formula-editor-context-menu button:focus-visible {
+  background: color-mix(in srgb, var(--accent-soft) 72%, transparent);
+  outline: none;
+}
+
+.formula-editor-context-menu button:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .formula-tile-context-menu {
@@ -9331,7 +10269,45 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 }
 
 .workspace.is-classic-layout.has-sidebar {
-  grid-template-columns: minmax(0, 1fr) 300px;
+  grid-template-columns:
+    minmax(0, 1fr)
+    7px
+    minmax(220px, var(--classic-tile-width, 300px));
+}
+
+.workspace.is-classic-layout:not(.is-office-workspace) {
+  grid-template-rows: var(--panel-header-height) minmax(0, 1fr);
+}
+
+.workspace.is-classic-layout:not(.is-office-workspace)
+  > .formula-workspace.editor-pane {
+  display: contents;
+}
+
+.workspace.is-classic-layout:not(.is-office-workspace)
+  > .formula-workspace.editor-pane
+  > .editor-pane-header {
+  grid-column: 1 / -1;
+  grid-row: 1;
+}
+
+.workspace.is-classic-layout:not(.is-office-workspace)
+  > .formula-workspace.editor-pane
+  > .classic-editor-pane-body {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.workspace.is-classic-layout:not(.is-office-workspace)
+  > .classic-tile-resizer {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.workspace.is-classic-layout:not(.is-office-workspace)
+  > .classic-tile-toolbar {
+  grid-column: 3;
+  grid-row: 2;
 }
 
 .workspace.is-classic-layout .formula-workspace.editor-pane {
@@ -9342,7 +10318,10 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) clamp(230px, 29vh, 250px);
+  grid-template-rows:
+    minmax(0, 1fr)
+    7px
+    minmax(132px, var(--classic-dock-height, 240px));
   overflow: hidden;
   background: var(--bg-elevated);
 }
@@ -9354,6 +10333,7 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 .classic-bottom-dock {
   min-width: 0;
   min-height: 0;
+  container-type: inline-size;
   display: grid;
   grid-template-rows: 36px minmax(0, 1fr);
   overflow: hidden;
@@ -9378,6 +10358,44 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 
 .classic-bottom-tab-spacer {
   min-width: 0;
+}
+
+.office-dialog-shell .classic-bottom-tabs {
+  grid-template-columns: minmax(250px, 1fr) auto minmax(34px, 1fr);
+  overflow: visible;
+}
+
+.classic-bottom-formatting-slot {
+  min-width: 0;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-self: start;
+  align-self: stretch;
+  padding-left: 2px;
+  overflow: visible;
+}
+
+.office-dialog-shell .classic-bottom-formatting-slot .formula-alignment-controls {
+  margin: 0;
+  padding: 0;
+  border-left: 0;
+  gap: 2px;
+}
+
+.office-dialog-shell .classic-bottom-formatting-slot .formula-formatting-controls {
+  position: relative;
+}
+
+.office-dialog-shell .classic-bottom-formatting-slot .formula-color-popover {
+  top: auto;
+  right: auto;
+  bottom: calc(100% + 8px);
+  left: 0;
+}
+
+.office-dialog-shell .classic-bottom-dock {
+  overflow: visible;
 }
 
 .classic-bottom-tab-group {
@@ -9437,10 +10455,178 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
   color: var(--accent);
 }
 
+@container (max-width: 560px) {
+  .office-dialog-shell .classic-bottom-tabs {
+    grid-template-columns: max-content minmax(72px, 1fr) max-content;
+    gap: 2px;
+    padding-inline: 4px;
+    overflow: hidden;
+  }
+
+  .office-dialog-shell .classic-bottom-tab-group {
+    min-width: 72px;
+    gap: 0;
+  }
+
+  .office-dialog-shell .classic-bottom-tab-group button {
+    min-width: 36px;
+    padding-inline: 8px;
+    gap: 0;
+  }
+
+  .office-dialog-shell .classic-bottom-tab-label {
+    display: none;
+  }
+
+  .office-dialog-shell .classic-bottom-actions {
+    min-width: max-content;
+    overflow: visible;
+  }
+}
+
+@container (max-width: 360px) {
+  .office-dialog-shell .classic-bottom-tabs {
+    grid-template-columns: minmax(0, 1fr) 64px max-content;
+    gap: 1px;
+    padding-inline: 2px;
+  }
+
+  .office-dialog-shell .classic-bottom-formatting-slot {
+    min-width: 0;
+    padding-left: 0;
+  }
+
+  .office-dialog-shell
+    .classic-bottom-formatting-slot
+    .formula-alignment-button,
+  .office-dialog-shell
+    .classic-bottom-formatting-slot
+    .formula-formatting-button {
+    width: 22px;
+    min-width: 22px;
+    height: 22px;
+    min-height: 22px;
+    padding: 0;
+  }
+
+  .office-dialog-shell
+    .classic-bottom-formatting-slot
+    .formula-alignment-controls {
+    gap: 0;
+  }
+
+  .office-dialog-shell .classic-bottom-tab-group {
+    min-width: 64px;
+  }
+
+  .office-dialog-shell .classic-bottom-tab-group button {
+    min-width: 32px;
+    padding-inline: 4px;
+  }
+
+  .office-dialog-shell .classic-bottom-copy,
+  .office-dialog-shell .classic-bottom-collapse {
+    width: 24px;
+    min-width: 24px;
+    height: 24px;
+    min-height: 24px;
+    padding: 0;
+  }
+}
+
+@media (max-height: 320px) {
+  .formula-toolbar.is-horizontal {
+    grid-template-rows: 32px minmax(0, 1fr);
+  }
+
+  .formula-toolbar.is-horizontal .toolbar-tabs {
+    padding: 2px 6px;
+  }
+
+  .formula-toolbar.is-horizontal .toolbar-tab {
+    height: 26px;
+  }
+
+  .formula-toolbar.is-horizontal .template-strip {
+    padding: 1px 6px;
+  }
+}
+
 .classic-bottom-content {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+}
+
+.workspace-panel-resizer {
+  position: relative;
+  z-index: 12;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  background: var(--bg-elevated);
+  touch-action: none;
+  outline: none;
+}
+
+.workspace-panel-resizer::before {
+  content: "";
+  position: absolute;
+  border-radius: 999px;
+  background: var(--border-strong);
+  opacity: 0.72;
+  transition:
+    background-color 120ms ease,
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.workspace-panel-resizer:hover::before,
+.workspace-panel-resizer:focus-visible::before {
+  background: var(--accent);
+  opacity: 1;
+}
+
+.classic-tile-resizer {
+  width: 7px;
+  cursor: col-resize;
+}
+
+.classic-tile-resizer::before {
+  inset: 8px 2px;
+  width: 3px;
+}
+
+.classic-tile-resizer:hover::before,
+.classic-tile-resizer:focus-visible::before {
+  transform: scaleX(1.35);
+}
+
+.classic-dock-resizer {
+  height: 7px;
+  cursor: row-resize;
+}
+
+.classic-dock-resizer::before {
+  inset: 2px 10px;
+  height: 3px;
+}
+
+.classic-dock-resizer:hover::before,
+.classic-dock-resizer:focus-visible::before {
+  transform: scaleY(1.35);
+}
+
+body[data-workspace-resize="tiles"],
+body[data-workspace-resize="tiles"] * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+body[data-workspace-resize="dock"],
+body[data-workspace-resize="dock"] * {
+  cursor: row-resize !important;
+  user-select: none !important;
 }
 
 .classic-source-pane-slot {
@@ -9461,6 +10647,33 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
   min-width: 0;
   border-right: 0;
   border-left: 1px solid var(--border);
+}
+
+.classic-tile-expand-button {
+  position: absolute;
+  top: calc(var(--panel-header-height, 48px) + 8px);
+  right: 8px;
+  z-index: 45;
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  color: var(--accent);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+}
+
+.classic-tile-expand-button:hover,
+.classic-tile-expand-button:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  outline: none;
 }
 
 .classic-tile-toolbar .formula-tiles-panel {
@@ -9502,16 +10715,46 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 }
 
 .formula-toolbar.is-horizontal .toolbar-tab {
+  position: relative;
   min-width: 78px;
   height: 28px;
   flex: 0 0 auto;
   padding-inline: 10px;
   border-radius: 3px;
+  color: var(--text-muted);
+  background: color-mix(
+    in srgb,
+    var(--surface) 82%,
+    var(--toolbar-category-tint, var(--toolbar-category-common)) 18%
+  );
+}
+
+.formula-toolbar.is-horizontal .toolbar-tab + .toolbar-tab::before {
+  content: "";
+  position: absolute;
+  left: -3px;
+  top: 5px;
+  bottom: 5px;
+  width: 1px;
+  background: color-mix(in srgb, var(--border) 58%, var(--border-strong) 42%);
+  pointer-events: none;
+}
+
+.formula-toolbar.is-horizontal .toolbar-tab:hover {
+  background: color-mix(
+    in srgb,
+    var(--surface-hover) 68%,
+    var(--toolbar-category-tint, var(--toolbar-category-common)) 32%
+  );
 }
 
 .formula-toolbar.is-horizontal .toolbar-tab.is-active {
-  background: transparent;
-  color: var(--accent);
+  background: color-mix(
+    in srgb,
+    var(--surface) 58%,
+    var(--toolbar-category-tint, var(--toolbar-category-common)) 42%
+  );
+  color: var(--text);
   box-shadow: inset 0 -2px 0 var(--accent);
 }
 
@@ -9521,12 +10764,18 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
   display: grid;
   grid-template-columns: none;
   grid-auto-flow: column;
-  grid-auto-columns: 56px;
-  grid-template-rows: repeat(3, minmax(46px, 1fr));
+  grid-auto-columns: var(--formula-toolbar-button-size, 52px);
+  grid-template-rows: repeat(
+    var(--toolbar-row-count, 3),
+    minmax(
+      max(30px, calc(var(--formula-toolbar-button-size, 52px) - 8px)),
+      1fr
+    )
+  );
   align-items: stretch;
   align-content: stretch;
-  gap: 4px;
-  padding: 5px 8px 7px;
+  gap: 0;
+  padding: 4px 8px;
   overflow-x: auto;
   overflow-y: hidden;
 }
@@ -9535,10 +10784,8 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
   width: 100%;
   min-width: 0;
   height: 100%;
-  min-height: 46px;
-  padding: 2px;
-  border-color: var(--border);
-  background: var(--surface);
+  min-height: 0;
+  padding: var(--formula-toolbar-button-padding, 2px);
 }
 
 .formula-toolbar.is-horizontal .template-button.is-wide-preview {
@@ -9548,21 +10795,387 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 }
 
 .formula-toolbar.is-horizontal .template-button .math-preview {
-  font-size: 18px;
+  font-size: clamp(
+    16px,
+    calc(var(--formula-toolbar-button-size, 52px) * 0.46),
+    32px
+  );
+}
+
+.formula-toolbar.is-horizontal .template-strip.is-continuous-categories {
+  display: flex;
+  align-items: stretch;
+  align-content: stretch;
+  gap: 14px;
+  scrollbar-width: none;
+  scroll-behavior: auto;
+  overscroll-behavior-inline: contain;
+  contain: layout paint style;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  isolation: isolate;
+}
+
+.formula-toolbar.is-horizontal
+  .template-strip.is-continuous-categories::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.formula-toolbar.is-horizontal .toolbar-category-section {
+  --toolbar-category-tint: var(--toolbar-category-common);
+  position: relative;
+  min-width: max-content;
+  min-height: 0;
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: none;
+  grid-auto-flow: column;
+  grid-auto-columns: var(--formula-toolbar-button-size, 52px);
+  grid-template-rows: repeat(
+    var(--toolbar-row-count, 3),
+    minmax(
+      max(30px, calc(var(--formula-toolbar-button-size, 52px) - 8px)),
+      1fr
+    )
+  );
+  align-items: stretch;
+  align-content: stretch;
+  gap: 0;
+  contain: paint style;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  will-change: transform;
+  background: color-mix(
+    in srgb,
+    var(--bg-elevated) 84%,
+    var(--toolbar-category-tint) 16%
+  );
+}
+
+.formula-toolbar.is-horizontal .toolbar-category-section .template-button {
+  outline-color: color-mix(
+    in srgb,
+    var(--border) 58%,
+    var(--toolbar-category-tint) 42%
+  );
+  background: linear-gradient(
+    180deg,
+    color-mix(
+      in srgb,
+      color-mix(in srgb, var(--surface) 91%, var(--bg-elevated) 9%) 82%,
+      var(--toolbar-category-tint) 18%
+    ),
+    color-mix(
+      in srgb,
+      color-mix(in srgb, var(--bg-elevated) 88%, var(--surface) 12%) 76%,
+      var(--toolbar-category-tint) 24%
+    )
+  );
+}
+
+.formula-toolbar.is-horizontal
+  .toolbar-category-section
+  .template-button:hover,
+.formula-toolbar.is-horizontal
+  .toolbar-category-section
+  .template-button:focus-visible {
+  outline-color: color-mix(
+    in srgb,
+    var(--accent-border) 54%,
+    var(--toolbar-category-tint) 46%
+  );
+  background: linear-gradient(
+    180deg,
+    color-mix(
+      in srgb,
+      var(--accent-soft) 62%,
+      var(--toolbar-category-tint) 38%
+    ),
+    color-mix(
+      in srgb,
+      var(--accent-soft) 68%,
+      var(--toolbar-category-tint) 32%
+    )
+  );
+}
+
+.formula-toolbar.is-horizontal .toolbar-static-preview {
+  contain: strict;
+}
+
+.formula-toolbar.is-horizontal
+  .toolbar-static-preview
+  .math-preview-fit-content {
+  transform: scale(0.92);
+}
+
+.formula-toolbar.is-horizontal
+  .template-strip.is-continuous-categories[data-scrolling="true"]
+  .toolbar-category-section {
+  pointer-events: none;
+}
+
+.formula-toolbar.is-horizontal
+  .template-strip.is-continuous-categories[data-scrolling="true"]
+  .toolbar-category-section
+  .template-button {
+  transition: none;
+  box-shadow: none;
+  background: color-mix(
+    in srgb,
+    var(--surface) 76%,
+    var(--toolbar-category-tint) 24%
+  );
+}
+
+.formula-toolbar.is-horizontal
+  .toolbar-category-section
+  + .toolbar-category-section::before {
+  content: "";
+  position: absolute;
+  left: -7px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: color-mix(in srgb, var(--border) 58%, var(--border-strong) 42%);
+}
+
+.formula-toolbar.is-horizontal .toolbar-tab[data-category="common"],
+.formula-toolbar.is-horizontal
+  .toolbar-category-section[data-toolbar-category-section="common"] {
+  --toolbar-category-tint: var(--toolbar-category-common);
+}
+
+.formula-toolbar.is-horizontal .toolbar-tab[data-category="structure"],
+.formula-toolbar.is-horizontal
+  .toolbar-category-section[data-toolbar-category-section="structure"] {
+  --toolbar-category-tint: var(--toolbar-category-structure);
+}
+
+.formula-toolbar.is-horizontal .toolbar-tab[data-category="calculus"],
+.formula-toolbar.is-horizontal
+  .toolbar-category-section[data-toolbar-category-section="calculus"] {
+  --toolbar-category-tint: var(--toolbar-category-calculus);
+}
+
+.formula-toolbar.is-horizontal .toolbar-tab[data-category="matrix"],
+.formula-toolbar.is-horizontal
+  .toolbar-category-section[data-toolbar-category-section="matrix"] {
+  --toolbar-category-tint: var(--toolbar-category-matrix);
+}
+
+.formula-toolbar.is-horizontal .toolbar-tab[data-category="relation"],
+.formula-toolbar.is-horizontal
+  .toolbar-category-section[data-toolbar-category-section="relation"] {
+  --toolbar-category-tint: var(--toolbar-category-relation);
+}
+
+.formula-toolbar.is-horizontal .toolbar-tab[data-category="greek"],
+.formula-toolbar.is-horizontal
+  .toolbar-category-section[data-toolbar-category-section="greek"] {
+  --toolbar-category-tint: var(--toolbar-category-greek);
+}
+
+.formula-toolbar.is-horizontal .toolbar-tab[data-category="arrow"],
+.formula-toolbar.is-horizontal
+  .toolbar-category-section[data-toolbar-category-section="arrow"] {
+  --toolbar-category-tint: var(--toolbar-category-arrow);
+}
+
+.formula-toolbar.is-horizontal .toolbar-tab[data-category="physics"],
+.formula-toolbar.is-horizontal
+  .toolbar-category-section[data-toolbar-category-section="physics"] {
+  --toolbar-category-tint: var(--toolbar-category-physics);
+}
+
+.formula-toolbar.is-horizontal .toolbar-tab[data-category="set"],
+.formula-toolbar.is-horizontal
+  .toolbar-category-section[data-toolbar-category-section="set"] {
+  --toolbar-category-tint: var(--toolbar-category-set);
+}
+
+.formula-toolbar.is-horizontal
+  .template-button.is-enlarged-cases-preview
+  .math-preview {
+  font-size: clamp(
+    22px,
+    calc(var(--formula-toolbar-button-size, 52px) * 0.68),
+    42px
+  );
+}
+
+.formula-toolbar .matrix-builder {
+  --toolbar-category-tint: var(--toolbar-category-matrix);
+  border-color: color-mix(
+    in srgb,
+    var(--border) 56%,
+    var(--toolbar-category-tint) 44%
+  );
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--surface) 76%, var(--toolbar-category-tint) 24%),
+    color-mix(
+      in srgb,
+      var(--bg-elevated) 68%,
+      var(--toolbar-category-tint) 32%
+    )
+  );
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--surface) 72%, transparent);
+}
+
+.formula-toolbar .matrix-options-column {
+  border-color: color-mix(
+    in srgb,
+    var(--border) 62%,
+    var(--toolbar-category-tint) 38%
+  );
+}
+
+.formula-toolbar .matrix-size-badge {
+  border-color: color-mix(
+    in srgb,
+    var(--border-strong) 48%,
+    var(--toolbar-category-tint) 52%
+  );
+  background: color-mix(
+    in srgb,
+    var(--surface) 72%,
+    var(--toolbar-category-tint) 28%
+  );
+  color: color-mix(in srgb, var(--text) 78%, var(--toolbar-category-tint) 22%);
+}
+
+.formula-toolbar .matrix-delimiter-options button {
+  border-color: color-mix(
+    in srgb,
+    var(--border) 66%,
+    var(--toolbar-category-tint) 34%
+  );
+  background: color-mix(
+    in srgb,
+    var(--surface) 82%,
+    var(--toolbar-category-tint) 18%
+  );
+  color: var(--text-muted);
+}
+
+.formula-toolbar .matrix-delimiter-options button:hover,
+.formula-toolbar .matrix-delimiter-options button:focus-visible {
+  border-color: color-mix(
+    in srgb,
+    var(--accent-border) 52%,
+    var(--toolbar-category-tint) 48%
+  );
+  background: color-mix(
+    in srgb,
+    var(--surface-hover) 66%,
+    var(--toolbar-category-tint) 34%
+  );
+}
+
+.formula-toolbar .matrix-delimiter-options button.is-active {
+  border-color: color-mix(
+    in srgb,
+    var(--accent-border) 44%,
+    var(--toolbar-category-tint) 56%
+  );
+  background: color-mix(
+    in srgb,
+    var(--accent-soft) 68%,
+    var(--toolbar-category-tint) 32%
+  );
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px color-mix(
+    in srgb,
+    var(--accent) 38%,
+    var(--toolbar-category-tint) 62%
+  );
+}
+
+.formula-toolbar .matrix-size-grid {
+  border-color: color-mix(
+    in srgb,
+    var(--border) 62%,
+    var(--toolbar-category-tint) 38%
+  );
+  background: color-mix(
+    in srgb,
+    var(--surface) 78%,
+    var(--toolbar-category-tint) 22%
+  );
+}
+
+.formula-toolbar .matrix-size-cell {
+  border-color: color-mix(
+    in srgb,
+    var(--border-strong) 70%,
+    var(--toolbar-category-tint) 30%
+  );
+  background: color-mix(
+    in srgb,
+    var(--bg-elevated) 84%,
+    var(--toolbar-category-tint) 16%
+  );
+}
+
+.formula-toolbar .matrix-size-cell:hover,
+.formula-toolbar .matrix-size-cell:focus-visible,
+.formula-toolbar .matrix-size-cell.is-previewed {
+  border-color: color-mix(
+    in srgb,
+    var(--accent-border) 42%,
+    var(--toolbar-category-tint) 58%
+  );
+  background: color-mix(
+    in srgb,
+    var(--accent-soft) 48%,
+    var(--toolbar-category-tint) 52%
+  );
+}
+
+.formula-toolbar .matrix-size-cell.is-selected-corner {
+  box-shadow: inset 0 0 0 1px color-mix(
+    in srgb,
+    var(--accent) 56%,
+    var(--toolbar-category-tint) 44%
+  );
+}
+
+.formula-toolbar .matrix-insert-button {
+  border-color: color-mix(
+    in srgb,
+    var(--accent) 80%,
+    var(--toolbar-category-tint) 20%
+  );
+  background: color-mix(
+    in srgb,
+    var(--accent) 86%,
+    var(--toolbar-category-tint) 14%
+  );
+}
+
+.formula-toolbar .matrix-insert-button:hover,
+.formula-toolbar .matrix-insert-button:focus-visible {
+  background: color-mix(
+    in srgb,
+    var(--accent-hover) 82%,
+    var(--toolbar-category-tint) 18%
+  );
 }
 
 .formula-toolbar.is-horizontal .matrix-builder {
   width: 100%;
   min-width: 0;
   height: auto;
-  grid-column: span 6;
-  grid-row: 1 / span 3;
-  grid-template-columns: minmax(0, 212px) 126px;
+  grid-column: span 7;
+  grid-row: 1 / span var(--toolbar-row-count, 3);
+  grid-template-columns: minmax(0, 214px) minmax(116px, 126px);
   grid-template-rows: minmax(0, 1fr);
   align-items: stretch;
   justify-content: stretch;
-  gap: 6px;
-  padding: 6px;
+  gap: 4px;
+  padding: 5px;
   overflow: hidden;
 }
 
@@ -9596,12 +11209,16 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 
 .formula-toolbar.is-horizontal .matrix-delimiter-picker {
   align-content: start;
-  gap: 2px;
+  gap: 0;
+}
+
+.formula-toolbar.is-horizontal .matrix-control-label {
+  display: none;
 }
 
 .formula-toolbar.is-horizontal .matrix-delimiter-options {
-  height: 62px;
-  gap: 4px;
+  height: 58px;
+  gap: 0;
 }
 
 .formula-toolbar.is-horizontal .matrix-delimiter-options button {
@@ -9624,37 +11241,110 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 }
 
 .formula-toolbar.is-horizontal .matrix-size-grid {
-  width: 120px;
-  padding: 4px;
-  gap: 2px;
+  width: 98px;
+  padding: 3px;
+  gap: 1px;
 }
 
 .formula-toolbar.is-horizontal .matrix-insert-button {
   width: 100%;
   min-width: 0;
-  height: 32px;
-  min-height: 32px;
+  height: 28px;
+  min-height: 28px;
   padding: 0 14px;
   border-radius: 4px;
   font-size: 10px;
   white-space: nowrap;
 }
 
-:root[data-theme="beige"] .formula-line:hover,
-:root[data-theme="beige"] .formula-line.is-active {
+.formula-toolbar.is-horizontal[data-toolbar-row-count="2"] .matrix-builder {
+  grid-column: span 5;
+  grid-template-columns: minmax(0, 190px) 78px;
+  gap: 4px;
+  padding: 4px;
+}
+
+.formula-toolbar.is-horizontal[data-toolbar-row-count="2"] .matrix-options-column {
+  gap: 2px;
+  padding-right: 4px;
+}
+
+.formula-toolbar.is-horizontal[data-toolbar-row-count="2"] .matrix-builder-heading {
+  min-height: 16px;
+}
+
+.formula-toolbar.is-horizontal[data-toolbar-row-count="2"] .matrix-builder-heading strong {
+  font-size: 10px;
+}
+
+.formula-toolbar.is-horizontal[data-toolbar-row-count="2"] .matrix-size-badge {
+  min-width: 36px;
+  height: 17px;
+  padding-inline: 3px;
+  font-size: 8px;
+}
+
+.formula-toolbar.is-horizontal[data-toolbar-row-count="2"] .matrix-control-label {
+  display: none;
+}
+
+.formula-toolbar.is-horizontal[data-toolbar-row-count="2"] .matrix-delimiter-options {
+  height: 40px;
+  gap: 2px;
+}
+
+.formula-toolbar.is-horizontal[data-toolbar-row-count="2"] .matrix-delimiter-options button {
+  min-height: 0;
+  padding: 1px;
+}
+
+.formula-toolbar.is-horizontal[data-toolbar-row-count="2"] .matrix-delimiter-options .math-preview {
+  height: 16px;
+  max-height: 16px;
+  min-height: 0;
+  font-size: 13px;
+}
+
+.formula-toolbar.is-horizontal[data-toolbar-row-count="2"] .matrix-size-picker {
+  gap: 1px;
+}
+
+.formula-toolbar.is-horizontal[data-toolbar-row-count="2"] .matrix-size-grid {
+  width: 74px;
+  padding: 2px;
+  gap: 1px;
+}
+
+.formula-toolbar.is-horizontal[data-toolbar-row-count="2"] .matrix-insert-button {
+  height: 23px;
+  min-height: 23px;
+  padding-inline: 7px;
+  font-size: 9px;
+}
+
+:root[data-theme="beige"]
+  .workspace.has-active-line-highlight
+  .formula-line:hover {
   background: color-mix(in srgb, var(--formula-surface) 88%, var(--accent-soft-beige) 12%);
 }
 
-:root[data-theme="beige"] .formula-line.is-active {
+:root[data-theme="beige"]
+  .workspace.has-active-line-highlight
+  .formula-line.is-active {
+  background: color-mix(in srgb, var(--formula-surface) 88%, var(--accent-soft-beige) 12%);
   box-shadow: inset 2px 0 0 var(--accent-primary);
 }
 
-:root[data-theme="purple"] .formula-line.is-active {
+:root[data-theme="purple"]
+  .workspace.has-active-line-highlight
+  .formula-line.is-active {
   background: var(--bg-current-line);
   box-shadow: inset 2px 0 0 var(--formula-active-line);
 }
 
-:root[data-theme="green"] .formula-line.is-active {
+:root[data-theme="green"]
+  .workspace.has-active-line-highlight
+  .formula-line.is-active {
   background: var(--bg-current-line);
   box-shadow: inset 2px 0 0 var(--accent-primary);
 }
@@ -9683,7 +11373,10 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 
 @media (max-width: 980px) {
   .workspace.is-classic-layout.has-sidebar {
-    grid-template-columns: minmax(0, 1fr) clamp(220px, 28vw, 260px);
+    grid-template-columns:
+      minmax(0, 1fr)
+      7px
+      minmax(220px, var(--classic-tile-width, 300px));
   }
 
   .classic-bottom-tab-group button {
@@ -9696,13 +11389,23 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .workspace.is-classic-layout > .classic-tile-resizer {
+    display: none;
+  }
+
   .workspace.is-classic-layout > .classic-tile-toolbar {
     position: absolute;
     inset: 0 0 0 auto;
     z-index: 35;
-    width: min(280px, 82vw);
+    width: min(var(--classic-tile-width, 300px), 82vw);
     min-width: 0;
     box-shadow: -10px 0 28px rgba(20, 24, 34, 0.16);
+  }
+
+  .office-dialog-shell
+    .workspace.is-classic-layout.has-sidebar
+    .classic-editor-pane-body {
+    margin-right: min(var(--classic-tile-width, 300px), 82vw);
   }
 
   .classic-bottom-tabs {
@@ -9717,7 +11420,14 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
   }
 
   .classic-editor-pane-body {
-    grid-template-rows: minmax(0, 1fr) clamp(210px, 32vh, 238px);
+    grid-template-rows:
+      minmax(0, 1fr)
+      7px
+      minmax(132px, var(--classic-dock-height, 240px));
+  }
+
+  .classic-editor-pane-body.is-dock-collapsed {
+    grid-template-rows: minmax(0, 1fr) 36px;
   }
 }
 
@@ -9734,8 +11444,12 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border-default) 86%, var(--text-secondary));
   background: var(--bg-global);
   color: var(--text-primary);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--surface-primary) 80%, transparent),
+    0 14px 38px color-mix(in srgb, #101820 16%, transparent);
 }
 
 .doc-import-toolbar,
@@ -9758,9 +11472,12 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 }
 
 .doc-import-footer {
-  min-height: 54px;
-  border-top: 1px solid var(--border-subtle);
-  box-shadow: 0 -1px 0 color-mix(in srgb, var(--border-subtle) 55%, transparent);
+  min-height: 58px;
+  border-top: 1px solid color-mix(in srgb, var(--border-default) 88%, var(--text-secondary));
+  background: color-mix(in srgb, var(--surface-secondary) 82%, var(--surface-primary));
+  box-shadow:
+    0 -1px 0 color-mix(in srgb, var(--surface-primary) 85%, transparent),
+    0 -8px 22px color-mix(in srgb, #101820 8%, transparent);
 }
 
 .doc-import-title-block {
@@ -9867,21 +11584,45 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
 }
 
 .doc-import-secondary {
+  border-color: color-mix(in srgb, var(--border-default) 92%, var(--text-secondary));
   background: var(--surface-primary);
   color: var(--text-primary);
+  font-weight: 650;
+}
+
+.doc-import-secondary:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent-primary) 48%, var(--border-default));
+  background: color-mix(in srgb, var(--accent-primary) 7%, var(--surface-primary));
 }
 
 .doc-import-primary {
-  border-color: var(--accent-primary);
-  background: var(--accent-primary);
-  color: var(--primary-foreground, #fff);
-  font-weight: 700;
+  border-color: color-mix(in srgb, var(--accent-primary) 78%, #102c43);
+  background: color-mix(in srgb, var(--accent-primary) 88%, #123f60);
+  color: #fff;
+  font-weight: 750;
+  box-shadow: 0 1px 2px color-mix(in srgb, #08131c 20%, transparent);
 }
 
-.doc-import-secondary:disabled,
+.doc-import-primary:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent-primary) 68%, #071c2b);
+  background: color-mix(in srgb, var(--accent-primary) 76%, #0c3553);
+}
+
+.doc-import-secondary:disabled {
+  cursor: default;
+  border-color: color-mix(in srgb, var(--border-default) 78%, transparent);
+  background: color-mix(in srgb, var(--surface-secondary) 72%, var(--surface-primary));
+  color: color-mix(in srgb, var(--text-secondary) 78%, var(--surface-primary));
+  opacity: 1;
+}
+
 .doc-import-primary:disabled {
   cursor: default;
-  opacity: 0.55;
+  border-color: color-mix(in srgb, var(--accent-primary) 28%, var(--border-default));
+  background: color-mix(in srgb, var(--accent-primary) 22%, var(--surface-secondary));
+  color: color-mix(in srgb, var(--text-primary) 68%, var(--surface-secondary));
+  box-shadow: none;
+  opacity: 1;
 }
 
 .doc-import-workspace {
@@ -10217,6 +11958,24 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
   color: #2d7f50;
 }
 
+/* Keep a compact inset so the first formula row follows the canvas shape. */
+.editor-pane-scroll {
+  padding-top: 0;
+}
+
+.editor-pane-scroll > .editor-surface.multi-line-editor {
+  padding-top: 6px;
+  padding-right: var(--formula-area-inset-right, 34px);
+  padding-left: var(--formula-area-inset-left, 34px);
+}
+
+@media (max-width: 760px) {
+  .workspace.is-classic-layout:not(.is-office-workspace)
+    > .classic-tile-toolbar {
+    top: var(--panel-header-height);
+  }
+}
+
 @media (max-width: 980px) {
   .doc-import-workspace {
     grid-template-columns: 1fr;
@@ -10227,5 +11986,139 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
   .doc-import-pane-heading small,
   .doc-import-preview-counts > span:not(:first-child) {
     display: none;
+  }
+}
+
+/* Interface-customization controls use a roomy horizontal parameter layout. */
+.settings-subdialog {
+  width: min(720px, calc(100vw - 36px));
+  max-height: min(720px, calc(100vh - 36px));
+}
+
+.settings-subdialog-content {
+  gap: 12px;
+  padding: 18px 20px 20px;
+}
+
+.formula-toolbar-customization,
+.formula-inset-customization,
+.formula-font-customization,
+.png-background-customization {
+  gap: 14px;
+  padding: 15px 16px;
+  border-radius: 14px;
+}
+
+.formula-inset-customization-header strong {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.formula-inset-reset {
+  min-height: 32px;
+  padding-inline: 12px;
+}
+
+.formula-toolbar-customization .formula-inset-range-grid,
+.formula-inset-range-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.formula-inset-range-grid > .formula-inset-range:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
+.settings-subdialog-content .formula-inset-range {
+  min-width: 0;
+  min-height: 68px;
+  display: grid;
+  grid-template-columns: minmax(104px, 0.78fr) minmax(140px, 1.22fr);
+  align-items: center;
+  gap: 16px;
+  margin: 0;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--surface);
+}
+
+.settings-subdialog-content .formula-inset-range > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.settings-subdialog-content .formula-inset-range strong {
+  max-width: 100%;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.settings-subdialog-content .formula-inset-range small {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.settings-subdialog-content .formula-inset-range input[type="range"] {
+  min-width: 0;
+  width: 100%;
+  margin: 0;
+}
+
+.configuration-transfer-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.configuration-transfer-actions .secondary-button {
+  width: 100%;
+  justify-content: center;
+  gap: 8px;
+}
+
+.configuration-file-input {
+  display: none;
+}
+
+.configuration-transfer-status {
+  margin: 9px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+@media (max-width: 640px) {
+  .settings-subdialog {
+    width: min(520px, calc(100vw - 24px));
+    max-height: calc(100vh - 24px);
+  }
+
+  .settings-subdialog-content {
+    padding-inline: 14px;
+  }
+
+  .formula-toolbar-customization .formula-inset-range-grid,
+  .formula-inset-range-grid,
+  .configuration-transfer-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .formula-inset-range-grid > .formula-inset-range:last-child:nth-child(odd) {
+    grid-column: auto;
+  }
+
+  .settings-subdialog-content .formula-inset-range {
+    grid-template-columns: minmax(96px, 118px) minmax(0, 1fr);
+    gap: 12px;
   }
 }

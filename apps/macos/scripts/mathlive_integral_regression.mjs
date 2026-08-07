@@ -15,6 +15,15 @@ const sleep = (milliseconds) =>
 
 const rareIntegralCommands = [
   "iiiint",
+  "idotsint",
+  "dotsint",
+  "sqint",
+  "sqiint",
+  "ointclockwise",
+  "varointctrclockwise",
+  "varoiint",
+  "landupint",
+  "landdownint",
   "sumint",
   "intbar",
   "intBar",
@@ -394,6 +403,16 @@ async function main() {
     assert.ok(
       intctrclockwiseNolimits.value.includes(String.raw`\intctrclockwise\nolimits`),
       "intctrclockwise nolimits serializes",
+    );
+    assert.equal(
+      result[String.raw`\dotsint_{a}^{b}`].svgPath,
+      result[String.raw`\idotsint_{a}^{b}`].svgPath,
+      "dotsint alias uses the idotsint esint10 outline",
+    );
+    assert.equal(
+      result[String.raw`\ointclockwise_{a}^{b}`].svgPath,
+      result[String.raw`\intclockwise_{a}^{b}`].svgPath,
+      "MathLive intclockwise spelling uses the esint ointclockwise outline",
     );
     assert.equal(
       result[String.raw`\awint_{a}^{b}`].svgPath,

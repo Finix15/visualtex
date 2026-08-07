@@ -1,5 +1,9 @@
 import { latexToSvg } from "../../export/latexToSvg";
 import type { LatexCodeFormat } from "../../types/formula";
+import type {
+  FormulaChineseFont,
+  FormulaLetterFont,
+} from "../../editor/formulaFontPreferences";
 import { errorMessage } from "../../runtime/errorMessage";
 import {
   latexLinesToOmmlArtifacts,
@@ -19,6 +23,8 @@ export interface RenderOfficeFormulaArtifactsInput {
   displayMode: "inline" | "block";
   host?: "word" | "powerpoint";
   includeWordOmml?: boolean;
+  formulaLetterFont?: FormulaLetterFont;
+  formulaChineseFont?: FormulaChineseFont;
 }
 
 export interface OfficeFormulaRenderArtifacts {
@@ -40,6 +46,8 @@ export function renderOfficeFormulaArtifacts({
   displayMode,
   host,
   includeWordOmml = true,
+  formulaLetterFont,
+  formulaChineseFont,
 }: RenderOfficeFormulaArtifactsInput): OfficeFormulaRenderArtifacts {
   const document = normalizeFormulaEditorDocument(lines, codeFormat);
   const canonicalLatex = serializeFormulaEditorDocument(document);
@@ -70,6 +78,8 @@ export function renderOfficeFormulaArtifacts({
         displayMode === "inline" ? 1 : host === "word" ? 2 : 10,
       background: "transparent",
       forceExplicitBlack: host === "word",
+      formulaLetterFont,
+      formulaChineseFont,
     });
   } catch (reason) {
     throw new Error(
@@ -84,6 +94,7 @@ export function renderOfficeFormulaArtifacts({
         document.lines.map((line) => line.latex),
         displayMode,
         document.codeFormat,
+        { formulaLetterFont, formulaChineseFont },
       );
     } catch (reason) {
       throw new Error(
@@ -99,4 +110,23 @@ export function renderOfficeFormulaArtifacts({
     svg,
     omml,
   };
+}
+
+/**
+ * Autosave runs while a formula is still being composed. MathLive templates
+ * deliberately expose temporary source such as `\\placeholder{}`, unclosed
+ * groups/environments and a command that is only partly typed. Those states
+ * must remain editable and persist their source, but they are not valid Office
+ * artifacts yet. Keep explicit insert/apply strict by using
+ * renderOfficeFormulaArtifacts there; only draft persistence uses this
+ * best-effort wrapper.
+ */
+export function tryRenderOfficeFormulaDraftArtifacts(
+  input: RenderOfficeFormulaArtifactsInput,
+): OfficeFormulaRenderArtifacts | null {
+  try {
+    return renderOfficeFormulaArtifacts(input);
+  } catch {
+    return null;
+  }
 }

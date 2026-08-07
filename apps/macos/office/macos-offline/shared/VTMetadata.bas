@@ -241,7 +241,8 @@ Public Function VTRequestJson( _
     Optional ByVal nativeEquation As Boolean = False, _
     Optional ByVal fontSizePt As Double = 0#, _
     Optional ByVal referenceWidthPt As Double = 0#, _
-    Optional ByVal referenceHeightPt As Double = 0#) As String
+    Optional ByVal referenceHeightPt As Double = 0#, _
+    Optional ByVal operationName As String = "formula") As String
 
     If Not VTIsCanonicalUuid(sessionId) Then
         Err.Raise vbObjectError + 7203, "VisualTeX", "Invalid VisualTeX Session id."
@@ -274,12 +275,29 @@ Public Function VTRequestJson( _
         Err.Raise vbObjectError + 7211, "VisualTeX", _
             "PowerPoint requests cannot contain Word-only formula metadata."
     End If
+    If operationName <> "formula" And _
+       operationName <> "nativeToImage" And _
+       operationName <> "imageToNative" Then
+        Err.Raise vbObjectError + 7212, "VisualTeX", _
+            "Invalid VisualTeX formula operation."
+    End If
+    If operationName = "nativeToImage" And _
+       (hostName <> "word" Or mode <> "edit" Or nativeEquation) Then
+        Err.Raise vbObjectError + 7212, "VisualTeX", _
+            "Native-to-image conversion requires a Word image-output edit request."
+    End If
+    If operationName = "imageToNative" And _
+       (hostName <> "word" Or mode <> "edit" Or Not nativeEquation) Then
+        Err.Raise vbObjectError + 7212, "VisualTeX", _
+            "Image-to-native conversion requires a Word native-output edit request."
+    End If
 
     VTRequestJson = "{" & _
         """protocolVersion"":" & CStr(VT_PROTOCOL_VERSION) & "," & _
         """sessionId"":" & VTJsonString(sessionId) & "," & _
         """host"":" & VTJsonString(hostName) & "," & _
         """mode"":" & VTJsonString(mode) & "," & _
+        """operation"":" & VTJsonString(operationName) & "," & _
         """formulaId"":" & VTJsonNullableString(formulaId) & "," & _
         """displayMode"":" & VTJsonString(displayMode) & "," & _
         """numbered"":" & VTJsonBoolean(numbered) & "," & _

@@ -28,6 +28,8 @@ export interface EditorWorkspaceProps {
   showOcrActions: boolean;
 
   primaryActionLabel?: string;
+  officeHeaderLeadingControls?: ReactNode;
+  officeHeaderTrailingActions?: ReactNode;
 
   onPrimaryAction?: () => Promise<void>;
   onCancel?: () => Promise<void>;
@@ -35,6 +37,7 @@ export interface EditorWorkspaceProps {
 
   editorRef: RefObject<MathEditorHandle | null>;
   editorInstanceKey?: string;
+  reuseEditorLineSlots?: boolean;
   sidebarOpen: boolean;
   onSidebarOpenChange: (open: boolean) => void;
   onHistoryBusyChange: (busy: boolean) => void;
@@ -42,6 +45,7 @@ export interface EditorWorkspaceProps {
     file: File,
     target: MathEditorInsertionTarget,
   ) => Promise<void>;
+  onCopyPng?: () => Promise<void>;
   onCopy: () => Promise<void>;
   onReplaceDocument: (
     snapshot: DocumentSnapshot,

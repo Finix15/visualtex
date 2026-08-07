@@ -469,10 +469,18 @@ async function main() {
         const fontArtifacts = module.latexLinesToOmmlArtifacts([
           String.raw\`\\mathrm{x}+\\mathbf{A+1}+\\mathit{x}+\\boldsymbol{\\alpha}+\\mathbb{R}+\\mathcal{G}+\\mathscr{g}+\\mathfrak{g}+\\mathsf{x}+\\mathtt{x}\`,
         ], 'inline');
+        const preferredArtifacts = module.latexLinesToOmmlArtifacts([
+          String.raw\`x+\\alpha+\\mathrm{A}+\\text{中文}+\\mathbb{R}+\\mathcal{L}+\\mathsf{S}\`,
+        ], 'inline', 'raw', {
+          formulaLetterFont: 'palatino',
+          formulaChineseFont: 'songti',
+        });
         return {
           ommlBase64: artifacts.ommlBase64,
           ommlDocxBase64: artifacts.ommlDocxBase64,
           fontOmmlDocxBase64: fontArtifacts.ommlDocxBase64,
+          preferredOmml: preferredArtifacts.omml,
+          preferredOmmlDocxBase64: preferredArtifacts.ommlDocxBase64,
         };
       })()
     `;
@@ -488,9 +496,20 @@ async function main() {
     const docxBase64 = artifacts?.ommlDocxBase64;
     const ommlBase64 = artifacts?.ommlBase64;
     const fontDocxBase64 = artifacts?.fontOmmlDocxBase64;
+    const preferredOmml = artifacts?.preferredOmml;
+    const preferredOmmlDocxBase64 = artifacts?.preferredOmmlDocxBase64;
     expect(typeof docxBase64 === "string" && docxBase64.length > 100, "OMML DOCX export is missing.");
     expect(typeof ommlBase64 === "string" && ommlBase64.length > 100, "OMML Base64URL export is missing.");
     expect(typeof fontDocxBase64 === "string" && fontDocxBase64.length > 100, "Font-variant OMML DOCX export is missing.");
+    expect(typeof preferredOmml === "string" && preferredOmml.length > 100, "Preferred-font OMML export is missing.");
+    expect(typeof preferredOmmlDocxBase64 === "string" && preferredOmmlDocxBase64.length > 100, "Preferred-font OMML DOCX export is missing.");
+    expectIncludes(preferredOmml, 'w:ascii="Palatino"', "Preferred math letters must carry the Palatino Word run font.");
+    expectIncludes(preferredOmml, 'w:hAnsi="Palatino"', "Preferred math letters must carry the Palatino high-ANSI font.");
+    expectIncludes(preferredOmml, 'w:eastAsia="Songti SC"', "Chinese OMML runs must carry the selected Songti SC East Asia font.");
+    expect(
+      !/<m:scr m:val="(?:double-struck|script|sans-serif)"\/>[\s\S]*?<w:rFonts[^>]*Palatino/.test(preferredOmml),
+      "Explicit mathbb/mathcal/mathsf runs must not be overridden with the global Palatino font.",
+    );
     docxDirectory = await mkdtemp("/tmp/visualtex-omml-docx-");
     const docxPath = join(docxDirectory, "fraction.docx");
     await writeFile(docxPath, Buffer.from(docxBase64, "base64url"));
@@ -531,6 +550,20 @@ async function main() {
         `Generated DOCX must preserve the ${style} OMML style.`,
       );
     }
+
+    const preferredDocxPath = join(docxDirectory, "preferred-fonts.docx");
+    await writeFile(
+      preferredDocxPath,
+      Buffer.from(preferredOmmlDocxBase64, "base64url"),
+    );
+    execFileSync("/usr/bin/unzip", ["-tqq", preferredDocxPath]);
+    const preferredDocumentXml = execFileSync(
+      "/usr/bin/unzip",
+      ["-p", preferredDocxPath, "word/document.xml"],
+      { encoding: "utf8" },
+    );
+    expectIncludes(preferredDocumentXml, 'w:ascii="Palatino"', "Generated DOCX must preserve the selected math letter font.");
+    expectIncludes(preferredDocumentXml, 'w:eastAsia="Songti SC"', "Generated DOCX must preserve the selected Chinese font.");
 
     const roundtripRoot = process.env.VISUALTEX_OMML_ROUNDTRIP_ROOT;
     if (roundtripRoot) {

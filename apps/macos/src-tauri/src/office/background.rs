@@ -20,7 +20,7 @@ pub const BACKGROUND_ARGUMENT: &str = "--office-background";
 pub const LAUNCH_AGENT_LABEL: &str = "com.visualtex.studio.office";
 const LAUNCH_AGENT_FILE: &str = "com.visualtex.studio.office.plist";
 const BACKGROUND_MARKER_FILE: &str = "office-background.enabled";
-const DOCK_ICON_MIGRATION_MARKER_FILE: &str = "dock-icon-v4.refreshed";
+const DOCK_ICON_MIGRATION_MARKER_FILE: &str = "dock-icon-v5.refreshed";
 #[cfg(target_os = "macos")]
 static APPLICATION_ICON_INSTALLED: AtomicBool = AtomicBool::new(false);
 
@@ -461,6 +461,37 @@ pub(crate) fn activate_foreground_app(app: &AppHandle) -> Result<(), String> {
 
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn activate_foreground_app(_app: &AppHandle) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn activate_foreground_app_via_launch_services(
+    app: &AppHandle,
+) -> Result<(), String> {
+    prepare_foreground_app(app)?;
+    let identifier = &app.config().identifier;
+    let status = Command::new("/usr/bin/open")
+        .arg("-b")
+        .arg(identifier)
+        .status()
+        .map_err(|error| {
+            format!(
+                "Unable to ask LaunchServices to activate {identifier}: {error}"
+            )
+        })?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "LaunchServices could not activate {identifier}: open exited with {status}"
+        ))
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn activate_foreground_app_via_launch_services(
+    _app: &AppHandle,
+) -> Result<(), String> {
     Ok(())
 }
 

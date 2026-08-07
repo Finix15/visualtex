@@ -41,6 +41,7 @@
     "test:office-formula-editor": "tsx scripts/office_formula_editor_regression.mjs",
     "test:macos-offline-office": "npm run test:ime-enter && npm run test:office-formula-editor && npm run test:word-latex-redraw && node scripts/macos_offline_office_smoke.mjs",
     "test:macos-offline-office:full": "node scripts/run_macos_offline_acceptance.mjs",
+    "verify:office-performance-budget": "node scripts/verify_office_performance_budget.mjs",
     "package:macos-offline-office": "node scripts/package_macos_offline_addins.mjs",
     "test:platform-onboarding": "tsx scripts/platform_onboarding_smoke.mjs",
     "test:startup-compatibility": "tsx scripts/startup_compatibility_smoke.mjs",

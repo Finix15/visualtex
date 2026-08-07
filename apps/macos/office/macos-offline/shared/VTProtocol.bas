@@ -216,7 +216,7 @@ Public Function VTUtf8ByteLength(ByVal value As String) As Long
     VTUtf8ByteLength = UBound(bytes) - LBound(bytes) + 1
 End Function
 
-Private Function VTUtf8Encode(ByVal value As String) As Byte()
+Public Function VTUtf8Encode(ByVal value As String) As Byte()
     Dim output() As Byte
     Dim byteCount As Long
     Dim index As Long
@@ -395,7 +395,11 @@ Private Function VTBase64UrlValue(ByVal value As String) As Long
     End Select
 End Function
 
-Private Function VTUtf8Decode(ByRef bytes() As Byte) As String
+' Public because PowerPoint may import latency-critical readers into a
+' renamed standard module during incremental VBE rebuilds. Keeping the decoder
+' project-visible prevents a false "Sub or Function not defined" compile error
+' while preserving the same validated UTF-8 implementation.
+Public Function VTUtf8Decode(ByRef bytes() As Byte) As String
     Dim index As Long
     Dim lastIndex As Long
     Dim firstByte As Long
@@ -589,11 +593,69 @@ Public Sub VTAppendText(ByVal destination As String, ByVal contents As String)
     Call VTFileBridgeCall("AppendVisualTeXFile", relativePath & "|" & encodedContents)
 End Sub
 
+Private Function VTTryReadTextDirect( _
+    ByVal sourcePath As String, _
+    ByVal maximumCharacters As Long, _
+    ByRef decodedContents As String) As Boolean
+
+    Dim handle As Integer
+    Dim openErrorNumber As Long
+    Dim byteCount As Long
+    Dim maximumBytes As Long
+    Dim bytes() As Byte
+    Dim readErrorNumber As Long
+    Dim readErrorDescription As String
+
+    decodedContents = ""
+    handle = FreeFile
+    On Error Resume Next
+    Open sourcePath For Binary Access Read As #handle
+    openErrorNumber = Err.Number
+    Err.Clear
+    On Error GoTo DirectReadFailed
+    If openErrorNumber <> 0 Then Exit Function
+
+    byteCount = LOF(handle)
+    maximumBytes = maximumCharacters * 4
+    If byteCount < 0 Or byteCount > maximumBytes Then
+        Err.Raise vbObjectError + 7111, "VisualTeX", _
+            "VisualTeX local file exceeds the allowed size."
+    End If
+    If byteCount > 0 Then
+        ReDim bytes(0 To byteCount - 1)
+        Get #handle, , bytes
+        decodedContents = VTUtf8Decode(bytes)
+    End If
+    Close #handle
+    handle = 0
+    If Len(decodedContents) > maximumCharacters Then
+        Err.Raise vbObjectError + 7111, "VisualTeX", _
+            "VisualTeX local file exceeds the allowed size."
+    End If
+    VTTryReadTextDirect = True
+    Exit Function
+
+DirectReadFailed:
+    readErrorNumber = Err.Number
+    readErrorDescription = Err.Description
+    On Error Resume Next
+    If handle <> 0 Then Close #handle
+    On Error GoTo 0
+    Err.Raise readErrorNumber, "VisualTeX direct file read", _
+        readErrorDescription
+End Function
+
 Public Function VTReadText(ByVal sourcePath As String, Optional ByVal maximumCharacters As Long = 262144) As String
     Dim encodedContents As String
     Dim decodedContents As String
 
     VTValidateAbsoluteVisualTeXPath sourcePath
+    If VTTryReadTextDirect( _
+       sourcePath, maximumCharacters, decodedContents) Then
+        VTReadText = decodedContents
+        Exit Function
+    End If
+
     encodedContents = VTFileBridgeCall("ReadVisualTeXFile", VTRuntimeRelativePath(sourcePath))
     If Len(encodedContents) = 0 Then
         decodedContents = ""
@@ -698,18 +760,28 @@ End Function
 Public Function VTPathFileExists(ByVal value As String) As Boolean
     Dim response As String
     Dim handle As Integer
+    Dim openErrorNumber As Long
 
     On Error GoTo MissingFile
-    If value = VTPlaceholderImagePath() Then
-        handle = FreeFile
-        Open value For Binary Access Read As #handle
+    If value <> VTPlaceholderImagePath() Then
+        VTValidateAbsoluteVisualTeXPath value
+    End If
+
+    handle = FreeFile
+    On Error Resume Next
+    Open value For Binary Access Read As #handle
+    openErrorNumber = Err.Number
+    Err.Clear
+    On Error GoTo MissingFile
+    If openErrorNumber = 0 Then
         Close #handle
         handle = 0
         VTPathFileExists = True
         Exit Function
     End If
+    handle = 0
 
-    VTValidateAbsoluteVisualTeXPath value
+    If value = VTPlaceholderImagePath() Then GoTo MissingFile
     response = VTFileBridgeCall("VisualTeXFileExists", VTRuntimeRelativePath(value))
     VTPathFileExists = (response = "1")
     Exit Function

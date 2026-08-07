@@ -19,6 +19,16 @@ import {
   VISUALTEX_MATHML_MACROS,
 } from "../../math/latexCompatibility.ts";
 import { errorMessage } from "../../runtime/errorMessage";
+import {
+  DEFAULT_FORMULA_CHINESE_FONT,
+  DEFAULT_FORMULA_LETTER_FONT,
+  formulaChinesePrimaryFontName,
+  formulaLetterPrimaryFontName,
+  normalizeFormulaChineseFont,
+  normalizeFormulaLetterFont,
+  type FormulaChineseFont,
+  type FormulaLetterFont,
+} from "../../editor/formulaFontPreferences";
 
 export type OmmlDisplayMode = "inline" | "block";
 
@@ -26,6 +36,11 @@ export interface OmmlArtifacts {
   omml: string;
   ommlBase64: string;
   ommlDocxBase64: string;
+}
+
+export interface OmmlFontPreferences {
+  formulaLetterFont?: FormulaLetterFont;
+  formulaChineseFont?: FormulaChineseFont;
 }
 
 const MATH_NAMESPACE =
@@ -936,6 +951,64 @@ function convertElement(element: Element): string {
   }
 }
 
+function applyOmmlFontPreferences(
+  body: string,
+  preferences: OmmlFontPreferences = {},
+) {
+  const letterFont = normalizeFormulaLetterFont(
+    preferences.formulaLetterFont ?? DEFAULT_FORMULA_LETTER_FONT,
+  );
+  const chineseFont = normalizeFormulaChineseFont(
+    preferences.formulaChineseFont ?? DEFAULT_FORMULA_CHINESE_FONT,
+  );
+  const letterFontName = formulaLetterPrimaryFontName(letterFont);
+  const chineseFontName = formulaChinesePrimaryFontName(chineseFont);
+
+  return body.replace(/<m:r>([\s\S]*?)<\/m:r>/g, (whole, inner: string) => {
+    const text = inner.match(/<m:t(?:\s[^>]*)?>([\s\S]*?)<\/m:t>/)?.[1] ?? "";
+    if (!text) return whole;
+
+    const hasLatinOrGreek = /[A-Za-z\u0370-\u03ff\u1f00-\u1fff]/u.test(text);
+    const hasChinese = /[\u3400-\u9fff\uf900-\ufaff]/u.test(text);
+    if (!hasLatinOrGreek && !hasChinese) return whole;
+
+    const script = inner.match(/<m:scr\s+m:val="([^"]+)"\/>/)?.[1] ?? "";
+    const isNormalText = inner.includes("<m:nor/>");
+    const isTextRun = isNormalText && !script;
+    const isSpecialMathAlphabet = Boolean(script && script !== "roman");
+
+    const fontAttributes: string[] = [];
+    if (hasLatinOrGreek) {
+      const latinFont = isTextRun
+        ? chineseFontName
+        : letterFont !== DEFAULT_FORMULA_LETTER_FONT && !isSpecialMathAlphabet
+          ? letterFontName
+          : "";
+      if (latinFont) {
+        const escaped = escapeXmlAttribute(latinFont);
+        fontAttributes.push(
+          `w:ascii="${escaped}"`,
+          `w:hAnsi="${escaped}"`,
+          `w:cs="${escaped}"`,
+        );
+      }
+    }
+    if (hasChinese) {
+      fontAttributes.push(
+        `w:eastAsia="${escapeXmlAttribute(chineseFontName)}"`,
+      );
+    }
+    if (!fontAttributes.length) return whole;
+
+    const wordRunProperties = `<w:rPr><w:rFonts ${fontAttributes.join(" ")}/></w:rPr>`;
+    const nextInner = inner.replace(
+      /(<m:t(?:\s[^>]*)?>)/,
+      `${wordRunProperties}$1`,
+    );
+    return `<m:r>${nextInner}</m:r>`;
+  });
+}
+
 function wrapOmml(body: string) {
   return (
     `<m:oMath xmlns:m="${MATH_NAMESPACE}" xmlns:w="${WORD_NAMESPACE}">` +
@@ -993,6 +1066,7 @@ export function latexLinesToOmml(
   lines: string[],
   displayMode: OmmlDisplayMode,
   codeFormat: LatexCodeFormat | string = "raw",
+  fontPreferences: OmmlFontPreferences = {},
 ) {
   const normalized = normalizeLines(lines);
   const alignRelations = relationAlignedCodeFormat(codeFormat);
@@ -1008,15 +1082,21 @@ export function latexLinesToOmml(
       : `<m:eqArr><m:eqArrPr><m:baseJc m:val="center"/></m:eqArrPr>${converted
           .map((line) => `<m:e>${line}</m:e>`)
           .join("")}</m:eqArr>`;
-  return wrapOmml(body);
+  return wrapOmml(applyOmmlFontPreferences(body, fontPreferences));
 }
 
 export function latexLinesToOmmlArtifacts(
   lines: string[],
   displayMode: OmmlDisplayMode,
   codeFormat: LatexCodeFormat | string = "raw",
+  fontPreferences: OmmlFontPreferences = {},
 ): OmmlArtifacts {
-  const omml = latexLinesToOmml(lines, displayMode, codeFormat);
+  const omml = latexLinesToOmml(
+    lines,
+    displayMode,
+    codeFormat,
+    fontPreferences,
+  );
   return {
     omml,
     ommlBase64: utf8ToBase64Url(omml),

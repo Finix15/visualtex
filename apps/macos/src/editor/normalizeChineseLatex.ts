@@ -1,4 +1,8 @@
-import { normalizeExtendedIntegralLatexCommands } from "../math/extendedIntegralCompatibility.ts";
+import {
+  EXTENDED_INTEGRAL_COMMANDS,
+  EXTENDED_INTEGRAL_COMMAND_PATTERN_SOURCE,
+  normalizeExtendedIntegralLatexCommands,
+} from "../math/extendedIntegralCompatibility.ts";
 
 const chineseChar = /[\u3400-\u9fff\uf900-\ufaff，。；：！？、（）【】《》“”‘’]/;
 
@@ -539,8 +543,10 @@ export function normalizeMathLiveCanonicalUprightCommands(
 }
 
 const differentialFractionCommands = ["\\dfrac", "\\tfrac", "\\frac"];
-const integralCommandPattern =
-  /\\(?:ointctrclockwise|varointclockwise|intclockwise|cirfnint|rppolint|scpolint|intlarhk|pointint|oiiint|iiiint|quatint|npolint|sumint|intbar|intBar|intcap|intcup|oiint|iiint|fint|awint|intx|upint|lowint|oint|iint|int)(?![A-Za-z])/g;
+const integralCommandPattern = new RegExp(
+  `\\\\(?:${EXTENDED_INTEGRAL_COMMAND_PATTERN_SOURCE})(?![A-Za-z])`,
+  "g",
+);
 const nonVariableCommands = new Set([
   "sin",
   "cos",
@@ -559,33 +565,7 @@ const nonVariableCommands = new Set([
   "min",
   "det",
   "gcd",
-  "int",
-  "iint",
-  "iiint",
-  "oint",
-  "oiint",
-  "oiiint",
-  "iiiint",
-  "intclockwise",
-  "varointclockwise",
-  "ointctrclockwise",
-  "sumint",
-  "intbar",
-  "intBar",
-  "fint",
-  "cirfnint",
-  "awint",
-  "rppolint",
-  "scpolint",
-  "npolint",
-  "pointint",
-  "quatint",
-  "intlarhk",
-  "intx",
-  "intcap",
-  "intcup",
-  "upint",
-  "lowint",
+  ...EXTENDED_INTEGRAL_COMMANDS,
   "sum",
   "prod",
   "frac",

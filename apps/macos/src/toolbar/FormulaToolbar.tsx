@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -11,6 +12,7 @@ import {
   FolderPlus,
   Keyboard,
   Palette,
+  PanelRightClose,
   Pencil,
   Plus,
   Star,
@@ -38,7 +40,13 @@ import {
 import { useEditorStore } from "../stores/editorStore";
 import { useFormulaHotkeyStore } from "../stores/formulaHotkeyStore";
 
-type MatrixDelimiter = "bmatrix" | "pmatrix" | "vmatrix";
+type MatrixDelimiter =
+  | "matrix"
+  | "pmatrix"
+  | "bmatrix"
+  | "Bmatrix"
+  | "vmatrix"
+  | "Vmatrix";
 type ToolbarView = "tools" | "tiles";
 type ToolbarLayout = "sidebar" | "horizontal";
 type TileCategory = "custom" | "common";
@@ -49,6 +57,7 @@ interface Props {
   layout?: ToolbarLayout;
   className?: string;
   stabilizeTileLayout?: boolean;
+  onCollapseTiles?: () => void;
 }
 
 interface FormulaTileDefinition {
@@ -553,7 +562,28 @@ const categories = [
   "arrow",
   "physics",
   "set",
-];
+] as const;
+
+type ToolbarCategory = (typeof categories)[number];
+type ToolbarPreviewMode = "full" | "static";
+
+const staticToolbarPreviewCategories = new Set<ToolbarCategory>([
+  "arrow",
+  "physics",
+  "set",
+]);
+const toolbarPreviewOverscanRatio = 1.35;
+const toolbarScrollIdleDelayMs = 110;
+
+function sameToolbarCategoryList(
+  left: readonly ToolbarCategory[],
+  right: readonly ToolbarCategory[],
+) {
+  return (
+    left.length === right.length &&
+    left.every((category, index) => category === right[index])
+  );
+}
 
 const matrixGridCells = Array.from({ length: 100 }, (_, index) => ({
   row: Math.floor(index / 10) + 1,
@@ -566,22 +596,40 @@ const matrixDelimiterOptions: Array<{
   labelEn: string;
 }> = [
   {
-    id: "vmatrix",
-    preview: "\\begin{vmatrix}a&b\\\\c&d\\end{vmatrix}",
-    labelZh: "竖线",
-    labelEn: "Bars",
+    id: "matrix",
+    preview: "\\begin{matrix}a\\end{matrix}",
+    labelZh: "无边界",
+    labelEn: "Plain",
+  },
+  {
+    id: "pmatrix",
+    preview: "\\begin{pmatrix}a\\end{pmatrix}",
+    labelZh: "圆括号",
+    labelEn: "Parentheses",
   },
   {
     id: "bmatrix",
-    preview: "\\begin{bmatrix}a&b\\\\c&d\\end{bmatrix}",
+    preview: "\\begin{bmatrix}a\\end{bmatrix}",
     labelZh: "方括号",
     labelEn: "Brackets",
   },
   {
-    id: "pmatrix",
-    preview: "\\begin{pmatrix}a&b\\\\c&d\\end{pmatrix}",
-    labelZh: "圆括号",
-    labelEn: "Parentheses",
+    id: "Bmatrix",
+    preview: "\\begin{Bmatrix}a\\end{Bmatrix}",
+    labelZh: "花括号",
+    labelEn: "Braces",
+  },
+  {
+    id: "vmatrix",
+    preview: "\\begin{vmatrix}a\\end{vmatrix}",
+    labelZh: "单竖线",
+    labelEn: "Bars",
+  },
+  {
+    id: "Vmatrix",
+    preview: "\\begin{Vmatrix}a\\end{Vmatrix}",
+    labelZh: "双竖线",
+    labelEn: "Double bars",
   },
 ];
 
@@ -589,9 +637,13 @@ const hiddenToolbarCommandIds = new Set(["time-ordering"]);
 const wideToolbarCommandIds = new Set([
   "matrixelement",
   "expectation-operator",
+  "matrix-dots",
+  "diagonal-matrix",
+  "augmented-matrix",
+  "block-matrix",
 ]);
-const toolbarPreviewMaximumScale = 1;
-const toolbarPreviewInsetRatio = 0.88;
+const minimumToolbarPreviewInsetRatio = 0.58;
+const maximumToolbarPreviewInsetRatio = 0.94;
 
 const calculusPreviewById: Record<string, string> = {
   intplain: "\\int",
@@ -614,6 +666,15 @@ const calculusPreviewById: Record<string, string> = {
   "prod-finite": "\\prod_{k=1}^{n}",
   productseries: "\\prod_{n=1}^{\\infty}",
   coproduct: "\\coprod_{i=1}^{n}",
+  "bigcap-limits": "\\bigcap_{i=1}^{n}",
+  "bigcup-limits": "\\bigcup_{i=1}^{n}",
+  "bigsqcup-limits": "\\bigsqcup_{i=1}^{n}",
+  "bigvee-limits": "\\bigvee_{i=1}^{n}",
+  "bigwedge-limits": "\\bigwedge_{i=1}^{n}",
+  "bigodot-limits": "\\bigodot_{i=1}^{n}",
+  "bigoplus-limits": "\\bigoplus_{i=1}^{n}",
+  "bigotimes-limits": "\\bigotimes_{i=1}^{n}",
+  "biguplus-limits": "\\biguplus_{i=1}^{n}",
   lim: "\\lim_{x\\to0}",
   "lim-infty": "\\lim_{x\\to\\infty}",
   "lim-left": "\\lim_{x\\to a^-}",
@@ -636,6 +697,7 @@ const calculusPreviewById: Record<string, string> = {
 const toolbarPreviewById: Record<string, string> = {
   ...calculusPreviewById,
   cases: "\\begin{cases}a\\\\b\\end{cases}",
+  "cases-three": "\\left\\{\\begin{array}{l}a\\\\b\\\\c\\end{array}\\right.",
   overbrace: "\\overbrace{a+b}",
   underbrace: "\\underbrace{a+b}",
   rowvector: "\\begin{bmatrix}a&b\\end{bmatrix}",
@@ -646,6 +708,10 @@ const toolbarPreviewById: Record<string, string> = {
   transpose: "A^{\\mathsf{T}}",
   inverse: "A^{-1}",
   dotproduct: "\\bullet",
+  "matrix-dots": "\\begin{bmatrix}a&\\cdots&b\\\\\\vdots&\\ddots&\\vdots\\\\c&\\cdots&d\\end{bmatrix}",
+  "diagonal-matrix": "\\begin{bmatrix}a_1&0&\\cdots\\\\0&a_2&\\ddots\\\\\\vdots&\\ddots&a_n\\end{bmatrix}",
+  "augmented-matrix": "\\left[\\begin{array}{cc|c}1&0&a\\\\0&1&b\\end{array}\\right]",
+  "block-matrix": "\\begin{bmatrix}A&B\\\\C&D\\end{bmatrix}",
 };
 
 const toolbarPreviewLatex = (command: LatexCommand) =>
@@ -700,6 +766,7 @@ export function FormulaToolbar({
   layout = "sidebar",
   className = "",
   stabilizeTileLayout = false,
+  onCollapseTiles,
 }: Props) {
   const [internalActiveView, setInternalActiveView] =
     useState<ToolbarView>("tools");
@@ -722,7 +789,11 @@ export function FormulaToolbar({
     useState<FormulaContextMenuState | null>(null);
   const [hotkeyTarget, setHotkeyTarget] =
     useState<FormulaHotkeyTarget | null>(null);
-  const [activeCategory, setActiveCategory] = useState("common");
+  const [activeCategory, setActiveCategory] =
+    useState<ToolbarCategory>("common");
+  const [fullPreviewCategories, setFullPreviewCategories] = useState<
+    ToolbarCategory[]
+  >(["common", "structure"]);
   const [matrixRows, setMatrixRows] = useState(2);
   const [matrixColumns, setMatrixColumns] = useState(2);
   const [matrixHover, setMatrixHover] = useState<{
@@ -732,6 +803,7 @@ export function FormulaToolbar({
   const [matrixDelimiter, setMatrixDelimiter] =
     useState<MatrixDelimiter>("bmatrix");
   const toolbarRef = useRef<HTMLElement>(null);
+  const [horizontalRowCount, setHorizontalRowCount] = useState(3);
   const [customTileGridWidths, setCustomTileGridWidths] = useState<
     Record<string, number>
   >({});
@@ -739,6 +811,23 @@ export function FormulaToolbar({
     Record<string, number>
   >({});
   const language = useEditorStore((state) => state.language);
+  const formulaToolButtonSize = useEditorStore(
+    (state) => state.formulaToolButtonSize,
+  );
+  const formulaToolButtonPadding = useEditorStore(
+    (state) => state.formulaToolButtonPadding,
+  );
+  const toolbarPreviewInsetRatio = Math.max(
+    minimumToolbarPreviewInsetRatio,
+    Math.min(
+      maximumToolbarPreviewInsetRatio,
+      maximumToolbarPreviewInsetRatio - formulaToolButtonPadding * 0.03,
+    ),
+  );
+  const toolbarPreviewMaximumScale = Math.min(
+    1.55,
+    Math.max(1, formulaToolButtonSize / 42),
+  );
   const lines = useEditorStore((state) => state.lines);
   const activeLineId = useEditorStore((state) => state.activeLineId);
   const hotkeyBindings = useFormulaHotkeyStore((state) => state.bindings);
@@ -861,19 +950,228 @@ export function FormulaToolbar({
     stabilizeTileLayout,
   ]);
 
+  const scrollToToolbarCategory = (
+    category: ToolbarCategory,
+    edge: "start" | "end" = "start",
+  ) => {
+    const root = toolbarRef.current;
+    const strip = root?.querySelector<HTMLElement>(
+      ".template-strip.is-continuous-categories",
+    );
+    const section = strip?.querySelector<HTMLElement>(
+      `[data-toolbar-category-section="${category}"]`,
+    );
+    if (!root || !strip || !section) {
+      setActiveCategory(category);
+      return false;
+    }
+
+    const sectionStart = section.offsetLeft;
+    const sectionEnd = Math.max(
+      sectionStart,
+      section.offsetLeft + section.offsetWidth - strip.clientWidth,
+    );
+    strip.scrollTo({
+      left: edge === "end" ? sectionEnd : sectionStart,
+      behavior: "smooth",
+    });
+    setActiveCategory(category);
+    root
+      .querySelector<HTMLElement>(
+        `.toolbar-tab[data-category="${category}"]`,
+      )
+      ?.scrollIntoView({
+        block: "nearest",
+        inline: "nearest",
+        behavior: "auto",
+      });
+    return true;
+  };
+
+  useLayoutEffect(() => {
+    const activeTab = toolbarRef.current?.querySelector<HTMLElement>(
+      `.toolbar-tab[data-category="${activeCategory}"]`,
+    );
+    activeTab?.scrollIntoView({
+      block: "nearest",
+      inline: "nearest",
+      behavior: "auto",
+    });
+  }, [activeCategory]);
+
+  useEffect(() => {
+    if (layout !== "horizontal" || activeView !== "tools") return;
+    const root = toolbarRef.current;
+    const strip = root?.querySelector<HTMLElement>(
+      ".template-strip.is-continuous-categories",
+    );
+    const tabs = root?.querySelector<HTMLElement>(".toolbar-tabs");
+    if (!root || !strip || !tabs) return;
+
+    const sections = Array.from(
+      strip.querySelectorAll<HTMLElement>(
+        ":scope > [data-toolbar-category-section]",
+      ),
+    );
+    const tabByCategory = new Map<ToolbarCategory, HTMLElement>();
+    tabs.querySelectorAll<HTMLElement>(".toolbar-tab").forEach((tab) => {
+      const category = tab.dataset.category as ToolbarCategory | undefined;
+      if (category) tabByCategory.set(category, tab);
+    });
+    if (!sections.length) return;
+
+    let idleTimer = 0;
+    let lastScrollAt = 0;
+    let currentDomCategory =
+      (strip.dataset.activeCategory as ToolbarCategory | undefined) ?? "common";
+    let geometry: Array<{
+      category: ToolbarCategory;
+      start: number;
+      end: number;
+    }> = [];
+
+    const measureGeometry = () => {
+      geometry = sections.flatMap((section) => {
+        const category = section.dataset
+          .toolbarCategorySection as ToolbarCategory | undefined;
+        if (!category) return [];
+        const start = section.offsetLeft;
+        return [{ category, start, end: start + section.offsetWidth }];
+      });
+    };
+
+    const resolveCategory = () => {
+      const viewportWidth = Math.max(1, strip.clientWidth);
+      const marker = strip.scrollLeft + viewportWidth * 0.38;
+      let resolved: ToolbarCategory = geometry[0]?.category ?? "common";
+      let nearestDistance = Number.POSITIVE_INFINITY;
+      for (const item of geometry) {
+        const distance = marker < item.start
+          ? item.start - marker
+          : marker > item.end
+            ? marker - item.end
+            : 0;
+        if (distance < nearestDistance) {
+          resolved = item.category;
+          nearestDistance = distance;
+        }
+      }
+      return resolved;
+    };
+
+    const updateActiveCategoryDom = (resolved: ToolbarCategory) => {
+      if (resolved === currentDomCategory) return;
+      tabByCategory.get(currentDomCategory)?.classList.remove("is-active");
+      tabByCategory
+        .get(currentDomCategory)
+        ?.setAttribute("aria-pressed", "false");
+      tabByCategory.get(resolved)?.classList.add("is-active");
+      tabByCategory.get(resolved)?.setAttribute("aria-pressed", "true");
+      currentDomCategory = resolved;
+      strip.dataset.activeCategory = resolved;
+    };
+
+    const commitIdleState = () => {
+      const elapsed = performance.now() - lastScrollAt;
+      if (lastScrollAt > 0 && elapsed < toolbarScrollIdleDelayMs) {
+        idleTimer = window.setTimeout(
+          commitIdleState,
+          toolbarScrollIdleDelayMs - elapsed,
+        );
+        return;
+      }
+      idleTimer = 0;
+      strip.dataset.scrolling = "false";
+      const resolved = resolveCategory();
+      updateActiveCategoryDom(resolved);
+
+      const viewportStart = strip.scrollLeft;
+      const viewportWidth = Math.max(1, strip.clientWidth);
+      const viewportEnd = viewportStart + viewportWidth;
+      const overscan = viewportWidth * toolbarPreviewOverscanRatio;
+      const renderStart = viewportStart - overscan;
+      const renderEnd = viewportEnd + overscan;
+      const nextFullPreviewCategories = geometry.flatMap((item) =>
+        !staticToolbarPreviewCategories.has(item.category) &&
+        item.end >= renderStart &&
+        item.start <= renderEnd
+          ? [item.category]
+          : [],
+      );
+      if (
+        !staticToolbarPreviewCategories.has(resolved) &&
+        !nextFullPreviewCategories.includes(resolved)
+      ) {
+        nextFullPreviewCategories.push(resolved);
+      }
+
+      setActiveCategory((current) =>
+        current === resolved ? current : resolved,
+      );
+      setFullPreviewCategories((current) =>
+        sameToolbarCategoryList(current, nextFullPreviewCategories)
+          ? current
+          : nextFullPreviewCategories,
+      );
+    };
+
+    const ensureIdleCommit = () => {
+      if (!idleTimer) {
+        idleTimer = window.setTimeout(
+          commitIdleState,
+          toolbarScrollIdleDelayMs,
+        );
+      }
+    };
+    const handleScroll = () => {
+      lastScrollAt = performance.now();
+      if (strip.dataset.scrolling !== "true") {
+        strip.dataset.scrolling = "true";
+      }
+      ensureIdleCommit();
+    };
+    const handleResize = () => {
+      measureGeometry();
+      updateActiveCategoryDom(resolveCategory());
+      lastScrollAt = 0;
+      window.clearTimeout(idleTimer);
+      idleTimer = window.setTimeout(commitIdleState, 0);
+    };
+
+    const resizeObserver = new ResizeObserver(handleResize);
+    resizeObserver.observe(strip);
+    strip.addEventListener("scroll", handleScroll, { passive: true });
+    measureGeometry();
+    updateActiveCategoryDom(resolveCategory());
+    idleTimer = window.setTimeout(commitIdleState, 0);
+
+    return () => {
+      window.clearTimeout(idleTimer);
+      resizeObserver.disconnect();
+      strip.removeEventListener("scroll", handleScroll);
+      delete strip.dataset.scrolling;
+    };
+  }, [activeView, horizontalRowCount, layout]);
+
   useEffect(() => {
     if (layout !== "horizontal") return;
     const root = toolbarRef.current;
-    if (!root) return;
+    const strip = root?.querySelector<HTMLElement>(
+      ".template-strip.is-continuous-categories",
+    );
+    const tabs = root?.querySelector<HTMLElement>(".toolbar-tabs");
+    if (!root || !strip || !tabs) return;
 
     const handleHorizontalWheel = (event: WheelEvent) => {
       if (event.ctrlKey || event.metaKey || event.altKey) return;
-      const target = event.target instanceof Element
-        ? event.target.closest<HTMLElement>(".template-strip, .toolbar-tabs")
-        : null;
-      if (!target || !root.contains(target)) return;
-      const overflow = target.scrollWidth - target.clientWidth;
-      if (overflow <= 1) return;
+      const eventTarget = event.target;
+      if (!(eventTarget instanceof Node)) return;
+      const target = eventTarget === strip || strip.contains(eventTarget)
+        ? strip
+        : eventTarget === tabs || tabs.contains(eventTarget)
+          ? tabs
+          : null;
+      if (!target) return;
 
       const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE
         ? 24
@@ -883,20 +1181,60 @@ export function FormulaToolbar({
       const rawDelta = Math.abs(event.deltaY) >= Math.abs(event.deltaX)
         ? event.deltaY
         : event.deltaX;
-      if (!rawDelta) return;
-      const previous = target.scrollLeft;
-      target.scrollLeft = Math.max(
-        0,
-        Math.min(overflow, previous + rawDelta * unit),
-      );
-      if (Math.abs(target.scrollLeft - previous) > 0.5) {
-        event.preventDefault();
-      }
+      const pixelDelta = rawDelta * unit;
+      if (!pixelDelta) return;
+
+      event.preventDefault();
+      target.scrollBy({ left: pixelDelta, top: 0, behavior: "auto" });
     };
 
     root.addEventListener("wheel", handleHorizontalWheel, { passive: false });
     return () => root.removeEventListener("wheel", handleHorizontalWheel);
-  }, [layout, activeCategory, activeView]);
+  }, [layout]);
+
+  useLayoutEffect(() => {
+    if (layout !== "horizontal" || activeView !== "tools") return;
+    const root = toolbarRef.current;
+    const tabs = root?.querySelector<HTMLElement>(".toolbar-tabs");
+    const strip = root?.querySelector<HTMLElement>(".template-strip");
+    if (!root || !tabs || !strip) return;
+
+    let frame = 0;
+    const measureRows = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        const styles = window.getComputedStyle(strip);
+        const paddingTop = Number.parseFloat(styles.paddingTop) || 0;
+        const paddingBottom = Number.parseFloat(styles.paddingBottom) || 0;
+        const rowGap = Number.parseFloat(styles.rowGap) || 0;
+        const availableHeight = Math.max(
+          0,
+          strip.clientHeight - paddingTop - paddingBottom,
+        );
+        const targetRowHeight = Math.max(30, formulaToolButtonSize - 8);
+        const nextRowCount = Math.max(
+          1,
+          Math.floor(
+            (availableHeight + rowGap) / (targetRowHeight + rowGap),
+          ),
+        );
+
+        root.style.setProperty("--toolbar-row-count", String(nextRowCount));
+        root.dataset.toolbarRowCount = String(nextRowCount);
+        setHorizontalRowCount((current) =>
+          current === nextRowCount ? current : nextRowCount,
+        );
+      });
+    };
+
+    const observer = new ResizeObserver(measureRows);
+    observer.observe(root);
+    measureRows();
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [activeCategory, activeView, formulaToolButtonSize, layout]);
 
   useEffect(() => {
     if (!contextMenu) return;
@@ -931,28 +1269,46 @@ export function FormulaToolbar({
     };
   }, [contextMenu]);
 
-  const visibleCommands = useMemo(() => {
-    const preferredIds = activeCategory === "common"
-      ? commonToolbarCommandIds
-      : activeCategory === "calculus"
-        ? calculusCommandIds
-        : null;
-    const candidates = preferredIds
-      ? preferredIds
-          .map((id) => commandRegistry.find((command) => command.id === id))
-          .filter((command): command is LatexCommand => Boolean(command))
-      : commandRegistry.filter(
-          (command) =>
-            command.category === activeCategory &&
-            !hiddenToolbarCommandIds.has(command.id),
-        );
-    const seenCommandIds = new Set<string>();
-    return candidates.filter((command) => {
-      if (seenCommandIds.has(command.id)) return false;
-      seenCommandIds.add(command.id);
-      return true;
+  const toolbarCommandsByCategory = useMemo(() => {
+    const entries = categories.map((category) => {
+      const preferredIds = category === "common"
+        ? commonToolbarCommandIds
+        : category === "calculus"
+          ? calculusCommandIds
+          : null;
+      const candidates = preferredIds
+        ? preferredIds
+            .map((id) => commandRegistry.find((command) => command.id === id))
+            .filter((command): command is LatexCommand => Boolean(command))
+        : commandRegistry.filter(
+            (command) =>
+              command.category === category &&
+              !hiddenToolbarCommandIds.has(command.id),
+          );
+      const seenCommandIds = new Set<string>();
+      return [
+        category,
+        candidates.filter((command) => {
+          if (seenCommandIds.has(command.id)) return false;
+          seenCommandIds.add(command.id);
+          return true;
+        }),
+      ] as const;
     });
-  }, [activeCategory, commonToolbarCommandIds]);
+    return Object.fromEntries(entries) as Record<
+      ToolbarCategory,
+      LatexCommand[]
+    >;
+  }, [commonToolbarCommandIds]);
+  const visibleCommands = toolbarCommandsByCategory[activeCategory];
+  const toolbarPreviewModeForCategory = (
+    category: ToolbarCategory,
+  ): ToolbarPreviewMode =>
+    layout !== "horizontal" ||
+    (!staticToolbarPreviewCategories.has(category) &&
+      fullPreviewCategories.includes(category))
+      ? "full"
+      : "static";
 
   const customTileDefinitions = useMemo<FormulaTileDefinition[]>(
     () =>
@@ -1181,6 +1537,193 @@ export function FormulaToolbar({
   const previewRows = matrixHover?.rows ?? matrixRows;
   const previewColumns = matrixHover?.columns ?? matrixColumns;
 
+  const renderMatrixBuilder = (
+    previewMode: ToolbarPreviewMode = "full",
+  ) => (
+    <section
+      className="matrix-builder"
+      aria-label={isEn ? "Custom matrix" : "自定义矩阵"}
+    >
+      <div className="matrix-options-column">
+        <div className="matrix-builder-heading">
+          <strong>{isEn ? "Custom matrix" : "自定义矩阵"}</strong>
+          <span className="matrix-size-badge" aria-live="polite">
+            {previewRows} × {previewColumns}
+          </span>
+        </div>
+
+        <div className="matrix-delimiter-picker">
+          <span className="matrix-control-label">
+            {isEn ? "Delimiter" : "边界样式"}
+          </span>
+          <div
+            className="matrix-delimiter-options"
+            role="group"
+            aria-label={isEn ? "Matrix delimiter" : "矩阵边界"}
+          >
+            {matrixDelimiterOptions.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                className={matrixDelimiter === option.id ? "is-active" : ""}
+                aria-pressed={matrixDelimiter === option.id}
+                onClick={() => setMatrixDelimiter(option.id)}
+                title={isEn ? option.labelEn : option.labelZh}
+                aria-label={isEn ? option.labelEn : option.labelZh}
+              >
+                <MathPreview
+                  latex={option.preview}
+                  className={
+                    previewMode === "static" ? "toolbar-static-preview" : ""
+                  }
+                  fit
+                  staticLayout={previewMode === "static"}
+                  maximumFitScale={1.15}
+                  fitInsetRatio={0.72}
+                />
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <button
+          type="button"
+          className="matrix-insert-button"
+          data-command-id="custom-matrix"
+          onClick={insertCustomMatrix}
+          onContextMenu={(event) =>
+            openFormulaContextMenu(event, matrixHotkeyTarget())
+          }
+          title={
+            isEn
+              ? "Insert the selected matrix · Right-click to set a hotkey"
+              : "插入当前矩阵 · 右键设置快捷键"
+          }
+        >
+          {isEn
+            ? `Insert ${matrixRows} × ${matrixColumns}`
+            : `插入 ${matrixRows} × ${matrixColumns}`}
+        </button>
+      </div>
+
+      <div className="matrix-size-picker">
+        <span className="matrix-control-label">
+          {isEn ? "Size" : "矩阵尺寸"}
+        </span>
+        <div
+          className="matrix-size-grid"
+          role="grid"
+          aria-label={
+            isEn
+              ? "Select matrix rows and columns"
+              : "选择矩阵行数和列数"
+          }
+          aria-rowcount={10}
+          aria-colcount={10}
+          onPointerLeave={() => setMatrixHover(null)}
+          onBlur={(event) => {
+            if (
+              !event.currentTarget.contains(event.relatedTarget as Node | null)
+            ) {
+              setMatrixHover(null);
+            }
+          }}
+        >
+          {matrixGridCells.map(({ row, column }) => {
+            const previewed =
+              row <= previewRows && column <= previewColumns;
+            const selectedCorner =
+              row === matrixRows && column === matrixColumns;
+            return (
+              <button
+                key={`${row}-${column}`}
+                type="button"
+                role="gridcell"
+                className={
+                  "matrix-size-cell" +
+                  (previewed ? " is-previewed" : "") +
+                  (selectedCorner ? " is-selected-corner" : "")
+                }
+                aria-label={
+                  isEn
+                    ? `${row} rows by ${column} columns`
+                    : `${row} 行 ${column} 列`
+                }
+                aria-selected={selectedCorner}
+                data-matrix-rows={row}
+                data-matrix-columns={column}
+                onPointerEnter={() =>
+                  setMatrixHover({ rows: row, columns: column })
+                }
+                onFocus={() =>
+                  setMatrixHover({ rows: row, columns: column })
+                }
+                onClick={() => {
+                  setMatrixRows(row);
+                  setMatrixColumns(column);
+                  setMatrixHover(null);
+                }}
+              />
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
+
+  const renderToolbarCommandButton = (
+    command: LatexCommand,
+    previewMode: ToolbarPreviewMode = "full",
+  ) => {
+    const previewLatex = toolbarPreviewLatex(command);
+    const widePreview = wideToolbarCommandIds.has(command.id);
+    const enlargedCasesPreview =
+      command.id === "cases" || command.id === "cases-three";
+    return (
+      <button
+        type="button"
+        className={
+          "template-button is-unified-fit" +
+          (widePreview ? " is-wide-preview" : "") +
+          (enlargedCasesPreview ? " is-enlarged-cases-preview" : "")
+        }
+        data-command-id={command.id}
+        data-preview-latex={previewLatex}
+        key={command.id}
+        onClick={() => onInsert(command)}
+        onContextMenu={(event) =>
+          openFormulaContextMenu(event, commandHotkeyTarget(command))
+        }
+        aria-label={isEn ? command.labelEn : command.labelZh}
+        title={
+          (isEn ? command.labelEn : command.labelZh) +
+          " · " +
+          command.command +
+          (isEn
+            ? " · Right-click to set a hotkey"
+            : " · 右键设置快捷键")
+        }
+      >
+        <MathPreview
+          latex={previewLatex}
+          className={
+            previewMode === "static" ? "toolbar-static-preview" : ""
+          }
+          fit
+          staticLayout={previewMode === "static"}
+          maximumFitScale={
+            enlargedCasesPreview
+              ? Math.max(1.85, toolbarPreviewMaximumScale)
+              : toolbarPreviewMaximumScale
+          }
+          fitInsetRatio={
+            enlargedCasesPreview ? 0.98 : toolbarPreviewInsetRatio
+          }
+        />
+      </button>
+    );
+  };
+
   return (
     <aside
       ref={toolbarRef}
@@ -1190,8 +1733,20 @@ export function FormulaToolbar({
         (layout === "horizontal" ? " is-horizontal" : "") +
         (className ? ` ${className}` : "")
       }
+      style={
+        {
+          "--formula-toolbar-button-size": `${formulaToolButtonSize}px`,
+          "--formula-toolbar-button-padding": `${formulaToolButtonPadding}px`,
+          ...(layout === "horizontal"
+            ? { "--toolbar-row-count": horizontalRowCount }
+            : {}),
+        } as CSSProperties
+      }
       data-toolbar-layout={layout}
       data-toolbar-fixed-view={fixedView ?? ""}
+      data-toolbar-row-count={
+        layout === "horizontal" ? horizontalRowCount : undefined
+      }
       aria-label={isEn ? "Formula toolbar" : "公式工具栏"}
     >
       {!fixedView && <header className="formula-toolbar-header">
@@ -1242,7 +1797,13 @@ export function FormulaToolbar({
             }
             data-category={category}
             aria-pressed={activeCategory === category}
-            onClick={() => setActiveCategory(category)}
+            onClick={() => {
+              if (layout === "horizontal") {
+                scrollToToolbarCategory(category, "start");
+              } else {
+                setActiveCategory(category);
+              }
+            }}
           >
             {(isEn ? categoryLabelsEn : categoryLabels)[category]}
           </button>
@@ -1250,171 +1811,39 @@ export function FormulaToolbar({
       </nav>
 
       <div
-        key={`${layout}-${activeCategory}`}
-        className="template-strip"
+        className={
+          "template-strip" +
+          (layout === "horizontal" ? " is-continuous-categories" : "")
+        }
         data-active-category={activeCategory}
         aria-label={isEn ? "Formula templates" : "公式模板"}
       >
-        {activeCategory === "matrix" && (
-          <section className="matrix-builder" aria-label={isEn ? "Custom matrix" : "自定义矩阵"}>
-            <div className="matrix-options-column">
-              <div className="matrix-builder-heading">
-                <strong>{isEn ? "Custom matrix" : "自定义矩阵"}</strong>
-                <span className="matrix-size-badge" aria-live="polite">
-                  {previewRows} × {previewColumns}
-                </span>
-              </div>
-
-              <div className="matrix-delimiter-picker">
-                <span className="matrix-control-label">
-                  {isEn ? "Delimiter" : "边界样式"}
-                </span>
-                <div className="matrix-delimiter-options" role="group" aria-label={isEn ? "Matrix delimiter" : "矩阵边界"}>
-                  {matrixDelimiterOptions.map((option) => (
-                    <button
-                      key={option.id}
-                      type="button"
-                      className={matrixDelimiter === option.id ? "is-active" : ""}
-                      aria-pressed={matrixDelimiter === option.id}
-                      onClick={() => setMatrixDelimiter(option.id)}
-                      title={isEn ? option.labelEn : option.labelZh}
-                      aria-label={isEn ? option.labelEn : option.labelZh}
-                    >
-                      <MathPreview
-                        latex={option.preview}
-                        fit
-                        maximumFitScale={1.15}
-                        fitInsetRatio={0.72}
-                      />
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <button
-                type="button"
-                className="matrix-insert-button"
-                data-command-id="custom-matrix"
-                onClick={insertCustomMatrix}
-                onContextMenu={(event) =>
-                  openFormulaContextMenu(event, matrixHotkeyTarget())
-                }
-                title={
-                  isEn
-                    ? "Insert the selected matrix · Right-click to set a hotkey"
-                    : "插入当前矩阵 · 右键设置快捷键"
-                }
+        {layout === "horizontal" ? (
+          categories.map((category) => {
+            const previewMode = toolbarPreviewModeForCategory(category);
+            return (
+              <section
+                key={category}
+                className="toolbar-category-section"
+                data-toolbar-category-section={category}
+                data-preview-mode={previewMode}
+                aria-label={(isEn ? categoryLabelsEn : categoryLabels)[category]}
               >
-                {isEn
-                  ? `Insert ${matrixRows} × ${matrixColumns}`
-                  : `插入 ${matrixRows} × ${matrixColumns}`}
-              </button>
-            </div>
-
-            <div className="matrix-size-picker">
-              <span className="matrix-control-label">
-                {isEn ? "Size" : "矩阵尺寸"}
-              </span>
-              <div
-                className="matrix-size-grid"
-                role="grid"
-                aria-label={
-                  isEn
-                    ? "Select matrix rows and columns"
-                    : "选择矩阵行数和列数"
-                }
-                aria-rowcount={10}
-                aria-colcount={10}
-                onPointerLeave={() => setMatrixHover(null)}
-                onBlur={(event) => {
-                  if (
-                    !event.currentTarget.contains(
-                      event.relatedTarget as Node | null,
-                    )
-                  ) {
-                    setMatrixHover(null);
-                  }
-                }}
-              >
-                {matrixGridCells.map(({ row, column }) => {
-                  const previewed =
-                    row <= previewRows && column <= previewColumns;
-                  const selectedCorner =
-                    row === matrixRows && column === matrixColumns;
-                  return (
-                    <button
-                      key={`${row}-${column}`}
-                      type="button"
-                      role="gridcell"
-                      className={
-                        "matrix-size-cell" +
-                        (previewed ? " is-previewed" : "") +
-                        (selectedCorner ? " is-selected-corner" : "")
-                      }
-                      aria-label={
-                        isEn
-                          ? `${row} rows by ${column} columns`
-                          : `${row} 行 ${column} 列`
-                      }
-                      aria-selected={selectedCorner}
-                      data-matrix-rows={row}
-                      data-matrix-columns={column}
-                      onPointerEnter={() =>
-                        setMatrixHover({ rows: row, columns: column })
-                      }
-                      onFocus={() =>
-                        setMatrixHover({ rows: row, columns: column })
-                      }
-                      onClick={() => {
-                        setMatrixRows(row);
-                        setMatrixColumns(column);
-                        setMatrixHover(null);
-                      }}
-                    />
-                  );
-                })}
-              </div>
-            </div>
-
-          </section>
+                {category === "matrix" && renderMatrixBuilder(previewMode)}
+                {toolbarCommandsByCategory[category].map((command) =>
+                  renderToolbarCommandButton(command, previewMode),
+                )}
+              </section>
+            );
+          })
+        ) : (
+          <>
+            {activeCategory === "matrix" && renderMatrixBuilder("full")}
+            {visibleCommands.map((command) =>
+              renderToolbarCommandButton(command, "full"),
+            )}
+          </>
         )}
-
-        {visibleCommands.map((command) => {
-          const previewLatex = toolbarPreviewLatex(command);
-          const widePreview = wideToolbarCommandIds.has(command.id);
-          return (
-            <button
-              type="button"
-              className={
-                "template-button is-unified-fit" +
-                (widePreview ? " is-wide-preview" : "")
-              }
-              data-command-id={command.id}
-              data-preview-latex={previewLatex}
-              key={command.id}
-              onClick={() => onInsert(command)}
-              onContextMenu={(event) =>
-                openFormulaContextMenu(event, commandHotkeyTarget(command))
-              }
-              aria-label={isEn ? command.labelEn : command.labelZh}
-              title={
-                (isEn ? command.labelEn : command.labelZh) +
-                " · " +
-                command.command +
-                (isEn
-                  ? " · Right-click to set a hotkey"
-                  : " · 右键设置快捷键")
-              }
-            >
-              <MathPreview
-                latex={previewLatex}
-                fit
-                maximumFitScale={toolbarPreviewMaximumScale}
-                fitInsetRatio={toolbarPreviewInsetRatio}
-              />
-            </button>
-          );
-        })}
       </div>
         </>
       ) : (
@@ -1450,6 +1879,21 @@ export function FormulaToolbar({
             >
               {isEn ? "Common" : "常用"}
             </button>
+            {onCollapseTiles && (
+              <button
+                type="button"
+                className="formula-tile-collapse-button"
+                data-formula-tile-collapse
+                aria-label={isEn ? "Collapse formula tiles" : "收起公式磁贴"}
+                title={isEn ? "Collapse formula tiles" : "收起公式磁贴"}
+                onClick={() => {
+                  setContextMenu(null);
+                  onCollapseTiles();
+                }}
+              >
+                <PanelRightClose size={15} />
+              </button>
+            )}
           </nav>
 
           {activeTileCategory === "custom" && (

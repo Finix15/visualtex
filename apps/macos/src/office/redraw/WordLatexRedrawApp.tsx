@@ -9,10 +9,22 @@ import {
   reportMacosLatexRedrawStage,
   resolveMacosLatexRedrawFontSizes,
   restoreMacosDocumentImportWindow,
+  type MacosFormulaRestoreTarget,
 } from "../documentImport/documentImportClient";
 import { documentImportErrorMessage } from "../documentImport/documentImportErrors";
 import { findWindowsWordLatexRedrawSpans } from "./wordLatexRedrawParser";
 import { prepareWindowsStyleWordLatexRedrawItems } from "./wordLatexRedrawRenderer";
+import { mathMlToLatex } from "./mathMlToLatex";
+
+function restoreTargetLatex(target: MacosFormulaRestoreTarget) {
+  const latex = target.latex?.trim() || (target.mathMl ? mathMlToLatex(target.mathMl) : "");
+  if (!latex) throw new Error("A Word formula does not contain recoverable LaTeX.");
+  return latex;
+}
+
+function latexSourceText(latex: string, displayMode: "inline" | "block") {
+  return displayMode === "block" ? `$$${latex}$$` : `$${latex}$`;
+}
 
 export function WordLatexRedrawApp() {
   const sessionId = useMemo(
@@ -20,7 +32,7 @@ export function WordLatexRedrawApp() {
     [],
   );
   const startedRef = useRef(false);
-  const [status, setStatus] = useState("Preparing Word LaTeX redraw…");
+  const [status, setStatus] = useState("Preparing Word formula operation…");
   const [error, setError] = useState("");
   const [closing, setClosing] = useState(false);
 
@@ -39,9 +51,64 @@ export function WordLatexRedrawApp() {
         ).catch(() => undefined);
       try {
         const request = await getMacosDocumentImportRequest(sessionId);
+        if (request.operation === "formulaRestore") {
+          const targets = request.restoreTargets ?? [];
+          const outputKind = request.outputKind;
+          if (!targets.length) {
+            throw new Error(
+              request.redrawScope === "document"
+                ? "No matching formulas were found in the Word document."
+                : "No matching formula was found in the Word selection.",
+            );
+          }
+          if (outputKind !== "latex" && outputKind !== "image") {
+            throw new Error("The Word formula restore output format is invalid.");
+          }
+
+          await focusMacosDocumentImportTarget("formulaRestore");
+          setStatus(`Reading 0/${targets.length} Word formulas…`);
+          const recovered = targets.map((target, index) => {
+            const latex = restoreTargetLatex(target);
+            setStatus(`Reading ${index + 1}/${targets.length} Word formulas…`);
+            return { ...target, latex };
+          });
+
+          if (outputKind === "latex") {
+            setStatus(`Writing ${recovered.length} LaTeX formulas back to Word…`);
+            await commitMacosDocumentImport(sessionId, {
+              outputKind: "latex",
+              items: recovered.map((target) => ({
+                kind: "text" as const,
+                text: latexSourceText(target.latex, target.displayMode),
+                sourceStart: target.sourceStart,
+                sourceEnd: target.sourceEnd,
+                sourceText: target.sourceText,
+              })),
+            });
+          } else {
+            setStatus(`Rendering 0/${recovered.length} formulas…`);
+            const items = await prepareWindowsStyleWordLatexRedrawItems(
+              recovered.map((target) => ({
+                start: target.sourceStart,
+                end: target.sourceEnd,
+                sourceText: target.sourceText,
+                latex: target.latex,
+                displayMode: target.displayMode,
+                fontSizePt: target.fontSizePt,
+              })),
+              "image",
+              (current, total) => setStatus(`Rendering ${current}/${total} formulas…`),
+            );
+            setStatus(`Writing ${items.length} image formulas back to Word…`);
+            await commitMacosDocumentImport(sessionId, { outputKind: "image", items });
+          }
+          await closeMacosDocumentImportWindow();
+          return;
+        }
+
         await reportStage("latex-redraw-request-ready", 0);
         if (request.operation !== "latexRedraw") {
-          throw new Error("The current Office session is not a Word LaTeX redraw request.");
+          throw new Error("The current Office session is not a Word formula operation.");
         }
         const source = request.source ?? "";
         const outputKind = request.outputKind;
@@ -91,7 +158,7 @@ export function WordLatexRedrawApp() {
         await reportStage("latex-redraw-commit-complete", items.length);
         await closeMacosDocumentImportWindow();
       } catch (reason) {
-        setError(documentImportErrorMessage(reason, "Word LaTeX redraw failed."));
+        setError(documentImportErrorMessage(reason, "Word formula operation failed."));
         setStatus("");
         await restoreMacosDocumentImportWindow().catch(() => undefined);
       }
@@ -121,7 +188,7 @@ export function WordLatexRedrawApp() {
   return (
     <main className="document-import-state is-error" role="alert">
       <AlertCircle />
-      <strong>Word LaTeX redraw failed</strong>
+      <strong>Word formula operation failed</strong>
       <p>{error}</p>
       <button type="button" onClick={() => void close()} disabled={closing}>
         <X size={16} />

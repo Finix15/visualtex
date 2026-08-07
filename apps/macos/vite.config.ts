@@ -5,6 +5,10 @@ import {
   RARE_INTEGRAL_GLYPHS,
   RARE_INTEGRAL_GLYPH_UNITS_PER_EM,
 } from "./src/math/rareIntegralGlyphs.generated.ts";
+import {
+  ESINT_INTEGRAL_GLYPHS,
+  ESINT_INTEGRAL_GLYPH_UNITS_PER_EM,
+} from "./src/math/esintGlyphs.ts";
 
 const host = process.env.TAURI_DEV_HOST;
 const mathLiveBrowserEntry = fileURLToPath(
@@ -27,8 +31,18 @@ function visualTexMathLiveIntegralCompatibility() {
     height: variant.height,
     depth: variant.depth,
   });
+  if (ESINT_INTEGRAL_GLYPH_UNITS_PER_EM !== RARE_INTEGRAL_GLYPH_UNITS_PER_EM) {
+    throw new Error("VisualTeX integral glyph registries use incompatible units.");
+  }
+  // esint definitions intentionally come last: where a package command also
+  // has a similarly named Unicode/STIX glyph (notably \\fint), the official
+  // esint10 outline is the source of truth.
+  const integralGlyphDefinitions = [
+    ...RARE_INTEGRAL_GLYPHS,
+    ...ESINT_INTEGRAL_GLYPHS,
+  ];
   const rareIntegralGlyphs = Object.fromEntries(
-    RARE_INTEGRAL_GLYPHS.flatMap((definition) =>
+    integralGlyphDefinitions.flatMap((definition) =>
       [definition.command, ...definition.aliases].map((command) => [
         command,
         {

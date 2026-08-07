@@ -45,6 +45,33 @@ export interface FormulaDocument {
     zoom: number;
     formulaAlignment?: FormulaAlignment;
     latexCodeFormat?: LatexCodeFormat;
+    editorLayout?: "standard" | "classic";
+    language?: "cn" | "en";
+    sourceOpen?: boolean;
+    autoPairDelimiters?: boolean;
+    showLineNumbers?: boolean;
+    highlightActiveLine?: boolean;
+    formulaInsetLeft?: number;
+    formulaInsetRight?: number;
+    formulaToolButtonSize?: number;
+    formulaToolButtonPadding?: number;
+    formulaRowVerticalInset?: number;
+    pngExportBackground?: "transparent" | `#${string}`;
+    formulaLetterFont?:
+      | "katex"
+      | "times"
+      | "cambria"
+      | "stix"
+      | "palatino"
+      | "helvetica";
+    formulaChineseFont?: "system" | "pingfang" | "songti" | "kaiti" | "heiti";
+    inputBehavior?: InputBehaviorSettings;
+    personalize?: boolean;
+    suggestionCount?: number;
+    checkUpdatesOnStartup?: boolean;
+    powerPointDefaultFontSizePt?: number;
+    classicTileWidth?: number;
+    classicDockHeight?: number;
   };
 }
 

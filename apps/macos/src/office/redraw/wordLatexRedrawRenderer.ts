@@ -13,6 +13,7 @@ import type {
   DocumentImportFormulaCommitItem,
 } from "../documentImport/documentImportClient";
 import type { WordLatexRedrawSpan } from "./wordLatexRedrawParser";
+import { useEditorStore } from "../../stores/editorStore";
 
 const MAX_WORD_REFERENCE_WIDTH_PT = 500;
 const WORD_IMAGE_VISUAL_SCALE = 1.1;
@@ -75,11 +76,14 @@ async function renderTemplate(
   const editorDocument = normalizeFormulaEditorDocument([line], "raw");
   const canonicalLatex = serializeFormulaEditorDocument(editorDocument);
 
+  const { formulaLetterFont, formulaChineseFont } = useEditorStore.getState();
+
   if (outputKind === "omml") {
     const omml = latexLinesToOmmlArtifacts(
       editorDocument.lines.map((formulaLine) => formulaLine.latex),
       span.displayMode,
       editorDocument.codeFormat,
+      { formulaLetterFont, formulaChineseFont },
     );
     if (ommlRetainsLiteralLatexCommand(omml.ommlBase64, canonicalLatex)) {
       throw new Error("The redraw formula contains a command unsupported by Word OMML.");
@@ -96,6 +100,8 @@ async function renderTemplate(
     codeFormat: editorDocument.codeFormat,
     displayMode: span.displayMode,
     host: "word",
+    formulaLetterFont,
+    formulaChineseFont,
   });
   if (!artifacts.omml) {
     throw new Error("Unable to generate Word OMML for the LaTeX redraw formula.");
@@ -131,6 +137,7 @@ function createMetadata(
   template: RenderTemplate,
 ): VisualTeXFormulaMetadata {
   const line = { id: createUuid(), latex: template.canonicalLatex };
+  const { formulaLetterFont, formulaChineseFont } = useEditorStore.getState();
   return createFormulaMetadata({
     formulaId,
     title:
@@ -143,6 +150,8 @@ function createMetadata(
     displayMode: span.displayMode,
     numbered: false,
     fontSizePt: span.fontSizePt,
+    formulaLetterFont,
+    formulaChineseFont,
     renderWidthPx: template.renderWidthPx,
     renderHeightPx: template.renderHeightPx,
     referenceWidthPt: template.referenceWidthPt,

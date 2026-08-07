@@ -1,0 +1,257 @@
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { useEditorStore } from "../stores/editorStore";
+import { safeStorage } from "./safeStorage";
+import { publishSynchronizedTheme } from "../themeSync";
+import { OCR_MODELS } from "../ocr/ocrService";
+import type { FormulaDocument } from "../types/formula";
+
+export const VISUALTEX_CONFIGURATION_SCHEMA = "visualtex-user-configuration";
+export const VISUALTEX_CONFIGURATION_VERSION = 1;
+export const VISUALTEX_CONFIGURATION_EXTENSION = "vtxconfig";
+
+export interface VisualTexConfigurationWindowSize {
+  width: number;
+  height: number;
+}
+
+export interface VisualTexConfigurationWindowState {
+  main?: VisualTexConfigurationWindowSize | null;
+  officeEditor?: VisualTexConfigurationWindowSize | null;
+}
+
+export interface VisualTexUserConfiguration {
+  schema: typeof VISUALTEX_CONFIGURATION_SCHEMA;
+  version: typeof VISUALTEX_CONFIGURATION_VERSION;
+  exportedAt: string;
+  editorSettings: Partial<FormulaDocument["settings"]>;
+  storage: Record<string, string>;
+  windows?: VisualTexConfigurationWindowState;
+}
+
+const configurationStorageKeys = [
+  "visualtex-custom-formula-tiles",
+  "visualtex-common-toolbar-command-ids-v1",
+  "visualtex-formula-hotkeys-v1",
+  "visualtex-custom-formula-text-colors",
+  "visualtex-custom-formula-background-colors",
+  "visualtex-desktop-editor-toolbar-open",
+  "visualtex-desktop-editor-tiles-open",
+  "visualtex-office-editor-toolbar-open",
+  "visualtex-office-editor-tiles-open",
+  "visualtex.ocr.model",
+] as const;
+
+const booleanConfigurationStorageKeys = new Set<string>([
+  "visualtex-desktop-editor-toolbar-open",
+  "visualtex-desktop-editor-tiles-open",
+  "visualtex-office-editor-toolbar-open",
+  "visualtex-office-editor-tiles-open",
+]);
+
+const jsonConfigurationStorageKeys = new Set<string>([
+  "visualtex-custom-formula-tiles",
+  "visualtex-common-toolbar-command-ids-v1",
+  "visualtex-formula-hotkeys-v1",
+  "visualtex-custom-formula-text-colors",
+  "visualtex-custom-formula-background-colors",
+]);
+
+const editorSettingKeys = [
+  "theme",
+  "zoom",
+  "formulaAlignment",
+  "latexCodeFormat",
+  "editorLayout",
+  "language",
+  "sourceOpen",
+  "autoPairDelimiters",
+  "showLineNumbers",
+  "highlightActiveLine",
+  "formulaInsetLeft",
+  "formulaInsetRight",
+  "formulaToolButtonSize",
+  "formulaToolButtonPadding",
+  "formulaRowVerticalInset",
+  "pngExportBackground",
+  "formulaLetterFont",
+  "formulaChineseFont",
+  "inputBehavior",
+  "personalize",
+  "suggestionCount",
+  "checkUpdatesOnStartup",
+  "powerPointDefaultFontSizePt",
+  "classicTileWidth",
+  "classicDockHeight",
+] as const satisfies readonly (keyof FormulaDocument["settings"])[];
+
+const maximumStorageEntryLength = 2_000_000;
+const maximumConfigurationLength = 8_000_000;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeEditorSettings(value: unknown) {
+  if (!isRecord(value)) {
+    throw new Error("The configuration is missing editor settings.");
+  }
+  const settings: Partial<FormulaDocument["settings"]> = {};
+  for (const key of editorSettingKeys) {
+    if (Object.prototype.hasOwnProperty.call(value, key)) {
+      (settings as Record<string, unknown>)[key] = value[key];
+    }
+  }
+  return settings;
+}
+
+function normalizeWindowSize(value: unknown): VisualTexConfigurationWindowSize | null {
+  if (!isRecord(value)) return null;
+  const width = Number(value.width);
+  const height = Number(value.height);
+  if (
+    !Number.isFinite(width) ||
+    !Number.isFinite(height) ||
+    width < 300 ||
+    height < 200 ||
+    width > 5000 ||
+    height > 4000
+  ) {
+    return null;
+  }
+  return { width, height };
+}
+
+function normalizeWindowState(value: unknown): VisualTexConfigurationWindowState | undefined {
+  if (!isRecord(value)) return undefined;
+  const main = normalizeWindowSize(value.main);
+  const officeEditor = normalizeWindowSize(value.officeEditor);
+  if (!main && !officeEditor) return undefined;
+  return { main, officeEditor };
+}
+
+function normalizeStorage(value: unknown) {
+  const result: Record<string, string> = {};
+  if (!isRecord(value)) return result;
+  for (const key of configurationStorageKeys) {
+    const raw = value[key];
+    if (typeof raw !== "string" || raw.length > maximumStorageEntryLength) continue;
+    if (jsonConfigurationStorageKeys.has(key)) {
+      try {
+        JSON.parse(raw);
+      } catch {
+        continue;
+      }
+    } else if (
+      booleanConfigurationStorageKeys.has(key) &&
+      !["true", "false", "1", "0"].includes(raw)
+    ) {
+      continue;
+    } else if (
+      key === "visualtex.ocr.model" &&
+      !OCR_MODELS.some((item) => item.id === raw)
+    ) {
+      continue;
+    }
+    result[key] = raw;
+  }
+  return result;
+}
+
+export function parseVisualTexConfiguration(source: string): VisualTexUserConfiguration {
+  if (!source.trim() || source.length > maximumConfigurationLength) {
+    throw new Error("The configuration file is empty or too large.");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source);
+  } catch {
+    throw new Error("The configuration file is not valid JSON.");
+  }
+  if (!isRecord(parsed)) {
+    throw new Error("The configuration file has an invalid structure.");
+  }
+  if (parsed.schema !== VISUALTEX_CONFIGURATION_SCHEMA) {
+    throw new Error("This file is not a VisualTeX configuration file.");
+  }
+  if (parsed.version !== VISUALTEX_CONFIGURATION_VERSION) {
+    throw new Error("This VisualTeX configuration version is not supported.");
+  }
+  return {
+    schema: VISUALTEX_CONFIGURATION_SCHEMA,
+    version: VISUALTEX_CONFIGURATION_VERSION,
+    exportedAt:
+      typeof parsed.exportedAt === "string" ? parsed.exportedAt : new Date(0).toISOString(),
+    editorSettings: normalizeEditorSettings(parsed.editorSettings),
+    storage: normalizeStorage(parsed.storage),
+    windows: normalizeWindowState(parsed.windows),
+  };
+}
+
+async function readWindowConfiguration(): Promise<VisualTexConfigurationWindowState | undefined> {
+  if (!isTauri()) {
+    return {
+      main: {
+        width: window.innerWidth,
+        height: window.innerHeight,
+      },
+    };
+  }
+  try {
+    return await invoke<VisualTexConfigurationWindowState>(
+      "get_app_window_configuration",
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+export async function buildVisualTexConfiguration(): Promise<VisualTexUserConfiguration> {
+  const editorSettings = useEditorStore.getState().toDocument().settings;
+  const storage: Record<string, string> = {};
+  for (const key of configurationStorageKeys) {
+    const value = safeStorage.getItem(key);
+    if (value !== null) storage[key] = value;
+  }
+  return {
+    schema: VISUALTEX_CONFIGURATION_SCHEMA,
+    version: VISUALTEX_CONFIGURATION_VERSION,
+    exportedAt: new Date().toISOString(),
+    editorSettings: { ...editorSettings },
+    storage,
+    windows: await readWindowConfiguration(),
+  };
+}
+
+export async function applyVisualTexConfiguration(
+  input: VisualTexUserConfiguration,
+): Promise<void> {
+  const configuration = parseVisualTexConfiguration(JSON.stringify(input));
+  const editor = useEditorStore.getState();
+  const currentDocument = editor.toDocument();
+  const mergedSettings = {
+    ...currentDocument.settings,
+    ...configuration.editorSettings,
+  };
+  editor.loadDocument({
+    ...currentDocument,
+    settings: mergedSettings,
+  });
+
+  for (const key of configurationStorageKeys) {
+    const value = configuration.storage[key];
+    if (typeof value === "string") safeStorage.setItem(key, value);
+    else safeStorage.removeItem(key);
+  }
+
+  publishSynchronizedTheme(useEditorStore.getState().theme);
+  if (isTauri()) {
+    await invoke("set_app_theme", {
+      theme: useEditorStore.getState().theme,
+    }).catch(() => undefined);
+    if (configuration.windows) {
+      await invoke("apply_app_window_configuration", {
+        configuration: configuration.windows,
+      });
+    }
+  }
+}

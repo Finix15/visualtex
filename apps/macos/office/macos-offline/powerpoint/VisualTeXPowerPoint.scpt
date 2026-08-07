@@ -7,6 +7,7 @@ use framework "Foundation"
 property runtimeSuffix : "Library/Application Scripts/com.microsoft.Powerpoint/VisualTeXRuntime"
 property maximumRelativePathLength : 1024
 property expectedHost : "powerpoint"
+property cachedVisualTeXExecutable : ""
 
 on OpenVisualTeXSession(sessionId)
     try
@@ -43,6 +44,9 @@ on PrewarmVisualTeXApplication(hostName)
     try
         set safeHost to my validateHostName(hostName as text)
         do shell script "/usr/bin/open -gj -b " & quoted form of "com.visualtex.studio" & " --args --office-background"
+        -- Resolve and cache the executable while Office is starting, outside
+        -- the user-visible create/edit path.
+        set cachedVisualTeXExecutable to my runningVisualTeXExecutable()
         set finishedAt to my monotonicSeconds()
         return "ok|host=" & safeHost & ";prewarmMs=" & my elapsedMilliseconds(startedAt, finishedAt)
     on error errorMessage number errorNumber
@@ -162,17 +166,28 @@ on launchVisualTeXURL(visualTeXURL)
     -- Launch a short second process with the validated URL in argv. Tauri's
     -- single-instance Unix socket forwards argv to the already-prewarmed app;
     -- a LaunchServices URL AppleEvent would be lost when the second process
-    -- exits before RunEvent::Opened on macOS.
-    do shell script "/usr/bin/nohup " & quoted form of executablePath & space & quoted form of safeURL & " >/dev/null 2>&1 &"
+    -- exits before RunEvent::Opened on macOS. NSTask avoids an extra shell,
+    -- nohup and redirection process on every editor open.
+    set launchTask to current application's NSTask's alloc()'s init()
+    launchTask's setLaunchPath:executablePath
+    launchTask's setArguments:{safeURL}
+    launchTask's setStandardOutput:(current application's NSFileHandle's fileHandleWithNullDevice())
+    launchTask's setStandardError:(current application's NSFileHandle's fileHandleWithNullDevice())
+    launchTask's |launch|()
 end launchVisualTeXURL
 
 on runningVisualTeXExecutable()
+    if cachedVisualTeXExecutable is not "" then return cachedVisualTeXExecutable
     set executableSuffix to "/VisualTeX.app/Contents/MacOS/visualtex"
     set standardExecutable to "/Applications/VisualTeX.app/Contents/MacOS/visualtex"
     set runningExecutable to my firstRunningVisualTeXExecutable(executableSuffix)
-    if runningExecutable is not "" then return runningExecutable
+    if runningExecutable is not "" then
+        set cachedVisualTeXExecutable to runningExecutable
+        return runningExecutable
+    end if
     try
         do shell script "/bin/test -x " & quoted form of standardExecutable
+        set cachedVisualTeXExecutable to standardExecutable
         return standardExecutable
     end try
     repeat with attemptIndex from 1 to 40
@@ -181,7 +196,10 @@ on runningVisualTeXExecutable()
         end if
         delay 0.05
         set runningExecutable to my firstRunningVisualTeXExecutable(executableSuffix)
-        if runningExecutable is not "" then return runningExecutable
+        if runningExecutable is not "" then
+            set cachedVisualTeXExecutable to runningExecutable
+            return runningExecutable
+        end if
     end repeat
     error "The prewarmed VisualTeX executable is not running" number 7128
 end runningVisualTeXExecutable
@@ -221,21 +239,16 @@ on isDecimalProcessId(candidate)
 end isDecimalProcessId
 
 on writeEncodedFileAtomically(targetPath, encodedData)
-    set temporaryPath to ""
     try
-        set parentPath to do shell script "/usr/bin/dirname " & quoted form of targetPath
+        set parentPath to ((current application's NSString's stringWithString:targetPath)'s stringByDeletingLastPathComponent()) as text
         my ensureDirectory(parentPath)
         set normalizedData to my normalizeBase64Url(encodedData)
-        set temporaryPath to do shell script "/usr/bin/mktemp " & quoted form of (targetPath & ".tmp.XXXXXX")
-        do shell script "/usr/bin/printf %s " & quoted form of normalizedData & " | /usr/bin/base64 -D > " & quoted form of temporaryPath
-        do shell script "/bin/chmod 600 " & quoted form of temporaryPath & " && /bin/mv -f " & quoted form of temporaryPath & space & quoted form of targetPath
-        set temporaryPath to ""
+        set decodedData to current application's NSData's alloc()'s initWithBase64EncodedString:normalizedData options:0
+        if decodedData is missing value then error "VisualTeX file bridge Base64URL payload is invalid" number 7125
+        set writeSucceeded to (decodedData's writeToFile:targetPath atomically:true) as boolean
+        if not writeSucceeded then error "VisualTeX could not write the local Session request" number 7129
+        do shell script "/bin/chmod 600 " & quoted form of targetPath
     on error errorMessage number errorNumber
-        if temporaryPath is not "" then
-            try
-                do shell script "/bin/rm -f " & quoted form of temporaryPath
-            end try
-        end if
         error errorMessage number errorNumber
     end try
 end writeEncodedFileAtomically

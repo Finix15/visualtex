@@ -10,15 +10,24 @@ use base64::{
 };
 use flate2::{read::DeflateDecoder, write::DeflateEncoder, Compression};
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "macos")]
+use objc2::MainThreadMarker;
+#[cfg(target_os = "macos")]
+use objc2_app_kit::NSApplication;
 use serde_json::{json, Value};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::{mpsc, Mutex, OnceLock};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::process::{Command, Stdio};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    mpsc, Mutex, OnceLock,
+};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::utils::config::BackgroundThrottlingPolicy;
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{
+    AppHandle, Emitter, Manager, Monitor, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+};
 use uuid::Uuid;
 
 const OFFLINE_PROTOCOL_VERSION: u32 = 1;
@@ -33,11 +42,27 @@ const LATEX_REDRAW_VECTOR_BATCH_FILE: &str = "latex-redraw-vectors.docx";
 const LATEX_REDRAW_SOURCE_FILE: &str = "latex-redraw-source.txt";
 const LATEX_REDRAW_PREFLIGHT_MANIFEST_FILE: &str = "latex-redraw-preflight.txt";
 const LATEX_REDRAW_FONT_SIZES_FILE: &str = "latex-redraw-font-sizes.txt";
+const FORMULA_RESTORE_SOURCE_FILE: &str = "formula-restore-source.txt";
+const WORD_PERFORMANCE_TRACE_SENTINEL: &str = "word-performance-trace.enabled";
 const MAX_LATEX_REDRAW_SOURCE_BYTES: u64 = 5 * 1024 * 1024;
 const EDITOR_READY_FILE: &str = "editor-ready.json";
 const EDITOR_PERFORMANCE_FILE: &str = "editor-performance.jsonl";
 const OFFICE_EDITOR_ACTIVATE_EVENT: &str = "visualtex-office-editor-activate";
 const OFFICE_EDITOR_CLEAR_EVENT: &str = "visualtex-office-editor-clear";
+const OFFICE_EDITOR_WINDOW_SIZE_FILE: &str = "editor-window-size.json";
+// Measured from the user's current Office editor: 843 × 568 logical pixels on
+// a 1470 × 956 logical-pixel display. Persist and restore the proportion rather
+// than the absolute pixels so Retina scaling and different displays keep the
+// same window density and screen coverage.
+const DEFAULT_OFFICE_EDITOR_WIDTH_RATIO: f64 = 843.0 / 1470.0;
+const DEFAULT_OFFICE_EDITOR_HEIGHT_RATIO: f64 = 568.0 / 956.0;
+const DEFAULT_OFFICE_EDITOR_FALLBACK_WIDTH: f64 = 843.0;
+const DEFAULT_OFFICE_EDITOR_FALLBACK_HEIGHT: f64 = 568.0;
+const MIN_OFFICE_EDITOR_WIDTH: f64 = 500.0;
+const MIN_OFFICE_EDITOR_HEIGHT: f64 = 300.0;
+const MAX_OFFICE_EDITOR_WIDTH: f64 = 2600.0;
+const MAX_OFFICE_EDITOR_HEIGHT: f64 = 1800.0;
+const OFFICE_EDITOR_TITLE_BAR_ALLOWANCE: f64 = 28.0;
 const WORD_POINTER_FILE: &str = "word-active-session.txt";
 const POWERPOINT_POINTER_FILE: &str = "powerpoint-active-session.txt";
 const WORD_RUNTIME_SUFFIX: &str = "Library/Application Scripts/com.microsoft.Word/VisualTeXRuntime";
@@ -65,6 +90,39 @@ const MIN_POWERPOINT_FONT_SIZE_PT: f64 = 1.0;
 const MAX_POWERPOINT_FONT_SIZE_PT: f64 = 512.0;
 static WORD_DISPATCH_LOCK: Mutex<()> = Mutex::new(());
 static POWERPOINT_DISPATCH_LOCK: Mutex<()> = Mutex::new(());
+static OFFICE_EDITOR_SIZE_WRITE_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug, Clone, Copy)]
+struct OfficeEditorWindowSize {
+    width: f64,
+    height: f64,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OfficeEditorWindowSizePreference {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    width_ratio: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    height_ratio: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fallback_width: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fallback_height: Option<f64>,
+    // Compatibility with the absolute-size file written by early 1.2.4 builds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    width: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    height: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct OfficeEditorMonitorGeometry {
+    screen_width: f64,
+    screen_height: f64,
+    maximum_inner_width: f64,
+    maximum_inner_height: f64,
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -96,6 +154,8 @@ struct MacOfflineDocumentImportRequest {
     redraw_scope: Option<String>,
     #[serde(default)]
     output_kind: Option<String>,
+    #[serde(default)]
+    source_kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -129,6 +189,21 @@ struct MacOfflineSessionRequest {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct MacOfflineFormulaRestoreTarget {
+    source_start: usize,
+    source_end: usize,
+    source_text: String,
+    display_mode: String,
+    font_size_pt: f64,
+    source_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    math_ml: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latex: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MacOfflineDocumentImportPublicRequest {
     protocol_version: u32,
     session_id: String,
@@ -142,7 +217,11 @@ pub struct MacOfflineDocumentImportPublicRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     output_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    source_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    restore_targets: Option<Vec<MacOfflineFormulaRestoreTarget>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -184,6 +263,12 @@ pub struct MacOfflineLatexRedrawFontQueryInput {
 pub enum MacOfflineDocumentImportCommitItem {
     Text {
         text: String,
+        #[serde(default)]
+        source_start: Option<usize>,
+        #[serde(default)]
+        source_end: Option<usize>,
+        #[serde(default)]
+        source_text: Option<String>,
         #[serde(default)]
         paragraph_id: Option<String>,
         #[serde(default)]
@@ -349,6 +434,23 @@ pub struct MacOfflineOfficeEditorReadyInput {
     content_ready_ms: f64,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MacOfflineOfficeEditorPrewarmDiagnosticInput {
+    stage: String,
+    editor_ready: bool,
+    mathfield_hosts: u32,
+    elapsed_ms: f64,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct ResidentEditorFocusState {
+    app_active: bool,
+    window_can_become_key: bool,
+    window_is_key: bool,
+    window_is_main: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MacOfflineOfficeEditorReadyMarker {
@@ -363,6 +465,11 @@ struct MacOfflineOfficeEditorReadyMarker {
     editor_mounted_ms: f64,
     content_ready_ms: f64,
     show_focus_ms: f64,
+    window_focused: bool,
+    window_visible: bool,
+    app_active: bool,
+    window_can_become_key: bool,
+    window_is_main: bool,
 }
 
 fn office_editor_runtime() -> &'static Mutex<OfficeEditorRuntime> {
@@ -443,6 +550,12 @@ pub(crate) fn runtime_root(host: OfficeHost) -> Result<PathBuf, String> {
     Ok(user_home()?.join(suffix))
 }
 
+fn word_performance_trace_enabled() -> bool {
+    runtime_root(OfficeHost::Word)
+        .map(|root| root.join(WORD_PERFORMANCE_TRACE_SENTINEL).is_file())
+        .unwrap_or(false)
+}
+
 fn host_from_request_name(value: &str) -> Result<OfficeHost, String> {
     match value {
         "word" => Ok(OfficeHost::Word),
@@ -495,6 +608,10 @@ fn latex_redraw_font_sizes_path(session_id: &str) -> Result<PathBuf, String> {
     Ok(session_directory(OfficeHost::Word, session_id)?.join(LATEX_REDRAW_FONT_SIZES_FILE))
 }
 
+fn formula_restore_source_path(session_id: &str) -> Result<PathBuf, String> {
+    Ok(session_directory(OfficeHost::Word, session_id)?.join(FORMULA_RESTORE_SOURCE_FILE))
+}
+
 fn result_png_path(host: OfficeHost, session_id: &str) -> Result<PathBuf, String> {
     Ok(session_directory(host, session_id)?.join(RESULT_PNG_FILE))
 }
@@ -516,6 +633,19 @@ fn native_word_document_path(formula_id: &str) -> Result<PathBuf, String> {
     Ok(directory.join(format!("{formula_id}.docx")))
 }
 
+fn word_image_cache_paths(formula_id: &str) -> Result<(PathBuf, PathBuf, PathBuf), String> {
+    validate_uuid(formula_id, "Formula id")?;
+    let directory = runtime_root(OfficeHost::Word)?.join("ImageDocuments");
+    fs::create_dir_all(&directory)
+        .map_err(|error| format!("Unable to create {}: {error}", directory.display()))?;
+    set_mode(&directory, 0o700)?;
+    Ok((
+        directory.join(format!("{formula_id}.svg")),
+        directory.join(format!("{formula_id}.docx")),
+        directory.join(format!("{formula_id}.png")),
+    ))
+}
+
 fn cleanup_session_files_at(
     directory: &Path,
     remove_document_formula_files: bool,
@@ -529,6 +659,7 @@ fn cleanup_session_files_at(
         DOCUMENT_IMPORT_MANIFEST_FILE,
         LATEX_REDRAW_VECTOR_BATCH_FILE,
         LATEX_REDRAW_SOURCE_FILE,
+        FORMULA_RESTORE_SOURCE_FILE,
         LATEX_REDRAW_PREFLIGHT_MANIFEST_FILE,
         LATEX_REDRAW_FONT_SIZES_FILE,
         "formula.docx",
@@ -627,7 +758,7 @@ fn validate_request(request: &MacOfflineSessionRequest, session_id: &str) -> Res
         return Err("Offline Office request mode must be create or edit".to_string());
     }
     let operation = request.operation.as_deref().unwrap_or("formula");
-    if matches!(operation, "documentImport" | "latexRedraw") {
+    if matches!(operation, "documentImport" | "latexRedraw" | "formulaRestore") {
         if request.host != "word" || request.mode != "create" {
             return Err("Document import is supported only as a new Word operation".to_string());
         }
@@ -668,13 +799,46 @@ fn validate_request(request: &MacOfflineSessionRequest, session_id: &str) -> Res
             ) {
                 return Err("LaTeX redraw output kind must be omml or image".to_string());
             }
+            if document_import.source_kind.is_some() {
+                return Err("LaTeX redraw request contains a formula restore source kind".to_string());
+            }
             let source_path =
                 session_directory(OfficeHost::Word, session_id)?.join(LATEX_REDRAW_SOURCE_FILE);
             let source_metadata = fs::metadata(&source_path)
                 .map_err(|error| format!("Unable to read {}: {error}", source_path.display()))?;
             validate_latex_redraw_source_size(source_metadata.len())?;
-        } else if document_import.redraw_scope.is_some() || document_import.output_kind.is_some() {
-            return Err("Document import request contains LaTeX redraw fields".to_string());
+        } else if operation == "formulaRestore" {
+            if !matches!(
+                document_import.redraw_scope.as_deref(),
+                Some("selection" | "document")
+            ) {
+                return Err("Formula restore scope must be selection or document".to_string());
+            }
+            if !matches!(document_import.output_kind.as_deref(), Some("latex" | "image")) {
+                return Err("Formula restore output kind must be latex or image".to_string());
+            }
+            if !matches!(document_import.source_kind.as_deref(), Some("omml" | "image")) {
+                return Err("Formula restore source kind must be omml or image".to_string());
+            }
+            if document_import.output_kind.as_deref() == Some("image")
+                && document_import.source_kind.as_deref() != Some("omml")
+            {
+                return Err("Only native OMML can be restored to a VisualTeX image".to_string());
+            }
+            let source_metadata = fs::metadata(formula_restore_source_path(session_id)?)
+                .map_err(|error| format!("Unable to inspect formula restore source: {error}"))?;
+            if source_metadata.file_type().is_symlink()
+                || !source_metadata.is_file()
+                || source_metadata.len() == 0
+                || source_metadata.len() as usize > MAX_DOCUMENT_IMPORT_MANIFEST_BYTES
+            {
+                return Err("Formula restore source has an invalid size".to_string());
+            }
+        } else if document_import.redraw_scope.is_some()
+            || document_import.output_kind.is_some()
+            || document_import.source_kind.is_some()
+        {
+            return Err("Document import request contains formula transform fields".to_string());
         }
         if request.formula_id.is_some()
             || request.encoded_metadata.is_some()
@@ -688,8 +852,33 @@ fn validate_request(request: &MacOfflineSessionRequest, session_id: &str) -> Res
         }
         return Ok(());
     }
-    if operation != "formula" || request.document_import.is_some() {
+    if !matches!(operation, "formula" | "nativeToImage" | "imageToNative")
+        || request.document_import.is_some()
+    {
         return Err("Unsupported offline Office operation".to_string());
+    }
+    if matches!(operation, "nativeToImage" | "imageToNative") {
+        let output_matches_operation = if operation == "nativeToImage" {
+            !request.native_equation
+        } else {
+            request.native_equation
+        };
+        if request.host != "word" || request.mode != "edit" || !output_matches_operation {
+            return Err(format!(
+                "{operation} conversion requires a matching Word edit output request"
+            ));
+        }
+        if request.formula_id.is_none()
+            || request.source_document_id.is_none()
+            || request.source_object_id.is_none()
+            || request.encoded_metadata.is_none()
+            || request.pending_marker.is_some()
+            || request.power_point.is_some()
+        {
+            return Err(format!(
+                "{operation} conversion is missing its existing Word formula identity"
+            ));
+        }
     }
     if !matches!(request.display_mode.as_str(), "inline" | "block") {
         return Err("Offline Office displayMode must be inline or block".to_string());
@@ -1429,11 +1618,17 @@ fn import_request(
         });
 
     let session_id = request.session_id.clone();
+    let session_operation = request
+        .operation
+        .as_deref()
+        .filter(|operation| *operation != "formula")
+        .map(str::to_string);
     match state.session_store.create_external(
         session_id.clone(),
         CreateOfficeSessionInput {
             mode,
             host,
+            operation: session_operation,
             formula_id: Some(formula_id),
             source_document_id,
             source_object_id,
@@ -1444,6 +1639,12 @@ fn import_request(
             display_mode: Some(request.display_mode),
             numbered: Some(request.numbered),
             font_size_pt,
+            formula_letter_font: original_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.formula_letter_font.clone()),
+            formula_chinese_font: original_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.formula_chinese_font.clone()),
             export_width: None,
             export_height: None,
             original_metadata,
@@ -1502,12 +1703,266 @@ fn editor_window_label(host: OfficeHost) -> &'static str {
     }
 }
 
+fn editor_prewarmed_marker_path(app: &AppHandle, host: OfficeHost) -> Result<PathBuf, String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Unable to resolve VisualTeX application data: {error}"))?;
+    Ok(app_data
+        .join("office")
+        .join(format!("{}-editor-prewarmed.json", office_host_name(host))))
+}
+
+fn editor_prewarm_diagnostic_path(app: &AppHandle, host: OfficeHost) -> Result<PathBuf, String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Unable to resolve VisualTeX application data: {error}"))?;
+    Ok(app_data
+        .join("office")
+        .join(format!("{}-editor-prewarm-diagnostic.json", office_host_name(host))))
+}
+
 fn editor_window_host(label: &str) -> Option<OfficeHost> {
     match label {
         "office-native-word-editor" => Some(OfficeHost::Word),
         "office-native-powerpoint-editor" => Some(OfficeHost::Powerpoint),
         _ => None,
     }
+}
+
+fn office_editor_monitor_geometry(monitor: &Monitor) -> Option<OfficeEditorMonitorGeometry> {
+    let scale_factor = monitor.scale_factor();
+    if !scale_factor.is_finite() || scale_factor <= 0.0 {
+        return None;
+    }
+    let screen_width = monitor.size().width as f64 / scale_factor;
+    let screen_height = monitor.size().height as f64 / scale_factor;
+    let work_width = monitor.work_area().size.width as f64 / scale_factor;
+    let work_height = monitor.work_area().size.height as f64 / scale_factor;
+    if screen_width <= 0.0 || screen_height <= 0.0 {
+        return None;
+    }
+    Some(OfficeEditorMonitorGeometry {
+        screen_width,
+        screen_height,
+        maximum_inner_width: work_width.max(MIN_OFFICE_EDITOR_WIDTH),
+        maximum_inner_height: (work_height - OFFICE_EDITOR_TITLE_BAR_ALLOWANCE)
+            .max(MIN_OFFICE_EDITOR_HEIGHT),
+    })
+}
+
+fn primary_office_editor_monitor_geometry(
+    app: &AppHandle,
+) -> Option<OfficeEditorMonitorGeometry> {
+    app.primary_monitor()
+        .ok()
+        .flatten()
+        .as_ref()
+        .and_then(office_editor_monitor_geometry)
+}
+
+fn current_office_editor_monitor_geometry(
+    app: &AppHandle,
+    window: &WebviewWindow,
+) -> Option<OfficeEditorMonitorGeometry> {
+    window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .as_ref()
+        .and_then(office_editor_monitor_geometry)
+        .or_else(|| primary_office_editor_monitor_geometry(app))
+}
+
+fn normalize_office_editor_ratio(value: Option<f64>, fallback: f64) -> f64 {
+    value
+        .filter(|value| value.is_finite() && *value >= 0.1 && *value <= 1.0)
+        .unwrap_or(fallback)
+}
+
+fn normalize_office_editor_window_size(
+    width: f64,
+    height: f64,
+    monitor: Option<OfficeEditorMonitorGeometry>,
+) -> OfficeEditorWindowSize {
+    let width = if width.is_finite() {
+        width
+    } else {
+        DEFAULT_OFFICE_EDITOR_FALLBACK_WIDTH
+    };
+    let height = if height.is_finite() {
+        height
+    } else {
+        DEFAULT_OFFICE_EDITOR_FALLBACK_HEIGHT
+    };
+    let maximum_width = monitor
+        .map(|geometry| geometry.maximum_inner_width)
+        .unwrap_or(MAX_OFFICE_EDITOR_WIDTH)
+        .min(MAX_OFFICE_EDITOR_WIDTH)
+        .max(MIN_OFFICE_EDITOR_WIDTH);
+    let maximum_height = monitor
+        .map(|geometry| geometry.maximum_inner_height)
+        .unwrap_or(MAX_OFFICE_EDITOR_HEIGHT)
+        .min(MAX_OFFICE_EDITOR_HEIGHT)
+        .max(MIN_OFFICE_EDITOR_HEIGHT);
+    OfficeEditorWindowSize {
+        width: width.clamp(MIN_OFFICE_EDITOR_WIDTH, maximum_width),
+        height: height.clamp(MIN_OFFICE_EDITOR_HEIGHT, maximum_height),
+    }
+}
+
+fn resolve_office_editor_window_size(
+    preference: Option<OfficeEditorWindowSizePreference>,
+    monitor: Option<OfficeEditorMonitorGeometry>,
+) -> OfficeEditorWindowSize {
+    let preference = preference.unwrap_or_default();
+    let fallback_width = preference
+        .fallback_width
+        .or(preference.width)
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(DEFAULT_OFFICE_EDITOR_FALLBACK_WIDTH);
+    let fallback_height = preference
+        .fallback_height
+        .or(preference.height)
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(DEFAULT_OFFICE_EDITOR_FALLBACK_HEIGHT);
+
+    let (width, height) = if let Some(geometry) = monitor {
+        let migrated_width_ratio = preference
+            .width
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .map(|value| value / geometry.screen_width);
+        let migrated_height_ratio = preference
+            .height
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .map(|value| value / geometry.screen_height);
+        let width_ratio = normalize_office_editor_ratio(
+            preference.width_ratio.or(migrated_width_ratio),
+            DEFAULT_OFFICE_EDITOR_WIDTH_RATIO,
+        );
+        let height_ratio = normalize_office_editor_ratio(
+            preference.height_ratio.or(migrated_height_ratio),
+            DEFAULT_OFFICE_EDITOR_HEIGHT_RATIO,
+        );
+        (
+            geometry.screen_width * width_ratio,
+            geometry.screen_height * height_ratio,
+        )
+    } else {
+        (fallback_width, fallback_height)
+    };
+    normalize_office_editor_window_size(width, height, monitor)
+}
+
+fn office_editor_window_size_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Unable to resolve VisualTeX application data: {error}"))?;
+    Ok(app_data.join("office").join(OFFICE_EDITOR_WINDOW_SIZE_FILE))
+}
+
+fn read_office_editor_window_size_preference(
+    app: &AppHandle,
+) -> Option<OfficeEditorWindowSizePreference> {
+    let path = office_editor_window_size_path(app).ok()?;
+    let bytes = fs::read(path).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn load_office_editor_window_size(app: &AppHandle) -> OfficeEditorWindowSize {
+    resolve_office_editor_window_size(
+        read_office_editor_window_size_preference(app),
+        primary_office_editor_monitor_geometry(app),
+    )
+}
+
+pub(crate) fn configuration_office_editor_window_size(
+    app: &AppHandle,
+) -> Option<(f64, f64)> {
+    let size = load_office_editor_window_size(app);
+    Some((size.width, size.height))
+}
+
+pub(crate) fn apply_configuration_office_editor_window_size(
+    app: &AppHandle,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    let monitor = primary_office_editor_monitor_geometry(app);
+    let size = normalize_office_editor_window_size(width, height, monitor);
+    let preference = OfficeEditorWindowSizePreference {
+        width_ratio: monitor.map(|geometry| {
+            (size.width / geometry.screen_width).clamp(0.1, 1.0)
+        }),
+        height_ratio: monitor.map(|geometry| {
+            (size.height / geometry.screen_height).clamp(0.1, 1.0)
+        }),
+        fallback_width: Some(size.width),
+        fallback_height: Some(size.height),
+        width: None,
+        height: None,
+    };
+    let path = office_editor_window_size_path(app)?;
+    let bytes = serde_json::to_vec_pretty(&preference).map_err(|error| error.to_string())?;
+    atomic_write(&path, &bytes, 0o600)?;
+
+    for host in [OfficeHost::Word, OfficeHost::Powerpoint] {
+        if let Some(window) = app.get_webview_window(editor_window_label(host)) {
+            window
+                .set_size(tauri::LogicalSize::new(size.width, size.height))
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn schedule_persist_office_editor_window_size(
+    app: &AppHandle,
+    label: &str,
+    physical_width: u32,
+    physical_height: u32,
+) {
+    if editor_window_host(label).is_none() || physical_width == 0 || physical_height == 0 {
+        return;
+    }
+    let Some(window) = app.get_webview_window(label) else {
+        return;
+    };
+    let scale_factor = window.scale_factor().unwrap_or(1.0).max(0.1);
+    let fallback_width = physical_width as f64 / scale_factor;
+    let fallback_height = physical_height as f64 / scale_factor;
+    let monitor = current_office_editor_monitor_geometry(app, &window);
+    let preference = OfficeEditorWindowSizePreference {
+        width_ratio: monitor.map(|geometry| {
+            (fallback_width / geometry.screen_width).clamp(0.1, 1.0)
+        }),
+        height_ratio: monitor.map(|geometry| {
+            (fallback_height / geometry.screen_height).clamp(0.1, 1.0)
+        }),
+        fallback_width: Some(fallback_width),
+        fallback_height: Some(fallback_height),
+        width: None,
+        height: None,
+    };
+    let generation = OFFICE_EDITOR_SIZE_WRITE_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(250));
+        if OFFICE_EDITOR_SIZE_WRITE_GENERATION.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        let Ok(path) = office_editor_window_size_path(&app) else {
+            return;
+        };
+        let Ok(bytes) = serde_json::to_vec_pretty(&preference) else {
+            return;
+        };
+        if let Err(error) = atomic_write(&path, &bytes, 0o600) {
+            eprintln!("Unable to persist the Office editor window size: {error}");
+        }
+    });
 }
 
 fn document_import_window_label(session_id: &str) -> String {
@@ -1553,7 +2008,15 @@ fn set_resident_editor_parked(window: &WebviewWindow, parked: bool) -> Result<()
             // multi-second transparent wake-up before the editor can paint.
             native_window.setAlphaValue(if parked { 0.01 } else { 1.0 });
             native_window.setIgnoresMouseEvents(parked);
-            native_window.setLevel(objc2_app_kit::NSNormalWindowLevel);
+            // A ready Office editor must remain visually above Word/PowerPoint
+            // even when macOS refuses a cross-application activation request.
+            // Only the dedicated editor is promoted; the desktop main window
+            // stays at/below the normal level and is never revealed here.
+            native_window.setLevel(if parked {
+                objc2_app_kit::NSNormalWindowLevel
+            } else {
+                objc2_app_kit::NSFloatingWindowLevel
+            });
         })
         .map_err(|error| format!("Unable to update the resident Office editor window: {error}"))
 }
@@ -1596,9 +2059,11 @@ fn order_main_window_behind_office_editor(app: &AppHandle) -> Result<(), String>
     main_window
         .with_webview(move |webview| unsafe {
             let native_window: &objc2_app_kit::NSWindow = &*webview.ns_window().cast();
-            // Activating a macOS application can reorder all of its normal
-            // windows as one group. Explicitly send only the desktop workspace
-            // behind the Office host, while the dedicated editor becomes key.
+            // ActivateAllWindows raises every normal-level VisualTeX window as
+            // one application group. Put only the desktop workspace one level
+            // below normal before activation so it stays behind Word/PowerPoint
+            // without being hidden, moved, minimized, or resized.
+            native_window.setLevel(objc2_app_kit::NSNormalWindowLevel - 1);
             native_window.orderBack(None);
         })
         .map_err(|error| format!("Unable to keep the VisualTeX main window behind Office: {error}"))
@@ -1610,15 +2075,117 @@ fn order_main_window_behind_office_editor(_app: &AppHandle) -> Result<(), String
 }
 
 #[cfg(target_os = "macos")]
+fn restore_main_window_level_after_office_editor(app: &AppHandle) -> Result<(), String> {
+    let Some(main_window) = app.get_webview_window("main") else {
+        return Ok(());
+    };
+    main_window
+        .with_webview(move |webview| unsafe {
+            let native_window: &objc2_app_kit::NSWindow = &*webview.ns_window().cast();
+            native_window.setLevel(objc2_app_kit::NSNormalWindowLevel);
+            // The Office host is active again when this runs. Keep the restored
+            // desktop workspace behind it until the user explicitly clicks it.
+            native_window.orderBack(None);
+        })
+        .map_err(|error| format!("Unable to restore the VisualTeX main window level: {error}"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn restore_main_window_level_after_office_editor(_app: &AppHandle) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn inspect_resident_editor_focus(
+    window: &WebviewWindow,
+) -> Result<ResidentEditorFocusState, String> {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    window
+        .with_webview(move |webview| unsafe {
+            let native_window: &objc2_app_kit::NSWindow = &*webview.ns_window().cast();
+            let state = MainThreadMarker::new()
+                .map(|main_thread| {
+                    let application = NSApplication::sharedApplication(main_thread);
+                    ResidentEditorFocusState {
+                        app_active: application.isActive(),
+                        window_can_become_key: native_window.canBecomeKeyWindow(),
+                        window_is_key: native_window.isKeyWindow(),
+                        window_is_main: native_window.isMainWindow(),
+                    }
+                })
+                .unwrap_or_default();
+            let _ = sender.send(state);
+        })
+        .map_err(|error| format!("Unable to inspect the Office editor focus state: {error}"))?;
+    receiver
+        .recv_timeout(Duration::from_millis(250))
+        .map_err(|error| format!("Timed out inspecting the Office editor focus state: {error}"))
+}
+
+#[cfg(target_os = "macos")]
+fn make_resident_editor_key(window: &WebviewWindow) -> Result<bool, String> {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    window
+        .with_webview(move |webview| unsafe {
+            let native_window: &objc2_app_kit::NSWindow = &*webview.ns_window().cast();
+            native_window.orderFrontRegardless();
+            native_window.makeKeyAndOrderFront(None);
+            native_window.makeKeyWindow();
+            let _ = sender.send(native_window.isKeyWindow());
+        })
+        .map_err(|error| format!("Unable to make the Office editor key: {error}"))?;
+
+    let initially_key = receiver
+        .recv_timeout(Duration::from_millis(250))
+        .map_err(|error| format!("Timed out making the Office editor key: {error}"))?;
+    window.set_focus().map_err(|error| error.to_string())?;
+    if initially_key {
+        return Ok(true);
+    }
+
+    // Both AppKit activation and Tauri's focus message can complete one run-loop
+    // turn after their API call returns. Poll the actual NSWindow on the main
+    // thread for a short bounded interval instead of reading either state early.
+    for attempt in 0..12 {
+        let focus = inspect_resident_editor_focus(window)?;
+        if focus.window_is_key || window.is_focused().unwrap_or(false) {
+            return Ok(true);
+        }
+        if attempt < 11 {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn inspect_resident_editor_focus(
+    window: &WebviewWindow,
+) -> Result<ResidentEditorFocusState, String> {
+    Ok(ResidentEditorFocusState {
+        app_active: window.is_focused().unwrap_or(false),
+        window_can_become_key: true,
+        window_is_key: window.is_focused().unwrap_or(false),
+        window_is_main: window.is_focused().unwrap_or(false),
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn make_resident_editor_key(window: &WebviewWindow) -> Result<bool, String> {
+    window.set_focus().map_err(|error| error.to_string())?;
+    Ok(window.is_focused().unwrap_or(false))
+}
+
+#[cfg(target_os = "macos")]
 fn present_resident_editor_window(app: &AppHandle, window: &WebviewWindow) -> Result<(), String> {
-    // Follow eb2fcf2a's proven two-stage activation. The window never leaves the
-    // AppKit ordering list, so restoring alpha and focus does not require a slow
-    // WebKit wake-up or a synthetic reopen.
-    crate::office::background::activate_foreground_app(app)?;
+    // Keep the already-validated foreground sequence unchanged. Window-size
+    // restoration happens earlier while the resident editor is still parked.
     set_resident_editor_parked(window, false)?;
     window.show().map_err(|error| error.to_string())?;
     window.unminimize().map_err(|error| error.to_string())?;
+    order_main_window_behind_office_editor(app)?;
     crate::office::background::activate_foreground_app(app)?;
+    let _ = make_resident_editor_key(window)?;
     window.set_focus().map_err(|error| error.to_string())
 }
 
@@ -1647,14 +2214,15 @@ fn create_editor_window(app: &AppHandle, host: OfficeHost) -> Result<WebviewWind
     }
 
     let theme = crate::persisted_app_theme(app);
+    let saved_size = load_office_editor_window_size(app);
     let path = format!(
         "office-native-dialog.html?transport=tauri&officeHost={}&theme={theme}",
         office_host_name(host),
     );
     let window = WebviewWindowBuilder::new(app, label, WebviewUrl::App(path.into()))
         .title("VisualTeX Office Formula")
-        .inner_size(1180.0, 820.0)
-        .min_inner_size(720.0, 560.0)
+        .inner_size(saved_size.width, saved_size.height)
+        .min_inner_size(MIN_OFFICE_EDITOR_WIDTH, MIN_OFFICE_EDITOR_HEIGHT)
         .focused(false)
         .skip_taskbar(true)
         .visible(false)
@@ -1672,9 +2240,8 @@ fn create_editor_window(app: &AppHandle, host: OfficeHost) -> Result<WebviewWind
 }
 
 pub(crate) fn prewarm_office_editor_windows(app: &AppHandle) -> Result<(), String> {
-    // Icon decoding and both WebKit process creations happen once while the
-    // resident app is starting. Formula double-clicks only switch a Session in
-    // an already initialized, hidden WebView.
+    // Both WebKit processes start once with the resident app. Formula
+    // interactions only switch a Session in an already initialized WebView.
     crate::office::background::install_application_icon(app)?;
     for host in [OfficeHost::Word, OfficeHost::Powerpoint] {
         create_editor_window(app, host)?;
@@ -1688,6 +2255,7 @@ fn open_editor_window(
     session_id: &str,
     received_epoch_ms: u64,
     received_at: Instant,
+    silent: bool,
 ) -> Result<(), String> {
     let label = editor_window_label(host);
     let reused = app.get_webview_window(label).is_some();
@@ -1739,21 +2307,24 @@ fn open_editor_window(
         Some(activation.generation),
         json!({}),
     );
-    // The proven snapshot makes the blanked resident window fully opaque for
-    // hydration, activates the app immediately, and keeps mouse input disabled
-    // until React reports that the Session content is ready.
-    crate::office::background::activate_foreground_app(app)?;
-    wake_resident_editor_for_hydration(&window)?;
-    window.center().map_err(|error| error.to_string())?;
-    window.show().map_err(|error| error.to_string())?;
-    window.unminimize().map_err(|error| error.to_string())?;
-    order_main_window_behind_office_editor(app)?;
+    // Ordinary editing hydrates at full native alpha before foreground
+    // promotion. A direct native-to-image conversion uses the same resident
+    // renderer, but remains parked and mouse-inert for the whole automatic
+    // commit so Word never flashes the formula editor.
+    if !silent {
+        wake_resident_editor_for_hydration(&window)?;
+        window.center().map_err(|error| error.to_string())?;
+        window.show().map_err(|error| error.to_string())?;
+        window.unminimize().map_err(|error| error.to_string())?;
+    }
     Ok(())
 }
 
 fn set_word_document_operation_preparing_status(operation: &str) -> Result<(), String> {
     let status = if operation == "latexRedraw" {
         "VisualTeX is rendering LaTeX formulas..."
+    } else if operation == "formulaRestore" {
+        "VisualTeX is restoring Word formulas..."
     } else {
         "VisualTeX is preparing the Word document import..."
     };
@@ -1845,6 +2416,42 @@ fn open_word_latex_redraw_window(app: &AppHandle, session_id: &str) -> Result<()
 }
 
 #[tauri::command]
+pub fn report_macos_offline_office_editor_prewarm_diagnostic(
+    window: WebviewWindow,
+    input: MacOfflineOfficeEditorPrewarmDiagnosticInput,
+) -> Result<(), String> {
+    let host = editor_window_host(window.label()).ok_or_else(|| {
+        "Only a VisualTeX Office formula editor can report prewarm diagnostics".to_string()
+    })?;
+    if input.stage.is_empty()
+        || input.stage.len() > 64
+        || !input
+            .stage
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err("Office editor prewarm diagnostic stage is invalid".to_string());
+    }
+    if !input.elapsed_ms.is_finite() || !(0.0..=120_000.0).contains(&input.elapsed_ms) {
+        return Err("Office editor prewarm diagnostic elapsedMs is invalid".to_string());
+    }
+    let diagnostic = serde_json::to_vec(&json!({
+        "schema": "visualtex-office-editor-prewarm-diagnostic-v1",
+        "host": office_host_name(host),
+        "windowLabel": window.label(),
+        "stage": input.stage,
+        "editorReady": input.editor_ready,
+        "mathfieldHosts": input.mathfield_hosts,
+        "elapsedMs": input.elapsed_ms,
+        "epochMs": epoch_ms(),
+        "processId": std::process::id(),
+    }))
+    .map_err(|error| format!("Unable to encode Office editor prewarm diagnostic: {error}"))?;
+    let diagnostic_path = editor_prewarm_diagnostic_path(window.app_handle(), host)?;
+    atomic_write_runtime(&diagnostic_path, &diagnostic, 0o600)
+}
+
+#[tauri::command]
 pub fn report_macos_offline_office_editor_prewarmed(window: WebviewWindow) -> Result<(), String> {
     let host = editor_window_host(window.label()).ok_or_else(|| {
         "Only a VisualTeX Office formula editor can report prewarming".to_string()
@@ -1854,6 +2461,16 @@ pub fn report_macos_offline_office_editor_prewarmed(window: WebviewWindow) -> Re
     if active_editor_session(host).is_none() {
         set_resident_editor_parked(&window, true)?;
     }
+    let marker = serde_json::to_vec(&json!({
+        "schema": "visualtex-office-editor-prewarmed-v1",
+        "host": office_host_name(host),
+        "windowLabel": window.label(),
+        "epochMs": epoch_ms(),
+        "processId": std::process::id(),
+    }))
+    .map_err(|error| format!("Unable to encode Office editor prewarm marker: {error}"))?;
+    let marker_path = editor_prewarmed_marker_path(window.app_handle(), host)?;
+    atomic_write_runtime(&marker_path, &marker, 0o600)?;
     Ok(())
 }
 
@@ -1904,6 +2521,10 @@ pub fn report_macos_offline_office_editor_ready(
     }
     active.ready = true;
     let active = active.clone();
+    let silent = matches!(
+        read_request(&input.session_id)?.operation.as_deref(),
+        Some("nativeToImage" | "imageToNative")
+    );
     let report_received_ms = active.received_at.elapsed().as_secs_f64() * 1000.0;
     let frontend_origin_ms = (report_received_ms - input.content_ready_ms).max(0.0);
 
@@ -1935,15 +2556,28 @@ pub fn report_macos_offline_office_editor_ready(
         }),
     );
 
-    crate::office::background::activate_foreground_app(&app)?;
-    set_resident_editor_content_visible(&window, true)?;
-    set_resident_editor_parked(&window, false)?;
-    window.center().map_err(|error| error.to_string())?;
-    window.show().map_err(|error| error.to_string())?;
-    window.unminimize().map_err(|error| error.to_string())?;
-    crate::office::background::activate_foreground_app(&app)?;
-    window.set_focus().map_err(|error| error.to_string())?;
-    order_main_window_behind_office_editor(&app)?;
+    let (focus, window_focused, window_visible) = if silent {
+        set_resident_editor_content_visible(&window, false)?;
+        set_resident_editor_parked(&window, true)?;
+        (inspect_resident_editor_focus(&window)?, false, false)
+    } else {
+        set_resident_editor_content_visible(&window, true)?;
+        set_resident_editor_parked(&window, false)?;
+        window.center().map_err(|error| error.to_string())?;
+        window.show().map_err(|error| error.to_string())?;
+        window.unminimize().map_err(|error| error.to_string())?;
+        order_main_window_behind_office_editor(&app)?;
+        crate::office::background::activate_foreground_app(&app)?;
+        if !inspect_resident_editor_focus(&window)?.app_active {
+            crate::office::background::activate_foreground_app_via_launch_services(&app)?;
+        }
+        let native_window_key = make_resident_editor_key(&window)?;
+        let focus = inspect_resident_editor_focus(&window)?;
+        let window_focused =
+            native_window_key || focus.window_is_key || window.is_focused().unwrap_or(false);
+        let window_visible = window.is_visible().unwrap_or(false);
+        (focus, window_focused, window_visible)
+    };
     let show_focus_ms = active.received_at.elapsed().as_secs_f64() * 1000.0;
     drop(runtime);
     let ready_epoch_ms = epoch_ms();
@@ -1953,7 +2587,7 @@ pub fn report_macos_offline_office_editor_ready(
         "window-show-focus",
         show_focus_ms,
         Some(input.generation),
-        json!({}),
+        json!({ "silent": silent }),
     );
 
     let marker = MacOfflineOfficeEditorReadyMarker {
@@ -1968,6 +2602,11 @@ pub fn report_macos_offline_office_editor_ready(
         editor_mounted_ms: input.editor_mounted_ms,
         content_ready_ms: input.content_ready_ms,
         show_focus_ms,
+        window_focused,
+        window_visible,
+        app_active: focus.app_active,
+        window_can_become_key: focus.window_can_become_key,
+        window_is_main: focus.window_is_main,
     };
     std::thread::spawn(move || {
         let Ok(path) = session_directory(host, &input.session_id)
@@ -1981,6 +2620,24 @@ pub fn report_macos_offline_office_editor_ready(
         let _ = atomic_write(&path, &bytes, 0o600);
     });
     Ok(())
+}
+
+#[tauri::command]
+pub fn present_macos_offline_office_editor_window(
+    window: WebviewWindow,
+    session_id: String,
+    generation: u64,
+) -> Result<(), String> {
+    validate_uuid(&session_id, "Office editor Session id")?;
+    let host = editor_window_host(window.label())
+        .ok_or_else(|| "Only a VisualTeX Office formula editor can reveal itself".to_string())?;
+    let active = active_editor_session(host)
+        .ok_or_else(|| "The Office editor has no active Session".to_string())?;
+    if active.activation.session_id != session_id || active.activation.generation != generation {
+        return Err("The Office editor Session is no longer active".to_string());
+    }
+    set_resident_editor_content_visible(&window, true)?;
+    present_resident_editor_window(window.app_handle(), &window)
 }
 
 #[tauri::command]
@@ -2065,6 +2722,9 @@ pub fn close_macos_offline_office_editor_window(
     // interaction. Explicitly return the foreground application to the Office
     // host without changing the visibility of the user's main workspace.
     restore_office_host_focus(host);
+    if !has_open_office_editor(&app) {
+        restore_main_window_level_after_office_editor(&app)?;
+    }
     Ok(())
 }
 
@@ -2077,6 +2737,38 @@ pub(crate) fn has_open_office_editor(app: &AppHandle) -> bool {
         })
 }
 
+fn has_recent_office_editor_request_in_roots(
+    now: SystemTime,
+    max_age: Duration,
+    roots: impl IntoIterator<Item = PathBuf>,
+) -> bool {
+    roots.into_iter().any(|root| {
+        let Ok(entries) = fs::read_dir(&root) else {
+            return false;
+        };
+        entries.flatten().any(|entry| {
+            let request = entry.path().join(REQUEST_FILE);
+            let Ok(modified) = fs::metadata(request).and_then(|metadata| metadata.modified())
+            else {
+                return false;
+            };
+            now.duration_since(modified)
+                .map(|age| age <= max_age)
+                .unwrap_or(true)
+        })
+    })
+}
+
+pub(crate) fn has_recent_office_editor_request(max_age: Duration) -> bool {
+    has_recent_office_editor_request_in_roots(
+        SystemTime::now(),
+        max_age,
+        [OfficeHost::Word, OfficeHost::Powerpoint]
+            .into_iter()
+            .filter_map(|host| sessions_root(host).ok()),
+    )
+}
+
 pub(crate) fn focus_open_office_editor(app: &AppHandle) -> bool {
     for host in [OfficeHost::Word, OfficeHost::Powerpoint] {
         if let Some(active) = active_editor_session(host) {
@@ -2084,15 +2776,15 @@ pub(crate) fn focus_open_office_editor(app: &AppHandle) -> bool {
                 continue;
             };
             // A parked active window is still hydrating. Treat it as owned so
-            // a second native double-click route cannot launch a duplicate,
-            // but never focus transparent stale content before readiness.
+            // a second native double-click route cannot launch a duplicate.
+            // LaunchServices Reopen may still raise the desktop main window;
+            // demote only that window without focusing transparent editor content.
             if !active.ready {
+                let _ = order_main_window_behind_office_editor(app);
                 return true;
             }
             let _ = window.show();
             let _ = present_resident_editor_window(app, &window);
-            let _ = window.set_focus();
-            let _ = order_main_window_behind_office_editor(app);
             return true;
         }
     }
@@ -2130,7 +2822,7 @@ pub(crate) fn handle_open_url(app: &AppHandle, value: &str) -> Result<(), String
 
     if matches!(
         request.operation.as_deref(),
-        Some("documentImport" | "latexRedraw")
+        Some("documentImport" | "latexRedraw" | "formulaRestore")
     ) {
         for host in [OfficeHost::Word, OfficeHost::Powerpoint] {
             if let Some(window) = app.get_webview_window(editor_window_label(host)) {
@@ -2154,13 +2846,20 @@ pub(crate) fn handle_open_url(app: &AppHandle, value: &str) -> Result<(), String
                 let _ = window.destroy();
             }
         }
-        return if request.operation.as_deref() == Some("latexRedraw") {
+        return if matches!(
+            request.operation.as_deref(),
+            Some("latexRedraw" | "formulaRestore")
+        ) {
             open_word_latex_redraw_window(app, &session_id)
         } else {
             open_document_import_window(app, &session_id)
         };
     }
 
+    let silent = matches!(
+        request.operation.as_deref(),
+        Some("nativeToImage" | "imageToNative")
+    );
     import_request(state.inner(), request)?;
     queue_editor_performance(
         host,
@@ -2170,7 +2869,14 @@ pub(crate) fn handle_open_url(app: &AppHandle, value: &str) -> Result<(), String
         None,
         json!({}),
     );
-    open_editor_window(app, host, &session_id, received_epoch_ms, received_at)
+    open_editor_window(
+        app,
+        host,
+        &session_id,
+        received_epoch_ms,
+        received_at,
+        silent,
+    )
 }
 
 fn decode_png(value: &str) -> Result<Vec<u8>, String> {
@@ -2996,6 +3702,15 @@ fn materialize_word_svg_package(
     atomic_write_runtime(&png_path, &png, 0o600)?;
     let package = build_word_svg_docx(&svg, &png, geometry.width, geometry.height)?;
     atomic_write_runtime(&document_path, &package, 0o600)?;
+
+    // Persist a formula-scoped image package even when the current Word output
+    // is OMML. A later OMML-to-image conversion can then stay entirely inside
+    // Word instead of waking the renderer and rebuilding the same SVG.
+    let (cached_svg_path, cached_document_path, cached_png_path) =
+        word_image_cache_paths(&session.formula_id)?;
+    atomic_write_runtime(&cached_svg_path, &svg, 0o600)?;
+    atomic_write_runtime(&cached_document_path, &package, 0o600)?;
+    atomic_write_runtime(&cached_png_path, &png, 0o600)?;
     Ok((svg_path, document_path, png_path))
 }
 
@@ -3058,13 +3773,15 @@ fn commit_word(
         None
     };
 
-    // Native Word equations consume only the native DOCX. Image equations
-    // consume only the SVG staging package. Avoid decoding, packaging and
-    // writing the unused representation on every Apply.
+    // Every successful Word export refreshes the durable image cache. Native
+    // OMML commits do not pass the Session-scoped image paths to VBA, but the
+    // formula-scoped cache makes the later OMML-to-image command a sub-second
+    // in-Word transaction with no renderer wake-up.
+    let prepared_image_artifacts = materialize_word_svg_package(session, geometry)?;
     let image_artifacts = if request.native_equation {
         None
     } else {
-        Some(materialize_word_svg_package(session, geometry)?)
+        Some(prepared_image_artifacts)
     };
     queue_editor_performance(
         OfficeHost::Word,
@@ -3090,6 +3807,17 @@ fn commit_word(
         ("sessionId", session.id.clone()),
         ("action", "commit".to_string()),
         ("host", "word".to_string()),
+        (
+            "operation",
+            request
+                .operation
+                .clone()
+                .unwrap_or_else(|| "formula".to_string()),
+        ),
+        (
+            "performanceTrace",
+            if word_performance_trace_enabled() { "1" } else { "0" }.to_string(),
+        ),
         ("mode", request.mode.clone()),
         ("formulaId", session.formula_id.clone()),
         ("displayMode", session.display_mode.clone()),
@@ -3288,18 +4016,290 @@ fn cancel_host(request: &MacOfflineSessionRequest) -> Result<(), String> {
     Ok(())
 }
 
+fn parse_formula_restore_manifest(
+    request: &MacOfflineSessionRequest,
+) -> Result<(String, Vec<MacOfflineFormulaRestoreTarget>), String> {
+    let path = formula_restore_source_path(&request.session_id)?;
+    let metadata = fs::metadata(&path)
+        .map_err(|error| format!("Unable to inspect {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() == 0
+        || metadata.len() as usize > MAX_DOCUMENT_IMPORT_MANIFEST_BYTES
+    {
+        return Err("Word formula restore source has an invalid size".to_string());
+    }
+    let text = fs::read_to_string(&path)
+        .map_err(|error| format!("Unable to read {}: {error}", path.display()))?;
+    let mut values = std::collections::HashMap::<String, String>::new();
+    for line in text.lines() {
+        let (key, value) = line
+            .split_once('=')
+            .ok_or_else(|| "Word formula restore source contains an invalid line".to_string())?;
+        if key.is_empty()
+            || !key.bytes().all(|byte| byte.is_ascii_alphanumeric())
+            || values.insert(key.to_string(), value.to_string()).is_some()
+        {
+            return Err("Word formula restore source contains an invalid key".to_string());
+        }
+    }
+    let required = |key: &str| {
+        values
+            .get(key)
+            .map(String::as_str)
+            .ok_or_else(|| format!("Word formula restore source is missing {key}"))
+    };
+    if required("protocolVersion")? != OFFLINE_PROTOCOL_VERSION.to_string()
+        || required("sessionId")? != request.session_id
+    {
+        return Err("Word formula restore source identity is invalid".to_string());
+    }
+    let item_count = required("itemCount")?
+        .parse::<usize>()
+        .map_err(|_| "Word formula restore item count is invalid".to_string())?;
+    if item_count == 0 || item_count > 1000 {
+        return Err("Word formula restore supports 1 to 1000 formulas".to_string());
+    }
+    let target_text = String::from_utf8(
+        URL_SAFE_NO_PAD
+            .decode(required("targetTextBase64")?)
+            .map_err(|error| format!("Unable to decode Word restore target text: {error}"))?,
+    )
+    .map_err(|_| "Word formula restore target text is not UTF-8".to_string())?;
+    if target_text.len() > MAX_LATEX_REDRAW_SOURCE_BYTES as usize {
+        return Err("Word formula restore target exceeds 5 MB".to_string());
+    }
+    let source_kind = required("sourceKind")?;
+    if !matches!(source_kind, "omml" | "image") {
+        return Err("Word formula restore source kind is invalid".to_string());
+    }
+
+    let mut targets = Vec::with_capacity(item_count);
+    let mut previous_end = 0usize;
+    for index in 0..item_count {
+        let prefix = format!("item{index}");
+        let start = required(&format!("{prefix}sourceStart"))?
+            .parse::<usize>()
+            .map_err(|_| "Word formula restore sourceStart is invalid".to_string())?;
+        let end = required(&format!("{prefix}sourceEnd"))?
+            .parse::<usize>()
+            .map_err(|_| "Word formula restore sourceEnd is invalid".to_string())?;
+        let source_text = String::from_utf8(
+            URL_SAFE_NO_PAD
+                .decode(required(&format!("{prefix}sourceTextBase64"))?)
+                .map_err(|error| format!("Unable to decode Word formula source text: {error}"))?,
+        )
+        .map_err(|_| "Word formula source text is not UTF-8".to_string())?;
+        validate_formula_restore_range(
+            &mut previous_end,
+            start,
+            end,
+            &source_text,
+        )?;
+        let display_mode = required(&format!("{prefix}displayMode"))?.to_string();
+        if !matches!(display_mode.as_str(), "inline" | "block") {
+            return Err("Word formula restore display mode is invalid".to_string());
+        }
+        let font_size_pt = required(&format!("{prefix}fontSizePt"))?
+            .parse::<f64>()
+            .map_err(|_| "Word formula restore font size is invalid".to_string())?;
+        if !font_size_pt.is_finite()
+            || !(MIN_WORD_FONT_SIZE_PT..=MAX_WORD_FONT_SIZE_PT).contains(&font_size_pt)
+        {
+            return Err("Word formula restore font size is outside the supported range".to_string());
+        }
+        let payload = String::from_utf8(
+            URL_SAFE_NO_PAD
+                .decode(required(&format!("{prefix}payloadBase64"))?)
+                .map_err(|error| format!("Unable to decode Word formula restore payload: {error}"))?,
+        )
+        .map_err(|_| "Word formula restore payload is not UTF-8".to_string())?;
+        if payload.is_empty() || payload.len() > MAX_OMML_BYTES.max(MAX_METADATA_BYTES) {
+            return Err("Word formula restore payload is invalid or excessive".to_string());
+        }
+        let (math_ml, latex) = if source_kind == "omml" {
+            (Some(word_omml_to_mathml(&payload)?), None)
+        } else {
+            let metadata = decode_metadata(&payload)?;
+            let latex = canonical_document_formula_latex(&metadata)?;
+            if metadata.display_mode != display_mode {
+                return Err("Word image formula display metadata changed".to_string());
+            }
+            (None, Some(latex))
+        };
+        targets.push(MacOfflineFormulaRestoreTarget {
+            source_start: start,
+            source_end: end,
+            source_text,
+            display_mode,
+            font_size_pt,
+            source_kind: source_kind.to_string(),
+            math_ml,
+            latex,
+        });
+    }
+    Ok((target_text, targets))
+}
+
+fn extract_omath_fragment(word_open_xml: &str) -> Result<String, String> {
+    if word_open_xml.is_empty()
+        || word_open_xml.len() > MAX_OMML_BYTES
+        || word_open_xml.contains("<!DOCTYPE")
+        || word_open_xml.contains("<!ENTITY")
+    {
+        return Err("Word OMML XML is invalid or excessive".to_string());
+    }
+    let starts = ["<m:oMath>", "<m:oMath "];
+    let start = starts
+        .iter()
+        .filter_map(|marker| word_open_xml.find(marker))
+        .min()
+        .ok_or_else(|| "Word range XML does not contain one native OMath".to_string())?;
+    let relative_end = word_open_xml[start..]
+        .find("</m:oMath>")
+        .ok_or_else(|| "Word native OMath XML is incomplete".to_string())?;
+    let end = start + relative_end + "</m:oMath>".len();
+    if word_open_xml[end..].contains("<m:oMath>")
+        || word_open_xml[end..].contains("<m:oMath ")
+    {
+        return Err("Word formula restore item contains multiple OMath objects".to_string());
+    }
+    let mut fragment = word_open_xml[start..end].to_string();
+    let tag_end = fragment
+        .find('>')
+        .ok_or_else(|| "Word native OMath start tag is incomplete".to_string())?;
+    let mut declarations = String::new();
+    let mut cursor = 0usize;
+    while let Some(offset) = word_open_xml[cursor..].find("xmlns") {
+        let attribute_start = cursor + offset;
+        let Some(equal_offset) = word_open_xml[attribute_start..].find('=') else {
+            break;
+        };
+        let equal = attribute_start + equal_offset;
+        let name = word_open_xml[attribute_start..equal].trim();
+        if !name.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'-' | b'_')
+        }) {
+            cursor = equal + 1;
+            continue;
+        }
+        let Some(quote) = word_open_xml.as_bytes().get(equal + 1).copied() else {
+            break;
+        };
+        if quote != b'\'' && quote != b'"' {
+            cursor = equal + 1;
+            continue;
+        }
+        let value_start = equal + 2;
+        let Some(value_end_offset) = word_open_xml[value_start..].find(quote as char) else {
+            break;
+        };
+        let value_end = value_start + value_end_offset;
+        if !fragment[..tag_end].contains(&format!("{name}="))
+            && !declarations.contains(&format!(" {name}="))
+        {
+            declarations.push(' ');
+            declarations.push_str(name);
+            declarations.push('=');
+            declarations.push(quote as char);
+            declarations.push_str(&word_open_xml[value_start..value_end]);
+            declarations.push(quote as char);
+        }
+        cursor = value_end + 1;
+    }
+    if !fragment[..tag_end].contains("xmlns:m=") && !declarations.contains(" xmlns:m=") {
+        declarations.push_str(
+            " xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\"",
+        );
+    }
+    if !fragment[..tag_end].contains("xmlns:w=") && !declarations.contains(" xmlns:w=") {
+        declarations.push_str(
+            " xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"",
+        );
+    }
+    fragment.insert_str(tag_end, &declarations);
+    Ok(fragment)
+}
+
+fn decode_xslt_output(bytes: &[u8]) -> Result<String, String> {
+    if bytes.starts_with(&[0xff, 0xfe]) || bytes.starts_with(&[0xfe, 0xff]) {
+        let little_endian = bytes.starts_with(&[0xff, 0xfe]);
+        let body = &bytes[2..];
+        if body.len() % 2 != 0 {
+            return Err("Word MathML output contains invalid UTF-16".to_string());
+        }
+        let units = body
+            .chunks_exact(2)
+            .map(|pair| {
+                if little_endian {
+                    u16::from_le_bytes([pair[0], pair[1]])
+                } else {
+                    u16::from_be_bytes([pair[0], pair[1]])
+                }
+            })
+            .collect::<Vec<_>>();
+        return String::from_utf16(&units)
+            .map_err(|_| "Word MathML output is not valid UTF-16".to_string());
+    }
+    String::from_utf8(bytes.to_vec())
+        .map_err(|_| "Word MathML output is not valid UTF-8".to_string())
+}
+
+pub(crate) fn word_omml_to_mathml(word_open_xml: &str) -> Result<String, String> {
+    let fragment = extract_omath_fragment(word_open_xml)?;
+    let stylesheet = Path::new(
+        "/Applications/Microsoft Word.app/Contents/Resources/omml2mathml.xsl",
+    );
+    if !stylesheet.is_file() {
+        return Err("Microsoft Word OMML conversion stylesheet is missing".to_string());
+    }
+    let mut child = Command::new("/usr/bin/xsltproc")
+        .args(["--nonet"])
+        .arg(stylesheet)
+        .arg("-")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("Unable to start the Word OMML converter: {error}"))?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| "Word OMML converter stdin is unavailable".to_string())?
+        .write_all(fragment.as_bytes())
+        .map_err(|error| format!("Unable to send OMML to the Word converter: {error}"))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("Unable to wait for the Word OMML converter: {error}"))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if detail.is_empty() {
+            "Microsoft Word could not convert the native formula to MathML".to_string()
+        } else {
+            format!("Microsoft Word could not convert the native formula to MathML: {detail}")
+        });
+    }
+    let math_ml = decode_xslt_output(&output.stdout)?;
+    if math_ml.trim().is_empty() || math_ml.len() > MAX_OMML_BYTES {
+        return Err("Microsoft Word returned empty or excessive MathML".to_string());
+    }
+    Ok(math_ml)
+}
+
 fn document_import_request_data(
     request: &MacOfflineSessionRequest,
 ) -> Result<MacOfflineDocumentImportPublicRequest, String> {
     let operation = request.operation.as_deref().unwrap_or("");
-    if !matches!(operation, "documentImport" | "latexRedraw") || request.host != "word" {
+    if !matches!(operation, "documentImport" | "latexRedraw" | "formulaRestore")
+        || request.host != "word"
+    {
         return Err("Offline Office request is not a Word document operation".to_string());
     }
     let document_import = request
         .document_import
         .as_ref()
         .ok_or_else(|| "Document import request is missing insertion information".to_string())?;
-    let source = if operation == "latexRedraw" {
+    let (source, restore_targets) = if operation == "latexRedraw" {
         let source_path = session_directory(OfficeHost::Word, &request.session_id)?
             .join(LATEX_REDRAW_SOURCE_FILE);
         let bytes = fs::read(&source_path)
@@ -3307,12 +4307,18 @@ fn document_import_request_data(
         if bytes.is_empty() || bytes.len() as u64 > MAX_LATEX_REDRAW_SOURCE_BYTES {
             return Err("LaTeX redraw source must contain 1 byte to 5 MB".to_string());
         }
-        Some(
-            String::from_utf8(bytes)
-                .map_err(|_| "LaTeX redraw source is not valid UTF-8".to_string())?,
+        (
+            Some(
+                String::from_utf8(bytes)
+                    .map_err(|_| "LaTeX redraw source is not valid UTF-8".to_string())?,
+            ),
+            None,
         )
+    } else if operation == "formulaRestore" {
+        let (source, targets) = parse_formula_restore_manifest(request)?;
+        (Some(source), Some(targets))
     } else {
-        None
+        (None, None)
     };
     Ok(MacOfflineDocumentImportPublicRequest {
         protocol_version: request.protocol_version,
@@ -3326,7 +4332,9 @@ fn document_import_request_data(
         operation: operation.to_string(),
         redraw_scope: document_import.redraw_scope.clone(),
         output_kind: document_import.output_kind.clone(),
+        source_kind: document_import.source_kind.clone(),
         source,
+        restore_targets,
     })
 }
 
@@ -3512,6 +4520,26 @@ fn validate_latex_redraw_range(
     Ok(())
 }
 
+fn validate_formula_restore_range(
+    previous_end: &mut usize,
+    start: usize,
+    end: usize,
+    original: &str,
+) -> Result<(), String> {
+    let span = end.saturating_sub(start);
+    if start < *previous_end
+        || end <= start
+        || end > 50_000_000
+        || span > 5_000_000
+        || original.is_empty()
+        || original.len() > MAX_LATEX_REDRAW_SOURCE_BYTES as usize
+    {
+        return Err("Word formula restore range is invalid or overlapping".to_string());
+    }
+    *previous_end = end;
+    Ok(())
+}
+
 fn parse_latex_redraw_font_sizes(source: &str, expected_count: usize) -> Result<Vec<f64>, String> {
     let mut item_count = None;
     let mut values = vec![None; expected_count];
@@ -3686,6 +4714,8 @@ fn commit_document_import_blocking(
     let request = read_request(&session_id)?;
     let public_request = document_import_request_data(&request)?;
     let is_redraw = public_request.operation == "latexRedraw";
+    let is_formula_restore = public_request.operation == "formulaRestore";
+    let is_range_replace = is_redraw || is_formula_restore;
     if is_redraw {
         queue_editor_performance(
             OfficeHost::Word,
@@ -3696,71 +4726,119 @@ fn commit_document_import_blocking(
             json!({ "itemCount": input.items.len(), "outputKind": input.output_kind }),
         );
     }
-    if input.output_kind != "omml" && input.output_kind != "image" {
-        return Err("Document formula output kind must be omml or image".to_string());
+    let valid_output = if is_formula_restore {
+        matches!(input.output_kind.as_str(), "latex" | "image")
+    } else {
+        matches!(input.output_kind.as_str(), "omml" | "image")
+    };
+    if !valid_output {
+        return Err("Document formula output kind is invalid for this operation".to_string());
     }
-    if is_redraw && public_request.output_kind.as_deref() != Some(input.output_kind.as_str()) {
-        return Err("LaTeX redraw output kind changed after the Word request".to_string());
+    if is_range_replace
+        && public_request.output_kind.as_deref() != Some(input.output_kind.as_str())
+    {
+        return Err("Word range replacement output kind changed after the request".to_string());
     }
-    let maximum_items = if is_redraw { 1000 } else { 2048 };
+    let maximum_items = if is_range_replace { 1000 } else { 2048 };
     if input.items.is_empty() || input.items.len() > maximum_items {
         return Err(format!(
             "Document operation must contain 1 to {maximum_items} blocks"
         ));
     }
-    let redraw_source_utf16 = public_request
+    let range_source_utf16 = public_request
         .source
         .as_deref()
         .map(|source| source.encode_utf16().collect::<Vec<_>>());
-    if is_redraw {
-        let source = redraw_source_utf16
+    if is_range_replace {
+        let source = range_source_utf16
             .as_deref()
-            .ok_or_else(|| "LaTeX redraw source snapshot is missing".to_string())?;
+            .ok_or_else(|| "Word range replacement source snapshot is missing".to_string())?;
         let mut preflight_end = 0usize;
         for item in &input.items {
-            match item {
-                MacOfflineDocumentImportCommitItem::Formula {
-                    source_start,
-                    source_end,
-                    source_text,
-                    paragraph_id,
-                    paragraph_style,
-                    paragraph_alignment,
-                    list_kind,
-                    list_level,
-                    paragraph_start,
-                    paragraph_end,
-                    ..
-                } => {
-                    if paragraph_id.is_some()
-                        || paragraph_style.is_some()
-                        || paragraph_alignment.is_some()
-                        || list_kind.is_some()
-                        || list_level.is_some()
-                        || *paragraph_start
-                        || *paragraph_end
-                    {
-                        return Err(
-                            "LaTeX redraw formulas cannot carry paragraph metadata".to_string()
-                        );
-                    }
-                    validate_latex_redraw_range(
-                        source,
-                        &mut preflight_end,
-                        source_start.ok_or_else(|| {
-                            "LaTeX redraw formula is missing sourceStart".to_string()
-                        })?,
-                        source_end.ok_or_else(|| {
-                            "LaTeX redraw formula is missing sourceEnd".to_string()
-                        })?,
-                        source_text.as_deref().ok_or_else(|| {
-                            "LaTeX redraw formula is missing sourceText".to_string()
-                        })?,
-                    )?;
-                }
-                MacOfflineDocumentImportCommitItem::Text { .. } => {
-                    return Err("LaTeX redraw accepts formula items only".to_string());
-                }
+            let (source_start, source_end, source_text, has_paragraph_metadata, item_kind) =
+                match item {
+                    MacOfflineDocumentImportCommitItem::Formula {
+                        source_start,
+                        source_end,
+                        source_text,
+                        paragraph_id,
+                        paragraph_style,
+                        paragraph_alignment,
+                        list_kind,
+                        list_level,
+                        paragraph_start,
+                        paragraph_end,
+                        ..
+                    } => (
+                        *source_start,
+                        *source_end,
+                        source_text.as_deref(),
+                        paragraph_id.is_some()
+                            || paragraph_style.is_some()
+                            || paragraph_alignment.is_some()
+                            || list_kind.is_some()
+                            || list_level.is_some()
+                            || *paragraph_start
+                            || *paragraph_end,
+                        "formula",
+                    ),
+                    MacOfflineDocumentImportCommitItem::Text {
+                        source_start,
+                        source_end,
+                        source_text,
+                        paragraph_id,
+                        paragraph_style,
+                        paragraph_alignment,
+                        list_kind,
+                        list_level,
+                        paragraph_start,
+                        paragraph_end,
+                        ..
+                    } => (
+                        *source_start,
+                        *source_end,
+                        source_text.as_deref(),
+                        paragraph_id.is_some()
+                            || paragraph_style.is_some()
+                            || paragraph_alignment.is_some()
+                            || list_kind.is_some()
+                            || list_level.is_some()
+                            || *paragraph_start
+                            || *paragraph_end,
+                        "text",
+                    ),
+                };
+            if has_paragraph_metadata {
+                return Err("Word range replacement items cannot carry paragraph metadata".to_string());
+            }
+            if (is_redraw && item_kind != "formula")
+                || (is_formula_restore
+                    && ((input.output_kind == "latex" && item_kind != "text")
+                        || (input.output_kind == "image" && item_kind != "formula")))
+            {
+                return Err("Word range replacement contains an incompatible item kind".to_string());
+            }
+            let start = source_start
+                .ok_or_else(|| "Word replacement item is missing sourceStart".to_string())?;
+            let end = source_end
+                .ok_or_else(|| "Word replacement item is missing sourceEnd".to_string())?;
+            let original = source_text
+                .ok_or_else(|| "Word replacement item is missing sourceText".to_string())?;
+            if is_formula_restore {
+                validate_formula_restore_range(
+                    &mut preflight_end,
+                    start,
+                    end,
+                    original,
+                )?;
+            } else {
+                validate_latex_redraw_range(
+                    source,
+                    &mut preflight_end,
+                    start,
+                    end,
+                    original,
+                )?;
             }
         }
     }
@@ -3784,7 +4862,7 @@ fn commit_document_import_blocking(
         ),
         ("itemCount".to_string(), input.items.len().to_string()),
     ];
-    let redraw_vector_batch_path = if is_redraw && input.output_kind == "image" {
+    let redraw_vector_batch_path = if is_range_replace && input.output_kind == "image" {
         Some(latex_redraw_vector_batch_path(&session_id)?)
     } else {
         None
@@ -3800,6 +4878,9 @@ fn commit_document_import_blocking(
         match item {
             MacOfflineDocumentImportCommitItem::Text {
                 text,
+                source_start,
+                source_end,
+                source_text,
                 paragraph_id,
                 paragraph_style,
                 paragraph_alignment,
@@ -3810,6 +4891,11 @@ fn commit_document_import_blocking(
             } => {
                 if is_redraw {
                     return Err("LaTeX redraw accepts formula items only".to_string());
+                }
+                if !is_formula_restore
+                    && (source_start.is_some() || source_end.is_some() || source_text.is_some())
+                {
+                    return Err("Document import text contains range replacement coordinates".to_string());
                 }
                 let paragraph = resolve_document_paragraph_transfer(
                     paragraph_id,
@@ -3847,6 +4933,25 @@ fn commit_document_import_blocking(
                     format!("{prefix}textBase64"),
                     URL_SAFE_NO_PAD.encode(text.as_bytes()),
                 ));
+                if is_formula_restore {
+                    entries.push((
+                        format!("{prefix}sourceStart"),
+                        source_start.expect("validated restore sourceStart").to_string(),
+                    ));
+                    entries.push((
+                        format!("{prefix}sourceEnd"),
+                        source_end.expect("validated restore sourceEnd").to_string(),
+                    ));
+                    entries.push((
+                        format!("{prefix}sourceTextBase64"),
+                        URL_SAFE_NO_PAD.encode(
+                            source_text
+                                .as_deref()
+                                .expect("validated restore sourceText")
+                                .as_bytes(),
+                        ),
+                    ));
+                }
                 append_document_paragraph_entries(&mut entries, &prefix, paragraph.as_ref());
                 if paragraph.as_ref().is_some_and(|value| value.end) {
                     active_paragraph_id = None;
@@ -3886,29 +4991,38 @@ fn commit_document_import_blocking(
                     *paragraph_start,
                     *paragraph_end,
                 )?;
-                if is_redraw {
+                if is_range_replace {
                     if paragraph.is_some() {
                         return Err(
-                            "LaTeX redraw formulas cannot carry paragraph metadata".to_string()
+                            "Word range replacement formulas cannot carry paragraph metadata".to_string()
                         );
                     }
                     let start = (*source_start)
-                        .ok_or_else(|| "LaTeX redraw formula is missing sourceStart".to_string())?;
+                        .ok_or_else(|| "Word replacement formula is missing sourceStart".to_string())?;
                     let end = (*source_end)
-                        .ok_or_else(|| "LaTeX redraw formula is missing sourceEnd".to_string())?;
+                        .ok_or_else(|| "Word replacement formula is missing sourceEnd".to_string())?;
                     let original = source_text
                         .as_deref()
-                        .ok_or_else(|| "LaTeX redraw formula is missing sourceText".to_string())?;
-                    let source = redraw_source_utf16
+                        .ok_or_else(|| "Word replacement formula is missing sourceText".to_string())?;
+                    let source = range_source_utf16
                         .as_ref()
-                        .ok_or_else(|| "LaTeX redraw source snapshot is missing".to_string())?;
-                    validate_latex_redraw_range(
-                        source,
-                        &mut previous_redraw_end,
-                        start,
-                        end,
-                        original,
-                    )?;
+                        .ok_or_else(|| "Word replacement source snapshot is missing".to_string())?;
+                    if is_formula_restore {
+                        validate_formula_restore_range(
+                            &mut previous_redraw_end,
+                            start,
+                            end,
+                            original,
+                        )?;
+                    } else {
+                        validate_latex_redraw_range(
+                            source,
+                            &mut previous_redraw_end,
+                            start,
+                            end,
+                            original,
+                        )?;
+                    }
                 } else if source_start.is_some() || source_end.is_some() || source_text.is_some() {
                     return Err(
                         "Document import formula contains LaTeX redraw coordinates".to_string()
@@ -4088,7 +5202,7 @@ fn commit_document_import_blocking(
                     format!("{prefix}referenceBaselinePt"),
                     format!("{:.6}", geometry.reference_baseline_pt),
                 ));
-                if is_redraw {
+                if is_range_replace {
                     entries.push((
                         format!("{prefix}sourceStart"),
                         source_start
@@ -4439,7 +5553,10 @@ pub fn focus_macos_offline_document_import_target(
     if !window.label().starts_with("office-native-document-") {
         return Err("Only the VisualTeX document importer can focus Word".to_string());
     }
-    if !matches!(operation.as_str(), "documentImport" | "latexRedraw") {
+    if !matches!(
+        operation.as_str(),
+        "documentImport" | "latexRedraw" | "formulaRestore"
+    ) {
         return Err("Word document operation is invalid".to_string());
     }
     set_word_document_operation_preparing_status(&operation)?;
@@ -4704,6 +5821,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn formula_restore_manifest_from_environment_is_valid() {
+        let Ok(session_id) = std::env::var("VISUALTEX_FORMULA_RESTORE_SESSION") else {
+            return;
+        };
+        let request = read_request(&session_id)
+            .expect("the requested real formula restore Session must be readable");
+        let public = document_import_request_data(&request)
+            .expect("the requested real formula restore manifest must validate");
+        assert_eq!(public.operation, "formulaRestore");
+        assert!(public.restore_targets.is_some());
+    }
+
+    #[test]
     fn office_formula_editors_have_one_stable_window_label_per_host() {
         assert_eq!(
             editor_window_label(OfficeHost::Word),
@@ -4725,6 +5855,76 @@ mod tests {
     }
 
     #[test]
+    fn recent_office_request_suppresses_only_the_matching_reopen_race() {
+        let temporary = tempfile::TempDir::new().expect("temporary request root should exist");
+        let sessions = temporary.path().join("OfficeSessions");
+        let session = sessions.join("12345678-1234-4234-9234-123456789abc");
+        fs::create_dir_all(&session).expect("temporary Session directory should exist");
+        let request = session.join(REQUEST_FILE);
+        fs::write(&request, b"{}\n").expect("temporary request should be writable");
+        let modified = fs::metadata(&request)
+            .and_then(|metadata| metadata.modified())
+            .expect("temporary request modification time should be readable");
+
+        assert!(has_recent_office_editor_request_in_roots(
+            modified + Duration::from_secs(1),
+            Duration::from_secs(3),
+            [sessions.clone()],
+        ));
+        assert!(!has_recent_office_editor_request_in_roots(
+            modified + Duration::from_secs(4),
+            Duration::from_secs(3),
+            [sessions],
+        ));
+    }
+
+    #[test]
+    fn office_editor_window_size_uses_measured_screen_ratio_and_safe_bounds() {
+        let current_monitor = OfficeEditorMonitorGeometry {
+            screen_width: 1470.0,
+            screen_height: 956.0,
+            maximum_inner_width: 1470.0,
+            maximum_inner_height: 900.0,
+        };
+        let default = resolve_office_editor_window_size(None, Some(current_monitor));
+        assert!((default.width - 843.0).abs() < 0.001);
+        assert!((default.height - 568.0).abs() < 0.001);
+
+        let larger_monitor = OfficeEditorMonitorGeometry {
+            screen_width: 1920.0,
+            screen_height: 1080.0,
+            maximum_inner_width: 1920.0,
+            maximum_inner_height: 1020.0,
+        };
+        let scaled = resolve_office_editor_window_size(None, Some(larger_monitor));
+        assert!((scaled.width / 1920.0 - DEFAULT_OFFICE_EDITOR_WIDTH_RATIO).abs() < 0.001);
+        assert!((scaled.height / 1080.0 - DEFAULT_OFFICE_EDITOR_HEIGHT_RATIO).abs() < 0.001);
+
+        let legacy = resolve_office_editor_window_size(
+            Some(OfficeEditorWindowSizePreference {
+                width: Some(930.0),
+                height: Some(700.0),
+                ..Default::default()
+            }),
+            Some(current_monitor),
+        );
+        assert!((legacy.width - 930.0).abs() < 0.001);
+        assert!((legacy.height - 700.0).abs() < 0.001);
+
+        let minimum = normalize_office_editor_window_size(1.0, 2.0, Some(current_monitor));
+        assert_eq!(minimum.width, MIN_OFFICE_EDITOR_WIDTH);
+        assert_eq!(minimum.height, MIN_OFFICE_EDITOR_HEIGHT);
+
+        let maximum = normalize_office_editor_window_size(
+            f64::INFINITY,
+            99_999.0,
+            Some(current_monitor),
+        );
+        assert_eq!(maximum.width, DEFAULT_OFFICE_EDITOR_FALLBACK_WIDTH);
+        assert_eq!(maximum.height, current_monitor.maximum_inner_height);
+    }
+
+    #[test]
     fn editor_ready_marker_exposes_machine_readable_frontend_stages() {
         let marker = MacOfflineOfficeEditorReadyMarker {
             schema: "visualtex-office-editor-ready-v1",
@@ -4738,6 +5938,11 @@ mod tests {
             editor_mounted_ms: 150.25,
             content_ready_ms: 166.75,
             show_focus_ms: 171.0,
+            window_focused: true,
+            window_visible: true,
+            app_active: true,
+            window_can_become_key: true,
+            window_is_main: true,
         };
         let value = serde_json::to_value(marker).expect("ready marker should serialize");
         assert_eq!(value["sessionId"], "12345678-1234-4234-9234-123456789abc");
@@ -4885,6 +6090,7 @@ mod tests {
                 default_font_size_pt: 12.0,
                 redraw_scope: Some("page".to_string()),
                 output_kind: Some("image".to_string()),
+                source_kind: None,
             }),
         };
         assert!(validate_request(&request, &session_id)
@@ -5530,6 +6736,7 @@ c &= e
             id: "32345678-1234-4234-9234-123456789abc".to_string(),
             mode: OfficeSessionMode::Edit,
             host: OfficeHost::Powerpoint,
+            operation: None,
             formula_id: "12345678-1234-4234-9234-123456789abc".to_string(),
             source_document_id: None,
             source_object_id: None,

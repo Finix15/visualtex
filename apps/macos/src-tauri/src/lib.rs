@@ -31,6 +31,12 @@ const OCR_RUNTIME_PROBE_CACHE_SCHEMA: u32 = 1;
 const OCR_RUNTIME_PROBE_CACHE_FILE: &str = "runtime-probe-cache.json";
 const ACTIVE_THEME_FILE: &str = "active-theme.txt";
 const THEME_CHANGED_EVENT: &str = "visualtex-theme-changed";
+const MAIN_WINDOW_SIZE_FILE: &str = "main-window-size.json";
+const MIN_MAIN_WINDOW_WIDTH: f64 = 500.0;
+const MIN_MAIN_WINDOW_HEIGHT: f64 = 300.0;
+const MAX_MAIN_WINDOW_WIDTH: f64 = 4000.0;
+const MAX_MAIN_WINDOW_HEIGHT: f64 = 3000.0;
+static MAIN_WINDOW_SIZE_WRITE_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 fn normalize_app_theme(theme: &str) -> &'static str {
     match theme.trim() {
@@ -64,6 +70,143 @@ fn set_app_theme(app: AppHandle, theme: String) -> Result<String, String> {
     app.emit(THEME_CHANGED_EVENT, normalized.clone())
         .map_err(|error| error.to_string())?;
     Ok(normalized)
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfigurationWindowSize {
+    width: f64,
+    height: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppWindowConfiguration {
+    main: Option<ConfigurationWindowSize>,
+    office_editor: Option<ConfigurationWindowSize>,
+}
+
+fn normalize_main_window_size(width: f64, height: f64) -> ConfigurationWindowSize {
+    let width = if width.is_finite() { width } else { 1240.0 };
+    let height = if height.is_finite() { height } else { 820.0 };
+    ConfigurationWindowSize {
+        width: width.clamp(MIN_MAIN_WINDOW_WIDTH, MAX_MAIN_WINDOW_WIDTH),
+        height: height.clamp(MIN_MAIN_WINDOW_HEIGHT, MAX_MAIN_WINDOW_HEIGHT),
+    }
+}
+
+fn main_window_size_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Unable to resolve VisualTeX application data: {error}"))?;
+    Ok(app_data_dir.join(MAIN_WINDOW_SIZE_FILE))
+}
+
+fn read_main_window_size(app: &AppHandle) -> Option<ConfigurationWindowSize> {
+    let path = main_window_size_path(app).ok()?;
+    let bytes = fs::read(path).ok()?;
+    let size: ConfigurationWindowSize = serde_json::from_slice(&bytes).ok()?;
+    Some(normalize_main_window_size(size.width, size.height))
+}
+
+fn current_main_window_size(app: &AppHandle) -> Option<ConfigurationWindowSize> {
+    let window = app.get_webview_window("main")?;
+    let physical = window.inner_size().ok()?;
+    let scale_factor = window.scale_factor().ok()?.max(0.1);
+    Some(normalize_main_window_size(
+        physical.width as f64 / scale_factor,
+        physical.height as f64 / scale_factor,
+    ))
+}
+
+fn write_main_window_size(app: &AppHandle, size: ConfigurationWindowSize) -> Result<(), String> {
+    let path = main_window_size_path(app)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let bytes = serde_json::to_vec_pretty(&size).map_err(|error| error.to_string())?;
+    fs::write(path, bytes).map_err(|error| error.to_string())
+}
+
+fn schedule_persist_main_window_size(app: &AppHandle, physical_width: u32, physical_height: u32) {
+    if physical_width == 0 || physical_height == 0 {
+        return;
+    }
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let scale_factor = window.scale_factor().unwrap_or(1.0).max(0.1);
+    let size = normalize_main_window_size(
+        physical_width as f64 / scale_factor,
+        physical_height as f64 / scale_factor,
+    );
+    let generation = MAIN_WINDOW_SIZE_WRITE_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        if MAIN_WINDOW_SIZE_WRITE_GENERATION.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        if let Err(error) = write_main_window_size(&app, size) {
+            eprintln!("Unable to persist the VisualTeX main window size: {error}");
+        }
+    });
+}
+
+fn restore_main_window_size(app: &AppHandle) -> Result<(), String> {
+    let Some(size) = read_main_window_size(app) else {
+        return Ok(());
+    };
+    let Some(window) = app.get_webview_window("main") else {
+        return Ok(());
+    };
+    window
+        .set_size(tauri::LogicalSize::new(size.width, size.height))
+        .map_err(|error| error.to_string())?;
+    window.center().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_app_window_configuration(app: AppHandle) -> Result<AppWindowConfiguration, String> {
+    #[cfg(target_os = "macos")]
+    let office_editor = office::macos_offline::configuration_office_editor_window_size(&app)
+        .map(|(width, height)| ConfigurationWindowSize { width, height });
+    #[cfg(not(target_os = "macos"))]
+    let office_editor = None;
+
+    Ok(AppWindowConfiguration {
+        main: current_main_window_size(&app).or_else(|| read_main_window_size(&app)),
+        office_editor,
+    })
+}
+
+#[tauri::command]
+fn apply_app_window_configuration(
+    app: AppHandle,
+    configuration: AppWindowConfiguration,
+) -> Result<AppWindowConfiguration, String> {
+    if let Some(requested) = configuration.main {
+        let size = normalize_main_window_size(requested.width, requested.height);
+        if let Some(window) = app.get_webview_window("main") {
+            window
+                .set_size(tauri::LogicalSize::new(size.width, size.height))
+                .map_err(|error| error.to_string())?;
+            window.center().map_err(|error| error.to_string())?;
+        }
+        write_main_window_size(&app, size)?;
+    }
+
+    #[cfg(target_os = "macos")]
+    if let Some(requested) = configuration.office_editor {
+        office::macos_offline::apply_configuration_office_editor_window_size(
+            &app,
+            requested.width,
+            requested.height,
+        )?;
+    }
+
+    get_app_window_configuration(app)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1262,6 +1405,61 @@ fn run_recognition(
 }
 
 #[tauri::command]
+fn copy_png_to_clipboard(data_base64: String) -> Result<(), String> {
+    let bytes = BASE64_STANDARD
+        .decode(data_base64.trim())
+        .map_err(|error| format!("Unable to decode PNG clipboard data: {error}"))?;
+    if bytes.len() > 100 * 1024 * 1024 {
+        return Err("PNG clipboard image is unexpectedly large".to_string());
+    }
+    const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+    if !bytes.starts_with(PNG_SIGNATURE) {
+        return Err("Clipboard image is not a valid PNG".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        let temporary = std::env::temp_dir().join(format!(
+            "visualtex-clipboard-{}-{nonce}.png",
+            std::process::id()
+        ));
+        fs::write(&temporary, &bytes)
+            .map_err(|error| format!("Unable to prepare PNG clipboard image: {error}"))?;
+
+        let script = r#"on run argv
+set pngPath to item 1 of argv
+set pngFile to POSIX file pngPath
+set the clipboard to (read pngFile as «class PNGf»)
+end run"#;
+        let output = Command::new("/usr/bin/osascript")
+            .arg("-e")
+            .arg(script)
+            .arg(&temporary)
+            .output();
+        let _ = fs::remove_file(&temporary);
+        let output = output.map_err(|error| format!("Unable to access the macOS clipboard: {error}"))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(if stderr.is_empty() {
+                "macOS rejected the PNG clipboard write".to_string()
+            } else {
+                format!("Unable to copy PNG to the macOS clipboard: {stderr}")
+            });
+        }
+        return Ok(());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("PNG clipboard export is currently supported on macOS only".to_string())
+    }
+}
+
+#[tauri::command]
 fn write_export_file(path: String, data_base64: String) -> Result<(), String> {
     let target = PathBuf::from(path.trim());
     if !target.is_absolute() {
@@ -1272,7 +1470,7 @@ fn write_export_file(path: String, data_base64: String) -> Result<(), String> {
         .and_then(|value| value.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
-    if !matches!(extension.as_str(), "md" | "svg" | "png") {
+    if !matches!(extension.as_str(), "md" | "svg" | "png" | "vtxconfig") {
         return Err("Unsupported export file extension".to_string());
     }
     let parent = target
@@ -1436,7 +1634,11 @@ fn claim_production_visualtex_url_handler() -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if let Some(status) = office::omml_batch::run_cli_if_requested() {
+        std::process::exit(status);
+    }
     let background_mode = office::background::is_background_mode();
+    let application_started_at = std::time::Instant::now();
     let maintenance_install = std::env::args_os().any(|argument| {
         argument
             == std::ffi::OsStr::new(office::macos_offline_installer::MAINTENANCE_INSTALL_ARGUMENT)
@@ -1508,6 +1710,7 @@ pub fn run() {
             // already have the real VisualTeX Dock icon installed.
             office::background::install_application_icon(app.handle())
                 .map_err(std::io::Error::other)?;
+            restore_main_window_size(app.handle()).map_err(std::io::Error::other)?;
             let office_state = office::initialize(app.handle(), office_ocr_state.clone())
                 .map_err(std::io::Error::other)?;
             if let Err(error) = office::powerpoint_native::start_double_click_monitor(
@@ -1542,7 +1745,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             write_export_file,
+            copy_png_to_clipboard,
             set_app_theme,
+            get_app_window_configuration,
+            apply_app_window_configuration,
             get_ocr_runtime_status,
             install_ocr_runtime,
             recognize_formula_image,
@@ -1567,6 +1773,7 @@ pub fn run() {
             office::macos_offline::commit_macos_offline_document_import,
             office::macos_offline::cancel_macos_offline_document_import,
             office::macos_offline::get_macos_offline_office_session,
+            office::macos_offline::report_macos_offline_office_editor_prewarm_diagnostic,
             office::macos_offline::report_macos_offline_office_editor_prewarmed,
             office::macos_offline::update_macos_offline_office_session,
             office::macos_offline::delete_macos_offline_office_session,
@@ -1574,6 +1781,7 @@ pub fn run() {
             office::macos_offline::cancel_macos_offline_office_session,
             office::macos_offline::get_macos_offline_office_editor_activation,
             office::macos_offline::report_macos_offline_office_editor_ready,
+            office::macos_offline::present_macos_offline_office_editor_window,
             office::macos_offline::close_macos_offline_office_editor_window,
             office::macos_offline::get_macos_offline_plugin_health,
             office::macos_offline_installer::get_macos_offline_office_install_status,
@@ -1587,6 +1795,23 @@ pub fn run() {
         .expect("error while building VisualTeX");
 
     app.run(move |app, event| match event {
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::WindowEvent {
+            label,
+            event: tauri::WindowEvent::Resized(size),
+            ..
+        } => {
+            if label == "main" {
+                schedule_persist_main_window_size(app, size.width, size.height);
+            } else {
+                office::macos_offline::schedule_persist_office_editor_window_size(
+                    app,
+                    &label,
+                    size.width,
+                    size.height,
+                );
+            }
+        }
         #[cfg(target_os = "macos")]
         tauri::RunEvent::WindowEvent {
             label,
@@ -1608,9 +1833,36 @@ pub fn run() {
         }
         #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen { .. } => {
-            if !office::macos_offline::focus_open_office_editor(app) {
-                let _ = office::background::reveal_main_window(app);
+            // LaunchServices can emit Reopen for the initial background launch.
+            // Never reveal the desktop workspace during that startup window.
+            if background_mode
+                && application_started_at.elapsed() < std::time::Duration::from_secs(2)
+            {
+                return;
             }
+            // A native Office launch starts a short-lived second VisualTeX
+            // process. macOS can deliver Reopen before the single-instance URL
+            // arguments establish the active formula Session. Defer the Dock
+            // behavior briefly so that launch cannot reveal the desktop main
+            // window over a hydrating Office editor.
+            let app = app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(150));
+                if office::macos_offline::focus_open_office_editor(&app) {
+                    return;
+                }
+                // Word and PowerPoint write request.json before asking
+                // LaunchServices to open VisualTeX. On a slower machine the
+                // Reopen event can arrive before handle_open_url has registered
+                // the active editor Session. Do not mistake that Office launch
+                // for an explicit Dock click and reveal the desktop workspace.
+                if office::macos_offline::has_recent_office_editor_request(
+                    std::time::Duration::from_secs(3),
+                ) {
+                    return;
+                }
+                let _ = office::background::reveal_main_window(&app);
+            });
         }
         tauri::RunEvent::ExitRequested { .. } => {
             #[cfg(target_os = "macos")]

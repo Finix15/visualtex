@@ -1,3 +1,8 @@
+import type {
+  FormulaChineseFont,
+  FormulaLetterFont,
+} from "../editor/formulaFontPreferences";
+
 export interface SvgExportOptions {
   displayMode: boolean;
   fontSizePt: number;
@@ -10,6 +15,8 @@ export interface SvgExportOptions {
    * first-frame artwork.
    */
   forceExplicitBlack?: boolean;
+  formulaLetterFont?: FormulaLetterFont;
+  formulaChineseFont?: FormulaChineseFont;
 }
 
 export interface SvgExportResult {
@@ -22,7 +29,7 @@ export interface SvgExportResult {
 
 export interface PngExportOptions {
   scale?: number;
-  background?: "transparent" | "white";
+  background?: "transparent" | "white" | `#${string}`;
 }
 
 export interface PngExportResult {

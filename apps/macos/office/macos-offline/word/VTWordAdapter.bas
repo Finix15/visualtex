@@ -21,6 +21,15 @@ Private Const VT_WORD_OMML_VARIABLE_PREFIX As String = "VT_OMML_"
 Private Const VT_WORD_METADATA_VARIABLE_PREFIX As String = "VT_Metadata_"
 Private Const VT_WORD_FORMAT_VARIABLE_PREFIX As String = "VT_Format_"
 Private Const VT_WORD_IMAGE_SCALE_VARIABLE_PREFIX As String = "VT_ImageScale_"
+Private Const VT_WORD_NATIVE_SIGNATURE_VARIABLE_PREFIX As String = _
+    "VT_NativeSignature_"
+Private Const VT_WORD_NUMBERING_MODE_VARIABLE As String = _
+    "VT_EquationNumberingMode"
+Private Const VT_WORD_NUMBERING_SEPARATOR_VARIABLE As String = _
+    "VT_EquationNumberingSeparator"
+Private Const VT_WORD_NUMBERING_MODE_SEQUENCE As String = "sequence"
+Private Const VT_WORD_NUMBERING_MODE_CHAPTER As String = "chapter"
+Private Const VT_WORD_NUMBERING_MODE_SECTION As String = "section"
 Private Const VT_WORD_IMAGE_REFERENCE_FONT_SIZE_PT As Double = 14#
 Private Const VT_WORD_MIN_FORMULA_FONT_SIZE_PT As Double = 1#
 Private Const VT_WORD_MAX_FORMULA_FONT_SIZE_PT As Double = 512#
@@ -36,8 +45,13 @@ Private Const VT_WORD_PAYLOAD_CHUNK_SIZE As Long = 20000
 Private Const VT_WORD_PAYLOAD_MAX_CHUNKS As Long = 128
 Private Const VT_WORD_LATEX_REDRAW_SOURCE_FILE As String = _
     "/latex-redraw-source.txt"
+Private Const VT_WORD_FORMULA_RESTORE_SOURCE_FILE As String = _
+    "/formula-restore-source.txt"
+Private Const VT_WORD_OMML_LATEX_RESULT_FILE As String = _
+    "/omml-latex-result.txt"
 Private Const VT_WORD_LATEX_REDRAW_CHUNK_SIZE As Long = 16000
 Private Const VT_WORD_LATEX_REDRAW_MAX_BYTES As Long = 5242880
+Private Const VT_WORD_FORMULA_RESTORE_COMBINED_MAX_BYTES As Long = 2097152
 Private Const VT_WORD_LATEX_REDRAW_MAX_FORMULAS As Long = 1000
 Private Const VT_WORD_TRACE_ENABLED As Boolean = False
 Private Const VT_WORD_DOUBLE_CLICK_TRACE_ENABLED As Boolean = False
@@ -45,6 +59,10 @@ Private Const VT_WORD_DOUBLE_CLICK_TRACE_FILE As String = _
     "/word-double-click-trace.log"
 Private Const VT_WORD_DOUBLE_CLICK_TRACE_SENTINEL As String = _
     "/word-double-click-trace.enabled"
+Private Const VT_WORD_PERFORMANCE_TRACE_FILE As String = _
+    "/word-vba-performance.txt"
+Private Const VT_WORD_PERFORMANCE_TRACE_SENTINEL As String = _
+    "/word-vba-performance.enabled"
 Private Const VT_WORD_LATEX_CHUNK_SIZE As Long = VT_WORD_PAYLOAD_CHUNK_SIZE
 Private Const VT_WORD_LATEX_MAX_CHUNKS As Long = VT_WORD_PAYLOAD_MAX_CHUNKS
 Private Const VT_WORD_OMML_CHUNK_SIZE As Long = VT_WORD_PAYLOAD_CHUNK_SIZE
@@ -59,6 +77,10 @@ Private VT_WORD_DOUBLE_CLICK_TRACE_ACTIVE As Boolean
 Private VT_WORD_DOUBLE_CLICK_TRACE_INITIALIZED As Boolean
 Private VT_WORD_LAST_IMAGE_EDIT_FORMULA_ID As String
 Private VT_WORD_LAST_IMAGE_EDIT_AT As Single
+Private VT_WORD_PERFORMANCE_ACTIVE As Boolean
+Private VT_WORD_PERFORMANCE_STARTED_AT As Single
+Private VT_WORD_PERFORMANCE_BUFFER As String
+Private VT_WORD_PERFORMANCE_OPERATION As String
 Private VT_WORD_IMAGE_MACRO_MIGRATION_SCHEDULED As Boolean
 Private VT_WORD_IMAGE_MACRO_MIGRATION_RUNNING As Boolean
 Private VT_WORD_IMAGE_SIZE_WATCH_SCHEDULED As Boolean
@@ -154,6 +176,9 @@ Public Sub VisualTeX_ProbeImageFormulaFontSize()
             "This Mac Word build does not reliably persist image Range.Font.Size. " & _
             "Use the VisualTeX 图片公式字号 drop-down as the supported fallback."
     End If
+End Sub
+
+Public Sub VisualTeX_PerformanceNoop()
 End Sub
 
 Public Sub VisualTeX_AssertWordHostSelfTest()
@@ -5525,6 +5550,8 @@ Private Sub VTDeleteEquationNumberScaffold( _
         documentObject, VTWordFormatVariableName(formulaId)
     VTDeleteDocumentVariable _
         documentObject, VTWordImageScaleVariableName(formulaId)
+    VTDeleteDocumentVariable _
+        documentObject, VTWordNativeSignatureVariableName(formulaId)
 End Sub
 
 Private Function VTNumberedTableScaffoldComplete( _
@@ -6041,6 +6068,1694 @@ Private Function VTLatexRedrawRequestJson( _
         "}}"
 End Function
 
+Private Function VTFormulaRestoreRequestJson( _
+    ByVal sessionId As String, _
+    ByVal sourceDocumentId As String, _
+    ByVal bookmarkName As String, _
+    ByVal defaultFontSizePt As Double, _
+    ByVal restoreScope As String, _
+    ByVal sourceKind As String, _
+    ByVal outputKind As String) As String
+
+    VTFormulaRestoreRequestJson = VTDocumentImportRequestJson( _
+        sessionId, sourceDocumentId, bookmarkName, defaultFontSizePt)
+    VTFormulaRestoreRequestJson = Replace$( _
+        VTFormulaRestoreRequestJson, _
+        """operation"":""documentImport""", _
+        """operation"":""formulaRestore""")
+    VTFormulaRestoreRequestJson = _
+        Left$(VTFormulaRestoreRequestJson, _
+            Len(VTFormulaRestoreRequestJson) - 2) & _
+        "," & """redrawScope"":" & VTJsonString(restoreScope) & _
+        "," & """outputKind"":" & VTJsonString(outputKind) & _
+        "," & """sourceKind"":" & VTJsonString(sourceKind) & _
+        "}}"
+End Function
+
+Private Sub VTWriteLargeSessionText( _
+    ByVal targetPath As String, _
+    ByVal contents As String)
+
+    Dim sourceOffset As Long
+    Dim sourceChunk As String
+
+    sourceOffset = 1
+    sourceChunk = Mid$( _
+        contents, sourceOffset, VT_WORD_LATEX_REDRAW_CHUNK_SIZE)
+    VTWriteTextAtomic targetPath, sourceChunk
+    sourceOffset = sourceOffset + Len(sourceChunk)
+    Do While sourceOffset <= Len(contents)
+        sourceChunk = Mid$( _
+            contents, sourceOffset, VT_WORD_LATEX_REDRAW_CHUNK_SIZE)
+        VTAppendText targetPath, sourceChunk
+        sourceOffset = sourceOffset + Len(sourceChunk)
+    Loop
+End Sub
+
+Private Function VTFormulaRestoreSelectionRange( _
+    ByVal sourceKind As String) As Range
+
+    Dim probeRange As Range
+    Dim formulaShape As InlineShape
+    Dim formulaMath As OMath
+
+    If sourceKind = "image" Then
+        Set formulaShape = VTVisualTeXInlineShapeAtSelection(Selection)
+        If formulaShape Is Nothing Then
+            Err.Raise vbObjectError + 7595, "VisualTeX", _
+                "Select one VisualTeX image formula."
+        End If
+        Set VTFormulaRestoreSelectionRange = _
+            formulaShape.Range.Duplicate
+        Exit Function
+    End If
+
+    Set probeRange = Selection.Range.Duplicate
+    If probeRange.OMaths.Count = 0 Then
+        On Error Resume Next
+        probeRange.MoveStart Unit:=wdCharacter, Count:=-1
+        probeRange.MoveEnd Unit:=wdCharacter, Count:=1
+        Err.Clear
+        On Error GoTo 0
+    End If
+    If probeRange.OMaths.Count <> 1 Then
+        Err.Raise vbObjectError + 7595, "VisualTeX", _
+            "Select one Word native equation."
+    End If
+    Set formulaMath = probeRange.OMaths(1)
+    If formulaMath.Range.InlineShapes.Count <> 0 Then
+        Err.Raise vbObjectError + 7595, "VisualTeX", _
+            "The selected math container contains an image, not a native Word equation."
+    End If
+    Set VTFormulaRestoreSelectionRange = formulaMath.Range.Duplicate
+End Function
+
+Private Function VTCollectFormulaRestoreTargets( _
+    ByVal targetRange As Range, _
+    ByVal sourceKind As String) As Collection
+
+    Dim targets As Collection
+    Dim formulaShape As InlineShape
+    Dim formulaMath As OMath
+    Dim formulaId As String
+    Dim displayMode As String
+    Dim numbered As Boolean
+    Dim encodedMetadata As String
+    Dim metadataNeedsWrite As Boolean
+    Dim formatNeedsWrite As Boolean
+
+    Set targets = New Collection
+    If sourceKind = "omml" Then
+        For Each formulaMath In targetRange.OMaths
+            If formulaMath.Range.InlineShapes.Count = 0 Then
+                targets.Add formulaMath
+            End If
+        Next formulaMath
+    ElseIf sourceKind = "image" Then
+        For Each formulaShape In targetRange.InlineShapes
+            formulaId = ""
+            displayMode = ""
+            numbered = False
+            encodedMetadata = ""
+            metadataNeedsWrite = False
+            formatNeedsWrite = False
+            If VTTryResolveVisualTeXInlineShapeReference( _
+               formulaShape, formulaId, displayMode, numbered, _
+               encodedMetadata, metadataNeedsWrite, formatNeedsWrite) Then
+                targets.Add formulaShape
+            End If
+        Next formulaShape
+    Else
+        Err.Raise vbObjectError + 7595, "VisualTeX", _
+            "The Word formula restore source kind is invalid."
+    End If
+    Set VTCollectFormulaRestoreTargets = targets
+End Function
+
+Private Function VTFormulaRestoreManifest( _
+    ByVal sessionId As String, _
+    ByVal sourceDocumentId As String, _
+    ByVal bookmarkName As String, _
+    ByVal targetRange As Range, _
+    ByVal sourceKind As String, _
+    ByVal targets As Collection) As String
+
+    Dim manifest As String
+    Dim prefix As String
+    Dim sourceRange As Range
+    Dim formulaShape As InlineShape
+    Dim formulaMath As OMath
+    Dim formulaId As String
+    Dim displayMode As String
+    Dim numbered As Boolean
+    Dim encodedMetadata As String
+    Dim metadataNeedsWrite As Boolean
+    Dim formatNeedsWrite As Boolean
+    Dim fontSizePt As Double
+    Dim payload As String
+    Dim itemIndex As Long
+
+    manifest = _
+        "protocolVersion=" & CStr(VT_PROTOCOL_VERSION) & vbLf & _
+        "sessionId=" & sessionId & vbLf & _
+        "sourceDocumentId=" & _
+            VTBase64UrlEncodeUtf8(sourceDocumentId) & vbLf & _
+        "bookmarkName=" & bookmarkName & vbLf & _
+        "sourceKind=" & sourceKind & vbLf & _
+        "targetTextBase64=" & _
+            VTBase64UrlEncodeUtf8(targetRange.Text) & vbLf & _
+        "itemCount=" & CStr(targets.Count) & vbLf
+
+    For itemIndex = 1 To targets.Count
+        prefix = "item" & CStr(itemIndex - 1)
+        If sourceKind = "omml" Then
+            Set formulaMath = targets(itemIndex)
+            Set sourceRange = formulaMath.Range.Duplicate
+            If formulaMath.Type = wdOMathDisplay Then
+                displayMode = "block"
+            Else
+                displayMode = "inline"
+            End If
+            fontSizePt = sourceRange.Font.Size
+            If Not VTValidWordFormulaFontSize(fontSizePt) Then
+                fontSizePt = VTPreferredWordFormulaFontSize(sourceRange)
+            End If
+            payload = sourceRange.WordOpenXML
+        Else
+            Set formulaShape = targets(itemIndex)
+            Set sourceRange = formulaShape.Range.Duplicate
+            formulaId = ""
+            displayMode = ""
+            numbered = False
+            encodedMetadata = ""
+            metadataNeedsWrite = False
+            formatNeedsWrite = False
+            If Not VTTryResolveVisualTeXInlineShapeReference( _
+               formulaShape, formulaId, displayMode, numbered, _
+               encodedMetadata, metadataNeedsWrite, formatNeedsWrite) Then
+                Err.Raise vbObjectError + 7595, "VisualTeX", _
+                    "A selected image formula lost its VisualTeX metadata."
+            End If
+            fontSizePt = VTPreferredWordFormulaFontSize(sourceRange)
+            payload = encodedMetadata
+        End If
+        manifest = manifest & _
+            prefix & "sourceStart=" & _
+                CStr(sourceRange.Start - targetRange.Start) & vbLf & _
+            prefix & "sourceEnd=" & _
+                CStr(sourceRange.End - targetRange.Start) & vbLf & _
+            prefix & "sourceTextBase64=" & _
+                VTBase64UrlEncodeUtf8(sourceRange.Text) & vbLf & _
+            prefix & "displayMode=" & displayMode & vbLf & _
+            prefix & "fontSizePt=" & VTJsonNumber(fontSizePt) & vbLf & _
+            prefix & "payloadBase64=" & _
+                VTBase64UrlEncodeUtf8(payload) & vbLf
+    Next itemIndex
+
+    If VTUtf8ByteLength(manifest) > 16777216 Then
+        Err.Raise vbObjectError + 7595, "VisualTeX", _
+            "The Word formula restore transfer exceeds 16 MB. Select a smaller range."
+    End If
+    VTFormulaRestoreManifest = manifest
+End Function
+
+Private Sub VTCommitSynchronousOmmlLatexResult( _
+    ByVal manifest As Object, _
+    ByVal sourceDocumentId As String, _
+    ByVal bookmarkName As String, _
+    ByVal itemCount As Long)
+
+    Dim targetDocument As Document
+    Dim anchorBookmark As Bookmark
+    Dim targetRange As Range
+    Dim sourceRange As Range
+    Dim rollbackRange As Range
+    Dim undoRecord As Object
+    Dim sourceStarts() As Long
+    Dim sourceEnds() As Long
+    Dim sourceTexts() As String
+    Dim replacementTexts() As String
+    Dim targetStart As Long
+    Dim targetEnd As Long
+    Dim previousEnd As Long
+    Dim itemIndex As Long
+    Dim originalSource As String
+    Dim itemKind As String
+    Dim errorNumber As Long
+    Dim errorDescription As String
+    Dim transactionStage As String
+    Dim internalMutationStarted As Boolean
+    Dim undoRecordStarted As Boolean
+    Dim mutationOccurred As Boolean
+    Dim rollbackVerified As Boolean
+
+    On Error GoTo Failed
+    transactionStage = "validate-target"
+    If itemCount < 1 Or _
+       itemCount > VT_WORD_LATEX_REDRAW_MAX_FORMULAS Then
+        Err.Raise vbObjectError + 7591, "VisualTeX", _
+            "The synchronous OMML result count is invalid."
+    End If
+    If sourceDocumentId <> VTWordDocumentIdentity() Then
+        Err.Raise vbObjectError + 7591, "VisualTeX", _
+            "The active Word document changed during OMML conversion."
+    End If
+    Set targetDocument = ActiveDocument
+    If Not targetDocument.Bookmarks.Exists(bookmarkName) Then
+        Err.Raise vbObjectError + 7591, "VisualTeX", _
+            "The OMML conversion target range no longer exists."
+    End If
+    Set anchorBookmark = targetDocument.Bookmarks(bookmarkName)
+    Set targetRange = anchorBookmark.Range.Duplicate
+    targetStart = targetRange.Start
+    targetEnd = targetRange.End
+    originalSource = targetRange.Text
+    If targetEnd <= targetStart Then
+        Err.Raise vbObjectError + 7591, "VisualTeX", _
+            "The OMML conversion target range is empty."
+    End If
+
+    ReDim sourceStarts(0 To itemCount - 1)
+    ReDim sourceEnds(0 To itemCount - 1)
+    ReDim sourceTexts(0 To itemCount - 1)
+    ReDim replacementTexts(0 To itemCount - 1)
+    previousEnd = 0
+    For itemIndex = 0 To itemCount - 1
+        transactionStage = "preflight item " & CStr(itemIndex)
+        itemKind = VTDocumentImportRequired( _
+            manifest, itemIndex, "kind")
+        If itemKind <> "text" Then
+            Err.Raise vbObjectError + 7591, "VisualTeX", _
+                "The synchronous OMML result contains a non-text item."
+        End If
+        sourceStarts(itemIndex) = VTDocumentImportSourceOffset( _
+            manifest, itemIndex, "sourceStart")
+        sourceEnds(itemIndex) = VTDocumentImportSourceOffset( _
+            manifest, itemIndex, "sourceEnd")
+        If sourceStarts(itemIndex) < previousEnd Or _
+           sourceEnds(itemIndex) <= sourceStarts(itemIndex) Or _
+           sourceEnds(itemIndex) > targetEnd - targetStart Then
+            Err.Raise vbObjectError + 7591, "VisualTeX", _
+                "The synchronous OMML source ranges overlap or exceed the target."
+        End If
+        sourceTexts(itemIndex) = VTBase64UrlDecodeUtf8( _
+            VTDocumentImportRequired( _
+                manifest, itemIndex, "sourceTextBase64"))
+        replacementTexts(itemIndex) = VTBase64UrlDecodeUtf8( _
+            VTDocumentImportRequired( _
+                manifest, itemIndex, "textBase64"))
+        If Len(replacementTexts(itemIndex)) = 0 Then
+            Err.Raise vbObjectError + 7591, "VisualTeX", _
+                "A synchronous OMML LaTeX result is empty."
+        End If
+        Set sourceRange = targetDocument.Range( _
+            Start:=targetStart + sourceStarts(itemIndex), _
+            End:=targetStart + sourceEnds(itemIndex))
+        If StrComp( _
+           sourceRange.Text, sourceTexts(itemIndex), _
+           vbBinaryCompare) <> 0 Then
+            Err.Raise vbObjectError + 7591, "VisualTeX", _
+                "Word content changed during synchronous OMML conversion."
+        End If
+        previousEnd = sourceEnds(itemIndex)
+    Next itemIndex
+    VTWordPerformanceMark "batch-word-preflighted"
+
+    transactionStage = "start-undo"
+    Set undoRecord = CallByName(Application, "UndoRecord", VbGet)
+    undoRecord.StartCustomRecord "VisualTeX Restore Word Formulas"
+    undoRecordStarted = True
+    VTBeginWordInternalMutation
+    internalMutationStarted = True
+    anchorBookmark.Delete
+
+    For itemIndex = itemCount - 1 To 0 Step -1
+        transactionStage = "replace item " & CStr(itemIndex)
+        Set sourceRange = targetDocument.Range( _
+            Start:=targetStart + sourceStarts(itemIndex), _
+            End:=targetStart + sourceEnds(itemIndex))
+        sourceRange.Text = replacementTexts(itemIndex)
+        mutationOccurred = True
+    Next itemIndex
+
+    If internalMutationStarted Then
+        VTEndWordInternalMutation
+        internalMutationStarted = False
+    End If
+    If undoRecordStarted Then
+        undoRecord.EndCustomRecord
+        undoRecordStarted = False
+    End If
+    Set sourceRange = targetDocument.Range( _
+        Start:=targetStart + sourceStarts(0), _
+        End:=targetStart + sourceStarts(0) + _
+            Len(replacementTexts(0)))
+    sourceRange.Select
+    Exit Sub
+
+Failed:
+    errorNumber = Err.Number
+    errorDescription = Err.Description
+    On Error Resume Next
+    If internalMutationStarted Then
+        VTEndWordInternalMutation
+        internalMutationStarted = False
+    End If
+    If undoRecordStarted Then
+        undoRecord.EndCustomRecord
+        undoRecordStarted = False
+    End If
+    rollbackVerified = Not mutationOccurred
+    If mutationOccurred Then
+        CallByName Application, "Undo", VbMethod
+        Err.Clear
+        Set rollbackRange = targetDocument.Range( _
+            Start:=targetStart, End:=targetStart + Len(originalSource))
+        rollbackVerified = _
+            StrComp(rollbackRange.Text, originalSource, _
+                vbBinaryCompare) = 0
+    End If
+    If rollbackVerified And Not targetDocument Is Nothing Then
+        If Not targetDocument.Bookmarks.Exists(bookmarkName) Then
+            Set rollbackRange = targetDocument.Range( _
+                Start:=targetStart, _
+                End:=targetStart + Len(originalSource))
+            targetDocument.Bookmarks.Add _
+                Name:=bookmarkName, Range:=rollbackRange
+        End If
+    End If
+    On Error GoTo 0
+    If Not rollbackVerified Then
+        Err.Raise vbObjectError + 7592, _
+            "VisualTeX synchronous OMML restore", _
+            transactionStage & ": " & errorDescription & _
+            " Word could not verify the automatic rollback."
+    End If
+    Err.Raise errorNumber, _
+        "VisualTeX synchronous OMML restore", _
+        transactionStage & ": " & errorDescription
+End Sub
+
+Private Function VTTryWriteOmmlBatchManifestDirect( _
+    ByVal sessionId As String, _
+    ByVal manifest As String) As Boolean
+
+    Dim sessionPath As String
+    Dim targetPath As String
+    Dim temporaryPath As String
+    Dim fileNumber As Integer
+    Dim fileOpened As Boolean
+
+    If Not VTIsCanonicalUuid(sessionId) Or Len(manifest) = 0 Then _
+        Exit Function
+    sessionPath = VTSessionDirectory(sessionId)
+    targetPath = sessionPath & VT_WORD_FORMULA_RESTORE_SOURCE_FILE
+    temporaryPath = targetPath & ".tmp"
+
+    On Error GoTo DirectWriteUnavailable
+    If Len(Dir$(sessionPath, vbDirectory)) = 0 Then MkDir sessionPath
+    On Error Resume Next
+    Kill temporaryPath
+    Err.Clear
+    On Error GoTo DirectWriteUnavailable
+    fileNumber = FreeFile
+    Open temporaryPath For Output Access Write As #fileNumber
+    fileOpened = True
+    Print #fileNumber, manifest;
+    Close #fileNumber
+    fileOpened = False
+    On Error Resume Next
+    Kill targetPath
+    Err.Clear
+    On Error GoTo DirectWriteUnavailable
+    Name temporaryPath As targetPath
+    VTTryWriteOmmlBatchManifestDirect = True
+    Exit Function
+
+DirectWriteUnavailable:
+    On Error Resume Next
+    If fileOpened Then Close #fileNumber
+    Kill temporaryPath
+    Err.Clear
+    On Error GoTo 0
+End Function
+
+Private Function VTTryRestoreOmmlBatchSynchronously( _
+    ByVal sessionId As String, _
+    ByVal sourceDocumentId As String, _
+    ByVal bookmarkName As String, _
+    ByVal manifest As String) As Boolean
+
+    Dim timingDetail As String
+    Dim encodedResult As String
+    Dim resultText As String
+    Dim resultSeparator As Long
+    Dim resultManifest As Object
+    Dim itemCount As Long
+    Dim directManifestWritten As Boolean
+    Dim conversionErrorNumber As Long
+    Dim commitErrorNumber As Long
+    Dim commitErrorDescription As String
+
+    If Len(manifest) > _
+       VT_WORD_FORMULA_RESTORE_COMBINED_MAX_BYTES Then Exit Function
+
+    VTWordPerformanceMark "batch-enter"
+    directManifestWritten = _
+        VTTryWriteOmmlBatchManifestDirect(sessionId, manifest)
+    VTWordPerformanceMark "batch-source-ready"
+    On Error GoTo ConversionUnavailable
+    If directManifestWritten Then
+        timingDetail = VTConvertOmmlBatch(VT_WORD_HOST, sessionId)
+    Else
+        timingDetail = VTConvertOmmlBatch( _
+            VT_WORD_HOST, sessionId, manifest)
+    End If
+    VTWordPerformanceMark "batch-converted"
+    resultSeparator = InStrRev( _
+        timingDetail, "|", -1, vbBinaryCompare)
+    If resultSeparator <= 1 Or _
+       resultSeparator >= Len(timingDetail) Then
+        Err.Raise vbObjectError + 7595, "VisualTeX", _
+            "The synchronous OMML converter returned no result payload."
+    End If
+    encodedResult = Mid$(timingDetail, resultSeparator + 1)
+    timingDetail = Left$(timingDetail, resultSeparator - 1)
+    resultText = VTBase64UrlDecodeUtf8(encodedResult)
+    Set resultManifest = VTParseDocumentImportManifestText( _
+        resultText, sessionId)
+    VTWordPerformanceMark "batch-result-decoded"
+    If CStr(resultManifest("operation")) <> "formulaRestore" Or _
+       CStr(resultManifest("outputKind")) <> "latex" Or _
+       CStr(resultManifest("sourceDocumentId")) <> sourceDocumentId Or _
+       CStr(resultManifest("bookmarkName")) <> bookmarkName Then
+        Err.Raise vbObjectError + 7595, "VisualTeX", _
+            "The synchronous OMML conversion result identity is invalid."
+    End If
+    itemCount = CLng(resultManifest("itemCount"))
+    If itemCount < 1 Or _
+       itemCount > VT_WORD_LATEX_REDRAW_MAX_FORMULAS Then
+        Err.Raise vbObjectError + 7595, "VisualTeX", _
+            "The synchronous OMML conversion item count is invalid."
+    End If
+
+    On Error GoTo CommitFailed
+    VTCommitSynchronousOmmlLatexResult _
+        resultManifest, sourceDocumentId, bookmarkName, itemCount
+    VTWordPerformanceMark "batch-word-committed"
+    If VT_WORD_PERFORMANCE_ACTIVE Then
+        VTWordPerformanceFlush sessionId
+    Else
+        VTDeleteSessionFiles sessionId
+    End If
+    VTTryRestoreOmmlBatchSynchronously = True
+    Exit Function
+
+ConversionUnavailable:
+    conversionErrorNumber = Err.Number
+    Err.Clear
+    If conversionErrorNumber = 0 Then conversionErrorNumber = 1
+    VTTryRestoreOmmlBatchSynchronously = False
+    Exit Function
+
+CommitFailed:
+    commitErrorNumber = Err.Number
+    commitErrorDescription = Err.Description
+    Err.Raise commitErrorNumber, _
+        "VisualTeX synchronous OMML restore", _
+        commitErrorDescription
+End Function
+
+Private Sub VTStartWordFormulaRestore( _
+    ByVal restoreScope As String, _
+    ByVal sourceKind As String, _
+    ByVal outputKind As String)
+
+    Dim sessionId As String
+    Dim bookmarkName As String
+    Dim sourceDocumentId As String
+    Dim targetRange As Range
+    Dim targets As Collection
+    Dim defaultFontSizePt As Double
+    Dim requestJson As String
+    Dim manifest As String
+    Dim manifestPath As String
+    Dim launchTiming As String
+    Dim operationStage As String
+    Dim errorNumber As Long
+    Dim errorDescription As String
+
+    If restoreScope <> "selection" And restoreScope <> "document" Then
+        VTShowError "Word formula restore", vbObjectError + 7595, _
+            "The formula restore scope is invalid."
+        Exit Sub
+    End If
+    If sourceKind <> "omml" And sourceKind <> "image" Then
+        VTShowError "Word formula restore", vbObjectError + 7595, _
+            "The formula restore source kind is invalid."
+        Exit Sub
+    End If
+    If outputKind <> "latex" And outputKind <> "image" Then
+        VTShowError "Word formula restore", vbObjectError + 7595, _
+            "The formula restore output kind is invalid."
+        Exit Sub
+    End If
+    If outputKind = "image" And sourceKind <> "omml" Then
+        VTShowError "Word formula restore", vbObjectError + 7595, _
+            "Only Word OMML formulas can be converted to image formulas."
+        Exit Sub
+    End If
+
+    VTWordPerformanceStartLocal sourceKind & "-to-" & outputKind
+    On Error GoTo Failed
+    operationStage = "require-document"
+    VTRequireWritableWordDocument
+    VTWordPerformanceMark "document-required"
+    operationStage = "resolve-range"
+    If restoreScope = "selection" And Selection.Range.Start = _
+       Selection.Range.End Then
+        Set targetRange = VTFormulaRestoreSelectionRange(sourceKind)
+    ElseIf restoreScope = "selection" Then
+        Set targetRange = Selection.Range.Duplicate
+    Else
+        Set targetRange = ActiveDocument.Content.Duplicate
+    End If
+    If targetRange Is Nothing Then
+        Err.Raise vbObjectError + 7595, "VisualTeX", _
+            "The Word formula restore range is missing."
+    End If
+    If targetRange.Start = targetRange.End Then
+        Err.Raise vbObjectError + 7595, "VisualTeX", _
+            "The Word formula restore range is empty."
+    End If
+    VTWordPerformanceMark "range-resolved"
+    If VTUtf8ByteLength(targetRange.Text) > _
+       VT_WORD_LATEX_REDRAW_MAX_BYTES Then
+        Err.Raise vbObjectError + 7595, "VisualTeX", _
+            "The Word formula restore range exceeds 5 MB."
+    End If
+
+    operationStage = "collect-formulas"
+    Set targets = VTCollectFormulaRestoreTargets(targetRange, sourceKind)
+    VTWordPerformanceMark "formulas-collected"
+    If targets.Count = 0 Then
+        If sourceKind = "omml" Then
+            Err.Raise vbObjectError + 7595, "VisualTeX", _
+                "No Word native equations were found in the target range."
+        Else
+            Err.Raise vbObjectError + 7595, "VisualTeX", _
+                "No recoverable VisualTeX image formulas were found in the target range."
+        End If
+    End If
+    If targets.Count > VT_WORD_LATEX_REDRAW_MAX_FORMULAS Then
+        Err.Raise vbObjectError + 7595, "VisualTeX", _
+            "The target range contains more than 1000 formulas."
+    End If
+
+    operationStage = "create-identities"
+    sessionId = VTNewUuidV4()
+    bookmarkName = VTDocumentImportBookmarkName(sessionId)
+    sourceDocumentId = VTWordDocumentIdentity()
+    defaultFontSizePt = VTPreferredWordFormulaFontSize(targetRange)
+    If ActiveDocument.Bookmarks.Exists(bookmarkName) Then
+        ActiveDocument.Bookmarks(bookmarkName).Delete
+    End If
+    ActiveDocument.Bookmarks.Add Name:=bookmarkName, Range:=targetRange
+    VTWordPerformanceMark "identities-created"
+
+    operationStage = "serialize-request"
+    requestJson = VTFormulaRestoreRequestJson( _
+        sessionId, sourceDocumentId, bookmarkName, defaultFontSizePt, _
+        restoreScope, sourceKind, outputKind)
+    VTWordPerformanceMark "request-serialized"
+    manifest = VTFormulaRestoreManifest( _
+        sessionId, sourceDocumentId, bookmarkName, targetRange, _
+        sourceKind, targets)
+    VTWordPerformanceMark "manifest-serialized"
+    If sourceKind = "omml" And outputKind = "latex" Then
+        operationStage = "convert-omml-batch"
+        If VTTryRestoreOmmlBatchSynchronously( _
+           sessionId, sourceDocumentId, bookmarkName, manifest) Then
+            operationStage = "complete"
+            Exit Sub
+        End If
+    End If
+    If VTUtf8ByteLength(manifest) <= _
+       VT_WORD_FORMULA_RESTORE_COMBINED_MAX_BYTES Then
+        operationStage = "write-source-and-launch"
+        launchTiming = VTWriteFormulaRestoreAndLaunchSession( _
+            VT_WORD_HOST, sessionId, requestJson, manifest)
+    Else
+        operationStage = "write-request"
+        VTWriteRequest sessionId, requestJson
+        manifestPath = VTSessionDirectory(sessionId) & _
+            VT_WORD_FORMULA_RESTORE_SOURCE_FILE
+        operationStage = "write-source"
+        VTWriteLargeSessionText manifestPath, manifest
+        operationStage = "launch"
+        VTLaunchSession VT_WORD_HOST, sessionId
+    End If
+    operationStage = "complete"
+    Exit Sub
+
+Failed:
+    errorNumber = Err.Number
+    errorDescription = Err.Description
+    On Error Resume Next
+    If Len(bookmarkName) > 0 Then
+        If ActiveDocument.Bookmarks.Exists(bookmarkName) Then
+            ActiveDocument.Bookmarks(bookmarkName).Delete
+        End If
+    End If
+    If Len(sessionId) > 0 Then VTDeleteSessionFiles sessionId
+    On Error GoTo 0
+    VTShowError _
+        "Word formula restore (" & operationStage & ")", _
+        errorNumber, errorDescription
+End Sub
+
+Private Function VTRestoreCachedImageFormulasToLatex( _
+    ByVal targetRange As Range) As Boolean
+
+    Dim targetDocument As Document
+    Dim formulaShape As InlineShape
+    Dim containerRange As Range
+    Dim replacementRange As Range
+    Dim undoRecord As Object
+    Dim formulaId As String
+    Dim displayMode As String
+    Dim numbered As Boolean
+    Dim encodedMetadata As String
+    Dim latexBase64 As String
+    Dim latexText As String
+    Dim metadataNeedsWrite As Boolean
+    Dim formatNeedsWrite As Boolean
+    Dim sourceStarts() As Long
+    Dim sourceEnds() As Long
+    Dim replacementTexts() As String
+    Dim maximumCount As Long
+    Dim formulaCount As Long
+    Dim itemIndex As Long
+    Dim internalMutationStarted As Boolean
+    Dim undoRecordStarted As Boolean
+    Dim mutationOccurred As Boolean
+    Dim restoreErrorNumber As Long
+    Dim restoreErrorDescription As String
+
+    If targetRange Is Nothing Then Exit Function
+    maximumCount = targetRange.InlineShapes.Count
+    If maximumCount = 0 Then Exit Function
+    Set targetDocument = targetRange.Document
+    ReDim sourceStarts(1 To maximumCount)
+    ReDim sourceEnds(1 To maximumCount)
+    ReDim replacementTexts(1 To maximumCount)
+
+    ' Preflight every target before changing Word. Old image formulas that do
+    ' not have a durable LaTeX payload use the existing hidden restore pipeline
+    ' instead of partially converting a document through this fast path.
+    For Each formulaShape In targetRange.InlineShapes
+        formulaId = ""
+        displayMode = ""
+        numbered = False
+        encodedMetadata = ""
+        metadataNeedsWrite = False
+        formatNeedsWrite = False
+        If VTTryResolveVisualTeXInlineShapeReference( _
+           formulaShape, formulaId, displayMode, numbered, _
+           encodedMetadata, metadataNeedsWrite, formatNeedsWrite) Then
+            If Not VTTryReadWordLatexPayload( _
+               targetDocument, formulaId, latexBase64) Then Exit Function
+            latexText = VTBase64UrlDecodeUtf8(latexBase64)
+            If Len(latexText) = 0 Then Exit Function
+            Set containerRange = _
+                VTVisualTeXImageContainerRange(formulaShape)
+            If containerRange.Start >= targetRange.Start And _
+               containerRange.End <= targetRange.End Then
+                formulaCount = formulaCount + 1
+                sourceStarts(formulaCount) = containerRange.Start
+                sourceEnds(formulaCount) = containerRange.End
+                If displayMode = "block" Then
+                    replacementTexts(formulaCount) = _
+                        "$$" & latexText & "$$"
+                Else
+                    replacementTexts(formulaCount) = _
+                        "$" & latexText & "$"
+                End If
+            End If
+        End If
+    Next formulaShape
+    If formulaCount = 0 Then Exit Function
+
+    On Error GoTo RestoreFailed
+    Set undoRecord = CallByName(Application, "UndoRecord", VbGet)
+    undoRecord.StartCustomRecord "VisualTeX Restore Image Formulas"
+    undoRecordStarted = True
+    VTBeginWordInternalMutation
+    internalMutationStarted = True
+    For itemIndex = formulaCount To 1 Step -1
+        Set replacementRange = targetDocument.Range( _
+            Start:=sourceStarts(itemIndex), _
+            End:=sourceEnds(itemIndex))
+        replacementRange.Text = replacementTexts(itemIndex)
+        mutationOccurred = True
+    Next itemIndex
+    If internalMutationStarted Then
+        VTEndWordInternalMutation
+        internalMutationStarted = False
+    End If
+    If undoRecordStarted Then
+        undoRecord.EndCustomRecord
+        undoRecordStarted = False
+    End If
+    VTRestoreCachedImageFormulasToLatex = True
+    Exit Function
+
+RestoreFailed:
+    restoreErrorNumber = Err.Number
+    restoreErrorDescription = Err.Description
+    On Error Resume Next
+    If internalMutationStarted Then VTEndWordInternalMutation
+    If undoRecordStarted Then undoRecord.EndCustomRecord
+    If mutationOccurred Then CallByName Application, "Undo", VbMethod
+    On Error GoTo 0
+    Err.Raise restoreErrorNumber, "VisualTeX image-to-LaTeX", _
+        restoreErrorDescription
+End Function
+
+#If False Then
+#If False Then
+Private Function VTMathUnicodeTokenToLatex(ByVal tokenText As String) As String
+    Select Case tokenText
+        Case "−": VTMathUnicodeTokenToLatex = "-"
+        Case "×": VTMathUnicodeTokenToLatex = "\times "
+        Case "÷": VTMathUnicodeTokenToLatex = "\div "
+        Case "±": VTMathUnicodeTokenToLatex = "\pm "
+        Case "∓": VTMathUnicodeTokenToLatex = "\mp "
+        Case "·": VTMathUnicodeTokenToLatex = "\cdot "
+        Case "∞": VTMathUnicodeTokenToLatex = "\infty "
+        Case "∂": VTMathUnicodeTokenToLatex = "\partial "
+        Case "∇": VTMathUnicodeTokenToLatex = "\nabla "
+        Case "∑": VTMathUnicodeTokenToLatex = "\sum "
+        Case "∏": VTMathUnicodeTokenToLatex = "\prod "
+        Case "∫": VTMathUnicodeTokenToLatex = "\int "
+        Case "∬": VTMathUnicodeTokenToLatex = "\iint "
+        Case "∭": VTMathUnicodeTokenToLatex = "\iiint "
+        Case "∮": VTMathUnicodeTokenToLatex = "\oint "
+        Case "≈": VTMathUnicodeTokenToLatex = "\approx "
+        Case "≃": VTMathUnicodeTokenToLatex = "\simeq "
+        Case "≅": VTMathUnicodeTokenToLatex = "\cong "
+        Case "≠": VTMathUnicodeTokenToLatex = "\ne "
+        Case "≤": VTMathUnicodeTokenToLatex = "\le "
+        Case "≥": VTMathUnicodeTokenToLatex = "\ge "
+        Case "≪": VTMathUnicodeTokenToLatex = "\ll "
+        Case "≫": VTMathUnicodeTokenToLatex = "\gg "
+        Case "≡": VTMathUnicodeTokenToLatex = "\equiv "
+        Case "∝": VTMathUnicodeTokenToLatex = "\propto "
+        Case "∈": VTMathUnicodeTokenToLatex = "\in "
+        Case "∉": VTMathUnicodeTokenToLatex = "\notin "
+        Case "⊂": VTMathUnicodeTokenToLatex = "\subset "
+        Case "⊃": VTMathUnicodeTokenToLatex = "\supset "
+        Case "⊆": VTMathUnicodeTokenToLatex = "\subseteq "
+        Case "⊇": VTMathUnicodeTokenToLatex = "\supseteq "
+        Case "∪": VTMathUnicodeTokenToLatex = "\cup "
+        Case "∩": VTMathUnicodeTokenToLatex = "\cap "
+        Case "∧": VTMathUnicodeTokenToLatex = "\land "
+        Case "∨": VTMathUnicodeTokenToLatex = "\lor "
+        Case "¬": VTMathUnicodeTokenToLatex = "\neg "
+        Case "∀": VTMathUnicodeTokenToLatex = "\forall "
+        Case "∃": VTMathUnicodeTokenToLatex = "\exists "
+        Case "∅": VTMathUnicodeTokenToLatex = "\varnothing "
+        Case "⊥": VTMathUnicodeTokenToLatex = "\perp "
+        Case "∥": VTMathUnicodeTokenToLatex = "\parallel "
+        Case "←": VTMathUnicodeTokenToLatex = "\leftarrow "
+        Case "→": VTMathUnicodeTokenToLatex = "\rightarrow "
+        Case "↔": VTMathUnicodeTokenToLatex = "\leftrightarrow "
+        Case "⇐": VTMathUnicodeTokenToLatex = "\Leftarrow "
+        Case "⇒": VTMathUnicodeTokenToLatex = "\Rightarrow "
+        Case "⇔": VTMathUnicodeTokenToLatex = "\Leftrightarrow "
+        Case "α": VTMathUnicodeTokenToLatex = "\alpha "
+        Case "β": VTMathUnicodeTokenToLatex = "\beta "
+        Case "γ": VTMathUnicodeTokenToLatex = "\gamma "
+        Case "δ": VTMathUnicodeTokenToLatex = "\delta "
+        Case "ε": VTMathUnicodeTokenToLatex = "\epsilon "
+        Case "ϵ": VTMathUnicodeTokenToLatex = "\varepsilon "
+        Case "ζ": VTMathUnicodeTokenToLatex = "\zeta "
+        Case "η": VTMathUnicodeTokenToLatex = "\eta "
+        Case "θ": VTMathUnicodeTokenToLatex = "\theta "
+        Case "ϑ": VTMathUnicodeTokenToLatex = "\vartheta "
+        Case "ι": VTMathUnicodeTokenToLatex = "\iota "
+        Case "κ": VTMathUnicodeTokenToLatex = "\kappa "
+        Case "λ": VTMathUnicodeTokenToLatex = "\lambda "
+        Case "μ": VTMathUnicodeTokenToLatex = "\mu "
+        Case "ν": VTMathUnicodeTokenToLatex = "\nu "
+        Case "ξ": VTMathUnicodeTokenToLatex = "\xi "
+        Case "π": VTMathUnicodeTokenToLatex = "\pi "
+        Case "ρ": VTMathUnicodeTokenToLatex = "\rho "
+        Case "σ": VTMathUnicodeTokenToLatex = "\sigma "
+        Case "τ": VTMathUnicodeTokenToLatex = "\tau "
+        Case "υ": VTMathUnicodeTokenToLatex = "\upsilon "
+        Case "φ": VTMathUnicodeTokenToLatex = "\phi "
+        Case "ϕ": VTMathUnicodeTokenToLatex = "\varphi "
+        Case "χ": VTMathUnicodeTokenToLatex = "\chi "
+        Case "ψ": VTMathUnicodeTokenToLatex = "\psi "
+        Case "ω": VTMathUnicodeTokenToLatex = "\omega "
+        Case "Γ": VTMathUnicodeTokenToLatex = "\Gamma "
+        Case "Δ": VTMathUnicodeTokenToLatex = "\Delta "
+        Case "Θ": VTMathUnicodeTokenToLatex = "\Theta "
+        Case "Λ": VTMathUnicodeTokenToLatex = "\Lambda "
+        Case "Ξ": VTMathUnicodeTokenToLatex = "\Xi "
+        Case "Π": VTMathUnicodeTokenToLatex = "\Pi "
+        Case "Σ": VTMathUnicodeTokenToLatex = "\Sigma "
+        Case "Υ": VTMathUnicodeTokenToLatex = "\Upsilon "
+        Case "Φ": VTMathUnicodeTokenToLatex = "\Phi "
+        Case "Ψ": VTMathUnicodeTokenToLatex = "\Psi "
+        Case "Ω": VTMathUnicodeTokenToLatex = "\Omega "
+        Case Else: VTMathUnicodeTokenToLatex = tokenText
+    End Select
+End Function
+#End If
+
+Private Function VTMathUnicodeTokenToLatex(ByVal tokenText As String) As String
+    Dim characterCode As Long
+
+    If Len(tokenText) = 0 Then Exit Function
+    characterCode = AscW(Left$(tokenText, 1))
+    If characterCode < 0 Then characterCode = characterCode + 65536
+    Select Case characterCode
+        Case 8722: VTMathUnicodeTokenToLatex = "-"
+        Case 215: VTMathUnicodeTokenToLatex = "\times "
+        Case 247: VTMathUnicodeTokenToLatex = "\div "
+        Case 177: VTMathUnicodeTokenToLatex = "\pm "
+        Case 8723: VTMathUnicodeTokenToLatex = "\mp "
+        Case 183: VTMathUnicodeTokenToLatex = "\cdot "
+        Case 8734: VTMathUnicodeTokenToLatex = "\infty "
+        Case 8706: VTMathUnicodeTokenToLatex = "\partial "
+        Case 8711: VTMathUnicodeTokenToLatex = "\nabla "
+        Case 8721: VTMathUnicodeTokenToLatex = "\sum "
+        Case 8719: VTMathUnicodeTokenToLatex = "\prod "
+        Case 8747: VTMathUnicodeTokenToLatex = "\int "
+        Case 8748: VTMathUnicodeTokenToLatex = "\iint "
+        Case 8749: VTMathUnicodeTokenToLatex = "\iiint "
+        Case 8750: VTMathUnicodeTokenToLatex = "\oint "
+        Case 8776: VTMathUnicodeTokenToLatex = "\approx "
+        Case 8771: VTMathUnicodeTokenToLatex = "\simeq "
+        Case 8773: VTMathUnicodeTokenToLatex = "\cong "
+        Case 8800: VTMathUnicodeTokenToLatex = "\ne "
+        Case 8804: VTMathUnicodeTokenToLatex = "\le "
+        Case 8805: VTMathUnicodeTokenToLatex = "\ge "
+        Case 8810: VTMathUnicodeTokenToLatex = "\ll "
+        Case 8811: VTMathUnicodeTokenToLatex = "\gg "
+        Case 8801: VTMathUnicodeTokenToLatex = "\equiv "
+        Case 8733: VTMathUnicodeTokenToLatex = "\propto "
+        Case 8712: VTMathUnicodeTokenToLatex = "\in "
+        Case 8713: VTMathUnicodeTokenToLatex = "\notin "
+        Case 8834: VTMathUnicodeTokenToLatex = "\subset "
+        Case 8835: VTMathUnicodeTokenToLatex = "\supset "
+        Case 8838: VTMathUnicodeTokenToLatex = "\subseteq "
+        Case 8839: VTMathUnicodeTokenToLatex = "\supseteq "
+        Case 8746: VTMathUnicodeTokenToLatex = "\cup "
+        Case 8745: VTMathUnicodeTokenToLatex = "\cap "
+        Case 8743: VTMathUnicodeTokenToLatex = "\land "
+        Case 8744: VTMathUnicodeTokenToLatex = "\lor "
+        Case 172: VTMathUnicodeTokenToLatex = "\neg "
+        Case 8704: VTMathUnicodeTokenToLatex = "\forall "
+        Case 8707: VTMathUnicodeTokenToLatex = "\exists "
+        Case 8709: VTMathUnicodeTokenToLatex = "\varnothing "
+        Case 8869: VTMathUnicodeTokenToLatex = "\perp "
+        Case 8741: VTMathUnicodeTokenToLatex = "\parallel "
+        Case 8592: VTMathUnicodeTokenToLatex = "\leftarrow "
+        Case 8594: VTMathUnicodeTokenToLatex = "\rightarrow "
+        Case 8596: VTMathUnicodeTokenToLatex = "\leftrightarrow "
+        Case 8656: VTMathUnicodeTokenToLatex = "\Leftarrow "
+        Case 8658: VTMathUnicodeTokenToLatex = "\Rightarrow "
+        Case 8660: VTMathUnicodeTokenToLatex = "\Leftrightarrow "
+        Case 945: VTMathUnicodeTokenToLatex = "\alpha "
+        Case 946: VTMathUnicodeTokenToLatex = "\beta "
+        Case 947: VTMathUnicodeTokenToLatex = "\gamma "
+        Case 948: VTMathUnicodeTokenToLatex = "\delta "
+        Case 949: VTMathUnicodeTokenToLatex = "\epsilon "
+        Case 1013: VTMathUnicodeTokenToLatex = "\varepsilon "
+        Case 950: VTMathUnicodeTokenToLatex = "\zeta "
+        Case 951: VTMathUnicodeTokenToLatex = "\eta "
+        Case 952: VTMathUnicodeTokenToLatex = "\theta "
+        Case 977: VTMathUnicodeTokenToLatex = "\vartheta "
+        Case 953: VTMathUnicodeTokenToLatex = "\iota "
+        Case 954: VTMathUnicodeTokenToLatex = "\kappa "
+        Case 955: VTMathUnicodeTokenToLatex = "\lambda "
+        Case 956: VTMathUnicodeTokenToLatex = "\mu "
+        Case 957: VTMathUnicodeTokenToLatex = "\nu "
+        Case 958: VTMathUnicodeTokenToLatex = "\xi "
+        Case 960: VTMathUnicodeTokenToLatex = "\pi "
+        Case 961: VTMathUnicodeTokenToLatex = "\rho "
+        Case 963: VTMathUnicodeTokenToLatex = "\sigma "
+        Case 964: VTMathUnicodeTokenToLatex = "\tau "
+        Case 965: VTMathUnicodeTokenToLatex = "\upsilon "
+        Case 966: VTMathUnicodeTokenToLatex = "\phi "
+        Case 981: VTMathUnicodeTokenToLatex = "\varphi "
+        Case 967: VTMathUnicodeTokenToLatex = "\chi "
+        Case 968: VTMathUnicodeTokenToLatex = "\psi "
+        Case 969: VTMathUnicodeTokenToLatex = "\omega "
+        Case 915: VTMathUnicodeTokenToLatex = "\Gamma "
+        Case 916: VTMathUnicodeTokenToLatex = "\Delta "
+        Case 920: VTMathUnicodeTokenToLatex = "\Theta "
+        Case 923: VTMathUnicodeTokenToLatex = "\Lambda "
+        Case 926: VTMathUnicodeTokenToLatex = "\Xi "
+        Case 928: VTMathUnicodeTokenToLatex = "\Pi "
+        Case 931: VTMathUnicodeTokenToLatex = "\Sigma "
+        Case 933: VTMathUnicodeTokenToLatex = "\Upsilon "
+        Case 934: VTMathUnicodeTokenToLatex = "\Phi "
+        Case 936: VTMathUnicodeTokenToLatex = "\Psi "
+        Case 937: VTMathUnicodeTokenToLatex = "\Omega "
+        Case Else: VTMathUnicodeTokenToLatex = tokenText
+    End Select
+End Function
+
+Private Function VTMathPlainTextToLatex(ByVal sourceText As String) As String
+    Dim resultText As String
+    Dim currentCharacter As String
+    Dim characterIndex As Long
+
+    sourceText = Replace$(sourceText, vbCr, "")
+    sourceText = Replace$(sourceText, Chr$(7), "")
+    sourceText = Replace$(sourceText, ChrW(&H2060), "")
+    For characterIndex = 1 To Len(sourceText)
+        currentCharacter = Mid$(sourceText, characterIndex, 1)
+        Select Case currentCharacter
+            Case "{", "}", "#", "%", "&", "_"
+                resultText = resultText & "\" & currentCharacter
+            Case "\"
+                resultText = resultText & "\backslash "
+            Case Else
+                resultText = resultText & _
+                    VTMathUnicodeTokenToLatex(currentCharacter)
+        End Select
+    Next characterIndex
+    VTMathPlainTextToLatex = resultText
+End Function
+
+Private Function VTOMathDynamicObject( _
+    ByVal sourceObject As Object, _
+    ByVal propertyName As String, _
+    ByRef supported As Boolean) As Object
+
+    On Error GoTo Unsupported
+    Set VTOMathDynamicObject = _
+        CallByName(sourceObject, propertyName, VbGet)
+    Exit Function
+Unsupported:
+    supported = False
+End Function
+
+Private Function VTOMathDynamicLong( _
+    ByVal sourceObject As Object, _
+    ByVal propertyName As String, _
+    ByRef supported As Boolean) As Long
+
+    On Error GoTo Unsupported
+    VTOMathDynamicLong = CLng(CallByName( _
+        sourceObject, propertyName, VbGet))
+    Exit Function
+Unsupported:
+    supported = False
+End Function
+
+Private Function VTOMathCharacter(ByVal characterCode As Long) As String
+    If characterCode = 0 Then Exit Function
+    If characterCode > 32767 Then characterCode = characterCode - 65536
+    VTOMathCharacter = ChrW(characterCode)
+End Function
+
+Private Function VTOMathArgumentListToLatex( _
+    ByVal argumentsObject As Object, _
+    ByVal separatorText As String, _
+    ByVal depth As Long, _
+    ByRef supported As Boolean) As String
+
+    Dim argumentObject As Object
+    Dim resultText As String
+    Dim argumentIndex As Long
+    Dim argumentCount As Long
+
+    On Error GoTo Unsupported
+    argumentCount = CLng(CallByName( _
+        argumentsObject, "Count", VbGet))
+    For argumentIndex = 1 To argumentCount
+        Set argumentObject = CallByName( _
+            argumentsObject, "Item", VbGet, argumentIndex)
+        If argumentIndex > 1 Then resultText = resultText & separatorText
+        resultText = resultText & _
+            VTOMathToLatexLocal(argumentObject, depth + 1, supported)
+        If Not supported Then Exit Function
+    Next argumentIndex
+    VTOMathArgumentListToLatex = resultText
+    Exit Function
+Unsupported:
+    supported = False
+End Function
+
+Private Function VTOMathDelimiterToLatex( _
+    ByVal characterCode As Long, _
+    ByVal isLeft As Boolean) As String
+
+    Dim delimiterText As String
+    Dim prefixText As String
+
+    Select Case characterCode
+        Case 0
+            delimiterText = "."
+        Case 123
+            delimiterText = "\{"
+        Case 125
+            delimiterText = "\}"
+        Case 124
+            If isLeft Then
+                delimiterText = "\lvert"
+            Else
+                delimiterText = "\rvert"
+            End If
+        Case 8214
+            If isLeft Then
+                delimiterText = "\lVert"
+            Else
+                delimiterText = "\rVert"
+            End If
+        Case 9001, 10216
+            delimiterText = "\langle"
+        Case 9002, 10217
+            delimiterText = "\rangle"
+        Case Else
+            delimiterText = VTOMathCharacter(characterCode)
+            If Len(delimiterText) = 0 Then delimiterText = "."
+    End Select
+
+    If isLeft Then
+        prefixText = "\left"
+    Else
+        prefixText = "\right"
+    End If
+    VTOMathDelimiterToLatex = prefixText & delimiterText & " "
+End Function
+
+Private Function VTOMathFunctionToLatex( _
+    ByVal functionObject As Object, _
+    ByVal depth As Long, _
+    ByRef supported As Boolean) As String
+
+    Dim functionType As Long
+    Dim partObject As Object
+    Dim firstMath As Object
+    Dim secondMath As Object
+    Dim thirdMath As Object
+    Dim argumentsObject As Object
+    Dim matrixObject As Object
+    Dim rowsObject As Object
+    Dim columnsObject As Object
+    Dim functionName As String
+    Dim bodyText As String
+    Dim lowerText As String
+    Dim upperText As String
+    Dim resultText As String
+    Dim characterText As String
+    Dim rowIndex As Long
+    Dim columnIndex As Long
+    Dim rowCount As Long
+    Dim columnCount As Long
+
+    If depth > 64 Then
+        supported = False
+        Exit Function
+    End If
+    On Error GoTo Unsupported
+    functionType = CLng(CallByName(functionObject, "Type", VbGet))
+    Select Case functionType
+        Case wdOMathFunctionFrac
+            Set partObject = VTOMathDynamicObject( _
+                functionObject, "Frac", supported)
+            Set firstMath = VTOMathDynamicObject(partObject, "Num", supported)
+            Set secondMath = VTOMathDynamicObject(partObject, "Den", supported)
+            resultText = "\frac{" & _
+                VTOMathToLatexLocal(firstMath, depth + 1, supported) & _
+                "}{" & _
+                VTOMathToLatexLocal(secondMath, depth + 1, supported) & "}"
+        Case wdOMathFunctionRad
+            Set partObject = VTOMathDynamicObject( _
+                functionObject, "Rad", supported)
+            Set firstMath = VTOMathDynamicObject(partObject, "E", supported)
+            Set secondMath = VTOMathDynamicObject(partObject, "Deg", supported)
+            upperText = VTOMathToLatexLocal( _
+                secondMath, depth + 1, supported)
+            bodyText = VTOMathToLatexLocal( _
+                firstMath, depth + 1, supported)
+            If Len(Trim$(upperText)) > 0 Then
+                resultText = "\sqrt[" & upperText & "]{" & bodyText & "}"
+            Else
+                resultText = "\sqrt{" & bodyText & "}"
+            End If
+        Case wdOMathFunctionScrSub
+            Set partObject = VTOMathDynamicObject( _
+                functionObject, "ScrSub", supported)
+            Set firstMath = VTOMathDynamicObject(partObject, "E", supported)
+            Set secondMath = VTOMathDynamicObject(partObject, "Sub", supported)
+            resultText = "{" & _
+                VTOMathToLatexLocal(firstMath, depth + 1, supported) & _
+                "}_{" & _
+                VTOMathToLatexLocal(secondMath, depth + 1, supported) & "}"
+        Case wdOMathFunctionScrSup
+            Set partObject = VTOMathDynamicObject( _
+                functionObject, "ScrSup", supported)
+            Set firstMath = VTOMathDynamicObject(partObject, "E", supported)
+            Set secondMath = VTOMathDynamicObject(partObject, "Sup", supported)
+            resultText = "{" & _
+                VTOMathToLatexLocal(firstMath, depth + 1, supported) & _
+                "}^{" & _
+                VTOMathToLatexLocal(secondMath, depth + 1, supported) & "}"
+        Case wdOMathFunctionScrSubSup
+            Set partObject = VTOMathDynamicObject( _
+                functionObject, "ScrSubSup", supported)
+            Set firstMath = VTOMathDynamicObject(partObject, "E", supported)
+            Set secondMath = VTOMathDynamicObject(partObject, "Sub", supported)
+            Set thirdMath = VTOMathDynamicObject(partObject, "Sup", supported)
+            resultText = "{" & _
+                VTOMathToLatexLocal(firstMath, depth + 1, supported) & _
+                "}_{" & _
+                VTOMathToLatexLocal(secondMath, depth + 1, supported) & _
+                "}^{" & _
+                VTOMathToLatexLocal(thirdMath, depth + 1, supported) & "}"
+        Case wdOMathFunctionScrPre
+            Set partObject = VTOMathDynamicObject( _
+                functionObject, "ScrPre", supported)
+            Set firstMath = VTOMathDynamicObject(partObject, "E", supported)
+            Set secondMath = VTOMathDynamicObject(partObject, "Sub", supported)
+            Set thirdMath = VTOMathDynamicObject(partObject, "Sup", supported)
+            resultText = "{}_{" & _
+                VTOMathToLatexLocal(secondMath, depth + 1, supported) & _
+                "}^{" & _
+                VTOMathToLatexLocal(thirdMath, depth + 1, supported) & _
+                "}{" & _
+                VTOMathToLatexLocal(firstMath, depth + 1, supported) & "}"
+        Case wdOMathFunctionNary
+            Set partObject = VTOMathDynamicObject( _
+                functionObject, "Nary", supported)
+            characterText = VTMathUnicodeTokenToLatex( _
+                VTOMathCharacter(VTOMathDynamicLong( _
+                    partObject, "Char", supported)))
+            Set firstMath = VTOMathDynamicObject(partObject, "E", supported)
+            Set secondMath = VTOMathDynamicObject(partObject, "Sub", supported)
+            Set thirdMath = VTOMathDynamicObject(partObject, "Sup", supported)
+            lowerText = VTOMathToLatexLocal( _
+                secondMath, depth + 1, supported)
+            upperText = VTOMathToLatexLocal( _
+                thirdMath, depth + 1, supported)
+            resultText = characterText
+            If Len(Trim$(lowerText)) > 0 Then
+                resultText = resultText & "_{" & lowerText & "}"
+            End If
+            If Len(Trim$(upperText)) > 0 Then
+                resultText = resultText & "^{" & upperText & "}"
+            End If
+            resultText = resultText & _
+                VTOMathToLatexLocal(firstMath, depth + 1, supported)
+        Case wdOMathFunctionDelim
+            Set partObject = VTOMathDynamicObject( _
+                functionObject, "Delim", supported)
+            Set argumentsObject = VTOMathDynamicObject( _
+                partObject, "E", supported)
+            resultText = VTOMathDelimiterToLatex( _
+                VTOMathDynamicLong(partObject, "BegChar", supported), True) & _
+                VTOMathArgumentListToLatex( _
+                    argumentsObject, ",", depth + 1, supported) & _
+                VTOMathDelimiterToLatex( _
+                    VTOMathDynamicLong(partObject, "EndChar", supported), False)
+        Case wdOMathFunctionMat
+            Set matrixObject = VTOMathDynamicObject( _
+                functionObject, "Mat", supported)
+            Set rowsObject = VTOMathDynamicObject( _
+                matrixObject, "Rows", supported)
+            Set columnsObject = VTOMathDynamicObject( _
+                matrixObject, "Cols", supported)
+            rowCount = CLng(CallByName(rowsObject, "Count", VbGet))
+            columnCount = CLng(CallByName(columnsObject, "Count", VbGet))
+            resultText = "\begin{matrix}"
+            For rowIndex = 1 To rowCount
+                If rowIndex > 1 Then resultText = resultText & " \\ "
+                For columnIndex = 1 To columnCount
+                    If columnIndex > 1 Then resultText = resultText & " & "
+                    Set firstMath = CallByName( _
+                        matrixObject, "Cell", VbGet, _
+                        rowIndex, columnIndex)
+                    resultText = resultText & _
+                        VTOMathToLatexLocal( _
+                            firstMath, depth + 1, supported)
+                Next columnIndex
+            Next rowIndex
+            resultText = resultText & "\end{matrix}"
+        Case wdOMathFunctionEqArray
+            Set partObject = VTOMathDynamicObject( _
+                functionObject, "EqArray", supported)
+            Set argumentsObject = VTOMathDynamicObject( _
+                partObject, "E", supported)
+            resultText = "\begin{aligned}" & _
+                VTOMathArgumentListToLatex( _
+                    argumentsObject, " \\ ", depth + 1, supported) & _
+                "\end{aligned}"
+        Case wdOMathFunctionFunc
+            Set partObject = VTOMathDynamicObject( _
+                functionObject, "Func", supported)
+            Set firstMath = VTOMathDynamicObject( _
+                partObject, "FName", supported)
+            Set secondMath = VTOMathDynamicObject(partObject, "E", supported)
+            functionName = Trim$(VTOMathToLatexLocal( _
+                firstMath, depth + 1, supported))
+            If Left$(functionName, 1) <> "\" Then
+                functionName = "\operatorname{" & functionName & "}"
+            End If
+            resultText = functionName & _
+                "{" & VTOMathToLatexLocal( _
+                    secondMath, depth + 1, supported) & "}"
+        Case wdOMathFunctionAcc
+            Set partObject = VTOMathDynamicObject( _
+                functionObject, "Acc", supported)
+            Set firstMath = VTOMathDynamicObject(partObject, "E", supported)
+            characterText = VTOMathCharacter(VTOMathDynamicLong( _
+                partObject, "Char", supported))
+            Select Case characterText
+                Case "¯", "̄": functionName = "\bar"
+                Case "̂": functionName = "\hat"
+                Case "˜", "̃": functionName = "\tilde"
+                Case "˙", "̇": functionName = "\dot"
+                Case "¨", "̈": functionName = "\ddot"
+                Case "→", "⃗": functionName = "\vec"
+                Case Else
+                    supported = False
+                    Exit Function
+            End Select
+            resultText = functionName & "{" & _
+                VTOMathToLatexLocal(firstMath, depth + 1, supported) & "}"
+        Case wdOMathFunctionBar
+            Set partObject = VTOMathDynamicObject( _
+                functionObject, "Bar", supported)
+            Set firstMath = VTOMathDynamicObject(partObject, "E", supported)
+            resultText = "\overline{" & _
+                VTOMathToLatexLocal(firstMath, depth + 1, supported) & "}"
+        Case wdOMathFunctionGroupChar
+            Set partObject = VTOMathDynamicObject( _
+                functionObject, "GroupChar", supported)
+            Set firstMath = VTOMathDynamicObject(partObject, "E", supported)
+            characterText = VTOMathCharacter(VTOMathDynamicLong( _
+                partObject, "Char", supported))
+            If characterText = "⏟" Then
+                functionName = "\underbrace"
+            ElseIf characterText = "⏞" Then
+                functionName = "\overbrace"
+            Else
+                supported = False
+                Exit Function
+            End If
+            resultText = functionName & "{" & _
+                VTOMathToLatexLocal(firstMath, depth + 1, supported) & "}"
+        Case wdOMathFunctionLimLow
+            Set partObject = VTOMathDynamicObject( _
+                functionObject, "LimLow", supported)
+            Set firstMath = VTOMathDynamicObject(partObject, "E", supported)
+            Set secondMath = VTOMathDynamicObject(partObject, "Lim", supported)
+            resultText = "{" & _
+                VTOMathToLatexLocal(firstMath, depth + 1, supported) & _
+                "}_{" & _
+                VTOMathToLatexLocal(secondMath, depth + 1, supported) & "}"
+        Case wdOMathFunctionLimUpp
+            Set partObject = VTOMathDynamicObject( _
+                functionObject, "LimUpp", supported)
+            Set firstMath = VTOMathDynamicObject(partObject, "E", supported)
+            Set secondMath = VTOMathDynamicObject(partObject, "Lim", supported)
+            resultText = "{" & _
+                VTOMathToLatexLocal(firstMath, depth + 1, supported) & _
+                "}^{" & _
+                VTOMathToLatexLocal(secondMath, depth + 1, supported) & "}"
+        Case wdOMathFunctionBox, wdOMathFunctionBorderBox, _
+             wdOMathFunctionPhantom
+            Set partObject = VTOMathDynamicObject( _
+                functionObject, IIf(functionType = wdOMathFunctionBox, _
+                "Box", IIf(functionType = wdOMathFunctionBorderBox, _
+                "BorderBox", "Phantom")), supported)
+            Set firstMath = VTOMathDynamicObject(partObject, "E", supported)
+            bodyText = VTOMathToLatexLocal( _
+                firstMath, depth + 1, supported)
+            If functionType = wdOMathFunctionBorderBox Then
+                resultText = "\boxed{" & bodyText & "}"
+            ElseIf functionType = wdOMathFunctionPhantom Then
+                resultText = "\phantom{" & bodyText & "}"
+            Else
+                resultText = bodyText
+            End If
+        Case wdOMathFunctionNormalText, wdOMathFunctionText
+            Set firstMath = VTOMathDynamicObject( _
+                functionObject, "OMath", supported)
+            resultText = "\text{" & _
+                Replace$(VTMathPlainTextToLatex( _
+                firstMath.Range.Text), "\backslash ", "\") & "}"
+        Case Else
+            supported = False
+            Exit Function
+    End Select
+    If supported Then VTOMathFunctionToLatex = resultText
+    Exit Function
+Unsupported:
+    supported = False
+End Function
+
+Private Function VTOMathToLatexLocal( _
+    ByVal mathObject As Object, _
+    ByVal depth As Long, _
+    ByRef supported As Boolean) As String
+
+    Dim functionsObject As Object
+    Dim functionObject As Object
+    Dim functionMath As Object
+    Dim mathRange As Range
+    Dim plainRange As Range
+    Dim resultText As String
+    Dim cursorPosition As Long
+    Dim nextStart As Long
+    Dim nextEnd As Long
+    Dim candidateStart As Long
+    Dim candidateEnd As Long
+    Dim functionIndex As Long
+    Dim functionCount As Long
+    Dim selectedIndex As Long
+
+    If depth > 64 Or mathObject Is Nothing Then
+        supported = False
+        Exit Function
+    End If
+    On Error GoTo Unsupported
+    Set mathRange = CallByName(mathObject, "Range", VbGet)
+    Set functionsObject = CallByName(mathObject, "Functions", VbGet)
+    functionCount = CLng(CallByName(functionsObject, "Count", VbGet))
+    cursorPosition = mathRange.Start
+    Do While cursorPosition < mathRange.End
+        selectedIndex = 0
+        nextStart = mathRange.End
+        nextEnd = -1
+        For functionIndex = 1 To functionCount
+            Set functionObject = CallByName( _
+                functionsObject, "Item", VbGet, functionIndex)
+            Set functionMath = CallByName( _
+                functionObject, "OMath", VbGet)
+            candidateStart = functionMath.Range.Start
+            candidateEnd = functionMath.Range.End
+            If candidateStart >= cursorPosition And _
+               candidateEnd <= mathRange.End Then
+                If candidateStart < nextStart Or _
+                   (candidateStart = nextStart And candidateEnd > nextEnd) Then
+                    selectedIndex = functionIndex
+                    nextStart = candidateStart
+                    nextEnd = candidateEnd
+                End If
+            End If
+        Next functionIndex
+        If selectedIndex = 0 Then
+            Set plainRange = mathRange.Document.Range( _
+                Start:=cursorPosition, End:=mathRange.End)
+            resultText = resultText & _
+                VTMathPlainTextToLatex(plainRange.Text)
+            cursorPosition = mathRange.End
+        Else
+            If nextStart > cursorPosition Then
+                Set plainRange = mathRange.Document.Range( _
+                    Start:=cursorPosition, End:=nextStart)
+                resultText = resultText & _
+                    VTMathPlainTextToLatex(plainRange.Text)
+            End If
+            Set functionObject = CallByName( _
+                functionsObject, "Item", VbGet, selectedIndex)
+            resultText = resultText & _
+                VTOMathFunctionToLatex( _
+                    functionObject, depth + 1, supported)
+            If Not supported Then Exit Function
+            cursorPosition = nextEnd
+        End If
+    Loop
+    VTOMathToLatexLocal = Trim$(resultText)
+    Exit Function
+Unsupported:
+    supported = False
+End Function
+
+Private Function VTRestoreLocalOmmlFormulasToLatex( _
+    ByVal targetRange As Range) As Boolean
+
+    Dim targetDocument As Document
+    Dim formulaMath As OMath
+    Dim replacementRange As Range
+    Dim undoRecord As Object
+    Dim latexText As String
+    Dim displayMode As String
+    Dim sourceStarts() As Long
+    Dim sourceEnds() As Long
+    Dim replacementTexts() As String
+    Dim formulaCount As Long
+    Dim itemIndex As Long
+    Dim supported As Boolean
+    Dim internalMutationStarted As Boolean
+    Dim undoRecordStarted As Boolean
+    Dim mutationOccurred As Boolean
+    Dim restoreErrorNumber As Long
+    Dim restoreErrorDescription As String
+
+    If targetRange Is Nothing Then Exit Function
+    If targetRange.OMaths.Count = 0 Then Exit Function
+    Set targetDocument = targetRange.Document
+    ReDim sourceStarts(1 To targetRange.OMaths.Count)
+    ReDim sourceEnds(1 To targetRange.OMaths.Count)
+    ReDim replacementTexts(1 To targetRange.OMaths.Count)
+
+    For Each formulaMath In targetRange.OMaths
+        If formulaMath.Range.InlineShapes.Count <> 0 Then Exit Function
+        supported = True
+        latexText = VTOMathToLatexLocal(formulaMath, 0, supported)
+        If Not supported Or Len(Trim$(latexText)) = 0 Then Exit Function
+        formulaCount = formulaCount + 1
+        sourceStarts(formulaCount) = formulaMath.Range.Start
+        sourceEnds(formulaCount) = formulaMath.Range.End
+        If formulaMath.Type = wdOMathDisplay Then
+            replacementTexts(formulaCount) = "$$" & latexText & "$$"
+        Else
+            replacementTexts(formulaCount) = "$" & latexText & "$"
+        End If
+    Next formulaMath
+    If formulaCount = 0 Then Exit Function
+
+    On Error GoTo RestoreFailed
+    Set undoRecord = CallByName(Application, "UndoRecord", VbGet)
+    undoRecord.StartCustomRecord "VisualTeX Restore Native OMML"
+    undoRecordStarted = True
+    VTBeginWordInternalMutation
+    internalMutationStarted = True
+    For itemIndex = formulaCount To 1 Step -1
+        Set replacementRange = targetDocument.Range( _
+            Start:=sourceStarts(itemIndex), End:=sourceEnds(itemIndex))
+        replacementRange.Text = replacementTexts(itemIndex)
+        mutationOccurred = True
+    Next itemIndex
+    If internalMutationStarted Then
+        VTEndWordInternalMutation
+        internalMutationStarted = False
+    End If
+    If undoRecordStarted Then
+        undoRecord.EndCustomRecord
+        undoRecordStarted = False
+    End If
+    VTRestoreLocalOmmlFormulasToLatex = True
+    Exit Function
+
+RestoreFailed:
+    restoreErrorNumber = Err.Number
+    restoreErrorDescription = Err.Description
+    On Error Resume Next
+    If internalMutationStarted Then VTEndWordInternalMutation
+    If undoRecordStarted Then undoRecord.EndCustomRecord
+    If mutationOccurred Then CallByName Application, "Undo", VbMethod
+    On Error GoTo 0
+    Err.Raise restoreErrorNumber, "VisualTeX local OMML-to-LaTeX", _
+        restoreErrorDescription
+End Function
+#End If
+
+Private Function VTDocumentHasVisualTeXNativeBookmark( _
+    ByVal documentObject As Document) As Boolean
+
+    Dim candidate As Bookmark
+
+    If documentObject Is Nothing Then Exit Function
+    For Each candidate In documentObject.Bookmarks
+        If Left$(candidate.Name, Len(VT_WORD_NATIVE_BOOKMARK_PREFIX)) = _
+           VT_WORD_NATIVE_BOOKMARK_PREFIX Then
+            VTDocumentHasVisualTeXNativeBookmark = True
+            Exit Function
+        End If
+    Next candidate
+End Function
+
+Private Function VTRestoreCachedNativeFormulasToLatex( _
+    ByVal targetRange As Range) As Boolean
+
+    Dim targetDocument As Document
+    Dim formulaMath As OMath
+    Dim nativeBookmark As Bookmark
+    Dim replacementRange As Range
+    Dim undoRecord As Object
+    Dim formulaId As String
+    Dim displayMode As String
+    Dim numbered As Boolean
+    Dim latexBase64 As String
+    Dim latexText As String
+    Dim sourceStarts() As Long
+    Dim sourceEnds() As Long
+    Dim replacementTexts() As String
+    Dim maximumCount As Long
+    Dim formulaCount As Long
+    Dim itemIndex As Long
+    Dim internalMutationStarted As Boolean
+    Dim undoRecordStarted As Boolean
+    Dim mutationOccurred As Boolean
+    Dim restoreErrorNumber As Long
+    Dim restoreErrorDescription As String
+
+    If targetRange Is Nothing Then Exit Function
+    Set targetDocument = targetRange.Document
+    If Not VTDocumentHasVisualTeXNativeBookmark(targetDocument) Then _
+        Exit Function
+    maximumCount = targetRange.OMaths.Count
+    If maximumCount = 0 Then Exit Function
+    ReDim sourceStarts(1 To maximumCount)
+    ReDim sourceEnds(1 To maximumCount)
+    ReDim replacementTexts(1 To maximumCount)
+
+    ' Preflight every native formula. A Word-native or modified formula has no
+    ' matching VisualTeX structure signature and therefore falls back to the
+    ' reviewed OMML -> MathML -> LaTeX path without partial document changes.
+    For Each formulaMath In targetRange.OMaths
+        If formulaMath.Range.InlineShapes.Count <> 0 Then Exit Function
+        Set nativeBookmark = VTFindNativeFormulaBookmark( _
+            formulaMath.Range, False)
+        If nativeBookmark Is Nothing Then Exit Function
+        If Not VTTryFormulaIdFromNativeBookmark( _
+           nativeBookmark.Name, formulaId) Then Exit Function
+        If Not VTTryReadWordFormulaFormat( _
+           targetDocument, formulaId, displayMode, numbered) Then Exit Function
+        If Not VTWordNativeSignatureMatches( _
+           targetDocument, formulaId, formulaMath) Then Exit Function
+        If Not VTTryReadWordLatexPayload( _
+           targetDocument, formulaId, latexBase64) Then Exit Function
+        latexText = VTBase64UrlDecodeUtf8(latexBase64)
+        If Len(latexText) = 0 Then Exit Function
+        formulaCount = formulaCount + 1
+        sourceStarts(formulaCount) = formulaMath.Range.Start
+        sourceEnds(formulaCount) = formulaMath.Range.End
+        If displayMode = "block" Then
+            replacementTexts(formulaCount) = "$$" & latexText & "$$"
+        Else
+            replacementTexts(formulaCount) = "$" & latexText & "$"
+        End If
+    Next formulaMath
+    If formulaCount = 0 Then Exit Function
+
+    On Error GoTo RestoreFailed
+    Set undoRecord = CallByName(Application, "UndoRecord", VbGet)
+    undoRecord.StartCustomRecord "VisualTeX Restore OMML Formulas"
+    undoRecordStarted = True
+    VTBeginWordInternalMutation
+    internalMutationStarted = True
+    For itemIndex = formulaCount To 1 Step -1
+        Set replacementRange = targetDocument.Range( _
+            Start:=sourceStarts(itemIndex), _
+            End:=sourceEnds(itemIndex))
+        replacementRange.Text = replacementTexts(itemIndex)
+        mutationOccurred = True
+    Next itemIndex
+    If internalMutationStarted Then
+        VTEndWordInternalMutation
+        internalMutationStarted = False
+    End If
+    If undoRecordStarted Then
+        undoRecord.EndCustomRecord
+        undoRecordStarted = False
+    End If
+    VTRestoreCachedNativeFormulasToLatex = True
+    Exit Function
+
+RestoreFailed:
+    restoreErrorNumber = Err.Number
+    restoreErrorDescription = Err.Description
+    On Error Resume Next
+    If internalMutationStarted Then VTEndWordInternalMutation
+    If undoRecordStarted Then undoRecord.EndCustomRecord
+    If mutationOccurred Then CallByName Application, "Undo", VbMethod
+    On Error GoTo 0
+    Err.Raise restoreErrorNumber, "VisualTeX OMML-to-LaTeX", _
+        restoreErrorDescription
+End Function
+
+Public Sub VisualTeX_RestoreSelectionOmmlToLatex()
+    Dim targetRange As Range
+
+    On Error GoTo Failed
+    VTRequireWritableWordDocument
+    If Selection.Range.Start = Selection.Range.End Then
+        Set targetRange = VTFormulaRestoreSelectionRange("omml")
+    Else
+        Set targetRange = Selection.Range.Duplicate
+    End If
+    If VTRestoreCachedNativeFormulasToLatex(targetRange) Then Exit Sub
+    VTStartWordFormulaRestore "selection", "omml", "latex"
+    Exit Sub
+
+Failed:
+    VTShowError "Word OMML-to-LaTeX restore", Err.Number, Err.Description
+End Sub
+
+Public Sub VisualTeX_RestoreSelectionImageToLatex()
+    Dim targetRange As Range
+
+    On Error GoTo Failed
+    VTRequireWritableWordDocument
+    If Selection.Range.Start = Selection.Range.End Then
+        Set targetRange = VTFormulaRestoreSelectionRange("image")
+    Else
+        Set targetRange = Selection.Range.Duplicate
+    End If
+    If VTRestoreCachedImageFormulasToLatex(targetRange) Then Exit Sub
+    VTStartWordFormulaRestore "selection", "image", "latex"
+    Exit Sub
+
+Failed:
+    VTShowError "Word image-to-LaTeX restore", Err.Number, Err.Description
+End Sub
+
+Public Sub VisualTeX_RestoreDocumentOmmlToLatex()
+    On Error GoTo Failed
+    VTRequireWritableWordDocument
+    If VTRestoreCachedNativeFormulasToLatex( _
+       ActiveDocument.Content.Duplicate) Then Exit Sub
+    VTStartWordFormulaRestore "document", "omml", "latex"
+    Exit Sub
+
+Failed:
+    VTShowError "Word OMML-to-LaTeX restore", Err.Number, Err.Description
+End Sub
+
+Public Sub VisualTeX_RestoreDocumentImageToLatex()
+    On Error GoTo Failed
+    VTRequireWritableWordDocument
+    If VTRestoreCachedImageFormulasToLatex( _
+       ActiveDocument.Content.Duplicate) Then Exit Sub
+    VTStartWordFormulaRestore "document", "image", "latex"
+    Exit Sub
+
+Failed:
+    VTShowError "Word image-to-LaTeX restore", Err.Number, Err.Description
+End Sub
+
 Private Sub VTWriteLatexRedrawSource( _
     ByVal sessionId As String, _
     ByVal sourceText As String)
@@ -6297,6 +8012,26 @@ Public Sub VTWordRibbonRedrawDocumentOmml( _
     VisualTeX_RedrawDocumentToOmml
 End Sub
 
+Public Sub VTWordRibbonRestoreSelectionOmmlToLatex( _
+    ByVal control As IRibbonControl)
+    VisualTeX_RestoreSelectionOmmlToLatex
+End Sub
+
+Public Sub VTWordRibbonRestoreSelectionImageToLatex( _
+    ByVal control As IRibbonControl)
+    VisualTeX_RestoreSelectionImageToLatex
+End Sub
+
+Public Sub VTWordRibbonRestoreDocumentOmmlToLatex( _
+    ByVal control As IRibbonControl)
+    VisualTeX_RestoreDocumentOmmlToLatex
+End Sub
+
+Public Sub VTWordRibbonRestoreDocumentImageToLatex( _
+    ByVal control As IRibbonControl)
+    VisualTeX_RestoreDocumentImageToLatex
+End Sub
+
 Public Sub VTWordRibbonInline(ByVal control As IRibbonControl)
     VisualTeX_CreateInline
 End Sub
@@ -6315,6 +8050,10 @@ End Sub
 
 Public Sub VTWordRibbonNumbering(ByVal control As IRibbonControl)
     VisualTeX_UpdateEquationNumbers
+End Sub
+
+Public Sub VTWordRibbonNumberingFormat(ByVal control As IRibbonControl)
+    VisualTeX_ConfigureEquationNumberingFormat
 End Sub
 
 Public Sub VTWordRibbonOpen(ByVal control As IRibbonControl)
@@ -8064,6 +9803,77 @@ Private Function VTTimerElapsedSeconds( _
     VTTimerElapsedSeconds = CDbl(finishedAt) - CDbl(startedAt)
 End Function
 
+Private Sub VTWordPerformanceStart()
+    VT_WORD_PERFORMANCE_STARTED_AT = Timer
+    VT_WORD_PERFORMANCE_ACTIVE = False
+    VT_WORD_PERFORMANCE_BUFFER = ""
+    VT_WORD_PERFORMANCE_OPERATION = ""
+End Sub
+
+Private Sub VTWordPerformanceStartLocal( _
+    ByVal operationName As String)
+
+    VTWordPerformanceStart
+    If Not VTPathFileExists( _
+       VTApplicationSupportRoot() & _
+       VT_WORD_PERFORMANCE_TRACE_SENTINEL) Then Exit Sub
+    VT_WORD_PERFORMANCE_ACTIVE = True
+    VT_WORD_PERFORMANCE_OPERATION = operationName
+    VTWordPerformanceMark "local-start"
+End Sub
+
+Private Sub VTWordPerformanceEnable( _
+    ByVal dispatch As Object)
+
+    If dispatch Is Nothing Then Exit Sub
+    VT_WORD_PERFORMANCE_ACTIVE = _
+        (VTDispatchOptional(dispatch, "performanceTrace") = "1")
+    If Not VT_WORD_PERFORMANCE_ACTIVE Then Exit Sub
+    VT_WORD_PERFORMANCE_OPERATION = _
+        VTDispatchOptional(dispatch, "operation")
+    If Len(VT_WORD_PERFORMANCE_OPERATION) = 0 Then
+        VT_WORD_PERFORMANCE_OPERATION = "formula"
+    End If
+    VTWordPerformanceMark "dispatch-read"
+End Sub
+
+Private Sub VTWordPerformanceMark(ByVal stageName As String)
+    Dim elapsedMilliseconds As Long
+
+    If Not VT_WORD_PERFORMANCE_ACTIVE Then Exit Sub
+    elapsedMilliseconds = CLng(1000# * VTTimerElapsedSeconds( _
+        VT_WORD_PERFORMANCE_STARTED_AT, Timer))
+    VT_WORD_PERFORMANCE_BUFFER = VT_WORD_PERFORMANCE_BUFFER & _
+        "stage=" & stageName & _
+        ";elapsedMs=" & CStr(elapsedMilliseconds) & vbLf
+End Sub
+
+Private Sub VTWordPerformanceFlush( _
+    ByVal sessionId As String, _
+    Optional ByVal errorNumber As Long = 0, _
+    Optional ByVal errorDescription As String = "")
+
+    Dim traceText As String
+
+    If Not VT_WORD_PERFORMANCE_ACTIVE Or Len(sessionId) = 0 Then Exit Sub
+    On Error Resume Next
+    traceText = _
+        "schema=visualtex-word-vba-performance-v1" & vbLf & _
+        "operation=" & VT_WORD_PERFORMANCE_OPERATION & vbLf & _
+        VT_WORD_PERFORMANCE_BUFFER & _
+        "errorNumber=" & CStr(errorNumber) & vbLf & _
+        "errorDescription=" & Replace$(Replace$( _
+            errorDescription, vbCr, " "), vbLf, " ") & vbLf
+    VTWriteTextAtomic _
+        VTSessionDirectory(sessionId) & VT_WORD_PERFORMANCE_TRACE_FILE, _
+        traceText
+    Err.Clear
+    On Error GoTo 0
+    VT_WORD_PERFORMANCE_ACTIVE = False
+    VT_WORD_PERFORMANCE_BUFFER = ""
+    VT_WORD_PERFORMANCE_OPERATION = ""
+End Sub
+
 Private Function VTImageEditDispatchDebounced( _
     ByVal formulaId As String) As Boolean
 
@@ -8079,6 +9889,68 @@ Private Function VTImageEditDispatchDebounced( _
          elapsedSeconds <= VT_WORD_IMAGE_EDIT_DEBOUNCE_SECONDS)
 End Function
 
+Private Sub VTReadWordImageConversionState( _
+    ByVal formulaShape As InlineShape, _
+    ByVal formulaId As String, _
+    ByRef fontSizePt As Double, _
+    ByRef referenceWidthPt As Double, _
+    ByRef referenceHeightPt As Double, _
+    ByRef referenceBaselinePt As Double, _
+    ByRef observedWordFontSizePt As Double)
+
+    Dim stateReadable As Boolean
+
+    If formulaShape Is Nothing Or Not VTIsCanonicalUuid(formulaId) Then
+        Err.Raise vbObjectError + 7493, "VisualTeX", _
+            "The selected image conversion target is invalid."
+    End If
+
+    ' Direct conversion must not run the normal image-size synchronizer. Word
+    ' can invalidate selection-backed collection wrappers while a Ribbon
+    ' callback is active, which previously raised Error 5941 before the hidden
+    ' imageToNative Session was written. Read the persisted scale state only;
+    ' when an older image has no state, derive it from its stable geometry.
+    On Error Resume Next
+    Err.Clear
+    stateReadable = VTTryReadWordImageScaleState( _
+        formulaShape.Range.Document, formulaId, fontSizePt, _
+        referenceWidthPt, referenceHeightPt, referenceBaselinePt, _
+        observedWordFontSizePt)
+    Err.Clear
+    On Error GoTo StateFailed
+
+    If stateReadable And _
+       VTValidWordFormulaFontSize(fontSizePt) And _
+       referenceWidthPt > 0# And referenceHeightPt > 0# Then
+        If Not VTValidWordFormulaFontSize(observedWordFontSizePt) Then
+            observedWordFontSizePt = fontSizePt
+        End If
+        Exit Sub
+    End If
+
+    fontSizePt = VTInlineShapeWordFontSize(formulaShape)
+    If Not VTValidWordFormulaFontSize(fontSizePt) Then
+        fontSizePt = VT_WORD_IMAGE_REFERENCE_FONT_SIZE_PT
+    End If
+    observedWordFontSizePt = fontSizePt
+    referenceWidthPt = formulaShape.Width * _
+        VT_WORD_IMAGE_REFERENCE_FONT_SIZE_PT / fontSizePt
+    referenceHeightPt = formulaShape.Height * _
+        VT_WORD_IMAGE_REFERENCE_FONT_SIZE_PT / fontSizePt
+    referenceBaselinePt = VTInlineShapeFontPosition(formulaShape) * _
+        VT_WORD_IMAGE_REFERENCE_FONT_SIZE_PT / fontSizePt
+    If referenceBaselinePt < -256# Then referenceBaselinePt = -256#
+    If referenceBaselinePt > 0# Then referenceBaselinePt = 0#
+    If referenceWidthPt <= 0# Or referenceHeightPt <= 0# Then
+        Err.Raise vbObjectError + 7493, "VisualTeX", _
+            "The selected image conversion geometry is invalid."
+    End If
+    Exit Sub
+
+StateFailed:
+    Err.Raise Err.Number, "VisualTeX image conversion state", Err.Description
+End Sub
+
 Private Sub VTWordOpenResolvedInlineShape( _
     ByVal selectedShape As InlineShape, _
     ByVal formulaId As String, _
@@ -8087,7 +9959,8 @@ Private Sub VTWordOpenResolvedInlineShape( _
     ByVal encodedMetadata As String, _
     ByVal metadataNeedsWrite As Boolean, _
     ByVal formatNeedsWrite As Boolean, _
-    Optional ByVal convertToNative As Boolean = False)
+    Optional ByVal convertToNative As Boolean = False, _
+    Optional ByVal operationName As String = "formula")
 
     Dim documentObject As Document
     Dim sessionId As String
@@ -8101,6 +9974,7 @@ Private Sub VTWordOpenResolvedInlineShape( _
     Dim launchTiming As String
     Dim openErrorNumber As Long
     Dim openErrorDescription As String
+    Dim openStage As String
 
     VTTraceWordDoubleClick _
         "edit-inline-enter", Selection, _
@@ -8132,19 +10006,30 @@ Private Sub VTWordOpenResolvedInlineShape( _
         debounceArmed = True
     End If
     On Error GoTo OpenFailed
+    openStage = "resolve-document"
     Set documentObject = selectedShape.Range.Document
-    VTPrepareWordImageFormulaState _
-        selectedShape, formulaId, displayMode, numbered, fontSizePt, _
-        referenceWidthPt, referenceHeightPt, referenceBaselinePt, _
-        observedWordFontSizePt
+    openStage = "prepare-formula-state"
+    If operationName = "imageToNative" Then
+        VTReadWordImageConversionState _
+            selectedShape, formulaId, fontSizePt, referenceWidthPt, _
+            referenceHeightPt, referenceBaselinePt, observedWordFontSizePt
+    Else
+        VTPrepareWordImageFormulaState _
+            selectedShape, formulaId, displayMode, numbered, fontSizePt, _
+            referenceWidthPt, referenceHeightPt, referenceBaselinePt, _
+            observedWordFontSizePt
+    End If
 
+    openStage = "write-metadata"
     If metadataNeedsWrite Then
         VTSetWordMetadataPayload documentObject, formulaId, encodedMetadata
     End If
+    openStage = "write-format"
     If formatNeedsWrite Then
         VTSetWordFormulaFormat documentObject, formulaId, displayMode, numbered
     End If
 
+    openStage = "build-request"
     sessionId = VTNewUuidV4()
     requestJson = VTRequestJson( _
         sessionId, _
@@ -8161,12 +10046,14 @@ Private Sub VTWordOpenResolvedInlineShape( _
         convertToNative, _
         fontSizePt, _
         referenceWidthPt, _
-        referenceHeightPt)
+        referenceHeightPt, _
+        operationName)
     VTTraceWordDoubleClick _
         "edit-inline-resolved", Selection, _
         "formulaId=" & formulaId & _
         " displayMode=" & displayMode & _
         " numbered=" & CStr(numbered)
+    openStage = "launch-session"
     launchTiming = _
         VTWriteAndLaunchSession(VT_WORD_HOST, sessionId, requestJson)
     VTTraceWordDoubleClick _
@@ -8184,7 +10071,7 @@ OpenFailed:
         VT_WORD_LAST_IMAGE_EDIT_AT = 0!
     End If
     Err.Raise openErrorNumber, "VisualTeX Word image edit", _
-        openErrorDescription
+        openStage & ": " & openErrorDescription
 End Sub
 
 Private Function VTDispatchVisualTeXImageEditAtSelection( _
@@ -8210,7 +10097,8 @@ End Function
 
 Private Sub VTWordEditInlineShape( _
     ByVal selectedShape As InlineShape, _
-    Optional ByVal convertToNative As Boolean = False)
+    Optional ByVal convertToNative As Boolean = False, _
+    Optional ByVal operationName As String = "formula")
 
     Dim formulaId As String
     Dim displayMode As String
@@ -8228,7 +10116,7 @@ Private Sub VTWordEditInlineShape( _
     End If
     VTWordOpenResolvedInlineShape _
         selectedShape, formulaId, displayMode, numbered, encodedMetadata, _
-        metadataNeedsWrite, formatNeedsWrite, convertToNative
+        metadataNeedsWrite, formatNeedsWrite, convertToNative, operationName
 End Sub
 
 Private Sub VTWordEditNativeBookmark(ByVal nativeBookmark As Bookmark)
@@ -8237,7 +10125,8 @@ End Sub
 
 Private Sub VTWordOpenNativeSession( _
     ByVal nativeBookmark As Bookmark, _
-    Optional ByVal keepNativeEquation As Boolean = True)
+    Optional ByVal keepNativeEquation As Boolean = True, _
+    Optional ByVal operationName As String = "formula")
 
     Dim documentObject As Document
     Dim formulaId As String
@@ -8325,7 +10214,8 @@ Private Sub VTWordOpenNativeSession( _
         keepNativeEquation, _
         fontSizePt, _
         referenceWidthPt, _
-        referenceHeightPt)
+        referenceHeightPt, _
+        operationName)
     launchTiming = _
         VTWriteAndLaunchSession(VT_WORD_HOST, sessionId, requestJson)
     VTTraceWordDoubleClick _
@@ -8334,43 +10224,305 @@ Private Sub VTWordOpenNativeSession( _
 End Sub
 
 Public Sub VisualTeX_ConvertSelectedToNativeEquation()
+    Dim selectedShape As InlineShape
+    Dim conversionStage As String
+
     On Error GoTo Failed
 
+    conversionStage = "validate-document"
     VTRequireWritableWordDocument
-    If Selection.InlineShapes.Count <> 1 Or _
-       Not VTIsVisualTeXInlineShape(Selection.InlineShapes(1)) Then
+    conversionStage = "resolve-image-selection"
+    Set selectedShape = VTVisualTeXInlineShapeAtSelection(Selection)
+    If selectedShape Is Nothing Then
         Err.Raise vbObjectError + 7428, "VisualTeX", _
             "Select exactly one VisualTeX formula image to convert to Word OMML."
     End If
-    VTWordConvertInlineShapeToNativeEquation Selection.InlineShapes(1)
+    ' A current VisualTeX image already carries the structural OMML payload and
+    ' normally has a durable native DOCX cache. Convert it entirely inside Word
+    ' to avoid waking the hidden renderer and paying two AppleEvent round trips.
+    ' Older images without that cache retain the validated hidden-renderer
+    ' fallback, so compatibility and all existing error UI remain unchanged.
+    conversionStage = "convert-image-to-native-fast"
+    If VTWordConvertInlineShapeToNativeFast(selectedShape) Then Exit Sub
+    conversionStage = "convert-image-to-native-compatible"
+    VTWordConvertInlineShapeToNativeEquation selectedShape
     Exit Sub
 
 Failed:
-    VTShowError "Word native equation conversion", Err.Number, Err.Description
+    VTShowError "Word native equation conversion", Err.Number, _
+        conversionStage & ": " & Err.Description
 End Sub
+
+Private Function VTWordConvertNativeBookmarkToImageFast( _
+    ByVal nativeBookmark As Bookmark) As Boolean
+
+    Dim targetDocument As Document
+    Dim nativeMath As OMath
+    Dim sourceRange As Range
+    Dim insertionRange As Range
+    Dim candidate As InlineShape
+    Dim undoRecord As Object
+    Dim formulaId As String
+    Dim displayMode As String
+    Dim numbered As Boolean
+    Dim encodedMetadata As String
+    Dim formulaReference As String
+    Dim vectorDocumentPath As String
+    Dim fallbackImagePath As String
+    Dim fontSizePt As Double
+    Dim referenceWidthPt As Double
+    Dim referenceHeightPt As Double
+    Dim referenceBaselinePt As Double
+    Dim observedWordFontSizePt As Double
+    Dim widthPoints As Double
+    Dim heightPoints As Double
+    Dim baselinePoints As Double
+    Dim internalMutationStarted As Boolean
+    Dim undoRecordStarted As Boolean
+    Dim sourceDeleted As Boolean
+    Dim conversionErrorNumber As Long
+    Dim conversionErrorDescription As String
+
+    If nativeBookmark Is Nothing Then Exit Function
+    If Not VTTryFormulaIdFromNativeBookmark( _
+       nativeBookmark.Name, formulaId) Then Exit Function
+    Set targetDocument = nativeBookmark.Range.Document
+    Set nativeMath = VTNativeMathForBookmark(nativeBookmark)
+    If nativeMath Is Nothing Then Exit Function
+    If Not VTTryReadWordFormulaFormat( _
+       targetDocument, formulaId, displayMode, numbered) Then Exit Function
+    ' Numbered formulas retain the existing complete numbering transaction.
+    If numbered Then Exit Function
+    If Not VTTryReadWordMetadataPayload( _
+       targetDocument, formulaId, encodedMetadata) Then Exit Function
+    If Not VTWordNativeSignatureMatches( _
+       targetDocument, formulaId, nativeMath) Then Exit Function
+    If Not VTTryReadWordImageScaleState( _
+       targetDocument, formulaId, fontSizePt, referenceWidthPt, _
+       referenceHeightPt, referenceBaselinePt, observedWordFontSizePt) Then
+        Exit Function
+    End If
+    vectorDocumentPath = VTImageCacheDocumentPath(formulaId)
+    If Not VTPathFileExists(vectorDocumentPath) Then Exit Function
+    fallbackImagePath = VTImageCachePngPath(formulaId)
+
+    widthPoints = referenceWidthPt * fontSizePt / _
+        VT_WORD_IMAGE_REFERENCE_FONT_SIZE_PT
+    heightPoints = referenceHeightPt * fontSizePt / _
+        VT_WORD_IMAGE_REFERENCE_FONT_SIZE_PT
+    baselinePoints = referenceBaselinePt * fontSizePt / _
+        VT_WORD_IMAGE_REFERENCE_FONT_SIZE_PT
+    If widthPoints <= 0# Or heightPoints <= 0# Or _
+       baselinePoints < -256# Or baselinePoints > 0# Then Exit Function
+    formulaReference = VTFormulaReference( _
+        formulaId, displayMode, False)
+    Set sourceRange = nativeMath.Range.Duplicate
+
+    On Error GoTo ConversionFailed
+    Set undoRecord = CallByName(Application, "UndoRecord", VbGet)
+    undoRecord.StartCustomRecord "VisualTeX Convert OMML to Image"
+    undoRecordStarted = True
+    VTBeginWordInternalMutation
+    internalMutationStarted = True
+
+    ' Insert after the still-live OMath. It remains the rollback copy until the
+    ' cached SVG drawing and all formula metadata are validated.
+    Set insertionRange = targetDocument.Range( _
+        Start:=sourceRange.End, End:=sourceRange.End)
+    Set candidate = VTAddWordFormulaPicture( _
+        targetDocument, insertionRange, vectorDocumentPath, fallbackImagePath)
+    candidate.LockAspectRatio = msoFalse
+    candidate.Width = CSng(widthPoints)
+    candidate.Height = CSng(heightPoints)
+    candidate.LockAspectRatio = msoTrue
+    candidate.AlternativeText = encodedMetadata
+    candidate.Title = formulaReference
+    On Error Resume Next
+    candidate.Range.Font.Size = CSng(fontSizePt)
+    Err.Clear
+    On Error GoTo ConversionFailed
+    If displayMode = "inline" Then
+        candidate.Range.Font.Position = CLng(baselinePoints)
+    Else
+        candidate.Range.Font.Position = 0
+    End If
+    If Abs(candidate.Width - widthPoints) > 0.1 Or _
+       Abs(candidate.Height - heightPoints) > 0.1 Or _
+       candidate.AlternativeText <> encodedMetadata Or _
+       candidate.Title <> formulaReference Then
+        Err.Raise vbObjectError + 7422, "VisualTeX", _
+            "Word did not persist the cached VisualTeX image properties."
+    End If
+
+    If targetDocument.Bookmarks.Exists(nativeBookmark.Name) Then
+        targetDocument.Bookmarks(nativeBookmark.Name).Delete
+    End If
+    sourceRange.Delete
+    sourceDeleted = True
+    Set candidate = VTEnsureVisualTeXImageMacroButton(candidate)
+    If displayMode = "block" Then
+        VTNormalizeUnnumberedDisplayParagraph candidate.Range
+        VTNormalizeImageDisplayParagraph candidate.Range
+    End If
+    VTDeleteTrailingNativeImageArtifact candidate
+    candidate.Select
+
+    If internalMutationStarted Then
+        VTEndWordInternalMutation
+        internalMutationStarted = False
+    End If
+    If undoRecordStarted Then
+        undoRecord.EndCustomRecord
+        undoRecordStarted = False
+    End If
+    VTWordConvertNativeBookmarkToImageFast = True
+    Exit Function
+
+ConversionFailed:
+    conversionErrorNumber = Err.Number
+    conversionErrorDescription = Err.Description
+    On Error Resume Next
+    If internalMutationStarted Then VTEndWordInternalMutation
+    If undoRecordStarted Then undoRecord.EndCustomRecord
+    If sourceDeleted Then
+        CallByName Application, "Undo", VbMethod
+    ElseIf Not candidate Is Nothing Then
+        candidate.Delete
+    End If
+    On Error GoTo 0
+    Err.Raise conversionErrorNumber, _
+        "VisualTeX Word cached native-to-image conversion", _
+        conversionErrorDescription
+End Function
 
 Public Sub VisualTeX_ConvertSelectedToImageFormula()
     Dim nativeBookmark As Bookmark
 
     On Error GoTo Failed
     VTRequireWritableWordDocument
-    Set nativeBookmark = VTFindSelectedNativeFormulaBookmark(Selection)
-    VTWordOpenNativeSession nativeBookmark, False
+    Set nativeBookmark = VTFindNativeFormulaBookmark(Selection.Range, False)
+    If nativeBookmark Is Nothing Then
+        VTStartWordFormulaRestore "selection", "omml", "image"
+    ElseIf VTWordConvertNativeBookmarkToImageFast(nativeBookmark) Then
+        Exit Sub
+    Else
+        VTWordOpenNativeSession nativeBookmark, False, "nativeToImage"
+    End If
     Exit Sub
 
 Failed:
     VTShowError "Word image formula conversion", Err.Number, Err.Description
 End Sub
 
+Public Sub VisualTeX_ConfigureEquationNumberingFormat()
+    Dim modeChoice As String
+    Dim separatorChoice As String
+    Dim numberingMode As String
+    Dim separatorText As String
+    Dim currentMode As String
+    Dim currentDescription As String
+    Dim promptText As String
+    Dim dialogTitle As String
+
+    On Error GoTo Failed
+    If Documents.Count = 0 Then
+        Err.Raise vbObjectError + 7401, "VisualTeX", _
+            "Open a Word document first."
+    End If
+    dialogTitle = "VisualTeX " & _
+        VTUnicodeText(32534, 21495, 26684, 24335, 35774, 32622)
+    currentMode = VTEquationNumberingMode(ActiveDocument)
+    Select Case currentMode
+        Case VT_WORD_NUMBERING_MODE_CHAPTER
+            currentDescription = VTUnicodeText(25353, 31456, 32534, 21495)
+        Case VT_WORD_NUMBERING_MODE_SECTION
+            currentDescription = VTUnicodeText(25353, 33410, 32534, 21495)
+        Case Else
+            currentDescription = VTUnicodeText(39034, 24207, 32534, 21495)
+    End Select
+
+    promptText = VTUnicodeText( _
+        35831, 36873, 25321, 20844, 24335, 32534, 21495, 26041, 24335, 65306)
+    promptText = promptText & vbCrLf & VTUnicodeText( _
+        49, 32, 32, 39034, 24207, 32534, 21495, 65292, 20363, 22914, _
+        32, 40, 49, 41, 12289, 40, 50, 41)
+    promptText = promptText & vbCrLf & VTUnicodeText( _
+        50, 32, 32, 25353, 31456, 32534, 21495, 65292, 20363, 22914, _
+        32, 40, 50, 46, 49, 41)
+    promptText = promptText & vbCrLf & VTUnicodeText( _
+        51, 32, 32, 25353, 33410, 32534, 21495, 65292, 20363, 22914, _
+        32, 40, 50, 46, 51, 46, 49, 41)
+    promptText = promptText & vbCrLf & vbCrLf & _
+        VTUnicodeText(24403, 21069, 35774, 32622, 65306) & currentDescription
+    modeChoice = InputBox(Prompt:=promptText, Title:=dialogTitle)
+    If Len(Trim$(modeChoice)) = 0 Then Exit Sub
+    Select Case Trim$(modeChoice)
+        Case "1"
+            numberingMode = VT_WORD_NUMBERING_MODE_SEQUENCE
+            separatorText = "."
+        Case "2"
+            numberingMode = VT_WORD_NUMBERING_MODE_CHAPTER
+        Case "3"
+            numberingMode = VT_WORD_NUMBERING_MODE_SECTION
+        Case Else
+            Err.Raise vbObjectError + 7596, "VisualTeX", _
+                VTUnicodeText( _
+                    35831, 36755, 20837, 32, 49, 12289, 50, 32, 25110, 32, _
+                    51, 12290)
+    End Select
+
+    If numberingMode <> VT_WORD_NUMBERING_MODE_SEQUENCE Then
+        promptText = VTUnicodeText( _
+            35831, 36873, 25321, 26631, 39064, 32534, 21495, 19982, 20844, _
+            24335, 24207, 21495, 20043, 38388, 30340, 20998, 38548, 31526, _
+            65306)
+        promptText = promptText & vbCrLf & VTUnicodeText( _
+            49, 32, 32, 28857, 21495, 65292, 20363, 22914, 32, 40, 50, _
+            46, 49, 41)
+        promptText = promptText & vbCrLf & VTUnicodeText( _
+            50, 32, 32, 36830, 23383, 31526, 65292, 20363, 22914, 32, _
+            40, 50, 45, 49, 41)
+        separatorChoice = InputBox(Prompt:=promptText, Title:=dialogTitle)
+        If Len(Trim$(separatorChoice)) = 0 Then Exit Sub
+        Select Case Trim$(separatorChoice)
+            Case "1", "."
+                separatorText = "."
+            Case "2", "-"
+                separatorText = "-"
+            Case Else
+                Err.Raise vbObjectError + 7596, "VisualTeX", _
+                    VTUnicodeText( _
+                        35831, 36755, 20837, 32, 49, 32, 25110, 32, 50, _
+                        12290)
+        End Select
+    End If
+
+    VTSetEquationNumberingFormat _
+        ActiveDocument, numberingMode, separatorText
+    VisualTeX_UpdateEquationNumbers
+    Exit Sub
+
+Failed:
+    VTShowError "equation numbering format", Err.Number, Err.Description
+End Sub
+
 Public Sub VisualTeX_UpdateEquationNumbers()
     Dim updated As Long
+    Dim movedHelpers As Long
+    Dim referenceBindings As Collection
 
     On Error GoTo Failed
     If Documents.Count = 0 Then
         Err.Raise vbObjectError + 7401, "VisualTeX", "Open a Word document first."
     End If
     updated = VTPruneOrphanedEquationNumberScaffolds(ActiveDocument)
+    movedHelpers = VTRepairMixedNumberHelperOrder( _
+        ActiveDocument, referenceBindings)
     VTReconcileEquationNumbers ActiveDocument
+    If movedHelpers > 0 Then
+        VTRestoreBodyEquationReferenceBindings _
+            ActiveDocument, referenceBindings
+    End If
     updated = VTVariantArrayCount( _
         VTValidNumberedFormulaIds(ActiveDocument))
     VTShowInformation "Updated " & CStr(updated) & _
@@ -8454,20 +10606,20 @@ End Function
 Private Function VTEquationCrossReferenceLabel( _
     ByVal documentObject As Document, _
     ByVal formulaId As String, _
-    ByVal ordinal As Long) As String
+    ByVal numberText As String) As String
 
     Dim latexBase64 As String
     Dim previewText As String
 
     If documentObject Is Nothing Or Not VTIsCanonicalUuid(formulaId) Or _
-       ordinal < 1 Then Exit Function
+       Len(Trim$(numberText)) = 0 Then Exit Function
     previewText = "VisualTeX formula"
     If VTTryReadWordLatexPayload( _
        documentObject, formulaId, latexBase64) Then
         previewText = VTEquationCrossReferenceText(latexBase64)
     End If
     VTEquationCrossReferenceLabel = _
-        "(" & CStr(ordinal) & ")  " & previewText
+        "(" & Trim$(numberText) & ")  " & previewText
 End Function
 
 Private Function VTNativeEquationReferenceItemForFormula( _
@@ -8530,7 +10682,7 @@ Private Function VTEquationNumberCrossReferenceItems( _
         numberText = Trim$(documentObject.Bookmarks( _
             sequenceBookmarkName).Range.Text)
         items(itemIndex) = VTEquationCrossReferenceLabel( _
-            documentObject, CStr(formulaIds(itemIndex)), CLng(numberText))
+            documentObject, CStr(formulaIds(itemIndex)), numberText)
     Next itemIndex
     VTEquationNumberCrossReferenceItems = items
 End Function
@@ -8596,8 +10748,7 @@ Private Function VTInsertEquationNumberReferenceAtRange( _
         Start:=insertionStart, End:=insertionEnd)
     VTFormatBodyEquationReference _
         documentObject, referenceField, insertedRange
-    If VTFirstPositiveIntegerInText(referenceField.Result.Text) <> _
-       CLng(expectedNumber) Or _
+    If Trim$(referenceField.Result.Text) <> expectedNumber Or _
        insertedRange.Text <> "(" & expectedNumber & ")" Then
         Err.Raise vbObjectError + 7547, "VisualTeX", _
             "The inserted native Equation cross-reference is incomplete" & _
@@ -8684,21 +10835,23 @@ Failed:
     VTShowError "application launch", Err.Number, Err.Description
 End Sub
 
-Private Function VTReadDocumentImportManifest( _
-    ByVal manifestPath As String, _
+Private Function VTParseDocumentImportManifestText( _
+    ByVal contents As String, _
     ByVal sessionId As String) As Object
 
     Dim dictionary As Object
-    Dim contents As String
     Dim rows() As String
     Dim row As Variant
     Dim separator As Long
     Dim key As String
     Dim value As String
 
-    VTValidateAbsoluteVisualTeXPath manifestPath
+    If Len(contents) = 0 Or Len(contents) > 16777216 Then
+        Err.Raise vbObjectError + 7581, "VisualTeX", _
+            "The document import manifest has an invalid size."
+    End If
     Set dictionary = New Collection
-    contents = Replace$(VTReadText(manifestPath, 16777216), vbCrLf, vbLf)
+    contents = Replace$(contents, vbCrLf, vbLf)
     contents = Replace$(contents, vbCr, vbLf)
     rows = Split(contents, vbLf)
     For Each row In rows
@@ -8730,7 +10883,17 @@ Private Function VTReadDocumentImportManifest( _
         Err.Raise vbObjectError + 7581, "VisualTeX", _
             "The document import manifest identity is invalid."
     End If
-    Set VTReadDocumentImportManifest = dictionary
+    Set VTParseDocumentImportManifestText = dictionary
+End Function
+
+Private Function VTReadDocumentImportManifest( _
+    ByVal manifestPath As String, _
+    ByVal sessionId As String) As Object
+
+    VTValidateAbsoluteVisualTeXPath manifestPath
+    Set VTReadDocumentImportManifest = _
+        VTParseDocumentImportManifestText( _
+            VTReadText(manifestPath, 16777216), sessionId)
 End Function
 
 Private Function VTDocumentImportItemKey( _
@@ -9037,6 +11200,8 @@ Private Sub VTDeleteDocumentImportedFormulaState( _
     VTDeleteWordMetadataPayload documentObject, formulaId
     VTDeleteDocumentVariable documentObject, VTWordFormatVariableName(formulaId)
     VTDeleteDocumentVariable documentObject, VTWordImageScaleVariableName(formulaId)
+    VTDeleteDocumentVariable _
+        documentObject, VTWordNativeSignatureVariableName(formulaId)
     bookmarkName = VTNativeFormulaBookmarkName(formulaId)
     If documentObject.Bookmarks.Exists(bookmarkName) Then
         documentObject.Bookmarks(bookmarkName).Delete
@@ -9877,6 +12042,8 @@ Private Sub VTCommitWordLatexRedrawDispatch( _
     Dim sourceText As String
     Dim formulaId As String
     Dim itemKind As String
+    Dim operationName As String
+    Dim replacementText As String
     Dim sharedVectorDocumentPath As String
     Dim targetStart As Long
     Dim targetEnd As Long
@@ -9898,6 +12065,12 @@ Private Sub VTCommitWordLatexRedrawDispatch( _
 
     On Error GoTo Failed
     transactionStage = "redraw-validate-target"
+    operationName = CStr(manifest("operation"))
+    If operationName <> "latexRedraw" And _
+       operationName <> "formulaRestore" Then
+        Err.Raise vbObjectError + 7591, "VisualTeX", _
+            "The Word range replacement operation is invalid."
+    End If
     If itemCount < 1 Or itemCount > VT_WORD_LATEX_REDRAW_MAX_FORMULAS Then
         Err.Raise vbObjectError + 7591, "VisualTeX", _
             "The LaTeX redraw formula count is outside the supported range."
@@ -9928,15 +12101,29 @@ Private Sub VTCommitWordLatexRedrawDispatch( _
     For itemIndex = 0 To itemCount - 1
         transactionStage = "redraw-preflight item " & CStr(itemIndex)
         itemKind = VTDocumentImportRequired(manifest, itemIndex, "kind")
-        If itemKind <> "formula" Then
+        If itemKind = "formula" Then
+            formulaId = VTDocumentImportRequired( _
+                manifest, itemIndex, "formulaId")
+            If Not VTIsCanonicalUuid(formulaId) Then
+                Err.Raise vbObjectError + 7591, "VisualTeX", _
+                    "A Word replacement formula id is invalid."
+            End If
+        ElseIf itemKind = "text" Then
+            If operationName <> "formulaRestore" Or _
+               outputKind <> "latex" Then
+                Err.Raise vbObjectError + 7591, "VisualTeX", _
+                    "Only formula restore can write LaTeX text items."
+            End If
+            replacementText = VTBase64UrlDecodeUtf8( _
+                VTDocumentImportRequired( _
+                    manifest, itemIndex, "textBase64"))
+            If Len(replacementText) = 0 Then
+                Err.Raise vbObjectError + 7591, "VisualTeX", _
+                    "A restored LaTeX text item is empty."
+            End If
+        Else
             Err.Raise vbObjectError + 7591, "VisualTeX", _
-                "LaTeX redraw accepts formula items only."
-        End If
-        formulaId = VTDocumentImportRequired( _
-            manifest, itemIndex, "formulaId")
-        If Not VTIsCanonicalUuid(formulaId) Then
-            Err.Raise vbObjectError + 7591, "VisualTeX", _
-                "A LaTeX redraw formula id is invalid."
+                "The Word range replacement item kind is invalid."
         End If
         sourceStarts(itemIndex) = VTDocumentImportSourceOffset( _
             manifest, itemIndex, "sourceStart")
@@ -9959,11 +12146,15 @@ Private Sub VTCommitWordLatexRedrawDispatch( _
                 "Word text changed after LaTeX redraw opened. " & _
                 "Please reopen redraw from the current selection."
         End If
-        sourceFontSizes(itemIndex) = VTDispatchPositiveDouble( _
-            manifest, VTDocumentImportItemKey(itemIndex, "fontSizePt"))
-        If Not VTValidWordFormulaFontSize(sourceFontSizes(itemIndex)) Then
-            Err.Raise vbObjectError + 7591, "VisualTeX", _
-                "A LaTeX redraw formula has an invalid inherited Word font size."
+        If itemKind = "formula" Then
+            sourceFontSizes(itemIndex) = VTDispatchPositiveDouble( _
+                manifest, VTDocumentImportItemKey(itemIndex, "fontSizePt"))
+            If Not VTValidWordFormulaFontSize(sourceFontSizes(itemIndex)) Then
+                Err.Raise vbObjectError + 7591, "VisualTeX", _
+                    "A Word replacement formula has an invalid inherited font size."
+            End If
+        Else
+            sourceFontSizes(itemIndex) = 0#
         End If
         previousEnd = sourceEnds(itemIndex)
     Next itemIndex
@@ -10008,7 +12199,11 @@ Private Sub VTCommitWordLatexRedrawDispatch( _
 
     transactionStage = "redraw-start-undo"
     Set undoRecord = CallByName(Application, "UndoRecord", VbGet)
-    undoRecord.StartCustomRecord "VisualTeX Redraw LaTeX Formulas"
+    If operationName = "formulaRestore" Then
+        undoRecord.StartCustomRecord "VisualTeX Restore Word Formulas"
+    Else
+        undoRecord.StartCustomRecord "VisualTeX Redraw LaTeX Formulas"
+    End If
     undoRecordStarted = True
     Set insertedFormulaIds = New Collection
     VTBeginWordInternalMutation
@@ -10023,12 +12218,19 @@ Private Sub VTCommitWordLatexRedrawDispatch( _
         Set sourceRange = targetDocument.Range( _
             Start:=targetStart + sourceStarts(itemIndex), _
             End:=targetStart + sourceEnds(itemIndex))
+        itemKind = VTDocumentImportRequired(manifest, itemIndex, "kind")
         sourceRange.Delete
         mutationOccurred = True
         Set cursorRange = targetDocument.Range( _
             Start:=targetStart + sourceStarts(itemIndex), _
             End:=targetStart + sourceStarts(itemIndex))
-        If sharedVectorDocument Is Nothing Then
+        If itemKind = "text" Then
+            replacementText = VTBase64UrlDecodeUtf8( _
+                VTDocumentImportRequired( _
+                    manifest, itemIndex, "textBase64"))
+            cursorRange.Text = replacementText
+            cursorRange.Collapse wdCollapseEnd
+        ElseIf sharedVectorDocument Is Nothing Then
             VTDocumentImportInsertFormula _
                 cursorRange, manifest, itemIndex, outputKind, _
                 insertedFormulaIds, sourceFontSizes(itemIndex)
@@ -10100,11 +12302,15 @@ Failed:
     End If
     If Not targetDocument Is Nothing Then
         For itemIndex = 0 To itemCount - 1
-            formulaId = VTDocumentImportRequired( _
-                manifest, itemIndex, "formulaId")
-            If VTIsCanonicalUuid(formulaId) Then
-                VTDeleteDocumentImportedFormulaState _
-                    targetDocument, formulaId
+            itemKind = VTDocumentImportRequired( _
+                manifest, itemIndex, "kind")
+            If itemKind = "formula" Then
+                formulaId = VTDocumentImportRequired( _
+                    manifest, itemIndex, "formulaId")
+                If VTIsCanonicalUuid(formulaId) Then
+                    VTDeleteDocumentImportedFormulaState _
+                        targetDocument, formulaId
+                End If
             End If
         Next itemIndex
         If rollbackVerified And _
@@ -10205,25 +12411,32 @@ Private Sub VTCommitWordDocumentImportDispatch( _
     End If
     operationName = CStr(manifest("operation"))
     If operationName <> "documentImport" And _
-       operationName <> "latexRedraw" Then
+       operationName <> "latexRedraw" And _
+       operationName <> "formulaRestore" Then
         Err.Raise vbObjectError + 7586, "VisualTeX", _
             "The document import manifest operation is invalid."
     End If
     outputKind = CStr(manifest("outputKind"))
-    If outputKind <> "omml" And outputKind <> "image" Then
+    If operationName = "formulaRestore" Then
+        If outputKind <> "latex" And outputKind <> "image" Then
+            Err.Raise vbObjectError + 7586, "VisualTeX", _
+                "The formula restore output kind is invalid."
+        End If
+    ElseIf outputKind <> "omml" And outputKind <> "image" Then
         Err.Raise vbObjectError + 7586, "VisualTeX", _
-            "The document import formula output kind is invalid."
+            "The document formula output kind is invalid."
     End If
     If Not IsNumeric(manifest("itemCount")) Then
         Err.Raise vbObjectError + 7586, "VisualTeX", _
             "The document import item count is invalid."
     End If
     itemCount = CLng(manifest("itemCount"))
-    If operationName = "latexRedraw" Then
+    If operationName = "latexRedraw" Or _
+       operationName = "formulaRestore" Then
         If itemCount < 1 Or _
            itemCount > VT_WORD_LATEX_REDRAW_MAX_FORMULAS Then
             Err.Raise vbObjectError + 7586, "VisualTeX", _
-                "The LaTeX redraw formula count is outside the supported range."
+                "The Word range replacement count is outside the supported range."
         End If
         VTCommitWordLatexRedrawDispatch _
             sessionId, manifest, sourceDocumentId, bookmarkName, _
@@ -10446,10 +12659,12 @@ Public Sub VisualTeX_ApplyPendingResult()
     Dim callbackErrorNumber As Long
     Dim callbackErrorDescription As String
 
+    VTWordPerformanceStart
     On Error GoTo Failed
     sessionId = VTReadActiveSessionId(VT_WORD_HOST)
     VTTraceWordSession sessionId, "callback-enter", ""
     Set dispatch = VTReadDispatch(sessionId)
+    VTWordPerformanceEnable dispatch
     actionName = CStr(dispatch("action"))
     hostName = CStr(dispatch("host"))
     If hostName <> VT_WORD_HOST Then
@@ -10468,6 +12683,8 @@ Public Sub VisualTeX_ApplyPendingResult()
         Case Else
             Err.Raise vbObjectError + 7403, "VisualTeX", "The VisualTeX Word dispatch action is invalid."
     End Select
+    VTWordPerformanceMark "callback-complete"
+    VTWordPerformanceFlush sessionId
     Exit Sub
 
 Failed:
@@ -10478,6 +12695,9 @@ Failed:
         VTWriteWordFailureTrace _
             sessionId, "document-import-callback", _
             callbackErrorNumber, callbackErrorDescription
+        VTWordPerformanceMark "callback-failed"
+        VTWordPerformanceFlush _
+            sessionId, callbackErrorNumber, callbackErrorDescription
     End If
     On Error GoTo 0
     Err.Raise callbackErrorNumber, "VisualTeX Word callback", _
@@ -11050,6 +13270,163 @@ FallbackFailed:
         CStr(fallbackErrorNumber) & "): " & fallbackErrorDescription
 End Function
 
+Private Sub VTDeleteTrailingNativeImageArtifact( _
+    ByVal formulaShape As InlineShape)
+
+    Dim documentObject As Document
+    Dim paragraphRange As Range
+    Dim trailingRange As Range
+    Dim trailingText As String
+    Dim trailingStart As Long
+    Dim cleanupIndex As Long
+    Dim contentEnd As Long
+    Dim terminalSuffixRange As Range
+
+    If formulaShape Is Nothing Then Exit Sub
+    Set documentObject = formulaShape.Range.Document
+    Set paragraphRange = formulaShape.Range.Paragraphs(1).Range.Duplicate
+    trailingStart = formulaShape.Range.End
+
+    ' A native OMath replacement can leave one or two invisible boundary
+    ' characters behind. Remove only Unicode format characters created by the
+    ' conversion; ordinary spaces, tabs, paragraph marks and body text are
+    ' intentionally preserved.
+    For cleanupIndex = 1 To 2
+        If trailingStart >= paragraphRange.End - 1 Then Exit For
+        Set trailingRange = documentObject.Range( _
+            Start:=trailingStart, End:=trailingStart + 1)
+        trailingText = trailingRange.Text
+        If trailingText = ChrW(8203) Or _
+           trailingText = ChrW(8204) Or _
+           trailingText = ChrW(8205) Or _
+           trailingText = ChrW(8288) Or _
+           trailingText = ChrW(65279) Then
+            trailingRange.Delete
+            Set paragraphRange = formulaShape.Range.Paragraphs(1).Range.Duplicate
+        Else
+            Exit For
+        End If
+    Next cleanupIndex
+
+    ' Word may consume the U+2060 math boundary while preserving its following
+    ' ordinary space. Strip paragraph/end-of-cell markers from the inspection
+    ' boundary, then remove the complete suffix only when it contains no body
+    ' text, fields, formulas or drawings. A genuine separator before following
+    ' body text therefore remains untouched.
+    Set paragraphRange = formulaShape.Range.Paragraphs(1).Range.Duplicate
+    contentEnd = paragraphRange.End
+    Do While contentEnd > trailingStart
+        trailingText = documentObject.Range( _
+            Start:=contentEnd - 1, End:=contentEnd).Text
+        If trailingText = vbCr Or trailingText = Chr$(7) Then
+            contentEnd = contentEnd - 1
+        Else
+            Exit Do
+        End If
+    Loop
+    If trailingStart < contentEnd Then
+        Set terminalSuffixRange = documentObject.Range( _
+            Start:=trailingStart, End:=contentEnd)
+        If terminalSuffixRange.Fields.Count = 0 And _
+           terminalSuffixRange.InlineShapes.Count = 0 And _
+           terminalSuffixRange.OMaths.Count = 0 And _
+           Not VTWordRangeHasMeaningfulText(terminalSuffixRange) Then
+            terminalSuffixRange.Delete
+        End If
+    End If
+End Sub
+
+Private Function VTDetachWordFormulaPictureFromMath( _
+    ByVal formulaShape As InlineShape) As InlineShape
+
+    Dim documentObject As Document
+    Dim sourceMathRange As Range
+    Dim backupDocument As Document
+    Dim backupContainerRange As Range
+    Dim backupImageRange As Range
+    Dim insertionRange As Range
+    Dim restoredRange As Range
+    Dim cleanupRange As Range
+    Dim formulaStart As Long
+    Dim detachErrorNumber As Long
+    Dim detachErrorDescription As String
+
+    formulaStart = -1
+    If formulaShape Is Nothing Then
+        Err.Raise vbObjectError + 7594, "VisualTeX", _
+            "The native-to-image detachment target is missing."
+    End If
+    If formulaShape.Range.OMaths.Count = 0 Then
+        VTDeleteTrailingNativeImageArtifact formulaShape
+        Set VTDetachWordFormulaPictureFromMath = formulaShape
+        Exit Function
+    End If
+    If formulaShape.Range.OMaths.Count <> 1 Then
+        Err.Raise vbObjectError + 7594, "VisualTeX", _
+            "The converted image is inside an ambiguous Word math container."
+    End If
+
+    Set documentObject = formulaShape.Range.Document
+    Set sourceMathRange = formulaShape.Range.OMaths(1).Range.Duplicate
+    formulaStart = sourceMathRange.Start
+    On Error GoTo DetachFailed
+
+    Set backupDocument = Documents.Add(Visible:=False)
+    Set backupContainerRange = backupDocument.Content
+    backupContainerRange.Collapse wdCollapseStart
+    backupContainerRange.FormattedText = sourceMathRange.FormattedText
+    If backupDocument.OMaths.Count <> 1 Or _
+       backupDocument.InlineShapes.Count <> 1 Then
+        Err.Raise vbObjectError + 7594, "VisualTeX", _
+            "Word could not back up the converted image math container."
+    End If
+    Set backupContainerRange = _
+        backupDocument.OMaths(1).Range.Duplicate
+    Set backupImageRange = _
+        backupDocument.InlineShapes(1).Range.Duplicate
+
+    documentObject.Activate
+    sourceMathRange.Delete
+    Set insertionRange = documentObject.Range( _
+        Start:=formulaStart, End:=formulaStart)
+    insertionRange.FormattedText = backupImageRange.FormattedText
+    Set restoredRange = documentObject.Range( _
+        Start:=formulaStart, End:=formulaStart + 1)
+    If restoredRange.InlineShapes.Count <> 1 Or _
+       restoredRange.OMaths.Count <> 0 Then
+        Err.Raise vbObjectError + 7594, "VisualTeX", _
+            "Word did not detach the converted image from its OMath container."
+    End If
+    Set formulaShape = restoredRange.InlineShapes(1)
+    VTDeleteTrailingNativeImageArtifact formulaShape
+
+    backupDocument.Close SaveChanges:=wdDoNotSaveChanges
+    Set backupDocument = Nothing
+    Set VTDetachWordFormulaPictureFromMath = formulaShape
+    Exit Function
+
+DetachFailed:
+    detachErrorNumber = Err.Number
+    detachErrorDescription = Err.Description
+    On Error Resume Next
+    If formulaStart >= 0 And Not documentObject Is Nothing Then
+        Set cleanupRange = documentObject.Range( _
+            Start:=formulaStart, End:=formulaStart + 1)
+        If cleanupRange.InlineShapes.Count > 0 Then cleanupRange.Delete
+        If Not backupContainerRange Is Nothing Then
+            Set insertionRange = documentObject.Range( _
+                Start:=formulaStart, End:=formulaStart)
+            insertionRange.FormattedText = backupContainerRange.FormattedText
+        End If
+    End If
+    If Not backupDocument Is Nothing Then
+        backupDocument.Close SaveChanges:=wdDoNotSaveChanges
+    End If
+    On Error GoTo 0
+    Err.Raise detachErrorNumber, "VisualTeX native-to-image cleanup", _
+        detachErrorDescription
+End Function
+
 Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Object)
     Dim mode As String
     Dim formulaId As String
@@ -11084,6 +13461,7 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
     Dim nativeBookmarkSet As Boolean
     Dim targetIsNative As Boolean
     Dim committed As InlineShape
+    Dim stagedCandidate As InlineShape
     Dim candidate As InlineShape
     Dim finalImageField As Field
     Dim rollbackMacroField As Field
@@ -11132,6 +13510,7 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
     Dim transactionStage As String
     Dim internalMutationStarted As Boolean
     transactionStage = "validate-document"
+    VTWordPerformanceMark "commit-enter"
     committedImageStart = -1
     VTRequireWritableWordDocument
     Set targetDocument = ActiveDocument
@@ -11204,6 +13583,7 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
         Err.Raise vbObjectError + 7498, "VisualTeX", _
             "VisualTeX Word image font-size geometry is invalid."
     End If
+    VTWordPerformanceMark "dispatch-validated"
 
     formulaReference = VTFormulaReference(formulaId, displayMode, numbered)
     captionText = VTEquationCrossReferenceText(latexBase64)
@@ -11262,6 +13642,7 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
     VTBeginWordInternalMutation
     internalMutationStarted = True
     VTTraceWordSession sessionId, "commit-target-resolved", pendingMarker
+    VTWordPerformanceMark "target-resolved"
 
     transactionStage = "capture-target-range"
     If targetIsNative Then
@@ -11336,6 +13717,7 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
         targetDocument, formulaId, previousFontSizePt, _
         previousReferenceWidthPt, previousReferenceHeightPt, _
         previousReferenceBaselinePt, previousObservedWordFontSizePt)
+    VTWordPerformanceMark "previous-state-read"
 
     If nativeEquation Then
         transactionStage = "prepare-native-replacement"
@@ -11358,6 +13740,7 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
         ' original OMath in a hidden document and replace its exact Range in
         ' one FormattedText assignment instead.
         If targetIsNative Then
+            VTWordPerformanceMark "native-backup-start"
             Set originalNativeBackupDocument = Documents.Add(Visible:=False)
             Set originalNativeBackupRange = originalNativeBackupDocument.Content
             originalNativeBackupRange.Collapse wdCollapseStart
@@ -11369,6 +13752,7 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
             Set originalNativeBackupRange = _
                 originalNativeBackupDocument.OMaths(1).Range.Duplicate
             targetRange.Document.Activate
+            VTWordPerformanceMark "native-backup-complete"
         End If
 
         transactionStage = "insert-native-equation"
@@ -11381,6 +13765,7 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
             targetIsNative)
         nativeEquationStart = nativeEquationRange.Start
         nativeTargetReplaced = targetIsNative
+        VTWordPerformanceMark "native-insert-complete"
 
         transactionStage = "store-native-state"
         targetDocument.Activate
@@ -11392,6 +13777,7 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
             targetDocument, formulaId, fontSizePt, referenceWidthPt, _
             referenceHeightPt, referenceBaselinePt, fontSizePt
         formulaStateStored = True
+        VTWordPerformanceMark "native-state-stored"
 
         ' Delete the source placeholder or image before creating the final
         ' display/number layout. Word can shift OMath and tab Ranges when the
@@ -11420,6 +13806,7 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
         nativeBookmarkSet = True
         Set originalNativeMath = VTNativeMathForBookmark( _
             targetDocument.Bookmarks(VTNativeFormulaBookmarkName(formulaId)))
+        VTWordPerformanceMark "native-source-removed"
         If originalNativeMath Is Nothing Then
             Err.Raise vbObjectError + 7460, "VisualTeX", _
                 "Word could not resolve the newly inserted native equation identity."
@@ -11455,7 +13842,16 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
         transactionStage = "bookmark-native-equation"
         VTSetNativeFormulaBookmark targetDocument, nativeEquationRange, formulaId
         nativeBookmarkSet = True
+        Set originalNativeMath = VTNativeMathForBookmark( _
+            targetDocument.Bookmarks(VTNativeFormulaBookmarkName(formulaId)))
+        If originalNativeMath Is Nothing Then
+            Err.Raise vbObjectError + 7460, "VisualTeX", _
+                "Word lost the finalized native equation before structure caching."
+        End If
+        VTSetWordNativeSignature _
+            targetDocument, formulaId, originalNativeMath
         VTDeletePendingBookmark targetDocument, sessionId
+        VTWordPerformanceMark "native-layout-complete"
 
         On Error Resume Next
         If Not originalNativeBackupDocument Is Nothing Then
@@ -11464,11 +13860,14 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
         On Error GoTo RollbackCandidate
         transactionStage = "place-native-caret"
         On Error Resume Next
-        If displayMode = "inline" Then
+        If displayMode = "inline" And mode = "create" Then
             VTPlaceCaretAfterInlineNativeEquation nativeEquationRange
-        ElseIf mode = "create" Then
+        ElseIf displayMode = "block" And mode = "create" Then
             VTPlaceCaretAfterDisplayFormula nativeEquationRange, formulaId
         Else
+            ' Editing or direct conversion must not manufacture a U+2060 caret
+            ' anchor after an existing formula. Keep the converted formula
+            ' selected so the surrounding Word text remains byte-for-byte stable.
             nativeEquationRange.Select
         End If
         If Err.Number <> 0 Then
@@ -11485,6 +13884,7 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
     End If
 
     If targetIsNative Then
+        VTWordPerformanceMark "image-native-backup-start"
         Set originalNativeBackupDocument = Documents.Add(Visible:=False)
         Set originalNativeBackupRange = originalNativeBackupDocument.Content
         originalNativeBackupRange.Collapse wdCollapseStart
@@ -11496,15 +13896,24 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
         Set originalNativeBackupRange = _
             originalNativeBackupDocument.OMaths(1).Range.Duplicate
         targetRange.Document.Activate
+        VTWordPerformanceMark "image-native-backup-complete"
     End If
 
     Set insertionRange = targetRange.Duplicate
     If Not targetIsNative Then insertionRange.Collapse wdCollapseStart
     targetDocument.Activate
-    Set candidate = VTAddWordFormulaPicture( _
+    Set stagedCandidate = VTAddWordFormulaPicture( _
         targetDocument, insertionRange, vectorDocumentPath, _
         fallbackImagePath)
+    VTWordPerformanceMark "image-staging-inserted"
     nativeTargetReplaced = targetIsNative
+    If targetIsNative Then
+        Set candidate = _
+            VTDetachWordFormulaPictureFromMath(stagedCandidate)
+    Else
+        Set candidate = stagedCandidate
+    End If
+    VTWordPerformanceMark "image-detached"
     candidate.LockAspectRatio = msoFalse
     candidate.Width = CSng(widthPoints)
     candidate.Height = CSng(heightPoints)
@@ -11543,6 +13952,7 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
             Err.Raise vbObjectError + 7424, "VisualTeX", "Word did not persist the VisualTeX display alignment."
         End If
     End If
+    VTWordPerformanceMark "image-properties-ready"
 
     VTSetWordLatexPayload targetDocument, formulaId, latexBase64
     VTSetWordOmmlPayload targetDocument, formulaId, ommlBase64
@@ -11556,6 +13966,7 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
         targetDocument, formulaId, fontSizePt, referenceWidthPt, _
         referenceHeightPt, referenceBaselinePt, observedWordFontSizePt
     formulaStateStored = True
+    VTWordPerformanceMark "image-state-stored"
 
     ' Finalize the paragraph only after the old image/native target has gone.
     ' Otherwise the placeholder participates in the tabbed line and Word shifts
@@ -11580,6 +13991,7 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
     committedImageStart = candidate.Range.Start
     Set candidate = VTEnsureVisualTeXImageMacroButton(candidate)
     committedImageStart = candidate.Range.Start
+    VTWordPerformanceMark "image-source-removed"
 
     If displayMode = "block" Then
         If numbered Then
@@ -11611,6 +14023,7 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
             "The committed VisualTeX formula picture is still inside a Word field."
     End If
     VTDeletePendingBookmark targetDocument, sessionId
+    VTWordPerformanceMark "image-layout-complete"
 
     On Error Resume Next
     If Not originalNativeBackupDocument Is Nothing Then
@@ -11630,6 +14043,7 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
     End If
     On Error GoTo RollbackCandidate
 CommitSucceeded:
+    VTWordPerformanceMark "commit-succeeded"
     If internalMutationStarted Then
         VTEndWordInternalMutation
         internalMutationStarted = False
@@ -11642,6 +14056,13 @@ RollbackCandidate:
     VTWriteWordFailureTrace _
         sessionId, transactionStage, transactionErrorNumber, transactionErrorDescription
     On Error Resume Next
+    If nativeEquation And numbered And mode = "create" Then
+        ' A failed native create can already have produced VT_N_/VT_R_/VT_C_
+        ' Bookmarks plus the external SEQ helper paragraph before a later
+        ' validation raises. Remove that entire formula-specific scaffold first;
+        ' otherwise the next create sees the failed helper and changes behavior.
+        VTDeleteEquationNumberScaffold targetDocument, formulaId, False
+    End If
     If Not insertedNumber Is Nothing Then insertedNumber.Delete
     If nativeBookmarkSet Then
         If targetRange.Document.Bookmarks.Exists( _
@@ -12372,7 +14793,8 @@ End Function
 
 Private Function VTEquationSequenceFieldCodeForOrdinal( _
     ByVal equationLabelName As String, _
-    ByVal sequenceOrdinal As Long) As String
+    ByVal sequenceOrdinal As Long, _
+    Optional ByVal restartLevel As Long = 0) As String
 
     If sequenceOrdinal < 1 Then
         Err.Raise vbObjectError + 7549, "VisualTeX", _
@@ -12385,7 +14807,17 @@ Private Function VTEquationSequenceFieldCodeForOrdinal( _
     ' deliberately has no \* formatting switch so built-up OMath cannot
     ' transform its asterisk into a mathematical operator.
     VTEquationSequenceFieldCodeForOrdinal = _
-        " SEQ " & VTEquationSequenceFieldText(equationLabelName) & " "
+        " SEQ " & VTEquationSequenceFieldText(equationLabelName)
+    If restartLevel = 1 Or restartLevel = 2 Then
+        VTEquationSequenceFieldCodeForOrdinal = _
+            VTEquationSequenceFieldCodeForOrdinal & _
+            " \s " & CStr(restartLevel)
+    ElseIf restartLevel <> 0 Then
+        Err.Raise vbObjectError + 7549, "VisualTeX", _
+            "The Equation sequence restart level is invalid."
+    End If
+    VTEquationSequenceFieldCodeForOrdinal = _
+        VTEquationSequenceFieldCodeForOrdinal & " "
 End Function
 
 Private Function VTNormalizeEquationFieldCode( _
@@ -12406,7 +14838,8 @@ End Function
 Private Function VTEquationSequenceFieldHasOrdinal( _
     ByVal sequenceField As Field, _
     ByVal equationLabelName As String, _
-    ByVal sequenceOrdinal As Long) As Boolean
+    ByVal sequenceOrdinal As Long, _
+    Optional ByVal restartLevel As Long = 0) As Boolean
 
     Dim actualCode As String
     Dim expectedCode As String
@@ -12415,16 +14848,27 @@ Private Function VTEquationSequenceFieldHasOrdinal( _
     actualCode = VTNormalizeEquationFieldCode(sequenceField.Code.Text)
     expectedCode = VTNormalizeEquationFieldCode( _
         VTEquationSequenceFieldCodeForOrdinal( _
-            equationLabelName, sequenceOrdinal))
+            equationLabelName, sequenceOrdinal, restartLevel))
     VTEquationSequenceFieldHasOrdinal = _
-        StrComp(actualCode, expectedCode, vbTextCompare) = 0 And _
-        VTEquationSequenceResultText(sequenceField) = CStr(sequenceOrdinal)
+        StrComp(actualCode, expectedCode, vbTextCompare) = 0
+    If VTEquationSequenceFieldHasOrdinal Then
+        If restartLevel = 0 Then
+            VTEquationSequenceFieldHasOrdinal = _
+                VTEquationSequenceResultText(sequenceField) = _
+                    CStr(sequenceOrdinal)
+        Else
+            VTEquationSequenceFieldHasOrdinal = _
+                VTFirstPositiveIntegerInText( _
+                    VTEquationSequenceResultText(sequenceField)) > 0
+        End If
+    End If
 End Function
 
 Private Sub VTApplyEquationSequenceOrdinal( _
     ByVal sequenceField As Field, _
     ByVal equationLabelName As String, _
-    ByVal sequenceOrdinal As Long)
+    ByVal sequenceOrdinal As Long, _
+    Optional ByVal restartLevel As Long = 0)
 
     Dim expectedCode As String
 
@@ -12433,7 +14877,7 @@ Private Sub VTApplyEquationSequenceOrdinal( _
             "The Equation SEQ field is missing."
     End If
     expectedCode = VTEquationSequenceFieldCodeForOrdinal( _
-        equationLabelName, sequenceOrdinal)
+        equationLabelName, sequenceOrdinal, restartLevel)
 
     ' Migrate the legacy restarted field once. After migration, renumbering
     ' updates only the field result, so Word can keep its own _Ref target.
@@ -12444,7 +14888,7 @@ Private Sub VTApplyEquationSequenceOrdinal( _
     sequenceField.Update
 
     If Not VTEquationSequenceFieldHasOrdinal( _
-       sequenceField, equationLabelName, sequenceOrdinal) Then
+       sequenceField, equationLabelName, sequenceOrdinal, restartLevel) Then
         Err.Raise vbObjectError + 7549, "VisualTeX", _
             "Word did not update the flowing native Equation SEQ field" & _
             " [code=" & sequenceField.Code.Text & _
@@ -12452,6 +14896,117 @@ Private Sub VTApplyEquationSequenceOrdinal( _
             "; expected=" & CStr(sequenceOrdinal) & "]."
     End If
 End Sub
+
+Private Function VTRefreshFormattedSequenceBookmark( _
+    ByVal documentObject As Document, _
+    ByVal sequenceField As Field, _
+    ByVal formulaId As String) As Range
+
+    Dim formulaRange As Range
+    Dim helperParagraph As Range
+    Dim prefixRange As Range
+    Dim suffixRange As Range
+    Dim bookmarkRange As Range
+    Dim numberingMode As String
+    Dim headingPrefix As String
+    Dim prefixText As String
+    Dim sequenceBookmarkName As String
+    Dim helperStart As Long
+    Dim fieldStart As Long
+    Dim fieldEnd As Long
+
+    If documentObject Is Nothing Or sequenceField Is Nothing Or _
+       Not VTIsCanonicalUuid(formulaId) Then
+        Err.Raise vbObjectError + 7596, "VisualTeX", _
+            "The formatted Equation sequence target is invalid."
+    End If
+    Set formulaRange = VTNumberedFormulaRangeForId( _
+        documentObject, formulaId)
+    If formulaRange Is Nothing Then
+        Err.Raise vbObjectError + 7596, "VisualTeX", _
+            "The formatted Equation sequence has no visible formula."
+    End If
+    numberingMode = VTEquationNumberingMode(documentObject)
+    If numberingMode <> VT_WORD_NUMBERING_MODE_SEQUENCE Then
+        headingPrefix = VTEquationHeadingPrefix( _
+            formulaRange, numberingMode)
+        prefixText = headingPrefix & _
+            VTEquationNumberingDisplaySeparator(documentObject)
+    End If
+
+    Set helperParagraph = _
+        sequenceField.Result.Paragraphs(1).Range.Duplicate
+    If Not VTHelperParagraphOwnsNativeEquationSequence( _
+       helperParagraph) Then
+        Err.Raise vbObjectError + 7596, "VisualTeX", _
+            "The formatted Equation sequence helper is invalid."
+    End If
+    helperStart = helperParagraph.Start
+    fieldStart = VTEquationFieldStart(sequenceField)
+    fieldEnd = VTEquationFieldEnd(sequenceField)
+    sequenceBookmarkName = _
+        VTEquationSequenceNumberBookmarkName(formulaId)
+    If documentObject.Bookmarks.Exists(sequenceBookmarkName) Then
+        documentObject.Bookmarks(sequenceBookmarkName).Delete
+    End If
+
+    ' Remove only the static formatting text around the one live SEQ field.
+    ' The field object and its native Word sequence identity stay in place.
+    Set suffixRange = documentObject.Range( _
+        Start:=fieldEnd, End:=helperParagraph.End - 1)
+    If suffixRange.End > suffixRange.Start Then suffixRange.Delete
+    Set helperParagraph = documentObject.Range( _
+        Start:=helperStart, End:=helperStart).Paragraphs(1).Range.Duplicate
+    Set sequenceField = helperParagraph.Fields(1)
+    fieldStart = VTEquationFieldStart(sequenceField)
+    Set prefixRange = documentObject.Range( _
+        Start:=helperParagraph.Start, End:=fieldStart)
+    If prefixRange.End > prefixRange.Start Then prefixRange.Delete
+
+    Set helperParagraph = documentObject.Range( _
+        Start:=helperStart, End:=helperStart).Paragraphs(1).Range.Duplicate
+    Set sequenceField = helperParagraph.Fields(1)
+    If Len(prefixText) > 0 Then
+        Set prefixRange = documentObject.Range( _
+            Start:=helperParagraph.Start, End:=helperParagraph.Start)
+        prefixRange.Text = prefixText
+        Set helperParagraph = documentObject.Range( _
+            Start:=helperStart, End:=helperStart).Paragraphs(1).Range.Duplicate
+        Set sequenceField = helperParagraph.Fields(1)
+        Set bookmarkRange = documentObject.Range( _
+            Start:=helperParagraph.Start, _
+            End:=sequenceField.Result.End)
+    Else
+        Set bookmarkRange = sequenceField.Result.Duplicate
+    End If
+    documentObject.Bookmarks.Add _
+        name:=sequenceBookmarkName, Range:=bookmarkRange
+    VTFormatHiddenEquationParagraph helperParagraph
+    Set VTRefreshFormattedSequenceBookmark = bookmarkRange.Duplicate
+End Function
+
+Private Function VTEquationNumberTextForFormula( _
+    ByVal documentObject As Document, _
+    ByVal formulaId As String) As String
+
+    Dim sequenceBookmarkName As String
+    Dim numberText As String
+
+    If documentObject Is Nothing Or Not VTIsCanonicalUuid(formulaId) Then
+        Exit Function
+    End If
+    sequenceBookmarkName = _
+        VTEquationSequenceNumberBookmarkName(formulaId)
+    If Not documentObject.Bookmarks.Exists(sequenceBookmarkName) Then
+        Exit Function
+    End If
+    numberText = documentObject.Bookmarks( _
+        sequenceBookmarkName).Range.Text
+    numberText = Replace$(numberText, vbCr, "")
+    numberText = Replace$(numberText, Chr$(7), "")
+    numberText = Replace$(numberText, Chr$(11), "")
+    VTEquationNumberTextForFormula = Trim$(numberText)
+End Function
 
 Private Function VTEquationSequenceOrdinal( _
     ByVal documentObject As Document, _
@@ -12761,11 +15316,12 @@ Private Function VTEquationSequenceFieldForBookmark( _
     equationLabelName = VTNativeEquationLabelName()
     For Each candidate In documentObject.Fields
         If VTIsNativeEquationSequenceField(candidate, equationLabelName) Then
-            If candidate.Result.Start <= bookmarkRange.Start Then
-                If candidate.Result.End >= bookmarkRange.End Then
-                    matchCount = matchCount + 1
-                    Set match = candidate
-                End If
+            If (candidate.Result.Start <= bookmarkRange.Start And _
+                candidate.Result.End >= bookmarkRange.End) Or _
+               (bookmarkRange.Start <= candidate.Result.Start And _
+                bookmarkRange.End >= candidate.Result.End) Then
+                matchCount = matchCount + 1
+                Set match = candidate
             End If
         End If
     Next candidate
@@ -12843,6 +15399,7 @@ Private Sub VTRefreshEquationNumberMirror( _
     Dim formulaId As String
     Dim fieldAnchor As Long
     Dim equationLabelName As String
+    Dim restartLevel As Long
     Dim paragraphNumber As Boolean
 
     If documentObject Is Nothing Or sequenceField Is Nothing Or _
@@ -12859,8 +15416,9 @@ Private Sub VTRefreshEquationNumberMirror( _
     ' instead of scanning every document field again for each formula.
     fieldAnchor = VTEquationFieldStart(sequenceField)
     equationLabelName = VTNativeEquationLabelName()
+    restartLevel = VTEquationNumberingRestartLevel(documentObject)
     VTApplyEquationSequenceOrdinal _
-        sequenceField, equationLabelName, sequenceOrdinal
+        sequenceField, equationLabelName, sequenceOrdinal, restartLevel
     Set sequenceField = VTResolveEquationSequenceFieldNear( _
         documentObject, fieldAnchor, 64)
     If sequenceField Is Nothing Then
@@ -12868,7 +15426,7 @@ Private Sub VTRefreshEquationNumberMirror( _
             "The Equation number target lost its native SEQ field after update."
     End If
     If Not VTEquationSequenceFieldHasOrdinal( _
-       sequenceField, equationLabelName, sequenceOrdinal) Then
+       sequenceField, equationLabelName, sequenceOrdinal, restartLevel) Then
         Err.Raise vbObjectError + 7549, "VisualTeX", _
             "The native Equation SEQ field has an invalid ordinal code" & _
             " [code=" & sequenceField.Code.Text & _
@@ -12877,14 +15435,21 @@ Private Sub VTRefreshEquationNumberMirror( _
             "; range=" & CStr(sequenceField.Result.Start) & "-" & _
                 CStr(sequenceField.Result.End) & "]."
     End If
-    If documentObject.Bookmarks.Exists(sequenceBookmarkName) Then
-        documentObject.Bookmarks(sequenceBookmarkName).Delete
-    End If
-    documentObject.Bookmarks.Add _
-        name:=sequenceBookmarkName, _
-        Range:=sequenceField.Result.Duplicate
-
     formulaId = VTFormulaIdFromBookmarkSuffix(suffixText)
+    If Len(formulaId) = 0 Then
+        Err.Raise vbObjectError + 7560, "VisualTeX", _
+            "The Equation sequence Bookmark has no formula identity."
+    End If
+    Set sequenceParagraph = _
+        VTRefreshFormattedSequenceBookmark( _
+            documentObject, sequenceField, formulaId)
+    Set sequenceField = VTEquationSequenceFieldForBookmark( _
+        documentObject, sequenceBookmarkName)
+    If sequenceField Is Nothing Then
+        Err.Raise vbObjectError + 7549, "VisualTeX", _
+            "The formatted Equation sequence Bookmark lost its SEQ field."
+    End If
+
     Set sequenceParagraph = _
         sequenceField.Result.Paragraphs(1).Range.Duplicate
     paragraphNumber = _
@@ -12933,8 +15498,14 @@ Private Sub VTRefreshEquationNumberMirror( _
         Err.Raise vbObjectError + 7549, "VisualTeX", _
             "The Equation native target cleanup lost its SEQ field."
     End If
-    expectedText = CStr(sequenceOrdinal)
-    If VTEquationSequenceResultText(sequenceField) <> expectedText Then
+    If restartLevel = 0 Then
+        expectedText = CStr(sequenceOrdinal)
+    Else
+        expectedText = VTEquationSequenceResultText(sequenceField)
+    End If
+    If VTEquationSequenceResultText(sequenceField) <> expectedText Or _
+       Len(VTEquationNumberTextForFormula( _
+           documentObject, formulaId)) = 0 Then
         Err.Raise vbObjectError + 7549, "VisualTeX", _
             "Word did not produce the native Equation SEQ result" & _
             " [code=" & sequenceField.Code.Text & _
@@ -12942,12 +15513,6 @@ Private Sub VTRefreshEquationNumberMirror( _
             "; expected=" & expectedText & "]."
     End If
 
-    If documentObject.Bookmarks.Exists(sequenceBookmarkName) Then
-        documentObject.Bookmarks(sequenceBookmarkName).Delete
-    End If
-    documentObject.Bookmarks.Add _
-        name:=sequenceBookmarkName, _
-        Range:=sequenceField.Result.Duplicate
     Set sequenceParagraph = _
         sequenceField.Result.Paragraphs(1).Range.Duplicate
     VTFormatHiddenEquationParagraph sequenceParagraph
@@ -13393,6 +15958,7 @@ Private Sub VTRefreshNumberedImageFormulaFontLayout( _
     Dim numberRange As Range
     Dim paragraphStart As Long
     Dim expectedPosition As Long
+    Dim numberFontSizePt As Single
 
     If formulaShape Is Nothing Or _
        Not VTIsCanonicalUuid(formulaId) Or _
@@ -13401,6 +15967,7 @@ Private Sub VTRefreshNumberedImageFormulaFontLayout( _
             "The numbered image formula resize target is invalid."
     End If
     Set documentObject = formulaShape.Range.Document
+    numberFontSizePt = VTVisibleEquationNumberFontSize(documentObject)
     Set paragraphRange = formulaShape.Range.Paragraphs(1).Range.Duplicate
     paragraphStart = paragraphRange.Start
 
@@ -13415,7 +15982,7 @@ Private Sub VTRefreshNumberedImageFormulaFontLayout( _
         Set numberRange = documentObject.Bookmarks( _
             VTEquationNumberBookmarkName(formulaId)).Range.Duplicate
         VTApplyStaticImageEquationNumberFormatting _
-            numberRange, 0, CSng(requestedFontSizePt)
+            numberRange, 0, numberFontSizePt
         On Error Resume Next
         numberRange.Cells(1).VerticalAlignment = wdCellAlignVerticalCenter
         Err.Clear
@@ -13435,14 +16002,15 @@ Private Sub VTRefreshNumberedImageFormulaFontLayout( _
             "The numbered image formula has no static visible number."
     End If
 
-    ' Use the same point size for formula and number, then align the number to
-    ' the SVG mathematical baseline. Repeated size changes scale the stored
-    ' baseline from the 14 pt reference geometry without accumulating offsets.
+    ' Equation numbers use one document-level point size for both image and
+    ' native OMath formulas. The formula itself may use any size, but the number
+    ' column must not shift merely because adjacent formulas have different
+    ' point sizes. Align that shared number size to the SVG mathematical baseline.
     expectedPosition = VTExpectedStaticImageEquationNumberPosition( _
-        formulaShape, requestedFontSizePt, _
+        formulaShape, CDbl(numberFontSizePt), _
         "The resized image Equation number baseline position")
     VTApplyStaticImageEquationNumberFormatting _
-        numberRange, expectedPosition, CSng(requestedFontSizePt)
+        numberRange, expectedPosition, numberFontSizePt
     VTSetEquationNumberBookmarkExact _
         documentObject, formulaId, numberRange
     Set formulaShape = VTResolveImageFormulaInParagraph( _
@@ -13832,11 +16400,17 @@ Private Sub VTRefreshParagraphEquationBookmarks( _
         VTEquationSequenceNumberBookmarkName(formulaId)
     numberBookmarkName = VTEquationNumberBookmarkName(formulaId)
     captionBookmarkName = VTEquationCaptionBookmarkName(formulaId)
-    If documentObject.Bookmarks.Exists(sequenceBookmarkName) Then
-        documentObject.Bookmarks(sequenceBookmarkName).Delete
+    Set sequenceParagraph = _
+        VTRefreshFormattedSequenceBookmark( _
+            documentObject, sequenceField, formulaId)
+    Set sequenceField = VTEquationSequenceFieldForBookmark( _
+        documentObject, sequenceBookmarkName)
+    If sequenceField Is Nothing Then
+        Err.Raise vbObjectError + 7560, "VisualTeX", _
+            "The formatted Equation number lost its native SEQ field."
     End If
-    documentObject.Bookmarks.Add _
-        name:=sequenceBookmarkName, Range:=sequenceField.Result.Duplicate
+    Set sequenceParagraph = _
+        sequenceField.Result.Paragraphs(1).Range.Duplicate
 
     Set formulaRange = VTNumberedFormulaRangeForId( _
         documentObject, formulaId)
@@ -13864,16 +16438,15 @@ Private Sub VTRefreshParagraphEquationBookmarks( _
                 "The image Equation SEQ is not isolated after the formula."
         End If
         VTConfigureNumberedEquationParagraph formulaParagraph
-        expectedNumber = VTEquationSequenceResultText(sequenceField)
+        expectedNumber = VTEquationNumberTextForFormula( _
+            documentObject, formulaId)
         If VTFirstPositiveIntegerInText(expectedNumber) < 1 Then
             Err.Raise vbObjectError + 7560, "VisualTeX", _
                 "The image Equation SEQ result is invalid."
         End If
         Set numberRange = VTStaticImageEquationNumberRange( _
             formulaRange, formulaId)
-        If Not numberRange Is Nothing Then
-            numberSize = numberRange.Font.Size
-        End If
+        numberSize = VTVisibleEquationNumberFontSize(documentObject)
         Set numberRange = VTWriteStaticImageEquationNumber( _
             documentObject, formulaRange, formulaId, expectedNumber)
         Set formulaRange = VTNumberedFormulaRangeForId( _
@@ -13919,8 +16492,10 @@ Private Sub VTRefreshParagraphEquationBookmarks( _
                 "The native Equation number REF left its OMath array."
         End If
         visibleNumberField.Update
-        If VTEquationSequenceResultText(visibleNumberField) <> _
-           VTEquationSequenceResultText(sequenceField) Then
+        If VTComparableEquationNumberText( _
+               VTEquationSequenceResultText(visibleNumberField)) <> _
+           VTComparableEquationNumberText( _
+               VTEquationNumberTextForFormula(documentObject, formulaId)) Then
             Err.Raise vbObjectError + 7560, "VisualTeX", _
                 "The visible native Equation REF does not match its external SEQ."
         End If
@@ -13930,7 +16505,7 @@ Private Sub VTRefreshParagraphEquationBookmarks( _
             Err.Raise vbObjectError + 7560, "VisualTeX", _
                 "Word did not expose the native Equation array number range."
         End If
-        numberSize = visibleNumberField.Result.Font.Size
+        numberSize = VTVisibleEquationNumberFontSize(documentObject)
         numberPosition = 0
         VTFormatHiddenEquationParagraph sequenceParagraph
         Set captionRange = sequenceParagraph.Duplicate
@@ -13962,6 +16537,9 @@ Private Sub VTRefreshParagraphEquationBookmarks( _
     With numberRange.Font
         .Hidden = False
         .Color = wdColorAutomatic
+        .Name = VT_WORD_EQUATION_NUMBER_FONT_NAME
+        .NameAscii = VT_WORD_EQUATION_NUMBER_FONT_NAME
+        .NameOther = VT_WORD_EQUATION_NUMBER_FONT_NAME
         .Position = numberPosition
         .Size = numberSize
     End With
@@ -13994,7 +16572,9 @@ Private Sub VTVerifyParagraphEquationNumberIntegrity( _
     Dim sequenceBookmarkName As String
     Dim captionBookmarkName As String
     Dim numberBookmarkName As String
-    Dim expectedText As String
+    Dim expectedOrdinalText As String
+    Dim expectedNumberText As String
+    Dim restartLevel As Long
 
     If formulaRange Is Nothing Or expectedOrdinal < 1 Or _
        Not VTIsCanonicalUuid(formulaId) Then
@@ -14037,10 +16617,23 @@ Private Sub VTVerifyParagraphEquationNumberIntegrity( _
         Err.Raise vbObjectError + 7560, "VisualTeX", _
             "The numbered formula has no native Equation SEQ field."
     End If
-    expectedText = CStr(expectedOrdinal)
-    If VTEquationSequenceResultText(sequenceField) <> expectedText Then
+    restartLevel = VTEquationNumberingRestartLevel(documentObject)
+    expectedOrdinalText = CStr(expectedOrdinal)
+    If Not VTEquationSequenceFieldHasOrdinal( _
+       sequenceField, VTNativeEquationLabelName(), _
+       expectedOrdinal, restartLevel) Then
         Err.Raise vbObjectError + 7560, "VisualTeX", _
-            "The Equation SEQ result is incorrect."
+            "The Equation SEQ result is incorrect" & _
+            " [code=" & sequenceField.Code.Text & _
+            "; result=" & VTEquationSequenceResultText(sequenceField) & _
+            "; ordinal=" & expectedOrdinalText & _
+            "; restartLevel=" & CStr(restartLevel) & "]."
+    End If
+    expectedNumberText = VTEquationNumberTextForFormula( _
+        documentObject, formulaId)
+    If Len(expectedNumberText) = 0 Then
+        Err.Raise vbObjectError + 7560, "VisualTeX", _
+            "The Equation has no formatted visible number."
     End If
     Set numberRange = documentObject.Bookmarks( _
         numberBookmarkName).Range.Duplicate
@@ -14065,7 +16658,7 @@ Private Sub VTVerifyParagraphEquationNumberIntegrity( _
            numberRange.Information(wdWithInTable) Or _
            numberRange.Paragraphs(1).Range.Start <> _
                formulaParagraph.Start Or _
-           numberRange.Text <> "(" & expectedText & ")" Or _
+           numberRange.Text <> "(" & expectedNumberText & ")" Or _
            Not VTParagraphHasSingleVisualTeXImageMacroButton( _
                formulaParagraph) Or _
            Not VTEquationCaptionBookmarkIsCollapsedInParagraph( _
@@ -14110,9 +16703,17 @@ Private Sub VTVerifyParagraphEquationNumberIntegrity( _
     End If
     If Not VTNativeEquationNumberIsInsideMath( _
        formulaRange, visibleNumberField) Or _
-       VTEquationSequenceResultText(visibleNumberField) <> expectedText Then
+       VTComparableEquationNumberText( _
+           VTEquationSequenceResultText(visibleNumberField)) <> _
+       VTComparableEquationNumberText(expectedNumberText) Then
         Err.Raise vbObjectError + 7560, "VisualTeX", _
-            "The native Equation visible REF is invalid."
+            "The native Equation visible REF is invalid" & _
+            " [actual=" & _
+                VTEquationSequenceResultText(visibleNumberField) & _
+            "; expected=" & expectedNumberText & _
+            "; insideMath=" & CStr( _
+                VTNativeEquationNumberIsInsideMath( _
+                    formulaRange, visibleNumberField)) & "]."
     End If
     Set expectedNumberRange = VTNativeEquationArrayNumberRange( _
         formulaRange, visibleNumberField)
@@ -17686,6 +20287,161 @@ Private Sub VTNormalizeVisibleEquationReferenceField( _
         wdAlignParagraphRight
 End Sub
 
+Private Function VTRepairMixedNumberHelperOrder( _
+    ByVal documentObject As Document, _
+    ByRef referenceBindings As Collection) As Long
+
+    Dim candidateField As Field
+    Dim sequenceField As Field
+    Dim formulaRange As Range
+    Dim formulaParagraph As Range
+    Dim helperParagraph As Range
+    Dim insertionRange As Range
+    Dim fieldRange As Range
+    Dim sequenceBookmarkName As String
+    Dim captionBookmarkName As String
+    Dim formulaId As String
+    Dim formulaIds() As String
+    Dim formulaAnchors() As Long
+    Dim formulaCount As Long
+    Dim helperStart As Long
+    Dim itemIndex As Long
+    Dim sortIndex As Long
+    Dim previousIndex As Long
+    Dim anchorValue As Long
+    Dim formulaIdValue As String
+
+    If documentObject Is Nothing Then Exit Function
+
+    For Each candidateField In documentObject.Fields
+        If VTIsNativeEquationSequenceField( _
+           candidateField, VTNativeEquationLabelName()) Then
+            sequenceBookmarkName = VTSequenceBookmarkNameForField( _
+                documentObject, candidateField)
+            formulaId = VTFormulaIdFromSequenceBookmarkName( _
+                sequenceBookmarkName)
+            If Len(formulaId) > 0 Then
+                Set formulaRange = VTNumberedFormulaRangeForId( _
+                    documentObject, formulaId)
+                If Not formulaRange Is Nothing Then
+                    Set formulaParagraph = _
+                        VTWordParagraphContainingFormula(formulaRange)
+                    Set helperParagraph = _
+                        candidateField.Result.Paragraphs(1).Range.Duplicate
+                    If Not formulaParagraph Is Nothing And _
+                       VTHelperParagraphOwnsNativeEquationSequence( _
+                           helperParagraph) Then
+                        If helperParagraph.Start <> formulaParagraph.End Then
+                            formulaCount = formulaCount + 1
+                            If formulaCount = 1 Then
+                                ReDim formulaIds(1 To 1)
+                                ReDim formulaAnchors(1 To 1)
+                            Else
+                                ReDim Preserve formulaIds(1 To formulaCount)
+                                ReDim Preserve formulaAnchors(1 To formulaCount)
+                            End If
+                            formulaIds(formulaCount) = formulaId
+                            formulaAnchors(formulaCount) = formulaRange.Start
+                        End If
+                    End If
+                End If
+            End If
+        End If
+    Next candidateField
+
+    If formulaCount = 0 Then Exit Function
+
+    For sortIndex = 2 To formulaCount
+        anchorValue = formulaAnchors(sortIndex)
+        formulaIdValue = formulaIds(sortIndex)
+        previousIndex = sortIndex - 1
+        Do While previousIndex >= 1 And _
+                 formulaAnchors(previousIndex) > anchorValue
+            formulaAnchors(previousIndex + 1) = _
+                formulaAnchors(previousIndex)
+            formulaIds(previousIndex + 1) = formulaIds(previousIndex)
+            previousIndex = previousIndex - 1
+        Loop
+        formulaAnchors(previousIndex + 1) = anchorValue
+        formulaIds(previousIndex + 1) = formulaIdValue
+    Next sortIndex
+
+    Set referenceBindings = _
+        VTCaptureBodyEquationReferenceBindings(documentObject)
+
+    For itemIndex = 1 To formulaCount
+        formulaId = formulaIds(itemIndex)
+        sequenceBookmarkName = _
+            VTEquationSequenceNumberBookmarkName(formulaId)
+        captionBookmarkName = VTEquationCaptionBookmarkName(formulaId)
+        Set sequenceField = VTEquationSequenceFieldForBookmark( _
+            documentObject, sequenceBookmarkName)
+        Set formulaRange = VTNumberedFormulaRangeForId( _
+            documentObject, formulaId)
+        If sequenceField Is Nothing Or formulaRange Is Nothing Then
+            Err.Raise vbObjectError + 7595, "VisualTeX", _
+                "A mixed-format Equation helper disappeared before ordering."
+        End If
+        Set formulaParagraph = _
+            VTWordParagraphContainingFormula(formulaRange)
+        Set helperParagraph = _
+            sequenceField.Result.Paragraphs(1).Range.Duplicate
+        If formulaParagraph Is Nothing Or _
+           Not VTHelperParagraphOwnsNativeEquationSequence( _
+               helperParagraph) Then
+            Err.Raise vbObjectError + 7595, "VisualTeX", _
+                "A mixed-format Equation helper is invalid."
+        End If
+        If helperParagraph.Start <> formulaParagraph.End Then
+            If documentObject.Bookmarks.Exists(sequenceBookmarkName) Then
+                documentObject.Bookmarks(sequenceBookmarkName).Delete
+            End If
+            If documentObject.Bookmarks.Exists(captionBookmarkName) Then
+                documentObject.Bookmarks(captionBookmarkName).Delete
+            End If
+            helperParagraph.Delete
+
+            Set formulaRange = VTNumberedFormulaRangeForId( _
+                documentObject, formulaId)
+            Set formulaParagraph = _
+                VTWordParagraphContainingFormula(formulaRange)
+            If formulaParagraph Is Nothing Then
+                Err.Raise vbObjectError + 7595, "VisualTeX", _
+                    "Word lost the visible Equation while moving its helper."
+            End If
+            helperStart = formulaParagraph.End
+            Set insertionRange = formulaParagraph.Duplicate
+            insertionRange.InsertParagraphAfter
+            Set helperParagraph = documentObject.Range( _
+                Start:=helperStart, _
+                End:=helperStart).Paragraphs(1).Range.Duplicate
+            If helperParagraph.Information(wdWithInTable) Or _
+               helperParagraph.Fields.Count <> 0 Or _
+               helperParagraph.InlineShapes.Count <> 0 Or _
+               helperParagraph.OMaths.Count <> 0 Or _
+               VTWordRangeHasMeaningfulText(helperParagraph) Then
+                Err.Raise vbObjectError + 7595, "VisualTeX", _
+                    "Word did not create an ordered Equation helper paragraph."
+            End If
+            Set fieldRange = documentObject.Range( _
+                Start:=helperParagraph.Start, End:=helperParagraph.Start)
+            Set sequenceField = VTInsertRegisteredEquationCaption( _
+                fieldRange, VTNativeEquationLabelName())
+            sequenceField.Update
+            documentObject.Bookmarks.Add _
+                name:=sequenceBookmarkName, _
+                Range:=sequenceField.Result.Duplicate
+            VTSetCollapsedEquationCaptionBookmark _
+                documentObject, formulaId, _
+                sequenceField.Result.Paragraphs(1).Range.Duplicate
+            VTFormatHiddenEquationParagraph _
+                sequenceField.Result.Paragraphs(1).Range.Duplicate
+            VTRepairMixedNumberHelperOrder = _
+                VTRepairMixedNumberHelperOrder + 1
+        End If
+    Next itemIndex
+End Function
+
 Private Sub VTReconcileEquationNumbers( _
     ByVal documentObject As Document, _
     Optional ByVal changedFrom As Long = -1)
@@ -17703,6 +20459,10 @@ Private Sub VTReconcileEquationNumbers( _
     Dim referenceAnchors() As Long
     Dim referenceCount As Long
     Dim itemIndex As Long
+    Dim sortIndex As Long
+    Dim previousIndex As Long
+    Dim anchorValue As Long
+    Dim bookmarkValue As String
     Dim shouldUpdate As Boolean
     Dim bookmarkParagraph As Range
     Dim nativeFormulaRange As Range
@@ -17731,8 +20491,41 @@ Private Sub VTReconcileEquationNumbers( _
                 VTEquationFieldStart(candidate)
             sequenceBookmarkNames(sequenceCount) = _
                 VTSequenceBookmarkNameForField(documentObject, candidate)
+            sequenceBookmarkName = sequenceBookmarkNames(sequenceCount)
+            If Len(sequenceBookmarkName) > 0 Then
+                formulaId = VTFormulaIdFromBookmarkSuffix( _
+                    Mid$(sequenceBookmarkName, _
+                        Len(VT_WORD_SEQUENCE_NUMBER_BOOKMARK_PREFIX) + 1))
+                If Len(formulaId) > 0 Then
+                    Set nativeFormulaRange = VTNumberedFormulaRangeForId( _
+                        documentObject, formulaId)
+                    If Not nativeFormulaRange Is Nothing Then
+                        sequenceAnchors(sequenceCount) = _
+                            nativeFormulaRange.Start
+                    End If
+                End If
+            End If
         End If
     Next candidate
+
+    ' Word's Fields collection is not guaranteed to enumerate mixed image and
+    ' OMML helper fields in document order. Sort the captured anchors together
+    ' with their VT_N_ identities before assigning flowing Equation ordinals.
+    For sortIndex = 2 To sequenceCount
+        anchorValue = sequenceAnchors(sortIndex)
+        bookmarkValue = sequenceBookmarkNames(sortIndex)
+        previousIndex = sortIndex - 1
+        Do While previousIndex >= 1 And _
+                 sequenceAnchors(previousIndex) > anchorValue
+            sequenceAnchors(previousIndex + 1) = _
+                sequenceAnchors(previousIndex)
+            sequenceBookmarkNames(previousIndex + 1) = _
+                sequenceBookmarkNames(previousIndex)
+            previousIndex = previousIndex - 1
+        Loop
+        sequenceAnchors(previousIndex + 1) = anchorValue
+        sequenceBookmarkNames(previousIndex + 1) = bookmarkValue
+    Next sortIndex
 
     ' Phase 1b: re-resolve one field at a time from its durable VT_N_ Bookmark or
     ' captured local anchor. No live Fields enumerator survives a field update.
@@ -18642,6 +21435,226 @@ Private Function VTInsertNativeEquationNumber( _
         exactEquationRange.Paragraphs(1).Range.Duplicate
 End Function
 
+Private Function VTInsertCachedNativeEquationFast( _
+    ByVal targetRange As Range, _
+    ByVal nativeDocumentPath As String, _
+    ByVal fontSizePt As Double) As Range
+
+    Dim targetDocument As Document
+    Dim stagingDocument As Document
+    Dim stagingRange As Range
+    Dim insertionRange As Range
+    Dim probeRange As Range
+    Dim equationRange As Range
+    Dim nativeMath As OMath
+    Dim insertionStart As Long
+    Dim probeEnd As Long
+    Dim stagingLength As Long
+    Dim insertErrorNumber As Long
+    Dim insertErrorDescription As String
+
+    If targetRange Is Nothing Or Not VTValidWordFormulaFontSize(fontSizePt) Then
+        Err.Raise vbObjectError + 7434, "VisualTeX", _
+            "The cached native equation insertion target is invalid."
+    End If
+    VTValidateAbsoluteVisualTeXPath nativeDocumentPath
+    ' The caller already performed the one sandbox-safe existence preflight.
+    ' Avoid a second AppleScriptTask round trip here; Documents.Open remains the
+    ' authoritative guard if the cache disappears between those two steps.
+    Set targetDocument = targetRange.Document
+    insertionStart = targetRange.Start
+    On Error GoTo InsertFailed
+
+    Set stagingDocument = Documents.Open( _
+        FileName:=nativeDocumentPath, _
+        ConfirmConversions:=False, _
+        ReadOnly:=True, _
+        AddToRecentFiles:=False, _
+        Visible:=False)
+    If stagingDocument.OMaths.Count <> 1 Then
+        Err.Raise vbObjectError + 7434, "VisualTeX", _
+            "The cached native Word document does not contain exactly one equation."
+    End If
+    Set stagingRange = stagingDocument.OMaths(1).Range.Duplicate
+    stagingLength = stagingRange.End - stagingRange.Start
+    Set insertionRange = targetDocument.Range( _
+        Start:=insertionStart, End:=insertionStart)
+    insertionRange.FormattedText = stagingRange.FormattedText
+    stagingDocument.Close SaveChanges:=wdDoNotSaveChanges
+    Set stagingDocument = Nothing
+    targetDocument.Activate
+
+    probeEnd = insertionStart + stagingLength + 8
+    If probeEnd > targetDocument.Content.End Then
+        probeEnd = targetDocument.Content.End
+    End If
+    Set probeRange = targetDocument.Range( _
+        Start:=insertionStart, End:=probeEnd)
+    If probeRange.OMaths.Count <> 1 Then
+        Err.Raise vbObjectError + 7434, "VisualTeX", _
+            "Word did not create one cached native equation at the insertion point."
+    End If
+    Set nativeMath = probeRange.OMaths(1)
+    If Not VTOMathHasMeaningfulContent(nativeMath) Then
+        Err.Raise vbObjectError + 7434, "VisualTeX", _
+            "The cached native equation is empty."
+    End If
+    Set equationRange = nativeMath.Range.Duplicate
+    equationRange.Font.Position = 0
+    equationRange.Font.Size = CSng(fontSizePt)
+    Set VTInsertCachedNativeEquationFast = equationRange
+    Exit Function
+
+InsertFailed:
+    insertErrorNumber = Err.Number
+    insertErrorDescription = Err.Description
+    On Error Resume Next
+    If Not stagingDocument Is Nothing Then
+        stagingDocument.Close SaveChanges:=wdDoNotSaveChanges
+    End If
+    If insertionStart >= 0 And Not targetDocument Is Nothing Then
+        probeEnd = insertionStart + 64
+        If probeEnd > targetDocument.Content.End Then
+            probeEnd = targetDocument.Content.End
+        End If
+        Set probeRange = targetDocument.Range( _
+            Start:=insertionStart, End:=probeEnd)
+        If probeRange.OMaths.Count = 1 Then
+            probeRange.OMaths(1).Range.Delete
+        End If
+    End If
+    On Error GoTo 0
+    Err.Raise insertErrorNumber, "VisualTeX cached native insertion", _
+        insertErrorDescription
+End Function
+
+Private Function VTWordConvertInlineShapeToNativeFast( _
+    ByVal target As InlineShape) As Boolean
+
+    Dim formulaId As String
+    Dim displayMode As String
+    Dim numbered As Boolean
+    Dim encodedMetadata As String
+    Dim ommlBase64 As String
+    Dim nativeDocumentPath As String
+    Dim targetDocument As Document
+    Dim sourceContainerRange As Range
+    Dim insertionRange As Range
+    Dim equationRange As Range
+    Dim nativeMath As OMath
+    Dim sourceImage As InlineShape
+    Dim undoRecord As Object
+    Dim sourceFontSizePt As Double
+    Dim referenceWidthPt As Double
+    Dim referenceHeightPt As Double
+    Dim referenceBaselinePt As Double
+    Dim observedWordFontSizePt As Double
+    Dim sourceStart As Long
+    Dim equationStart As Long
+    Dim internalMutationStarted As Boolean
+    Dim undoRecordStarted As Boolean
+    Dim mutationOccurred As Boolean
+    Dim conversionErrorNumber As Long
+    Dim conversionErrorDescription As String
+
+    If target Is Nothing Or Not VTIsVisualTeXInlineShape(target) Then Exit Function
+    If Not VTTryParseFormulaReference( _
+       target.Title, formulaId, displayMode, numbered) Then Exit Function
+    ' Numbered formulas retain the established full reconciliation transaction.
+    If numbered Then Exit Function
+    Set targetDocument = target.Range.Document
+    If Not VTTryReadWordMetadataPayload( _
+       targetDocument, formulaId, encodedMetadata) Then
+        encodedMetadata = target.AlternativeText
+    End If
+    If Not VTIsEncodedMetadata(encodedMetadata) Then Exit Function
+    If Not VTTryReadWordOmmlPayload( _
+       targetDocument, formulaId, ommlBase64) Then Exit Function
+    nativeDocumentPath = VTNativeWordDocumentPath(formulaId)
+    If Not VTPathFileExists(nativeDocumentPath) Then Exit Function
+
+    VTReadWordImageConversionState _
+        target, formulaId, sourceFontSizePt, referenceWidthPt, _
+        referenceHeightPt, referenceBaselinePt, observedWordFontSizePt
+    Set sourceContainerRange = VTVisualTeXImageContainerRange(target)
+    sourceStart = sourceContainerRange.Start
+
+    On Error GoTo ConversionFailed
+    Set undoRecord = CallByName(Application, "UndoRecord", VbGet)
+    undoRecord.StartCustomRecord "VisualTeX Convert Image to OMML"
+    undoRecordStarted = True
+    VTBeginWordInternalMutation
+    internalMutationStarted = True
+
+    ' Insert before the still-live source image. The image remains the rollback
+    ' copy until Word has parsed and validated exactly one cached OMath.
+    Set insertionRange = targetDocument.Range( _
+        Start:=sourceStart, End:=sourceStart)
+    Set equationRange = VTInsertCachedNativeEquationFast( _
+        insertionRange, nativeDocumentPath, sourceFontSizePt)
+    equationStart = equationRange.Start
+
+    Set sourceImage = VTFindCommittedInlineShapeInDocument( _
+        targetDocument, encodedMetadata, _
+        VTFormulaReference(formulaId, displayMode, numbered))
+    If sourceImage Is Nothing Then
+        Err.Raise vbObjectError + 7430, "VisualTeX", _
+            "Word could not re-resolve the source image after cached OMML insertion."
+    End If
+    VTDeleteVisualTeXImageContainer sourceImage
+    mutationOccurred = True
+
+    Set equationRange = VTResolveNativeEquationRange( _
+        targetDocument, equationStart, 16)
+    If displayMode = "block" Then
+        Set equationRange = VTPromoteNativeEquationToDisplay(equationRange)
+    Else
+        Set equationRange = VTFinalizeInlineNativeEquation(equationRange)
+    End If
+    equationRange.Font.Size = CSng(sourceFontSizePt)
+    VTSetWordMetadataPayload targetDocument, formulaId, encodedMetadata
+    VTSetWordFormulaFormat targetDocument, formulaId, displayMode, False
+    VTSetWordImageScaleState _
+        targetDocument, formulaId, sourceFontSizePt, referenceWidthPt, _
+        referenceHeightPt, referenceBaselinePt, sourceFontSizePt
+    VTSetNativeFormulaBookmark targetDocument, equationRange, formulaId
+    Set nativeMath = VTNativeMathForBookmark( _
+        targetDocument.Bookmarks(VTNativeFormulaBookmarkName(formulaId)))
+    If nativeMath Is Nothing Then
+        Err.Raise vbObjectError + 7430, "VisualTeX", _
+            "Word lost the native equation before structure caching."
+    End If
+    VTSetWordNativeSignature targetDocument, formulaId, nativeMath
+    equationRange.Select
+
+    If internalMutationStarted Then
+        VTEndWordInternalMutation
+        internalMutationStarted = False
+    End If
+    If undoRecordStarted Then
+        undoRecord.EndCustomRecord
+        undoRecordStarted = False
+    End If
+    VTWordConvertInlineShapeToNativeFast = True
+    Exit Function
+
+ConversionFailed:
+    conversionErrorNumber = Err.Number
+    conversionErrorDescription = Err.Description
+    On Error Resume Next
+    If internalMutationStarted Then VTEndWordInternalMutation
+    If undoRecordStarted Then undoRecord.EndCustomRecord
+    If mutationOccurred Then
+        CallByName Application, "Undo", VbMethod
+    ElseIf Not equationRange Is Nothing Then
+        equationRange.Delete
+    End If
+    On Error GoTo 0
+    Err.Raise conversionErrorNumber, _
+        "VisualTeX Word cached image-to-native conversion", _
+        conversionErrorDescription
+End Function
+
 Private Sub VTWordConvertInlineShapeToNativeEquation(ByVal target As InlineShape)
     Dim formulaId As String
     Dim displayMode As String
@@ -18672,6 +21685,7 @@ Private Sub VTWordConvertInlineShapeToNativeEquation(ByVal target As InlineShape
     Dim nativeBookmarkAnchor As Long
     Dim numberCreated As Boolean
     Dim internalMutationStarted As Boolean
+    Dim replaceSourceContainer As Boolean
     Dim sourceFontSizePt As Double
     Dim referenceWidthPt As Double
     Dim referenceHeightPt As Double
@@ -18704,10 +21718,12 @@ Private Sub VTWordConvertInlineShapeToNativeEquation(ByVal target As InlineShape
     sourceHeightPoints = target.Height
     nativeDocumentPath = VTNativeWordDocumentPath(formulaId)
     If Not VTPathFileExists(nativeDocumentPath) Then
-        ' Formulas created by an older build have no durable staging DOCX.
-        ' Open one edit Session; committing it materializes the cache and
-        ' performs the requested conversion instead of showing a dead-end error.
-        VTWordEditInlineShape target, True
+        ' Older image formulas can retain valid LaTeX/OMML metadata while their
+        ' durable native staging DOCX is absent. Rebuild that DOCX through the
+        ' resident renderer as a silent image-to-native operation; the frontend
+        ' commits automatically and this same Word callback performs the final
+        ' replacement without ever revealing the formula editor.
+        VTWordEditInlineShape target, True, "imageToNative"
         Exit Sub
     End If
 
@@ -18715,6 +21731,7 @@ Private Sub VTWordConvertInlineShapeToNativeEquation(ByVal target As InlineShape
     If numbered Or displayMode = "block" Then nativeDisplayMode = "inline"
     Set sourceContainerRange = VTVisualTeXImageContainerRange(target)
     sourceStart = sourceContainerRange.Start
+    replaceSourceContainer = (sourceContainerRange.OMaths.Count = 1)
     Set insertionAnchor = sourceContainerRange.Duplicate
     insertionAnchor.Collapse wdCollapseEnd
     On Error GoTo ConversionFailed
@@ -18730,9 +21747,10 @@ Private Sub VTWordConvertInlineShapeToNativeEquation(ByVal target As InlineShape
     sourceBackupRange.Collapse wdCollapseStart
     sourceBackupRange.FormattedText = sourceContainerRange.FormattedText
     If sourceBackupDocument.InlineShapes.Count <> 1 Or _
-       sourceBackupDocument.Fields.Count <> 1 Then
+       Not VTIsVisualTeXInlineShape( _
+           sourceBackupDocument.InlineShapes(1)) Then
         Err.Raise vbObjectError + 7472, "VisualTeX", _
-            "Word could not back up the formula image field before native conversion."
+            "Word could not back up the VisualTeX image before native conversion."
     End If
     Set sourceBackupRange = _
         VTVisualTeXImageContainerRange( _
@@ -18741,19 +21759,30 @@ Private Sub VTWordConvertInlineShapeToNativeEquation(ByVal target As InlineShape
 
     VTSetWordMetadataPayload targetDocument, formulaId, encodedMetadata
     VTSetWordFormulaFormat targetDocument, formulaId, displayMode, numbered
-    Set equationRange = VTInsertNativeEquationAtRange( _
-        insertionAnchor, _
-        ommlBase64, _
-        nativeDocumentPath, _
-        nativeDisplayMode, _
-        displayMode = "block", _
-        False)
-    nativeEquationStart = equationRange.Start
+    If replaceSourceContainer Then
+        Set equationRange = VTInsertNativeEquationAtRange( _
+            sourceContainerRange, _
+            ommlBase64, _
+            nativeDocumentPath, _
+            nativeDisplayMode, _
+            displayMode = "block", _
+            True)
+        sourceDeleted = True
+    Else
+        Set equationRange = VTInsertNativeEquationAtRange( _
+            insertionAnchor, _
+            ommlBase64, _
+            nativeDocumentPath, _
+            nativeDisplayMode, _
+            displayMode = "block", _
+            False)
 
-    targetDocument.Activate
-    Set sourceImage = VTFindUniqueInlineShape(encodedMetadata)
-    VTDeleteVisualTeXImageContainer sourceImage
-    sourceDeleted = True
+        targetDocument.Activate
+        Set sourceImage = VTFindUniqueInlineShape(encodedMetadata)
+        VTDeleteVisualTeXImageContainer sourceImage
+        sourceDeleted = True
+    End If
+    nativeEquationStart = equationRange.Start
 
     Set equationRange = VTResolveNativeEquationRange( _
         targetDocument, nativeEquationStart, 16)
@@ -18812,11 +21841,9 @@ Private Sub VTWordConvertInlineShapeToNativeEquation(ByVal target As InlineShape
     sourceBackupDocument.Close SaveChanges:=wdDoNotSaveChanges
     Set sourceBackupDocument = Nothing
     On Error Resume Next
-    If displayMode = "inline" Then
-        VTPlaceCaretAfterInlineNativeEquation equationRange
-    Else
-        equationRange.Select
-    End If
+    ' This is a conversion of an existing formula, not a new insertion. Select
+    ' the converted OMath instead of creating a U+2060 caret anchor after it.
+    equationRange.Select
     On Error GoTo 0
     DoEvents
 
@@ -18864,6 +21891,8 @@ Private Sub VTWordConvertInlineShapeToNativeEquation(ByVal target As InlineShape
         referenceHeightPt, referenceBaselinePt, sourceFontSizePt
     VTSetNativeFormulaBookmark _
         targetDocument, finalFormulaRange, formulaId
+    VTSetWordNativeSignature _
+        targetDocument, formulaId, finalFormulaRange.OMaths(1)
     If Not targetDocument.Bookmarks.Exists( _
        VTNativeFormulaBookmarkName(formulaId)) Or _
        (numbered And displayMode = "block" And _
@@ -18908,6 +21937,24 @@ Private Function VTNativeWordDocumentPath(ByVal formulaId As String) As String
     End If
     VTNativeWordDocumentPath = _
         VTApplicationSupportRoot() & "/NativeDocuments/" & formulaId & ".docx"
+End Function
+
+Private Function VTImageCacheDocumentPath(ByVal formulaId As String) As String
+    If Not VTIsCanonicalUuid(formulaId) Then
+        Err.Raise vbObjectError + 7434, "VisualTeX", _
+            "The cached Word image formula id is invalid."
+    End If
+    VTImageCacheDocumentPath = _
+        VTApplicationSupportRoot() & "/ImageDocuments/" & formulaId & ".docx"
+End Function
+
+Private Function VTImageCachePngPath(ByVal formulaId As String) As String
+    If Not VTIsCanonicalUuid(formulaId) Then
+        Err.Raise vbObjectError + 7434, "VisualTeX", _
+            "The cached Word image formula id is invalid."
+    End If
+    VTImageCachePngPath = _
+        VTApplicationSupportRoot() & "/ImageDocuments/" & formulaId & ".png"
 End Function
 
 Private Function VTNativeFormulaBookmarkName(ByVal formulaId As String) As String
@@ -19022,6 +22069,52 @@ Private Function VTFindSelectedNativeFormulaBookmark(ByVal selected As Selection
     Set VTFindSelectedNativeFormulaBookmark = VTFindNativeFormulaBookmark(selected.Range, True)
 End Function
 
+Private Function VTTryFindNativeFormulaBookmarkLocally( _
+    ByVal selectedRange As Range, _
+    ByRef resolvedBookmark As Bookmark) As Boolean
+
+    Dim probeRange As Range
+    Dim mathRange As Range
+    Dim candidate As Bookmark
+    Dim formulaId As String
+    Dim match As Bookmark
+    Dim matchCount As Long
+
+    Set resolvedBookmark = Nothing
+    If selectedRange Is Nothing Then Exit Function
+    On Error GoTo LocalMiss
+
+    Set probeRange = selectedRange.Duplicate
+    If probeRange.OMaths.Count <> 1 Then
+        probeRange.MoveStart Unit:=wdCharacter, Count:=-1
+        probeRange.MoveEnd Unit:=wdCharacter, Count:=1
+    End If
+    If probeRange.OMaths.Count <> 1 Then Exit Function
+    Set mathRange = probeRange.OMaths(1).Range.Duplicate
+
+    ' Current VisualTeX OMML formulas persist one exact VT_F_ Bookmark around
+    ' the equation. Range.Bookmarks limits lookup to the clicked equation and
+    ' avoids walking every Bookmark in a formula-dense document.
+    For Each candidate In mathRange.Bookmarks
+        If VTTryFormulaIdFromNativeBookmark(candidate.Name, formulaId) Then
+            If candidate.Range.Start <= mathRange.End And _
+               candidate.Range.End >= mathRange.Start Then
+                matchCount = matchCount + 1
+                Set match = candidate
+            End If
+        End If
+    Next candidate
+    If matchCount = 1 Then
+        Set resolvedBookmark = match
+        VTTryFindNativeFormulaBookmarkLocally = True
+    End If
+    Exit Function
+
+LocalMiss:
+    Set resolvedBookmark = Nothing
+    Err.Clear
+End Function
+
 Private Function VTFindNativeFormulaBookmark( _
     ByVal selectedRange As Range, _
     Optional ByVal requireMatch As Boolean = True) As Bookmark
@@ -19033,6 +22126,16 @@ Private Function VTFindNativeFormulaBookmark( _
     Dim candidateMath As OMath
 
     If selectedRange Is Nothing Then GoTo NoMatch
+    If VTTryFindNativeFormulaBookmarkLocally( _
+       selectedRange, match) Then
+        Set VTFindNativeFormulaBookmark = match
+        Exit Function
+    End If
+
+    ' Legacy or damaged documents can lack the exact local Bookmark. Retain the
+    ' full-document resolver only as a compatibility fallback; genuine current
+    ' VisualTeX formulas never pay this formula-count-dependent cost.
+    Set match = Nothing
     For Each candidate In selectedRange.Document.Bookmarks
         If VTTryFormulaIdFromNativeBookmark(candidate.Name, formulaId) Then
             Set candidateMath = VTNativeMathForBookmark(candidate)
@@ -19125,6 +22228,177 @@ Private Sub VTDeleteDocumentVariable(ByVal documentObject As Document, ByVal var
     Err.Clear
     On Error GoTo 0
 End Sub
+
+Private Function VTEquationNumberingMode( _
+    ByVal documentObject As Document) As String
+
+    Dim storedMode As String
+
+    VTEquationNumberingMode = VT_WORD_NUMBERING_MODE_SEQUENCE
+    If documentObject Is Nothing Then Exit Function
+    If Not VTTryGetDocumentVariable( _
+       documentObject, VT_WORD_NUMBERING_MODE_VARIABLE, storedMode) Then
+        Exit Function
+    End If
+    storedMode = LCase$(Trim$(storedMode))
+    Select Case storedMode
+        Case VT_WORD_NUMBERING_MODE_SEQUENCE, _
+             VT_WORD_NUMBERING_MODE_CHAPTER, _
+             VT_WORD_NUMBERING_MODE_SECTION
+            VTEquationNumberingMode = storedMode
+    End Select
+End Function
+
+Private Function VTEquationNumberingSeparator( _
+    ByVal documentObject As Document) As String
+
+    Dim storedSeparator As String
+
+    VTEquationNumberingSeparator = "."
+    If documentObject Is Nothing Then Exit Function
+    If VTTryGetDocumentVariable( _
+       documentObject, VT_WORD_NUMBERING_SEPARATOR_VARIABLE, _
+       storedSeparator) Then
+        storedSeparator = Trim$(storedSeparator)
+        If storedSeparator = "." Or storedSeparator = "-" Then
+            VTEquationNumberingSeparator = storedSeparator
+        End If
+    End If
+End Function
+
+Private Function VTEquationNumberingDisplaySeparator( _
+    ByVal documentObject As Document) As String
+
+    If VTEquationNumberingSeparator(documentObject) = "-" Then
+        ' OMath turns an ASCII hyphen into a mathematical minus. Use that same
+        ' character in the shared VT_N_ source so image, OMath and body REF
+        ' numbers have identical text metrics and alignment.
+        VTEquationNumberingDisplaySeparator = ChrW(8722)
+    Else
+        VTEquationNumberingDisplaySeparator = "."
+    End If
+End Function
+
+Private Function VTComparableEquationNumberText( _
+    ByVal numberText As String) As String
+
+    numberText = Trim$(numberText)
+    numberText = Replace$(numberText, ChrW(8722), "-")
+    numberText = Replace$(numberText, ChrW(8208), "-")
+    numberText = Replace$(numberText, ChrW(8209), "-")
+    VTComparableEquationNumberText = numberText
+End Function
+
+Private Sub VTSetEquationNumberingFormat( _
+    ByVal documentObject As Document, _
+    ByVal numberingMode As String, _
+    ByVal separatorText As String)
+
+    numberingMode = LCase$(Trim$(numberingMode))
+    If documentObject Is Nothing Then
+        Err.Raise vbObjectError + 7596, "VisualTeX", _
+            "The Equation numbering format requires an open document."
+    End If
+    Select Case numberingMode
+        Case VT_WORD_NUMBERING_MODE_SEQUENCE
+            separatorText = "."
+        Case VT_WORD_NUMBERING_MODE_CHAPTER, _
+             VT_WORD_NUMBERING_MODE_SECTION
+            If separatorText <> "." And separatorText <> "-" Then
+                Err.Raise vbObjectError + 7596, "VisualTeX", _
+                    "The Equation numbering separator must be . or -."
+            End If
+        Case Else
+            Err.Raise vbObjectError + 7596, "VisualTeX", _
+                "The Equation numbering mode is invalid."
+    End Select
+    VTSetDocumentVariable _
+        documentObject, VT_WORD_NUMBERING_MODE_VARIABLE, numberingMode
+    VTSetDocumentVariable _
+        documentObject, VT_WORD_NUMBERING_SEPARATOR_VARIABLE, separatorText
+End Sub
+
+Private Function VTEquationNumberingRestartLevel( _
+    ByVal documentObject As Document) As Long
+
+    Select Case VTEquationNumberingMode(documentObject)
+        Case VT_WORD_NUMBERING_MODE_CHAPTER
+            VTEquationNumberingRestartLevel = 1
+        Case VT_WORD_NUMBERING_MODE_SECTION
+            VTEquationNumberingRestartLevel = 2
+    End Select
+End Function
+
+Private Function VTNormalizeHeadingNumberText( _
+    ByVal headingNumber As String) As String
+
+    headingNumber = Trim$(headingNumber)
+    headingNumber = Replace$(headingNumber, vbTab, "")
+    headingNumber = Replace$(headingNumber, ChrW(160), "")
+    Do While Len(headingNumber) > 0 And _
+             InStr(1, ".-、:：", Right$(headingNumber, 1), _
+                 vbBinaryCompare) > 0
+        headingNumber = Left$(headingNumber, Len(headingNumber) - 1)
+    Loop
+    VTNormalizeHeadingNumberText = Trim$(headingNumber)
+End Function
+
+Private Function VTEquationHeadingPrefix( _
+    ByVal formulaRange As Range, _
+    ByVal numberingMode As String) As String
+
+    Dim documentObject As Document
+    Dim candidateParagraph As Paragraph
+    Dim candidateLevel As Long
+    Dim targetLevel As Long
+    Dim chapterCount As Long
+    Dim sectionCount As Long
+    Dim listText As String
+    Dim fallbackText As String
+
+    If formulaRange Is Nothing Then Exit Function
+    numberingMode = LCase$(Trim$(numberingMode))
+    If numberingMode = VT_WORD_NUMBERING_MODE_CHAPTER Then
+        targetLevel = 1
+    ElseIf numberingMode = VT_WORD_NUMBERING_MODE_SECTION Then
+        targetLevel = 2
+    Else
+        Exit Function
+    End If
+
+    Set documentObject = formulaRange.Document
+    For Each candidateParagraph In documentObject.Paragraphs
+        If candidateParagraph.Range.Start >= formulaRange.Start Then Exit For
+        candidateLevel = candidateParagraph.OutlineLevel
+        If candidateLevel = 1 Then
+            chapterCount = chapterCount + 1
+            sectionCount = 0
+        ElseIf candidateLevel = 2 Then
+            sectionCount = sectionCount + 1
+        End If
+        If candidateLevel = targetLevel Then
+            listText = VTNormalizeHeadingNumberText( _
+                candidateParagraph.Range.ListFormat.ListString)
+            If Len(listText) > 0 Then
+                VTEquationHeadingPrefix = listText
+            ElseIf targetLevel = 1 Then
+                VTEquationHeadingPrefix = CStr(chapterCount)
+            Else
+                fallbackText = CStr(IIf(chapterCount > 0, chapterCount, 1)) & _
+                    "." & CStr(IIf(sectionCount > 0, sectionCount, 1))
+                VTEquationHeadingPrefix = fallbackText
+            End If
+        End If
+    Next candidateParagraph
+
+    If Len(VTEquationHeadingPrefix) = 0 Then
+        If targetLevel = 1 Then
+            VTEquationHeadingPrefix = "1"
+        Else
+            VTEquationHeadingPrefix = "1.1"
+        End If
+    End If
+End Function
 
 Private Function VTStoredPayloadChunkCount( _
     ByVal documentObject As Document, _
@@ -19534,6 +22808,97 @@ InvalidPayload:
     Err.Raise vbObjectError + 7466, "VisualTeX", "The stored Word formula metadata is incomplete or corrupt."
 End Function
 
+Private Function VTWordNativeSignatureVariableName( _
+    ByVal formulaId As String) As String
+
+    If Not VTIsCanonicalUuid(formulaId) Then
+        Err.Raise vbObjectError + 7467, "VisualTeX", _
+            "VisualTeX cannot address a native formula signature for an invalid id."
+    End If
+    VTWordNativeSignatureVariableName = _
+        VT_WORD_NATIVE_SIGNATURE_VARIABLE_PREFIX & _
+        Replace$(formulaId, "-", "_")
+End Function
+
+Private Function VTNativeMathStructureSignature( _
+    ByVal nativeMath As OMath) As String
+
+    Dim sourceXml As String
+    Dim mathStart As Long
+    Dim mathEnd As Long
+    Dim fragment As String
+    Dim hashValue As Double
+    Dim characterValue As Long
+    Dim characterIndex As Long
+
+    If nativeMath Is Nothing Then Exit Function
+    sourceXml = nativeMath.Range.WordOpenXML
+    mathStart = InStr(1, sourceXml, "<m:oMath", vbBinaryCompare)
+    If mathStart = 0 Then Exit Function
+    mathEnd = InStr(mathStart, sourceXml, "</m:oMath>", vbBinaryCompare)
+    If mathEnd = 0 Then Exit Function
+    fragment = Mid$( _
+        sourceXml, mathStart, _
+        mathEnd - mathStart + Len("</m:oMath>"))
+    fragment = Replace$(fragment, vbCr, "")
+    fragment = Replace$(fragment, vbLf, "")
+    fragment = Replace$(fragment, vbTab, "")
+    Do While InStr(1, fragment, "> ", vbBinaryCompare) > 0
+        fragment = Replace$(fragment, "> ", ">")
+    Loop
+    Do While InStr(1, fragment, " <", vbBinaryCompare) > 0
+        fragment = Replace$(fragment, " <", "<")
+    Loop
+    If Len(fragment) = 0 Then Exit Function
+
+    hashValue = 7#
+    For characterIndex = 1 To Len(fragment)
+        characterValue = AscW(Mid$(fragment, characterIndex, 1))
+        If characterValue < 0 Then characterValue = characterValue + 65536
+        hashValue = hashValue * 131# + CDbl(characterValue)
+        hashValue = hashValue - _
+            Fix(hashValue / 2147483629#) * 2147483629#
+    Next characterIndex
+    VTNativeMathStructureSignature = _
+        CStr(Len(fragment)) & "|" & Hex$(CLng(hashValue))
+End Function
+
+Private Sub VTSetWordNativeSignature( _
+    ByVal documentObject As Document, _
+    ByVal formulaId As String, _
+    ByVal nativeMath As OMath)
+
+    Dim signatureValue As String
+
+    signatureValue = VTNativeMathStructureSignature(nativeMath)
+    If Len(signatureValue) = 0 Then
+        Err.Raise vbObjectError + 7467, "VisualTeX", _
+            "Word did not expose a stable native formula structure."
+    End If
+    VTSetDocumentVariable _
+        documentObject, _
+        VTWordNativeSignatureVariableName(formulaId), _
+        signatureValue
+End Sub
+
+Private Function VTWordNativeSignatureMatches( _
+    ByVal documentObject As Document, _
+    ByVal formulaId As String, _
+    ByVal nativeMath As OMath) As Boolean
+
+    Dim storedSignature As String
+    Dim currentSignature As String
+
+    If documentObject Is Nothing Or nativeMath Is Nothing Then Exit Function
+    If Not VTTryGetDocumentVariable( _
+       documentObject, VTWordNativeSignatureVariableName(formulaId), _
+       storedSignature) Then Exit Function
+    currentSignature = VTNativeMathStructureSignature(nativeMath)
+    If Len(currentSignature) = 0 Then Exit Function
+    VTWordNativeSignatureMatches = _
+        (StrComp(storedSignature, currentSignature, vbBinaryCompare) = 0)
+End Function
+
 Private Function VTWordFormatVariableName(ByVal formulaId As String) As String
     If Not VTIsCanonicalUuid(formulaId) Then
         Err.Raise vbObjectError + 7467, "VisualTeX", "VisualTeX cannot address Word formula format for an invalid formula id."
@@ -19929,7 +23294,6 @@ Private Sub VTPrepareWordImageFormulaState( _
     ByRef observedWordFontSizePt As Double)
 
     Dim currentWordFontSizePt As Double
-    Dim normalFontSizePt As Double
     Dim expectedWidthPt As Double
     Dim expectedHeightPt As Double
 
@@ -19941,22 +23305,18 @@ Private Sub VTPrepareWordImageFormulaState( _
     currentWordFontSizePt = VTInlineShapeWordFontSize(formulaShape)
     If VTValidWordFormulaFontSize(currentWordFontSizePt) And _
        Abs(currentWordFontSizePt - observedWordFontSizePt) > 0.05 Then
-        ' Selecting an InlineShape can make Word for Mac report the Normal
-        ' paragraph font (commonly 11 pt) instead of the font stored on the
-        ' shape Range. Do not mistake that host-selection artifact for a user
-        ' resize when the image geometry still exactly represents the stored
-        ' VisualTeX point size.
-        On Error Resume Next
-        normalFontSizePt = _
-            formulaShape.Range.Document.Styles(wdStyleNormal).Font.Size
-        On Error GoTo 0
+        ' Selecting an InlineShape can make Word for Mac report the surrounding
+        ' paragraph font instead of the VisualTeX size persisted for the image.
+        ' The reported value is not tied reliably to the document's Normal style:
+        ' Word can return 10 pt for an 11 pt formula, or the reverse. Geometry is
+        ' authoritative here. If width and height still represent the persisted
+        ' VisualTeX point size, selection changed only Word's transient font view
+        ' and must never resize the image.
         expectedWidthPt = referenceWidthPt * _
             storedFontSizePt / VT_WORD_IMAGE_REFERENCE_FONT_SIZE_PT
         expectedHeightPt = referenceHeightPt * _
             storedFontSizePt / VT_WORD_IMAGE_REFERENCE_FONT_SIZE_PT
-        If VTValidWordFormulaFontSize(normalFontSizePt) And _
-           Abs(currentWordFontSizePt - normalFontSizePt) <= 0.05 And _
-           Abs(formulaShape.Width - expectedWidthPt) <= 0.5 And _
+        If Abs(formulaShape.Width - expectedWidthPt) <= 0.5 And _
            Abs(formulaShape.Height - expectedHeightPt) <= 0.5 Then Exit Sub
         VTApplyWordImageFormulaFontSize formulaShape, currentWordFontSizePt
         VTEnsureWordImageScaleState _

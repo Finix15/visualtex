@@ -36,6 +36,7 @@ import {
   renderOfficeFormulaArtifacts,
 } from "../shared/formulaRenderArtifacts";
 import { createUuid } from "../../runtime/browserCompatibility";
+import { useEditorStore } from "../../stores/editorStore";
 import { documentImportErrorMessage } from "./documentImportErrors";
 import {
   cancelMacosDocumentImport,
@@ -164,11 +165,14 @@ async function prepareFormulaArtifactCommitItem(
   const line = { id: createUuid(), latex: block.latex.trim() };
   if (!line.latex) throw new Error("存在空公式，请填写或删除后再插入。");
   const editorDocument = normalizeFormulaEditorDocument([line], "raw");
+  const { formulaLetterFont, formulaChineseFont } = useEditorStore.getState();
   const artifacts = renderOfficeFormulaArtifacts({
     lines: editorDocument.lines,
     codeFormat: editorDocument.codeFormat,
     displayMode: block.displayMode,
     host: "word",
+    formulaLetterFont,
+    formulaChineseFont,
   });
   const { canonicalLatex, svg } = artifacts;
   if (!artifacts.omml) {
@@ -210,6 +214,8 @@ async function prepareFormulaArtifactCommitItem(
       displayMode: block.displayMode,
       numbered: block.displayMode === "block" && block.numbered,
       fontSizePt: block.fontSizePt,
+      formulaLetterFont,
+      formulaChineseFont,
       renderWidthPx: svg.width,
       renderHeightPx: svg.height,
       ...reference,
@@ -242,6 +248,8 @@ async function prepareFormulaArtifactCommitItem(
     displayMode: block.displayMode,
     numbered: block.displayMode === "block" && block.numbered,
     fontSizePt: block.fontSizePt,
+    formulaLetterFont,
+    formulaChineseFont,
   });
   return {
     kind: "formula",

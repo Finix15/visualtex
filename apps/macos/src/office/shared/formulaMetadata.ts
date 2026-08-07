@@ -1,4 +1,12 @@
 import { deflateSync, inflateSync, strFromU8, strToU8 } from "fflate";
+import {
+  FORMULA_CHINESE_FONT_OPTIONS,
+  FORMULA_LETTER_FONT_OPTIONS,
+  normalizeFormulaChineseFont,
+  normalizeFormulaLetterFont,
+  type FormulaChineseFont,
+  type FormulaLetterFont,
+} from "../../editor/formulaFontPreferences";
 
 export interface VisualTeXFormulaMetadata {
   schema: "visualtex-formula";
@@ -17,6 +25,8 @@ export interface VisualTeXFormulaMetadata {
   renderHeightPx?: number;
   /** Office point size used to scale Word images or PowerPoint SVG formulas. */
   fontSizePt?: number;
+  formulaLetterFont?: FormulaLetterFont;
+  formulaChineseFont?: FormulaChineseFont;
   /** Vector/image dimensions at VisualTeX's 14 pt reference size. */
   referenceWidthPt?: number;
   referenceHeightPt?: number;
@@ -40,6 +50,8 @@ export interface CreateFormulaMetadataInput {
   renderWidthPx?: number;
   renderHeightPx?: number;
   fontSizePt?: number;
+  formulaLetterFont?: FormulaLetterFont;
+  formulaChineseFont?: FormulaChineseFont;
   referenceWidthPt?: number;
   referenceHeightPt?: number;
   referenceBaselinePt?: number;
@@ -129,6 +141,14 @@ export function isVisualTeXFormulaMetadata(
       (typeof candidate.fontSizePt === "number" &&
         Number.isFinite(candidate.fontSizePt) &&
         candidate.fontSizePt > 0)) &&
+    (candidate.formulaLetterFont === undefined ||
+      FORMULA_LETTER_FONT_OPTIONS.some(
+        (item) => item.id === candidate.formulaLetterFont,
+      )) &&
+    (candidate.formulaChineseFont === undefined ||
+      FORMULA_CHINESE_FONT_OPTIONS.some(
+        (item) => item.id === candidate.formulaChineseFont,
+      )) &&
     (candidate.referenceWidthPt === undefined ||
       (typeof candidate.referenceWidthPt === "number" &&
         Number.isFinite(candidate.referenceWidthPt) &&
@@ -160,6 +180,8 @@ export function createFormulaMetadata({
   renderWidthPx,
   renderHeightPx,
   fontSizePt,
+  formulaLetterFont,
+  formulaChineseFont,
   referenceWidthPt,
   referenceHeightPt,
   referenceBaselinePt,
@@ -185,6 +207,12 @@ export function createFormulaMetadata({
     fontSizePt && Number.isFinite(fontSizePt) && fontSizePt > 0
       ? fontSizePt
       : original?.fontSizePt;
+  const resolvedFormulaLetterFont = normalizeFormulaLetterFont(
+    formulaLetterFont ?? original?.formulaLetterFont,
+  );
+  const resolvedFormulaChineseFont = normalizeFormulaChineseFont(
+    formulaChineseFont ?? original?.formulaChineseFont,
+  );
   const resolvedReferenceWidth =
     referenceWidthPt && Number.isFinite(referenceWidthPt) && referenceWidthPt > 0
       ? referenceWidthPt
@@ -215,6 +243,8 @@ export function createFormulaMetadata({
     ...(resolvedRenderWidth ? { renderWidthPx: resolvedRenderWidth } : {}),
     ...(resolvedRenderHeight ? { renderHeightPx: resolvedRenderHeight } : {}),
     ...(resolvedFontSize ? { fontSizePt: resolvedFontSize } : {}),
+    formulaLetterFont: resolvedFormulaLetterFont,
+    formulaChineseFont: resolvedFormulaChineseFont,
     ...(resolvedReferenceWidth ? { referenceWidthPt: resolvedReferenceWidth } : {}),
     ...(resolvedReferenceHeight ? { referenceHeightPt: resolvedReferenceHeight } : {}),
     ...(resolvedReferenceBaseline !== undefined

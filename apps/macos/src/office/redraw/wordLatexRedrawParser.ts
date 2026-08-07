@@ -52,8 +52,49 @@ function normalizeDisplayEnvironmentLatex(environment: string, body: string) {
   return normalizedBody;
 }
 
+function isWordMathematicalAlphanumeric(character: string) {
+  const codePoint = character.codePointAt(0) ?? 0;
+  if (
+    (codePoint >= 0x1d400 && codePoint <= 0x1d7ff) ||
+    (codePoint >= 0x2100 && codePoint <= 0x214f)
+  ) {
+    const normalized = character.normalize("NFKC");
+    return /^[A-Za-z0-9]$/.test(normalized);
+  }
+  return false;
+}
+
+/**
+ * Word can return selected LaTeX using Unicode mathematical-alphanumeric
+ * glyphs and duplicate the command backslash before those glyphs. Keep the
+ * exact Word text for range validation, but restore a standard LaTeX body for
+ * MathJax and OMML conversion.
+ */
+function normalizeWordLatexBody(body: string) {
+  const characters = Array.from(body);
+  let normalized = "";
+  for (let index = 0; index < characters.length; index += 1) {
+    const character = characters[index];
+    if (
+      character === "\\" &&
+      characters[index + 1] === "\\" &&
+      isWordMathematicalAlphanumeric(characters[index + 2] ?? "")
+    ) {
+      normalized += "\\";
+      index += 1;
+      continue;
+    }
+    if (isWordMathematicalAlphanumeric(character)) {
+      normalized += character.normalize("NFKC");
+      continue;
+    }
+    normalized += character === "−" ? "-" : character;
+  }
+  return normalized;
+}
+
 function normalizeDelimitedDisplayLatex(body: string) {
-  return body
+  return normalizeWordLatexBody(body)
     .replace(/\r\n?/g, "\n")
     .replace(/[ \t]*\n+[ \t]*/g, " ")
     .trim();
@@ -71,7 +112,9 @@ function addFormulaSpan(
 ) {
   if (bodyEnd <= bodyStart) return;
   const body = source.slice(bodyStart, bodyEnd);
-  const latex = normalizeDisplay ? normalizeDelimitedDisplayLatex(body) : body.trim();
+  const latex = normalizeDisplay
+    ? normalizeDelimitedDisplayLatex(body)
+    : normalizeWordLatexBody(body).trim();
   if (!latex) return;
   spans.push({
     start: sourceStart,
@@ -167,7 +210,7 @@ export function findWindowsWordLatexRedrawSpans(source: string) {
         if (end >= bodyStart) {
           const latex = normalizeDisplayEnvironmentLatex(
             name,
-            source.slice(bodyStart, end),
+            normalizeWordLatexBody(source.slice(bodyStart, end)),
           );
           if (latex) {
             spans.push({

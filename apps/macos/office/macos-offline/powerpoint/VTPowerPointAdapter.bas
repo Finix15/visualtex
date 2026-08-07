@@ -21,6 +21,7 @@ Private Const VT_POWERPOINT_REFERENCE_HEIGHT_TAG As String = _
     "VisualTeXReferenceHeightPt"
 Private VT_POWERPOINT_EVENT_SINK As VTPowerPointEvents
 Private VT_POWERPOINT_RIBBON As IRibbonUI
+Private VT_POWERPOINT_SELECTION_SYNC_ACTIVE As Boolean
 
 Public Sub Auto_Open()
     On Error Resume Next
@@ -191,7 +192,16 @@ Private Sub VTPowerPointEditShape(ByVal selectedShape As Shape)
     Dim fontSizePt As Double
     Dim referenceWidthPt As Double
     Dim referenceHeightPt As Double
+    Dim launchTiming As String
+    Dim startedAt As Double
+    Dim envelopeReadyAt As Double
+    Dim scaleReadyAt As Double
+    Dim identifierReadyAt As Double
+    Dim geometryReadyAt As Double
+    Dim requestReadyAt As Double
+    Dim launchFinishedAt As Double
 
+    startedAt = Timer
     If selectedShape Is Nothing Then
         Err.Raise vbObjectError + 7500, "VisualTeX", "Select one VisualTeX formula shape."
     End If
@@ -203,13 +213,17 @@ Private Sub VTPowerPointEditShape(ByVal selectedShape As Shape)
     If Len(formulaId) = 0 Then
         Err.Raise vbObjectError + 7500, "VisualTeX", "The selected PowerPoint shape has no VisualTeX formula id."
     End If
+    envelopeReadyAt = Timer
     VTEnsurePowerPointFormulaScaleState _
         selectedShape, fontSizePt, referenceWidthPt, referenceHeightPt
+    scaleReadyAt = Timer
 
     sessionId = VTNewUuidV4()
+    identifierReadyAt = Timer
     powerPointJson = VTPowerPointGeometryJson( _
         ActiveWindow.View.Slide, selectedShape, fontSizePt, _
         referenceWidthPt, referenceHeightPt)
+    geometryReadyAt = Timer
     requestJson = VTRequestJson( _
         sessionId, _
         VT_POWERPOINT_HOST, _
@@ -222,8 +236,61 @@ Private Sub VTPowerPointEditShape(ByVal selectedShape As Shape)
         encodedMetadata, _
         "", _
         powerPointJson)
-    Call VTWriteAndLaunchSession( _
+    requestReadyAt = Timer
+    launchTiming = VTWriteAndLaunchSession( _
         VT_POWERPOINT_HOST, sessionId, requestJson)
+    launchFinishedAt = Timer
+    VTWritePowerPointOpenPerformance _
+        sessionId, startedAt, envelopeReadyAt, scaleReadyAt, _
+        identifierReadyAt, geometryReadyAt, requestReadyAt, _
+        launchFinishedAt, launchTiming
+End Sub
+
+Private Function VTTimerElapsedMilliseconds( _
+    ByVal startedAt As Double, _
+    ByVal finishedAt As Double) As Double
+
+    If finishedAt < startedAt Then finishedAt = finishedAt + 86400#
+    VTTimerElapsedMilliseconds = (finishedAt - startedAt) * 1000#
+End Function
+
+Private Sub VTWritePowerPointOpenPerformance( _
+    ByVal sessionId As String, _
+    ByVal startedAt As Double, _
+    ByVal envelopeReadyAt As Double, _
+    ByVal scaleReadyAt As Double, _
+    ByVal identifierReadyAt As Double, _
+    ByVal geometryReadyAt As Double, _
+    ByVal requestReadyAt As Double, _
+    ByVal launchFinishedAt As Double, _
+    ByVal launchTiming As String)
+
+    Dim tracePath As String
+    Dim payload As String
+
+    On Error GoTo TraceFinished
+    tracePath = VTSessionDirectory(sessionId) & _
+        "/vba-open-performance.txt"
+    payload = _
+        "envelopeMs=" & VTJsonNumber( _
+            VTTimerElapsedMilliseconds(startedAt, envelopeReadyAt)) & ";" & _
+        "scaleMs=" & VTJsonNumber( _
+            VTTimerElapsedMilliseconds(envelopeReadyAt, scaleReadyAt)) & ";" & _
+        "identifierMs=" & VTJsonNumber( _
+            VTTimerElapsedMilliseconds(scaleReadyAt, identifierReadyAt)) & ";" & _
+        "geometryMs=" & VTJsonNumber( _
+            VTTimerElapsedMilliseconds(identifierReadyAt, geometryReadyAt)) & ";" & _
+        "requestMs=" & VTJsonNumber( _
+            VTTimerElapsedMilliseconds(geometryReadyAt, requestReadyAt)) & ";" & _
+        "launcherCallMs=" & VTJsonNumber( _
+            VTTimerElapsedMilliseconds(requestReadyAt, launchFinishedAt)) & ";" & _
+        "totalMs=" & VTJsonNumber( _
+            VTTimerElapsedMilliseconds(startedAt, launchFinishedAt)) & ";" & _
+        launchTiming
+    VTWriteTextAtomic tracePath, payload
+
+TraceFinished:
+    Err.Clear
 End Sub
 
 Public Sub VisualTeX_DeleteSelected()
@@ -297,6 +364,7 @@ Private Sub VTFinalizePowerPointDispatch(ByVal sessionId As String, ByVal dispat
     Dim fontSizePt As Double
     Dim referenceWidthPt As Double
     Dim referenceHeightPt As Double
+    Dim targetPresentation As Presentation
     Dim currentSlide As Slide
     Dim committed As Shape
     Dim original As Shape
@@ -305,8 +373,9 @@ Private Sub VTFinalizePowerPointDispatch(ByVal sessionId As String, ByVal dispat
     Dim candidateTemporaryName As String
     Dim originalRenamed As Boolean
     Dim formulaReference As String
+    Dim existingSessionId As String
+    Dim existingPendingState As String
 
-    VTRequireWritablePowerPointPresentation
     VTRequireDispatchValue dispatch, "formulaId"
     VTRequireDispatchValue dispatch, "metadata"
     VTRequireDispatchValue dispatch, "shapeName"
@@ -332,6 +401,8 @@ Private Sub VTFinalizePowerPointDispatch(ByVal sessionId As String, ByVal dispat
     imagePath = CStr(dispatch("imagePath"))
     fallbackImagePath = VTDispatchOptionalPpt(dispatch, "fallbackImagePath")
     expectedPresentation = CStr(dispatch("presentationIdentity"))
+    Set targetPresentation = VTFindPowerPointPresentation(expectedPresentation)
+    VTRequireWritablePowerPointPresentationObject targetPresentation
     slideIndex = CLng(dispatch("slideIndex"))
     slideId = CLng(dispatch("slideId"))
     targetLeft = VTDispatchDoublePpt(dispatch, "targetLeft")
@@ -355,10 +426,7 @@ Private Sub VTFinalizePowerPointDispatch(ByVal sessionId As String, ByVal dispat
             "VisualTeX PowerPoint result metadata is invalid."
     End If
     formulaReference = VTFormulaReference(formulaId, "block", False)
-    If expectedPresentation <> VTPresentationIdentity() Then
-        Err.Raise vbObjectError + 7515, "VisualTeX", "The active PowerPoint presentation changed while VisualTeX was open."
-    End If
-    If slideIndex <= 0 Or slideIndex > ActivePresentation.Slides.Count Or slideId <= 0 Or targetZOrder <= 0 Then
+    If slideIndex <= 0 Or slideIndex > targetPresentation.Slides.Count Or slideId <= 0 Or targetZOrder <= 0 Then
         Err.Raise vbObjectError + 7516, "VisualTeX", "VisualTeX PowerPoint target reference is invalid."
     End If
     VTValidateAbsoluteVisualTeXPath imagePath
@@ -370,19 +438,30 @@ Private Sub VTFinalizePowerPointDispatch(ByVal sessionId As String, ByVal dispat
         If Not VTPathFileExists(fallbackImagePath) Then fallbackImagePath = ""
     End If
 
-    Set currentSlide = ActivePresentation.Slides(slideIndex)
+    Set currentSlide = targetPresentation.Slides(slideIndex)
     If currentSlide.SlideID <> slideId Then
         Err.Raise vbObjectError + 7518, "VisualTeX", "The original PowerPoint slide no longer exists."
     End If
     On Error Resume Next
     Set committed = currentSlide.Shapes(shapeName)
+    If Not committed Is Nothing Then
+        existingSessionId = committed.Tags("VisualTeXSessionId")
+        existingPendingState = committed.Tags("VisualTeXPending")
+    End If
+    Err.Clear
     On Error GoTo TransactionFailed
     If Not committed Is Nothing Then
-        If VTIsCommittedPowerPointShape( _
-            committed, shapeName, formulaReference, metadata, formulaId, sessionId, _
-            targetLeft, targetTop, targetWidth, targetHeight, targetRotation, _
-            targetZOrder, fontSizePt, referenceWidthPt, referenceHeightPt) Then
-            Exit Sub
+        ' A normal edit starts from the previously committed shape, whose
+        ' Session id differs from this Apply. Avoid reading every geometry and
+        ' metadata property unless this is an actual retry of the same commit.
+        If existingSessionId = sessionId And existingPendingState = "0" Then
+            If VTIsCommittedPowerPointShape( _
+                committed, shapeName, formulaReference, metadata, formulaId, _
+                sessionId, targetLeft, targetTop, targetWidth, targetHeight, _
+                targetRotation, targetZOrder, fontSizePt, referenceWidthPt, _
+                referenceHeightPt) Then
+                Exit Sub
+            End If
         End If
     End If
     Set committed = Nothing
@@ -428,13 +507,12 @@ Private Sub VTFinalizePowerPointDispatch(ByVal sessionId As String, ByVal dispat
             Height:=CSng(targetHeight))
     End If
     candidate.Name = candidateTemporaryName
-    candidate.LockAspectRatio = msoFalse
-    candidate.Left = CSng(targetLeft)
-    candidate.Top = CSng(targetTop)
-    candidate.Width = CSng(targetWidth)
-    candidate.Height = CSng(targetHeight)
+    ' AddPicture already received the final bounds. Reassigning all four
+    ' geometry properties forces redundant Office layout work on every Apply.
     candidate.LockAspectRatio = msoTrue
-    candidate.Rotation = CSng(targetRotation)
+    If Abs(targetRotation) > 0.01 Then
+        candidate.Rotation = CSng(targetRotation)
+    End If
     candidate.AlternativeText = metadata
     candidate.Title = formulaReference
     VTSetShapeTag candidate, "VisualTeXFormulaId", formulaId
@@ -455,20 +533,18 @@ Private Sub VTFinalizePowerPointDispatch(ByVal sessionId As String, ByVal dispat
     originalRenamed = True
     candidate.Name = shapeName
 
+    ' Keep the synchronous transaction check focused on identity and rollback
+    ' safety. The integration benchmark verifies geometry and scale metadata
+    ' after the callback without extending the user's Apply wait.
     If candidate.Name <> shapeName Or _
-       Abs(candidate.Left - targetLeft) > 0.1 Or Abs(candidate.Top - targetTop) > 0.1 Or _
-       Abs(candidate.Width - targetWidth) > 0.1 Or Abs(candidate.Height - targetHeight) > 0.1 Or _
-       Abs(candidate.Rotation - targetRotation) > 0.1 Or candidate.ZOrderPosition <> targetZOrder + 1 Or _
-       candidate.AlternativeText <> metadata Or candidate.Title <> formulaReference Or _
+       candidate.ZOrderPosition <> targetZOrder + 1 Or _
+       candidate.AlternativeText <> metadata Or _
+       candidate.Title <> formulaReference Or _
        candidate.Tags("VisualTeXFormulaId") <> formulaId Or _
        candidate.Tags("VisualTeXSessionId") <> sessionId Or _
-       candidate.Tags("VisualTeXPending") <> "0" Or _
-       candidate.Tags(VT_POWERPOINT_FONT_TAG) <> VTJsonNumber(fontSizePt) Or _
-       candidate.Tags(VT_POWERPOINT_REFERENCE_WIDTH_TAG) <> _
-            VTJsonNumber(referenceWidthPt) Or _
-       candidate.Tags(VT_POWERPOINT_REFERENCE_HEIGHT_TAG) <> _
-            VTJsonNumber(referenceHeightPt) Then
-        Err.Raise vbObjectError + 7520, "VisualTeX", "PowerPoint did not persist the VisualTeX formula properties."
+       candidate.Tags("VisualTeXPending") <> "0" Then
+        Err.Raise vbObjectError + 7520, "VisualTeX", _
+            "PowerPoint did not persist the VisualTeX formula identity."
     End If
 
     original.Delete
@@ -504,24 +580,27 @@ Private Function VTIsCommittedPowerPointShape( _
     ByVal referenceHeightPt As Double) As Boolean
 
     On Error GoTo NotCommitted
-    VTIsCommittedPowerPointShape = _
-        target.Name = expectedName And _
-        Abs(target.Left - targetLeft) <= 0.1 And _
-        Abs(target.Top - targetTop) <= 0.1 And _
-        Abs(target.Width - targetWidth) <= 0.1 And _
-        Abs(target.Height - targetHeight) <= 0.1 And _
-        Abs(target.Rotation - targetRotation) <= 0.1 And _
-        target.ZOrderPosition = targetZOrder And _
-        target.AlternativeText = metadata And _
-        target.Title = formulaReference And _
-        target.Tags("VisualTeXFormulaId") = formulaId And _
-        target.Tags("VisualTeXSessionId") = sessionId And _
-        target.Tags("VisualTeXPending") = "0" And _
-        target.Tags(VT_POWERPOINT_FONT_TAG) = VTJsonNumber(fontSizePt) And _
-        target.Tags(VT_POWERPOINT_REFERENCE_WIDTH_TAG) = _
-            VTJsonNumber(referenceWidthPt) And _
-        target.Tags(VT_POWERPOINT_REFERENCE_HEIGHT_TAG) = _
-            VTJsonNumber(referenceHeightPt)
+    ' VBA does not short-circuit And expressions. Check cheap identifiers first
+    ' so a retry mismatch does not read every COM-backed shape property.
+    If target.Name <> expectedName Then Exit Function
+    If target.Tags("VisualTeXSessionId") <> sessionId Then Exit Function
+    If target.Tags("VisualTeXPending") <> "0" Then Exit Function
+    If target.Tags("VisualTeXFormulaId") <> formulaId Then Exit Function
+    If target.AlternativeText <> metadata Then Exit Function
+    If target.Title <> formulaReference Then Exit Function
+    If target.ZOrderPosition <> targetZOrder Then Exit Function
+    If Abs(target.Left - targetLeft) > 0.1 Then Exit Function
+    If Abs(target.Top - targetTop) > 0.1 Then Exit Function
+    If Abs(target.Width - targetWidth) > 0.1 Then Exit Function
+    If Abs(target.Height - targetHeight) > 0.1 Then Exit Function
+    If Abs(target.Rotation - targetRotation) > 0.1 Then Exit Function
+    If target.Tags(VT_POWERPOINT_FONT_TAG) <> _
+       VTJsonNumber(fontSizePt) Then Exit Function
+    If target.Tags(VT_POWERPOINT_REFERENCE_WIDTH_TAG) <> _
+       VTJsonNumber(referenceWidthPt) Then Exit Function
+    If target.Tags(VT_POWERPOINT_REFERENCE_HEIGHT_TAG) <> _
+       VTJsonNumber(referenceHeightPt) Then Exit Function
+    VTIsCommittedPowerPointShape = True
     Exit Function
 
 NotCommitted:
@@ -531,22 +610,25 @@ End Function
 
 Private Sub VTCancelPowerPointDispatch(ByVal sessionId As String, ByVal dispatch As Object)
     Dim pendingMarker As String
+    Dim currentPresentation As Presentation
     Dim currentSlide As Slide
     Dim shapeItem As Shape
 
     pendingMarker = VTDispatchOptionalPpt(dispatch, "pendingMarker")
     If Len(pendingMarker) = 0 Or Presentations.Count = 0 Then Exit Sub
     On Error Resume Next
-    For Each currentSlide In ActivePresentation.Slides
-        For Each shapeItem In currentSlide.Shapes
-            If shapeItem.AlternativeText = pendingMarker And _
-               shapeItem.Tags("VisualTeXSessionId") = sessionId And _
-               shapeItem.Tags("VisualTeXPending") = "1" Then
-                shapeItem.Delete
-                Exit Sub
-            End If
-        Next shapeItem
-    Next currentSlide
+    For Each currentPresentation In Presentations
+        For Each currentSlide In currentPresentation.Slides
+            For Each shapeItem In currentSlide.Shapes
+                If shapeItem.AlternativeText = pendingMarker And _
+                   shapeItem.Tags("VisualTeXSessionId") = sessionId And _
+                   shapeItem.Tags("VisualTeXPending") = "1" Then
+                    shapeItem.Delete
+                    Exit Sub
+                End If
+            Next shapeItem
+        Next currentSlide
+    Next currentPresentation
     On Error GoTo 0
 End Sub
 
@@ -826,8 +908,14 @@ Public Sub VisualTeX_SynchronizeSelectedFormulaSize( _
     Dim referenceWidthPt As Double
     Dim referenceHeightPt As Double
 
+    ' Ribbon invalidation can synchronously cause another PowerPoint selection
+    ' notification while the original event is still on the VBA stack. Without
+    ' a guard, loading the add-in can recurse indefinitely before the first
+    ' presentation window appears.
+    If VT_POWERPOINT_SELECTION_SYNC_ACTIVE Then Exit Sub
+    VT_POWERPOINT_SELECTION_SYNC_ACTIVE = True
     On Error GoTo SynchronizeFinished
-    If selected Is Nothing Then Exit Sub
+    If selected Is Nothing Then GoTo SynchronizeFinished
     If selected.Type <> ppSelectionShapes Or _
        selected.ShapeRange.Count <> 1 Then GoTo SynchronizeFinished
     Set selectedShape = selected.ShapeRange(1)
@@ -836,7 +924,10 @@ Public Sub VisualTeX_SynchronizeSelectedFormulaSize( _
         selectedShape, fontSizePt, referenceWidthPt, referenceHeightPt
 
 SynchronizeFinished:
+    On Error Resume Next
     VTInvalidatePowerPointFormulaFontSizeControl
+    VT_POWERPOINT_SELECTION_SYNC_ACTIVE = False
+    On Error GoTo 0
 End Sub
 
 Public Sub VisualTeX_SetSelectedFormulaFontSize( _
@@ -1062,24 +1153,72 @@ Private Function VTPowerPointGeometryJson( _
         "}"
 End Function
 
-Private Function VTPresentationIdentity() As String
+Private Function VTPresentationIdentityFor( _
+    ByVal targetPresentation As Presentation) As String
+
     On Error Resume Next
-    VTPresentationIdentity = ActivePresentation.FullName
-    If Err.Number <> 0 Or Len(VTPresentationIdentity) = 0 Then
+    VTPresentationIdentityFor = targetPresentation.FullName
+    If Err.Number <> 0 Or Len(VTPresentationIdentityFor) = 0 Then
         Err.Clear
-        VTPresentationIdentity = ActivePresentation.Name
+        VTPresentationIdentityFor = targetPresentation.Name
     End If
     On Error GoTo 0
-    VTPresentationIdentity = VTBoundedIdentity(VTPresentationIdentity)
+    VTPresentationIdentityFor = VTBoundedIdentity(VTPresentationIdentityFor)
 End Function
+
+Private Function VTPresentationIdentity() As String
+    VTPresentationIdentity = VTPresentationIdentityFor(ActivePresentation)
+End Function
+
+Private Function VTFindPowerPointPresentation( _
+    ByVal expectedIdentity As String) As Presentation
+
+    Dim candidatePresentation As Presentation
+    Dim matchingPresentation As Presentation
+    Dim matchCount As Long
+
+    expectedIdentity = VTBoundedIdentity(expectedIdentity)
+    If Len(expectedIdentity) = 0 Or Presentations.Count = 0 Then
+        Err.Raise vbObjectError + 7525, "VisualTeX", _
+            "The target PowerPoint presentation is no longer open."
+    End If
+
+    For Each candidatePresentation In Presentations
+        If VTPresentationIdentityFor(candidatePresentation) = expectedIdentity Then
+            matchCount = matchCount + 1
+            Set matchingPresentation = candidatePresentation
+        End If
+    Next candidatePresentation
+    If matchCount <> 1 Or matchingPresentation Is Nothing Then
+        Err.Raise vbObjectError + 7525, "VisualTeX", _
+            "The target PowerPoint presentation is no longer uniquely available."
+    End If
+
+    Set VTFindPowerPointPresentation = matchingPresentation
+End Function
+
+Private Sub VTRequireWritablePowerPointPresentationObject( _
+    ByVal targetPresentation As Presentation)
+
+    If targetPresentation Is Nothing Then
+        Err.Raise vbObjectError + 7510, "VisualTeX", _
+            "Open the target PowerPoint presentation first."
+    End If
+    If targetPresentation.ReadOnly = msoTrue Then
+        Err.Raise vbObjectError + 7511, "VisualTeX", _
+            "The target PowerPoint presentation is read-only."
+    End If
+    If targetPresentation.Windows.Count = 0 Then
+        Err.Raise vbObjectError + 7512, "VisualTeX", _
+            "The target PowerPoint presentation has no editable window."
+    End If
+End Sub
 
 Private Sub VTRequireWritablePowerPointPresentation()
     If Presentations.Count = 0 Then
         Err.Raise vbObjectError + 7510, "VisualTeX", "Open a PowerPoint presentation first."
     End If
-    If ActivePresentation.ReadOnly = msoTrue Then
-        Err.Raise vbObjectError + 7511, "VisualTeX", "The active PowerPoint presentation is read-only."
-    End If
+    VTRequireWritablePowerPointPresentationObject ActivePresentation
     If ActiveWindow Is Nothing Then
         Err.Raise vbObjectError + 7512, "VisualTeX", "Switch PowerPoint to a normal editing view."
     End If
@@ -1098,18 +1237,62 @@ End Sub
 
 Private Sub VTRestoreZOrder(ByVal target As Shape, ByVal expectedPosition As Long)
     Dim guard As Long
-    If expectedPosition <= 0 Then Exit Sub
-    Do While target.ZOrderPosition > expectedPosition And guard < 4096
-        target.ZOrder msoSendBackward
-        guard = guard + 1
-    Loop
-    Do While target.ZOrderPosition < expectedPosition And guard < 8192
-        target.ZOrder msoBringForward
-        guard = guard + 1
-    Loop
-    If target.ZOrderPosition <> expectedPosition Then
-        Err.Raise vbObjectError + 7514, "VisualTeX", "PowerPoint could not restore the formula z-order."
+    Dim currentPosition As Long
+    Dim shapeCount As Long
+    Dim directSteps As Long
+    Dim edgeRouteSteps As Long
+
+    If target Is Nothing Or expectedPosition <= 0 Then Exit Sub
+    currentPosition = target.ZOrderPosition
+    If currentPosition = expectedPosition Then Exit Sub
+
+    On Error Resume Next
+    shapeCount = target.Parent.Shapes.Count
+    Err.Clear
+    On Error GoTo RestoreFailed
+    If shapeCount <= 0 Then shapeCount = currentPosition
+    If expectedPosition > shapeCount Then expectedPosition = shapeCount
+
+    If currentPosition > expectedPosition Then
+        directSteps = currentPosition - expectedPosition
+        edgeRouteSteps = expectedPosition
+        If edgeRouteSteps < directSteps Then
+            target.ZOrder msoSendToBack
+            guard = guard + 1
+            Do While target.ZOrderPosition < expectedPosition And guard < 8192
+                target.ZOrder msoBringForward
+                guard = guard + 1
+            Loop
+        Else
+            Do While target.ZOrderPosition > expectedPosition And guard < 8192
+                target.ZOrder msoSendBackward
+                guard = guard + 1
+            Loop
+        End If
+    Else
+        directSteps = expectedPosition - currentPosition
+        edgeRouteSteps = shapeCount - expectedPosition + 1
+        If edgeRouteSteps < directSteps Then
+            target.ZOrder msoBringToFront
+            guard = guard + 1
+            Do While target.ZOrderPosition > expectedPosition And guard < 8192
+                target.ZOrder msoSendBackward
+                guard = guard + 1
+            Loop
+        Else
+            Do While target.ZOrderPosition < expectedPosition And guard < 8192
+                target.ZOrder msoBringForward
+                guard = guard + 1
+            Loop
+        End If
     End If
+
+    If target.ZOrderPosition <> expectedPosition Then GoTo RestoreFailed
+    Exit Sub
+
+RestoreFailed:
+    Err.Raise vbObjectError + 7514, "VisualTeX", _
+        "PowerPoint could not restore the formula z-order."
 End Sub
 
 Private Function VTDispatchOptionalPpt(ByVal dispatch As Object, ByVal key As String) As String

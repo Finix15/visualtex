@@ -10,6 +10,7 @@ const baseUrl = `http://127.0.0.1:${previewPort}`;
 const chromeProfile = `/tmp/visualtex-formula-hotkeys-${process.pid}`;
 const chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const defaultsOnly = process.argv.includes("--defaults-only");
 
 async function waitFor(url, timeoutMs = 15000) {
   const started = Date.now();
@@ -265,6 +266,98 @@ async function main() {
         setTimeout(() => resolve(field.value), 120);
       })`);
 
+    const clearFormula = async () =>
+      evaluate(`new Promise((resolve) => {
+        const field = document.querySelector("math-field");
+        field.setValue("", { silenceNotifications: true });
+        field.position = field.lastOffset;
+        field.dispatchEvent(new InputEvent("input", {
+          bubbles: true,
+          composed: true,
+          inputType: "deleteContentBackward",
+        }));
+        setTimeout(() => resolve(field.value), 80);
+      })`);
+
+    const defaultHotkeys = [
+      ["KeyR", "r", { metaKey: true }, /\\sqrt/],
+      ["KeyF", "f", { metaKey: true }, /\\frac/],
+      ["KeyJ", "j", { metaKey: true }, /[_^]/],
+      ["KeyL", "l", { metaKey: true }, /_/],
+      ["KeyD", "d", { metaKey: true }, /\\circ/],
+      ["KeyP", "P", { metaKey: true, shiftKey: true }, /\\partial/],
+      ["KeyI", "I", { metaKey: true, shiftKey: true }, /\\int/],
+      ["KeyS", "S", { metaKey: true, shiftKey: true }, /\\sum/],
+      ["KeyX", "X", { altKey: true, shiftKey: true }, /\\underline\{X\}/],
+      ["KeyY", "Y", { altKey: true, shiftKey: true }, /\\underline\{Y\}/],
+    ];
+    const hasConflictingCommandH = await evaluate(`(() => {
+      const hotkeys = JSON.parse(
+        localStorage.getItem("visualtex-formula-hotkeys-v1") || "{}",
+      );
+      return (hotkeys.state?.bindings || []).some(
+        (binding) => binding.chord?.metaKey &&
+          !binding.chord?.ctrlKey &&
+          !binding.chord?.altKey &&
+          !binding.chord?.shiftKey &&
+          binding.chord?.code === "KeyH",
+      );
+    })()`);
+    assert.equal(hasConflictingCommandH, false);
+    for (const [code, key, modifiers, expected] of defaultHotkeys) {
+      await clearFormula();
+      const value = await pressInFormula(code, key, modifiers);
+      assert.match(value, expected, `${code}: ${value}`);
+    }
+    await clearFormula();
+
+    const greekLetterHotkeys = [
+      ["KeyA", "a", /\\alpha/],
+      ["KeyB", "b", /\\beta/],
+      ["KeyG", "g", /\\gamma/],
+      ["KeyD", "d", /\\delta/],
+      ["KeyE", "e", /\\epsilon/],
+      ["KeyZ", "z", /\\zeta/],
+      ["KeyH", "h", /\\eta/],
+      ["KeyQ", "q", /\\theta/],
+      ["KeyI", "i", /\\iota/],
+      ["KeyK", "k", /\\kappa/],
+      ["KeyL", "l", /\\lambda/],
+      ["KeyM", "m", /\\mu/],
+      ["KeyN", "n", /\\nu/],
+      ["KeyX", "x", /\\xi/],
+      ["KeyO", "o", /^o$/],
+      ["KeyP", "p", /\\pi/],
+      ["KeyR", "r", /\\rho/],
+      ["KeyS", "s", /\\sigma/],
+      ["KeyT", "t", /\\tau/],
+      ["KeyU", "u", /\\upsilon/],
+      ["KeyF", "f", /\\phi/],
+      ["KeyC", "c", /\\chi/],
+      ["KeyY", "y", /\\psi/],
+      ["KeyW", "w", /\\omega/],
+    ];
+    for (const [code, key, expected] of greekLetterHotkeys) {
+      await clearFormula();
+      const armedValue = await pressInFormula("KeyG", "g", { metaKey: true });
+      assert.equal(armedValue, "", `Command+G inserted text before ${code}`);
+      const value = await pressInFormula(code, key, {});
+      assert.match(value, expected, `Command+G then ${key}: ${value}`);
+    }
+    for (const [code, key, expected] of [
+      ["KeyG", "G", /\\Gamma/],
+      ["KeyD", "D", /\\Delta/],
+      ["KeyQ", "Q", /\\Theta/],
+      ["KeyL", "L", /\\Lambda/],
+      ["KeyW", "W", /\\Omega/],
+    ]) {
+      await clearFormula();
+      await pressInFormula("KeyG", "g", { metaKey: true });
+      const value = await pressInFormula(code, key, { shiftKey: true });
+      assert.match(value, expected, `Command+G then Shift+${key}: ${value}`);
+    }
+    await clearFormula();
+
     await openContextMenu('.template-button[data-command-id="frac"]');
     await assignCurrentContext("KeyF", "f", {
       ctrlKey: true,
@@ -300,6 +393,30 @@ async function main() {
     assert.match(protectedState.warning, /保存|Save/);
     await evaluate(`document.querySelector(".formula-hotkey-recorder-dialog .dialog-header .icon-button")?.click()`);
 
+    await openContextMenu('.template-button[data-command-id="frac"]');
+    const greekPrefixProtectedState = await evaluate(`new Promise((resolve) => {
+      document.querySelector(".formula-hotkey-context-action")?.click();
+      setTimeout(() => {
+        document.dispatchEvent(new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          code: "KeyG",
+          key: "g",
+          metaKey: true,
+        }));
+        setTimeout(() => {
+          const save = document.querySelector(".formula-hotkey-recorder-footer .primary-button");
+          resolve({
+            disabled: save?.disabled ?? false,
+            warning: document.querySelector(".formula-hotkey-message.is-danger")?.textContent ?? "",
+          });
+        }, 40);
+      }, 50);
+    })`);
+    assert.equal(greekPrefixProtectedState.disabled, true);
+    assert.match(greekPrefixProtectedState.warning, /希腊字母|Greek letter/);
+    await evaluate(`document.querySelector(".formula-hotkey-recorder-dialog .dialog-header .icon-button")?.click()`);
+
     const managerState = await evaluate(`new Promise((resolve) => {
       document.querySelector(".settings-toggle")?.click();
       setTimeout(() => {
@@ -322,10 +439,58 @@ async function main() {
         }, 80);
       }, 80);
     })`);
-    assert.equal(managerState.rows, 1);
+    assert.equal(managerState.rows, 10);
     assert.ok(managerState.hotkey);
     assert.ok(managerState.keycapCenterDelta <= 1, JSON.stringify(managerState));
     await evaluate(`document.querySelector(".formula-hotkey-manager-dialog .dialog-header .icon-button")?.click()`);
+
+    if (defaultsOnly) {
+      await evaluate(`(() => {
+        localStorage.setItem(
+          "visualtex-formula-hotkeys-v1",
+          JSON.stringify({ state: { bindings: [] }, version: 1 }),
+        );
+      })()`);
+      await reload();
+      const migratedCount = await evaluate(`new Promise((resolve) => {
+        document.querySelector(".settings-toggle")?.click();
+        setTimeout(() => {
+          document.querySelector(".settings-hotkey-button")?.click();
+          setTimeout(() => resolve(
+            document.querySelectorAll(".formula-hotkey-binding-row").length,
+          ), 80);
+        }, 80);
+      })`);
+      assert.equal(migratedCount, 10);
+
+      const removedDefault = await evaluate(`new Promise((resolve) => {
+        const row = [...document.querySelectorAll(".formula-hotkey-binding-row")]
+          .find((item) => item.querySelector("code")?.textContent === "\\\\sqrt");
+        row?.querySelector(".formula-hotkey-binding-actions .is-danger")?.click();
+        setTimeout(() => resolve({
+          rows: document.querySelectorAll(".formula-hotkey-binding-row").length,
+          storedVersion: JSON.parse(
+            localStorage.getItem("visualtex-formula-hotkeys-v1") || "{}",
+          ).version,
+        }), 80);
+      })`);
+      assert.equal(removedDefault.rows, 9);
+      assert.equal(removedDefault.storedVersion, 2);
+      await evaluate(`document.querySelector(".formula-hotkey-manager-dialog .dialog-header .icon-button")?.click()`);
+      await reload();
+      const persistedRemovalCount = await evaluate(`new Promise((resolve) => {
+        document.querySelector(".settings-toggle")?.click();
+        setTimeout(() => {
+          document.querySelector(".settings-hotkey-button")?.click();
+          setTimeout(() => resolve(
+            document.querySelectorAll(".formula-hotkey-binding-row").length,
+          ), 80);
+        }, 80);
+      })`);
+      assert.equal(persistedRemovalCount, 9);
+      console.log("Default formula hotkey regression passed");
+      return;
+    }
 
     const expandedCategories = await evaluate(`new Promise(async (resolve) => {
       const result = {};

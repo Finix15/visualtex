@@ -344,8 +344,7 @@ async function main() {
           "\\biggl": "delimiter",
           "\\biggm": "delimiter",
           "\\biggr": "delimiter",
-          "\\bmod": "native",
-          "\\bull": "native",
+          "\\bm": "alias",
         },
       },
       {

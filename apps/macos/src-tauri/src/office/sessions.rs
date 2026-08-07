@@ -15,6 +15,22 @@ fn default_display_mode() -> String {
     "inline".to_string()
 }
 
+fn default_formula_letter_font() -> String {
+    "katex".to_string()
+}
+
+fn default_formula_chinese_font() -> String {
+    "system".to_string()
+}
+
+fn valid_formula_letter_font(value: &str) -> bool {
+    matches!(value, "katex" | "times" | "cambria" | "stix" | "palatino" | "helvetica")
+}
+
+fn valid_formula_chinese_font(value: &str) -> bool {
+    matches!(value, "system" | "pingfang" | "songti" | "kaiti" | "heiti")
+}
+
 const SESSION_FILE: &str = "session.json";
 const SESSION_TEMP_FILE: &str = "session.tmp";
 
@@ -113,6 +129,10 @@ pub struct VisualTeXFormulaMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_size_pt: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formula_letter_font: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formula_chinese_font: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference_width_pt: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference_height_pt: Option<f64>,
@@ -130,6 +150,8 @@ pub struct OfficeFormulaSession {
     pub id: String,
     pub mode: OfficeSessionMode,
     pub host: OfficeHost,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<String>,
     pub formula_id: String,
     pub source_document_id: Option<String>,
     pub source_object_id: Option<String>,
@@ -143,6 +165,10 @@ pub struct OfficeFormulaSession {
     pub numbered: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_size_pt: Option<f64>,
+    #[serde(default = "default_formula_letter_font")]
+    pub formula_letter_font: String,
+    #[serde(default = "default_formula_chinese_font")]
+    pub formula_chinese_font: String,
     pub export_width: f64,
     pub export_height: f64,
     pub export_result: Option<OfficeExportResult>,
@@ -162,6 +188,8 @@ pub struct OfficeFormulaSession {
 pub struct CreateOfficeSessionInput {
     pub mode: OfficeSessionMode,
     pub host: OfficeHost,
+    #[serde(default)]
+    pub operation: Option<String>,
     pub formula_id: Option<String>,
     pub source_document_id: Option<String>,
     pub source_object_id: Option<String>,
@@ -172,6 +200,8 @@ pub struct CreateOfficeSessionInput {
     pub display_mode: Option<String>,
     pub numbered: Option<bool>,
     pub font_size_pt: Option<f64>,
+    pub formula_letter_font: Option<String>,
+    pub formula_chinese_font: Option<String>,
     pub export_width: Option<f64>,
     pub export_height: Option<f64>,
     pub original_metadata: Option<VisualTeXFormulaMetadata>,
@@ -478,10 +508,39 @@ impl SessionStore {
                 "Office Session fontSizePt must be from 1 to 512 pt".to_string(),
             ));
         }
+        let formula_letter_font = input
+            .formula_letter_font
+            .or_else(|| {
+                input
+                    .original_metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.formula_letter_font.clone())
+            })
+            .unwrap_or_else(default_formula_letter_font);
+        if !valid_formula_letter_font(&formula_letter_font) {
+            return Err(SessionError::Invalid(
+                "Office Session formulaLetterFont is invalid".to_string(),
+            ));
+        }
+        let formula_chinese_font = input
+            .formula_chinese_font
+            .or_else(|| {
+                input
+                    .original_metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.formula_chinese_font.clone())
+            })
+            .unwrap_or_else(default_formula_chinese_font);
+        if !valid_formula_chinese_font(&formula_chinese_font) {
+            return Err(SessionError::Invalid(
+                "Office Session formulaChineseFont is invalid".to_string(),
+            ));
+        }
         let session = OfficeFormulaSession {
             id,
             mode: input.mode,
             host: input.host,
+            operation: input.operation,
             formula_id,
             source_document_id: input.source_document_id,
             source_object_id: input.source_object_id,
@@ -492,6 +551,8 @@ impl SessionStore {
             display_mode,
             numbered,
             font_size_pt,
+            formula_letter_font,
+            formula_chinese_font,
             export_width: input.export_width.unwrap_or_default(),
             export_height: input.export_height.unwrap_or_default(),
             export_result: None,
@@ -536,6 +597,8 @@ impl SessionStore {
             "displayMode",
             "numbered",
             "fontSizePt",
+            "formulaLetterFont",
+            "formulaChineseFont",
             "exportWidth",
             "exportHeight",
             "exportResult",
@@ -604,6 +667,16 @@ impl SessionStore {
         {
             return Err(SessionError::Invalid(
                 "Office Session fontSizePt must be from 1 to 512 pt".to_string(),
+            ));
+        }
+        if !valid_formula_letter_font(&next.formula_letter_font) {
+            return Err(SessionError::Invalid(
+                "Office Session formulaLetterFont is invalid".to_string(),
+            ));
+        }
+        if !valid_formula_chinese_font(&next.formula_chinese_font) {
+            return Err(SessionError::Invalid(
+                "Office Session formulaChineseFont is invalid".to_string(),
             ));
         }
 
@@ -758,6 +831,7 @@ mod tests {
         CreateOfficeSessionInput {
             mode: OfficeSessionMode::Create,
             host: OfficeHost::Word,
+            operation: None,
             formula_id: None,
             source_document_id: None,
             source_object_id: None,

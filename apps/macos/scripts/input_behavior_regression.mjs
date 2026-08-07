@@ -349,6 +349,44 @@ async function main() {
       })()`);
 
     await configure();
+
+    await prepareEmptyField();
+    await typeCharacter("a", "KeyA", 65);
+    await typeCharacter(" ", "Space", 32);
+    await typeCharacter("b", "KeyB", 66);
+    const ordinaryTrailingSpace = await readState();
+    assert.match(
+      ordinaryTrailingSpace.value,
+      /^a\\\s+b$/,
+      `Ordinary Space did not insert a visible math spacing atom: ${JSON.stringify(
+        ordinaryTrailingSpace,
+      )}`,
+    );
+
+    await evaluate(`(() => {
+      const field = document.querySelector("math-field");
+      field.setValue("ab", {
+        mode: "math",
+        format: "latex",
+        insertionMode: "replaceAll",
+        selectionMode: "after",
+        silenceNotifications: true,
+      });
+      field.position = 1;
+      field.selection = { ranges: [[1, 1]], direction: "none" };
+      field.focus();
+      field.shadowRoot?.querySelector('[part="keyboard-sink"]')?.focus({ preventScroll: true });
+    })()`);
+    await typeCharacter(" ", "Space", 32);
+    const ordinaryMiddleSpace = await readState();
+    assert.match(
+      ordinaryMiddleSpace.value,
+      /^a\\\s+b$/,
+      `Space at a root-level middle caret moved the caret instead of inserting spacing: ${JSON.stringify(
+        ordinaryMiddleSpace,
+      )}`,
+    );
+
     await preparePlaceholder("x^{\\placeholder{}}");
     await typeCharacter("a", "KeyA", 65);
     const superscript = await readState();
@@ -945,6 +983,34 @@ async function main() {
       `Integral row height changed with caret position: ${JSON.stringify(integralGeometry)}`,
     );
 
+    await loadSingleFormulaLine(
+      "\\int_{0}^{1}\\frac{\\alpha f}{g}+HHHHH",
+    );
+    const stableComplexHeight = await evaluate(`new Promise((resolve) => {
+      const row = document.querySelector(".formula-line");
+      const heights = [];
+      const sample = () => heights.push(row.getBoundingClientRect().height);
+      setTimeout(() => {
+        sample();
+        window.dispatchEvent(new Event("visualtex-editor-layout-refresh"));
+        setTimeout(() => {
+          sample();
+          setTimeout(() => {
+            sample();
+            resolve(heights);
+          }, 320);
+        }, 320);
+      }, 320);
+    })`);
+    assert.ok(
+      Math.max(...stableComplexHeight) < 240,
+      `Complex formula row expanded beyond a sane editor height: ${JSON.stringify(stableComplexHeight)}`,
+    );
+    assert.ok(
+      Math.max(...stableComplexHeight) - Math.min(...stableComplexHeight) <= 2,
+      `Complex formula row kept growing after layout refresh: ${JSON.stringify(stableComplexHeight)}`,
+    );
+
     const loadFormulaLines = async (values, activeIndex = values.length - 1) => {
       await evaluate(`(() => {
         const key = "visualtex-editor";
@@ -1045,6 +1111,104 @@ async function main() {
       "\\sqrt{\\frac{u}{v}}y_k^4",
     );
 
+    const dragFromFarRightWithinLine = async () => {
+      await loadFormulaLines(["abcDEF"], 0);
+      const geometry = await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        const compact = (value) => value.replace(/\\s+/g, "");
+        let focusOffset = -1;
+        for (let offset = 0; offset <= field.lastOffset; offset += 1) {
+          if (compact(field.getValue(0, offset, "latex")) === "abc") {
+            focusOffset = offset;
+            break;
+          }
+        }
+        const focusBounds = field.getElementInfo(focusOffset)?.bounds;
+        const fieldBounds = field.getBoundingClientRect();
+        const contentBounds = field.shadowRoot
+          ?.querySelector('[part="content"]')
+          ?.getBoundingClientRect();
+        return {
+          focusOffset,
+          lastOffset: field.lastOffset,
+          startX:
+            fieldBounds && contentBounds
+              ? Math.min(fieldBounds.right - 12, contentBounds.right + 100)
+              : -1,
+          endX: focusBounds ? focusBounds.right - 1 : -1,
+          y: contentBounds
+            ? (contentBounds.top + contentBounds.bottom) / 2
+            : -1,
+          contentRight: contentBounds?.right ?? -1,
+        };
+      })()`);
+      assert.ok(
+        geometry.startX > geometry.contentRight + 6,
+        JSON.stringify(geometry),
+      );
+      assert.ok(geometry.endX >= 0 && geometry.y >= 0, JSON.stringify(geometry));
+
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: geometry.startX,
+        y: geometry.y,
+        button: "left",
+        buttons: 1,
+        clickCount: 1,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: geometry.endX,
+        y: geometry.y,
+        button: "left",
+        buttons: 1,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: geometry.endX,
+        y: geometry.y,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+      });
+      await sleep(180);
+
+      const readSelection = () =>
+        evaluate(`(() => {
+          const field = document.querySelector("math-field");
+          const range = field.selection.ranges.at(-1);
+          const start = Math.min(range[0], range[1]);
+          const end = Math.max(range[0], range[1]);
+          return {
+            range,
+            selectedLatex: field.getValue(start, end, "latex-expanded"),
+            customSelection:
+              field.classList.contains("has-visualtex-multi-line-selection"),
+          };
+        })()`);
+      const released = await readSelection();
+      assert.deepEqual(
+        [Math.min(...released.range), Math.max(...released.range)],
+        [geometry.focusOffset, geometry.lastOffset],
+        JSON.stringify({ geometry, released }),
+      );
+      assert.equal(released.selectedLatex, "DEF", JSON.stringify(released));
+      assert.equal(released.customSelection, true, JSON.stringify(released));
+
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: geometry.startX,
+        y: geometry.y,
+        button: "none",
+        buttons: 0,
+      });
+      await sleep(100);
+      const moved = await readSelection();
+      assert.deepEqual(moved, released, JSON.stringify({ released, moved }));
+    };
+
+    await dragFromFarRightWithinLine();
+
     const dragAcrossLines = async ({ reverse, fromFarRight = false }) => {
       await loadFormulaLines(["abcDEF", "m+\\frac{n}{d}", "UVWxyz"], reverse ? 2 : 0);
       const geometry = await evaluate(`(() => {
@@ -1119,6 +1283,144 @@ async function main() {
         selected.every((state) => state.selection.ranges[0][0] !== state.selection.ranges[0][1]),
         JSON.stringify(selected),
       );
+
+      if (!reverse && !fromFarRight) {
+        const selectionHighlightState = await evaluate(`(async () => {
+          const workspace = document.querySelector(".workspace");
+          const waitForPaint = () => new Promise((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(resolve))
+          );
+          const isTransparent = (value) =>
+            value === "transparent" || value === "rgba(0, 0, 0, 0)";
+          const readLayers = () => {
+            const fields = Array.from(document.querySelectorAll("math-field"));
+            const layerStyles = fields.map((field) => {
+              const root = field.shadowRoot;
+              const selection = Array.from(root?.querySelectorAll(".ML__selection") ?? [])
+                .map((node) => getComputedStyle(node).backgroundColor);
+              const contains = Array.from(root?.querySelectorAll(".ML__contains-highlight") ?? [])
+                .map((node) => getComputedStyle(node).backgroundColor);
+              return {
+                selection,
+                contains,
+                selectedCount: root?.querySelectorAll(".ML__selected").length ?? 0,
+              };
+            });
+            const lineBackgrounds = Array.from(
+              document.querySelectorAll(".formula-line.is-multi-line-selected"),
+            ).map((line) => getComputedStyle(line).backgroundColor);
+            return {
+              layerStyles,
+              lineBackgrounds,
+              visibleSelectionCount: layerStyles.flatMap((state) => state.selection)
+                .filter((value) => !isTransparent(value)).length,
+              visibleContainsCount: layerStyles.flatMap((state) => state.contains)
+                .filter((value) => !isTransparent(value)).length,
+              visibleLineBackgroundCount: lineBackgrounds
+                .filter((value) => !isTransparent(value)).length,
+              selectedCount: layerStyles.reduce((sum, state) => sum + state.selectedCount, 0),
+            };
+          };
+
+          workspace?.classList.remove("has-active-line-highlight");
+          await waitForPaint();
+          const disabled = readLayers();
+          workspace?.classList.add("has-active-line-highlight");
+          await waitForPaint();
+          const enabled = readLayers();
+          workspace?.classList.remove("has-active-line-highlight");
+          await waitForPaint();
+          const restoredDisabled = readLayers();
+          return { disabled, enabled, restoredDisabled };
+        })()`);
+        assert.ok(
+          selectionHighlightState.disabled.visibleSelectionCount > 0,
+          JSON.stringify(selectionHighlightState),
+        );
+        assert.ok(
+          selectionHighlightState.disabled.selectedCount > 0,
+          JSON.stringify(selectionHighlightState),
+        );
+        assert.equal(
+          selectionHighlightState.disabled.visibleLineBackgroundCount,
+          0,
+          JSON.stringify(selectionHighlightState),
+        );
+        assert.equal(
+          selectionHighlightState.enabled.visibleSelectionCount,
+          selectionHighlightState.disabled.visibleSelectionCount,
+          JSON.stringify(selectionHighlightState),
+        );
+        assert.ok(
+          selectionHighlightState.enabled.visibleLineBackgroundCount > 0,
+          JSON.stringify(selectionHighlightState),
+        );
+        assert.equal(
+          selectionHighlightState.enabled.selectedCount,
+          selectionHighlightState.disabled.selectedCount,
+          JSON.stringify(selectionHighlightState),
+        );
+        assert.equal(
+          selectionHighlightState.restoredDisabled.visibleSelectionCount,
+          selectionHighlightState.disabled.visibleSelectionCount,
+          JSON.stringify(selectionHighlightState),
+        );
+        assert.equal(
+          selectionHighlightState.restoredDisabled.visibleLineBackgroundCount,
+          0,
+          JSON.stringify(selectionHighlightState),
+        );
+        assert.equal(
+          selectionHighlightState.restoredDisabled.selectedCount,
+          selectionHighlightState.disabled.selectedCount,
+          JSON.stringify(selectionHighlightState),
+        );
+      }
+
+      const copyState = await evaluate(`(() => {
+        const fields = Array.from(document.querySelectorAll("math-field"));
+        const selectedLatex = fields.map((field) => {
+          const [left, right] = field.selection.ranges.at(-1);
+          return field.getValue(
+            Math.min(left, right),
+            Math.max(left, right),
+            "latex-expanded",
+          );
+        });
+        const target =
+          fields.find((field) => field.hasFocus()) ?? fields.at(-1);
+        const keyboardSink = target?.shadowRoot?.querySelector(
+          '[part="keyboard-sink"]',
+        );
+        const clipboardData = new DataTransfer();
+        const event = new ClipboardEvent("copy", {
+          clipboardData,
+          bubbles: true,
+          composed: true,
+          cancelable: true,
+        });
+        keyboardSink?.dispatchEvent(event);
+        return {
+          selectedLatex,
+          latex: clipboardData.getData("application/x-latex"),
+          plain: clipboardData.getData("text/plain"),
+          visualTex: clipboardData.getData(
+            "application/x-visualtex-multiline-latex",
+          ),
+          defaultPrevented: event.defaultPrevented,
+        };
+      })()`);
+      const expectedCopy = copyState.selectedLatex.join("\n");
+      assert.ok(copyState.selectedLatex.length > 1, JSON.stringify(copyState));
+      assert.equal(copyState.latex, expectedCopy, JSON.stringify(copyState));
+      assert.equal(copyState.plain, expectedCopy, JSON.stringify(copyState));
+      assert.deepEqual(
+        JSON.parse(copyState.visualTex),
+        { version: 1, lines: copyState.selectedLatex },
+        JSON.stringify(copyState),
+      );
+      assert.equal(copyState.defaultPrevented, true, JSON.stringify(copyState));
+
       const common = {
         key: "Backspace",
         code: "Backspace",
@@ -1128,10 +1430,14 @@ async function main() {
       await client.send("Input.dispatchKeyEvent", { type: "keyDown", ...common });
       await client.send("Input.dispatchKeyEvent", { type: "keyUp", ...common });
       await sleep(220);
-      return evaluate(`Array.from(document.querySelectorAll("math-field")).map((field) => field.value)`);
+      const values = await evaluate(
+        `Array.from(document.querySelectorAll("math-field")).map((field) => field.value)`,
+      );
+      return { values, copyState };
     };
 
-    assert.deepEqual(await dragAcrossLines({ reverse: false }), ["abcxyz"]);
+    const forwardMultiLineSelection = await dragAcrossLines({ reverse: false });
+    assert.deepEqual(forwardMultiLineSelection.values, ["abcxyz"]);
     const undoMultiLineDelete = await evaluate(`new Promise((resolve) => {
       const field = document.querySelector("math-field");
       field.dispatchEvent(new KeyboardEvent("keydown", {
@@ -1167,11 +1473,86 @@ async function main() {
       ), 180);
     })`);
     assert.deepEqual(redoMultiLineDelete, ["abcxyz"]);
-    assert.deepEqual(await dragAcrossLines({ reverse: true }), ["abcxyz"]);
+    const reverseMultiLineSelection = await dragAcrossLines({ reverse: true });
+    assert.deepEqual(reverseMultiLineSelection.values, ["abcxyz"]);
+    const farRightMultiLineSelection = await dragAcrossLines({
+      reverse: true,
+      fromFarRight: true,
+    });
+    assert.deepEqual(farRightMultiLineSelection.values, ["abc"]);
+
+    await loadFormulaLines([""], 0);
+    const multiLinePasteState = await evaluate(`new Promise((resolve) => {
+      const field = document.querySelector("math-field");
+      field.focus();
+      field.position = 0;
+      field.selection = { ranges: [[0, 0]], direction: "none" };
+      const keyboardSink = field.shadowRoot?.querySelector(
+        '[part="keyboard-sink"]',
+      );
+      keyboardSink?.focus({ preventScroll: true });
+      const clipboardData = new DataTransfer();
+      clipboardData.setData(
+        "application/x-visualtex-multiline-latex",
+        ${JSON.stringify("__VISUALTEX_MULTILINE_PAYLOAD__")},
+      );
+      clipboardData.setData(
+        "application/x-latex",
+        ${JSON.stringify("__VISUALTEX_LATEX__")},
+      );
+      clipboardData.setData(
+        "text/plain",
+        ${JSON.stringify("__VISUALTEX_PLAIN__")},
+      );
+      const event = new ClipboardEvent("paste", {
+        clipboardData,
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+      });
+      keyboardSink?.dispatchEvent(event);
+      setTimeout(() => resolve({
+        values: Array.from(document.querySelectorAll("math-field")).map(
+          (item) => item.value,
+        ),
+        activeIndex: Array.from(document.querySelectorAll("math-field")).findIndex(
+          (item) => item.hasFocus(),
+        ),
+        activePosition:
+          Array.from(document.querySelectorAll("math-field")).find(
+            (item) => item.hasFocus(),
+          )?.position ?? -1,
+        activeLastOffset:
+          Array.from(document.querySelectorAll("math-field")).find(
+            (item) => item.hasFocus(),
+          )?.lastOffset ?? -1,
+        defaultPrevented: event.defaultPrevented,
+      }), 220);
+    })`
+      .replace(
+        JSON.stringify("__VISUALTEX_MULTILINE_PAYLOAD__"),
+        JSON.stringify(forwardMultiLineSelection.copyState.visualTex),
+      )
+      .replace(
+        JSON.stringify("__VISUALTEX_LATEX__"),
+        JSON.stringify(forwardMultiLineSelection.copyState.latex),
+      )
+      .replace(
+        JSON.stringify("__VISUALTEX_PLAIN__"),
+        JSON.stringify(forwardMultiLineSelection.copyState.plain),
+      ));
     assert.deepEqual(
-      await dragAcrossLines({ reverse: true, fromFarRight: true }),
-      ["abc"],
+      multiLinePasteState.values,
+      forwardMultiLineSelection.copyState.selectedLatex,
+      JSON.stringify(multiLinePasteState),
     );
+    assert.equal(multiLinePasteState.activeIndex, 2);
+    assert.equal(
+      multiLinePasteState.activePosition,
+      multiLinePasteState.activeLastOffset,
+      JSON.stringify(multiLinePasteState),
+    );
+    assert.equal(multiLinePasteState.defaultPrevented, true);
 
     const mergeAtSecondLineStart = async () =>
       evaluate(`new Promise((resolve) => {

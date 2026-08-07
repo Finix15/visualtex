@@ -24,6 +24,14 @@ import type {
   SvgExportResult,
 } from "./exportTypes";
 import { errorMessage } from "../runtime/errorMessage.ts";
+import {
+  DEFAULT_FORMULA_CHINESE_FONT,
+  DEFAULT_FORMULA_LETTER_FONT,
+  formulaChineseFontFamily,
+  formulaLetterFontFamilies,
+  normalizeFormulaChineseFont,
+  normalizeFormulaLetterFont,
+} from "../editor/formulaFontPreferences.ts";
 
 const DEFAULT_OPTIONS: SvgExportOptions = {
   displayMode: true,
@@ -169,6 +177,72 @@ function assertSelfContained(svg: string) {
   }
 }
 
+function escapeSvgAttribute(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function escapeSvgText(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function mathAlphabetBaseCharacter(codePointHex: string) {
+  const codePoint = Number.parseInt(codePointHex, 16);
+  if (!Number.isFinite(codePoint)) return "";
+  const source = String.fromCodePoint(codePoint);
+  const normalized = source.normalize("NFKD");
+  const characters = Array.from(normalized);
+  if (characters.length !== 1 || !/\p{L}/u.test(characters[0])) return "";
+  return characters[0];
+}
+
+function applyVisualTexSvgFontPreferences(
+  svg: string,
+  options: SvgExportOptions,
+) {
+  const letterFont = normalizeFormulaLetterFont(
+    options.formulaLetterFont ?? DEFAULT_FORMULA_LETTER_FONT,
+  );
+  const chineseFont = normalizeFormulaChineseFont(
+    options.formulaChineseFont ?? DEFAULT_FORMULA_CHINESE_FONT,
+  );
+  let output = svg;
+
+  const chineseFamily = escapeSvgAttribute(formulaChineseFontFamily(chineseFont));
+  output = output.replace(
+    /(<g\b[^>]*data-mml-node=["']mtext["'][^>]*>)([\s\S]*?)(<\/g>)/gi,
+    (_whole, opening: string, body: string, closing: string) =>
+      `${opening}${body.replace(
+        /font-family=["'][^"']*["']/gi,
+        `font-family="${chineseFamily}" data-visualtex-output-text-font="${escapeSvgAttribute(chineseFont)}"`,
+      )}${closing}`,
+  );
+
+  if (letterFont === DEFAULT_FORMULA_LETTER_FONT) return output;
+
+  const families = formulaLetterFontFamilies(letterFont);
+  output = output.replace(/<use\b([^>]*)><\/use>/gi, (whole, attributes: string) => {
+    const codePoint = attributes.match(/\bdata-c=["']([0-9A-F]+)["']/i)?.[1];
+    const href = attributes.match(/\bxlink:href=["']#([^"']+)["']/i)?.[1] ?? "";
+    const variant = href.match(/-TEX-(BI|B|I|N)-[0-9A-F]+$/i)?.[1]?.toUpperCase();
+    if (!codePoint || !variant) return whole;
+    const character = mathAlphabetBaseCharacter(codePoint);
+    if (!character) return whole;
+
+    const italic = variant === "I" || variant === "BI";
+    const bold = variant === "B" || variant === "BI";
+    const family = escapeSvgAttribute(italic ? families.italic : families.upright);
+    return `<text data-c="${codePoint}" data-visualtex-output-letter-font="${escapeSvgAttribute(letterFont)}" transform="scale(1,-1)" font-size="1000px" font-family="${family}"${italic ? ' font-style="italic"' : ""}${bold ? ' font-weight="700"' : ""}>${escapeSvgText(character)}</text>`;
+  });
+  return output;
+}
+
 const WORD_EXPLICIT_BLACK = "#000000";
 
 function wordCompatiblePaintValue(value: string) {
@@ -283,6 +357,7 @@ export function latexToSvg(
   });
   let svg = extractSvg(adaptor.outerHTML(container));
   svg = applyVisualTexIntegralSvgGlyphs(svg, options.displayMode);
+  svg = applyVisualTexSvgFontPreferences(svg, options);
   const viewBox = parseViewBox(svg);
 
   const unitsPerPx = 1000 / fontSizePx;
@@ -423,20 +498,34 @@ export async function svgToPng(
   canvas.height = height;
   const context = canvas.getContext("2d");
   if (!context) throw new Error("Unable to create a PNG canvas context.");
-  if (options.background === "white") {
-    context.fillStyle = "#ffffff";
+  const requestedBackground = options.background ?? "transparent";
+  const opaqueBackground =
+    requestedBackground === "white" ? "#ffffff" : requestedBackground;
+  if (opaqueBackground !== "transparent") {
+    context.fillStyle = opaqueBackground;
     context.fillRect(0, 0, width, height);
   }
   context.drawImage(image, 0, 0, width, height);
 
+  const backgroundRgb = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(
+    opaqueBackground,
+  );
+  const backgroundChannels = backgroundRgb
+    ? backgroundRgb.slice(1).map((channel) => Number.parseInt(channel, 16))
+    : null;
   const pixels = context.getImageData(0, 0, width, height).data;
   let hasVisibleInk = false;
   for (let index = 0; index < pixels.length; index += 4) {
     const alpha = pixels[index + 3];
-    if (
-      alpha >= 16 &&
-      (pixels[index] < 245 || pixels[index + 1] < 245 || pixels[index + 2] < 245)
-    ) {
+    if (alpha < 16) continue;
+    const differsFromBackground = backgroundChannels
+      ? Math.abs(pixels[index] - backgroundChannels[0]) > 10 ||
+        Math.abs(pixels[index + 1] - backgroundChannels[1]) > 10 ||
+        Math.abs(pixels[index + 2] - backgroundChannels[2]) > 10
+      : pixels[index] < 245 ||
+        pixels[index + 1] < 245 ||
+        pixels[index + 2] < 245;
+    if (differsFromBackground) {
       hasVisibleInk = true;
       break;
     }

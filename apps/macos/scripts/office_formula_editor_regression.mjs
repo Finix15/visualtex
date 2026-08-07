@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
+import { DOMParser } from "@xmldom/xmldom";
 import {
   normalizeFormulaEditorDocument,
   serializeFormulaEditorDocument,
 } from "../src/office/shared/formulaEditorDocument.ts";
 import { createFormulaMetadata } from "../src/office/shared/formulaMetadata.ts";
-import { renderOfficeFormulaArtifacts } from "../src/office/shared/formulaRenderArtifacts.ts";
+import {
+  renderOfficeFormulaArtifacts,
+  tryRenderOfficeFormulaDraftArtifacts,
+} from "../src/office/shared/formulaRenderArtifacts.ts";
 import { latexToSvg } from "../src/export/latexToSvg.ts";
 import { errorMessage } from "../src/runtime/errorMessage.ts";
 import {
@@ -12,6 +16,24 @@ import {
   isOfficeEditorActivation,
   shouldAcceptOfficeEditorActivation,
 } from "../src/office/dialog/officeEditorActivation.ts";
+
+globalThis.DOMParser ??= DOMParser;
+const domProbe = new DOMParser().parseFromString("<root/>", "application/xml");
+const documentPrototype = Object.getPrototypeOf(domProbe);
+const elementPrototype = Object.getPrototypeOf(domProbe.documentElement);
+if (typeof documentPrototype.querySelector !== "function") {
+  documentPrototype.querySelector = function querySelector(name) {
+    return this.getElementsByTagName(name)?.item(0) ?? null;
+  };
+}
+if (!("children" in elementPrototype)) {
+  Object.defineProperty(elementPrototype, "children", {
+    configurable: true,
+    get() {
+      return Array.from(this.childNodes ?? []).filter((node) => node.nodeType === 1);
+    },
+  });
+}
 
 const warmActivation = {
   sessionId: "12345678-1234-4234-9234-123456789abc",
@@ -56,6 +78,35 @@ function normalize(source, codeFormat = "raw") {
     codeFormat,
   );
 }
+
+const placeholderDraftInput = {
+  lines: [
+    {
+      id: "placeholder-draft",
+      latex: String.raw`\frac{\placeholder{}}{\placeholder{}}`,
+    },
+  ],
+  codeFormat: "raw",
+  displayMode: "inline",
+  host: "word",
+};
+assert.equal(
+  tryRenderOfficeFormulaDraftArtifacts(placeholderDraftInput),
+  null,
+  "Office autosave must tolerate MathLive placeholder source without producing an invalid Word artifact",
+);
+assert.throws(
+  () => renderOfficeFormulaArtifacts(placeholderDraftInput),
+  /placeholder/,
+  "explicit Office apply must remain strict while a placeholder is still present",
+);
+assert.ok(
+  tryRenderOfficeFormulaDraftArtifacts({
+    ...placeholderDraftInput,
+    lines: [{ id: "completed-draft", latex: String.raw`\frac{a}{b}` }],
+  }),
+  "a completed formula must resume normal draft artifact generation",
+);
 
 const sourceFormattedEquation = normalizeFormulaEditorDocument(
   [

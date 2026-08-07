@@ -1,5 +1,9 @@
 import { responseErrorMessage } from "../../runtime/errorMessage.ts";
 import type { VisualTeXFormulaMetadata } from "./formulaMetadata";
+import type {
+  FormulaChineseFont,
+  FormulaLetterFont,
+} from "../../editor/formulaFontPreferences";
 import {
   invokeTauri,
   isTauriRuntimeAvailable,
@@ -47,6 +51,7 @@ export interface OfficeFormulaSession {
   id: string;
   mode: OfficeSessionMode;
   host: OfficeHost;
+  operation?: "nativeToImage" | "imageToNative";
   formulaId: string;
   sourceDocumentId: string | null;
   sourceObjectId: string | null;
@@ -57,6 +62,8 @@ export interface OfficeFormulaSession {
   displayMode: "inline" | "block";
   numbered: boolean;
   fontSizePt?: number;
+  formulaLetterFont?: FormulaLetterFont;
+  formulaChineseFont?: FormulaChineseFont;
   exportWidth: number;
   exportHeight: number;
   exportResult: OfficeExportResult | null;
@@ -84,6 +91,8 @@ export interface CreateOfficeSessionInput {
   displayMode?: "inline" | "block";
   numbered?: boolean;
   fontSizePt?: number;
+  formulaLetterFont?: FormulaLetterFont;
+  formulaChineseFont?: FormulaChineseFont;
   exportWidth?: number;
   exportHeight?: number;
   originalMetadata?: VisualTeXFormulaMetadata | null;

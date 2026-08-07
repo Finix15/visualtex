@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const offlineRoot = join(repositoryRoot, "office", "macos-offline");
 const resourcesRoot = join(offlineRoot, "resources");
+const wordRibbonIconRoot = join(offlineRoot, "word", "ribbon-icons");
 const packageVersion = JSON.parse(readFileSync(join(repositoryRoot, "package.json"), "utf8")).version;
 
 function usage() {
@@ -216,6 +217,20 @@ const RIBBON_ICON_FILES = {
     VisualTeXIcon07: "icon_07_same_subject.png",
     VisualTeXIcon08: "icon_08_same_subject.png",
     VisualTeXIcon09: "icon_09_same_subject.png",
+    VisualTeXWordImageInline: { svg: "image-inline.svg" },
+    VisualTeXWordImageDisplay: { svg: "image-display.svg" },
+    VisualTeXWordOmmlInline: { svg: "omml-inline.svg" },
+    VisualTeXWordOmmlDisplay: { svg: "omml-display.svg" },
+    VisualTeXWordEditSelected: { svg: "edit-selected.svg" },
+    VisualTeXWordConvertOmml: { svg: "convert-omml.svg" },
+    VisualTeXWordConvertImage: { svg: "convert-image.svg" },
+    VisualTeXWordDocumentImport: { svg: "document-import.svg" },
+    VisualTeXWordUpdateNumbers: { svg: "update-numbers.svg" },
+    VisualTeXWordNumberingFormat: { svg: "numbering-format.svg" },
+    VisualTeXWordCrossReference: { svg: "cross-reference.svg" },
+    VisualTeXWordOpenApp: { svg: "open-visualtex.svg" },
+    VisualTeXWordRedrawSelection: { svg: "redraw-selection.svg" },
+    VisualTeXWordRedrawDocument: { svg: "redraw-document.svg" },
   },
   PowerPoint: {
     VisualTeXIcon05: "icon_05_same_subject.png",
@@ -250,27 +265,41 @@ function installRibbonImages(unpacked, kind, ribbonXml) {
       : undefined;
   const relationships = unique.map((imageId) => {
     const embeddedPath = join(imagesDirectory, `${imageId}.png`);
-    const imageBytes = archivePath
-      ? run(
-          "/usr/bin/unzip",
-          ["-p", archivePath, mapping[imageId]],
-          { encoding: "buffer" },
-        )
-      : existsSync(embeddedPath)
-        ? readFileSync(embeddedPath)
-        : undefined;
+    const source = mapping[imageId];
+    const archiveEntry = typeof source === "string" ? source : source.archive;
+    let imageBytes;
+    if (archivePath && archiveEntry) {
+      imageBytes = run(
+        "/usr/bin/unzip",
+        ["-p", archivePath, archiveEntry],
+        { encoding: "buffer" },
+      );
+      writeFileSync(embeddedPath, imageBytes);
+    } else if (typeof source === "object" && source.svg) {
+      const svgPath = join(wordRibbonIconRoot, source.svg);
+      if (!existsSync(svgPath)) {
+        throw new Error(`${kind} Ribbon SVG source is missing: ${svgPath}`);
+      }
+      run(
+        "/usr/bin/sips",
+        ["-s", "format", "png", svgPath, "--out", embeddedPath],
+        { stdio: ["ignore", "ignore", "pipe"] },
+      );
+      imageBytes = readFileSync(embeddedPath);
+    } else if (existsSync(embeddedPath)) {
+      imageBytes = readFileSync(embeddedPath);
+    }
     if (
       !imageBytes ||
       imageBytes.length < 8 ||
       !imageBytes.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex"))
     ) {
       throw new Error(
-        archivePath
-          ? `${mapping[imageId]} is not a valid PNG Ribbon image.`
-          : `${kind} Ribbon image ${imageId} is missing from the reviewed Office container; provide --ribbon-icons-archive to replace it.`,
+        archivePath && archiveEntry
+          ? `${archiveEntry} is not a valid PNG Ribbon image.`
+          : `${kind} Ribbon image ${imageId} could not be generated or read.`,
       );
     }
-    writeFileSync(embeddedPath, imageBytes);
     return `<Relationship Id="${imageId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="images/${imageId}.png"/>`;
   });
   writeFileSync(

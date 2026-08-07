@@ -75,6 +75,142 @@ Failed:
         operationStage & ": " & errorDescription
 End Function
 
+Public Function VTWriteFormulaRestoreAndLaunchSession( _
+    ByVal hostName As String, _
+    ByVal sessionId As String, _
+    ByVal requestJson As String, _
+    ByVal restoreSource As String) As String
+
+    Dim normalizedHost As String
+    Dim scriptName As String
+    Dim encodedRequest As String
+    Dim encodedSource As String
+    Dim response As String
+    Dim timingDetail As String
+    Dim operationStage As String
+    Dim errorNumber As Long
+    Dim errorDescription As String
+
+    On Error GoTo Failed
+    operationStage = "normalize-host"
+    normalizedHost = VTCanonicalOfficeHost(hostName)
+    If normalizedHost <> "word" Then
+        Err.Raise vbObjectError + 7312, "VisualTeX", _
+            "Formula restore write-and-launch is available only for Word."
+    End If
+    operationStage = "resolve-script"
+    scriptName = VTOfficeLauncherScriptName(normalizedHost)
+    operationStage = "validate-request"
+    VTValidateRequestPayload sessionId, requestJson
+    If Len(restoreSource) = 0 Then
+        Err.Raise vbObjectError + 7312, "VisualTeX", _
+            "The formula restore source is empty."
+    End If
+    operationStage = "encode-payloads"
+    encodedRequest = VTBase64UrlEncodeUtf8(requestJson)
+    encodedSource = VTBase64UrlEncodeUtf8(restoreSource)
+
+#If Mac Then
+    operationStage = "applescript-task"
+    response = AppleScriptTask( _
+        scriptName, _
+        "WriteFormulaRestoreAndOpenVisualTeXSession", _
+        normalizedHost & "|" & sessionId & "|" & _
+        encodedRequest & "|" & encodedSource)
+#Else
+    Err.Raise vbObjectError + 7312, "VisualTeX", _
+        "The VisualTeX offline add-in is available only on macOS."
+#End If
+
+    operationStage = "validate-response"
+    If Left$(response, 3) <> "ok|" Then
+        Err.Raise vbObjectError + 7313, "VisualTeX", _
+            VTAppleScriptErrorMessage(response)
+    End If
+    timingDetail = Mid$(response, 4)
+    If InStr(1, timingDetail, "totalMs=", vbBinaryCompare) = 0 Or _
+       InStr(1, timingDetail, "writeMs=", vbBinaryCompare) = 0 Or _
+       InStr(1, timingDetail, "launchMs=", vbBinaryCompare) = 0 Then
+        Err.Raise vbObjectError + 7314, "VisualTeX", _
+            "VisualTeX received an invalid formula restore timing response."
+    End If
+    VTWriteFormulaRestoreAndLaunchSession = timingDetail
+    Exit Function
+
+Failed:
+    errorNumber = Err.Number
+    errorDescription = Err.Description
+    Err.Raise errorNumber, "VisualTeX formula restore write and launch", _
+        operationStage & ": " & errorDescription
+End Function
+
+Public Function VTConvertOmmlBatch( _
+    ByVal hostName As String, _
+    ByVal sessionId As String, _
+    Optional ByVal restoreSource As String = "") As String
+
+    Dim normalizedHost As String
+    Dim scriptName As String
+    Dim encodedSource As String
+    Dim response As String
+    Dim requestArgument As String
+    Dim timingDetail As String
+    Dim operationStage As String
+    Dim errorNumber As Long
+    Dim errorDescription As String
+
+    On Error GoTo Failed
+    operationStage = "normalize-host"
+    normalizedHost = VTCanonicalOfficeHost(hostName)
+    If normalizedHost <> "word" Then
+        Err.Raise vbObjectError + 7315, "VisualTeX", _
+            "OMML batch conversion is available only for Word."
+    End If
+    If Not VTIsCanonicalUuid(sessionId) Then
+        Err.Raise vbObjectError + 7315, "VisualTeX", _
+            "The OMML batch Session id is invalid."
+    End If
+    operationStage = "resolve-script"
+    scriptName = VTOfficeLauncherScriptName(normalizedHost)
+    requestArgument = sessionId
+    If Len(restoreSource) > 0 Then
+        operationStage = "encode-source"
+        encodedSource = VTBase64UrlEncodeUtf8(restoreSource)
+        requestArgument = sessionId & "|" & encodedSource
+    End If
+
+#If Mac Then
+    operationStage = "applescript-task"
+    response = AppleScriptTask( _
+        scriptName, _
+        "ConvertOmmlBatch", _
+        requestArgument)
+#Else
+    Err.Raise vbObjectError + 7315, "VisualTeX", _
+        "OMML batch conversion is available only on macOS."
+#End If
+
+    operationStage = "validate-response"
+    If Left$(response, 3) <> "ok|" Then
+        Err.Raise vbObjectError + 7316, "VisualTeX", _
+            VTAppleScriptErrorMessage(response)
+    End If
+    timingDetail = Mid$(response, 4)
+    If InStr(1, timingDetail, "totalMs=", vbBinaryCompare) = 0 Or _
+       InStr(1, timingDetail, "convertMs=", vbBinaryCompare) = 0 Then
+        Err.Raise vbObjectError + 7317, "VisualTeX", _
+            "VisualTeX received an invalid OMML batch timing response."
+    End If
+    VTConvertOmmlBatch = timingDetail
+    Exit Function
+
+Failed:
+    errorNumber = Err.Number
+    errorDescription = Err.Description
+    Err.Raise errorNumber, "VisualTeX OMML batch conversion", _
+        operationStage & ": " & errorDescription
+End Function
+
 Public Sub VTPrewarmApplication(ByVal hostName As String)
     Dim normalizedHost As String
     Dim scriptName As String

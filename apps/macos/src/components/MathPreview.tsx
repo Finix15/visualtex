@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef } from "react";
+import { memo, useLayoutEffect, useMemo, useRef } from "react";
 import { convertVisualTexLatexToMarkup } from "../editor/mathLiveIntegralCompatibility";
 
 interface MathPreviewProps {
@@ -16,6 +16,7 @@ interface MathPreviewProps {
   minimumFluidHeight?: number;
   maximumFluidHeight?: number;
   fluidVerticalPadding?: number;
+  staticLayout?: boolean;
   onMeasure?: (size: { width: number; height: number }) => void;
 }
 
@@ -24,6 +25,20 @@ const minimumFluidFitScale = 0.1;
 const defaultMaximumFitScale = 8;
 const visiblePlaceholderLatex =
   "\\htmlClass{visualtex-tile-placeholder}{\\phantom{\\rule{0.40em}{0.66em}}}";
+const mathPreviewMarkupCache = new Map<string, string>();
+const mathPreviewMarkupCacheLimit = 1024;
+
+function cachedPreviewMarkup(latex: string) {
+  const cached = mathPreviewMarkupCache.get(latex);
+  if (cached !== undefined) return cached;
+  const markup = convertVisualTexLatexToMarkup(latex, { defaultMode: "math" });
+  if (mathPreviewMarkupCache.size >= mathPreviewMarkupCacheLimit) {
+    const oldestKey = mathPreviewMarkupCache.keys().next().value;
+    if (typeof oldestKey === "string") mathPreviewMarkupCache.delete(oldestKey);
+  }
+  mathPreviewMarkupCache.set(latex, markup);
+  return markup;
+}
 
 export function latexWithVisiblePlaceholders(latex: string) {
   if (!latex.includes("\\placeholder")) return latex;
@@ -76,7 +91,7 @@ export function latexWithVisiblePlaceholders(latex: string) {
   return rendered;
 }
 
-export function MathPreview({
+function MathPreviewComponent({
   latex,
   className = "",
   showPlaceholders = false,
@@ -91,6 +106,7 @@ export function MathPreview({
   minimumFluidHeight = 52,
   maximumFluidHeight = 168,
   fluidVerticalPadding = 20,
+  staticLayout = false,
   onMeasure,
 }: MathPreviewProps) {
   const hostRef = useRef<HTMLSpanElement>(null);
@@ -102,7 +118,7 @@ export function MathPreview({
     [latex, showPlaceholders],
   );
   const markup = useMemo(
-    () => convertVisualTexLatexToMarkup(previewLatex, { defaultMode: "math" }),
+    () => cachedPreviewMarkup(previewLatex),
     [previewLatex],
   );
 
@@ -110,6 +126,15 @@ export function MathPreview({
     const host = hostRef.current;
     const content = contentRef.current;
     if (!host || !content) return;
+
+    if (staticLayout) {
+      content.style.setProperty("--math-preview-fit-scale", "1");
+      host.style.removeProperty("--math-preview-fluid-height");
+      host.style.removeProperty("--math-preview-intrinsic-width");
+      host.dataset.fitReady = "static";
+      host.dataset.fitScale = "1";
+      return;
+    }
 
     let animationFrame = 0;
     const measure = () => {
@@ -212,6 +237,7 @@ export function MathPreview({
     fitInsetRatio,
     minimumFluidHeight,
     minimumFluidScale,
+    staticLayout,
   ]);
 
   return (
@@ -223,6 +249,7 @@ export function MathPreview({
       data-show-placeholders={showPlaceholders ? "true" : "false"}
       data-fluid-height={fluidHeight ? "true" : "false"}
       data-intrinsic-width={intrinsicWidth ? "true" : "false"}
+      data-static-layout={staticLayout ? "true" : "false"}
     >
       <span
         ref={contentRef}
@@ -232,3 +259,5 @@ export function MathPreview({
     </span>
   );
 }
+
+export const MathPreview = memo(MathPreviewComponent);
