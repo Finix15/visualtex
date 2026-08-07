@@ -41,6 +41,7 @@ const configurationStorageKeys = [
   "visualtex.ocr.model",
   "visualtex.silent-ocr.enabled",
   "visualtex.quick-ocr.capture-mode",
+  "visualtex.custom-theme.v1",
 ] as const;
 
 const booleanConfigurationStorageKeys = new Set<string>([
@@ -57,6 +58,7 @@ const jsonConfigurationStorageKeys = new Set<string>([
   "visualtex-formula-hotkeys-v1",
   "visualtex-custom-formula-text-colors",
   "visualtex-custom-formula-background-colors",
+  "visualtex.custom-theme.v1",
 ]);
 
 const editorSettingKeys = [

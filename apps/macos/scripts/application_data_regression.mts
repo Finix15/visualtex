@@ -23,7 +23,7 @@ const expectedInputBehavior = {
 
 const configure = () => {
   state().setTitle("应用数据往返");
-  state().setTheme("green" satisfies Theme);
+  state().setTheme("raycast" satisfies Theme);
   state().setLanguage("en");
   state().setEditorLayout("classic" satisfies EditorLayout);
   state().setZoom(1.25);
@@ -54,7 +54,7 @@ configure();
 const saved = state().toDocument();
 const serialized = JSON.parse(JSON.stringify(saved));
 
-assert.equal(serialized.settings.theme, "green");
+assert.equal(serialized.settings.theme, "raycast");
 assert.equal(serialized.settings.editorLayout, "classic");
 assert.equal(serialized.settings.language, "en");
 assert.equal(serialized.settings.zoom, 1.25);
@@ -105,7 +105,7 @@ state().loadDocument(serialized);
 const restored = state();
 
 assert.equal(restored.title, "应用数据往返");
-assert.equal(restored.theme, "green");
+assert.equal(restored.theme, "raycast");
 assert.equal(restored.editorLayout, "classic");
 assert.equal(restored.language, "en");
 assert.equal(restored.zoom, 1.25);

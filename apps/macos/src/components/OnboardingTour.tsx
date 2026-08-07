@@ -27,6 +27,7 @@ import { VisualTeXLogo } from "./VisualTeXLogo";
 import { PowerPointAddinGuide } from "./PowerPointAddinGuide";
 import type { Language } from "../stores/editorStore";
 import type { DesktopPlatform } from "../platform";
+import { THEME_DEFINITIONS } from "../themeCustomization";
 
 interface Props {
   open: boolean;
@@ -388,21 +389,21 @@ export function OnboardingTour({ open, language, platform, onFinish }: Props) {
                 <div className="onboarding-theme-guide">
                   <header>
                     <Settings2 size={17} />
-                    <strong>{isEn ? "Five complete themes" : "五套完整界面主题"}</strong>
+                    <strong>{isEn ? "15 preset themes + Custom" : "15 套预设主题 + 自定义"}</strong>
                   </header>
                   <div className="onboarding-theme-swatches">
-                    {[
-                      ["light", isEn ? "Light" : "浅色"],
-                      ["beige", isEn ? "Warm beige" : "暖米色"],
-                      ["dark", isEn ? "Dark" : "深色"],
-                      ["purple", isEn ? "Deep purple" : "深紫色"],
-                      ["green", isEn ? "Deep green" : "深绿色"],
-                    ].map(([themeId, label]) => (
-                      <span className={`is-${themeId}`} key={themeId}>
-                        <i><b /><b /><b /></i>
-                        <small>{label}</small>
-                      </span>
-                    ))}
+                    {THEME_DEFINITIONS.filter((item) => item.id !== "custom").map(
+                      (definition) => (
+                        <span key={definition.id}>
+                          <i>
+                            {definition.swatches.map((color) => (
+                              <b key={color} style={{ background: color }} />
+                            ))}
+                          </i>
+                          <small>{isEn ? definition.labelEn : definition.labelZh}</small>
+                        </span>
+                      ),
+                    )}
                   </div>
                   <div className="onboarding-theme-sync-note">
                     <Check size={14} />

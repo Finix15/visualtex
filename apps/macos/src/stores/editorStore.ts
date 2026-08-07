@@ -25,6 +25,7 @@ import {
   normalizePngExportBackground,
   type PngExportBackground,
 } from "../export/pngBackground";
+import { isTheme } from "../themeCustomization";
 import {
   DEFAULT_FORMULA_CHINESE_FONT,
   DEFAULT_FORMULA_LETTER_FONT,
@@ -125,12 +126,7 @@ export function normalizeEditorLayout(value: unknown): EditorLayout {
 }
 
 function normalizeTheme(value: unknown): Theme {
-  return value === "dark" ||
-    value === "beige" ||
-    value === "purple" ||
-    value === "green"
-    ? value
-    : DEFAULT_THEME;
+  return isTheme(value) ? value : DEFAULT_THEME;
 }
 
 function normalizeEditorZoom(value: unknown) {

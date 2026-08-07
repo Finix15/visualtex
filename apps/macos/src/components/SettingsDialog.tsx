@@ -56,6 +56,68 @@ import {
   parseVisualTexConfiguration,
   VISUALTEX_CONFIGURATION_EXTENSION,
 } from "../runtime/applicationConfiguration";
+import {
+  createDefaultCustomTheme,
+  publishCustomTheme,
+  readCustomTheme,
+  THEME_DEFINITIONS,
+  type CustomThemeState,
+  type ThemePaletteColors,
+} from "../themeCustomization";
+
+const THEME_CORE_COLOR_FIELDS: readonly [keyof ThemePaletteColors, string, string][] = [
+  ["accent", "Accent", "强调色"],
+  ["accentHover", "Accent hover", "强调色悬停"],
+  ["accentSoft", "Accent soft", "强调浅色"],
+  ["background", "App background", "应用背景"],
+  ["elevated", "Raised background", "抬升背景"],
+  ["surface", "Panel surface", "面板背景"],
+  ["sunken", "Sunken surface", "凹陷背景"],
+  ["hover", "Hover surface", "悬停背景"],
+  ["active", "Selected surface", "选中背景"],
+  ["foreground", "Primary text", "主要前景"],
+  ["textMuted", "Secondary text", "次要前景"],
+  ["textFaint", "Muted text", "弱化前景"],
+  ["border", "Border", "边框"],
+  ["borderStrong", "Strong border", "强调边框"],
+  ["focusRing", "Focus ring", "焦点描边"],
+  ["info", "Info", "信息状态"],
+  ["success", "Success", "成功状态"],
+  ["warning", "Warning", "警告状态"],
+  ["danger", "Danger", "危险状态"],
+];
+
+const THEME_FORMULA_COLOR_FIELDS: readonly [keyof ThemePaletteColors, string, string][] = [
+  ["formulaSurface", "Formula canvas", "公式画布"],
+  ["formulaPlaceholder", "Placeholder", "公式占位符"],
+  ["formulaPlaceholderSelected", "Selected placeholder", "选中占位符"],
+  ["formulaCaret", "Formula caret", "公式光标"],
+];
+
+const THEME_SYNTAX_COLOR_FIELDS: readonly [keyof ThemePaletteColors, string, string][] = [
+  ["syntaxCommand", "Command", "命令"],
+  ["syntaxKeyword", "Keyword", "关键字"],
+  ["syntaxOperator", "Operator", "运算符"],
+  ["syntaxNumber", "Number", "数字"],
+  ["syntaxBracket", "Bracket", "括号"],
+  ["syntaxString", "String", "字符串"],
+  ["syntaxComment", "Comment", "注释"],
+  ["syntaxVariable", "Variable", "变量"],
+  ["syntaxFunction", "Function", "函数"],
+  ["syntaxError", "Error", "错误"],
+];
+
+const THEME_TOOLBAR_COLOR_FIELDS: readonly [keyof ThemePaletteColors, string, string][] = [
+  ["toolbarCommon", "Common", "常用"],
+  ["toolbarStructure", "Structure", "结构"],
+  ["toolbarCalculus", "Calculus", "微积分"],
+  ["toolbarMatrix", "Matrix", "矩阵"],
+  ["toolbarRelation", "Relation", "关系"],
+  ["toolbarGreek", "Greek", "希腊字母"],
+  ["toolbarArrow", "Arrow", "箭头"],
+  ["toolbarPhysics", "Physics", "物理"],
+  ["toolbarSet", "Set", "集合"],
+];
 
 interface Props {
   open: boolean;
@@ -103,6 +165,8 @@ export function SettingsDialog({
     useState(false);
   const [configurationBusy, setConfigurationBusy] = useState(false);
   const [configurationStatus, setConfigurationStatus] = useState("");
+  const [customTheme, setCustomTheme] =
+    useState<CustomThemeState>(() => readCustomTheme());
   const theme = useEditorStore((state) => state.theme);
   const setTheme = useEditorStore((state) => state.setTheme);
   const language = useEditorStore((state) => state.language);
@@ -262,6 +326,79 @@ export function SettingsDialog({
     interfaceCustomizationOpenRef.current = false;
     setInterfaceCustomizationOpen(false);
   };
+
+  const updateCustomTheme = (
+    update: (current: CustomThemeState) => CustomThemeState,
+  ) => {
+    setCustomTheme((current) => {
+      const next = update(current);
+      publishCustomTheme(next);
+      setTheme("custom");
+      return next;
+    });
+  };
+
+  const updateThemeColor = (key: keyof ThemePaletteColors, color: string) => {
+    if (!/^#[0-9a-f]{6}$/i.test(color)) return;
+    updateCustomTheme((current) => ({
+      ...current,
+      colors: {
+        ...current.colors,
+        [key]: color.toUpperCase(),
+      },
+    }));
+  };
+
+  const resetThemePalette = () => {
+    const next = createDefaultCustomTheme();
+    setCustomTheme(next);
+    publishCustomTheme(next);
+    setTheme("custom");
+  };
+
+  const renderThemeColorFields = (
+    fields: readonly [keyof ThemePaletteColors, string, string][],
+  ) => (
+    <div className="theme-color-grid">
+      {fields.map(([key, labelEn, labelZh]) => {
+        const color = customTheme.colors[key];
+        return (
+          <label className="theme-color-row" key={key}>
+            <strong>{isEn ? labelEn : labelZh}</strong>
+            <span className="theme-color-control">
+              <input
+                type="color"
+                value={color}
+                aria-label={isEn ? `${labelEn} color` : `${labelZh}颜色`}
+                data-theme-color-setting={key}
+                onChange={(event) =>
+                  updateThemeColor(key, event.currentTarget.value)
+                }
+              />
+              <input
+                key={`${key}-${color}`}
+                type="text"
+                defaultValue={color}
+                spellCheck={false}
+                aria-label={isEn ? `${labelEn} hex value` : `${labelZh}十六进制值`}
+                onBlur={(event) => {
+                  const value = event.currentTarget.value.trim();
+                  if (/^#[0-9a-f]{6}$/i.test(value)) {
+                    updateThemeColor(key, value);
+                  } else {
+                    event.currentTarget.value = color;
+                  }
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") event.currentTarget.blur();
+                }}
+              />
+            </span>
+          </label>
+        );
+      })}
+    </div>
+  );
 
   const saveConfiguration = async () => {
     if (configurationBusy) return;
@@ -475,31 +612,33 @@ export function SettingsDialog({
                 role="group"
                 aria-label={isEn ? "Colour theme" : "界面配色"}
               >
-                {(
-                  [
-                    ["light", isEn ? "Light" : "浅色"],
-                    ["beige", isEn ? "Warm beige" : "暖米色"],
-                    ["dark", isEn ? "Dark" : "深色"],
-                    ["purple", isEn ? "Deep purple" : "深紫色"],
-                    ["green", isEn ? "Deep green" : "深绿色"],
-                  ] as const
-                ).map(([themeId, label]) => (
-                  <button
-                    key={themeId}
-                    type="button"
-                    className={theme === themeId ? "is-active" : ""}
-                    aria-pressed={theme === themeId}
-                    data-theme-choice={themeId}
-                    onClick={() => setTheme(themeId)}
-                  >
-                    <span className="theme-choice-swatch" aria-hidden="true">
-                      <i />
-                      <i />
-                      <i />
-                    </span>
-                    <span>{label}</span>
-                  </button>
-                ))}
+                {THEME_DEFINITIONS.map((definition) => {
+                  const swatches =
+                    definition.id === "custom"
+                      ? ([
+                          customTheme.colors.background,
+                          customTheme.colors.surface,
+                          customTheme.colors.accent,
+                        ] as const)
+                      : definition.swatches;
+                  return (
+                    <button
+                      key={definition.id}
+                      type="button"
+                      className={theme === definition.id ? "is-active" : ""}
+                      aria-pressed={theme === definition.id}
+                      data-theme-choice={definition.id}
+                      onClick={() => setTheme(definition.id)}
+                    >
+                      <span className="theme-choice-swatch" aria-hidden="true">
+                        {swatches.map((color) => (
+                          <i key={color} style={{ background: color }} />
+                        ))}
+                      </span>
+                      <span>{isEn ? definition.labelEn : definition.labelZh}</span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
             <label className="switch-row">
@@ -762,6 +901,204 @@ export function SettingsDialog({
               </header>
 
               <div className="settings-subdialog-content">
+                <section
+                  className="theme-studio-customization"
+                  aria-labelledby="theme-studio-title"
+                  data-theme-studio
+                >
+                  <header className="theme-studio-header">
+                    <div>
+                      <strong id="theme-studio-title">
+                        {isEn ? "Theme studio" : "界面配色工作室"}
+                      </strong>
+                    </div>
+                    <div className="theme-studio-actions">
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        data-theme-reset-preset
+                        onClick={resetThemePalette}
+                      >
+                        {isEn ? "Reset custom" : "重置自定义"}
+                      </button>
+                      <button
+                        type="button"
+                        className={theme === "custom" ? "primary-button" : "secondary-button"}
+                        data-theme-use-custom
+                        onClick={() => setTheme("custom")}
+                      >
+                        {isEn ? "Use Custom" : "使用自定义"}
+                      </button>
+                    </div>
+                  </header>
+
+                  <div className="theme-preset-section">
+                    <strong>{isEn ? "Ready-made palettes" : "现成配色方案"}</strong>
+                    <div className="theme-preset-grid" role="group">
+                      {THEME_DEFINITIONS.filter((preset) => preset.id !== "custom").map(
+                        (preset) => (
+                          <button
+                            type="button"
+                            key={preset.id}
+                            className={theme === preset.id ? "is-active" : ""}
+                            aria-pressed={theme === preset.id}
+                            data-theme-preset={preset.id}
+                            onClick={() => setTheme(preset.id)}
+                          >
+                            <span
+                              className="theme-preset-aa"
+                              style={{
+                                background: preset.swatches[0],
+                                color: preset.swatches[2],
+                                borderColor: preset.swatches[1],
+                              }}
+                              aria-hidden="true"
+                            >
+                              Aa
+                            </span>
+                            <span className="theme-preset-name">
+                              {isEn ? preset.labelEn : preset.labelZh}
+                            </span>
+                            <span className="theme-preset-swatches" aria-hidden="true">
+                              {preset.swatches.map((color) => (
+                                <i key={color} style={{ background: color }} />
+                              ))}
+                            </span>
+                          </button>
+                        ),
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="theme-mode-row">
+                    <strong>{isEn ? "Control appearance" : "控件明暗模式"}</strong>
+                    <div className="theme-segment theme-mode-segment" role="group">
+                      <button
+                        type="button"
+                        className={customTheme.mode === "light" ? "is-active" : ""}
+                        aria-pressed={customTheme.mode === "light"}
+                        onClick={() =>
+                          updateCustomTheme((current) => ({
+                            ...current,
+                            mode: "light",
+                          }))
+                        }
+                      >
+                        {isEn ? "Light" : "浅色"}
+                      </button>
+                      <button
+                        type="button"
+                        className={customTheme.mode === "dark" ? "is-active" : ""}
+                        aria-pressed={customTheme.mode === "dark"}
+                        onClick={() =>
+                          updateCustomTheme((current) => ({
+                            ...current,
+                            mode: "dark",
+                          }))
+                        }
+                      >
+                        {isEn ? "Dark" : "深色"}
+                      </button>
+                    </div>
+                  </div>
+
+                  <details className="theme-color-details" open>
+                    <summary>{isEn ? "Interface colors" : "界面颜色"}</summary>
+                    {renderThemeColorFields(THEME_CORE_COLOR_FIELDS)}
+                  </details>
+
+                  <details className="theme-color-details" open>
+                    <summary>{isEn ? "Formula colors" : "公式区域颜色"}</summary>
+                    {renderThemeColorFields(THEME_FORMULA_COLOR_FIELDS)}
+                  </details>
+
+                  <details className="theme-color-details">
+                    <summary>{isEn ? "Source editor colors" : "源码编辑器颜色"}</summary>
+                    {renderThemeColorFields(THEME_SYNTAX_COLOR_FIELDS)}
+                  </details>
+
+                  <details className="theme-color-details">
+                    <summary>{isEn ? "Toolbar category colors" : "工具栏分类颜色"}</summary>
+                    {renderThemeColorFields(THEME_TOOLBAR_COLOR_FIELDS)}
+                  </details>
+
+                  <div
+                    className="theme-studio-preview"
+                    data-theme-studio-preview
+                    style={
+                      {
+                        "--theme-preview-accent": customTheme.colors.accent,
+                        "--theme-preview-accent-hover": customTheme.colors.accentHover,
+                        "--theme-preview-accent-soft": customTheme.colors.accentSoft,
+                        "--theme-preview-bg": customTheme.colors.background,
+                        "--theme-preview-elevated": customTheme.colors.elevated,
+                        "--theme-preview-surface": customTheme.colors.surface,
+                        "--theme-preview-sunken": customTheme.colors.sunken,
+                        "--theme-preview-hover": customTheme.colors.hover,
+                        "--theme-preview-active": customTheme.colors.active,
+                        "--theme-preview-text": customTheme.colors.foreground,
+                        "--theme-preview-muted": customTheme.colors.textMuted,
+                        "--theme-preview-faint": customTheme.colors.textFaint,
+                        "--theme-preview-border": customTheme.colors.border,
+                        "--theme-preview-border-strong": customTheme.colors.borderStrong,
+                        "--theme-preview-formula": customTheme.colors.formulaSurface,
+                        "--theme-preview-placeholder": customTheme.colors.formulaPlaceholder,
+                        "--theme-preview-danger": customTheme.colors.danger,
+                        "--theme-preview-warning": customTheme.colors.warning,
+                        "--theme-preview-success": customTheme.colors.success,
+                      } as CSSProperties
+                    }
+                  >
+                    <div className="theme-preview-titlebar">
+                      <span className="theme-preview-window-dots" aria-hidden="true">
+                        <i />
+                        <i />
+                        <i />
+                      </span>
+                      <strong>{isEn ? "Custom" : "自定义"}</strong>
+                      <span className="theme-preview-status">
+                        {theme === "custom"
+                          ? isEn
+                            ? "Active"
+                            : "当前主题"
+                          : isEn
+                            ? "Preview"
+                            : "预览"}
+                      </span>
+                    </div>
+                    <div className="theme-preview-body">
+                      <aside className="theme-preview-sidebar" aria-hidden="true">
+                        <span className="is-active" />
+                        <span />
+                        <span />
+                        <span />
+                      </aside>
+                      <div className="theme-preview-main">
+                        <div className="theme-preview-toolbar">
+                          <span />
+                          <span />
+                          <span />
+                          <button type="button" tabIndex={-1}>Aa</button>
+                        </div>
+                        <div className="theme-preview-editor">
+                          <div className="theme-preview-formula-card">
+                            <span className="theme-preview-formula-text">x² + y² = r²</span>
+                            <i />
+                          </div>
+                          <div className="theme-preview-controls">
+                            <button type="button" tabIndex={-1}>
+                              {isEn ? "Primary" : "主要操作"}
+                            </button>
+                            <span className="success" />
+                            <span className="warning" />
+                            <span className="danger" />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
                 <label className="switch-row">
                   <span>
                     <strong>

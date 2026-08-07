@@ -78,7 +78,7 @@ import {
 } from "./clipboard/LatexCopyService";
 import { normalizeChineseLatex } from "./editor/normalizeChineseLatex";
 import type { FormulaDocument, LatexCodeFormat } from "./types/formula";
-import { publishSynchronizedTheme } from "./themeSync";
+import { applyDocumentTheme, publishSynchronizedTheme } from "./themeSync";
 import { copyFormulaDocumentPngToClipboard } from "./export/pngClipboard";
 import {
   OCR_MODELS,
@@ -220,6 +220,7 @@ function App() {
   const activeLineId = useEditorStore((state) => state.activeLineId);
   const formulaAlignment = useEditorStore((state) => state.formulaAlignment);
   const theme = useEditorStore((state) => state.theme);
+  const synchronizedThemeRef = useRef(theme);
   const language = useEditorStore((state) => state.language);
   const setLanguage = useEditorStore((state) => state.setLanguage);
   const zoom = useEditorStore((state) => state.zoom);
@@ -410,7 +411,12 @@ function App() {
   }, []);
 
   useEffect(() => {
-    publishSynchronizedTheme(theme);
+    if (synchronizedThemeRef.current === theme) {
+      applyDocumentTheme(theme);
+    } else {
+      synchronizedThemeRef.current = theme;
+      publishSynchronizedTheme(theme);
+    }
     if (isTauriEnvironment()) {
       void invoke<string>("set_app_theme", { theme }).catch(() => undefined);
     }

@@ -45,6 +45,17 @@ fn normalize_app_theme(theme: &str) -> &'static str {
         "dark" => "dark",
         "purple" => "purple",
         "green" => "green",
+        "codex" => "codex",
+        "notion" => "notion",
+        "one" => "one",
+        "proof" => "proof",
+        "raycast" => "raycast",
+        "rose-pine" => "rose-pine",
+        "solarized" => "solarized",
+        "vercel" => "vercel",
+        "vscode-plus" => "vscode-plus",
+        "xcode" => "xcode",
+        "custom" => "custom",
         _ => "light",
     }
 }
