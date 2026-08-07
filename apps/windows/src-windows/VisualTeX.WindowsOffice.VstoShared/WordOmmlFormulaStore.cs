@@ -211,69 +211,247 @@ internal static class WordOmmlFormulaStore
         finally { Release(bookmarks); }
     }
 
+    internal static IReadOnlyList<string> BookmarkedFormulaIds(Document document)
+    {
+        var formulaIds = new List<string>();
+        Bookmarks? bookmarks = null;
+        try
+        {
+            // Snapshot only stable formula ids while holding the live Word
+            // Bookmarks collection. No OMath/Range lookup is allowed here.
+            bookmarks = document.Bookmarks;
+            var bookmarkCount = bookmarks.Count;
+            for (var index = 1; index <= bookmarkCount; index++)
+            {
+                Bookmark? bookmark = null;
+                try
+                {
+                    bookmark = bookmarks[index];
+                    if (TryGetFormulaId(bookmark, out var formulaId))
+                        formulaIds.Add(formulaId);
+                }
+                finally { Release(bookmark); }
+            }
+        }
+        finally { Release(bookmarks); }
+        return formulaIds
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
     internal static IReadOnlyList<string> FormulaIds(Document document)
     {
         var result = new List<string>();
         var staleFormulaIds = new List<string>();
-        Bookmarks? bookmarks = null;
-        try
+        var driftedAnchors = new List<(string FormulaId, int Start, int End, FormulaMetadata Metadata)>();
+        var candidates = new List<(
+            string FormulaId,
+            int Anchor,
+            int EquationStart,
+            int EquationEnd)>();
+        var formulaIds = BookmarkedFormulaIds(document);
+
+        foreach (var formulaId in formulaIds)
         {
-            bookmarks = document.Bookmarks;
-            for (var index = 1; index <= bookmarks.Count; index++)
+            Bookmark? bookmark = null;
+            Range? bookmarkRange = null;
+            Range? equationRange = null;
+            OMaths? maths = null;
+            try
             {
-                Bookmark? bookmark = null;
-                Range? bookmarkRange = null;
-                Range? equationRange = null;
-                OMaths? maths = null;
+                bookmark = FindByFormulaId(document, formulaId);
+                if (bookmark is null) continue;
+                bookmarkRange = bookmark.Range;
                 try
                 {
-                    bookmark = bookmarks[index];
-                    if (!TryGetFormulaId(bookmark, out var formulaId)) continue;
-                    bookmarkRange = bookmark.Range;
-                    try
+                    equationRange = GetEquationRange(bookmark);
+                    maths = equationRange.OMaths;
+                    if (maths.Count == 1)
                     {
-                        equationRange = GetEquationRange(bookmark);
-                        maths = equationRange.OMaths;
-                        var anchorDistance = DistanceFromAnchorToEquation(
+                        candidates.Add((
+                            formulaId,
                             bookmarkRange.Start,
-                            equationRange);
-                        if (maths.Count == 1 && anchorDistance <= 8)
-                            result.Add(formulaId);
-                        else
-                            staleFormulaIds.Add(formulaId);
+                            equationRange.Start,
+                            equationRange.End));
                     }
-                    catch
+                    else
                     {
-                        // Deleting an OMML formula with Word's Delete key leaves
-                        // its collapsed VisualTeX bookmark and custom XML part.
-                        // Treat that anchor as stale so Update Equation Numbers
-                        // can remove the old visible number and renumber the rest.
                         staleFormulaIds.Add(formulaId);
                     }
                 }
-                finally
+                catch
                 {
-                    Release(maths);
-                    Release(equationRange);
-                    Release(bookmarkRange);
-                    Release(bookmark);
+                    // Enumeration must remain non-destructive. Word can
+                    // transiently reject OMath/Range COM calls while fields,
+                    // tables or add-ins are rebuilding. A failed lookup is not
+                    // sufficient proof that the user deleted the equation.
+                    // Exclude it from this pass, but preserve both its bookmark
+                    // and CustomXML metadata for a later successful recovery.
+                    staleFormulaIds.Add(formulaId);
                 }
             }
+            finally
+            {
+                Release(maths);
+                Release(equationRange);
+                Release(bookmarkRange);
+                Release(bookmark);
+            }
         }
-        finally { Release(bookmarks); }
 
-        foreach (var formulaId in staleFormulaIds.Distinct(StringComparer.OrdinalIgnoreCase))
+        var assignedEquationRanges = new HashSet<string>(StringComparer.Ordinal);
+        var fingerprintCache = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var group in candidates
+                     .GroupBy(candidate => FormulaRangeKey(
+                         candidate.EquationStart,
+                         candidate.EquationEnd))
+                     .OrderBy(group => group.Min(candidate => candidate.EquationStart)))
         {
-            Bookmark? staleBookmark = null;
+            var entries = group.OrderBy(candidate => candidate.Anchor).ToArray();
+            var sharedKey = group.Key;
+            var hasConflict = entries.Length > 1
+                || assignedEquationRanges.Contains(sharedKey);
+            if (!hasConflict)
+            {
+                result.Add(entries[0].FormulaId);
+                assignedEquationRanges.Add(sharedKey);
+                continue;
+            }
+
+            Range? sharedRange = null;
+            string sharedFingerprint = string.Empty;
             try
             {
-                staleBookmark = FindByFormulaId(document, formulaId);
-                staleBookmark?.Delete();
-                Delete(document, formulaId);
+                sharedRange = document.Range(
+                    entries[0].EquationStart,
+                    entries[0].EquationEnd);
+                sharedFingerprint = GetEquationFingerprint(
+                    sharedRange,
+                    fingerprintCache);
             }
             catch { }
-            finally { Release(staleBookmark); }
+            finally { Release(sharedRange); }
+
+            var metadataByFormula = entries.ToDictionary(
+                entry => entry.FormulaId,
+                entry => TryRead(document, entry.FormulaId),
+                StringComparer.OrdinalIgnoreCase);
+            var keeper = assignedEquationRanges.Contains(sharedKey)
+                ? default((string FormulaId, int Anchor, int EquationStart, int EquationEnd)?)
+                : entries
+                    .Where(entry =>
+                    {
+                        var metadata = metadataByFormula[entry.FormulaId];
+                        return metadata is not null
+                            && !string.IsNullOrWhiteSpace(metadata.NativeOmmlFingerprint)
+                            && string.Equals(
+                                metadata.NativeOmmlFingerprint,
+                                sharedFingerprint,
+                                StringComparison.OrdinalIgnoreCase);
+                    })
+                    .OrderBy(entry => FormulaAnchorOwnershipScore(
+                        entry.Anchor,
+                        entry.EquationStart,
+                        entry.EquationEnd))
+                    .Cast<(string FormulaId, int Anchor, int EquationStart, int EquationEnd)?>()
+                    .FirstOrDefault();
+            if (keeper is null && !assignedEquationRanges.Contains(sharedKey))
+            {
+                keeper = entries
+                    .OrderBy(entry => FormulaAnchorOwnershipScore(
+                        entry.Anchor,
+                        entry.EquationStart,
+                        entry.EquationEnd))
+                    .Cast<(string FormulaId, int Anchor, int EquationStart, int EquationEnd)?>()
+                    .First();
+            }
+
+            if (keeper is not null)
+            {
+                result.Add(keeper.Value.FormulaId);
+                assignedEquationRanges.Add(sharedKey);
+            }
+
+            foreach (var entry in entries)
+            {
+                if (keeper is not null
+                    && string.Equals(
+                        entry.FormulaId,
+                        keeper.Value.FormulaId,
+                        StringComparison.OrdinalIgnoreCase))
+                    continue;
+                var metadata = metadataByFormula[entry.FormulaId];
+                if (metadata is null
+                    || string.IsNullOrWhiteSpace(metadata.NativeOmmlFingerprint))
+                {
+                    staleFormulaIds.Add(entry.FormulaId);
+                    continue;
+                }
+
+                Range? recovered = null;
+                try
+                {
+                    recovered = FindNearbyEquationRangeByFingerprint(
+                        document,
+                        entry.Anchor,
+                        metadata.NativeOmmlFingerprint!,
+                        assignedEquationRanges,
+                        fingerprintCache);
+                    if (recovered is null)
+                    {
+                        staleFormulaIds.Add(entry.FormulaId);
+                        continue;
+                    }
+                    var recoveredKey = FormulaRangeKey(recovered.Start, recovered.End);
+                    assignedEquationRanges.Add(recoveredKey);
+                    result.Add(entry.FormulaId);
+                    driftedAnchors.Add((
+                        entry.FormulaId,
+                        recovered.Start,
+                        recovered.End,
+                        metadata));
+                }
+                finally { Release(recovered); }
+            }
         }
+
+        // Structural edits such as inserting a table before the next display
+        // formula can collapse that next formula's zero-width bookmark backward.
+        // Only conflicting anchors pay the OMML fingerprint cost; ordinary
+        // formulas retain the fast adjacent-range path.
+        foreach (var drifted in driftedAnchors)
+        {
+            Range? equationRange = null;
+            Bookmark? repaired = null;
+            try
+            {
+                equationRange = document.Range(drifted.Start, drifted.End);
+                repaired = Wrap(
+                    document,
+                    equationRange,
+                    drifted.Metadata,
+                    replaceExisting: true);
+            }
+            catch
+            {
+                staleFormulaIds.Add(drifted.FormulaId);
+                result.RemoveAll(id => string.Equals(
+                    id,
+                    drifted.FormulaId,
+                    StringComparison.OrdinalIgnoreCase));
+            }
+            finally
+            {
+                Release(repaired);
+                Release(equationRange);
+            }
+        }
+
+        // Do not delete unresolved anchors or metadata here. FormulaIds is used
+        // by read-only discovery paths as well as reconciliation, and a transient
+        // COM lookup failure must never mutate an unsaved document. Explicit
+        // deletion/conversion paths already remove their own OMML store entries;
+        // numbering reconciliation removes only proven orphan number artifacts.
         return result;
     }
 
@@ -513,6 +691,115 @@ internal static class WordOmmlFormulaStore
         }
     }
 
+    internal static Range GetEquationRangeVerifiedForStructuralEdit(
+        Document document,
+        string formulaId,
+        FormulaMetadata metadata)
+    {
+        Bookmark? bookmark = null;
+        Range? bookmarkRange = null;
+        OMaths? documentMaths = null;
+        Range? adjacent = null;
+        Range? recovered = null;
+        Bookmark? repairedBookmark = null;
+        try
+        {
+            bookmark = FindByFormulaId(document, formulaId)
+                ?? throw new InvalidDataException(
+                    $"The VisualTeX OMML bookmark for {formulaId} is missing.");
+            bookmarkRange = bookmark.Range;
+            var anchor = bookmarkRange.Start;
+            var expectedFingerprint = metadata.NativeOmmlFingerprint;
+            if (string.IsNullOrWhiteSpace(expectedFingerprint))
+                return GetEquationRange(bookmark);
+
+            // Obtain a complete native OMath from document.OMaths rather than
+            // serializing an arbitrary range around the bookmark. InsertXML and
+            // native Word editing can normalize otherwise equivalent OMML, which
+            // changes the fingerprint while keeping the canonical collapsed
+            // bookmark exactly at the OMath start (or one cell mark before it).
+            documentMaths = document.OMaths;
+            adjacent = FindAdjacentEquationRange(documentMaths, anchor);
+            if (adjacent is not null)
+            {
+                string? adjacentFingerprint = null;
+                try { adjacentFingerprint = GetEquationFingerprint(adjacent); }
+                catch { }
+                var fingerprintMatches = !string.IsNullOrWhiteSpace(adjacentFingerprint)
+                    && string.Equals(
+                        adjacentFingerprint,
+                        expectedFingerprint,
+                        StringComparison.OrdinalIgnoreCase);
+                var canonicalAnchor = anchor == adjacent.Start
+                    || anchor == adjacent.Start - 1;
+                if (fingerprintMatches || canonicalAnchor)
+                {
+                    if (!fingerprintMatches
+                        && !string.IsNullOrWhiteSpace(adjacentFingerprint))
+                    {
+                        metadata.NativeOmmlFingerprint = adjacentFingerprint;
+                        Save(document, metadata);
+                    }
+                    repairedBookmark = Wrap(
+                        document,
+                        adjacent,
+                        metadata,
+                        replaceExisting: true);
+                    var adjacentResult = adjacent;
+                    adjacent = null;
+                    return adjacentResult;
+                }
+            }
+            Release(adjacent);
+            adjacent = null;
+
+            // Structural edits can drag a collapsed VTOMML bookmark into the
+            // table created for the preceding formula. Search only complete
+            // native OMath ranges and identify the formula by its durable
+            // fingerprint; never serialize a malformed cross-table probe range.
+            recovered = FindNearbyEquationRangeByFingerprint(
+                document,
+                anchor,
+                expectedFingerprint!);
+            if (recovered is null)
+            {
+                // Table insertion can move a still-unprocessed formula farther
+                // than the local recovery window. A full-document fallback is
+                // safe only when the durable fingerprint identifies exactly one
+                // complete native OMath; repeated identical formulas remain an
+                // intentional hard failure rather than guessing by proximity.
+                recovered = FindUniqueEquationRangeByFingerprint(
+                    document,
+                    expectedFingerprint!,
+                    requireDisplay: string.Equals(
+                        metadata.DisplayMode,
+                        "block",
+                        StringComparison.Ordinal));
+            }
+            if (recovered is null)
+                throw new InvalidDataException(
+                    $"The VisualTeX OMML bookmark for {formulaId} drifted and its native equation could not be recovered uniquely.");
+
+            repairedBookmark = Wrap(
+                document,
+                recovered,
+                metadata,
+                replaceExisting: true);
+            var result = recovered;
+            recovered = null;
+            return result;
+        }
+        finally
+        {
+            Release(repairedBookmark);
+            Release(recovered);
+            Release(adjacent);
+            Release(documentMaths);
+            Release(bookmarkRange);
+            Release(bookmark);
+        }
+    }
+
     private static void ClampToInlineBaselineBookmark(
         Document document,
         Bookmark formulaBookmark,
@@ -645,10 +932,92 @@ internal static class WordOmmlFormulaStore
         return bestRange;
     }
 
+    private static string FormulaRangeKey(int start, int end) =>
+        start + ":" + end;
+
+    private static long FormulaAnchorOwnershipScore(
+        int anchor,
+        int equationStart,
+        int equationEnd)
+    {
+        if (anchor <= equationStart) return equationStart - anchor;
+        if (anchor <= equationEnd) return 1_000L + anchor - equationStart;
+        return 1_000_000L + anchor - equationEnd;
+    }
+
+    private static string GetEquationFingerprint(
+        Range equationRange,
+        IDictionary<string, string>? cache = null)
+    {
+        var key = FormulaRangeKey(equationRange.Start, equationRange.End);
+        if (cache is not null && cache.TryGetValue(key, out var cached))
+            return cached;
+        var fingerprint = WordOmmlConverter.ComputeOmmlFingerprint(
+            equationRange.WordOpenXML);
+        if (cache is not null) cache[key] = fingerprint;
+        return fingerprint;
+    }
+
+    private static Range? FindUniqueEquationRangeByFingerprint(
+        Document document,
+        string expectedFingerprint,
+        bool requireDisplay)
+    {
+        OMaths? maths = null;
+        Range? match = null;
+        var ambiguous = false;
+        try
+        {
+            maths = document.OMaths;
+            for (var index = 1; index <= maths.Count; index++)
+            {
+                OMath? math = null;
+                Range? range = null;
+                Range? trimmed = null;
+                try
+                {
+                    math = maths[index];
+                    if (requireDisplay && math.Type != WdOMathType.wdOMathDisplay)
+                        continue;
+                    range = math.Range;
+                    trimmed = TrimToNativeMath(range);
+                    string fingerprint;
+                    try { fingerprint = GetEquationFingerprint(trimmed); }
+                    catch { continue; }
+                    if (!string.Equals(
+                            fingerprint,
+                            expectedFingerprint,
+                            StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    if (match is not null)
+                    {
+                        ambiguous = true;
+                        break;
+                    }
+                    match = trimmed;
+                    trimmed = null;
+                }
+                finally
+                {
+                    Release(trimmed);
+                    Release(range);
+                    Release(math);
+                }
+            }
+            if (!ambiguous) return match;
+            Release(match);
+            match = null;
+            return null;
+        }
+        finally { Release(maths); }
+    }
+
     private static Range? FindNearbyEquationRangeByFingerprint(
         Document document,
         int anchor,
-        string expectedFingerprint)
+        string expectedFingerprint,
+        ISet<string>? excludedRangeKeys = null,
+        IDictionary<string, string>? fingerprintCache = null)
     {
         const int MaximumRecoveryDistance = 512;
         OMaths? maths = null;
@@ -668,13 +1037,15 @@ internal static class WordOmmlFormulaStore
                 {
                     math = maths[index];
                     range = math.Range;
-                    var distance = DistanceFromAnchorToEquation(anchor, range);
+                    trimmed = TrimToNativeMath(range);
+                    var rangeKey = FormulaRangeKey(trimmed.Start, trimmed.End);
+                    if (excludedRangeKeys?.Contains(rangeKey) == true) continue;
+                    var distance = DistanceFromAnchorToEquation(anchor, trimmed);
                     if (distance > MaximumRecoveryDistance) continue;
                     string fingerprint;
                     try
                     {
-                        fingerprint = WordOmmlConverter.ComputeOmmlFingerprint(
-                            range.WordOpenXML);
+                        fingerprint = GetEquationFingerprint(trimmed, fingerprintCache);
                     }
                     catch { continue; }
                     if (!string.Equals(
@@ -683,11 +1054,10 @@ internal static class WordOmmlFormulaStore
                             StringComparison.OrdinalIgnoreCase))
                         continue;
 
-                    var priority = AnchorRelationPriority(anchor, range);
+                    var priority = AnchorRelationPriority(anchor, trimmed);
                     if (distance < bestDistance
                         || (distance == bestDistance && priority < bestPriority))
                     {
-                        trimmed = TrimToNativeMath(range);
                         Release(bestRange);
                         bestRange = trimmed;
                         trimmed = null;
@@ -772,10 +1142,19 @@ internal static class WordOmmlFormulaStore
     internal static float EstimateHeightPoints(Bookmark bookmark)
     {
         Range? equationRange = null;
-        Microsoft.Office.Interop.Word.Font? font = null;
         try
         {
             equationRange = GetEquationRange(bookmark);
+            return EstimateHeightPoints(equationRange);
+        }
+        finally { Release(equationRange); }
+    }
+
+    internal static float EstimateHeightPoints(Range equationRange)
+    {
+        Microsoft.Office.Interop.Word.Font? font = null;
+        try
+        {
             font = equationRange.Font;
             var size = 11f;
             try { size = font.Size; } catch { }
@@ -783,11 +1162,7 @@ internal static class WordOmmlFormulaStore
                 size = 11f;
             return Math.Max(11f, size * 1.5f);
         }
-        finally
-        {
-            Release(font);
-            Release(equationRange);
-        }
+        finally { Release(font); }
     }
 
     internal static string BuildPartXml(FormulaMetadata metadata)

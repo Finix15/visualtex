@@ -87,6 +87,58 @@ internal static class Program
     private static int Main(string[] args)
     {
         if (args.Length >= 1
+            && string.Equals(
+                args[0],
+                "--installed-word-ole-numbering-promotion",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var promotionArtifactRoot = args.Length >= 2
+                    ? Path.GetFullPath(args[1])
+                    : Path.Combine(
+                        Path.GetTempPath(),
+                        $"VisualTeX-Word-OLE-Numbering-Promotion-{Guid.NewGuid():N}");
+                Directory.CreateDirectory(promotionArtifactRoot);
+                var promotionPreviewRoot = Path.Combine(
+                    Environment.GetFolderPath(
+                        Environment.SpecialFolder.LocalApplicationData),
+                    "VisualTeX",
+                    "office",
+                    "temp");
+                Directory.CreateDirectory(promotionPreviewRoot);
+                var promotionPreviewFormulaId = Guid.NewGuid().ToString();
+                var promotionInitial = CreatePreviewSet(
+                    promotionPreviewRoot,
+                    promotionPreviewFormulaId,
+                    "unnumbered",
+                    420,
+                    130);
+                var promotionUpdated = CreatePreviewSet(
+                    promotionPreviewRoot,
+                    promotionPreviewFormulaId,
+                    "numbered",
+                    520,
+                    150);
+                VerifyWordOleNumberingPromotion(
+                    promotionArtifactRoot,
+                    promotionInitial,
+                    promotionUpdated);
+                Console.WriteLine(
+                    "Installed Word OLE numbering promotion acceptance passed: "
+                    + "an unnumbered display OLE was edited to Numbered=true without "
+                    + "reusing a deleted InlineShape COM object.");
+                Console.WriteLine($"Artifacts: {promotionArtifactRoot}");
+                return 0;
+            }
+            catch (Exception error)
+            {
+                Console.Error.WriteLine(error);
+                return 1;
+            }
+        }
+
+        if (args.Length >= 1
             && string.Equals(args[0], "--native-word-number-size-probe", StringComparison.OrdinalIgnoreCase))
         {
             try
@@ -350,6 +402,7 @@ internal static class Program
             Console.WriteLine("[2/9] Verifying Word OMML/OLE editing, mixed numbering, and cross-reference updates...");
             VerifyWordOmmlOleRoundTrip(wordOmmlPath, ommlFormulaId, initial, updated);
             VerifyWordMixedNumberingScenarios(initial, updated);
+            VerifyWordOleNumberingPromotion(artifactRoot, initial, updated);
             VerifyRepeatedWordConversionsGeometryAndNativeSync(
                 repeatedConversionFormulaId,
                 display);
@@ -4989,6 +5042,173 @@ internal static class Program
             Release(shape);
             Release(range);
             Release(bookmark);
+            Release(selection);
+            if (document is not null)
+            {
+                try { document.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
+            }
+            Release(document);
+            if (application is not null)
+            {
+                try { application.Quit(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
+            }
+            Release(application);
+            ForceComCleanup();
+        }
+    }
+
+    private static void VerifyWordOleNumberingPromotion(
+        string artifactRoot,
+        PreviewSet initial,
+        PreviewSet updated)
+    {
+        const string firstMathMl =
+            "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">"
+            + "<mi>x</mi><mo>=</mo><mn>1</mn></math>";
+        const string secondMathMl =
+            "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">"
+            + "<mi>y</mi><mo>=</mo><mn>2</mn></math>";
+        const string oleMathMl =
+            "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">"
+            + "<mi>u</mi><mo>+</mo><mi>v</mi><mo>=</mo><mi>w</mi></math>";
+
+        var firstId = Guid.NewGuid().ToString();
+        var secondId = Guid.NewGuid().ToString();
+        var promotedOleId = Guid.NewGuid().ToString();
+        Word.Application? application = null;
+        Word.Document? document = null;
+        Word.Selection? selection = null;
+        Word.InlineShape? shape = null;
+        Word.Range? range = null;
+        try
+        {
+            application = new Word.Application
+            {
+                Visible = false,
+                DisplayAlerts = Word.WdAlertLevel.wdAlertsNone,
+            };
+            document = application.Documents.Add();
+            var service = new WordFormulaService(application);
+
+            ResetWordSelection(application, ref selection, 0, 0);
+            service.InsertOmml(
+                CreateWordSession(
+                    firstId,
+                    "create",
+                    FormulaOleContract.WordOmmlMode,
+                    "x=1",
+                    firstMathMl,
+                    initial,
+                    numbered: true,
+                    originalMetadata: null),
+                firstMathMl);
+
+            ResetWordSelection(
+                application,
+                ref selection,
+                document.Content.End - 1,
+                document.Content.End - 1);
+            service.InsertOmml(
+                CreateWordSession(
+                    secondId,
+                    "create",
+                    FormulaOleContract.WordOmmlMode,
+                    "y=2",
+                    secondMathMl,
+                    initial,
+                    numbered: true,
+                    originalMetadata: null),
+                secondMathMl);
+
+            ResetWordSelection(
+                application,
+                ref selection,
+                document.Content.End - 1,
+                document.Content.End - 1);
+            service.InsertOle(
+                CreateWordSession(
+                    promotedOleId,
+                    "create",
+                    FormulaOleContract.NativeOleMode,
+                    "u+v=w",
+                    oleMathMl,
+                    initial,
+                    numbered: false,
+                    originalMetadata: null),
+                initial.PngPath,
+                initial.EmfPath);
+            AssertEqual(
+                "2",
+                WordEquationNumbering.Reconcile(document).ToString(),
+                "The unnumbered OLE fixture unexpectedly participated in numbering.");
+
+            shape = FindWordFormula(document, promotedOleId)
+                ?? throw new InvalidOperationException(
+                    "Unnumbered OLE promotion fixture is missing before edit.");
+            range = shape.Range;
+            var selected = ReadSelectedFormula(application, service, range);
+            var originalMetadata = selected.Metadata
+                ?? throw new InvalidOperationException(
+                    "Unnumbered OLE promotion fixture returned no metadata.");
+            Assert(
+                !originalMetadata.Numbered,
+                "Unnumbered OLE promotion fixture unexpectedly started numbered.");
+            Release(range);
+            range = null;
+            Release(shape);
+            shape = null;
+
+            service.ReplaceOle(
+                CreateWordSession(
+                    promotedOleId,
+                    "edit",
+                    FormulaOleContract.NativeOleMode,
+                    "u+v=w+1",
+                    oleMathMl,
+                    updated,
+                    numbered: true,
+                    originalMetadata),
+                updated.PngPath,
+                updated.EmfPath);
+
+            Assert(
+                document.InlineShapes.Count == 1,
+                "Editing an unnumbered OLE to numbered duplicated or deleted the formula.");
+            shape = FindWordFormula(document, promotedOleId)
+                ?? throw new InvalidOperationException(
+                    "Editing an unnumbered OLE to numbered deleted the formula.");
+            range = shape.Range;
+            Assert(
+                (bool)range.get_Information(Word.WdInformation.wdWithInTable),
+                "Editing an unnumbered OLE to numbered left it outside the numbered table.");
+            var refreshed = ReadSelectedFormula(application, service, range);
+            Assert(
+                refreshed.Metadata?.Numbered == true,
+                "Editing an unnumbered OLE to numbered did not persist Numbered=true.");
+            AssertEqual(
+                "3",
+                WordEquationNumbering.Reconcile(document).ToString(),
+                "OLE numbering promotion did not expose three numbered formulas.");
+            var targets = WordEquationNumbering.GetEquationReferenceTargets(document);
+            AssertTargetNumbers(
+                targets,
+                (firstId, "1"),
+                (secondId, "2"),
+                (promotedOleId, "3"));
+
+            Directory.CreateDirectory(artifactRoot);
+            var path = Path.Combine(
+                artifactRoot,
+                "word-office2019-unnumbered-ole-edit-to-numbered.docx");
+            document.SaveAs2(path, Word.WdSaveFormat.wdFormatXMLDocument);
+            Console.WriteLine(
+                "  Word OLE numbering promotion: unnumbered display OLE edited to "
+                + "Numbered=true, one OLE retained, table migration and 1/2/3 sequence passed.");
+        }
+        finally
+        {
+            Release(range);
+            Release(shape);
             Release(selection);
             if (document is not null)
             {

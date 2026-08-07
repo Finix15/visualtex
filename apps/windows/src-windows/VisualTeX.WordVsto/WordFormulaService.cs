@@ -972,339 +972,6 @@ internal sealed class WordFormulaService
         }
     }
 
-    public WordBatchEquationNumberingStats GetBatchEquationNumberingStats()
-    {
-        Document? document = null;
-        try
-        {
-            document = _application.ActiveDocument
-                ?? throw new InvalidOperationException("No active Word document.");
-            return CaptureBatchEquationNumberingStats(document);
-        }
-        finally { Release(document); }
-    }
-
-    private sealed class BatchNumberingMetadataSnapshot
-    {
-        internal string FormulaId { get; set; } = string.Empty;
-        internal bool IsOmml { get; set; }
-        internal FormulaMetadata Metadata { get; set; } = new();
-    }
-
-    public WordBatchEquationNumberingResult ApplyBatchEquationNumbering(
-        string formatId,
-        bool redrawExisting)
-    {
-        Document? document = null;
-        InlineShapes? inlineShapes = null;
-        UndoRecord? undoRecord = null;
-        List<BatchNumberingMetadataSnapshot>? metadataSnapshots = null;
-        string? previousFormatId = null;
-        try
-        {
-            document = _application.ActiveDocument
-                ?? throw new InvalidOperationException("No active Word document.");
-            EnsureWritable(document);
-            var stats = CaptureBatchEquationNumberingStats(document);
-            var format = EquationNumberFormat.Resolve(formatId);
-            previousFormatId = WordEquationNumbering.GetEquationNumberFormatId(document);
-            metadataSnapshots = CaptureBatchNumberingMetadataSnapshots(document);
-            if (stats.TotalCount == 0)
-            {
-                return new WordBatchEquationNumberingResult
-                {
-                    FormatId = format.Id,
-                };
-            }
-
-            undoRecord = BeginUndoRecord("VisualTeX Batch Equation Numbering");
-            WordEquationNumbering.SetEquationNumberFormatPreference(document, format.Id);
-
-            var added = 0;
-            var redrawn = 0;
-            var seenFormulaIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            inlineShapes = document.InlineShapes;
-            for (var index = 1; index <= inlineShapes.Count; index++)
-            {
-                InlineShape? shape = null;
-                try
-                {
-                    shape = inlineShapes[index];
-                    var metadata = WordFormulaMetadataReader.TryRead(shape);
-                    if (metadata?.DisplayMode != "block"
-                        || !seenFormulaIds.Add(metadata.FormulaId))
-                        continue;
-
-                    var hasCompleteNumbering =
-                        WordEquationNumbering.HasCompleteFormulaNumberingArtifacts(
-                            document,
-                            metadata.FormulaId);
-                    if (hasCompleteNumbering)
-                    {
-                        if (!redrawExisting)
-                        {
-                            if (!metadata.Numbered)
-                            {
-                                StampBatchNumberingMetadata(metadata);
-                                WordFormulaMetadataReader.Write(shape, metadata);
-                            }
-                            continue;
-                        }
-
-                        WordEquationNumbering.RemoveFormulaNumberingArtifacts(
-                            document,
-                            metadata.FormulaId);
-                        redrawn++;
-                    }
-                    else
-                    {
-                        added++;
-                    }
-
-                    StampBatchNumberingMetadata(metadata);
-                    WordFormulaMetadataReader.Write(shape, metadata);
-                }
-                finally { Release(shape); }
-            }
-
-            foreach (var formulaId in WordOmmlFormulaStore.FormulaIds(document))
-            {
-                if (!seenFormulaIds.Add(formulaId)) continue;
-                var metadata = WordOmmlFormulaStore.TryRead(document, formulaId);
-                if (metadata?.DisplayMode != "block") continue;
-                var hasCompleteNumbering =
-                    WordEquationNumbering.HasCompleteFormulaNumberingArtifacts(
-                        document,
-                        formulaId);
-                if (hasCompleteNumbering)
-                {
-                    if (!redrawExisting)
-                    {
-                        if (!metadata.Numbered)
-                        {
-                            StampBatchNumberingMetadata(metadata);
-                            WordOmmlFormulaStore.Save(document, metadata);
-                        }
-                        continue;
-                    }
-
-                    WordEquationNumbering.RemoveFormulaNumberingArtifacts(document, formulaId);
-                    redrawn++;
-                }
-                else
-                {
-                    added++;
-                }
-
-                StampBatchNumberingMetadata(metadata);
-                WordOmmlFormulaStore.Save(document, metadata);
-            }
-
-            var numbered = WordEquationNumbering.Reconcile(document);
-            return new WordBatchEquationNumberingResult
-            {
-                TotalCount = stats.TotalCount,
-                AddedCount = added,
-                RedrawnCount = redrawn,
-                NumberedCount = numbered,
-                FormatId = format.Id,
-            };
-        }
-        catch
-        {
-            if (undoRecord is not null)
-            {
-                EndUndoRecord(undoRecord);
-                Release(undoRecord);
-                undoRecord = null;
-                if (document is not null)
-                    TryUndoBatchEquationNumbering(document);
-            }
-            if (document is not null && metadataSnapshots is not null)
-            {
-                RestoreBatchNumberingMetadata(
-                    document,
-                    metadataSnapshots,
-                    previousFormatId);
-            }
-            throw;
-        }
-        finally
-        {
-            EndUndoRecord(undoRecord);
-            Release(undoRecord);
-            Release(inlineShapes);
-            Release(document);
-        }
-    }
-
-    private static WordBatchEquationNumberingStats CaptureBatchEquationNumberingStats(
-        Document document)
-    {
-        var total = 0;
-        var numbered = 0;
-        var seenFormulaIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        InlineShapes? inlineShapes = null;
-        try
-        {
-            inlineShapes = document.InlineShapes;
-            for (var index = 1; index <= inlineShapes.Count; index++)
-            {
-                InlineShape? shape = null;
-                try
-                {
-                    shape = inlineShapes[index];
-                    var metadata = WordFormulaMetadataReader.TryRead(shape);
-                    if (metadata?.DisplayMode != "block"
-                        || !seenFormulaIds.Add(metadata.FormulaId))
-                        continue;
-                    total++;
-                    if (WordEquationNumbering.HasCompleteFormulaNumberingArtifacts(
-                            document,
-                            metadata.FormulaId))
-                        numbered++;
-                }
-                finally { Release(shape); }
-            }
-
-            foreach (var formulaId in WordOmmlFormulaStore.FormulaIds(document))
-            {
-                if (!seenFormulaIds.Add(formulaId)) continue;
-                var metadata = WordOmmlFormulaStore.TryRead(document, formulaId);
-                if (metadata?.DisplayMode != "block") continue;
-                total++;
-                if (WordEquationNumbering.HasCompleteFormulaNumberingArtifacts(
-                        document,
-                        formulaId))
-                    numbered++;
-            }
-        }
-        finally { Release(inlineShapes); }
-
-        return new WordBatchEquationNumberingStats
-        {
-            TotalCount = total,
-            NumberedCount = numbered,
-            CurrentFormatId = WordEquationNumbering.GetEquationNumberFormatId(document),
-        };
-    }
-
-    private static void StampBatchNumberingMetadata(FormulaMetadata metadata)
-    {
-        metadata.Numbered = true;
-        metadata.UpdatedWithVersion = "1.2.4";
-        metadata.UpdatedAt = DateTimeOffset.UtcNow.ToString("O");
-        metadata.Validate();
-    }
-
-    private static List<BatchNumberingMetadataSnapshot>
-        CaptureBatchNumberingMetadataSnapshots(Document document)
-    {
-        var snapshots = new List<BatchNumberingMetadataSnapshot>();
-        var seenFormulaIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        InlineShapes? inlineShapes = null;
-        try
-        {
-            inlineShapes = document.InlineShapes;
-            for (var index = 1; index <= inlineShapes.Count; index++)
-            {
-                InlineShape? shape = null;
-                try
-                {
-                    shape = inlineShapes[index];
-                    var metadata = WordFormulaMetadataReader.TryRead(shape);
-                    if (metadata?.DisplayMode != "block"
-                        || !seenFormulaIds.Add(metadata.FormulaId))
-                        continue;
-                    snapshots.Add(new BatchNumberingMetadataSnapshot
-                    {
-                        FormulaId = metadata.FormulaId,
-                        IsOmml = false,
-                        Metadata = CloneBatchNumberingMetadata(metadata),
-                    });
-                }
-                finally { Release(shape); }
-            }
-
-            foreach (var formulaId in WordOmmlFormulaStore.FormulaIds(document))
-            {
-                if (!seenFormulaIds.Add(formulaId)) continue;
-                var metadata = WordOmmlFormulaStore.TryRead(document, formulaId);
-                if (metadata?.DisplayMode != "block") continue;
-                snapshots.Add(new BatchNumberingMetadataSnapshot
-                {
-                    FormulaId = formulaId,
-                    IsOmml = true,
-                    Metadata = CloneBatchNumberingMetadata(metadata),
-                });
-            }
-        }
-        finally { Release(inlineShapes); }
-        return snapshots;
-    }
-
-    private static FormulaMetadata CloneBatchNumberingMetadata(
-        FormulaMetadata metadata) =>
-        FormulaMetadataCodec.DeserializeJson(
-            FormulaMetadataCodec.SerializeJson(metadata))
-        ?? throw new InvalidDataException(
-            "VisualTeX could not snapshot formula metadata before batch numbering.");
-
-    private void TryUndoBatchEquationNumbering(Document document)
-    {
-        object count = 1;
-        try { document.Undo(ref count); }
-        catch
-        {
-            // Metadata restoration below still prevents a failed operation from
-            // leaving formulas falsely marked as numbered.
-        }
-    }
-
-    private static void RestoreBatchNumberingMetadata(
-        Document document,
-        IReadOnlyList<BatchNumberingMetadataSnapshot> snapshots,
-        string? previousFormatId)
-    {
-        foreach (var snapshot in snapshots)
-        {
-            try
-            {
-                var metadata = CloneBatchNumberingMetadata(snapshot.Metadata);
-                if (snapshot.IsOmml)
-                {
-                    WordOmmlFormulaStore.Save(document, metadata);
-                    continue;
-                }
-
-                InlineShape? shape = null;
-                try
-                {
-                    shape = FindByFormulaId(document, snapshot.FormulaId);
-                    if (shape is not null)
-                        WordFormulaMetadataReader.Write(shape, metadata);
-                }
-                finally { Release(shape); }
-            }
-            catch
-            {
-                // Preserve the original batch-numbering exception. Restoration is
-                // best effort for documents that Word itself has already made invalid.
-            }
-        }
-
-        if (!string.IsNullOrWhiteSpace(previousFormatId))
-        {
-            try
-            {
-                WordEquationNumbering.SetEquationNumberFormatPreference(
-                    document,
-                    previousFormatId!);
-            }
-            catch { }
-        }
-    }
-
     public string ExportSelectedOleAsPicture()
     {
         var selected = ReadSelection();
@@ -1412,7 +1079,7 @@ internal sealed class WordFormulaService
             EnsureWritable(document);
             EnsureSourceDocument(document, session.SourceDocumentId);
             selection = _application.Selection;
-            insertion = ResolveSourceRange(document, session.SourceObjectId, selection);
+            insertion = ResolveSessionInsertionRange(document, session, selection);
             insertion.Collapse(WdCollapseDirection.wdCollapseEnd);
             object link = false;
             object save = true;
@@ -1518,7 +1185,7 @@ internal sealed class WordFormulaService
             EnsureWritable(document);
             EnsureSourceDocument(document, session.SourceDocumentId);
             selection = _application.Selection;
-            insertion = ResolveSourceRange(document, session.SourceObjectId, selection);
+            insertion = ResolveSessionInsertionRange(document, session, selection);
             insertion.Collapse(WdCollapseDirection.wdCollapseEnd);
             if (session.DisplayMode == "inline")
             {
@@ -1638,7 +1305,7 @@ internal sealed class WordFormulaService
             EnsureWritable(document);
             EnsureSourceDocument(document, session.SourceDocumentId);
             selection = _application.Selection;
-            insertion = ResolveSourceRange(document, session.SourceObjectId, selection);
+            insertion = ResolveSessionInsertionRange(document, session, selection);
             insertion.Collapse(WdCollapseDirection.wdCollapseEnd);
             if (session.DisplayMode == "inline")
             {
@@ -5069,7 +4736,9 @@ internal sealed class WordFormulaService
                     "reconcile",
                     performanceWatch,
                     ref performanceCheckpoint);
-                finalSelection = oldShape.Range.Duplicate;
+                finalSelection = DuplicateOleRangeByFormulaId(
+                    document,
+                    metadata.FormulaId);
                 return Result(session, document);
             }
 
@@ -5136,7 +4805,9 @@ internal sealed class WordFormulaService
             else
             {
                 TryReconcileShape(document, replacement, metadata);
-                finalSelection = replacement.Range.Duplicate;
+                finalSelection = DuplicateOleRangeByFormulaId(
+                    document,
+                    metadata.FormulaId);
             }
             return Result(session, document);
         }
@@ -5931,6 +5602,29 @@ internal sealed class WordFormulaService
         {
             Release(selection);
             Release(caret);
+        }
+    }
+
+    private static Range DuplicateOleRangeByFormulaId(
+        Document document,
+        string formulaId)
+    {
+        InlineShape? refreshedShape = null;
+        Range? refreshedRange = null;
+        try
+        {
+            refreshedShape = FindByFormulaId(document, formulaId)
+                ?? throw new InvalidOperationException(
+                    "Word lost the updated VisualTeX OLE formula during numbered-layout migration.");
+            refreshedRange = refreshedShape.Range.Duplicate;
+            var result = refreshedRange;
+            refreshedRange = null;
+            return result;
+        }
+        finally
+        {
+            Release(refreshedRange);
+            Release(refreshedShape);
         }
     }
 
@@ -7812,6 +7506,140 @@ internal sealed class WordFormulaService
             Release(maths);
             Release(candidate);
             Release(content);
+        }
+    }
+
+    private static Range ResolveSessionInsertionRange(
+        Document document,
+        OfficeSessionDocument session,
+        Selection selection)
+    {
+        var sourceRange = ResolveSourceRange(
+            document,
+            session.SourceObjectId,
+            selection);
+        if (!string.Equals(session.Mode, "create", StringComparison.OrdinalIgnoreCase))
+            return sourceRange;
+        try
+        {
+            return ResolveCreateInsertionRange(document, sourceRange);
+        }
+        finally { Release(sourceRange); }
+    }
+
+    private static Range ResolveCreateInsertionRange(
+        Document document,
+        Range sourceRange)
+    {
+        Tables? tables = null;
+        Table? table = null;
+        Range? safeTypingRange = null;
+        Bookmarks? bookmarks = null;
+        Bookmark? captionBookmark = null;
+        Range? captionRange = null;
+        Range? content = null;
+        try
+        {
+            if (!(bool)sourceRange.get_Information(WdInformation.wdWithInTable))
+                return sourceRange.Duplicate;
+            tables = sourceRange.Tables;
+            if (tables.Count == 0) return sourceRange.Duplicate;
+            table = tables[1];
+            var formulaId = TryGetNumberedFormulaId(document, table);
+            if (string.IsNullOrWhiteSpace(formulaId))
+                return sourceRange.Duplicate;
+
+            // When the captured caret belongs to an existing VisualTeX numbered
+            // table, place a new formula after that formula's dedicated native
+            // SEQ paragraph. In Office 2019, using the live Selection at commit
+            // time can otherwise insert Tables.Add between the old table and its
+            // caption, reordering the old number and corrupting adjacent cells.
+            safeTypingRange =
+                WordEquationNumbering.EnsureNormalTypingParagraphAfterNumberedDisplay(
+                    document,
+                    formulaId!);
+            if (safeTypingRange is not null)
+            {
+                var result = safeTypingRange;
+                safeTypingRange = null;
+                return result;
+            }
+
+            bookmarks = document.Bookmarks;
+            var captionName = WordEquationNumbering.NativeCaptionBookmarkName(
+                formulaId!);
+            if (!bookmarks.Exists(captionName))
+                return sourceRange.Duplicate;
+            captionBookmark = bookmarks[captionName];
+            captionRange = captionBookmark.Range;
+            content = document.Content;
+            var lastInsertPosition = Math.Max(content.Start, content.End - 1);
+            var position = Math.Max(
+                content.Start,
+                Math.Min(captionRange.End, lastInsertPosition));
+            return document.Range(position, position);
+        }
+        catch
+        {
+            // Falling back to the captured range is safer than consulting the
+            // mutable live Selection again. Normal document tables must retain
+            // their existing in-cell insertion behavior.
+            return sourceRange.Duplicate;
+        }
+        finally
+        {
+            Release(content);
+            Release(captionRange);
+            Release(captionBookmark);
+            Release(bookmarks);
+            Release(safeTypingRange);
+            Release(table);
+            Release(tables);
+        }
+    }
+
+    private static string? TryGetNumberedFormulaId(
+        Document document,
+        Table table)
+    {
+        Range? tableRange = null;
+        InlineShapes? shapes = null;
+        InlineShape? shape = null;
+        Bookmark? ommlBookmark = null;
+        try
+        {
+            tableRange = table.Range;
+            shapes = tableRange.InlineShapes;
+            for (var index = 1; index <= shapes.Count; index++)
+            {
+                Release(shape);
+                shape = shapes[index];
+                var metadata = WordFormulaMetadataReader.TryRead(shape);
+                if (metadata?.Numbered == true
+                    && string.Equals(
+                        metadata.DisplayMode,
+                        "block",
+                        StringComparison.Ordinal))
+                    return metadata.FormulaId;
+            }
+
+            ommlBookmark = WordOmmlFormulaStore.FindAtRange(document, tableRange);
+            if (ommlBookmark is null) return null;
+            var ommlMetadata = WordOmmlFormulaStore.TryRead(document, ommlBookmark);
+            return ommlMetadata?.Numbered == true
+                && string.Equals(
+                    ommlMetadata.DisplayMode,
+                    "block",
+                    StringComparison.Ordinal)
+                ? ommlMetadata.FormulaId
+                : null;
+        }
+        finally
+        {
+            Release(ommlBookmark);
+            Release(shape);
+            Release(shapes);
+            Release(tableRange);
         }
     }
 

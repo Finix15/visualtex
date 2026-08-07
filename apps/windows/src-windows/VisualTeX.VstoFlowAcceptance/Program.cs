@@ -524,17 +524,9 @@ internal static partial class Program
             {
                 RunWordEquationNumberFormat(client, artifactRoot);
             }
-            else if (string.Equals(mode, "word-batch-equation-numbering", StringComparison.OrdinalIgnoreCase))
+            else if (string.Equals(mode, "word-office2019-sequential-numbered-insertion", StringComparison.OrdinalIgnoreCase))
             {
-                RunWordBatchEquationNumbering(client, artifactRoot);
-            }
-            else if (string.Equals(mode, "word-batch-equation-numbering-current-clone", StringComparison.OrdinalIgnoreCase))
-            {
-                RunWordBatchEquationNumberingCurrentClone(artifactRoot);
-            }
-            else if (string.Equals(mode, "word-batch-equation-numbering-safety", StringComparison.OrdinalIgnoreCase))
-            {
-                RunWordBatchEquationNumberingSafety(client, artifactRoot);
+                RunWordOffice2019SequentialNumberedInsertion(artifactRoot);
             }
             else if (string.Equals(mode, "word-bulk-import-performance", StringComparison.OrdinalIgnoreCase))
             {

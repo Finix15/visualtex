@@ -106,8 +106,6 @@ public interface IWordRibbonCallbacks
     [DispId(30)]
     void OnRedrawDocumentOmmlToLatex(object control);
 
-    [DispId(31)]
-    void OnBatchEquationNumbering(object control);
 }
 
 [ComVisible(true)]
@@ -145,7 +143,6 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
           <button id="VisualTeX.WordVsto.ConvertSelected" label="转为原生 OLE" screentip="转为可嵌入编辑的原生 OLE" supertip="转换后对象随 Word 文档保存，并可通过 VisualTeX 双击重新编辑。" tag="convertToOle" getImage="GetRibbonImage" onAction="OnConvertSelected" />
           <button id="VisualTeX.WordVsto.ConvertSelectedToOmml" label="转为 Word OMML" size="large" screentip="转为 Word 原生公式" supertip="将所选 VisualTeX 公式转换为 Word 原生 OMML；可在 Word 中直接编辑，也可继续用 VisualTeX 编辑。" tag="convertToOmml" getImage="GetRibbonImage" onAction="OnConvertSelectedToOmml" />
           <button id="VisualTeX.WordVsto.UpdateNumbers" label="更新公式编号" tag="updateNumbers" getImage="GetRibbonImage" onAction="OnUpdateEquationNumbers" />
-          <button id="VisualTeX.WordVsto.BatchNumbers" label="批量编号" size="large" screentip="为全文行间公式批量添加编号" supertip="扫描当前文档中的 VisualTeX OLE 与 OMML 行间公式，选择编号格式后批量添加编号；已有编号可选择重绘，并保持公式 ID、交叉引用和格式转换元数据。" tag="updateNumbers" getImage="GetRibbonImage" onAction="OnBatchEquationNumbering" />
           <menu id="VisualTeX.WordVsto.NumberFormat" label="编号格式" screentip="设置当前文档的公式编号格式" supertip="选择后立即更新当前文档已有的 VisualTeX 公式编号，并应用于后续新插入的带编号公式。">
             <toggleButton id="VisualTeX.WordVsto.NumberFormatContinuous" label="全文连续编号（1）" tag="continuous" getPressed="GetEquationNumberFormatPressed" onAction="OnEquationNumberFormatChanged" />
             <toggleButton id="VisualTeX.WordVsto.NumberFormatHeading1Dot" label="按章编号（1.1）" tag="heading1-dot" getPressed="GetEquationNumberFormatPressed" onAction="OnEquationNumberFormatChanged" />
@@ -374,7 +371,6 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             FormulaOleContract.WordOmmlMode,
             conversionOnly: true);
     public void OnUpdateEquationNumbers(object control) => _ = UpdateEquationNumbersAsync();
-    public void OnBatchEquationNumbering(object control) => _ = BatchEquationNumberingAsync();
     public bool GetEquationNumberFormatPressed(Office.IRibbonControl control)
     {
         try
@@ -929,7 +925,12 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 Host = "word",
                 FormulaId = metadata?.FormulaId,
                 SourceDocumentId = selection.DocumentId,
-                SourceObjectId = mode == "edit" ? selection.ObjectId : null,
+                // Preserve the Word range captured when the editor opens for both
+                // create and edit sessions. Office 2019 can move the live Selection
+                // back into the preceding equation table while the external editor
+                // owns focus; resolving the insertion point only at commit time then
+                // inserts the new formula into the old numbered structure.
+                SourceObjectId = selection.ObjectId,
                 Title = metadata?.Title ?? "Word Formula",
                 Lines = lines,
                 ActiveLineId = lines.FirstOrDefault()?.Id,
@@ -2189,119 +2190,6 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
     {
         if (string.IsNullOrWhiteSpace(path)) return;
         try { File.Delete(path!); } catch { }
-    }
-
-    private async Task BatchEquationNumberingAsync()
-    {
-        var dispatcher = _dispatcher;
-        var service = _formulaService;
-        var application = _application;
-        if (dispatcher is null || service is null || application is null) return;
-        try
-        {
-            var result = await dispatcher.InvokeAsync(() =>
-            {
-                Window? window = null;
-                try
-                {
-                    var stats = service.GetBatchEquationNumberingStats();
-                    if (stats.TotalCount == 0)
-                    {
-                        System.Windows.Forms.MessageBox.Show(
-                            "当前文档没有可编号的 VisualTeX 行间公式。行内公式不会参与批量编号。",
-                            "VisualTeX 批量编号",
-                            System.Windows.Forms.MessageBoxButtons.OK,
-                            System.Windows.Forms.MessageBoxIcon.Information);
-                        return null;
-                    }
-
-                    var acceptance = string.Equals(
-                        Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE"),
-                        "1",
-                        StringComparison.Ordinal);
-                    var redrawExisting = false;
-                    if (stats.NumberedCount > 0)
-                    {
-                        if (acceptance)
-                        {
-                            redrawExisting = string.Equals(
-                                Environment.GetEnvironmentVariable(
-                                    "VISUALTEX_VSTO_BATCH_NUMBER_REDRAW"),
-                                "1",
-                                StringComparison.Ordinal);
-                        }
-                        else
-                        {
-                            var prompt = System.Windows.Forms.MessageBox.Show(
-                                $"检测到 {stats.TotalCount} 个 VisualTeX 行间公式，其中 "
-                                + $"{stats.NumberedCount} 个已有编号。\r\n\r\n"
-                                + "是否重绘全部公式编号？\r\n\r\n"
-                                + "“是”：重建全部编号，公式 ID 与交叉引用保持不变。\r\n"
-                                + "“否”：只给未编号公式补编号；已有编号结构保持不变。",
-                                "VisualTeX 批量编号",
-                                System.Windows.Forms.MessageBoxButtons.YesNoCancel,
-                                System.Windows.Forms.MessageBoxIcon.Question);
-                            if (prompt == System.Windows.Forms.DialogResult.Cancel)
-                                return null;
-                            redrawExisting = prompt == System.Windows.Forms.DialogResult.Yes;
-                        }
-                    }
-
-                    string selectedFormatId;
-                    if (acceptance)
-                    {
-                        selectedFormatId = EquationNumberFormat.Resolve(
-                            Environment.GetEnvironmentVariable(
-                                "VISUALTEX_VSTO_BATCH_NUMBER_FORMAT")
-                            ?? stats.CurrentFormatId).Id;
-                    }
-                    else
-                    {
-                        using var dialog = new BatchEquationNumberDialog(
-                            stats,
-                            redrawExisting);
-                        System.Windows.Forms.DialogResult dialogResult;
-                        try
-                        {
-                            window = application.ActiveWindow;
-                            dialogResult = dialog.ShowDialog(
-                                new NativeWindowOwner(new IntPtr(window.Hwnd)));
-                        }
-                        catch
-                        {
-                            dialogResult = dialog.ShowDialog();
-                        }
-                        if (dialogResult != System.Windows.Forms.DialogResult.OK)
-                            return null;
-                        selectedFormatId = dialog.SelectedFormatId;
-                    }
-
-                    return service.ApplyBatchEquationNumbering(
-                        selectedFormatId,
-                        redrawExisting);
-                }
-                finally { ReleaseComObject(window); }
-            }).ConfigureAwait(false);
-
-            if (result is null)
-            {
-                SetStatus("已取消 VisualTeX 批量编号，Word 文档未修改。");
-                return;
-            }
-
-            var format = EquationNumberFormat.Resolve(result.FormatId);
-            var redrawSuffix = result.RedrawnCount > 0
-                ? $"，重绘 {result.RedrawnCount} 个已有编号"
-                : string.Empty;
-            SetStatus(
-                $"批量编号完成：共 {result.NumberedCount} 个行间公式使用“{format.DisplayName}”，"
-                + $"新增 {result.AddedCount} 个编号{redrawSuffix}；交叉引用已同步更新。");
-        }
-        catch (Exception error)
-        {
-            SetStatus($"VisualTeX 批量编号失败：{error.Message}");
-        }
-        finally { InvalidateEquationNumberFormatControls(); }
     }
 
     private async Task UpdateEquationNumbersAsync()

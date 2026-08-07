@@ -653,11 +653,11 @@ for (const command of [
   assert.ok(powerpointVsto.includes(command), `PowerPoint Ribbon is missing ${command}`);
 }
 assert.ok(wordVsto.includes("OnUpdateEquationNumbers"));
-assert.ok(wordVsto.includes("OnBatchEquationNumbering"));
-assert.ok(wordVsto.includes("BatchEquationNumberingAsync"));
-assert.ok(wordVsto.includes('id="VisualTeX.WordVsto.BatchNumbers"'));
-assert.ok(wordVsto.includes("VISUALTEX_VSTO_BATCH_NUMBER_REDRAW"));
-assert.ok(wordVsto.includes("VISUALTEX_VSTO_BATCH_NUMBER_FORMAT"));
+assert.ok(!wordVsto.includes("OnBatchEquationNumbering"));
+assert.ok(!wordVsto.includes("BatchEquationNumberingAsync"));
+assert.ok(!wordVsto.includes('id="VisualTeX.WordVsto.BatchNumbers"'));
+assert.ok(!wordVsto.includes("VISUALTEX_VSTO_BATCH_NUMBER_REDRAW"));
+assert.ok(!wordVsto.includes("VISUALTEX_VSTO_BATCH_NUMBER_FORMAT"));
 assert.ok(wordVsto.includes("GetEquationNumberFormatPressed"));
 assert.ok(wordVsto.includes("OnEquationNumberFormatChanged"));
 assert.ok(wordVsto.includes('id="VisualTeX.WordVsto.NumberFormat"'));
