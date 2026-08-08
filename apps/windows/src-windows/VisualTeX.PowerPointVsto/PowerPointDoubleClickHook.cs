@@ -11,7 +11,7 @@ internal sealed class PowerPointDoubleClickHook : IDisposable
     private const int WmQuit = 0x0012;
     private const int SmCxDoubleClick = 36;
     private const int SmCyDoubleClick = 37;
-    private readonly Action _callbackAction;
+    private readonly Action<int, int> _callbackAction;
     private readonly Thread _thread;
     private readonly ManualResetEventSlim _ready = new(false);
     private HookProc? _hookCallback;
@@ -21,7 +21,7 @@ internal sealed class PowerPointDoubleClickHook : IDisposable
     private int _lastClickX = int.MinValue;
     private int _lastClickY = int.MinValue;
 
-    public PowerPointDoubleClickHook(Action callbackAction)
+    public PowerPointDoubleClickHook(Action<int, int> callbackAction)
     {
         _callbackAction = callbackAction;
         _thread = new Thread(Run)
@@ -85,7 +85,7 @@ internal sealed class PowerPointDoubleClickHook : IDisposable
                     // Let PowerPoint update its ShapeRange before the add-in
                     // reads the selected formula on the Office UI thread.
                     Thread.Sleep(80);
-                    try { _callbackAction(); } catch { }
+                    try { _callbackAction(input.Pt.X, input.Pt.Y); } catch { }
                 });
             }
         }

@@ -356,15 +356,17 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         _lastFormulaSelection = null;
     }
 
-    private void OnNativeDoubleClick()
+    private void OnNativeDoubleClick(int screenX, int screenY)
     {
         var dispatcher = _dispatcher;
         var service = _formulaService;
         if (dispatcher is null || service is null) return;
         _ = dispatcher.InvokeAsync(() =>
         {
-            var selected = ResolveFormulaSelection(service);
-            if (string.IsNullOrWhiteSpace(selected.FormulaId)) return false;
+            var selected = service.ReadFormulaAtScreenPoint(screenX, screenY);
+            if (selected?.Metadata is null || string.IsNullOrWhiteSpace(selected.FormulaId))
+                return false;
+            _lastFormulaSelection = selected;
             var now = DateTimeOffset.UtcNow;
             if (selected.FormulaId == _lastDoubleClickFormulaId
                 && now - _lastDoubleClickAt < TimeSpan.FromSeconds(1))

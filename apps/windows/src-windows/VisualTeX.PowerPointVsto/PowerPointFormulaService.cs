@@ -119,6 +119,81 @@ public sealed class PowerPointFormulaService
         }
     }
 
+    public OfficeSelection? ReadFormulaAtScreenPoint(int screenX, int screenY)
+    {
+        Presentation? presentation = null;
+        DocumentWindow? window = null;
+        View? view = null;
+        Slide? slide = null;
+        object? hit = null;
+        Shape? shape = null;
+        try
+        {
+            EnsureNotSlideShow();
+            presentation = _application.ActivePresentation
+                ?? throw new InvalidOperationException("No active PowerPoint presentation.");
+            window = _application.ActiveWindow
+                ?? throw new InvalidOperationException("No active PowerPoint window.");
+            view = window.View;
+            slide = (Slide)view.Slide;
+            try { hit = window.RangeFromPoint(screenX, screenY); }
+            catch { return null; }
+            shape = hit as Shape;
+            if (shape is null) return null;
+
+            var metadata = ReadMetadata(shape);
+            if (metadata is null) return null;
+            metadata = EnsureUniqueFormulaIdentity(presentation, slide, shape, metadata);
+            string objectMode;
+            if (PowerPointOmmlBridge.IsNativeEquation(shape))
+            {
+                var currentLatex = PowerPointOmmlBridge.TryReadCurrentLatex(shape);
+                if (!string.IsNullOrWhiteSpace(currentLatex))
+                {
+                    metadata = CloneWithLatex(metadata, currentLatex!);
+                    Configure(shape, metadata);
+                }
+                metadata.FontSizePt = PowerPointOmmlBridge.ReadFontSize(shape)
+                    ?? FormulaFontSize.ResolveSemanticFontSize(metadata);
+                objectMode = FormulaOleContract.WordOmmlMode;
+            }
+            else
+            {
+                metadata.FontSizePt = InferPowerPointFormulaFontSize(
+                    shape.Width,
+                    shape.Height,
+                    metadata);
+                objectMode = IsNativeOle(shape)
+                    ? FormulaOleContract.NativeOleMode
+                    : FormulaOleContract.CrossPlatformPictureMode;
+            }
+
+            return new OfficeSelection
+            {
+                Host = "powerpoint",
+                DocumentId = DocumentIdentity(presentation),
+                ObjectId = shape.Name,
+                ReadOnly = presentation.ReadOnly == MsoTriState.msoTrue,
+                FormulaId = metadata.FormulaId,
+                Metadata = metadata,
+                ObjectMode = objectMode,
+            };
+        }
+        finally
+        {
+            if (shape is not null)
+            {
+                Release(shape);
+                hit = null;
+            }
+            Release(hit);
+            Release(slide);
+            Release(view);
+            Release(window);
+            Release(presentation);
+        }
+    }
+
     public float ReadCurrentTypingFontSize()
     {
         object? mathRange = null;
@@ -540,7 +615,8 @@ public sealed class PowerPointFormulaService
             height *= scale;
             var left = Math.Max(0f, (presentation.PageSetup.SlideWidth - width) / 2f);
             var top = Math.Max(0f, (presentation.PageSetup.SlideHeight - height) / 2f);
-            shape = AddOleObject(slide, left, top, width, height);
+            shape = AddOleObjectOffscreen(slide, width, height);
+            ProbeOleStage("allocated", shape);
             shape.Visible = MsoTriState.msoFalse;
             ProbeOleStage("created", shape);
             InitializeOle(shape, metadata, emfPath, pngPath);
@@ -780,12 +856,11 @@ public sealed class PowerPointFormulaService
 
             var rotation = oldShape.Rotation;
             var zOrder = oldShape.ZOrderPosition;
-            replacement = AddOleObject(
+            replacement = AddOleObjectOffscreen(
                 slide,
-                newLeft,
-                newTop,
                 editedSize.Width,
                 editedSize.Height);
+            ProbeOleStage("allocated", replacement);
             replacement.Visible = MsoTriState.msoFalse;
             ProbeOleStage("created", replacement);
             InitializeOle(replacement, metadata, emfPath, pngPath);
@@ -907,15 +982,20 @@ public sealed class PowerPointFormulaService
         try { _application.StartNewUndoEntry(); } catch { }
     }
 
-    private static Shape AddOleObject(
+    private static Shape AddOleObjectOffscreen(
         Slide slide,
-        float left,
-        float top,
         float width,
-        float height) =>
-        slide.Shapes.AddOLEObject(
-            left,
-            top,
+        float height)
+    {
+        // AddOLEObject creates a visible Shape synchronously. On a warm OLE
+        // server PowerPoint can paint that placeholder before the next managed
+        // statement has a chance to set Visible=false. Stage the object fully
+        // outside the slide so even that pre-hide frame cannot flash onscreen.
+        var stagingLeft = -Math.Max(2048f, width + 256f);
+        var stagingTop = -Math.Max(2048f, height + 256f);
+        return slide.Shapes.AddOLEObject(
+            stagingLeft,
+            stagingTop,
             width,
             height,
             FormulaOleContract.ProgId,
@@ -925,6 +1005,7 @@ public sealed class PowerPointFormulaService
             0,
             string.Empty,
             MsoTriState.msoFalse);
+    }
 
     private void InitializeOle(
         Shape shape,

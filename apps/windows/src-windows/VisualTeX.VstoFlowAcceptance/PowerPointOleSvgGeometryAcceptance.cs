@@ -464,41 +464,57 @@ internal static partial class Program
             application.ActiveWindow.View.GotoSlide(1);
             var postedUiWork = new Queue<Action>();
             var delayedUiWork = new Queue<(Action Operation, int DelayMilliseconds)>();
-            var captureOleStages = true;
             var oleStageOrdinal = 0;
-            var sawHiddenCreatedStage = false;
-            var sawHiddenInitializedStage = false;
-            var sawVisibleFinalizedStage = false;
+            var offscreenAllocatedCount = 0;
+            var hiddenCreatedCount = 0;
+            var hiddenInitializedCount = 0;
+            var visibleFinalizedCount = 0;
             var service = new PowerPointFormulaService(
                 application,
                 operation => postedUiWork.Enqueue(operation),
                 (operation, delayMilliseconds) => delayedUiWork.Enqueue((operation, delayMilliseconds)),
                 (stage, stageShape) =>
                 {
-                    if (!captureOleStages) return;
                     oleStageOrdinal++;
                     var visible = stageShape.Visible;
                     var stageExtent = ReadOleExtentPoints(stageShape);
-                    if (string.Equals(stage, "created", StringComparison.Ordinal))
+                    if (string.Equals(stage, "allocated", StringComparison.Ordinal))
+                    {
+                        AssertEqual(MsoTriState.msoTrue, visible,
+                            "PowerPoint OLE staging probe expected the newly allocated Shape to start visible.");
+                        AssertTrue(
+                            stageShape.Left + stageShape.Width < 0f
+                            && stageShape.Top + stageShape.Height < 0f,
+                            "PowerPoint allocated the OLE placeholder inside the visible slide before it could be hidden.");
+                        offscreenAllocatedCount++;
+                    }
+                    else if (string.Equals(stage, "created", StringComparison.Ordinal))
                     {
                         AssertEqual(MsoTriState.msoFalse, visible,
                             "New PowerPoint OLE became visible before initialization.");
-                        sawHiddenCreatedStage = true;
+                        hiddenCreatedCount++;
                     }
                     else if (string.Equals(stage, "initialized", StringComparison.Ordinal))
                     {
                         AssertEqual(MsoTriState.msoFalse, visible,
                             "PowerPoint exposed the transient OLE presentation reflow during initialization.");
-                        sawHiddenInitializedStage = true;
+                        hiddenInitializedCount++;
                     }
                     else if (string.Equals(stage, "finalized", StringComparison.Ordinal))
                     {
                         AssertEqual(MsoTriState.msoTrue, visible,
                             "PowerPoint OLE did not become visible after final geometry restoration.");
-                        sawVisibleFinalizedStage = true;
+                        visibleFinalizedCount++;
                     }
 
-                    if (visible == MsoTriState.msoFalse)
+                    if (string.Equals(stage, "allocated", StringComparison.Ordinal))
+                    {
+                        Console.WriteLine(
+                            $"  OLE synchronous stage {oleStageOrdinal:D2} {stage}: visible but off-slide, " +
+                            $"shape={stageShape.Width:F2}x{stageShape.Height:F2}pt at " +
+                            $"({stageShape.Left:F2},{stageShape.Top:F2}), server={stageExtent}.");
+                    }
+                    else if (visible == MsoTriState.msoFalse)
                     {
                         Console.WriteLine(
                             $"  OLE synchronous stage {oleStageOrdinal:D2} {stage}: hidden, " +
@@ -517,8 +533,6 @@ internal static partial class Program
                             $"server={stageExtent}, ink={stageInk.Width}x{stageInk.Height}/{stageInk.Count}, " +
                             $"canvas={stageInk.ImageWidth}x{stageInk.ImageHeight}.");
                     }
-                    if (string.Equals(stage, "finalized", StringComparison.Ordinal))
-                        captureOleStages = false;
                 });
             void DrainPostedUiWork()
             {
@@ -560,6 +574,42 @@ internal static partial class Program
             AssertNear(fixture.RenderHeight * 0.75f, baselineHeight, 1.5f,
                 "PowerPoint geometry fixture height does not match its 96-dpi natural size.");
 
+            PowerPoint.DocumentWindow? hitTestWindow = null;
+            try
+            {
+                hitTestWindow = application.ActiveWindow;
+                var formulaScreenX = hitTestWindow.PointsToScreenPixelsX(shape.Left + shape.Width / 2f);
+                var formulaScreenY = hitTestWindow.PointsToScreenPixelsY(shape.Top + shape.Height / 2f);
+                var hitSelection = service.ReadFormulaAtScreenPoint(formulaScreenX, formulaScreenY);
+                AssertTrue(hitSelection?.Metadata is not null
+                    && string.Equals(hitSelection.FormulaId, formulaId, StringComparison.OrdinalIgnoreCase),
+                    "PowerPoint coordinate hit-test did not resolve the VisualTeX formula under the mouse point.");
+
+                var blankCandidates = new[]
+                {
+                    (X: 5f, Y: 5f),
+                    (X: presentation.PageSetup.SlideWidth - 5f, Y: 5f),
+                    (X: 5f, Y: presentation.PageSetup.SlideHeight - 5f),
+                    (X: presentation.PageSetup.SlideWidth - 5f, Y: presentation.PageSetup.SlideHeight - 5f),
+                };
+                var foundBlankPoint = false;
+                foreach (var candidate in blankCandidates)
+                {
+                    var screenX = hitTestWindow.PointsToScreenPixelsX(candidate.X);
+                    var screenY = hitTestWindow.PointsToScreenPixelsY(candidate.Y);
+                    if (service.ReadFormulaAtScreenPoint(screenX, screenY) is not null) continue;
+                    foundBlankPoint = true;
+                    break;
+                }
+                AssertTrue(foundBlankPoint,
+                    "PowerPoint coordinate hit-test could not find a blank slide point that rejects the cached formula.");
+                Console.WriteLine("  PowerPoint double-click coordinate hit-test passed for formula center and blank slide area.");
+            }
+            finally
+            {
+                Release(hitTestWindow);
+            }
+
             for (var iteration = 1; iteration <= 20; iteration++)
             {
                 shape.Select(MsoTriState.msoFalse);
@@ -573,17 +623,23 @@ internal static partial class Program
                     shape.Name,
                     metadata,
                     fixture);
+                var allocatedBefore = offscreenAllocatedCount;
+                var createdBefore = hiddenCreatedCount;
+                var initializedBefore = hiddenInitializedCount;
+                var finalizedBefore = visibleFinalizedCount;
                 var oleResult = service.ReplaceOle(toOle, pngPath, emfPath);
+                AssertEqual(allocatedBefore + 1, offscreenAllocatedCount,
+                    $"Iteration {iteration} did not allocate the OLE off-slide before hiding it.");
+                AssertEqual(createdBefore + 1, hiddenCreatedCount,
+                    $"Iteration {iteration} did not hide the OLE immediately after allocation.");
+                AssertEqual(initializedBefore + 1, hiddenInitializedCount,
+                    $"Iteration {iteration} exposed the OLE while its presentation was initializing.");
+                AssertEqual(finalizedBefore + 1, visibleFinalizedCount,
+                    $"Iteration {iteration} did not reveal the OLE only after final geometry restoration.");
                 Release(shape);
                 shape = slide.Shapes[oleResult.ObjectId];
                 if (iteration == 1)
                 {
-                    AssertTrue(sawHiddenCreatedStage,
-                        "PowerPoint OLE regression did not observe the hidden creation stage.");
-                    AssertTrue(sawHiddenInitializedStage,
-                        "PowerPoint OLE regression did not observe the hidden initialized stage.");
-                    AssertTrue(sawVisibleFinalizedStage,
-                        "PowerPoint OLE regression did not observe the visible finalized stage.");
                     // Reproduce the two real host geometries observed in the
                     // installed PowerPoint add-in after its OLE callback unwound.
                     var centerX = baselineLeft + baselineWidth / 2f;
@@ -762,6 +818,25 @@ internal static partial class Program
             AssertNear(baselineTop, shape.Top, 0.5f, "Final OLE top position drifted before save.");
             AssertNear(baselineWidth, shape.Width, 1.5f, "Final OLE width drifted before save.");
             AssertNear(baselineHeight, shape.Height, 1.5f, "Final OLE height drifted before save.");
+
+            var updateMetadata = DecodePowerPointMetadata(shape)
+                ?? throw new InvalidDataException("Final OLE metadata disappeared before in-place update validation.");
+            var updateOleSession = CreatePowerPointGeometrySession(
+                "edit",
+                FormulaOleContract.NativeOleMode,
+                formulaId,
+                shape.Name,
+                updateMetadata,
+                fixture);
+            var updateResult = service.ReplaceOle(updateOleSession, pngPath, emfPath);
+            Release(shape);
+            shape = slide.Shapes[updateResult.ObjectId];
+            Console.WriteLine(
+                $"  OLE in-place update returned at {shape.Width:F2}x{shape.Height:F2} pt, visible={shape.Visible}.");
+            DrainPostedUiWork();
+            DrainDelayedUiWork();
+            AssertNear(baselineWidth, shape.Width, 1.5f, "In-place OLE update width drifted.");
+            AssertNear(baselineHeight, shape.Height, 1.5f, "In-place OLE update height drifted.");
 
             var output = Path.Combine(artifactRoot, "powerpoint-ole-svg-geometry-stable.pptx");
             presentation.SaveAs(
