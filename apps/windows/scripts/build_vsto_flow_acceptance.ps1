@@ -34,7 +34,8 @@ $env:MSBuildEnableWorkloadResolver = "false"
 $referenceRoot = Join-Path $env:USERPROFILE ".nuget\packages\microsoft.netframework.referenceassemblies.net48\1.0.3\build"
 if (-not (Test-Path $referenceRoot)) { throw ".NET Framework 4.8 reference assemblies are missing." }
 
-& $dotnet restore $project --ignore-failed-sources
+$runtimeIdentifier = "win7-$Platform"
+& $dotnet restore $project --ignore-failed-sources -p:Platform=$Platform -r $runtimeIdentifier
 if ($LASTEXITCODE -ne 0) { throw "NuGet restore failed." }
 & $msbuild $project /m /p:Configuration=$Configuration /p:Platform=$Platform /p:TargetFrameworkRootPath=$referenceRoot
 if ($LASTEXITCODE -ne 0) { throw "VSTO flow acceptance build failed." }

@@ -19,13 +19,17 @@ public sealed class PowerPointFormulaService
     private const string SlideReferencePrefix = "visualtex-ppt-vsto-slide:";
     private readonly Application _application;
     private readonly Action<Action>? _postToOfficeUi;
+    private readonly Action<Action, int>? _postDelayedToOfficeUi;
+    private readonly Dictionary<string, long> _oleGeometryRestoreGenerations = new(StringComparer.OrdinalIgnoreCase);
 
     public PowerPointFormulaService(
         Application application,
-        Action<Action>? postToOfficeUi = null)
+        Action<Action>? postToOfficeUi = null,
+        Action<Action, int>? postDelayedToOfficeUi = null)
     {
         _application = application;
         _postToOfficeUi = postToOfficeUi;
+        _postDelayedToOfficeUi = postDelayedToOfficeUi;
     }
 
     public OfficeSelection ReadSelection() => ReadSelection(null);
@@ -1410,9 +1414,20 @@ public sealed class PowerPointFormulaService
     {
         var post = _postToOfficeUi;
         if (post is null) return;
+        var delayedPost = _postDelayedToOfficeUi;
+        var generationKey = documentId + "\n" + formulaId;
+        var generation = _oleGeometryRestoreGenerations.TryGetValue(generationKey, out var previousGeneration)
+            ? previousGeneration + 1
+            : 1;
+        _oleGeometryRestoreGenerations[generationKey] = generation;
+
+        bool IsCurrentGeneration() =>
+            _oleGeometryRestoreGenerations.TryGetValue(generationKey, out var currentGeneration)
+            && currentGeneration == generation;
 
         void Restore()
         {
+            if (!IsCurrentGeneration()) return;
             Presentation? presentation = null;
             Slide? slide = null;
             Shape? shape = null;
@@ -1443,15 +1458,23 @@ public sealed class PowerPointFormulaService
             }
         }
 
-        // PowerPoint performs an additional OLE presentation/layout pass only
-        // after the COM/Ribbon write callback unwinds. Restore once on the next
-        // UI message, then once more on the following message to outrun both the
-        // container reflow and any selection-change work it schedules.
+        // PowerPoint performs one or more OLE presentation/layout passes only
+        // after the COM/Ribbon write callback unwinds. Two immediate BeginInvoke
+        // callbacks are not sufficient on high-DPI Office: the container can
+        // replay the cached presentation hundreds of milliseconds later and
+        // replace the host box with a DPI-distorted extent. Repair on the next
+        // two UI messages and then re-check across the short post-callback window.
         post(() =>
         {
             Restore();
             post(Restore);
         });
+        if (delayedPost is not null)
+        {
+            delayedPost(Restore, 80);
+            delayedPost(Restore, 250);
+            delayedPost(Restore, 700);
+        }
     }
 
     private static void Configure(Shape shape, FormulaMetadata metadata)

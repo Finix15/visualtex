@@ -166,7 +166,10 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             try { _comAddIn.Object = this; } catch { }
         }
         _dispatcher = new OfficeUiDispatcher();
-        _formulaService = new PowerPointFormulaService(_application, _dispatcher.Post);
+        _formulaService = new PowerPointFormulaService(
+            _application,
+            _dispatcher.Post,
+            _dispatcher.PostDelayed);
         _sessionClient = new VisualTeXSessionClient();
         _lifetime = new CancellationTokenSource();
         _ = PrewarmCompanionAsync(_sessionClient, _lifetime.Token);

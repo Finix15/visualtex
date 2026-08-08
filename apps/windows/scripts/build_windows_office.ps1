@@ -99,8 +99,9 @@ foreach ($architecture in $architectures) {
         throw "$packagePlatform native Formula OLE LocalServer build failed."
     }
 
+    $runtimeIdentifier = "win7-$packagePlatform"
     foreach ($project in @($wordProject, $powerPointProject)) {
-        & $dotnet restore $project --ignore-failed-sources
+        & $dotnet restore $project --ignore-failed-sources -p:Platform=$packagePlatform -r $runtimeIdentifier
         if ($LASTEXITCODE -ne 0) { throw "NuGet restore failed: $project" }
         & $msbuild $project /m /p:Configuration=$Configuration /p:Platform=$packagePlatform /p:TargetFrameworkRootPath=$referenceRoot
         if ($LASTEXITCODE -ne 0) { throw "$packagePlatform VSTO build failed: $project" }

@@ -368,10 +368,16 @@ internal static partial class Program
         using var officeMessageFilter = OfficeComMessageFilter.Register();
         using var installedWordAutoLoadSuppression =
             UserOfficeAddInAutoLoadSuppression.Create("Word", "VisualTeX.WordVsto");
-        using var installedPowerPointAutoLoadSuppression =
-            UserOfficeAddInAutoLoadSuppression.Create("PowerPoint", "VisualTeX.PowerPointVsto");
-        Console.WriteLine(
-            "Installed Word and PowerPoint add-in auto-load is suppressed for this isolated acceptance process.");
+        var exerciseInstalledPowerPointAddIn = string.Equals(
+            mode,
+            "powerpoint-installed-ole-presentation",
+            StringComparison.OrdinalIgnoreCase);
+        using var installedPowerPointAutoLoadSuppression = exerciseInstalledPowerPointAddIn
+            ? null
+            : UserOfficeAddInAutoLoadSuppression.Create("PowerPoint", "VisualTeX.PowerPointVsto");
+        Console.WriteLine(exerciseInstalledPowerPointAddIn
+            ? "Installed Word add-in auto-load is suppressed; installed PowerPoint add-in remains enabled for this acceptance."
+            : "Installed Word and PowerPoint add-in auto-load is suppressed for this isolated acceptance process.");
 
         try
         {
@@ -413,6 +419,22 @@ internal static partial class Program
             {
                 RunPowerPointCopyConversionAcceptance(client, artifactRoot);
             }
+            else if (string.Equals(mode, "powerpoint-ole-svg-geometry", StringComparison.OrdinalIgnoreCase))
+            {
+                RunPowerPointOleSvgGeometryAcceptance(artifactRoot);
+            }
+            else if (string.Equals(mode, "powerpoint-current-geometry-probe", StringComparison.OrdinalIgnoreCase))
+            {
+                RunPowerPointCurrentGeometryProbe();
+            }
+            else if (string.Equals(mode, "powerpoint-current-ole-cache-probe", StringComparison.OrdinalIgnoreCase))
+            {
+                RunPowerPointCurrentOleCacheProbe();
+            }
+            else if (string.Equals(mode, "powerpoint-installed-ole-presentation", StringComparison.OrdinalIgnoreCase))
+            {
+                RunPowerPointInstalledOlePresentationAcceptance(artifactRoot);
+            }
             else if (string.Equals(mode, "powerpoint-direct-omml-stress", StringComparison.OrdinalIgnoreCase))
             {
                 RunPowerPointDirectOmmlStressAcceptance(artifactRoot);
@@ -451,7 +473,11 @@ internal static partial class Program
             }
             else if (string.Equals(mode, "word-ole-picture-roundtrip", StringComparison.OrdinalIgnoreCase))
             {
-                RunWord(client, artifactRoot, stopAfterOlePictureRoundTrip: true);
+                RunWord(
+                    client,
+                    artifactRoot,
+                    stopAfterOlePictureRoundTrip: true,
+                    skipDoubleClickForOlePictureRoundTrip: true);
             }
             else if (string.Equals(mode, "word-unchanged", StringComparison.OrdinalIgnoreCase))
             {
@@ -3128,7 +3154,8 @@ internal static partial class Program
         string artifactRoot,
         bool initialOnly = false,
         bool stopAfterUnchanged = false,
-        bool stopAfterOlePictureRoundTrip = false)
+        bool stopAfterOlePictureRoundTrip = false,
+        bool skipDoubleClickForOlePictureRoundTrip = false)
     {
         Word.Application? application = null;
         Word.Document? document = null;
@@ -3137,12 +3164,35 @@ internal static partial class Program
         Word.Range? typedRange = null;
         Word.Selection? eventSelection = null;
         Word.InlineShape? numberedShape = null;
+        Process? testOleServerProcess = null;
+        object? oleServerKeepAlive = null;
         COMAddIns? installedAddIns = null;
         COMAddIn? installedAddIn = null;
         VisualTeX.WordVsto.ThisAddIn? addIn = null;
         Array custom = Array.Empty<object>();
         try
         {
+            var testOleServerPath = Environment.GetEnvironmentVariable("VISUALTEX_TEST_OLE_SERVER_PATH");
+            if (!string.IsNullOrWhiteSpace(testOleServerPath))
+            {
+                testOleServerProcess = Process.Start(new ProcessStartInfo
+                {
+                    FileName = testOleServerPath,
+                    Arguments = "-Embedding",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                }) ?? throw new InvalidOperationException("Failed to start the test VisualTeX OLE server.");
+                Thread.Sleep(500);
+                if (testOleServerProcess.HasExited)
+                    throw new InvalidOperationException("The test VisualTeX OLE server exited before Word COM activation.");
+                var oleServerType = Type.GetTypeFromProgID(FormulaOleContract.ProgId, throwOnError: true)
+                    ?? throw new InvalidOperationException("VisualTeX OLE server class is not registered.");
+                oleServerKeepAlive = Activator.CreateInstance(oleServerType)
+                    ?? throw new InvalidOperationException("VisualTeX OLE server keep-alive could not be created.");
+                Console.WriteLine(
+                    $"[Word probe] Test OLE server pinned: pid={testOleServerProcess.Id}, path={testOleServerPath}");
+            }
+
             Console.WriteLine("[Word 1/12] Starting Word and creating an inline Session...");
             application = CreateWordApplication(visible: false);
             installedAddIns = application.COMAddIns;
@@ -3249,20 +3299,29 @@ internal static partial class Program
                 "Word unchanged edit was incorrectly marked dirty.");
             WaitForAddInIdle(addIn, TimeSpan.FromSeconds(10));
 
-            Console.WriteLine("[Word 6/12] Reopening immediately through the double-click interception...");
+            Console.WriteLine(skipDoubleClickForOlePictureRoundTrip
+                ? "[Word 6/12] Reopening through Edit Selected for the OLE/picture compatibility probe..."
+                : "[Word 6/12] Reopening immediately through the double-click interception...");
             shape.Range.Select();
             existing = SnapshotSessionIds();
-            eventSelection = application.Selection;
-            var handler = typeof(VisualTeX.WordVsto.ThisAddIn).GetMethod(
-                "OnWindowBeforeDoubleClick",
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
-                ?? throw new MissingMethodException("Word double-click handler is missing.");
-            var handlerArguments = new object[] { eventSelection, false };
-            handler.Invoke(addIn, handlerArguments);
-            AssertEqual(true, (bool)handlerArguments[1],
-                "Word did not suppress built-in OLE activation on double-click.");
-            Release(eventSelection);
-            eventSelection = null;
+            if (skipDoubleClickForOlePictureRoundTrip)
+            {
+                addIn.OnEditSelected(new object());
+            }
+            else
+            {
+                eventSelection = application.Selection;
+                var handler = typeof(VisualTeX.WordVsto.ThisAddIn).GetMethod(
+                    "OnWindowBeforeDoubleClick",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                    ?? throw new MissingMethodException("Word double-click handler is missing.");
+                var handlerArguments = new object[] { eventSelection, false };
+                handler.Invoke(addIn, handlerArguments);
+                AssertEqual(true, (bool)handlerArguments[1],
+                    "Word did not suppress built-in OLE activation on double-click.");
+                Release(eventSelection);
+                eventSelection = null;
+            }
             var editSessionId = WaitForNewSession(existing, "word", TimeSpan.FromSeconds(30));
             var editSession = client.GetSessionAsync(editSessionId, CancellationToken.None)
                 .GetAwaiter().GetResult();
@@ -3554,6 +3613,7 @@ internal static partial class Program
             Release(typedRange);
             Release(wordOleFormat);
             Release(shape);
+            Release(oleServerKeepAlive);
             if (document is not null)
             {
                 try { document.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
@@ -3561,6 +3621,16 @@ internal static partial class Program
             Release(document);
             try { QuitWordApplicationIfOwned(application); } catch { }
             Release(application);
+            if (testOleServerProcess is not null)
+            {
+                try
+                {
+                    if (!testOleServerProcess.HasExited)
+                        testOleServerProcess.Kill();
+                }
+                catch { }
+                testOleServerProcess.Dispose();
+            }
             ForceComCleanup();
         }
     }
@@ -3574,12 +3644,35 @@ internal static partial class Program
         PowerPoint.Slide? slide = null;
         PowerPoint.Shape? shape = null;
         PowerPoint.OLEFormat? oleFormat = null;
+        Process? testOleServerProcess = null;
+        object? oleServerKeepAlive = null;
         COMAddIns? installedAddIns = null;
         COMAddIn? installedAddIn = null;
         VisualTeX.PowerPointVsto.ThisAddIn? addIn = null;
         Array custom = Array.Empty<object>();
         try
         {
+            var testOleServerPath = Environment.GetEnvironmentVariable("VISUALTEX_TEST_OLE_SERVER_PATH");
+            if (!string.IsNullOrWhiteSpace(testOleServerPath))
+            {
+                testOleServerProcess = Process.Start(new ProcessStartInfo
+                {
+                    FileName = testOleServerPath,
+                    Arguments = "-Embedding",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                }) ?? throw new InvalidOperationException("Failed to start the test VisualTeX OLE server.");
+                Thread.Sleep(500);
+                if (testOleServerProcess.HasExited)
+                    throw new InvalidOperationException("The test VisualTeX OLE server exited before PowerPoint COM activation.");
+                var oleServerType = Type.GetTypeFromProgID(FormulaOleContract.ProgId, throwOnError: true)
+                    ?? throw new InvalidOperationException("VisualTeX OLE server class is not registered.");
+                oleServerKeepAlive = Activator.CreateInstance(oleServerType)
+                    ?? throw new InvalidOperationException("VisualTeX OLE server keep-alive could not be created.");
+                Console.WriteLine(
+                    $"[Targeted PowerPoint] Test OLE server pinned: pid={testOleServerProcess.Id}, path={testOleServerPath}");
+            }
+
             Console.WriteLine("[Targeted PowerPoint 1/4] Starting PowerPoint and creating a picture formula...");
             application = new PowerPoint.Application { Visible = MsoTriState.msoTrue };
             installedAddIns = application.COMAddIns;
@@ -3627,6 +3720,15 @@ internal static partial class Program
             shape = slide.Shapes[1];
             AssertTrue(IsPowerPointEditablePictureShape(shape),
                 $"PowerPoint targeted fixture did not start as an editable picture/graphic. Actual type: {(int)shape.Type}.");
+            var pictureLeft = shape.Left;
+            var pictureTop = shape.Top;
+            var pictureWidth = shape.Width;
+            var pictureHeight = shape.Height;
+            var pictureRatio = pictureWidth / pictureHeight;
+            var sourcePicturePng = Path.Combine(artifactRoot, "targeted-current-vsto-source.png");
+            shape.Export(sourcePicturePng, PowerPoint.PpShapeFormat.ppShapeFormatPNG);
+            var sourceInk = AnalyzeDarkPixels(sourcePicturePng);
+            AssertTrue(sourceInk.Count > 0, "Current VSTO source picture export contains no formula pixels.");
 
             Console.WriteLine("[Targeted PowerPoint 2/4] Converting picture to OLE without opening the editor...");
             shape.Select(MsoTriState.msoTrue);
@@ -3657,9 +3759,30 @@ internal static partial class Program
             oleFormat = shape.OLEFormat;
             AssertEqual(FormulaOleContract.ProgId, oleFormat.ProgID,
                 "Direct PowerPoint conversion created the wrong OLE class.");
+            AssertNear(pictureLeft, shape.Left, 0.2f,
+                "Current VSTO picture-to-OLE conversion moved horizontally.");
+            AssertNear(pictureTop, shape.Top, 0.2f,
+                "Current VSTO picture-to-OLE conversion moved vertically.");
+            AssertNear(pictureWidth, shape.Width, 0.2f,
+                "Current VSTO picture-to-OLE conversion changed width.");
+            AssertNear(pictureHeight, shape.Height, 0.2f,
+                "Current VSTO picture-to-OLE conversion changed height.");
+            AssertNear(pictureRatio, shape.Width / shape.Height, 0.01f,
+                "Current VSTO picture-to-OLE conversion changed aspect ratio.");
+            var currentVstoOlePng = Path.Combine(artifactRoot, "targeted-current-vsto-ole.png");
+            shape.Export(currentVstoOlePng, PowerPoint.PpShapeFormat.ppShapeFormatPNG);
+            var oleInk = AnalyzeDarkPixels(currentVstoOlePng);
+            AssertTrue(oleInk.Count > 0, "Current VSTO OLE export contains no formula pixels.");
+            var sourceInkRatio = sourceInk.Width / (double)Math.Max(1, sourceInk.Height);
+            var oleInkRatio = oleInk.Width / (double)Math.Max(1, oleInk.Height);
+            if (Math.Abs(sourceInkRatio - oleInkRatio) / sourceInkRatio > 0.03)
+                throw new InvalidOperationException(
+                    $"Current VSTO picture-to-OLE visually distorted the formula. " +
+                    $"Source ink ratio={sourceInkRatio:F4}, OLE ink ratio={oleInkRatio:F4}.");
             Console.WriteLine(
                 $"  Direct PowerPoint conversion completed in "
-                + $"{conversionElapsed.TotalSeconds:F2}s without a visible editor.");
+                + $"{conversionElapsed.TotalSeconds:F2}s without a visible editor; "
+                + $"geometry stayed {shape.Left:F3},{shape.Top:F3} {shape.Width:F3}x{shape.Height:F3} pt.");
 
             Console.WriteLine("[Targeted PowerPoint 3/4] Verifying the OLE verb does not reveal the VisualTeX main window...");
             var baselineWindows = VisibleVisualTeXWindowTitles();
@@ -3721,6 +3844,7 @@ internal static partial class Program
             Release(installedAddIns);
             Release(oleFormat);
             Release(shape);
+            Release(oleServerKeepAlive);
             Release(slide);
             if (presentation is not null)
             {
@@ -3732,6 +3856,16 @@ internal static partial class Program
                 try { application.Quit(); } catch { }
             }
             Release(application);
+            if (testOleServerProcess is not null)
+            {
+                try
+                {
+                    if (!testOleServerProcess.HasExited)
+                        testOleServerProcess.Kill();
+                }
+                catch { }
+                testOleServerProcess.Dispose();
+            }
             ForceComCleanup();
         }
     }
@@ -5104,6 +5238,7 @@ internal static partial class Program
         for (var x = 0; x < bitmap.Width; x++)
         {
             var pixel = bitmap.GetPixel(x, y);
+            if (pixel.A < 16) continue;
             if (pixel.R >= 120 && pixel.G >= 120 && pixel.B >= 120) continue;
             count++;
             minimumX = Math.Min(minimumX, x);
