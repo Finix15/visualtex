@@ -1,5 +1,6 @@
 import { validateLatex } from "mathlive/ssr";
 import { normalizeMathLiveCanonicalUprightCommands } from "../editor/normalizeChineseLatex.ts";
+import { findCustomSymbolByCommand } from "../math/customSymbolRegistry";
 import type { LatexCodeFormat } from "../types/formula";
 
 export type LatexCodeFormatGroup = "single" | "multi";
@@ -954,7 +955,14 @@ function validateFormulaDraft(latex: string): string | null {
   if (!hasCompleteRequiredCommandArguments(latex)) {
     return "incomplete-command-arguments";
   }
-  const errors = validateLatex(latex);
+  const errors = validateLatex(latex).filter(
+    (error) =>
+      !(
+        error.code === "unknown-command" &&
+        typeof error.arg === "string" &&
+        findCustomSymbolByCommand(error.arg)
+      ),
+  );
   return errors.length ? errors[0]?.code ?? "invalid-latex" : null;
 }
 

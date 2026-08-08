@@ -41,7 +41,10 @@ import {
 } from "../history/HistoryManager";
 import { getEditorDocumentSnapshot } from "../history/documentHistory";
 import { searchCommands } from "../autocomplete/CommandSearchEngine";
-import { commandRegistry } from "../autocomplete/commandRegistry";
+import {
+  findRuntimeCommandByCommand,
+  getRuntimeCommandRegistry,
+} from "../autocomplete/runtimeCommandRegistry";
 import { CommandSuggestionPopup } from "../autocomplete/CommandSuggestionPopup";
 import {
   createFormulaLine,
@@ -67,6 +70,14 @@ import {
   convertVisualTexLatexToMarkup,
   installMathLiveContourIntegralShadowStyle,
 } from "./mathLiveIntegralCompatibility";
+import { applyCustomSymbolMacrosToMathfield } from "../math/customSymbolRegistry";
+import {
+  containsCustomSymbolCommand,
+  installCustomSymbolGlobalStyle,
+  installCustomSymbolShadowStyle,
+  refreshCustomSymbolMathfield,
+} from "../math/customSymbolRendering";
+import { useCustomSymbolRevision } from "../math/customSymbolReact";
 import { ImeCompositionGuard } from "./imeCompositionGuard";
 import {
   nativeSuggestionPreviewHasVisibleInk,
@@ -1084,7 +1095,7 @@ function visibleCommandSuggestions(
     rawQuery,
     usage,
     personalize,
-    commandRegistry.length,
+    getRuntimeCommandRegistry().length,
   )
     .filter((command) =>
       structuredSuggestionCommands.has(command.command)
@@ -1156,9 +1167,7 @@ function selectAdjacentAccentPlaceholder(
 function exactWrapperCommand(rawQuery: string) {
   const normalizedQuery = rawQuery.trim();
   if (!wrapperCommandPreviews.has(normalizedQuery)) return null;
-  return (
-    commandRegistry.find((command) => command.command === normalizedQuery) ?? null
-  );
+  return findRuntimeCommandByCommand(normalizedQuery);
 }
 
 function findAcceptedWrapperRange(
@@ -1253,11 +1262,7 @@ let nativeInputPopoverManualCommand = "";
 function nativeSuggestionUsageId(command: string) {
   const normalized = command.trim();
   return (
-    commandRegistry.find(
-      (candidate) =>
-        candidate.command === normalized ||
-        candidate.insertTemplate === normalized,
-    )?.id ?? `mathlive-native:${normalized}`
+    findRuntimeCommandByCommand(normalized)?.id ?? `mathlive-native:${normalized}`
   );
 }
 
@@ -4085,6 +4090,7 @@ function FormulaField(props: FormulaFieldProps) {
       initialRowHeight + "px",
     );
     installMathLiveContourIntegralShadowStyle(field);
+    installCustomSymbolShadowStyle(field);
     installVisualTexStructuralPlaceholderStyle(field);
 
     let pointerPlaceholderFrame = 0;
@@ -4801,6 +4807,7 @@ function FormulaField(props: FormulaFieldProps) {
       }
       clearPendingAutoExit();
     normalizeCompletedDifferentialDisplay(field);
+    installCustomSymbolShadowStyle(field);
     const inputType =
       event instanceof InputEvent ? event.inputType || "insertText" : "insertText";
     let postInputSnapshot = captureFieldSnapshot(field);
@@ -5633,7 +5640,11 @@ function FormulaField(props: FormulaFieldProps) {
         expand: false,
       },
     };
-    if (/\\bm(?:\s|\{|$)/.test(propsRef.current.latex)) {
+    applyCustomSymbolMacrosToMathfield(field);
+    if (
+      /\\bm(?:\s|\{|$)/.test(propsRef.current.latex) ||
+      containsCustomSymbolCommand(propsRef.current.latex)
+    ) {
       field.setValue(propsRef.current.latex, {
         mode: "math",
         format: "latex",
@@ -5646,6 +5657,7 @@ function FormulaField(props: FormulaFieldProps) {
     // context menu completely instead of hiding it after it opens.
     field.menuItems = [];
     installMathLiveContourIntegralShadowStyle(field);
+    installCustomSymbolShadowStyle(field);
     installVisualTexStructuralPlaceholderStyle(field);
     applyVisualTexFormulaFonts(
       field,
@@ -5819,6 +5831,7 @@ function FormulaField(props: FormulaFieldProps) {
     // model first so upright operators and plain command candidates never
     // depend on a remount or app restart.
     normalizeCompletedDifferentialDisplay(field);
+    installCustomSymbolShadowStyle(field);
 
     // 本地输入仅因中文规范化而与 store 等值时，不重建 MathLive 模型；
     // 只更新事务基准，保留当前光标、选区和删除键内部状态。
@@ -5836,6 +5849,7 @@ function FormulaField(props: FormulaFieldProps) {
         selectionMode: "after",
         silenceNotifications: true,
       });
+      installCustomSymbolShadowStyle(field);
       field.resetUndo();
     }
 
@@ -5998,9 +6012,15 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
     const formulaHotkeyBindings = useFormulaHotkeyStore(
       (state) => state.bindings,
     );
+    const customSymbolRevision = useCustomSymbolRevision();
     const isEn = language === "en";
     const interactionReadOnly = readOnly || previewOnly;
     previewOnlyRef.current = previewOnly;
+
+    useEffect(() => {
+      installCustomSymbolGlobalStyle();
+      fieldRefs.current.forEach((field) => refreshCustomSymbolMathfield(field));
+    }, [customSymbolRevision]);
 
     linesRef.current = lines;
     const resolvedActiveLineId =

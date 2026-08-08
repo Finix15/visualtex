@@ -4,6 +4,10 @@ import { safeStorage } from "./safeStorage";
 import { publishSynchronizedTheme } from "../themeSync";
 import { OCR_MODELS } from "../ocr/ocrService";
 import type { FormulaDocument } from "../types/formula";
+import {
+  CUSTOM_SYMBOL_STORAGE_KEY,
+  refreshCustomSymbolLibraryFromStorage,
+} from "../math/customSymbolRegistry";
 
 export const VISUALTEX_CONFIGURATION_SCHEMA = "visualtex-user-configuration";
 export const VISUALTEX_CONFIGURATION_VERSION = 1;
@@ -42,6 +46,7 @@ const configurationStorageKeys = [
   "visualtex.silent-ocr.enabled",
   "visualtex.quick-ocr.capture-mode",
   "visualtex.custom-theme.v1",
+  CUSTOM_SYMBOL_STORAGE_KEY,
 ] as const;
 
 const booleanConfigurationStorageKeys = new Set<string>([
@@ -59,6 +64,7 @@ const jsonConfigurationStorageKeys = new Set<string>([
   "visualtex-custom-formula-text-colors",
   "visualtex-custom-formula-background-colors",
   "visualtex.custom-theme.v1",
+  CUSTOM_SYMBOL_STORAGE_KEY,
 ]);
 
 const editorSettingKeys = [
@@ -252,6 +258,7 @@ export async function applyVisualTexConfiguration(
     if (typeof value === "string") safeStorage.setItem(key, value);
     else safeStorage.removeItem(key);
   }
+  refreshCustomSymbolLibraryFromStorage();
 
   publishSynchronizedTheme(useEditorStore.getState().theme);
   if (isTauri()) {

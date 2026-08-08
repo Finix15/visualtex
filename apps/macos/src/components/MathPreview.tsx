@@ -1,5 +1,6 @@
 import { memo, useLayoutEffect, useMemo, useRef } from "react";
 import { convertVisualTexLatexToMarkup } from "../editor/mathLiveIntegralCompatibility";
+import { useCustomSymbolRevision } from "../math/customSymbolReact";
 
 interface MathPreviewProps {
   latex: string;
@@ -28,15 +29,16 @@ const visiblePlaceholderLatex =
 const mathPreviewMarkupCache = new Map<string, string>();
 const mathPreviewMarkupCacheLimit = 1024;
 
-function cachedPreviewMarkup(latex: string) {
-  const cached = mathPreviewMarkupCache.get(latex);
+function cachedPreviewMarkup(latex: string, customSymbolRevision: number) {
+  const cacheKey = `${customSymbolRevision}\u0000${latex}`;
+  const cached = mathPreviewMarkupCache.get(cacheKey);
   if (cached !== undefined) return cached;
   const markup = convertVisualTexLatexToMarkup(latex, { defaultMode: "math" });
   if (mathPreviewMarkupCache.size >= mathPreviewMarkupCacheLimit) {
     const oldestKey = mathPreviewMarkupCache.keys().next().value;
     if (typeof oldestKey === "string") mathPreviewMarkupCache.delete(oldestKey);
   }
-  mathPreviewMarkupCache.set(latex, markup);
+  mathPreviewMarkupCache.set(cacheKey, markup);
   return markup;
 }
 
@@ -113,13 +115,14 @@ function MathPreviewComponent({
   const contentRef = useRef<HTMLSpanElement>(null);
   const onMeasureRef = useRef(onMeasure);
   onMeasureRef.current = onMeasure;
+  const customSymbolRevision = useCustomSymbolRevision();
   const previewLatex = useMemo(
     () => (showPlaceholders ? latexWithVisiblePlaceholders(latex) : latex),
     [latex, showPlaceholders],
   );
   const markup = useMemo(
-    () => cachedPreviewMarkup(previewLatex),
-    [previewLatex],
+    () => cachedPreviewMarkup(previewLatex, customSymbolRevision),
+    [customSymbolRevision, previewLatex],
   );
 
   useLayoutEffect(() => {

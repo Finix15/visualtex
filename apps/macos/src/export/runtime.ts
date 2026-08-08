@@ -11,6 +11,11 @@ import { normalizeMathLiveCanonicalUprightCommands } from "../editor/normalizeCh
 import { normalizeExtendedIntegralLatexCommands } from "../math/extendedIntegralCompatibility.ts";
 import { applyVisualTexIntegralSvgGlyphs } from "../math/integralSvgExportCompatibility.ts";
 import {
+  applyCustomSymbolArtworkToSvg,
+  expandCustomSymbolsForMathMl,
+  expandCustomSymbolsForSvg,
+} from "../math/customSymbolRendering.ts";
+import {
   assertResolvedMathJaxSvg,
   assertResolvedPresentationMathMl,
   VISUALTEX_MATHML_MACROS,
@@ -326,7 +331,7 @@ export function svgToBase64(svg: string) {
 }
 
 export function latexToMathMl(latex: string, displayMode = true) {
-  const source = prepareLatex(latex);
+  const source = expandCustomSymbolsForMathMl(prepareLatex(latex));
   const root = mathMlDocument.convert(source, {
     display: displayMode,
     end: STATE.COMPILED,
@@ -343,7 +348,7 @@ export function latexToSvg(
   latex: string,
   options: SvgExportOptions = DEFAULT_OPTIONS,
 ): SvgExportResult {
-  const source = prepareLatex(latex);
+  const source = expandCustomSymbolsForSvg(prepareLatex(latex));
   const fontSizePt = positiveFinite(options.fontSizePt, DEFAULT_OPTIONS.fontSizePt);
   const paddingPx = nonNegativeFinite(options.paddingPx, DEFAULT_OPTIONS.paddingPx);
   const fontSizePx = fontSizePt * (96 / 72);
@@ -357,6 +362,7 @@ export function latexToSvg(
   });
   let svg = extractSvg(adaptor.outerHTML(container));
   svg = applyVisualTexIntegralSvgGlyphs(svg, options.displayMode);
+  svg = applyCustomSymbolArtworkToSvg(svg);
   svg = applyVisualTexSvgFontPreferences(svg, options);
   const viewBox = parseViewBox(svg);
 

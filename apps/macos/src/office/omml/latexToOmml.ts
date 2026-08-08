@@ -19,6 +19,7 @@ import {
   VISUALTEX_MATHML_MACROS,
 } from "../../math/latexCompatibility.ts";
 import { errorMessage } from "../../runtime/errorMessage";
+import { expandCustomSymbolsForMathMl } from "../../math/customSymbolRendering";
 import {
   DEFAULT_FORMULA_CHINESE_FONT,
   DEFAULT_FORMULA_LETTER_FONT,
@@ -288,7 +289,8 @@ function elementName(element: Element) {
 }
 
 function latexToMathMl(latex: string, displayMode: OmmlDisplayMode) {
-  const root = mathDocument.convert(latex, {
+  const semanticLatex = expandCustomSymbolsForMathMl(latex);
+  const root = mathDocument.convert(semanticLatex, {
     display: displayMode === "block",
     end: STATE.COMPILED,
   }) as MmlNode;
