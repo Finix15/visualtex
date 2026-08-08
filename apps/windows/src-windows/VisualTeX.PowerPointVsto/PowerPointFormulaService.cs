@@ -17,23 +17,49 @@ public sealed class PowerPointFormulaService
     private const string MetadataTag = "VisualTeXMetadata";
     private const string IdentityOwnerTag = "VisualTeXIdentityOwner";
     private const string SlideReferencePrefix = "visualtex-ppt-vsto-slide:";
+    private const uint WmSetRedraw = 0x000B;
+    private const uint RdwInvalidate = 0x0001;
+    private const uint RdwErase = 0x0004;
+    private const uint RdwAllChildren = 0x0080;
+    private const uint RdwUpdateNow = 0x0100;
+    private const uint RdwFrame = 0x0400;
     private readonly Application _application;
     private readonly Action<Action>? _postToOfficeUi;
     private readonly Action<Action, int>? _postDelayedToOfficeUi;
     private readonly Action<string, Shape>? _oleStageProbe;
+    private readonly Action<string, IntPtr>? _windowRedrawProbe;
     private readonly Dictionary<string, long> _oleGeometryRestoreGenerations = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<IntPtr, long> _windowRedrawFreezeGenerations = new();
+    private long _nextWindowRedrawFreezeGeneration;
 
     public PowerPointFormulaService(
         Application application,
         Action<Action>? postToOfficeUi = null,
         Action<Action, int>? postDelayedToOfficeUi = null,
-        Action<string, Shape>? oleStageProbe = null)
+        Action<string, Shape>? oleStageProbe = null,
+        Action<string, IntPtr>? windowRedrawProbe = null)
     {
         _application = application;
         _postToOfficeUi = postToOfficeUi;
         _postDelayedToOfficeUi = postDelayedToOfficeUi;
         _oleStageProbe = oleStageProbe;
+        _windowRedrawProbe = windowRedrawProbe;
     }
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    private static extern IntPtr SendMessage(
+        IntPtr hWnd,
+        uint message,
+        IntPtr wParam,
+        IntPtr lParam);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool RedrawWindow(
+        IntPtr hWnd,
+        IntPtr updateRect,
+        IntPtr updateRegion,
+        uint flags);
 
     public OfficeSelection ReadSelection() => ReadSelection(null);
 
@@ -596,6 +622,8 @@ public sealed class PowerPointFormulaService
         View? view = null;
         Slide? slide = null;
         Shape? shape = null;
+        (IntPtr Hwnd, long Generation)? redrawFreeze = null;
+        var deferRedrawRestore = false;
         try
         {
             EnsureNotSlideShow();
@@ -615,6 +643,7 @@ public sealed class PowerPointFormulaService
             height *= scale;
             var left = Math.Max(0f, (presentation.PageSetup.SlideWidth - width) / 2f);
             var top = Math.Max(0f, (presentation.PageSetup.SlideHeight - height) / 2f);
+            redrawFreeze = FreezePowerPointWindowRedraw(window);
             shape = AddOleObjectOffscreen(slide, width, height);
             ProbeOleStage("allocated", shape);
             shape.Visible = MsoTriState.msoFalse;
@@ -636,6 +665,7 @@ public sealed class PowerPointFormulaService
                 height,
                 left,
                 top);
+            deferRedrawRestore = true;
             return Result(session, presentation, shape.Name);
         }
         catch
@@ -645,6 +675,7 @@ public sealed class PowerPointFormulaService
         }
         finally
         {
+            FinishPowerPointWindowRedrawFreeze(redrawFreeze, deferRedrawRestore);
             StartNewUndoEntry();
             Release(shape);
             Release(slide);
@@ -805,6 +836,8 @@ public sealed class PowerPointFormulaService
         Slide? slide = null;
         Shape? oldShape = null;
         Shape? replacement = null;
+        (IntPtr Hwnd, long Generation)? redrawFreeze = null;
+        var deferRedrawRestore = false;
         try
         {
             EnsureNotSlideShow();
@@ -834,6 +867,7 @@ public sealed class PowerPointFormulaService
                 FormulaContentEquivalent(originalMetadata, metadata));
             var newLeft = left + (oldWidth - editedSize.Width) / 2f;
             var newTop = top + (oldHeight - editedSize.Height) / 2f;
+            redrawFreeze = FreezePowerPointWindowRedraw();
 
             if (TryUpdateOle(oldShape, metadata, emfPath, pngPath))
             {
@@ -851,6 +885,7 @@ public sealed class PowerPointFormulaService
                     editedSize.Height,
                     newLeft,
                     newTop);
+                deferRedrawRestore = true;
                 return Result(session, presentation, oldShape.Name);
             }
 
@@ -866,35 +901,25 @@ public sealed class PowerPointFormulaService
             InitializeOle(replacement, metadata, emfPath, pngPath);
             TryApplyRotation(replacement, rotation);
             Configure(replacement, metadata);
-            // Keep the original SVG/OMML immediately above the replacement as a
-            // short-lived visual cover. PowerPoint can paint several OLE cache
-            // states while AddOLEObject/initialization unwinds; exposing the new
-            // object only after it is correct is not enough if deleting the source
-            // creates a blank/repaint frame. The cover keeps every one of those
-            // transitions visually identical to the source formula.
-            MoveToZOrder(replacement, zOrder);
+            MoveToZOrder(replacement, zOrder + 1);
+            oldShape.Delete();
+            // The window is still redraw-suspended here, so deleting the source
+            // does not expose a blank frame. Finalize the OLE completely before
+            // the deferred redraw is allowed to paint the slide again.
             ApplyOleSizeAndRefresh(replacement, editedSize.Width, editedSize.Height);
             RestoreOlePosition(replacement, newLeft, newTop);
             replacement.Visible = MsoTriState.msoTrue;
             ProbeOleStage("finalized", replacement);
-            var documentId = DocumentIdentity(presentation);
-            var coverName = PrepareOleTransitionCover(oldShape);
-            // The old source remains only as a paint cover. Keep PowerPoint's
-            // actual selection on the finished OLE so an immediate follow-up
-            // Ribbon action never targets the metadata-free cover.
             try { replacement.Select(MsoTriState.msoTrue); } catch { }
             ScheduleOleGeometryRestore(
-                documentId,
+                DocumentIdentity(presentation),
                 metadata.FormulaId,
                 replacement.Name,
                 editedSize.Width,
                 editedSize.Height,
                 newLeft,
                 newTop);
-            ScheduleOleTransitionCoverRemoval(
-                documentId,
-                slide.SlideID,
-                coverName);
+            deferRedrawRestore = true;
             return Result(session, presentation, replacement.Name);
         }
         catch
@@ -904,6 +929,7 @@ public sealed class PowerPointFormulaService
         }
         finally
         {
+            FinishPowerPointWindowRedrawFreeze(redrawFreeze, deferRedrawRestore);
             StartNewUndoEntry();
             Release(replacement);
             Release(oldShape);
@@ -1512,110 +1538,80 @@ public sealed class PowerPointFormulaService
         shape.Top = top;
     }
 
-    private static string PrepareOleTransitionCover(Shape shape)
+    private (IntPtr Hwnd, long Generation)? FreezePowerPointWindowRedraw(
+        DocumentWindow? knownWindow = null)
     {
-        var coverName = $"VisualTeX_OleTransitionCover_{Guid.NewGuid():N}";
-        try { shape.Name = coverName; } catch { coverName = shape.Name; }
-        Tags? tags = null;
+        DocumentWindow? acquiredWindow = null;
         try
         {
-            tags = shape.Tags;
-            try { tags.Delete(FormulaIdTag); } catch { }
-            try { tags.Delete(MetadataTag); } catch { }
-            try { tags.Delete(IdentityOwnerTag); } catch { }
+            var window = knownWindow;
+            if (window is null)
+            {
+                acquiredWindow = _application.ActiveWindow;
+                window = acquiredWindow;
+            }
+            if (window is null) return null;
+
+            var hwnd = new IntPtr(window.HWND);
+            if (hwnd == IntPtr.Zero) return null;
+            var generation = ++_nextWindowRedrawFreezeGeneration;
+            _windowRedrawFreezeGenerations[hwnd] = generation;
+            SendMessage(hwnd, WmSetRedraw, IntPtr.Zero, IntPtr.Zero);
+            _windowRedrawProbe?.Invoke("suspended", hwnd);
+            return (hwnd, generation);
         }
-        finally { Release(tags); }
-        try { shape.AlternativeText = string.Empty; } catch { }
-        return coverName;
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            Release(acquiredWindow);
+        }
     }
 
-    private void ScheduleOleTransitionCoverRemoval(
-        string documentId,
-        int slideId,
-        string coverName)
+    private void FinishPowerPointWindowRedrawFreeze(
+        (IntPtr Hwnd, long Generation)? redrawFreeze,
+        bool deferUntilOleSettled)
     {
-        void RemoveCover()
+        if (redrawFreeze is null) return;
+        var freeze = redrawFreeze.Value;
+
+        void RestoreRedraw()
         {
-            Presentations? presentations = null;
-            Presentation? presentation = null;
-            Slides? slides = null;
-            Slide? slide = null;
-            Shapes? shapes = null;
-            Shape? cover = null;
+            if (!_windowRedrawFreezeGenerations.TryGetValue(freeze.Hwnd, out var currentGeneration)
+                || currentGeneration != freeze.Generation)
+                return;
+            _windowRedrawFreezeGenerations.Remove(freeze.Hwnd);
             try
             {
-                presentations = _application.Presentations;
-                for (var presentationIndex = 1; presentationIndex <= presentations.Count; presentationIndex++)
-                {
-                    Presentation? candidate = null;
-                    try
-                    {
-                        candidate = presentations[presentationIndex];
-                        if (!string.Equals(
-                                DocumentIdentity(candidate),
-                                documentId,
-                                StringComparison.OrdinalIgnoreCase))
-                            continue;
-                        presentation = candidate;
-                        candidate = null;
-                        break;
-                    }
-                    finally { Release(candidate); }
-                }
-                if (presentation is null) return;
-
-                slides = presentation.Slides;
-                for (var slideIndex = 1; slideIndex <= slides.Count; slideIndex++)
-                {
-                    Slide? candidate = null;
-                    try
-                    {
-                        candidate = slides[slideIndex];
-                        if (candidate.SlideID != slideId) continue;
-                        slide = candidate;
-                        candidate = null;
-                        break;
-                    }
-                    finally { Release(candidate); }
-                }
-                if (slide is null) return;
-                shapes = slide.Shapes;
-                try { cover = shapes[coverName]; }
-                catch { return; }
-                cover.Delete();
-            }
-            catch
-            {
-                // A transition cover is purely visual. Failure to remove it on
-                // one callback must not destabilize PowerPoint; the fallback UI
-                // post below will retry when available.
+                SendMessage(freeze.Hwnd, WmSetRedraw, new IntPtr(1), IntPtr.Zero);
+                RedrawWindow(
+                    freeze.Hwnd,
+                    IntPtr.Zero,
+                    IntPtr.Zero,
+                    RdwInvalidate | RdwErase | RdwFrame | RdwAllChildren | RdwUpdateNow);
             }
             finally
             {
-                Release(cover);
-                Release(shapes);
-                Release(slide);
-                Release(slides);
-                Release(presentation);
-                Release(presentations);
+                _windowRedrawProbe?.Invoke("restored", freeze.Hwnd);
             }
         }
 
-        var delayedPost = _postDelayedToOfficeUi;
-        if (delayedPost is not null)
+        if (deferUntilOleSettled && _postDelayedToOfficeUi is not null)
         {
-            // Keep the source picture over the finished OLE long enough to span
-            // the synchronous cache refresh and the first high-DPI host reflow.
-            delayedPost(RemoveCover, 850);
+            // The last OLE geometry correction runs at 700 ms. Keep the actual
+            // PowerPoint window frozen slightly longer so no intermediate OLE
+            // cache/presentation frame can ever reach the screen.
+            _postDelayedToOfficeUi(RestoreRedraw, 850);
             return;
         }
-        var post = _postToOfficeUi;
-        if (post is not null)
+        if (deferUntilOleSettled && _postToOfficeUi is not null)
         {
-            post(() => post(RemoveCover));
+            _postToOfficeUi(() => _postToOfficeUi(RestoreRedraw));
             return;
         }
-        RemoveCover();
+        RestoreRedraw();
     }
 
     private void ScheduleOleGeometryRestore(

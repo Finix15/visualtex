@@ -469,6 +469,8 @@ internal static partial class Program
             var hiddenCreatedCount = 0;
             var hiddenInitializedCount = 0;
             var visibleFinalizedCount = 0;
+            var redrawSuspendedCount = 0;
+            var redrawRestoredCount = 0;
             var service = new PowerPointFormulaService(
                 application,
                 operation => postedUiWork.Enqueue(operation),
@@ -533,6 +535,13 @@ internal static partial class Program
                             $"server={stageExtent}, ink={stageInk.Width}x{stageInk.Height}/{stageInk.Count}, " +
                             $"canvas={stageInk.ImageWidth}x{stageInk.ImageHeight}.");
                     }
+                },
+                (stage, _) =>
+                {
+                    if (string.Equals(stage, "suspended", StringComparison.Ordinal))
+                        redrawSuspendedCount++;
+                    else if (string.Equals(stage, "restored", StringComparison.Ordinal))
+                        redrawRestoredCount++;
                 });
             void DrainPostedUiWork()
             {
@@ -627,6 +636,8 @@ internal static partial class Program
                 var createdBefore = hiddenCreatedCount;
                 var initializedBefore = hiddenInitializedCount;
                 var finalizedBefore = visibleFinalizedCount;
+                var redrawSuspendedBefore = redrawSuspendedCount;
+                var redrawRestoredBefore = redrawRestoredCount;
                 var oleResult = service.ReplaceOle(toOle, pngPath, emfPath);
                 AssertEqual(allocatedBefore + 1, offscreenAllocatedCount,
                     $"Iteration {iteration} did not allocate the OLE off-slide before hiding it.");
@@ -636,30 +647,17 @@ internal static partial class Program
                     $"Iteration {iteration} exposed the OLE while its presentation was initializing.");
                 AssertEqual(finalizedBefore + 1, visibleFinalizedCount,
                     $"Iteration {iteration} did not reveal the OLE only after final geometry restoration.");
-                if (iteration == 1)
-                {
-                    AssertTrue(shape.Name.StartsWith("VisualTeX_OleTransitionCover_", StringComparison.Ordinal),
-                        "SVG -> OLE did not preserve the source as a transition cover.");
-                    AssertTrue(DecodePowerPointMetadata(shape) is null,
-                        "PowerPoint transition cover still exposes VisualTeX metadata.");
-                    PowerPoint.Shape? stagedOle = null;
-                    try
-                    {
-                        stagedOle = slide.Shapes[oleResult.ObjectId];
-                        AssertTrue(stagedOle.Visible == MsoTriState.msoTrue,
-                            "Final OLE is not visible underneath the transition cover.");
-                        AssertTrue(shape.ZOrderPosition > stagedOle.ZOrderPosition,
-                            "Transition cover is not layered above the final OLE.");
-                        AssertEqual(2, slide.Shapes.Count,
-                            "SVG -> OLE transition should temporarily contain exactly the cover and final OLE.");
-                        var selectedDuringCover = service.ReadSelection();
-                        AssertEqual(oleResult.ObjectId, selectedDuringCover.ObjectId,
-                            "PowerPoint selection stayed on the metadata-free transition cover.");
-                        AssertEqual(FormulaOleContract.NativeOleMode, selectedDuringCover.ObjectMode,
-                            "PowerPoint selection did not move to the finalized OLE while the cover remained visible.");
-                    }
-                    finally { Release(stagedOle); }
-                }
+                AssertEqual(redrawSuspendedBefore + 1, redrawSuspendedCount,
+                    $"Iteration {iteration} did not suspend PowerPoint window redraw before OLE replacement.");
+                AssertEqual(redrawRestoredBefore, redrawRestoredCount,
+                    $"Iteration {iteration} restored PowerPoint redraw before delayed OLE stabilization completed.");
+                AssertEqual(1, slide.Shapes.Count,
+                    $"Iteration {iteration} left both the source formula and replacement OLE on the slide.");
+                var selectedDuringFreeze = service.ReadSelection();
+                AssertEqual(oleResult.ObjectId, selectedDuringFreeze.ObjectId,
+                    $"Iteration {iteration} did not move selection to the finalized OLE while redraw was suspended.");
+                AssertEqual(FormulaOleContract.NativeOleMode, selectedDuringFreeze.ObjectMode,
+                    $"Iteration {iteration} selection is not the finalized native OLE.");
                 Release(shape);
                 shape = slide.Shapes[oleResult.ObjectId];
                 if (iteration == 1)
@@ -706,16 +704,16 @@ internal static partial class Program
                     // OLE server extent remained near the original natural size.
                     // Simulate that late replay and require a delayed UI repair to
                     // restore both the box and its center.
-                    AssertTrue(delayedUiWork.Count >= 3,
-                        "PowerPoint OLE conversion did not schedule delayed geometry rechecks.");
+                    AssertTrue(delayedUiWork.Count >= 4,
+                        "PowerPoint OLE conversion did not schedule delayed geometry rechecks plus final redraw restore.");
                     shape.LockAspectRatio = MsoTriState.msoFalse;
                     shape.Width = 136.25f;
                     shape.Height = 57.50f;
                     shape.Left = centerX - shape.Width / 2f;
                     shape.Top = centerY - shape.Height / 2f;
                     DrainDelayedUiWork();
-                    AssertEqual(1, slide.Shapes.Count,
-                        "PowerPoint OLE transition cover was not removed after the stabilization window.");
+                    AssertEqual(redrawRestoredBefore + 1, redrawRestoredCount,
+                        "PowerPoint redraw was not restored after the OLE stabilization window.");
                     AssertNear(baselineWidth, shape.Width, 1.5f,
                         "Delayed OLE reflow repair did not restore width.");
                     AssertNear(baselineHeight, shape.Height, 1.5f,
@@ -729,6 +727,8 @@ internal static partial class Program
                 {
                     DrainPostedUiWork();
                     DrainDelayedUiWork();
+                    AssertEqual(redrawRestoredBefore + 1, redrawRestoredCount,
+                        $"Iteration {iteration} did not restore PowerPoint redraw after delayed OLE stabilization.");
                 }
                 WaitForPowerPointOleSettle();
                 Release(shape);
