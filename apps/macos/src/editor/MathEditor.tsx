@@ -24,6 +24,7 @@ import type {
   FormulaAlignment,
   FormulaLine,
   InputBehaviorSettingKey,
+  LatexCodeFormat,
   InputBehaviorSettings,
 } from "../types/formula";
 import type {
@@ -95,6 +96,11 @@ import {
   type FormulaChineseFont,
   type FormulaLetterFont,
 } from "./formulaFontPreferences";
+import {
+  usesExplicitAlignmentPoints,
+  VISUALTEX_ALIGNMENT_MARKER_CLASS,
+  VISUALTEX_ALIGNMENT_MARKER_LATEX,
+} from "./alignmentMarkers";
 
 export interface MathEditorInsertionTarget {
   lineId: string;
@@ -152,6 +158,7 @@ interface Props {
   lines: FormulaLine[];
   activeLineId: string | null;
   formulaAlignment: FormulaAlignment;
+  latexCodeFormat: LatexCodeFormat;
   zoom: number;
   reuseLineSlots?: boolean;
   readOnly?: boolean;
@@ -242,6 +249,23 @@ function rawLatexInput(field: MathfieldElement) {
     .filter((node) => !node.classList.contains("ML__suggestion"))
     .map((node) => node.textContent ?? "")
     .join("");
+}
+
+type MathLiveInternalField = {
+  _mathfield?: {
+    model?: {
+      parentEnvironment?: {
+        environmentName?: string;
+      } | null;
+    };
+  };
+};
+
+function activeMathLiveEnvironmentName(field: MathfieldElement) {
+  return (
+    (field as unknown as MathLiveInternalField)._mathfield?.model?.parentEnvironment
+      ?.environmentName ?? null
+  );
 }
 
 function structuralBoundaryOffsetFromPoint(
@@ -4493,6 +4517,51 @@ function FormulaField(props: FormulaFieldProps) {
       );
       field.resetUndo();
     };
+    const commitCompletedRawCasesEnvironment = () => {
+      if (rawLatexInput(field).replace(/\s+/g, "") !== "\\begin{cases}") {
+        return false;
+      }
+      const anchor = rawCommandAnchors.get(field);
+      if (!anchor) return false;
+
+      const before = {
+        latex: anchor.latex,
+        selection: anchor.selection,
+      };
+      restoringRawCommandAnchor = true;
+      let inserted = false;
+      try {
+        restoreRawCommandInsertionAnchor(field, anchor);
+        inserted = field.insert(
+          "\\begin{cases}\\placeholder{} & \\placeholder{}\\end{cases}",
+          {
+            mode: "math",
+            format: "latex",
+            insertionMode: "replaceSelection",
+            selectionMode: "placeholder",
+            focus: true,
+            scrollIntoView: false,
+          },
+        );
+      } finally {
+        restoringRawCommandAnchor = false;
+      }
+      if (!inserted) return false;
+
+      rawCommandAnchors.delete(field);
+      delete field.dataset.pendingNativeSuggestion;
+      dismissNativeSuggestionPopover(field);
+      markVisualTexStructuralPlaceholders(field);
+      field.focus();
+      field.shadowRoot
+        ?.querySelector<HTMLElement>('[part="keyboard-sink"]')
+        ?.focus({ preventScroll: true });
+      const after = captureFieldSnapshot(field);
+      emitEdit(before, after, "replace", "keyboard");
+      propsRef.current.onInputActivity(field);
+      syncFrameSize();
+      return true;
+    };
     const handleCompositionStart = () => {
       compositionDeleteObserved = false;
       suppressPostCompositionDeleteUntil = 0;
@@ -4778,6 +4847,7 @@ function FormulaField(props: FormulaFieldProps) {
         return;
       }
       normalizeGuardedBackslashInput(event.timeStamp);
+      if (commitCompletedRawCasesEnvironment()) return;
       const before = lastSnapshotRef.current ?? captureFieldSnapshot(field);
       const directInputSetting =
         event instanceof InputEvent && isSingleDirectInput(event, field)
@@ -5935,6 +6005,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       lines,
       activeLineId,
       formulaAlignment,
+      latexCodeFormat,
       zoom,
       reuseLineSlots = false,
       readOnly = false,
@@ -6026,6 +6097,98 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
     const resolvedActiveLineId =
       lines.find((line) => line.id === activeLineId)?.id ?? lines[0]?.id ?? null;
     activeLineIdRef.current = resolvedActiveLineId;
+
+    const refreshExplicitAlignmentLayout = () => {
+      const registered = Array.from(fieldRefs.current.values());
+      for (const field of registered) {
+        const host = field.closest<HTMLElement>(".mathfield-host");
+        host?.classList.remove("has-explicit-align-marker");
+        field.style.removeProperty("margin-left");
+      }
+      if (!usesExplicitAlignmentPoints(latexCodeFormat)) return;
+
+      const marked = linesRef.current.flatMap((line) => {
+        const field = fieldRefs.current.get(line.id);
+        if (!field?.isConnected) return [];
+        const host = field.closest<HTMLElement>(".mathfield-host");
+        const marker = field.shadowRoot?.querySelector<HTMLElement>(
+          `.${VISUALTEX_ALIGNMENT_MARKER_CLASS}`,
+        );
+        if (!host || !marker) return [];
+        const fieldBounds = field.getBoundingClientRect();
+        const markerBounds = marker.getBoundingClientRect();
+        return [
+          {
+            field,
+            host,
+            anchorOffset: markerBounds.left - fieldBounds.left,
+            leftExtent: markerBounds.left - fieldBounds.left,
+            rightExtent: fieldBounds.right - markerBounds.left,
+          },
+        ];
+      });
+      if (!marked.length) return;
+
+      const sharedLeftExtent = Math.max(
+        0,
+        ...marked.map((entry) => entry.leftExtent),
+      );
+      const sharedRightExtent = Math.max(
+        0,
+        ...marked.map((entry) => entry.rightExtent),
+      );
+      const alignedWidth = sharedLeftExtent + sharedRightExtent;
+
+      for (const entry of marked) {
+        const hostWidth = entry.host.getBoundingClientRect().width;
+        const groupStart =
+          formulaAlignment === "left"
+            ? 0
+            : formulaAlignment === "right"
+              ? Math.max(0, hostWidth - alignedWidth)
+              : Math.max(0, (hostWidth - alignedWidth) / 2);
+        const fieldOffset = Math.max(
+          0,
+          groupStart + sharedLeftExtent - entry.anchorOffset,
+        );
+        entry.host.classList.add("has-explicit-align-marker");
+        entry.field.style.marginLeft = `${fieldOffset}px`;
+      }
+    };
+
+    useLayoutEffect(() => {
+      let firstFrame = 0;
+      let secondFrame = 0;
+      const schedule = () => {
+        window.cancelAnimationFrame(firstFrame);
+        window.cancelAnimationFrame(secondFrame);
+        firstFrame = window.requestAnimationFrame(() => {
+          refreshExplicitAlignmentLayout();
+          secondFrame = window.requestAnimationFrame(
+            refreshExplicitAlignmentLayout,
+          );
+        });
+      };
+      schedule();
+      window.addEventListener("resize", schedule);
+      window.addEventListener(EDITOR_LAYOUT_REFRESH_EVENT, schedule);
+      return () => {
+        window.cancelAnimationFrame(firstFrame);
+        window.cancelAnimationFrame(secondFrame);
+        window.removeEventListener("resize", schedule);
+        window.removeEventListener(EDITOR_LAYOUT_REFRESH_EVENT, schedule);
+      };
+    }, [
+      fieldRenderEpoch,
+      formulaAlignment,
+      formulaInsetLeft,
+      formulaInsetRight,
+      formulaRowVerticalInset,
+      latexCodeFormat,
+      lines,
+      showLineNumbers,
+      zoom,
+    ]);
 
     const captureEditorScrollSnapshot = (
       preferredLineId?: string | null,
@@ -7843,6 +8006,51 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         }
       }
 
+      const alignmentCaretDepth =
+        field.getElementInfo(field.position)?.depth ??
+        field.getElementInfo(Math.max(0, field.position - 1))?.depth ??
+        0;
+      const insertsExplicitAlignmentPoint =
+        usesExplicitAlignmentPoints(latexCodeFormat) &&
+        alignmentCaretDepth === 0 &&
+        event.key === "&" &&
+        !event.isComposing &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        field.mode !== "latex" &&
+        !rawCommandActive &&
+        activeMathLiveEnvironmentName(field) === null;
+      if (insertsExplicitAlignmentPoint) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const inserted = applyDiscreteFormulaMutation(
+          lineId,
+          field,
+          "keyboard",
+          () =>
+            field.insert(VISUALTEX_ALIGNMENT_MARKER_LATEX, {
+              mode: "math",
+              format: "latex",
+              insertionMode: "replaceSelection",
+              selectionMode: "after",
+              focus: true,
+              scrollIntoView: false,
+            }),
+        );
+        if (inserted) {
+          suppressedSuggestionRef.current = null;
+          queryRef.current = "";
+          setQuery("");
+          selectSuggestionIndex(0);
+          focusLine(lineId, {
+            latex: normalizeChineseLatex(field.value),
+            selection: captureSelection(field),
+          });
+        }
+        return;
+      }
+
       const insertsVisibleMathSpace =
         !event.isComposing &&
         !event.altKey &&
@@ -7860,6 +8068,31 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         // Only when nothing consumes the key do we insert an explicit LaTeX
         // control space on the microtask immediately after key dispatch.
         scheduleUnconsumedMathSpace(lineId, field);
+        return;
+      }
+
+      if (
+        event.key === "Enter" &&
+        activeMathLiveEnvironmentName(field) === "cases"
+      ) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const insertedRow = applyDiscreteFormulaMutation(
+          lineId,
+          field,
+          "keyboard",
+          () => field.executeCommand("addRowAfter"),
+        );
+        if (insertedRow) {
+          suppressedSuggestionRef.current = null;
+          queryRef.current = "";
+          setQuery("");
+          selectSuggestionIndex(0);
+          focusLine(lineId, {
+            latex: normalizeChineseLatex(field.value),
+            selection: captureSelection(field),
+          });
+        }
         return;
       }
 

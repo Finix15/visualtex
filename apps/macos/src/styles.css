@@ -7368,6 +7368,10 @@ textarea:disabled {
   justify-content: flex-end;
 }
 
+.multi-line-editor .mathfield-host.has-explicit-align-marker {
+  justify-content: flex-start !important;
+}
+
 .formula-line .visual-mathfield.is-simple-formula {
   padding-block: var(--formula-row-vertical-inset, 5px) !important;
 }

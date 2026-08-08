@@ -800,6 +800,7 @@ export function EditorWorkspace({
         activeLineId={visualActiveLineId}
         reuseLineSlots={reuseEditorLineSlots}
         formulaAlignment={formulaAlignment}
+        latexCodeFormat={latexCodeFormat}
         zoom={zoom}
         readOnly={false}
         previewOnly={sourceFocused}

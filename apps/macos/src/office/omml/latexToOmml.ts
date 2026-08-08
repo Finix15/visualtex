@@ -10,6 +10,10 @@ import { SerializedMmlVisitor } from "mathjax-full/js/core/MmlTree/SerializedMml
 import type { MmlNode } from "mathjax-full/js/core/MmlTree/MmlNode.js";
 import { normalizeMathLiveCanonicalUprightCommands } from "../../editor/normalizeChineseLatex.ts";
 import {
+  stripVisualTexAlignmentMarkers,
+  VISUALTEX_ALIGNMENT_MARKER_LATEX,
+} from "../../editor/alignmentMarkers";
+import {
   MATHJAX_INTEGRAL_OPERATOR_CHARACTERS,
   normalizeMathJaxUnsupportedNaryCommands,
 } from "../../export/mathJaxCompatibility.ts";
@@ -1071,13 +1075,29 @@ export function latexLinesToOmml(
   fontPreferences: OmmlFontPreferences = {},
 ) {
   const normalized = normalizeLines(lines);
-  const alignRelations = relationAlignedCodeFormat(codeFormat);
+  const explicitAlignment = relationAlignedCodeFormat(codeFormat);
   const converted = normalized.map((line) => {
-    const mathElement = parseMathMl(line, displayMode);
-    if (alignRelations) markTopLevelRelationAlignment(mathElement);
-    return convertSequence(elementChildren(mathElement));
+    if (!explicitAlignment) {
+      const mathElement = parseMathMl(
+        stripVisualTexAlignmentMarkers(line),
+        displayMode,
+      );
+      return convertSequence(elementChildren(mathElement));
+    }
+
+    return line
+      .split(VISUALTEX_ALIGNMENT_MARKER_LATEX)
+      .map((segment, index) => {
+        const convertedSegment = segment.trim()
+          ? convertSequence(elementChildren(parseMathMl(segment, displayMode)))
+          : "";
+        return index === 0
+          ? convertedSegment
+          : ommlRun("", { equationArrayAlignment: true }) + convertedSegment;
+      })
+      .join("");
   });
-  const useEquationArray = converted.length > 1 || alignRelations;
+  const useEquationArray = converted.length > 1 || explicitAlignment;
   const body =
     !useEquationArray
       ? converted[0]

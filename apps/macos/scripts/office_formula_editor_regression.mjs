@@ -17,6 +17,7 @@ import {
 } from "../src/office/shared/formulaRenderArtifacts.ts";
 import { latexToSvg } from "../src/export/latexToSvg.ts";
 import { errorMessage } from "../src/runtime/errorMessage.ts";
+import { VISUALTEX_ALIGNMENT_MARKER_LATEX } from "../src/editor/alignmentMarkers.ts";
 import {
   registerCustomSymbol,
   replaceCustomSymbolLibrary,
@@ -264,7 +265,10 @@ a &= b + c \\
 d &= e
 \end{align}`,
     codeFormat: "align",
-    lines: ["a = b + c", "d = e"],
+    lines: [
+      `a ${VISUALTEX_ALIGNMENT_MARKER_LATEX}= b + c`,
+      `d ${VISUALTEX_ALIGNMENT_MARKER_LATEX}= e`,
+    ],
   },
   {
     name: "align-star",
@@ -273,7 +277,10 @@ x &= y \\
 y &= z
 \end{align*}`,
     codeFormat: "align-star",
-    lines: ["x = y", "y = z"],
+    lines: [
+      `x ${VISUALTEX_ALIGNMENT_MARKER_LATEX}= y`,
+      `y ${VISUALTEX_ALIGNMENT_MARKER_LATEX}= z`,
+    ],
   },
   {
     name: "aligned",
@@ -282,7 +289,10 @@ p &= q \\
 r &= s
 \end{aligned}`,
     codeFormat: "aligned",
-    lines: ["p = q", "r = s"],
+    lines: [
+      `p ${VISUALTEX_ALIGNMENT_MARKER_LATEX}= q`,
+      `r ${VISUALTEX_ALIGNMENT_MARKER_LATEX}= s`,
+    ],
   },
   {
     name: "gather",
@@ -329,7 +339,10 @@ c &= d
 \end{split}
 \end{equation}`,
     codeFormat: "equation-split",
-    lines: ["a = b", "c = d"],
+    lines: [
+      `a ${VISUALTEX_ALIGNMENT_MARKER_LATEX}= b`,
+      `c ${VISUALTEX_ALIGNMENT_MARKER_LATEX}= d`,
+    ],
   },
   {
     name: "equation-star-split",
@@ -340,7 +353,10 @@ c &= d
 \end{split}
 \end{equation*}`,
     codeFormat: "equation-star-split",
-    lines: ["a = b", "c = d"],
+    lines: [
+      `a ${VISUALTEX_ALIGNMENT_MARKER_LATEX}= b`,
+      `c ${VISUALTEX_ALIGNMENT_MARKER_LATEX}= d`,
+    ],
   },
 ];
 
@@ -562,7 +578,10 @@ e&=f &\quad g&=h
 assert.equal(alignat.codeFormat, "align");
 assert.deepEqual(
   alignat.lines.map((line) => line.latex),
-  ["a=b \\quad c=d", "e=f \\quad g=h"],
+  [
+    `a${VISUALTEX_ALIGNMENT_MARKER_LATEX}=b ${VISUALTEX_ALIGNMENT_MARKER_LATEX}\\quad c${VISUALTEX_ALIGNMENT_MARKER_LATEX}=d`,
+    `e${VISUALTEX_ALIGNMENT_MARKER_LATEX}=f ${VISUALTEX_ALIGNMENT_MARKER_LATEX}\\quad g${VISUALTEX_ALIGNMENT_MARKER_LATEX}=h`,
+  ],
 );
 
 const alreadyNormalized = normalizeFormulaEditorDocument(
