@@ -82,6 +82,27 @@ if (-not $source.Contains($oldSelection)) {
 }
 $source = $source.Replace($oldSelection, $newSelection)
 
+$oldSameVersionLeave = ConvertTo-Lf @'
+  ${If} $R0 = 0 ; Same version, proceed
+    ${If} $R1 = 1              ; User chose to add/reinstall
+      Goto reinst_done
+    ${Else}                    ; User chose to uninstall
+      Goto reinst_uninstall
+    ${EndIf}
+'@
+$newSameVersionLeave = ConvertTo-Lf @'
+  ${If} $R0 = 0 ; Same version: always remove the installed payload before reinstalling.
+    ; Tauri's in-place same-version path can leave the previous EXE/resources
+    ; untouched while still running post-install hooks from the stale install.
+    ; Force a real uninstall so the File commands below install this package's
+    ; exact payload rather than silently reusing the old 1.2.4 files.
+    Goto reinst_uninstall
+'@
+if (-not $source.Contains($oldSameVersionLeave)) {
+    throw "Generated PageLeaveReinstall same-version block did not match the expected Tauri template. Refusing to build an installer that can retain stale payload files."
+}
+$source = $source.Replace($oldSameVersionLeave, $newSameVersionLeave)
+
 $outputDirectory = Split-Path -Parent $OutputInstaller
 New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
 $outputForNsis = [IO.Path]::GetFullPath($OutputInstaller).Replace('\', '\\')
@@ -117,8 +138,9 @@ if (-not (Test-Path -LiteralPath $OutputInstaller -PathType Leaf)) {
 $patched = Get-Content -LiteralPath $InstallerNsi -Raw
 if ($patched -notmatch 'Same-version maintenance defaults to the second option' -or
     $patched -notmatch 'StrCpy \$ReinstallPageCheck 2' -or
+    $patched -notmatch 'Same version: always remove the installed payload before reinstalling' -or
     $patched -notmatch '/VISUALTEXACCEPTANCE') {
-    throw "Generated NSIS source does not contain the verified same-version uninstall default."
+    throw "Generated NSIS source does not contain the verified same-version forced reinstall flow."
 }
 
 $item = Get-Item -LiteralPath $OutputInstaller

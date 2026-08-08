@@ -224,6 +224,7 @@ $report = [ordered]@{
     ocrWarmupScheduled = $false
     officeEditorCreatedBeforeRequest = $false
     officeRuntimeVerified = $false
+    officePayloadHashesVerified = $false
     lifecycleLogTail = ""
 }
 
@@ -259,6 +260,40 @@ try {
         throw "The exact installed VisualTeX executable is missing below $installRoot"
     }
     $script:installedExe = (Resolve-Path -LiteralPath $installedExe).Path
+
+    # Acceptance mode intentionally skips machine-wide Office registration, but it
+    # still extracts the exact Office payload embedded in this NSIS. Verify that
+    # payload against the resources used for this build so a stale same-version
+    # installer can never pass merely because the desktop EXE starts correctly.
+    $sourceOfficeRoot = Join-Path $root "src-tauri\resources\windows-office"
+    $installedOfficeRoot = Join-Path $installRoot "windows-office"
+    foreach ($architecture in @("x64", "x86")) {
+        $manifestName = "VisualTeX-WindowsOffice-VSTO-$architecture.sha256.json"
+        $msiName = "VisualTeX-WindowsOffice-VSTO-$architecture.msi"
+        $sourceManifestPath = Join-Path $sourceOfficeRoot $manifestName
+        $installedManifestPath = Join-Path $installedOfficeRoot $manifestName
+        $sourceMsiPath = Join-Path $sourceOfficeRoot $msiName
+        $installedMsiPath = Join-Path $installedOfficeRoot $msiName
+        foreach ($requiredPath in @($sourceManifestPath, $installedManifestPath, $sourceMsiPath, $installedMsiPath)) {
+            if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
+                throw "Installed-release Office payload verification is missing: $requiredPath"
+            }
+        }
+        $sourceManifest = Get-Content -LiteralPath $sourceManifestPath -Raw | ConvertFrom-Json
+        $installedManifest = Get-Content -LiteralPath $installedManifestPath -Raw | ConvertFrom-Json
+        if ($installedManifest.package.sha256 -ne $sourceManifest.package.sha256 -or
+            $installedManifest.word.sha256 -ne $sourceManifest.word.sha256 -or
+            $installedManifest.powerPoint.sha256 -ne $sourceManifest.powerPoint.sha256 -or
+            $installedManifest.formulaOleServer.sha256 -ne $sourceManifest.formulaOleServer.sha256) {
+            throw "Installed-release $architecture Office manifest does not match the current build resources."
+        }
+        $sourceMsiHash = (Get-FileHash -LiteralPath $sourceMsiPath -Algorithm SHA256).Hash
+        $installedMsiHash = (Get-FileHash -LiteralPath $installedMsiPath -Algorithm SHA256).Hash
+        if ($sourceMsiHash -ne $installedMsiHash -or $installedMsiHash -ne $sourceManifest.package.sha256) {
+            throw "Installed-release $architecture Office MSI payload is stale: installed=$installedMsiHash source=$sourceMsiHash manifest=$($sourceManifest.package.sha256)"
+        }
+    }
+    $report.officePayloadHashesVerified = $true
 
     $bootstrap = Start-ExactVisualTeX @("--office-bootstrap")
     if (-not $bootstrap.WaitForExit(30000)) {

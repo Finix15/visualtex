@@ -308,6 +308,7 @@ $customNsisSource = Get-Content -LiteralPath $customNsisTemplate -Raw
 foreach ($requiredMarker in @(
     "Same-version maintenance defaults to the second option",
     'StrCpy $ReinstallPageCheck 2',
+    'Same version: always remove the installed payload before reinstalling',
     '/VISUALTEXACCEPTANCE'
 )) {
     if (-not $customNsisSource.Contains($requiredMarker)) {
@@ -391,7 +392,8 @@ foreach ($requiredGeneratedMarker in @(
     'src-tauri\windows\hooks.nsh"',
     'File /a "/oname=windows-office\VisualTeX-WindowsOffice-VSTO-x64.msi"',
     'File /a "/oname=windows-office\VisualTeX-WindowsOffice-VSTO-x86.msi"',
-    'File /a "/oname=windows-office\vstor_redist.exe"'
+    'File /a "/oname=windows-office\vstor_redist.exe"',
+    'Same version: always remove the installed payload before reinstalling'
 )) {
     if (-not $generatedNsisSource.Contains($requiredGeneratedMarker)) {
         throw "Generated NSIS installer is missing verified main/Office resource marker: $requiredGeneratedMarker"

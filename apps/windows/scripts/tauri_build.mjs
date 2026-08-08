@@ -114,6 +114,28 @@ function preparePatchedNsisTemplate() {
   }
   template = template.replace(oldSelection, newSelection);
 
+  const oldSameVersionLeave = [
+    "  ${If} $R0 = 0 ; Same version, proceed",
+    "    ${If} $R1 = 1              ; User chose to add/reinstall",
+    "      Goto reinst_done",
+    "    ${Else}                    ; User chose to uninstall",
+    "      Goto reinst_uninstall",
+    "    ${EndIf}",
+  ].join("\n");
+  const newSameVersionLeave = [
+    "  ${If} $R0 = 0 ; Same version: always remove the installed payload before reinstalling.",
+    "    ; Tauri's in-place same-version path can leave the previous EXE/resources",
+    "    ; untouched while still running post-install hooks from the stale install.",
+    "    ; Force a real uninstall so this installer writes its exact payload.",
+    "    Goto reinst_uninstall",
+  ].join("\n");
+  if (!template.includes(oldSameVersionLeave)) {
+    throw new Error(
+      "The Tauri NSIS same-version PageLeaveReinstall block changed unexpectedly; refusing an installer that can retain stale payload files",
+    );
+  }
+  template = template.replace(oldSameVersionLeave, newSameVersionLeave);
+
   const output = resolve(
     "src-tauri",
     "target",
