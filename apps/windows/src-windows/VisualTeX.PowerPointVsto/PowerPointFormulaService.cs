@@ -11,42 +11,6 @@ using VisualTeX.WindowsOffice.VstoShared;
 
 namespace VisualTeX.PowerPointVsto;
 
-[ComImport]
-[Guid("00000112-0000-0000-C000-000000000046")]
-[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IOleObjectNative
-{
-    [PreserveSig] int SetClientSite(IntPtr clientSite);
-    [PreserveSig] int GetClientSite(out IntPtr clientSite);
-    [PreserveSig] int SetHostNames(IntPtr containerApp, IntPtr containerObject);
-    [PreserveSig] int Close(uint saveOption);
-    [PreserveSig] int SetMoniker(uint whichMoniker, IntPtr moniker);
-    [PreserveSig] int GetMoniker(uint assign, uint whichMoniker, out IntPtr moniker);
-    [PreserveSig] int InitFromData(IntPtr dataObject, int creation, uint reserved);
-    [PreserveSig] int GetClipboardData(uint reserved, out IntPtr dataObject);
-    [PreserveSig] int DoVerb(
-        int verb,
-        IntPtr message,
-        IntPtr activeSite,
-        int index,
-        IntPtr parentWindow,
-        IntPtr positionRect);
-    [PreserveSig] int EnumVerbs(out IntPtr enumerator);
-    [PreserveSig] int Update();
-    [PreserveSig] int IsUpToDate();
-    [PreserveSig] int GetUserClassId(out Guid classId);
-    [PreserveSig] int GetUserType(uint formOfType, out IntPtr userType);
-    [PreserveSig] int SetExtent(uint drawAspect, ref OleSize size);
-    [PreserveSig] int GetExtent(uint drawAspect, out OleSize size);
-}
-
-[StructLayout(LayoutKind.Sequential)]
-internal struct OleSize
-{
-    internal int Cx;
-    internal int Cy;
-}
-
 public sealed class PowerPointFormulaService
 {
     private const string FormulaIdTag = "VisualTeXFormulaId";
@@ -54,10 +18,14 @@ public sealed class PowerPointFormulaService
     private const string IdentityOwnerTag = "VisualTeXIdentityOwner";
     private const string SlideReferencePrefix = "visualtex-ppt-vsto-slide:";
     private readonly Application _application;
+    private readonly Action<Action>? _postToOfficeUi;
 
-    public PowerPointFormulaService(Application application)
+    public PowerPointFormulaService(
+        Application application,
+        Action<Action>? postToOfficeUi = null)
     {
         _application = application;
+        _postToOfficeUi = postToOfficeUi;
     }
 
     public OfficeSelection ReadSelection() => ReadSelection(null);
@@ -110,7 +78,7 @@ public sealed class PowerPointFormulaService
                         }
                         else
                         {
-                            metadata.FontSizePt = FormulaFontSize.InferOleFontSize(
+                            metadata.FontSizePt = InferPowerPointFormulaFontSize(
                                 shape.Width,
                                 shape.Height,
                                 metadata);
@@ -567,9 +535,20 @@ public sealed class PowerPointFormulaService
             var top = Math.Max(0f, (presentation.PageSetup.SlideHeight - height) / 2f);
             shape = AddOleObject(slide, left, top, width, height);
             InitializeOle(shape, metadata, emfPath, pngPath);
+            Configure(shape, metadata);
+            // PowerPoint can rebuild the OLE presentation while metadata and
+            // container state are being finalized. Host geometry must therefore
+            // be the very last mutation in the write path.
             ApplyOleSizeAndRefresh(shape, width, height);
             RestoreOlePosition(shape, left, top);
-            Configure(shape, metadata);
+            ScheduleOleGeometryRestore(
+                DocumentIdentity(presentation),
+                metadata.FormulaId,
+                shape.Name,
+                width,
+                height,
+                left,
+                top);
             return Result(session, presentation, shape.Name);
         }
         catch
@@ -759,29 +738,32 @@ public sealed class PowerPointFormulaService
             var oldWidth = oldShape.Width;
             var oldHeight = oldShape.Height;
             var originalMetadata = ReadMetadata(oldShape) ?? session.OriginalMetadata;
-            var convertingPictureToOle = !IsNativeOle(oldShape);
-            var editedSize = convertingPictureToOle
-                && FormulaContentEquivalent(originalMetadata, metadata)
-                    ? (Width: oldWidth, Height: oldHeight)
-                    : OfficeFormulaSizing.EditedSize(
-                        oldWidth,
-                        oldHeight,
-                        originalMetadata?.RenderWidthPx,
-                        originalMetadata?.RenderHeightPx,
-                        session.ExportResult?.Width ?? oldWidth / 0.75f,
-                        session.ExportResult?.Height ?? oldHeight / 0.75f,
-                        600f,
-                        400f,
-                        originalMetadata?.FontSizePt,
-                        originalMetadata?.RenderFontSizePt);
+            var editedSize = ResolvePowerPointEditedSize(
+                oldWidth,
+                oldHeight,
+                originalMetadata,
+                session.ExportResult?.Width ?? oldWidth / 0.75f,
+                session.ExportResult?.Height ?? oldHeight / 0.75f,
+                FormulaContentEquivalent(originalMetadata, metadata));
             var newLeft = left + (oldWidth - editedSize.Width) / 2f;
             var newTop = top + (oldHeight - editedSize.Height) / 2f;
 
             if (TryUpdateOle(oldShape, metadata, emfPath, pngPath))
             {
+                Configure(oldShape, metadata);
+                // Updating the embedded presentation may cause PowerPoint to
+                // reinterpret the cached preview. Restore the host box only after
+                // every metadata/container operation has completed.
                 ApplyOleSizeAndRefresh(oldShape, editedSize.Width, editedSize.Height);
                 RestoreOlePosition(oldShape, newLeft, newTop);
-                Configure(oldShape, metadata);
+                ScheduleOleGeometryRestore(
+                    DocumentIdentity(presentation),
+                    metadata.FormulaId,
+                    oldShape.Name,
+                    editedSize.Width,
+                    editedSize.Height,
+                    newLeft,
+                    newTop);
                 return Result(session, presentation, oldShape.Name);
             }
 
@@ -794,12 +776,24 @@ public sealed class PowerPointFormulaService
                 editedSize.Width,
                 editedSize.Height);
             InitializeOle(replacement, metadata, emfPath, pngPath);
-            ApplyOleSizeAndRefresh(replacement, editedSize.Width, editedSize.Height);
-            RestoreOlePosition(replacement, newLeft, newTop);
             TryApplyRotation(replacement, rotation);
             Configure(replacement, metadata);
             MoveToZOrder(replacement, zOrder + 1);
             oldShape.Delete();
+            // Deleting the source SVG and finalizing the replacement can make
+            // PowerPoint rebuild its OLE presentation one more time. Geometry is
+            // intentionally restored after all of those operations so SVG↔OLE
+            // conversion is bit-for-bit stable in position and physical size.
+            ApplyOleSizeAndRefresh(replacement, editedSize.Width, editedSize.Height);
+            RestoreOlePosition(replacement, newLeft, newTop);
+            ScheduleOleGeometryRestore(
+                DocumentIdentity(presentation),
+                metadata.FormulaId,
+                replacement.Name,
+                editedSize.Width,
+                editedSize.Height,
+                newLeft,
+                newTop);
             return Result(session, presentation, replacement.Name);
         }
         catch
@@ -847,22 +841,13 @@ public sealed class PowerPointFormulaService
             var rotation = oldShape.Rotation;
             var zOrder = oldShape.ZOrderPosition;
             var originalMetadata = ReadMetadata(oldShape) ?? session.OriginalMetadata;
-            var convertingEditableObjectToPicture = IsNativeOle(oldShape)
-                || PowerPointOmmlBridge.IsNativeEquation(oldShape);
-            var editedSize = convertingEditableObjectToPicture
-                && FormulaContentEquivalent(originalMetadata, metadata)
-                    ? (Width: oldWidth, Height: oldHeight)
-                    : OfficeFormulaSizing.EditedSize(
-                        oldWidth,
-                        oldHeight,
-                        originalMetadata?.RenderWidthPx,
-                        originalMetadata?.RenderHeightPx,
-                        session.ExportResult?.Width ?? oldWidth / 0.75f,
-                        session.ExportResult?.Height ?? oldHeight / 0.75f,
-                        600f,
-                        400f,
-                        originalMetadata?.FontSizePt,
-                        originalMetadata?.RenderFontSizePt);
+            var editedSize = ResolvePowerPointEditedSize(
+                oldWidth,
+                oldHeight,
+                originalMetadata,
+                session.ExportResult?.Width ?? oldWidth / 0.75f,
+                session.ExportResult?.Height ?? oldHeight / 0.75f,
+                FormulaContentEquivalent(originalMetadata, metadata));
             var newLeft = left + (oldWidth - editedSize.Width) / 2f;
             var newTop = top + (oldHeight - editedSize.Height) / 2f;
 
@@ -1264,6 +1249,100 @@ public sealed class PowerPointFormulaService
         finally { Release(format); }
     }
 
+    private static float InferPowerPointFormulaFontSize(
+        float currentWidth,
+        float currentHeight,
+        FormulaMetadata? metadata)
+    {
+        if (!IsPowerPointGeometryTrusted(currentWidth, currentHeight, metadata))
+            return FormulaFontSize.ResolveSemanticFontSize(metadata);
+        return FormulaFontSize.InferOleFontSize(currentWidth, currentHeight, metadata);
+    }
+
+    private static bool IsPowerPointGeometryTrusted(
+        float currentWidth,
+        float currentHeight,
+        FormulaMetadata? metadata)
+    {
+        if (metadata?.RenderWidthPx is not > 0 || metadata.RenderHeightPx is not > 0)
+            return true;
+        if (currentWidth <= 0 || currentHeight <= 0
+            || float.IsNaN(currentWidth) || float.IsInfinity(currentWidth)
+            || float.IsNaN(currentHeight) || float.IsInfinity(currentHeight))
+            return false;
+
+        var naturalWidth = Math.Max(0.01f, (float)metadata.RenderWidthPx.Value * 0.75f);
+        var naturalHeight = Math.Max(0.01f, (float)metadata.RenderHeightPx.Value * 0.75f);
+        var horizontalScale = currentWidth / naturalWidth;
+        var verticalScale = currentHeight / naturalHeight;
+        if (horizontalScale <= 0 || verticalScale <= 0
+            || float.IsNaN(horizontalScale) || float.IsInfinity(horizontalScale)
+            || float.IsNaN(verticalScale) || float.IsInfinity(verticalScale))
+            return false;
+
+        // PowerPoint formula objects are aspect-locked. A host box whose X/Y
+        // scale differs materially from the metadata's natural geometry is not
+        // a legitimate user resize; it is an OLE-container geometry glitch and
+        // must never be propagated into the next SVG/OLE conversion or font size.
+        var scaleRatio = horizontalScale / verticalScale;
+        return scaleRatio >= 0.90f && scaleRatio <= 1.10f;
+    }
+
+    private static (float Width, float Height) ResolvePowerPointEditedSize(
+        float currentWidth,
+        float currentHeight,
+        FormulaMetadata? originalMetadata,
+        float newRenderWidth,
+        float newRenderHeight,
+        bool preserveCurrentGeometry)
+    {
+        const float maximumWidth = 600f;
+        const float maximumHeight = 400f;
+        if (preserveCurrentGeometry
+            && currentWidth > 0
+            && currentHeight > 0
+            && !float.IsNaN(currentWidth)
+            && !float.IsInfinity(currentWidth)
+            && !float.IsNaN(currentHeight)
+            && !float.IsInfinity(currentHeight))
+        {
+            if (IsPowerPointGeometryTrusted(currentWidth, currentHeight, originalMetadata))
+                return (currentWidth, currentHeight);
+
+            var semanticScale = originalMetadata is null
+                ? 1f
+                : FormulaFontSize.ResolveSemanticFontSize(originalMetadata)
+                    / Math.Max(0.5f, FormulaFontSize.ResolveRenderFontSize(originalMetadata));
+            if (float.IsNaN(semanticScale) || float.IsInfinity(semanticScale) || semanticScale <= 0)
+                semanticScale = 1f;
+            var width = Math.Max(1f, newRenderWidth * 0.75f * semanticScale);
+            var height = Math.Max(1f, newRenderHeight * 0.75f * semanticScale);
+            var fit = Math.Min(
+                1f,
+                Math.Min(
+                    maximumWidth > 0 ? maximumWidth / width : 1f,
+                    maximumHeight > 0 ? maximumHeight / height : 1f));
+            if (!float.IsNaN(fit) && !float.IsInfinity(fit) && fit > 0 && fit < 1f)
+            {
+                width *= fit;
+                height *= fit;
+            }
+            return (Math.Max(1f, width), Math.Max(1f, height));
+        }
+
+        return OfficeFormulaSizing.EditedSize(
+            currentWidth,
+            currentHeight,
+            originalMetadata?.RenderWidthPx,
+            originalMetadata?.RenderHeightPx,
+            newRenderWidth,
+            newRenderHeight,
+            maximumWidth,
+            maximumHeight,
+            originalMetadata?.FontSizePt,
+            originalMetadata?.RenderFontSizePt);
+    }
+
     private static (float Width, float Height) ScaleCurrentShapeSize(
         float currentWidth,
         float currentHeight,
@@ -1300,52 +1379,15 @@ public sealed class PowerPointFormulaService
 
     private static void ApplyOleSizeAndRefresh(Shape shape, float width, float height)
     {
-        // PowerPoint 2021 may resize the outer Shape first, then restore the OLE
-        // server's previous HIMETRIC extent when the data-change notification
-        // arrives. Keep both sides synchronized, then reapply the host box after
-        // the server notification so width and height remain uniformly scaled.
+        // Keep PowerPoint's outer Shape as the single geometry authority.
+        // Calling IOleObject.SetExtent from inside POWERPNT.EXE causes the
+        // VisualTeX LocalServer to send OnViewChange/OnDataChange back into the
+        // same PowerPoint OLE container. PowerPoint can then reinterpret the
+        // cached EMF extent as a new host extent and feed that enlarged value
+        // back through the next SVG/OLE conversion, producing cumulative growth.
+        // The server already derives a correct 96-DPI natural extent from the
+        // EMF during Initialize/Update, so only size the host box here.
         ApplyPictureSize(shape, width, height);
-        SetOleServerExtent(shape, width, height);
-        ApplyPictureSize(shape, width, height);
-        // Do not invoke an OLE verb here. PowerPoint's DoVerb API accepts only
-        // host verb indexes (0..n), not OLEIVERB_SHOW (-1), and the primary
-        // verb would activate the editor. The LocalServer data-change
-        // notification plus CF_ENHMETAFILE/CF_METAFILEPICT presentations own
-        // the preview refresh instead.
-    }
-
-    private static void SetOleServerExtent(Shape shape, float width, float height)
-    {
-        const uint dvaspectContent = 1;
-        const double himetricPerPoint = 2540.0 / 72.0;
-        OLEFormat? format = null;
-        object? oleObject = null;
-        try
-        {
-            format = shape.OLEFormat;
-            if (!string.Equals(
-                    format.ProgID,
-                    FormulaOleContract.ProgId,
-                    StringComparison.OrdinalIgnoreCase))
-                return;
-            oleObject = format.Object;
-            if (oleObject is not IOleObjectNative nativeOle)
-                throw new InvalidCastException(
-                    "The VisualTeX OLE object does not expose IOleObject.");
-            var size = new OleSize
-            {
-                Cx = Math.Max(1, (int)Math.Round(Math.Max(1f, width) * himetricPerPoint)),
-                Cy = Math.Max(1, (int)Math.Round(Math.Max(1f, height) * himetricPerPoint)),
-            };
-            var result = nativeOle.SetExtent(dvaspectContent, ref size);
-            if (result < 0)
-                Marshal.ThrowExceptionForHR(result);
-        }
-        finally
-        {
-            Release(oleObject);
-            Release(format);
-        }
     }
 
     private static void RestoreOlePosition(Shape shape, float left, float top)
@@ -1355,6 +1397,61 @@ public sealed class PowerPointFormulaService
         // is therefore the final geometry operation, after width and height.
         shape.Left = left;
         shape.Top = top;
+    }
+
+    private void ScheduleOleGeometryRestore(
+        string documentId,
+        string formulaId,
+        string objectId,
+        float width,
+        float height,
+        float left,
+        float top)
+    {
+        var post = _postToOfficeUi;
+        if (post is null) return;
+
+        void Restore()
+        {
+            Presentation? presentation = null;
+            Slide? slide = null;
+            Shape? shape = null;
+            try
+            {
+                presentation = _application.ActivePresentation;
+                if (presentation is null
+                    || !string.Equals(
+                        DocumentIdentity(presentation),
+                        documentId,
+                        StringComparison.OrdinalIgnoreCase))
+                    return;
+                (slide, shape) = FindFormula(presentation, formulaId, objectId);
+                if (shape is null || !IsNativeOle(shape)) return;
+                ApplyOleSizeAndRefresh(shape, width, height);
+                RestoreOlePosition(shape, left, top);
+            }
+            catch
+            {
+                // Geometry repair is best-effort and must never destabilize the
+                // PowerPoint UI after the original conversion has completed.
+            }
+            finally
+            {
+                Release(shape);
+                Release(slide);
+                Release(presentation);
+            }
+        }
+
+        // PowerPoint performs an additional OLE presentation/layout pass only
+        // after the COM/Ribbon write callback unwinds. Restore once on the next
+        // UI message, then once more on the following message to outrun both the
+        // container reflow and any selection-change work it schedules.
+        post(() =>
+        {
+            Restore();
+            post(Restore);
+        });
     }
 
     private static void Configure(Shape shape, FormulaMetadata metadata)

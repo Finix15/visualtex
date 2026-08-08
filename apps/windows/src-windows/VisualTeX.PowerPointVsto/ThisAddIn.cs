@@ -165,8 +165,8 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         {
             try { _comAddIn.Object = this; } catch { }
         }
-        _formulaService = new PowerPointFormulaService(_application);
         _dispatcher = new OfficeUiDispatcher();
+        _formulaService = new PowerPointFormulaService(_application, _dispatcher.Post);
         _sessionClient = new VisualTeXSessionClient();
         _lifetime = new CancellationTokenSource();
         _ = PrewarmCompanionAsync(_sessionClient, _lifetime.Token);
@@ -549,7 +549,8 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 emfPath = OfficeOlePreview.CreateVectorEmfFromSvg(
                     svgPath,
                     export.Width,
-                    export.Height);
+                    export.Height,
+                    usePowerPointStablePhysicalFrame: true);
             }
             else if (session.ObjectMode == "crossPlatformPicture")
             {

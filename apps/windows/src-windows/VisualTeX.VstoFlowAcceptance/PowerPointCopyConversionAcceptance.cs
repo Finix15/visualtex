@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using Extensibility;
 using Microsoft.Office.Core;
 using PowerPoint = Microsoft.Office.Interop.PowerPoint;
+using WinForms = System.Windows.Forms;
 using VisualTeX.PowerPointVsto;
 using VisualTeX.WindowsOffice.Contracts;
 
@@ -11,7 +12,7 @@ namespace VisualTeX.VstoFlowAcceptance;
 
 internal static partial class Program
 {
-    private const string PowerPointAcceptanceLatex = @"\frac{a}{b}+\sqrt{x}";
+    private const string PowerPointAcceptanceLatex = @"x=\frac{-b\pm\sqrt{b^2-4ac}}{2a}";
     private const string PowerPointAcceptanceMathMl =
         "<math xmlns=\"http://www.w3.org/1998/Math/MathML\">" +
         "<mfrac><mi>a</mi><mi>b</mi></mfrac><mo>+</mo><msqrt><mi>x</mi></msqrt></math>";
@@ -155,6 +156,98 @@ internal static partial class Program
             AssertTrue(IsPowerPointEditablePictureShape(shape), "OLE -> picture conversion did not create an SVG picture.");
             AssertEqual(formulaId, DecodePowerPointMetadata(shape)?.FormulaId, "OLE -> picture changed FormulaId.");
 
+            // Regression: a DPI-scaled EMF frame used to make PowerPoint and the
+            // OLE server disagree about the formula's physical extent.  Each
+            // picture <-> OLE round trip then inherited the already-expanded box,
+            // causing severe vertical stretching and exponential growth.
+            var stablePictureWidth = shape.Width;
+            var stablePictureHeight = shape.Height;
+            for (var iteration = 1; iteration <= 12; iteration++)
+            {
+                sourceMetadata = DecodePowerPointMetadata(shape)
+                    ?? throw new InvalidDataException($"PowerPoint picture metadata disappeared before round trip {iteration}.");
+                var roundTripToOle = CreatePowerPointAcceptanceSession(
+                    "edit",
+                    "nativeOle",
+                    formulaId,
+                    shape.Name,
+                    sourceMetadata);
+                var roundTripOleResult = service.ReplaceOle(roundTripToOle, pngPath, emfPath);
+                Release(shape);
+                shape = slide1.Shapes[roundTripOleResult.ObjectId];
+                WinForms.Application.DoEvents();
+                Thread.Sleep(180);
+                Release(shape);
+                shape = slide1.Shapes[roundTripOleResult.ObjectId];
+                AssertPowerPointOle(shape, $"Picture -> OLE round trip {iteration} did not create native OLE.");
+                AssertNear(stablePictureWidth, shape.Width, 1.5f, $"Picture -> OLE round trip {iteration} drifted in width.");
+                AssertNear(stablePictureHeight, shape.Height, 1.5f, $"Picture -> OLE round trip {iteration} drifted in height.");
+
+                sourceMetadata = DecodePowerPointMetadata(shape)
+                    ?? throw new InvalidDataException($"PowerPoint OLE metadata disappeared before round trip {iteration}.");
+                var roundTripToPicture = CreatePowerPointAcceptanceSession(
+                    "edit",
+                    "crossPlatformPicture",
+                    formulaId,
+                    shape.Name,
+                    sourceMetadata);
+                var roundTripPictureResult = service.Replace(roundTripToPicture, svgPath);
+                Release(shape);
+                shape = slide1.Shapes[roundTripPictureResult.ObjectId];
+                WinForms.Application.DoEvents();
+                Thread.Sleep(180);
+                Release(shape);
+                shape = slide1.Shapes[roundTripPictureResult.ObjectId];
+                AssertTrue(IsPowerPointEditablePictureShape(shape), $"OLE -> picture round trip {iteration} did not create SVG.");
+                AssertNear(stablePictureWidth, shape.Width, 1.5f, $"OLE -> picture round trip {iteration} drifted in width.");
+                AssertNear(stablePictureHeight, shape.Height, 1.5f, $"OLE -> picture round trip {iteration} drifted in height.");
+            }
+            Console.WriteLine(
+                $"PowerPoint OLE/SVG geometry stability passed: 12 round trips stayed at "
+                + $"{stablePictureWidth:0.0}x{stablePictureHeight:0.0} pt without cumulative growth.");
+
+            // Existing presentations can already contain a catastrophically
+            // enlarged Shape produced by the old DPI feedback loop. One normal
+            // conversion must repair that geometry instead of preserving it.
+            shape.LockAspectRatio = MsoTriState.msoFalse;
+            shape.Width = 9000f;
+            shape.Height = 5000f;
+            shape.LockAspectRatio = MsoTriState.msoTrue;
+            sourceMetadata = DecodePowerPointMetadata(shape)
+                ?? throw new InvalidDataException("Corrupted PowerPoint picture lost metadata before recovery.");
+            var recoveryToOle = CreatePowerPointAcceptanceSession(
+                "edit",
+                "nativeOle",
+                formulaId,
+                shape.Name,
+                sourceMetadata);
+            var recoveredOle = service.ReplaceOle(recoveryToOle, pngPath, emfPath);
+            Release(shape);
+            shape = slide1.Shapes[recoveredOle.ObjectId];
+            WinForms.Application.DoEvents();
+            Thread.Sleep(220);
+            Release(shape);
+            shape = slide1.Shapes[recoveredOle.ObjectId];
+            AssertPowerPointOle(shape, "Corrupted picture recovery did not create native OLE.");
+            AssertNear(stablePictureWidth, shape.Width, 1.5f, "Corrupted picture recovery did not restore natural width.");
+            AssertNear(stablePictureHeight, shape.Height, 1.5f, "Corrupted picture recovery did not restore natural height.");
+
+            sourceMetadata = DecodePowerPointMetadata(shape)
+                ?? throw new InvalidDataException("Recovered PowerPoint OLE lost metadata.");
+            var recoveryToPicture = CreatePowerPointAcceptanceSession(
+                "edit",
+                "crossPlatformPicture",
+                formulaId,
+                shape.Name,
+                sourceMetadata);
+            var recoveredPicture = service.Replace(recoveryToPicture, svgPath);
+            Release(shape);
+            shape = slide1.Shapes[recoveredPicture.ObjectId];
+            AssertTrue(IsPowerPointEditablePictureShape(shape), "Recovered OLE -> picture did not restore SVG.");
+            AssertNear(stablePictureWidth, shape.Width, 1.5f, "Recovered OLE -> picture changed repaired width.");
+            AssertNear(stablePictureHeight, shape.Height, 1.5f, "Recovered OLE -> picture changed repaired height.");
+            Console.WriteLine("PowerPoint pathological geometry recovery passed: a 9000x5000 pt corrupted formula returned to its metadata-derived natural size in one conversion.");
+
             // Picture -> native Office Math / OMML.
             sourceMetadata = DecodePowerPointMetadata(shape)
                 ?? throw new InvalidDataException("PowerPoint picture metadata disappeared before OMML conversion.");
@@ -287,6 +380,60 @@ internal static partial class Program
                 $"PowerPoint direct MathML stress passed: 25/25 picture -> OMML -> readback -> picture cycles; " +
                 $"OMML write p50={ommlP50:F1} ms, max={ommlMax:F1} ms.");
 
+            // Recreate the exact metadata/geometry reported by the user's fresh
+            // quadratic formula: raw code, 20 pt, 264.7467x82.36 CSS px. This
+            // keeps the Ribbon growth probe on the same session/render path as
+            // the real presentation instead of inheriting the synthetic fixture.
+            var userLikeMetadata = new FormulaMetadata
+            {
+                FormulaId = formulaId,
+                Title = "PowerPoint Formula",
+                Latex = PowerPointAcceptanceLatex,
+                Lines = new List<FormulaLine>
+                {
+                    new() { Id = Guid.NewGuid().ToString(), Latex = PowerPointAcceptanceLatex },
+                },
+                CodeFormat = "raw",
+                DisplayMode = "block",
+                Numbered = false,
+                RenderWidthPx = 264.74667358398438,
+                RenderHeightPx = 82.36000061035156,
+                Baseline = 53.8,
+                FontSizePt = 20,
+                RenderFontSizePt = 20,
+                CreatedWithVersion = "1.0.18",
+                UpdatedWithVersion = "1.0.18",
+                CreatedAt = DateTimeOffset.UtcNow.ToString("O"),
+                UpdatedAt = DateTimeOffset.UtcNow.ToString("O"),
+            };
+            var userLikeNatural = OfficeFormulaSizing.NaturalSize(
+                (float)userLikeMetadata.RenderWidthPx.Value,
+                (float)userLikeMetadata.RenderHeightPx.Value);
+            var userLikeLeft = shape.Left;
+            var userLikeTop = shape.Top;
+            var userLikeShape = slide1.Shapes.AddPicture(
+                svgPath,
+                MsoTriState.msoFalse,
+                MsoTriState.msoTrue,
+                userLikeLeft,
+                userLikeTop,
+                userLikeNatural.Width,
+                userLikeNatural.Height);
+            userLikeShape.LockAspectRatio = MsoTriState.msoFalse;
+            userLikeShape.Width = userLikeNatural.Width;
+            userLikeShape.Height = userLikeNatural.Height;
+            userLikeShape.LockAspectRatio = MsoTriState.msoTrue;
+            userLikeShape.Name = $"VisualTeX_{formulaId}";
+            var userLikeEncoded = FormulaMetadataCodec.Encode(userLikeMetadata);
+            userLikeShape.AlternativeText = userLikeEncoded;
+            var userLikeTags = userLikeShape.Tags;
+            userLikeTags.Add("VisualTeXFormulaId", formulaId);
+            userLikeTags.Add("VisualTeXMetadata", userLikeEncoded);
+            Release(userLikeTags);
+            shape.Delete();
+            Release(shape);
+            shape = userLikeShape;
+
             // Exercise the actual Ribbon -> Session -> converter -> PowerPoint path
             // for the new OMML mode and both existing conversion callbacks.
             addIn = new VisualTeX.PowerPointVsto.ThisAddIn();
@@ -354,6 +501,104 @@ internal static partial class Program
             shape = slide1.Shapes[1];
             AssertTrue(IsPowerPointEditablePictureShape(shape), "Ribbon OMML -> picture did not create an SVG picture.");
             AssertEqual(formulaId, DecodePowerPointMetadata(shape)?.FormulaId, "Ribbon conversion chain changed the original FormulaId.");
+
+            var ribbonRoundTripBaselineWidth = shape.Width;
+            var ribbonRoundTripBaselineHeight = shape.Height;
+            Console.WriteLine(
+                $"PowerPoint Ribbon SVG/OLE growth probe baseline: {ribbonRoundTripBaselineWidth:F2}x{ribbonRoundTripBaselineHeight:F2} pt.");
+            for (var roundTrip = 1; roundTrip <= 8; roundTrip++)
+            {
+                var beforeMetadata = DecodePowerPointMetadata(shape)
+                    ?? throw new InvalidDataException($"Ribbon SVG/OLE growth probe lost picture metadata before round trip {roundTrip}.");
+                Console.WriteLine(
+                    $"  [Ribbon round {roundTrip}] SVG before={shape.Width:F2}x{shape.Height:F2} pt; " +
+                    $"meta={beforeMetadata.RenderWidthPx:F2}x{beforeMetadata.RenderHeightPx:F2} px; " +
+                    $"font={beforeMetadata.FontSizePt:F1}/{beforeMetadata.RenderFontSizePt:F1} pt.");
+
+                shape.Select(MsoTriState.msoTrue);
+                existing = SnapshotSessionIds();
+                converted = WaitForDirectConversion(
+                    client,
+                    existing,
+                    "powerpoint",
+                    "nativeOle",
+                    () => addIn.OnConvertSelected(new object()),
+                    TimeSpan.FromSeconds(45),
+                    out _);
+                AssertEqual("completed", converted.Status,
+                    converted.Error ?? $"Ribbon SVG-to-OLE growth probe failed at round trip {roundTrip}.");
+                Release(shape);
+                shape = slide1.Shapes[1];
+                AssertPowerPointOle(shape, $"Ribbon SVG-to-OLE growth probe did not create OLE at round trip {roundTrip}.");
+                var oleMetadata = DecodePowerPointMetadata(shape)
+                    ?? throw new InvalidDataException($"Ribbon SVG/OLE growth probe lost OLE metadata at round trip {roundTrip}.");
+                Console.WriteLine(
+                    $"  [Ribbon round {roundTrip}] OLE after={shape.Width:F2}x{shape.Height:F2} pt; " +
+                    $"export={converted.ExportResult?.Width:F2}x{converted.ExportResult?.Height:F2} px; " +
+                    $"meta={oleMetadata.RenderWidthPx:F2}x{oleMetadata.RenderHeightPx:F2} px; " +
+                    $"font={oleMetadata.FontSizePt:F1}/{oleMetadata.RenderFontSizePt:F1} pt.");
+
+                if (roundTrip == 1)
+                {
+                    for (var sample = 1; sample <= 20; sample++)
+                    {
+                        WinForms.Application.DoEvents();
+                        Thread.Sleep(250);
+                        PowerPoint.OLEFormat? delayedFormat = null;
+                        object? delayedObject = null;
+                        try
+                        {
+                            delayedFormat = shape.OLEFormat;
+                            delayedObject = delayedFormat.Object;
+                            var serverWidth = double.NaN;
+                            var serverHeight = double.NaN;
+                            if (delayedObject is GeometryOleObjectNative nativeOle
+                                && nativeOle.GetExtent(1, out var extent) >= 0)
+                            {
+                                serverWidth = extent.Cx * 72.0 / 2540.0;
+                                serverHeight = extent.Cy * 72.0 / 2540.0;
+                            }
+                            Console.WriteLine(
+                                $"    settle {sample * 250,4} ms: shape={shape.Width:F2}x{shape.Height:F2} pt; " +
+                                $"server={serverWidth:F2}x{serverHeight:F2} pt.");
+                        }
+                        finally
+                        {
+                            Release(delayedObject);
+                            Release(delayedFormat);
+                        }
+                    }
+                }
+
+                shape.Select(MsoTriState.msoTrue);
+                existing = SnapshotSessionIds();
+                converted = WaitForDirectConversion(
+                    client,
+                    existing,
+                    "powerpoint",
+                    "crossPlatformPicture",
+                    () => addIn.OnExportSelectedAsPicture(new object()),
+                    TimeSpan.FromSeconds(45),
+                    out _);
+                AssertEqual("completed", converted.Status,
+                    converted.Error ?? $"Ribbon OLE-to-SVG growth probe failed at round trip {roundTrip}.");
+                Release(shape);
+                shape = slide1.Shapes[1];
+                AssertTrue(IsPowerPointEditablePictureShape(shape),
+                    $"Ribbon OLE-to-SVG growth probe did not create SVG at round trip {roundTrip}.");
+                var pictureMetadata = DecodePowerPointMetadata(shape)
+                    ?? throw new InvalidDataException($"Ribbon SVG/OLE growth probe lost picture metadata after round trip {roundTrip}.");
+                Console.WriteLine(
+                    $"  [Ribbon round {roundTrip}] SVG after={shape.Width:F2}x{shape.Height:F2} pt; " +
+                    $"export={converted.ExportResult?.Width:F2}x{converted.ExportResult?.Height:F2} px; " +
+                    $"meta={pictureMetadata.RenderWidthPx:F2}x{pictureMetadata.RenderHeightPx:F2} px; " +
+                    $"font={pictureMetadata.FontSizePt:F1}/{pictureMetadata.RenderFontSizePt:F1} pt.");
+            }
+            AssertNear(ribbonRoundTripBaselineWidth, shape.Width, 1.0f,
+                "Ribbon SVG/OLE round trips accumulated PowerPoint width growth.");
+            AssertNear(ribbonRoundTripBaselineHeight, shape.Height, 1.0f,
+                "Ribbon SVG/OLE round trips accumulated PowerPoint height growth.");
+
             Console.WriteLine(
                 "PowerPoint Ribbon conversion path passed: SVG -> OMML -> OLE -> OMML -> SVG completed through VisualTeX Sessions. " +
                 $"SVG->OMML={ribbonPictureToOmmlElapsed.TotalMilliseconds:F0} ms, " +
@@ -463,8 +708,15 @@ internal static partial class Program
             "CreateVectorEmfFromSvg",
             BindingFlags.Public | BindingFlags.Static)
             ?? throw new MissingMethodException(type.FullName, "CreateVectorEmfFromSvg");
-        return (string)(method.Invoke(null, new object[] { svgPath, width, height })
+        var result = (string)(method.Invoke(null, new object[] { svgPath, width, height, true })
             ?? throw new InvalidOperationException("PowerPoint EMF preview generation returned null."));
+        var diagnostics = type.GetProperty(
+            "LastRecordingDiagnostics",
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
+            ?.GetValue(null) as string;
+        if (!string.IsNullOrWhiteSpace(diagnostics))
+            Console.WriteLine($"  PowerPoint EMF recording: {diagnostics}");
+        return result;
     }
 
     private static void AssertPowerPointOle(PowerPoint.Shape shape, string message)

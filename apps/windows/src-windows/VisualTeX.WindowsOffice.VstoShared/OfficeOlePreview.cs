@@ -38,7 +38,8 @@ internal static class OfficeOlePreview
     public static string CreateVectorEmfFromSvg(
         string svgPath,
         float widthPixels,
-        float heightPixels)
+        float heightPixels,
+        bool usePowerPointStablePhysicalFrame = false)
     {
         if (string.IsNullOrWhiteSpace(svgPath))
             throw new ArgumentException("SVG preview path is required.", nameof(svgPath));
@@ -56,7 +57,11 @@ internal static class OfficeOlePreview
         try
         {
             var renderer = SvgVectorRenderer.Load(svgPath);
-            renderer.Render(emfPath, widthPixels, heightPixels);
+            renderer.Render(
+                emfPath,
+                widthPixels,
+                heightPixels,
+                usePowerPointStablePhysicalFrame);
             ValidateVectorEmf(emfPath);
             return emfPath;
         }
@@ -199,7 +204,11 @@ internal static class OfficeOlePreview
             return new SvgVectorRenderer(root);
         }
 
-        public void Render(string emfPath, float widthPixels, float heightPixels)
+        public void Render(
+            string emfPath,
+            float widthPixels,
+            float heightPixels,
+            bool usePowerPointStablePhysicalFrame)
         {
             // Use a real display DC as the EMF reference device. A memory DC
             // obtained from a 1x1 Bitmap records a mismatched physical-device
@@ -222,11 +231,29 @@ internal static class OfficeOlePreview
                     : 1d;
                 if (!IsPositiveFinite(deviceScaleX)) deviceScaleX = 1d;
                 if (!IsPositiveFinite(deviceScaleY)) deviceScaleY = 1d;
+                // Word's established inline-OLE sizing contract is based on a
+                // display-referenced Pixel frame plus desktop-scale compensation.
+                // PowerPoint cannot use that representation: on scaled desktops it
+                // reinterprets the physical presentation size and feeds the error
+                // back into subsequent SVG/OLE conversions. Give PowerPoint a
+                // fixed CSS-96-dpi physical frame instead, while leaving Word on
+                // the legacy-compatible Pixel frame.
+                const float millimetresPerCssPixel = 25.4f / 96f;
+                var frameRectangle = usePowerPointStablePhysicalFrame
+                    ? new RectangleF(
+                        0,
+                        0,
+                        widthPixels * millimetresPerCssPixel,
+                        heightPixels * millimetresPerCssPixel)
+                    : new RectangleF(0, 0, widthPixels, heightPixels);
+                var frameUnit = usePowerPointStablePhysicalFrame
+                    ? MetafileFrameUnit.Millimeter
+                    : MetafileFrameUnit.Pixel;
                 using var metafile = new Metafile(
                     emfPath,
                     referenceHdc,
-                    new RectangleF(0, 0, widthPixels, heightPixels),
-                    MetafileFrameUnit.Pixel,
+                    frameRectangle,
+                    frameUnit,
                     EmfType.EmfOnly,
                     "VisualTeX vector formula preview");
                 using var graphics = Graphics.FromImage(metafile);
@@ -266,8 +293,26 @@ internal static class OfficeOlePreview
                     deviceScaleY,
                     widthPixels,
                     heightPixels);
-                var recordingWidth = widthPixels * deviceScaleX;
-                var recordingHeight = heightPixels * deviceScaleY;
+                // The physical frame and the EMF recording coordinate space are
+                // different units. PowerPoint gets a fixed CSS-96-dpi physical
+                // frame, but GDI+ records the vector geometry in device pixels.
+                // In a Per-Monitor-DPI-aware Office process HORZRES and
+                // DESKTOPHORZRES are already equal, so desktop/logical is 1 even
+                // on a 175% (168-dpi) display. Derive PowerPoint's recording scale
+                // directly from the recording Graphics DPI instead. Word keeps its
+                // established desktop/logical mapping paired with the Pixel frame.
+                var powerPointRecordingScaleX = graphics.DpiX / 96d;
+                var powerPointRecordingScaleY = graphics.DpiY / 96d;
+                if (!IsPositiveFinite(powerPointRecordingScaleX)) powerPointRecordingScaleX = 1d;
+                if (!IsPositiveFinite(powerPointRecordingScaleY)) powerPointRecordingScaleY = 1d;
+                var coordinateScaleX = usePowerPointStablePhysicalFrame
+                    ? powerPointRecordingScaleX
+                    : deviceScaleX;
+                var coordinateScaleY = usePowerPointStablePhysicalFrame
+                    ? powerPointRecordingScaleY
+                    : deviceScaleY;
+                var recordingWidth = widthPixels * coordinateScaleX;
+                var recordingHeight = heightPixels * coordinateScaleY;
                 var rootTransform = new SvgMatrix(
                     recordingWidth / _viewBox.Width,
                     0,
