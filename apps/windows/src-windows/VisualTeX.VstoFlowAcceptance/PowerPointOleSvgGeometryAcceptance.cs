@@ -464,10 +464,62 @@ internal static partial class Program
             application.ActiveWindow.View.GotoSlide(1);
             var postedUiWork = new Queue<Action>();
             var delayedUiWork = new Queue<(Action Operation, int DelayMilliseconds)>();
+            var captureOleStages = true;
+            var oleStageOrdinal = 0;
+            var sawHiddenCreatedStage = false;
+            var sawHiddenInitializedStage = false;
+            var sawVisibleFinalizedStage = false;
             var service = new PowerPointFormulaService(
                 application,
                 operation => postedUiWork.Enqueue(operation),
-                (operation, delayMilliseconds) => delayedUiWork.Enqueue((operation, delayMilliseconds)));
+                (operation, delayMilliseconds) => delayedUiWork.Enqueue((operation, delayMilliseconds)),
+                (stage, stageShape) =>
+                {
+                    if (!captureOleStages) return;
+                    oleStageOrdinal++;
+                    var visible = stageShape.Visible;
+                    var stageExtent = ReadOleExtentPoints(stageShape);
+                    if (string.Equals(stage, "created", StringComparison.Ordinal))
+                    {
+                        AssertEqual(MsoTriState.msoFalse, visible,
+                            "New PowerPoint OLE became visible before initialization.");
+                        sawHiddenCreatedStage = true;
+                    }
+                    else if (string.Equals(stage, "initialized", StringComparison.Ordinal))
+                    {
+                        AssertEqual(MsoTriState.msoFalse, visible,
+                            "PowerPoint exposed the transient OLE presentation reflow during initialization.");
+                        sawHiddenInitializedStage = true;
+                    }
+                    else if (string.Equals(stage, "finalized", StringComparison.Ordinal))
+                    {
+                        AssertEqual(MsoTriState.msoTrue, visible,
+                            "PowerPoint OLE did not become visible after final geometry restoration.");
+                        sawVisibleFinalizedStage = true;
+                    }
+
+                    if (visible == MsoTriState.msoFalse)
+                    {
+                        Console.WriteLine(
+                            $"  OLE synchronous stage {oleStageOrdinal:D2} {stage}: hidden, " +
+                            $"shape={stageShape.Width:F2}x{stageShape.Height:F2}pt, server={stageExtent}.");
+                    }
+                    else
+                    {
+                        var stagePath = Path.Combine(
+                            artifactRoot,
+                            $"real-session-ole-stage-{oleStageOrdinal:D2}-{stage}.png");
+                        stageShape.Export(stagePath, PowerPoint.PpShapeFormat.ppShapeFormatPNG);
+                        var stageInk = AnalyzeVisibleDarkPixels(stagePath, margin: 4);
+                        Console.WriteLine(
+                            $"  OLE synchronous stage {oleStageOrdinal:D2} {stage}: visible, " +
+                            $"shape={stageShape.Width:F2}x{stageShape.Height:F2}pt, " +
+                            $"server={stageExtent}, ink={stageInk.Width}x{stageInk.Height}/{stageInk.Count}, " +
+                            $"canvas={stageInk.ImageWidth}x{stageInk.ImageHeight}.");
+                    }
+                    if (string.Equals(stage, "finalized", StringComparison.Ordinal))
+                        captureOleStages = false;
+                });
             void DrainPostedUiWork()
             {
                 while (postedUiWork.Count > 0)
@@ -526,6 +578,12 @@ internal static partial class Program
                 shape = slide.Shapes[oleResult.ObjectId];
                 if (iteration == 1)
                 {
+                    AssertTrue(sawHiddenCreatedStage,
+                        "PowerPoint OLE regression did not observe the hidden creation stage.");
+                    AssertTrue(sawHiddenInitializedStage,
+                        "PowerPoint OLE regression did not observe the hidden initialized stage.");
+                    AssertTrue(sawVisibleFinalizedStage,
+                        "PowerPoint OLE regression did not observe the visible finalized stage.");
                     // Reproduce the two real host geometries observed in the
                     // installed PowerPoint add-in after its OLE callback unwound.
                     var centerX = baselineLeft + baselineWidth / 2f;
@@ -1329,6 +1387,32 @@ internal static partial class Program
         {
             WinForms.Application.DoEvents();
             Thread.Sleep(80);
+        }
+    }
+
+    private static string ReadOleExtentPoints(PowerPoint.Shape shape)
+    {
+        PowerPoint.OLEFormat? format = null;
+        object? value = null;
+        try
+        {
+            format = shape.OLEFormat;
+            value = format.Object;
+            if (value is not GeometryOleObjectNative nativeOle) return "n/a";
+            var result = nativeOle.GetExtent(1, out var extent);
+            if (result < 0) return $"hr=0x{result:X8}";
+            var width = extent.Cx * 72f / 2540f;
+            var height = extent.Cy * 72f / 2540f;
+            return $"{width:F2}x{height:F2}pt";
+        }
+        catch (Exception error)
+        {
+            return error.GetType().Name;
+        }
+        finally
+        {
+            Release(value);
+            Release(format);
         }
     }
 

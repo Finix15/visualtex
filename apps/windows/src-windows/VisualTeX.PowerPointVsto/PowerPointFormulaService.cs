@@ -20,16 +20,19 @@ public sealed class PowerPointFormulaService
     private readonly Application _application;
     private readonly Action<Action>? _postToOfficeUi;
     private readonly Action<Action, int>? _postDelayedToOfficeUi;
+    private readonly Action<string, Shape>? _oleStageProbe;
     private readonly Dictionary<string, long> _oleGeometryRestoreGenerations = new(StringComparer.OrdinalIgnoreCase);
 
     public PowerPointFormulaService(
         Application application,
         Action<Action>? postToOfficeUi = null,
-        Action<Action, int>? postDelayedToOfficeUi = null)
+        Action<Action, int>? postDelayedToOfficeUi = null,
+        Action<string, Shape>? oleStageProbe = null)
     {
         _application = application;
         _postToOfficeUi = postToOfficeUi;
         _postDelayedToOfficeUi = postDelayedToOfficeUi;
+        _oleStageProbe = oleStageProbe;
     }
 
     public OfficeSelection ReadSelection() => ReadSelection(null);
@@ -538,6 +541,8 @@ public sealed class PowerPointFormulaService
             var left = Math.Max(0f, (presentation.PageSetup.SlideWidth - width) / 2f);
             var top = Math.Max(0f, (presentation.PageSetup.SlideHeight - height) / 2f);
             shape = AddOleObject(slide, left, top, width, height);
+            shape.Visible = MsoTriState.msoFalse;
+            ProbeOleStage("created", shape);
             InitializeOle(shape, metadata, emfPath, pngPath);
             Configure(shape, metadata);
             // PowerPoint can rebuild the OLE presentation while metadata and
@@ -545,6 +550,8 @@ public sealed class PowerPointFormulaService
             // be the very last mutation in the write path.
             ApplyOleSizeAndRefresh(shape, width, height);
             RestoreOlePosition(shape, left, top);
+            shape.Visible = MsoTriState.msoTrue;
+            ProbeOleStage("finalized", shape);
             ScheduleOleGeometryRestore(
                 DocumentIdentity(presentation),
                 metadata.FormulaId,
@@ -779,6 +786,8 @@ public sealed class PowerPointFormulaService
                 newTop,
                 editedSize.Width,
                 editedSize.Height);
+            replacement.Visible = MsoTriState.msoFalse;
+            ProbeOleStage("created", replacement);
             InitializeOle(replacement, metadata, emfPath, pngPath);
             TryApplyRotation(replacement, rotation);
             Configure(replacement, metadata);
@@ -790,6 +799,8 @@ public sealed class PowerPointFormulaService
             // conversion is bit-for-bit stable in position and physical size.
             ApplyOleSizeAndRefresh(replacement, editedSize.Width, editedSize.Height);
             RestoreOlePosition(replacement, newLeft, newTop);
+            replacement.Visible = MsoTriState.msoTrue;
+            ProbeOleStage("finalized", replacement);
             ScheduleOleGeometryRestore(
                 DocumentIdentity(presentation),
                 metadata.FormulaId,
@@ -915,7 +926,7 @@ public sealed class PowerPointFormulaService
             string.Empty,
             MsoTriState.msoFalse);
 
-    private static void InitializeOle(
+    private void InitializeOle(
         Shape shape,
         FormulaMetadata metadata,
         string emfPath,
@@ -931,6 +942,7 @@ public sealed class PowerPointFormulaService
                 throw new InvalidOperationException(
                     "The inserted PowerPoint object does not expose the VisualTeX native OLE interface.");
             FormulaOleInterop.Initialize(formula, metadata, emfPath, pngPath);
+            ProbeOleStage("initialized", shape);
         }
         finally
         {
@@ -1371,6 +1383,11 @@ public sealed class PowerPointFormulaService
             height *= fit;
         }
         return (Math.Max(1f, width), Math.Max(1f, height));
+    }
+
+    private void ProbeOleStage(string stage, Shape shape)
+    {
+        _oleStageProbe?.Invoke(stage, shape);
     }
 
     private static void ApplyPictureSize(Shape shape, float width, float height)
