@@ -636,6 +636,30 @@ internal static partial class Program
                     $"Iteration {iteration} exposed the OLE while its presentation was initializing.");
                 AssertEqual(finalizedBefore + 1, visibleFinalizedCount,
                     $"Iteration {iteration} did not reveal the OLE only after final geometry restoration.");
+                if (iteration == 1)
+                {
+                    AssertTrue(shape.Name.StartsWith("VisualTeX_OleTransitionCover_", StringComparison.Ordinal),
+                        "SVG -> OLE did not preserve the source as a transition cover.");
+                    AssertTrue(DecodePowerPointMetadata(shape) is null,
+                        "PowerPoint transition cover still exposes VisualTeX metadata.");
+                    PowerPoint.Shape? stagedOle = null;
+                    try
+                    {
+                        stagedOle = slide.Shapes[oleResult.ObjectId];
+                        AssertTrue(stagedOle.Visible == MsoTriState.msoTrue,
+                            "Final OLE is not visible underneath the transition cover.");
+                        AssertTrue(shape.ZOrderPosition > stagedOle.ZOrderPosition,
+                            "Transition cover is not layered above the final OLE.");
+                        AssertEqual(2, slide.Shapes.Count,
+                            "SVG -> OLE transition should temporarily contain exactly the cover and final OLE.");
+                        var selectedDuringCover = service.ReadSelection();
+                        AssertEqual(oleResult.ObjectId, selectedDuringCover.ObjectId,
+                            "PowerPoint selection stayed on the metadata-free transition cover.");
+                        AssertEqual(FormulaOleContract.NativeOleMode, selectedDuringCover.ObjectMode,
+                            "PowerPoint selection did not move to the finalized OLE while the cover remained visible.");
+                    }
+                    finally { Release(stagedOle); }
+                }
                 Release(shape);
                 shape = slide.Shapes[oleResult.ObjectId];
                 if (iteration == 1)
@@ -690,6 +714,8 @@ internal static partial class Program
                     shape.Left = centerX - shape.Width / 2f;
                     shape.Top = centerY - shape.Height / 2f;
                     DrainDelayedUiWork();
+                    AssertEqual(1, slide.Shapes.Count,
+                        "PowerPoint OLE transition cover was not removed after the stabilization window.");
                     AssertNear(baselineWidth, shape.Width, 1.5f,
                         "Delayed OLE reflow repair did not restore width.");
                     AssertNear(baselineHeight, shape.Height, 1.5f,

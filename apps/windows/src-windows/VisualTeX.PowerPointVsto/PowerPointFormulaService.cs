@@ -866,24 +866,35 @@ public sealed class PowerPointFormulaService
             InitializeOle(replacement, metadata, emfPath, pngPath);
             TryApplyRotation(replacement, rotation);
             Configure(replacement, metadata);
-            MoveToZOrder(replacement, zOrder + 1);
-            oldShape.Delete();
-            // Deleting the source SVG and finalizing the replacement can make
-            // PowerPoint rebuild its OLE presentation one more time. Geometry is
-            // intentionally restored after all of those operations so SVG↔OLE
-            // conversion is bit-for-bit stable in position and physical size.
+            // Keep the original SVG/OMML immediately above the replacement as a
+            // short-lived visual cover. PowerPoint can paint several OLE cache
+            // states while AddOLEObject/initialization unwinds; exposing the new
+            // object only after it is correct is not enough if deleting the source
+            // creates a blank/repaint frame. The cover keeps every one of those
+            // transitions visually identical to the source formula.
+            MoveToZOrder(replacement, zOrder);
             ApplyOleSizeAndRefresh(replacement, editedSize.Width, editedSize.Height);
             RestoreOlePosition(replacement, newLeft, newTop);
             replacement.Visible = MsoTriState.msoTrue;
             ProbeOleStage("finalized", replacement);
+            var documentId = DocumentIdentity(presentation);
+            var coverName = PrepareOleTransitionCover(oldShape);
+            // The old source remains only as a paint cover. Keep PowerPoint's
+            // actual selection on the finished OLE so an immediate follow-up
+            // Ribbon action never targets the metadata-free cover.
+            try { replacement.Select(MsoTriState.msoTrue); } catch { }
             ScheduleOleGeometryRestore(
-                DocumentIdentity(presentation),
+                documentId,
                 metadata.FormulaId,
                 replacement.Name,
                 editedSize.Width,
                 editedSize.Height,
                 newLeft,
                 newTop);
+            ScheduleOleTransitionCoverRemoval(
+                documentId,
+                slide.SlideID,
+                coverName);
             return Result(session, presentation, replacement.Name);
         }
         catch
@@ -1499,6 +1510,112 @@ public sealed class PowerPointFormulaService
         // is therefore the final geometry operation, after width and height.
         shape.Left = left;
         shape.Top = top;
+    }
+
+    private static string PrepareOleTransitionCover(Shape shape)
+    {
+        var coverName = $"VisualTeX_OleTransitionCover_{Guid.NewGuid():N}";
+        try { shape.Name = coverName; } catch { coverName = shape.Name; }
+        Tags? tags = null;
+        try
+        {
+            tags = shape.Tags;
+            try { tags.Delete(FormulaIdTag); } catch { }
+            try { tags.Delete(MetadataTag); } catch { }
+            try { tags.Delete(IdentityOwnerTag); } catch { }
+        }
+        finally { Release(tags); }
+        try { shape.AlternativeText = string.Empty; } catch { }
+        return coverName;
+    }
+
+    private void ScheduleOleTransitionCoverRemoval(
+        string documentId,
+        int slideId,
+        string coverName)
+    {
+        void RemoveCover()
+        {
+            Presentations? presentations = null;
+            Presentation? presentation = null;
+            Slides? slides = null;
+            Slide? slide = null;
+            Shapes? shapes = null;
+            Shape? cover = null;
+            try
+            {
+                presentations = _application.Presentations;
+                for (var presentationIndex = 1; presentationIndex <= presentations.Count; presentationIndex++)
+                {
+                    Presentation? candidate = null;
+                    try
+                    {
+                        candidate = presentations[presentationIndex];
+                        if (!string.Equals(
+                                DocumentIdentity(candidate),
+                                documentId,
+                                StringComparison.OrdinalIgnoreCase))
+                            continue;
+                        presentation = candidate;
+                        candidate = null;
+                        break;
+                    }
+                    finally { Release(candidate); }
+                }
+                if (presentation is null) return;
+
+                slides = presentation.Slides;
+                for (var slideIndex = 1; slideIndex <= slides.Count; slideIndex++)
+                {
+                    Slide? candidate = null;
+                    try
+                    {
+                        candidate = slides[slideIndex];
+                        if (candidate.SlideID != slideId) continue;
+                        slide = candidate;
+                        candidate = null;
+                        break;
+                    }
+                    finally { Release(candidate); }
+                }
+                if (slide is null) return;
+                shapes = slide.Shapes;
+                try { cover = shapes[coverName]; }
+                catch { return; }
+                cover.Delete();
+            }
+            catch
+            {
+                // A transition cover is purely visual. Failure to remove it on
+                // one callback must not destabilize PowerPoint; the fallback UI
+                // post below will retry when available.
+            }
+            finally
+            {
+                Release(cover);
+                Release(shapes);
+                Release(slide);
+                Release(slides);
+                Release(presentation);
+                Release(presentations);
+            }
+        }
+
+        var delayedPost = _postDelayedToOfficeUi;
+        if (delayedPost is not null)
+        {
+            // Keep the source picture over the finished OLE long enough to span
+            // the synchronous cache refresh and the first high-DPI host reflow.
+            delayedPost(RemoveCover, 850);
+            return;
+        }
+        var post = _postToOfficeUi;
+        if (post is not null)
+        {
+            post(() => post(RemoveCover));
+            return;
+        }
+        RemoveCover();
     }
 
     private void ScheduleOleGeometryRestore(
