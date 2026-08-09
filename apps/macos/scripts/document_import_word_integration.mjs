@@ -129,12 +129,30 @@ const createImageNativeMonitorRegression = process.argv.includes(
   "--create-image-native-monitor-double-click",
 );
 const physicalHitTestOnly = process.argv.includes("--physical-hit-test-only");
+const createImageDisplayRegression = process.argv.includes(
+  "--create-image-display",
+);
+const createImageNumberedRegression = process.argv.includes(
+  "--create-image-numbered",
+);
+const createNativeInlineRegression = process.argv.includes(
+  "--create-native-inline",
+);
+const createNativeDisplayRegression = process.argv.includes(
+  "--create-native-display",
+);
+const createNativeRegression =
+  createNativeInlineRegression || createNativeDisplayRegression;
 const createImagePhysicalRegression =
   process.argv.includes("--create-image-physical-double-click") ||
   createImageNativeMonitorRegression ||
   createSourceFormattedEquationRegression;
 const createImageRegression =
-  process.argv.includes("--create-image") || createImagePhysicalRegression;
+  process.argv.includes("--create-image") ||
+  createImageDisplayRegression ||
+  createImageNumberedRegression ||
+  createImagePhysicalRegression;
+const createFormulaRegression = createImageRegression || createNativeRegression;
 const physicalTargets = new Set([
   "image-inline",
   "image-block",
@@ -1728,15 +1746,35 @@ function runFormulaRegressionReport(testDocumentName, formulas) {
         `Word OMML formula structure regression failed: ${JSON.stringify(report)}`,
       );
     }
-    for (const [key, expected] of [
-      // Numbered native equations retain their existing zero-spaced table
-      // layout; unnumbered native equations inherit the configured Normal
-      // style spacing. Image-only normalization must not change either case.
-      ["minimumNativeSpaceBefore", 0],
-      ["maximumNativeSpaceBefore", 6],
-      ["minimumNativeSpaceAfter", 0],
-      ["maximumNativeSpaceAfter", 9],
-    ]) {
+    const nativeSpacingExpectations = createNativeDisplayRegression
+      ? [
+          // A freshly promoted unnumbered native display equation follows the
+          // host document's Normal paragraph spacing. The default Word document
+          // used by this create regression reports 0 pt before / 8 pt after.
+          // Keep this distinct from image displays, which VisualTeX explicitly
+          // normalizes to zero because the image already owns its visual height.
+          ["minimumNativeSpaceBefore", 0],
+          ["maximumNativeSpaceBefore", 0],
+          ["minimumNativeSpaceAfter", 8],
+          ["maximumNativeSpaceAfter", 8],
+        ]
+      : createNativeInlineRegression
+        ? [
+            ["minimumNativeSpaceBefore", 0],
+            ["maximumNativeSpaceBefore", 0],
+            ["minimumNativeSpaceAfter", 0],
+            ["maximumNativeSpaceAfter", 0],
+          ]
+        : [
+          // Numbered native equations retain their existing zero-spaced table
+          // layout; unnumbered native equations inherit the configured Normal
+          // style spacing. Image-only normalization must not change either case.
+          ["minimumNativeSpaceBefore", 0],
+          ["maximumNativeSpaceBefore", 6],
+          ["minimumNativeSpaceAfter", 0],
+          ["maximumNativeSpaceAfter", 9],
+        ];
+    for (const [key, expected] of nativeSpacingExpectations) {
       if (Math.abs(numericReportValue(report, key) - expected) > 0.05) {
         throw new Error(
           `OMML paragraph spacing changed for ${key}: ${JSON.stringify(report)}`,
@@ -3482,9 +3520,15 @@ async function runCreatedImageFormulaRegression(
   beforeSessions,
   runPhysicalDoubleClickAfterReopen = false,
 ) {
-  const createdDisplayMode = createSourceFormattedEquationRegression
-    ? "block"
-    : "inline";
+  const createdNumbered = createImageNumberedRegression;
+  const createdNativeEquation = createNativeRegression;
+  const createdDisplayMode =
+    createSourceFormattedEquationRegression ||
+    createImageDisplayRegression ||
+    createImageNumberedRegression ||
+    createNativeDisplayRegression
+      ? "block"
+      : "inline";
   const createdLatex = createSourceFormattedEquationRegression
     ? String.raw`\begin{equation}
 \frac{\delta \mathbb{E}[L]}
@@ -3498,8 +3542,16 @@ p(\mathbf{x},t)\,
 0
 \end{equation}`
     : "dfdfdf";
-  const createMacroName = "VisualTeX_CreateInline";
-  const requestedDisplayMode = "inline";
+  const createMacroName = createdNativeEquation
+    ? createdDisplayMode === "block"
+      ? "VisualTeX_CreateNativeDisplay"
+      : "VisualTeX_CreateNativeInline"
+    : createdNumbered
+      ? "VisualTeX_CreateNumberedDisplay"
+      : createdDisplayMode === "block"
+        ? "VisualTeX_CreateDisplay"
+        : "VisualTeX_CreateInline";
+  const requestedDisplayMode = createdDisplayMode;
   if (runPhysicalDoubleClickAfterReopen) {
     rmSync(finalBinaryPhysicalStatusPath, { force: true });
   }
@@ -3537,14 +3589,15 @@ p(\mathbf{x},t)\,
     request.host !== "word" ||
     request.sessionId !== sessionId ||
     request.displayMode !== requestedDisplayMode ||
-    request.numbered ||
+    request.numbered !== createdNumbered ||
+    request.nativeEquation !== createdNativeEquation ||
     !request.formulaId ||
     !request.sourceDocumentId ||
     !pendingMarker ||
     !Number.isFinite(fontSizePt)
   ) {
     throw new Error(
-      `Unexpected Word image creation request: ${JSON.stringify(request)}`,
+      `Unexpected Word formula creation request: ${JSON.stringify(request)}`,
     );
   }
 
@@ -3555,7 +3608,7 @@ p(\mathbf{x},t)\,
       ? "equation"
       : "raw",
     displayMode: createdDisplayMode,
-    numbered: false,
+    numbered: createdNumbered,
     fontSizePt,
     artifactDirectory: sessionDirectory,
   });
@@ -3568,8 +3621,8 @@ p(\mathbf{x},t)\,
     ["mode", "create"],
     ["formulaId", formula.formulaId],
     ["displayMode", formula.displayMode],
-    ["numbered", "0"],
-    ["nativeEquation", "0"],
+    ["numbered", createdNumbered ? "1" : "0"],
+    ["nativeEquation", createdNativeEquation ? "1" : "0"],
     ["imagePath", formula.imagePath],
     ["vectorDocumentPath", formula.vectorDocumentPath],
     ["fallbackImagePath", formula.fallbackImagePath],
@@ -3607,11 +3660,11 @@ p(\mathbf{x},t)\,
     "end tell",
   ], 90_000);
   if (!existsSync(callbackStatusPath)) {
-    throw new Error("Word did not write the image-create callback status file");
+    throw new Error("Word did not write the formula-create callback status file");
   }
   const callbackStatus = readFileSync(callbackStatusPath, "utf8");
   if (!callbackStatus.startsWith("PASS")) {
-    throw new Error(`Word image-create callback failed:\n${callbackStatus}`);
+    throw new Error(`Word formula-create callback failed:\n${callbackStatus}`);
   }
 
   let afterCommit = { skipped: "final-binary-physical-focus" };
@@ -3622,34 +3675,40 @@ p(\mathbf{x},t)\,
   let afterSaveReopenInk = afterCommitInk;
   if (!runPhysicalDoubleClickAfterReopen) {
     afterCommit = runFormulaRegressionReport(testDocumentName, [formula]);
-    afterCommitInk = createdImagePdfInkBounds(
-      testDocumentName,
-      "Created dfdfdf formula after commit",
-    );
-    assertCreatedImageFormulaInk(
-      afterCommitInk,
-      formula,
-      "Created dfdfdf formula after commit",
-    );
-    runAppleScript([
-      'tell application "Microsoft Word"',
-      `activate object document ${JSON.stringify(testDocumentName)}`,
-      'run VB macro macro name "VisualTeX_MigrateImageMacroButtons"',
-      "end tell",
-    ], 60_000);
-    afterNativeNormalization = runFormulaRegressionReport(
-      testDocumentName,
-      [formula],
-    );
-    afterNativeNormalizationInk = createdImagePdfInkBounds(
-      testDocumentName,
-      "Created dfdfdf formula after native normalization",
-    );
-    assertCreatedImageFormulaInk(
-      afterNativeNormalizationInk,
-      formula,
-      "Created dfdfdf formula after native normalization",
-    );
+    if (!createdNativeEquation) {
+      afterCommitInk = createdImagePdfInkBounds(
+        testDocumentName,
+        "Created dfdfdf formula after commit",
+      );
+      assertCreatedImageFormulaInk(
+        afterCommitInk,
+        formula,
+        "Created dfdfdf formula after commit",
+      );
+      runAppleScript([
+        'tell application "Microsoft Word"',
+        `activate object document ${JSON.stringify(testDocumentName)}`,
+        'run VB macro macro name "VisualTeX_MigrateImageMacroButtons"',
+        "end tell",
+      ], 60_000);
+      afterNativeNormalization = runFormulaRegressionReport(
+        testDocumentName,
+        [formula],
+      );
+      afterNativeNormalizationInk = createdImagePdfInkBounds(
+        testDocumentName,
+        "Created dfdfdf formula after native normalization",
+      );
+      assertCreatedImageFormulaInk(
+        afterNativeNormalizationInk,
+        formula,
+        "Created dfdfdf formula after native normalization",
+      );
+    } else {
+      afterCommitInk = { skipped: "native-equation" };
+      afterNativeNormalization = afterCommit;
+      afterNativeNormalizationInk = afterCommitInk;
+    }
     afterSaveReopen = afterNativeNormalization;
     afterSaveReopenInk = afterNativeNormalizationInk;
     testDocumentName = saveAndReopenWordDocument(testDocumentName);
@@ -3669,15 +3728,17 @@ p(\mathbf{x},t)\,
       }
     }
     if (!afterSaveReopen) throw afterSaveReopenError;
-    afterSaveReopenInk = createdImagePdfInkBounds(
-      testDocumentName,
-      "Created dfdfdf formula after save and reopen",
-    );
-    assertCreatedImageFormulaInk(
-      afterSaveReopenInk,
-      formula,
-      "Created dfdfdf formula after save and reopen",
-    );
+    if (!createdNativeEquation) {
+      afterSaveReopenInk = createdImagePdfInkBounds(
+        testDocumentName,
+        "Created dfdfdf formula after save and reopen",
+      );
+      assertCreatedImageFormulaInk(
+        afterSaveReopenInk,
+        formula,
+        "Created dfdfdf formula after save and reopen",
+      );
+    }
   }
 
   let physicalDoubleClickResult = null;
@@ -3997,7 +4058,7 @@ try {
     await runPictureRoutingNativeRegression(before);
   } else if (firstFrameImageRegression) {
     await runFirstFrameImageRegression(before);
-  } else if (createImageRegression) {
+  } else if (createFormulaRegression) {
     await runCreatedImageFormulaRegression(
       before,
       createImagePhysicalRegression,

@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
-  "pluginVersion": "1.2.4",
+  "pluginVersion": "1.2.5",
   "files": {
     "VisualTeX.dotm": {
-      "sha256": "e7bee29ac9a49746acf72fc8ca9c4ea46fde42260a57350c3f791ef24bb2d0f1"
+      "sha256": "9e3033b4a981349c5471fb7ee12cab26dba07890244908afa0e995dbf783beac"
     },
     "VisualTeX.ppam": {
-      "sha256": "a165762b7999f5c45cb89af7fb76d211f2ae0325ad1a9d6d6d3f9b82feadab96"
+      "sha256": "c8aafe97cffe579f69b27c0d1f15ea561cb721a7e50bda7a1c5d858bf9e892ce"
     }
   }
 }

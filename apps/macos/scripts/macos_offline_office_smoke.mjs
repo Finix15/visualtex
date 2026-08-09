@@ -210,8 +210,28 @@ expectIncludes(powerpointAdapter, "VTPowerPointRibbonGetFormulaFontSizeItemCount
 expectIncludes(powerpointAdapter, "VTPowerPointRibbonApplyFormulaFontSizePreset", "PowerPoint must apply a selected SVG point-size preset immediately");
 expectIncludes(powerpointAdapter, "VTUnicodeText(28151, 21512, 23383, 21495)", "PowerPoint must report mixed selected SVG formula sizes without source-encoding corruption");
 expectIncludes(powerpointAdapter, "VTPrewarmApplication VT_POWERPOINT_HOST", "PowerPoint must prewarm the resident VisualTeX editor during add-in startup");
-expectIncludes(powerpointAdapter, "Call VTWriteAndLaunchSession", "PowerPoint create and edit paths must write and launch through one AppleScriptTask round trip");
+expectIncludes(powerpointAdapter, "Call VTWriteAndLaunchSession", "PowerPoint create and edit paths must use the shared write-and-launch bridge");
 expect(!powerpointAdapter.includes("VTWriteRequest sessionId, requestJson\n    VTLaunchSession"), "PowerPoint must not retain the two-round-trip request and launch path");
+expectIncludes(launcher, "VTTryWriteAndLaunchSessionDirect", "macOS Office formula opens must attempt the sandbox-inbox VBA fast path before AppleScriptTask");
+expectIncludes(launcher, 'Environ$("HOME")', "The Office fast path must use the host sandbox HOME instead of the normalized user home");
+expectIncludes(launcher, '"/Library/Application Support/VisualTeX/FastOpen/" & normalizedHost', "The Office fast path must write only beneath the host sandbox FastOpen inbox");
+expectIncludes(launcher, 'InStr(1, requestJson, """operation"":""formula"""', "Only ordinary formula requests may use the sandbox fast-open path");
+expectIncludes(launcher, "VT_FAST_OPEN_MAX_REQUEST_BYTES", "Oversized Office requests must fall back to the established AppleScriptTask bridge");
+expectIncludes(launcher, "requestBytes = VTUtf8Encode(requestJson)", "The sandbox fast-open request must be written as strict UTF-8 bytes");
+expectIncludes(launcher, "Open temporaryPath For Binary Access Write As #handle", "The Office host must write the fast-open request directly inside its own writable sandbox");
+expectIncludes(launcher, "Name temporaryPath As requestPath", "The Office fast-open request must become visible through an atomic same-directory rename");
+expectIncludes(launcher, "Private VT_OFFICE_RESIDENT_PREWARMED As Boolean", "The direct Office fast path must cache a confirmed resident prewarm");
+expectIncludes(launcher, "VTFastOpenResidentReady(normalizedHost)", "The fast path must recover from lost VBA prewarm state by checking the resident heartbeat in the Office sandbox");
+expectIncludes(launcher, '"/resident-ready"', "Word and PowerPoint must verify the resident-ready heartbeat inside their own FastOpen inbox");
+expect(!launcher.includes("MacScript("), "The Office inbox fast path must not need a synchronous MacScript launch bridge");
+expect(!launcher.includes("/usr/bin/open -gj"), "The Office inbox fast path must not rely on LaunchServices Reopen delivery");
+expect(!launcher.includes("nohup"), "The Office fast path must not spawn a sandbox-inherited second VisualTeX process that cannot use Tauri's /tmp socket");
+expect(!launcher.includes("Shell(VT_VISUALTEX"), "Mac VBA Shell must not be used because it can trigger Word-to-Terminal permission prompts");
+expect(!launcher.includes("open location"), "The rejected MacScript custom-URL fast path must not return");
+expect(!launcher.includes("&request="), "The rejected inline custom-URL payload must not return");
+expectIncludes(launcher, "VTFastOpenRequestClaimed(requestPath, payloadReadyAt)", "The direct Office fast path must confirm that the resident actually claimed the sandbox request before reporting success");
+expectIncludes(launcher, "MAX_CLAIM_WAIT_SECONDS As Double = 0.2", "A stale resident heartbeat must fall back quickly instead of falsely reporting a successful open");
+expectIncludes(launcher, '"fastPath=inbox-poll;writeMs="', "The direct Office fast path must report sandbox inbox write and resident-claim timing without a process launch round trip");
 
 expectIncludes(wordAdapter, "Public Sub AutoExec()", "Word template must publish AutoExec health");
 expectIncludes(wordAdapter, '"word-office-performance-20260801-r77"', "Word health must identify the optimized native Office build");
@@ -402,10 +422,15 @@ expectIncludes(wordAdapter, "Not VTWordRangeHasMeaningfulText(terminalSuffixRang
 expectIncludes(wordAdapter, 'If displayMode = "inline" And mode = "create" Then', "Only a newly created inline native formula may manufacture an after-formula caret anchor");
 expectIncludes(wordAdapter, "Editing or direct conversion must not manufacture a U+2060 caret", "Existing formula conversion must preserve surrounding Word text without a synthetic caret character");
 expectIncludes(wordAdapter, "finalFormulaRange.Font.Size = CSng(sourceFontSizePt)", "Direct image-to-OMML conversion must preserve the source point size");
-expectIncludes(wordAdapter, "InlineShapes.AddPicture", "Word formula insertion must create an InlineShape");
-expectIncludes(wordAdapter, "placeholder.Width = 1", "Word pending placeholders must remain a one-pixel transaction target");
-expectIncludes(wordAdapter, "Selection.SetRange Start:=placeholder.Range.End", "Word must move the caret after the pending formula target");
-expectIncludes(wordAdapter, "Private Function VTPrepareWordCreateInsertionRange", "Display creation must isolate a dedicated paragraph before placing its transaction placeholder");
+const wordCreateStart = wordAdapter.indexOf("Private Sub VTWordCreate(");
+const wordCreateEnd = wordAdapter.indexOf("Private Function VTAddWordFormulaPicture", wordCreateStart);
+const wordCreateSource = wordAdapter.slice(wordCreateStart, wordCreateEnd);
+expectIncludes(wordCreateSource, "VTAddPendingBookmark insertionRange, sessionId", "Word create must use a lightweight pending Bookmark instead of importing a placeholder picture before the editor opens");
+expectIncludes(wordCreateSource, "bookmark-anchor-ready", "Word create performance tracing must expose the lightweight anchor stage");
+expect(!wordCreateSource.includes("InlineShapes.AddPicture"), "Word create must not synchronously import a 1×1 placeholder image on the editor-open hot path");
+expect(!wordCreateSource.includes("VTRefreshWordHealthQuietly"), "Word create must not synchronously rewrite plug-in health before every editor open");
+expectIncludes(wordCreateSource, "VTDeletePendingBookmark ActiveDocument, sessionId", "A failed lightweight Word create must delete its pending Bookmark anchor");
+expectIncludes(wordAdapter, "Private Function VTPrepareWordCreateInsertionRange", "Display creation must isolate a dedicated paragraph before placing its transaction Bookmark");
 expectIncludes(wordAdapter, "Text = vbCr & vbCr", "A display formula inserted between existing content must preserve both sides around an empty display paragraph");
 expectIncludes(wordAdapter, "beforeRange.InlineShapes.Count > 0", "Display paragraph isolation must treat an earlier inline image formula as real surrounding content");
 expectIncludes(wordAdapter, "beforeRange.Fields.Count > 0", "Display paragraph isolation must not reuse a visually blank hidden Equation helper field");
@@ -1069,12 +1094,8 @@ expectIncludes(powerpointScript, 'do shell script "/usr/bin/open -b " & quoted f
 const wordPrewarmStart = wordScript.indexOf("on PrewarmVisualTeXApplication(hostName)");
 const wordPrewarmEnd = wordScript.indexOf("end PrewarmVisualTeXApplication", wordPrewarmStart);
 const wordPrewarmSource = wordScript.slice(wordPrewarmStart, wordPrewarmEnd);
-expectIncludes(wordPrewarmSource, "firstRunningVisualTeXExecutable", "Word startup prewarming must reuse an already-running VisualTeX process");
-expect(
-  wordPrewarmSource.indexOf("firstRunningVisualTeXExecutable") < wordPrewarmSource.indexOf('/usr/bin/open -gj -b '),
-  "Word startup prewarming must inspect the running process before asking LaunchServices to open VisualTeX",
-);
-expectIncludes(wordPrewarmSource, 'if my firstRunningVisualTeXExecutable(executableSuffix) is "" then', "Word startup prewarming must launch VisualTeX only when no matching process exists");
+expectIncludes(wordPrewarmSource, "runningVisualTeXExecutable", "Word startup prewarming must resolve one fully launched VisualTeX resident before formula clicks");
+expect(!wordPrewarmSource.includes('/usr/bin/open -gj -b '), "Word startup prewarming must delegate cold-launch policy to the shared ready-resident resolver");
 expect(!wordScript.includes("System Events"), "Word AppleScriptTask must not use UI automation");
 expect(!powerpointScript.includes("System Events"), "PowerPoint AppleScriptTask must not use UI automation");
 for (const [host, script] of [["Word", wordScript], ["PowerPoint", powerpointScript]]) {
@@ -1090,20 +1111,23 @@ for (const [host, script] of [["Word", wordScript], ["PowerPoint", powerpointScr
   expectIncludes(script, 'set encodedData to do shell script "/usr/bin/base64 < " & quoted form of targetPath', `${host} file bridge must quote the validated read path`);
   expectIncludes(script, 'do shell script "/bin/mkdir -p " & quoted form of targetPath & " && /bin/chmod 700 " & quoted form of targetPath', `${host} runtime directory creation must quote its validated path`);
   expectIncludes(script, "on launchVisualTeXURL(visualTeXURL)", `${host} Session launch must use the fixed argv-forwarding helper`);
-  expectIncludes(script, 'do shell script "/usr/bin/pgrep -x " & quoted form of "visualtex"', `${host} Session launch must resolve the already-prewarmed VisualTeX process`);
-  expectIncludes(script, 'set candidatePath to do shell script "/bin/ps -p " & quoted form of processId & " -o comm="', `${host} Session launch must obtain the exact running executable path without parsing arguments`);
-  expectIncludes(script, 'if candidatePath ends with executableSuffix then', `${host} Session launch must reject unrelated processes named visualtex`);
+  expectIncludes(script, 'if candidatePath ends with executableSuffix then', `${host} cold resident discovery must reject unrelated executables`);
   const launchStart = script.indexOf("on launchVisualTeXURL(visualTeXURL)");
   const launchEnd = script.indexOf("end launchVisualTeXURL", launchStart);
   const launchSource = script.slice(launchStart, launchEnd);
-  expectIncludes(launchSource, "/usr/bin/nohup", `${host} Session launch must forward argv through a detached helper that cannot steal Office focus`);
+  expectIncludes(launchSource, "/usr/bin/nohup", `${host} Session launch must preserve the detached forwarding helper that does not steal Office focus`);
   expectIncludes(launchSource, "quoted form of executablePath", `${host} Session launch must execute only the resolved VisualTeX binary`);
   expectIncludes(launchSource, "quoted form of safeURL", `${host} Session launch must put only the validated URL in argv for Tauri single-instance IPC`);
   const resolverStart = script.indexOf("on runningVisualTeXExecutable()");
   const resolverEnd = script.indexOf("end runningVisualTeXExecutable", resolverStart);
   const resolverSource = script.slice(resolverStart, resolverEnd);
+  expectIncludes(resolverSource, 'if cachedVisualTeXExecutable is not "" then return cachedVisualTeXExecutable', `${host} hot formula launch must return the prewarmed executable without pgrep/ps validation`);
+  expect(
+    resolverSource.indexOf('if cachedVisualTeXExecutable is not "" then return cachedVisualTeXExecutable') < resolverSource.indexOf("firstRunningVisualTeXExecutable"),
+    `${host} hot formula launch must hit the cached resident before any process scan`,
+  );
   expectIncludes(resolverSource, '/usr/bin/open -gj -b ', `${host} cold formula launch must prewarm VisualTeX without activating it`);
-  expectIncludes(resolverSource, 'delay 0.5', `${host} cold formula launch must wait for the Tauri single-instance channel after process creation`);
+  expectIncludes(resolverSource, 'delay 0.5', `${host} cold formula launch must preserve the validated single-instance settling wait`);
   expectIncludes(resolverSource, 'repeat with attemptIndex from 1 to 80', `${host} cold formula launch must bound resident startup waiting`);
   expect(!resolverSource.includes('set standardExecutable to "/Applications/VisualTeX.app/Contents/MacOS/visualtex"'), `${host} cold formula launch must not mistake an installed binary for a ready resident process`);
   expectIncludes(script, "cachedVisualTeXExecutable", `${host} Session launch must cache the executable resolved during prewarm`);
@@ -1208,6 +1232,26 @@ expect(
 expect(!rustRuntime.includes("hide_main_window_for_office_editor"), "Opening an Office formula must not hide an already visible VisualTeX desktop workspace");
 expect(!handleOpenUrlSource.includes("reveal_main_window"), "Office URL handling must never reveal the desktop main window");
 expect(!handleOpenUrlSource.includes("hide_main_window"), "Office URL handling must never hide the desktop main window");
+expectIncludes(rustRuntime, "pub(crate) fn consume_fast_open_request(app: &AppHandle)", "The resident macOS runtime must consume sandbox fast-open requests before revealing the desktop window");
+expectIncludes(rustRuntime, "WORD_FAST_OPEN_INBOX_SUFFIX", "The resident runtime must scan the fixed Word sandbox inbox");
+expectIncludes(rustRuntime, "POWERPOINT_FAST_OPEN_INBOX_SUFFIX", "The resident runtime must scan the fixed PowerPoint sandbox inbox");
+expect(!rustRuntime.includes("GLOBAL_FAST_OPEN_INBOX_SUFFIX"), "The fast-open consumer must not accept a global fallback inbox outside Office containers");
+expectIncludes(rustRuntime, "fast_open_session_id(&path)", "Fast-open inbox filenames must be validated as canonical Session UUID request files");
+expectIncludes(rustRuntime, "metadata.file_type().is_symlink()", "Fast-open request files and roots must reject symlinks");
+expectIncludes(rustRuntime, "FAST_OPEN_MAX_AGE", "Fast-open requests must expire quickly instead of remaining replayable");
+expectIncludes(rustRuntime, "persist_fast_open_claim(host, &session_id, &claim_path)", "The resident must claim and validate the inbox request before importing it");
+expectIncludes(rustRuntime, "atomic_write_runtime(&request_path(expected_host, session_id)?", "A validated inbox request must be copied into the canonical Application Scripts Session runtime");
+expectIncludes(appRuntime, "consume_fast_open_request(app)", "The single-instance callback must check the Office sandbox inbox before revealing the VisualTeX main window");
+expectIncludes(appRuntime, "start_fast_open_inbox_watcher(app.handle().clone())", "The resident app must start the low-latency Office inbox watcher after editor prewarming");
+expectIncludes(rustRuntime, "FAST_OPEN_POLL_INTERVAL", "The resident Office inbox watcher must use a bounded low-latency polling interval");
+expectIncludes(rustRuntime, "FAST_OPEN_MIN_STABLE_AGE", "The inbox watcher must leave a short post-rename stability window before claiming a VBA request");
+expectIncludes(rustRuntime, "FAST_OPEN_READY_HEARTBEAT_INTERVAL", "The resident watcher must refresh a bounded readiness heartbeat for Office VBA");
+expectIncludes(rustRuntime, "refresh_fast_open_ready_markers", "The resident watcher must publish readiness inside both fixed Office sandbox inboxes");
+expectIncludes(rustRuntime, "pub(crate) fn start_fast_open_inbox_watcher", "The macOS Office runtime must expose one guarded resident inbox watcher");
+expect(
+  appRuntime.indexOf("consume_fast_open_request(app)") < appRuntime.indexOf("reveal_main_window(app)"),
+  "A parameterless Office fast-open signal must be consumed before the desktop main window can flash",
+);
 expect(!rustRuntime.includes("main_was_visible"), "The Office editor lifecycle must derive background mode from current main-window visibility instead of hiding and remembering the workspace");
 expect(
   (documentImportWindowSource.match(/order_main_window_behind_office_editor\(app\)\?/g) ?? []).length >= 2,

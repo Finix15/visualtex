@@ -121,15 +121,8 @@ on PrewarmVisualTeXApplication(hostName)
     set startedAt to my monotonicSeconds()
     try
         set safeHost to my validateHostName(hostName as text)
-        -- Reuse an already-running VisualTeX process. Calling `open` for a
-        -- visible desktop window reactivates the whole application and covers
-        -- Word during both cold startup and the first document open.
-        set executableSuffix to "/VisualTeX.app/Contents/MacOS/visualtex"
-        if my firstRunningVisualTeXExecutable(executableSuffix) is "" then
-            do shell script "/usr/bin/open -gj -b " & quoted form of "com.visualtex.studio" & " --args --office-background"
-        end if
-        -- Resolve and cache the executable while Office is starting, outside
-        -- the user-visible create/edit path.
+        -- Resolve a fully launched resident while Office itself is starting.
+        -- This keeps every later formula click on the in-process AppKit fast path.
         set cachedVisualTeXExecutable to my runningVisualTeXExecutable()
         set finishedAt to my monotonicSeconds()
         return "ok|host=" & safeHost & ";prewarmMs=" & my elapsedMilliseconds(startedAt, finishedAt)
@@ -247,37 +240,32 @@ on launchVisualTeXURL(visualTeXURL)
     set safeURL to visualTeXURL as text
     if safeURL does not start with "visualtex://office/open?session=" then error "VisualTeX launch URL is invalid" number 7127
     set executablePath to my runningVisualTeXExecutable()
-    -- Launch the validated URL through a detached helper process. Keeping this
-    -- helper out of the macOS application activation lifecycle prevents Office
-    -- from briefly falling back to the previously-frontmost application before
-    -- the resident VisualTeX editor window is raised.
+    -- Keep the detached forwarding helper from the stable cold-launch path so
+    -- Office never falls back to another foreground application while the
+    -- resident editor window is being raised.
     do shell script "/usr/bin/nohup " & quoted form of executablePath & space & quoted form of safeURL & " >/dev/null 2>&1 &"
 end launchVisualTeXURL
 
 on runningVisualTeXExecutable()
+    -- Prewarm resolves and caches the exact resident executable before the user
+    -- opens a formula. Do not re-run pgrep/ps/test on every hot editor launch.
+    if cachedVisualTeXExecutable is not "" then return cachedVisualTeXExecutable
+
     set executableSuffix to "/VisualTeX.app/Contents/MacOS/visualtex"
-    if cachedVisualTeXExecutable is not "" then
-        set runningExecutable to my firstRunningVisualTeXExecutable(executableSuffix)
-        if runningExecutable is cachedVisualTeXExecutable then return runningExecutable
-        set cachedVisualTeXExecutable to ""
-    end if
     set runningExecutable to my firstRunningVisualTeXExecutable(executableSuffix)
     if runningExecutable is not "" then
         set cachedVisualTeXExecutable to runningExecutable
         return runningExecutable
     end if
-    -- A formula click must never cold-launch the visible application process.
-    -- Start the resident app in background-only mode first and wait until its
-    -- executable is observable; only then may launchVisualTeXURL send argv to
-    -- the single-instance forwarder. This keeps Word frontmost during startup.
+
+    -- Cold launch retains the validated b201fde behavior: start VisualTeX in
+    -- background-only mode and wait until the real process is observable before
+    -- forwarding the first Session URL.
     do shell script "/usr/bin/open -gj -b " & quoted form of "com.visualtex.studio" & " --args --office-background"
     repeat with attemptIndex from 1 to 80
         delay 0.05
         set runningExecutable to my firstRunningVisualTeXExecutable(executableSuffix)
         if runningExecutable is not "" then
-            -- Process creation precedes Tauri's single-instance socket becoming
-            -- ready. Wait only on this cold-start path so the first formula URL
-            -- cannot race the resident app and disappear.
             delay 0.5
             set runningExecutable to my firstRunningVisualTeXExecutable(executableSuffix)
             if runningExecutable is not "" then

@@ -1680,6 +1680,15 @@ pub fn run() {
                     }
                     return;
                 }
+                #[cfg(target_os = "macos")]
+                match office::macos_offline::consume_fast_open_request(app) {
+                    Ok(true) => return,
+                    Ok(false) => {}
+                    Err(error) => {
+                        eprintln!("Unable to consume VisualTeX Office fast-open request: {error}");
+                        return;
+                    }
+                }
                 let _ = office::background::reveal_main_window(app);
             },
         ))
@@ -1750,6 +1759,8 @@ pub fn run() {
                 // the fixed host window lazily if WebKit was unavailable here.
                 eprintln!("Unable to prewarm VisualTeX Office editors: {error}");
             }
+            #[cfg(target_os = "macos")]
+            office::macos_offline::start_fast_open_inbox_watcher(app.handle().clone());
             #[cfg(not(target_os = "macos"))]
             office::lifecycle::start(office_state);
             if let Some(url) = initial_office_url.as_deref() {
@@ -1854,6 +1865,18 @@ pub fn run() {
         }
         #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen { .. } => {
+            // Office fast-open writes a validated request into the host sandbox,
+            // then asks LaunchServices to deliver this Reopen event to the resident
+            // app. Consume that inbox before any startup/Dock reveal logic so the
+            // editor can open without a Terminal prompt, custom URL, or /tmp socket.
+            match office::macos_offline::consume_fast_open_request(app) {
+                Ok(true) => return,
+                Ok(false) => {}
+                Err(error) => {
+                    eprintln!("Unable to consume VisualTeX Office fast-open request on Reopen: {error}");
+                    return;
+                }
+            }
             // LaunchServices can emit Reopen for the initial background launch.
             // Never reveal the desktop workspace during that startup window.
             if background_mode

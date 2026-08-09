@@ -71,6 +71,14 @@ const POWERPOINT_RUNTIME_SUFFIX: &str =
 const METADATA_PREFIX: &str = "visualtex:v1:deflate:";
 const PENDING_PREFIX: &str = "visualtex:pending:v1:";
 const MAX_REQUEST_BYTES: u64 = 256 * 1024;
+const WORD_FAST_OPEN_INBOX_SUFFIX: &str = "Library/Containers/com.microsoft.Word/Data/Library/Application Support/VisualTeX/FastOpen/word";
+const POWERPOINT_FAST_OPEN_INBOX_SUFFIX: &str = "Library/Containers/com.microsoft.Powerpoint/Data/Library/Application Support/VisualTeX/FastOpen/powerpoint";
+const FAST_OPEN_MAX_AGE: Duration = Duration::from_secs(10);
+const FAST_OPEN_MIN_STABLE_AGE: Duration = Duration::from_millis(20);
+const FAST_OPEN_FUTURE_TOLERANCE: Duration = Duration::from_secs(2);
+const FAST_OPEN_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const FAST_OPEN_READY_FILE: &str = "resident-ready";
+const FAST_OPEN_READY_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_METADATA_BYTES: usize = 2 * 1024 * 1024;
 const MAX_OMML_BYTES: usize = 4 * 1024 * 1024;
 const MAX_DOCUMENT_IMPORT_MANIFEST_BYTES: usize = 16 * 1024 * 1024;
@@ -91,6 +99,7 @@ const MAX_POWERPOINT_FONT_SIZE_PT: f64 = 512.0;
 static WORD_DISPATCH_LOCK: Mutex<()> = Mutex::new(());
 static POWERPOINT_DISPATCH_LOCK: Mutex<()> = Mutex::new(());
 static OFFICE_EDITOR_SIZE_WRITE_GENERATION: AtomicU64 = AtomicU64::new(0);
+static FAST_OPEN_WATCHER_STARTED: OnceLock<()> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy)]
 struct OfficeEditorWindowSize {
@@ -566,6 +575,231 @@ fn host_from_request_name(value: &str) -> Result<OfficeHost, String> {
 
 fn sessions_root(host: OfficeHost) -> Result<PathBuf, String> {
     Ok(runtime_root(host)?.join("OfficeSessions"))
+}
+
+fn fast_open_inbox_roots_for_home(home: &Path) -> Vec<(OfficeHost, PathBuf)> {
+    vec![
+        (
+            OfficeHost::Word,
+            home.join(WORD_FAST_OPEN_INBOX_SUFFIX),
+        ),
+        (
+            OfficeHost::Powerpoint,
+            home.join(POWERPOINT_FAST_OPEN_INBOX_SUFFIX),
+        ),
+    ]
+}
+
+fn fast_open_inbox_roots() -> Result<Vec<(OfficeHost, PathBuf)>, String> {
+    Ok(fast_open_inbox_roots_for_home(&user_home()?))
+}
+
+fn fast_open_session_id(path: &Path) -> Option<String> {
+    let file_name = path.file_name()?.to_str()?;
+    let session_id = file_name.strip_suffix(".json")?;
+    if validate_uuid(session_id, "Fast-open Session id").is_ok() {
+        Some(session_id.to_string())
+    } else {
+        None
+    }
+}
+
+fn fast_open_modified_is_recent(modified: SystemTime, now: SystemTime) -> bool {
+    match now.duration_since(modified) {
+        Ok(age) => (FAST_OPEN_MIN_STABLE_AGE..=FAST_OPEN_MAX_AGE).contains(&age),
+        Err(error) => error.duration() <= FAST_OPEN_FUTURE_TOLERANCE,
+    }
+}
+
+fn persist_fast_open_claim(
+    expected_host: OfficeHost,
+    session_id: &str,
+    claim_path: &Path,
+) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(claim_path).map_err(|error| {
+        format!(
+            "Unable to inspect claimed Office fast-open request {}: {error}",
+            claim_path.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() == 0
+        || metadata.len() > MAX_REQUEST_BYTES
+    {
+        return Err("Office fast-open request has an invalid file type or size".to_string());
+    }
+    let bytes = fs::read(claim_path).map_err(|error| {
+        format!(
+            "Unable to read claimed Office fast-open request {}: {error}",
+            claim_path.display()
+        )
+    })?;
+    let request: MacOfflineSessionRequest = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("Office fast-open request contains invalid JSON: {error}"))?;
+    validate_request(&request, session_id)?;
+    if host_from_request_name(&request.host)? != expected_host {
+        return Err("Office fast-open request host does not match its sandbox inbox".to_string());
+    }
+    if request.operation.as_deref().unwrap_or("formula") != "formula" {
+        return Err("Office fast-open accepts only ordinary formula requests".to_string());
+    }
+
+    ensure_runtime_root(expected_host)?;
+    atomic_write_runtime(&request_path(expected_host, session_id)?, &bytes, 0o600)
+}
+
+pub(crate) fn consume_fast_open_request(app: &AppHandle) -> Result<bool, String> {
+    let now = SystemTime::now();
+    let mut candidates = Vec::new();
+    'host_roots: for (host, root) in fast_open_inbox_roots()? {
+        let root_metadata = loop {
+            match fs::symlink_metadata(&root) {
+                Ok(metadata) => break metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue 'host_roots,
+                Err(error) => {
+                    return Err(format!(
+                        "Unable to inspect Office fast-open inbox {}: {error}",
+                        root.display()
+                    ))
+                }
+            }
+        };
+        if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
+            return Err(format!(
+                "Office fast-open inbox is not a real directory: {}",
+                root.display()
+            ));
+        }
+        let entries = loop {
+            match fs::read_dir(&root) {
+                Ok(entries) => break entries,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => {
+                    return Err(format!(
+                        "Unable to enumerate Office fast-open inbox {}: {error}",
+                        root.display()
+                    ))
+                }
+            }
+        };
+        'entries: for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => {
+                    return Err(format!(
+                        "Unable to enumerate Office fast-open inbox {}: {error}",
+                        root.display()
+                    ))
+                }
+            };
+            let path = entry.path();
+            let Some(session_id) = fast_open_session_id(&path) else {
+                continue;
+            };
+            let metadata = loop {
+                match fs::symlink_metadata(&path) {
+                    Ok(metadata) => break metadata,
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue 'entries,
+                    Err(error) => {
+                        return Err(format!(
+                            "Unable to inspect Office fast-open request {}: {error}",
+                            path.display()
+                        ))
+                    }
+                }
+            };
+            if metadata.file_type().is_symlink()
+                || !metadata.is_file()
+                || metadata.len() == 0
+                || metadata.len() > MAX_REQUEST_BYTES
+            {
+                continue;
+            }
+            let modified = metadata.modified().map_err(|error| {
+                format!(
+                    "Unable to read Office fast-open request timestamp {}: {error}",
+                    path.display()
+                )
+            })?;
+            if !fast_open_modified_is_recent(modified, now) {
+                continue;
+            }
+            candidates.push((modified, host, path, session_id));
+        }
+    }
+
+    candidates.sort_by(|left, right| right.0.cmp(&left.0));
+    for (_modified, host, path, session_id) in candidates {
+        let parent = path
+            .parent()
+            .ok_or_else(|| "Office fast-open request has no inbox parent".to_string())?;
+        let claim_path = parent.join(format!(
+            ".{session_id}.{}.claim",
+            Uuid::new_v4()
+        ));
+        match fs::rename(&path, &claim_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(format!(
+                    "Unable to claim Office fast-open request {}: {error}",
+                    path.display()
+                ))
+            }
+        }
+
+        let persist_result = persist_fast_open_claim(host, &session_id, &claim_path);
+        let _ = fs::remove_file(&claim_path);
+        persist_result?;
+        let url = format!("visualtex://office/open?session={session_id}");
+        handle_open_url(app, &url)?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+fn refresh_fast_open_ready_markers() -> Result<(), String> {
+    let heartbeat = format!("visualtex-fast-open-ready-v1\n{}\n", epoch_ms());
+    for (_host, root) in fast_open_inbox_roots()? {
+        fs::create_dir_all(&root).map_err(|error| {
+            format!(
+                "Unable to create Office fast-open inbox {}: {error}",
+                root.display()
+            )
+        })?;
+        set_mode(&root, 0o700)?;
+        atomic_write_runtime(&root.join(FAST_OPEN_READY_FILE), heartbeat.as_bytes(), 0o600)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn start_fast_open_inbox_watcher(app: AppHandle) {
+    if FAST_OPEN_WATCHER_STARTED.set(()).is_err() {
+        return;
+    }
+    std::thread::spawn(move || {
+        let mut last_heartbeat = Instant::now()
+            .checked_sub(FAST_OPEN_READY_HEARTBEAT_INTERVAL)
+            .unwrap_or_else(Instant::now);
+        loop {
+            if last_heartbeat.elapsed() >= FAST_OPEN_READY_HEARTBEAT_INTERVAL {
+                if let Err(error) = refresh_fast_open_ready_markers() {
+                    eprintln!("Unable to refresh VisualTeX Office fast-open readiness: {error}");
+                }
+                last_heartbeat = Instant::now();
+            }
+            if let Err(error) = consume_fast_open_request(&app) {
+                eprintln!("Unable to consume VisualTeX Office fast-open request: {error}");
+                std::thread::sleep(Duration::from_millis(250));
+                continue;
+            }
+            std::thread::sleep(FAST_OPEN_POLL_INTERVAL);
+        }
+    });
 }
 
 fn ensure_runtime_root(host: OfficeHost) -> Result<PathBuf, String> {
@@ -5855,6 +6089,63 @@ mod tests {
     }
 
     #[test]
+    fn fast_open_inboxes_are_host_sandbox_only_and_uuid_named() {
+        let home = Path::new("/Users/visualtex-test");
+        let roots = fast_open_inbox_roots_for_home(home);
+        assert_eq!(roots.len(), 2);
+        assert_eq!(
+            roots[0],
+            (
+                OfficeHost::Word,
+                home.join(WORD_FAST_OPEN_INBOX_SUFFIX)
+            )
+        );
+        assert_eq!(
+            roots[1],
+            (
+                OfficeHost::Powerpoint,
+                home.join(POWERPOINT_FAST_OPEN_INBOX_SUFFIX)
+            )
+        );
+        assert!(roots
+            .iter()
+            .all(|(_, root)| root.to_string_lossy().contains("/Library/Containers/com.microsoft.")));
+
+        let session_id = "12345678-1234-4234-9234-123456789abc";
+        assert_eq!(
+            fast_open_session_id(Path::new(&format!("{session_id}.json"))).as_deref(),
+            Some(session_id)
+        );
+        assert!(fast_open_session_id(Path::new(&format!(".{session_id}.tmp"))).is_none());
+        assert!(fast_open_session_id(Path::new("not-a-uuid.json")).is_none());
+    }
+
+    #[test]
+    fn fast_open_requests_have_a_short_replay_window() {
+        let now = UNIX_EPOCH + Duration::from_secs(100);
+        assert!(fast_open_modified_is_recent(
+            now - Duration::from_secs(FAST_OPEN_MAX_AGE.as_secs() - 1),
+            now,
+        ));
+        assert!(!fast_open_modified_is_recent(
+            now - Duration::from_secs(FAST_OPEN_MAX_AGE.as_secs() + 1),
+            now,
+        ));
+        assert!(!fast_open_modified_is_recent(
+            now - Duration::from_millis(FAST_OPEN_MIN_STABLE_AGE.as_millis() as u64 / 2),
+            now,
+        ));
+        assert!(fast_open_modified_is_recent(
+            now + FAST_OPEN_FUTURE_TOLERANCE,
+            now,
+        ));
+        assert!(!fast_open_modified_is_recent(
+            now + FAST_OPEN_FUTURE_TOLERANCE + Duration::from_secs(1),
+            now,
+        ));
+    }
+
+    #[test]
     fn recent_office_request_suppresses_only_the_matching_reopen_race() {
         let temporary = tempfile::TempDir::new().expect("temporary request root should exist");
         let sessions = temporary.path().join("OfficeSessions");
@@ -6467,8 +6758,8 @@ mod tests {
             reference_width_pt: None,
             reference_height_pt: None,
             reference_baseline_pt: None,
-            created_with_version: "1.2.4".to_string(),
-            updated_with_version: "1.2.4".to_string(),
+            created_with_version: "1.2.5".to_string(),
+            updated_with_version: "1.2.5".to_string(),
             created_at: "unix-ms:1".to_string(),
             updated_at: "unix-ms:1".to_string(),
         }

@@ -10085,6 +10085,16 @@ Private Sub VTWordPerformanceMark(ByVal stageName As String)
         ";elapsedMs=" & CStr(elapsedMilliseconds) & vbLf
 End Sub
 
+Private Sub VTWordPerformanceNote( _
+    ByVal keyName As String, _
+    ByVal valueText As String)
+
+    If Not VT_WORD_PERFORMANCE_ACTIVE Then Exit Sub
+    VT_WORD_PERFORMANCE_BUFFER = VT_WORD_PERFORMANCE_BUFFER & _
+        keyName & "=" & Replace$(Replace$( _
+            valueText, vbCr, " "), vbLf, " ") & vbLf
+End Sub
+
 Private Sub VTWordPerformanceFlush( _
     ByVal sessionId As String, _
     Optional ByVal errorNumber As Long = 0, _
@@ -13408,7 +13418,6 @@ Private Sub VTWordCreate( _
     Dim sessionId As String
     Dim formulaId As String
     Dim pendingMarker As String
-    Dim placeholder As InlineShape
     Dim insertionRange As Range
     Dim requestJson As String
     Dim requestedFontSizePt As Double
@@ -13416,33 +13425,30 @@ Private Sub VTWordCreate( _
     Dim errorNumber As Long
     Dim errorDescription As String
 
+    VTWordPerformanceStartLocal "formula-open"
     On Error GoTo Failed
     VTRequireWritableWordDocument
-    VTRefreshWordHealthQuietly
+    VTWordPerformanceMark "document-ready"
     VTCleanupOrphanedNumberedDisplaySelection Selection.Range
-    If Not VTPathFileExists(VTPlaceholderImagePath()) Then
-        Err.Raise vbObjectError + 7404, "VisualTeX", "The VisualTeX placeholder resource is missing. Repair the offline add-in."
-    End If
-
+    VTWordPerformanceMark "orphan-cleanup-complete"
     sessionId = VTNewUuidV4()
     formulaId = VTNewUuidV4()
     pendingMarker = VTPendingMarker(sessionId, formulaId)
+    VTWordPerformanceMark "identities-ready"
     requestedFontSizePt = _
         VTPreferredWordFormulaFontSize(Selection.Range.Duplicate)
+    VTWordPerformanceMark "font-size-ready"
     Set insertionRange = VTPrepareWordCreateInsertionRange( _
         Selection.Range.Duplicate, displayMode)
-    Set placeholder = ActiveDocument.InlineShapes.AddPicture( _
-        FileName:=VTPlaceholderImagePath(), _
-        LinkToFile:=False, _
-        SaveWithDocument:=True, _
-        Range:=insertionRange)
-    placeholder.AlternativeText = pendingMarker
-    placeholder.Title = pendingMarker
-    placeholder.Width = 1
-    placeholder.Height = 1
-    VTAddPendingBookmark placeholder.Range, sessionId
-    VTTraceWordSession sessionId, "placeholder-created", pendingMarker
-    Selection.SetRange Start:=placeholder.Range.End, End:=placeholder.Range.End
+    VTWordPerformanceMark "insertion-range-ready"
+    ' Keep create lightweight. The commit/cancel transaction already supports a
+    ' pending Bookmark with no InlineShape and resolves the final insertion Range
+    ' from that Bookmark. Avoiding a 1×1 PNG here removes Word's synchronous
+    ' picture-import cost from the editor-open path.
+    VTAddPendingBookmark insertionRange, sessionId
+    VTTraceWordSession sessionId, "bookmark-anchor-created", pendingMarker
+    Selection.SetRange Start:=insertionRange.Start, End:=insertionRange.Start
+    VTWordPerformanceMark "bookmark-anchor-ready"
 
     requestJson = VTRequestJson( _
         sessionId, _
@@ -13458,20 +13464,28 @@ Private Sub VTWordCreate( _
         "", _
         nativeEquation, _
         requestedFontSizePt)
+    VTWordPerformanceMark "request-serialized"
     launchTiming = _
         VTWriteAndLaunchSession(VT_WORD_HOST, sessionId, requestJson)
+    VTWordPerformanceNote "launcherTiming", launchTiming
+    VTWordPerformanceMark "launcher-returned"
     VTTraceWordSession _
         sessionId, "request-written-and-launched", _
         pendingMarker & " " & launchTiming
     VTTraceWordSession sessionId, "editor-launched", pendingMarker
+    VTWordPerformanceMark "formula-open-complete"
+    VTWordPerformanceFlush sessionId
     Exit Sub
 
 Failed:
     errorNumber = Err.Number
     errorDescription = Err.Description
     On Error Resume Next
-    If Not placeholder Is Nothing Then placeholder.Delete
-    If Len(sessionId) > 0 Then VTDeleteSessionFiles sessionId
+    VTWordPerformanceFlush sessionId, errorNumber, errorDescription
+    If Len(sessionId) > 0 Then
+        VTDeletePendingBookmark ActiveDocument, sessionId
+        VTDeleteSessionFiles sessionId
+    End If
     On Error GoTo 0
     VTShowError "Word formula creation", errorNumber, errorDescription
 End Sub
