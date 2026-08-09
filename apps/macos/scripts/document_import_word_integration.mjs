@@ -128,6 +128,7 @@ const createSourceFormattedEquationRegression = process.argv.includes(
 const createImageNativeMonitorRegression = process.argv.includes(
   "--create-image-native-monitor-double-click",
 );
+const physicalHitTestOnly = process.argv.includes("--physical-hit-test-only");
 const createImagePhysicalRegression =
   process.argv.includes("--create-image-physical-double-click") ||
   createImageNativeMonitorRegression ||
@@ -223,6 +224,11 @@ if (physicalApplyPerformance && physicalTarget !== "image-inline") {
 }
 if (createImageRegression && physicalDoubleClick) {
   throw new Error("--create-image cannot be combined with --physical-double-click");
+}
+if (physicalHitTestOnly && !createImagePhysicalRegression) {
+  throw new Error(
+    "--physical-hit-test-only requires --create-image-physical-double-click or --create-image-native-monitor-double-click",
+  );
 }
 if (
   firstFrameImageRegression &&
@@ -712,7 +718,27 @@ async function applyActiveVisualTeXFormula(sessionId, timeoutMs = 10_000) {
   };
 }
 
-function physicallyDoubleClickSelectedWordFormula(
+function physicallyDoubleClickAt(x, y, appKitY = true) {
+  const argumentsList = [
+    join(repositoryRoot, "scripts/macos_physical_double_click.swift"),
+    x.toFixed(3),
+    y.toFixed(3),
+  ];
+  if (appKitY) argumentsList.push("--appkit-y");
+  const click = spawnSync("/usr/bin/swift", argumentsList, {
+    encoding: "utf8",
+    timeout: 30_000,
+    maxBuffer: 2 * 1024 * 1024,
+  });
+  if (click.status !== 0) {
+    throw new Error(
+      click.stderr.trim() || click.stdout.trim() || "Quartz physical double-click failed",
+    );
+  }
+  return click.stdout.trim();
+}
+
+function selectedWordFormulaScreenBounds(
   testDocumentName,
   boundsMacro = "VisualTeX_WriteSelectedScreenBoundsForRegression",
 ) {
@@ -738,33 +764,44 @@ function physicallyDoubleClickSelectedWordFormula(
   ) {
     throw new Error(`Word returned invalid physical screen bounds: ${status}`);
   }
+  return values;
+}
+
+function wordFrontWindowScreenBounds() {
+  const raw = runAppleScript([
+    'tell application "System Events"',
+    'tell process "Microsoft Word"',
+    'if (count of windows) is 0 then error "Word window is missing"',
+    "set windowPosition to position of window 1",
+    "set windowSize to size of window 1",
+    'return (item 1 of windowPosition as text) & "|" & (item 2 of windowPosition as text) & "|" & (item 1 of windowSize as text) & "|" & (item 2 of windowSize as text)',
+    "end tell",
+    "end tell",
+  ], 10_000);
+  const values = raw.split("|").map(Number);
+  if (
+    values.length !== 4 ||
+    values.some((value) => !Number.isFinite(value)) ||
+    values[2] <= 0 ||
+    values[3] <= 0
+  ) {
+    throw new Error(`Word returned invalid window bounds: ${raw}`);
+  }
+  return values;
+}
+
+function physicallyDoubleClickSelectedWordFormula(
+  testDocumentName,
+  boundsMacro = "VisualTeX_WriteSelectedScreenBoundsForRegression",
+) {
+  const values = selectedWordFormulaScreenBounds(testDocumentName, boundsMacro);
   const clickX = values[0] + values[2] / 2;
   const clickY = values[1] + values[3] / 2;
-  const click = spawnSync(
-    "/usr/bin/swift",
-    [
-      join(repositoryRoot, "scripts/macos_physical_double_click.swift"),
-      clickX.toFixed(3),
-      clickY.toFixed(3),
-      "--appkit-y",
-    ],
-    {
-      encoding: "utf8",
-      timeout: 30_000,
-      maxBuffer: 2 * 1024 * 1024,
-    },
-  );
-  if (click.status !== 0) {
-    throw new Error(
-      click.stderr.trim() || click.stdout.trim() || "Quartz physical double-click failed",
-    );
-  }
-  const clickResult = click.stdout.trim();
   return {
     wordScreenCenterX: clickX,
     wordScreenCenterY: clickY,
     screenBounds: values,
-    quartzResult: clickResult,
+    quartzResult: physicallyDoubleClickAt(clickX, clickY, true),
   };
 }
 const legacyAlignLatex = String.raw`\begin{align}
@@ -1747,6 +1784,18 @@ function currentSessionIds() {
   );
 }
 
+function sessionIdsAddedAfter(before) {
+  return [...currentSessionIds()].filter((sessionId) => !before.has(sessionId));
+}
+
+async function assertNoNewWordEditSession(before, label, waitMs = 1_200) {
+  await sleep(waitMs);
+  const added = sessionIdsAddedAfter(before);
+  if (added.length > 0) {
+    throw new Error(`${label} unexpectedly created VisualTeX Session(s): ${added.join(",")}`);
+  }
+}
+
 function inspectWordFormulaContainers(testDocumentName, formulas, stage) {
   const report = runFormulaRegressionReport(testDocumentName, formulas);
   if (outputKind === "omml") {
@@ -2336,6 +2385,40 @@ function validatedPhysicalEditorReadiness(sessionId, formulaId, marker, records)
     ),
     stages: stageElapsed,
   };
+}
+
+async function waitForPhysicalEditorVisible(
+  sessionId,
+  formulaId,
+  timeoutMs = 30_000,
+) {
+  const readyPath = join(sessionsRoot, sessionId, editorReadyFileName);
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (existsSync(readyPath)) {
+      const marker = JSON.parse(readFileSync(readyPath, "utf8"));
+      if (
+        marker.schema === editorReadySchema &&
+        marker.sessionId === sessionId &&
+        marker.host === "word" &&
+        marker.windowVisible === true &&
+        Number.isFinite(marker.contentReadyMs)
+      ) {
+        return {
+          schema: marker.schema,
+          sessionId,
+          formulaId,
+          generation: marker.generation,
+          windowVisible: marker.windowVisible,
+          windowFocused: marker.windowFocused,
+          contentReadyMs: marker.contentReadyMs,
+          showFocusMs: marker.showFocusMs,
+        };
+      }
+    }
+    await sleep(50);
+  }
+  throw new Error(`VisualTeX did not expose a visible Word editor for ${formulaId}`);
 }
 
 async function waitForPhysicalEditorReadiness(
@@ -3626,7 +3709,6 @@ p(\mathbf{x},t)\,
         `Word lost the physical-regression document around the VisualTeX restart: before=${documentBeforeAppRestart} after=${documentAfterAppRestart}`,
       );
     }
-    const sessionsBeforePhysicalEdit = currentSessionIds();
     const physicalSelection = runAppleScript([
       'tell application "Microsoft Word"',
       `set documentObject to document ${JSON.stringify(testDocumentName)}`,
@@ -3653,6 +3735,70 @@ p(\mathbf{x},t)\,
         `Word did not expose the required metadata-only image fixture: ${physicalSelection}`,
       );
     }
+
+    let negativeHitTests = null;
+    if (physicalHitTestOnly) {
+      const formulaBounds = selectedWordFormulaScreenBounds(testDocumentName);
+      const wordBounds = wordFrontWindowScreenBounds();
+      const formulaLeft = formulaBounds[0];
+      const formulaTop = formulaBounds[1];
+      const formulaWidth = formulaBounds[2];
+      const formulaHeight = formulaBounds[3];
+      const wordLeft = wordBounds[0];
+      const wordWidth = wordBounds[2];
+      let blankX = formulaLeft + formulaWidth + Math.max(80, formulaWidth);
+      if (blankX >= wordLeft + wordWidth - 40) {
+        blankX = formulaLeft - Math.max(80, formulaWidth);
+      }
+      if (blankX <= wordLeft + 20 || blankX >= wordLeft + wordWidth - 20) {
+        throw new Error(
+          `Unable to choose same-line blank-space click outside formula: ${JSON.stringify({ formulaBounds, wordBounds, blankX })}`,
+        );
+      }
+      const blankY = formulaTop + formulaHeight / 2;
+      const beforeBlankClick = currentSessionIds();
+      const blankQuartzResult = physicallyDoubleClickAt(blankX, blankY, true);
+      await assertNoNewWordEditSession(
+        beforeBlankClick,
+        "A same-line blank-space double-click",
+      );
+
+      runAppleScript([
+        'tell application "Microsoft Word"',
+        `set documentObject to document ${JSON.stringify(testDocumentName)}`,
+        "activate object documentObject",
+        "activate",
+        "set formulaShape to inline shape 1 of documentObject",
+        "select text object of formulaShape",
+        "end tell",
+      ], 30_000);
+      const refreshedWordBounds = wordFrontWindowScreenBounds();
+      const ribbonX = refreshedWordBounds[0] + refreshedWordBounds[2] * 0.55;
+      const ribbonY = refreshedWordBounds[1] + Math.min(120, refreshedWordBounds[3] * 0.16);
+      const beforeRibbonClick = currentSessionIds();
+      const ribbonQuartzResult = physicallyDoubleClickAt(ribbonX, ribbonY, false);
+      await assertNoNewWordEditSession(
+        beforeRibbonClick,
+        "A Word Ribbon double-click with a stale formula selection",
+      );
+
+      runAppleScript([
+        'tell application "Microsoft Word"',
+        `set documentObject to document ${JSON.stringify(testDocumentName)}`,
+        "activate object documentObject",
+        "activate",
+        "set formulaShape to inline shape 1 of documentObject",
+        "select text object of formulaShape",
+        "end tell",
+      ], 30_000);
+      negativeHitTests = {
+        formulaBounds,
+        blank: { x: blankX, y: blankY, quartzResult: blankQuartzResult },
+        ribbon: { x: ribbonX, y: ribbonY, quartzResult: ribbonQuartzResult },
+      };
+    }
+
+    const sessionsBeforePhysicalEdit = currentSessionIds();
     const physicalClick = createSourceFormattedEquationRegression
       ? (() => {
           runAppleScript([
@@ -3680,15 +3826,46 @@ p(\mathbf{x},t)\,
       formula.codeFormat,
       formula.metadataLines,
     );
-    const editorReadiness = await waitForPhysicalEditorReadiness(
-      physicalEditSessionId,
-      formula.formulaId,
-    );
+    const editorReadiness = physicalHitTestOnly
+      ? await waitForPhysicalEditorVisible(
+          physicalEditSessionId,
+          formula.formulaId,
+        )
+      : await waitForPhysicalEditorReadiness(
+          physicalEditSessionId,
+          formula.formulaId,
+        );
     await assertSinglePhysicalEditSession(
       sessionsBeforePhysicalEdit,
       physicalEditSessionId,
       formula.formulaId,
     );
+    if (physicalHitTestOnly) {
+      physicalDoubleClickResult = {
+        sessionId: physicalEditSessionId,
+        formulaId: formula.formulaId,
+        selection: physicalSelectionFields,
+        physicalClick,
+        negativeHitTests,
+        editorReadiness,
+      };
+      writeFileSync(
+        finalBinaryPhysicalStatusPath,
+        JSON.stringify(
+          {
+            status: "PASS",
+            revision: "word-double-click-hit-test-20260809-r1",
+            ...physicalDoubleClickResult,
+          },
+          null,
+          2,
+        ),
+        { mode: 0o600 },
+      );
+      console.log(JSON.stringify(physicalDoubleClickResult, null, 2));
+      console.log("Word physical double-click hit-test integration passed");
+      return;
+    }
     const pictureFormatUi = wordPictureFormatUiSnapshot();
     if (pictureFormatUi.pictureFormatVisible) {
       throw new Error(

@@ -7785,6 +7785,165 @@ Private Sub VTWriteLatexRedrawSource( _
     Loop
 End Sub
 
+Private Function VTUnsignedUtf16CodeUnit( _
+    ByVal character As String) As Long
+
+    Dim value As Long
+
+    If Len(character) = 0 Then Exit Function
+    value = AscW(character)
+    If value < 0 Then value = value + 65536
+    VTUnsignedUtf16CodeUnit = value
+End Function
+
+Private Function VTAdvanceWordOffsetToUtf16Boundary( _
+    ByVal sourceText As String, _
+    ByVal targetUtf16Offset As Long, _
+    ByRef utf16Cursor As Long, _
+    ByRef wordCursor As Long) As Long
+
+    Dim firstUnit As Long
+    Dim secondUnit As Long
+
+    If targetUtf16Offset < utf16Cursor Or _
+       targetUtf16Offset < 0 Or _
+       targetUtf16Offset > Len(sourceText) Then
+        Err.Raise vbObjectError + 7590, "VisualTeX", _
+            "A LaTeX redraw UTF-16 offset is outside the source snapshot."
+    End If
+
+    Do While utf16Cursor < targetUtf16Offset
+        firstUnit = VTUnsignedUtf16CodeUnit( _
+            Mid$(sourceText, utf16Cursor + 1, 1))
+        If firstUnit >= &HD800& And firstUnit <= &HDBFF& And _
+           utf16Cursor + 1 < Len(sourceText) Then
+            secondUnit = VTUnsignedUtf16CodeUnit( _
+                Mid$(sourceText, utf16Cursor + 2, 1))
+            If secondUnit >= &HDC00& And secondUnit <= &HDFFF& Then
+                If utf16Cursor + 2 > targetUtf16Offset Then
+                    Err.Raise vbObjectError + 7590, "VisualTeX", _
+                        "A LaTeX redraw range splits a Unicode surrogate pair."
+                End If
+                utf16Cursor = utf16Cursor + 2
+                wordCursor = wordCursor + 1
+            Else
+                utf16Cursor = utf16Cursor + 1
+                wordCursor = wordCursor + 1
+            End If
+        Else
+            utf16Cursor = utf16Cursor + 1
+            wordCursor = wordCursor + 1
+        End If
+    Loop
+
+    VTAdvanceWordOffsetToUtf16Boundary = wordCursor
+End Function
+
+Private Sub VTBuildWordOffsetsFromUtf16( _
+    ByVal sourceText As String, _
+    ByRef sourceStarts() As Long, _
+    ByRef sourceEnds() As Long, _
+    ByVal itemCount As Long, _
+    ByRef wordStarts() As Long, _
+    ByRef wordEnds() As Long)
+
+    Dim utf16Cursor As Long
+    Dim wordCursor As Long
+    Dim itemIndex As Long
+
+    If itemCount < 1 Then
+        Err.Raise vbObjectError + 7590, "VisualTeX", _
+            "LaTeX redraw requires at least one source range."
+    End If
+
+    ReDim wordStarts(0 To itemCount - 1)
+    ReDim wordEnds(0 To itemCount - 1)
+    utf16Cursor = 0
+    wordCursor = 0
+
+    For itemIndex = 0 To itemCount - 1
+        wordStarts(itemIndex) = VTAdvanceWordOffsetToUtf16Boundary( _
+            sourceText, sourceStarts(itemIndex), utf16Cursor, wordCursor)
+        wordEnds(itemIndex) = VTAdvanceWordOffsetToUtf16Boundary( _
+            sourceText, sourceEnds(itemIndex), utf16Cursor, wordCursor)
+    Next itemIndex
+End Sub
+
+Private Function VTLatexRedrawWordOffsetsMatch( _
+    ByVal documentObject As Document, _
+    ByVal targetStart As Long, _
+    ByVal targetEnd As Long, _
+    ByRef sourceTexts() As String, _
+    ByVal itemCount As Long, _
+    ByRef candidateStarts() As Long, _
+    ByRef candidateEnds() As Long) As Boolean
+
+    Dim itemIndex As Long
+    Dim candidateRange As Range
+
+    If documentObject Is Nothing Or itemCount < 1 Then Exit Function
+    On Error GoTo NotMatched
+    For itemIndex = 0 To itemCount - 1
+        If candidateStarts(itemIndex) < 0 Or _
+           candidateEnds(itemIndex) <= candidateStarts(itemIndex) Or _
+           targetStart + candidateEnds(itemIndex) > targetEnd Then
+            Exit Function
+        End If
+        Set candidateRange = documentObject.Range( _
+            Start:=targetStart + candidateStarts(itemIndex), _
+            End:=targetStart + candidateEnds(itemIndex))
+        If StrComp( _
+           candidateRange.Text, sourceTexts(itemIndex), _
+           vbBinaryCompare) <> 0 Then
+            Exit Function
+        End If
+    Next itemIndex
+    VTLatexRedrawWordOffsetsMatch = True
+    Exit Function
+
+NotMatched:
+    VTLatexRedrawWordOffsetsMatch = False
+End Function
+
+Private Sub VTResolveLatexRedrawWordOffsets( _
+    ByVal documentObject As Document, _
+    ByVal targetStart As Long, _
+    ByVal targetEnd As Long, _
+    ByVal sourceSnapshot As String, _
+    ByRef sourceStarts() As Long, _
+    ByRef sourceEnds() As Long, _
+    ByRef sourceTexts() As String, _
+    ByVal itemCount As Long, _
+    ByRef wordStarts() As Long, _
+    ByRef wordEnds() As Long)
+
+    Dim itemIndex As Long
+
+    ReDim wordStarts(0 To itemCount - 1)
+    ReDim wordEnds(0 To itemCount - 1)
+    For itemIndex = 0 To itemCount - 1
+        wordStarts(itemIndex) = sourceStarts(itemIndex)
+        wordEnds(itemIndex) = sourceEnds(itemIndex)
+    Next itemIndex
+    If VTLatexRedrawWordOffsetsMatch( _
+       documentObject, targetStart, targetEnd, sourceTexts, itemCount, _
+       wordStarts, wordEnds) Then
+        Exit Sub
+    End If
+
+    VTBuildWordOffsetsFromUtf16 _
+        sourceSnapshot, sourceStarts, sourceEnds, itemCount, _
+        wordStarts, wordEnds
+    If VTLatexRedrawWordOffsetsMatch( _
+       documentObject, targetStart, targetEnd, sourceTexts, itemCount, _
+       wordStarts, wordEnds) Then
+        Exit Sub
+    End If
+
+    Err.Raise vbObjectError + 7594, "VisualTeX", _
+        "Word text changed before LaTeX redraw rendering."
+End Sub
+
 Private Sub VTStartWordLatexRedraw( _
     ByVal redrawScope As String, _
     ByVal outputKind As String)
@@ -8687,6 +8846,52 @@ Public Sub VisualTeX_RefreshImageMacroButtonsForRegression()
     End If
 End Sub
 
+Public Sub VisualTeX_WriteSelectedDoubleClickScreenBounds()
+    Dim formulaShape As InlineShape
+    Dim targetRange As Range
+    Dim screenLeft As Long
+    Dim screenTop As Long
+    Dim screenWidth As Long
+    Dim screenHeight As Long
+    Dim statusPath As String
+    Dim boundsErrorNumber As Long
+    Dim boundsErrorDescription As String
+
+    statusPath = VTApplicationSupportRoot() & _
+        "/double-click-screen-bounds.txt"
+    On Error GoTo Failed
+    If Documents.Count = 0 Or Selection Is Nothing Then
+        Err.Raise vbObjectError + 7593, "VisualTeX", _
+            "There is no selected Word formula for double-click hit testing."
+    End If
+    If Not VTTryVisualTeXMetadataShapeAtSelection( _
+       Selection, formulaShape) Then
+        Err.Raise vbObjectError + 7593, "VisualTeX", _
+            "The current Word selection does not resolve to a VisualTeX image formula."
+    End If
+    Set targetRange = formulaShape.Range.Duplicate
+    ActiveWindow.GetPoint _
+        screenLeft, screenTop, screenWidth, screenHeight, targetRange
+    If screenWidth <= 0 Or screenHeight <= 0 Then
+        Err.Raise vbObjectError + 7593, "VisualTeX", _
+            "Word returned invalid formula screen bounds."
+    End If
+    VTWriteTextAtomic statusPath, _
+        "PASS|" & CStr(screenLeft) & "|" & CStr(screenTop) & "|" & _
+        CStr(screenWidth) & "|" & CStr(screenHeight) & vbLf
+    Exit Sub
+
+Failed:
+    boundsErrorNumber = Err.Number
+    boundsErrorDescription = Err.Description
+    On Error Resume Next
+    VTWriteTextAtomic statusPath, _
+        "FAIL|" & CStr(boundsErrorNumber) & "|" & _
+        Replace$(Replace$(boundsErrorDescription, vbCr, " "), _
+            vbLf, " ") & vbLf
+    On Error GoTo 0
+End Sub
+
 Public Sub VisualTeX_WriteSelectedPictureScreenBoundsRegression()
     Dim targetRange As Range
     Dim screenLeft As Long
@@ -9126,6 +9331,36 @@ InvalidSelection:
     VTTryVisualTeXMetadataShapeAtSelection = False
 End Function
 
+Private Function VTTryVisualTeXMetadataShapeAtDoubleClick( _
+    ByVal selected As Selection, _
+    ByRef resolvedShape As InlineShape) As Boolean
+
+    Dim candidate As InlineShape
+    Dim shapeRange As Range
+    Dim selectionStart As Long
+    Dim selectionEnd As Long
+
+    Set resolvedShape = Nothing
+    If selected Is Nothing Then Exit Function
+    On Error GoTo NotMatched
+    If Not VTTryVisualTeXMetadataShapeAtSelection( _
+       selected, candidate) Then Exit Function
+
+    Set shapeRange = candidate.Range.Duplicate
+    selectionStart = selected.Range.Start
+    selectionEnd = selected.Range.End
+    If selectionStart > shapeRange.End + 1 Or _
+       selectionEnd < shapeRange.Start - 1 Then Exit Function
+
+    Set resolvedShape = candidate
+    VTTryVisualTeXMetadataShapeAtDoubleClick = True
+    Exit Function
+
+NotMatched:
+    Set resolvedShape = Nothing
+    VTTryVisualTeXMetadataShapeAtDoubleClick = False
+End Function
+
 Private Function VTInterceptVisualTeXPictureFormatCommand( _
     ByVal commandName As String) As Boolean
 
@@ -9235,7 +9470,7 @@ Public Function VTHandleWordBeforeDoubleClick( _
         VTTraceWordDoubleClick "handler-skip", selected, "reason=internal-mutation"
         GoTo HandlerFinished
     End If
-    If VTTryVisualTeXMetadataShapeAtSelection( _
+    If VTTryVisualTeXMetadataShapeAtDoubleClick( _
        selected, selectedShape) Then
         VTHandleWordBeforeDoubleClick = True
         VTTraceWordDoubleClick _
@@ -9259,7 +9494,9 @@ Public Function VTHandleWordBeforeDoubleClick( _
         GoTo HandlerFinished
     End If
     VTTraceWordDoubleClick "handler-image-not-found", selected, ""
-    Set nativeBookmark = VTFindNativeFormulaBookmark(selected.Range, False)
+    Set nativeBookmark = Nothing
+    If Not VTTryFindNativeFormulaBookmarkLocally( _
+       selected.Range, nativeBookmark) Then Set nativeBookmark = Nothing
     If nativeBookmark Is Nothing Then
         VTTraceWordDoubleClick "handler-native-not-found", selected, ""
         GoTo HandlerFinished
@@ -11220,6 +11457,7 @@ Private Sub VTDocumentImportInsertFormula( _
     ByVal outputKind As String, _
     ByRef insertedFormulaIds As Collection, _
     Optional ByVal overrideFontSizePt As Double = 0#, _
+    Optional ByVal preserveParagraphTopology As Boolean = False, _
     Optional ByVal sharedVectorDocument As Variant)
 
     Dim targetDocument As Document
@@ -11410,8 +11648,13 @@ Private Sub VTDocumentImportInsertFormula( _
 
         formulaStage = "place-native-caret"
         If displayMode = "block" Then
-            VTPlaceCaretAfterDisplayFormula formulaRange, formulaId
-            Set cursorRange = Selection.Range.Duplicate
+            If preserveParagraphTopology Then
+                Set cursorRange = targetDocument.Range( _
+                    Start:=formulaRange.End, End:=formulaRange.End)
+            Else
+                VTPlaceCaretAfterDisplayFormula formulaRange, formulaId
+                Set cursorRange = Selection.Range.Duplicate
+            End If
         Else
             ' A collapsed Range at OMath.Range.End remains inside the equation
             ' on Word for Mac. Establish a verified text boundary so a later
@@ -11511,8 +11754,15 @@ Private Sub VTDocumentImportInsertFormula( _
     insertedFormulaIds.Add formulaId
 
     If displayMode = "block" Then
-        VTPlaceCaretAfterDisplayFormula candidate.Range, formulaId
-        Set cursorRange = Selection.Range.Duplicate
+        If preserveParagraphTopology Then
+            Set formulaRange = VTVisualTeXImageContainerRange(candidate)
+            If formulaRange Is Nothing Then Set formulaRange = candidate.Range.Duplicate
+            Set cursorRange = targetDocument.Range( _
+                Start:=formulaRange.End, End:=formulaRange.End)
+        Else
+            VTPlaceCaretAfterDisplayFormula candidate.Range, formulaId
+            Set cursorRange = Selection.Range.Duplicate
+        End If
     Else
         Set formulaRange = VTVisualTeXImageContainerRange(candidate)
         Set cursorRange = targetDocument.Range( _
@@ -11901,9 +12151,12 @@ Private Sub VTResolveWordLatexRedrawFontsDispatch( _
     Dim sourceDocumentId As String
     Dim bookmarkName As String
     Dim sourceText As String
+    Dim sourceSnapshot As String
     Dim displayMode As String
     Dim sourceStarts() As Long
     Dim sourceEnds() As Long
+    Dim wordStarts() As Long
+    Dim wordEnds() As Long
     Dim sourceTexts() As String
     Dim displayModes() As String
     Dim resultText As String
@@ -11959,6 +12212,13 @@ Private Sub VTResolveWordLatexRedrawFontsDispatch( _
         Err.Raise vbObjectError + 7594, "VisualTeX", _
             "The LaTeX redraw target range is empty."
     End If
+    sourceSnapshot = VTReadText( _
+        VTSessionDirectory(sessionId) & VT_WORD_LATEX_REDRAW_SOURCE_FILE, _
+        VT_WORD_LATEX_REDRAW_MAX_BYTES)
+    If Len(sourceSnapshot) = 0 Then
+        Err.Raise vbObjectError + 7594, "VisualTeX", _
+            "The LaTeX redraw source snapshot is missing."
+    End If
 
     ReDim sourceStarts(0 To itemCount - 1)
     ReDim sourceEnds(0 To itemCount - 1)
@@ -11972,13 +12232,20 @@ Private Sub VTResolveWordLatexRedrawFontsDispatch( _
             manifest, itemIndex, "sourceEnd")
         If sourceStarts(itemIndex) < previousEnd Or _
            sourceEnds(itemIndex) <= sourceStarts(itemIndex) Or _
-           sourceEnds(itemIndex) > targetEnd - targetStart Then
+           sourceEnds(itemIndex) > Len(sourceSnapshot) Then
             Err.Raise vbObjectError + 7594, "VisualTeX", _
-                "LaTeX redraw preflight ranges overlap or exceed the Word target."
+                "LaTeX redraw preflight ranges overlap or exceed the source snapshot."
         End If
         sourceTexts(itemIndex) = VTBase64UrlDecodeUtf8( _
             VTDocumentImportRequired( _
                 manifest, itemIndex, "sourceTextBase64"))
+        If StrComp( _
+           Mid$(sourceSnapshot, sourceStarts(itemIndex) + 1, _
+                sourceEnds(itemIndex) - sourceStarts(itemIndex)), _
+           sourceTexts(itemIndex), vbBinaryCompare) <> 0 Then
+            Err.Raise vbObjectError + 7594, "VisualTeX", _
+                "The LaTeX redraw manifest no longer matches its source snapshot."
+        End If
         displayModes(itemIndex) = VTDocumentImportRequired( _
             manifest, itemIndex, "displayMode")
         If displayModes(itemIndex) <> "inline" And _
@@ -11986,26 +12253,26 @@ Private Sub VTResolveWordLatexRedrawFontsDispatch( _
             Err.Raise vbObjectError + 7594, "VisualTeX", _
                 "A LaTeX redraw preflight display mode is invalid."
         End If
-        Set sourceRange = targetDocument.Range( _
-            Start:=targetStart + sourceStarts(itemIndex), _
-            End:=targetStart + sourceEnds(itemIndex))
-        If StrComp( _
-           sourceRange.Text, sourceTexts(itemIndex), _
-           vbBinaryCompare) <> 0 Then
-            Err.Raise vbObjectError + 7594, "VisualTeX", _
-                "Word text changed before LaTeX redraw rendering."
-        End If
         previousEnd = sourceEnds(itemIndex)
     Next itemIndex
 
+    VTResolveLatexRedrawWordOffsets _
+        targetDocument, targetStart, targetEnd, sourceSnapshot, _
+        sourceStarts, sourceEnds, sourceTexts, itemCount, _
+        wordStarts, wordEnds
+
     resultText = "itemCount=" & CStr(itemCount) & vbLf
     For itemIndex = 0 To itemCount - 1
+        If wordEnds(itemIndex) > targetEnd - targetStart Then
+            Err.Raise vbObjectError + 7594, "VisualTeX", _
+                "A LaTeX redraw range exceeds the current Word target."
+        End If
         Set sourceRange = targetDocument.Range( _
-            Start:=targetStart + sourceStarts(itemIndex), _
-            End:=targetStart + sourceEnds(itemIndex))
+            Start:=targetStart + wordStarts(itemIndex), _
+            End:=targetStart + wordEnds(itemIndex))
         fontSizePt = VTInheritedLatexRedrawFontSize( _
             sourceRange, displayModes(itemIndex), targetStart, _
-            sourceStarts, sourceEnds, itemCount)
+            wordStarts, wordEnds, itemCount)
         If Not VTValidWordFormulaFontSize(fontSizePt) Then
             Err.Raise vbObjectError + 7594, "VisualTeX", _
                 "A LaTeX redraw source formula has an invalid Word font size."
@@ -12037,8 +12304,12 @@ Private Sub VTCommitWordLatexRedrawDispatch( _
     Dim insertedFormulaIds As Collection
     Dim sourceStarts() As Long
     Dim sourceEnds() As Long
+    Dim wordStarts() As Long
+    Dim wordEnds() As Long
+    Dim sourceTexts() As String
     Dim sourceFontSizes() As Double
     Dim originalSource As String
+    Dim sourceSnapshot As String
     Dim sourceText As String
     Dim formulaId As String
     Dim itemKind As String
@@ -12047,6 +12318,7 @@ Private Sub VTCommitWordLatexRedrawDispatch( _
     Dim sharedVectorDocumentPath As String
     Dim targetStart As Long
     Dim targetEnd As Long
+    Dim originalTargetLength As Long
     Dim previousEnd As Long
     Dim itemIndex As Long
     Dim completedItems As Long
@@ -12088,14 +12360,27 @@ Private Sub VTCommitWordLatexRedrawDispatch( _
     Set targetRange = anchorBookmark.Range.Duplicate
     targetStart = targetRange.Start
     targetEnd = targetRange.End
+    originalTargetLength = targetEnd - targetStart
     originalSource = targetRange.Text
     If targetEnd <= targetStart Then
         Err.Raise vbObjectError + 7591, "VisualTeX", _
             "The LaTeX redraw target range is empty."
     End If
+    If operationName = "latexRedraw" Then
+        sourceSnapshot = VTReadText( _
+            VTSessionDirectory(sessionId) & VT_WORD_LATEX_REDRAW_SOURCE_FILE, _
+            VT_WORD_LATEX_REDRAW_MAX_BYTES)
+        If Len(sourceSnapshot) = 0 Then
+            Err.Raise vbObjectError + 7591, "VisualTeX", _
+                "The LaTeX redraw source snapshot is missing."
+        End If
+    Else
+        sourceSnapshot = originalSource
+    End If
 
     ReDim sourceStarts(0 To itemCount - 1)
     ReDim sourceEnds(0 To itemCount - 1)
+    ReDim sourceTexts(0 To itemCount - 1)
     ReDim sourceFontSizes(0 To itemCount - 1)
     previousEnd = 0
     For itemIndex = 0 To itemCount - 1
@@ -12130,21 +12415,30 @@ Private Sub VTCommitWordLatexRedrawDispatch( _
         sourceEnds(itemIndex) = VTDocumentImportSourceOffset( _
             manifest, itemIndex, "sourceEnd")
         If sourceStarts(itemIndex) < previousEnd Or _
-           sourceEnds(itemIndex) <= sourceStarts(itemIndex) Or _
-           sourceEnds(itemIndex) > targetEnd - targetStart Then
+           sourceEnds(itemIndex) <= sourceStarts(itemIndex) Then
             Err.Raise vbObjectError + 7591, "VisualTeX", _
-                "LaTeX redraw source ranges overlap or exceed the Word target."
+                "LaTeX redraw source ranges overlap or are invalid."
         End If
-        sourceText = VTBase64UrlDecodeUtf8( _
+        If operationName = "latexRedraw" Then
+            If sourceEnds(itemIndex) > Len(sourceSnapshot) Then
+                Err.Raise vbObjectError + 7591, "VisualTeX", _
+                    "A LaTeX redraw source range exceeds the source snapshot."
+            End If
+        ElseIf sourceEnds(itemIndex) > originalTargetLength Then
+            Err.Raise vbObjectError + 7591, "VisualTeX", _
+                "A formula restore source range exceeds the Word target."
+        End If
+        sourceTexts(itemIndex) = VTBase64UrlDecodeUtf8( _
             VTDocumentImportRequired( _
                 manifest, itemIndex, "sourceTextBase64"))
-        Set sourceRange = targetDocument.Range( _
-            Start:=targetStart + sourceStarts(itemIndex), _
-            End:=targetStart + sourceEnds(itemIndex))
-        If StrComp(sourceRange.Text, sourceText, vbBinaryCompare) <> 0 Then
-            Err.Raise vbObjectError + 7591, "VisualTeX", _
-                "Word text changed after LaTeX redraw opened. " & _
-                "Please reopen redraw from the current selection."
+        If operationName = "latexRedraw" Then
+            If StrComp( _
+               Mid$(sourceSnapshot, sourceStarts(itemIndex) + 1, _
+                    sourceEnds(itemIndex) - sourceStarts(itemIndex)), _
+               sourceTexts(itemIndex), vbBinaryCompare) <> 0 Then
+                Err.Raise vbObjectError + 7591, "VisualTeX", _
+                    "The LaTeX redraw manifest no longer matches its source snapshot."
+            End If
         End If
         If itemKind = "formula" Then
             sourceFontSizes(itemIndex) = VTDispatchPositiveDouble( _
@@ -12157,6 +12451,38 @@ Private Sub VTCommitWordLatexRedrawDispatch( _
             sourceFontSizes(itemIndex) = 0#
         End If
         previousEnd = sourceEnds(itemIndex)
+    Next itemIndex
+
+    If operationName = "latexRedraw" Then
+        VTResolveLatexRedrawWordOffsets _
+            targetDocument, targetStart, targetEnd, sourceSnapshot, _
+            sourceStarts, sourceEnds, sourceTexts, itemCount, _
+            wordStarts, wordEnds
+    Else
+        ReDim wordStarts(0 To itemCount - 1)
+        ReDim wordEnds(0 To itemCount - 1)
+        For itemIndex = 0 To itemCount - 1
+            wordStarts(itemIndex) = sourceStarts(itemIndex)
+            wordEnds(itemIndex) = sourceEnds(itemIndex)
+        Next itemIndex
+    End If
+
+    For itemIndex = 0 To itemCount - 1
+        transactionStage = "redraw-live-range item " & CStr(itemIndex)
+        If wordEnds(itemIndex) > originalTargetLength Then
+            Err.Raise vbObjectError + 7591, "VisualTeX", _
+                "A Word replacement range exceeds the current target."
+        End If
+        Set sourceRange = targetDocument.Range( _
+            Start:=targetStart + wordStarts(itemIndex), _
+            End:=targetStart + wordEnds(itemIndex))
+        If StrComp( _
+           sourceRange.Text, sourceTexts(itemIndex), _
+           vbBinaryCompare) <> 0 Then
+            Err.Raise vbObjectError + 7591, "VisualTeX", _
+                "Word text changed after LaTeX redraw opened. " & _
+                "Please reopen redraw from the current selection."
+        End If
     Next itemIndex
 
     transactionStage = "redraw-disable-ui"
@@ -12216,14 +12542,14 @@ Private Sub VTCommitWordLatexRedrawDispatch( _
     For itemIndex = itemCount - 1 To 0 Step -1
         transactionStage = "redraw-replace item " & CStr(itemIndex)
         Set sourceRange = targetDocument.Range( _
-            Start:=targetStart + sourceStarts(itemIndex), _
-            End:=targetStart + sourceEnds(itemIndex))
+            Start:=targetStart + wordStarts(itemIndex), _
+            End:=targetStart + wordEnds(itemIndex))
         itemKind = VTDocumentImportRequired(manifest, itemIndex, "kind")
         sourceRange.Delete
         mutationOccurred = True
         Set cursorRange = targetDocument.Range( _
-            Start:=targetStart + sourceStarts(itemIndex), _
-            End:=targetStart + sourceStarts(itemIndex))
+            Start:=targetStart + wordStarts(itemIndex), _
+            End:=targetStart + wordStarts(itemIndex))
         If itemKind = "text" Then
             replacementText = VTBase64UrlDecodeUtf8( _
                 VTDocumentImportRequired( _
@@ -12233,11 +12559,11 @@ Private Sub VTCommitWordLatexRedrawDispatch( _
         ElseIf sharedVectorDocument Is Nothing Then
             VTDocumentImportInsertFormula _
                 cursorRange, manifest, itemIndex, outputKind, _
-                insertedFormulaIds, sourceFontSizes(itemIndex)
+                insertedFormulaIds, sourceFontSizes(itemIndex), True
         Else
             VTDocumentImportInsertFormula _
                 cursorRange, manifest, itemIndex, outputKind, _
-                insertedFormulaIds, sourceFontSizes(itemIndex), _
+                insertedFormulaIds, sourceFontSizes(itemIndex), True, _
                 sharedVectorDocument
         End If
         completedItems = itemCount - itemIndex
@@ -12296,7 +12622,7 @@ Failed:
         CallByName Application, "Undo", VbMethod
         Err.Clear
         Set rollbackRange = targetDocument.Range( _
-            Start:=targetStart, End:=targetStart + Len(originalSource))
+            Start:=targetStart, End:=targetStart + originalTargetLength)
         rollbackVerified = _
             StrComp(rollbackRange.Text, originalSource, vbBinaryCompare) = 0
     End If
@@ -12316,7 +12642,7 @@ Failed:
         If rollbackVerified And _
            Not targetDocument.Bookmarks.Exists(bookmarkName) Then
             Set rollbackRange = targetDocument.Range( _
-                Start:=targetStart, End:=targetStart + Len(originalSource))
+                Start:=targetStart, End:=targetStart + originalTargetLength)
             targetDocument.Bookmarks.Add _
                 Name:=bookmarkName, Range:=rollbackRange
         End If

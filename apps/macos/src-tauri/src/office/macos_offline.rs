@@ -6109,7 +6109,7 @@ mod tests {
         document_import.output_kind = Some("image".to_string());
         assert!(validate_request(&request, &session_id)
             .unwrap_err()
-            .contains("redraw fields"));
+            .contains("formula transform fields"));
     }
 
     #[test]
@@ -6416,6 +6416,8 @@ mod tests {
             render_width_px: Some(50.0),
             render_height_px: Some(20.0),
             font_size_pt: Some(10.5),
+            formula_letter_font: None,
+            formula_chinese_font: None,
             reference_width_pt: Some(37.5),
             reference_height_pt: Some(15.0),
             reference_baseline_pt: Some(-3.0),
@@ -6460,6 +6462,8 @@ mod tests {
             render_width_px: None,
             render_height_px: None,
             font_size_pt: Some(14.0),
+            formula_letter_font: None,
+            formula_chinese_font: None,
             reference_width_pt: None,
             reference_height_pt: None,
             reference_baseline_pt: None,
@@ -6747,6 +6751,8 @@ c &= e
             display_mode: "block".to_string(),
             numbered: false,
             font_size_pt: None,
+            formula_letter_font: "katex".to_string(),
+            formula_chinese_font: "system".to_string(),
             export_width: 0.0,
             export_height: 0.0,
             export_result: Some(crate::office::sessions::OfficeExportResult {
@@ -6772,6 +6778,8 @@ c &= e
                 render_width_px: Some(120.0),
                 render_height_px: Some(40.0),
                 font_size_pt: None,
+                formula_letter_font: None,
+                formula_chinese_font: None,
                 reference_width_pt: None,
                 reference_height_pt: None,
                 reference_baseline_pt: None,

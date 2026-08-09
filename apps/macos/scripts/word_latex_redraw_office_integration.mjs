@@ -193,6 +193,15 @@ function inspectImageDocument(documentName) {
   };
 }
 
+function inspectParagraphCount(documentName) {
+  return Number(runAppleScript([
+    'tell application "Microsoft Word"',
+    `set documentObject to document ${JSON.stringify(documentName)}`,
+    "return count paragraphs of documentObject",
+    "end tell",
+  ]));
+}
+
 function inspectOmmlDocument(documentName) {
   const raw = runAppleScript([
     'tell application "Microsoft Word"',
@@ -261,6 +270,14 @@ async function runCase(caseInfo) {
       ? inspectImageDocument(documentName)
       : inspectOmmlDocument(documentName);
     assertContext(caseInfo, report);
+    if (Number.isInteger(caseInfo.expectedParagraphCount)) {
+      const paragraphCount = inspectParagraphCount(documentName);
+      if (paragraphCount !== caseInfo.expectedParagraphCount) {
+        throw new Error(
+          `${caseInfo.name} changed Word paragraph topology: expected ${caseInfo.expectedParagraphCount}, got ${paragraphCount}`,
+        );
+      }
+    }
     if (caseInfo.output === "image") {
       const fontSizes = report.metadata.map((metadata) => metadata?.fontSizePt);
       if (
@@ -308,6 +325,9 @@ const selectionOmmlStart = selectionOmmlText.indexOf("alpha");
 const selectionOmmlEnd = selectionOmmlText.indexOf(" KEEP-R");
 const fullImageText = "DOC-I before $a/b$ after\r$$c^2=a^2+b^2$$\rDOC-I tail";
 const fullOmmlText = "DOC-O before $p+q$ middle \\[r^2\\] after";
+const fullUnicodeImageText = "DOC-U 😀 before $$𝑥+𝑦=𝑧$$ after";
+const paragraphTopologyText =
+  "DOC-P head\r$$a=1$$\r$$b=2$$\r\r$$c=3$$\rDOC-P tail";
 
 const cases = [
   {
@@ -359,6 +379,33 @@ const cases = [
     expectedFormulaCount: 2,
     sentinels: ["DOC-I", "before", "after", "tail"],
     removedLiterals: ["$a/b$", "$$c^2=a^2+b^2$$"],
+  },
+  {
+    name: "document-image-preserves-paragraph-topology",
+    scope: "document",
+    output: "image",
+    text: paragraphTopologyText,
+    selectionStart: 0,
+    selectionEnd: paragraphTopologyText.length,
+    fontRanges: [],
+    expectedFontSizes: [11, 11, 11],
+    expectedFormulaCount: 3,
+    expectedParagraphCount: paragraphTopologyText.split("\r").length,
+    sentinels: ["DOC-P head", "DOC-P tail"],
+    removedLiterals: ["$$a=1$$", "$$b=2$$", "$$c=3$$"],
+  },
+  {
+    name: "document-image-supplementary-unicode",
+    scope: "document",
+    output: "image",
+    text: fullUnicodeImageText,
+    selectionStart: 0,
+    selectionEnd: fullUnicodeImageText.length,
+    fontRanges: [],
+    expectedFontSizes: [11],
+    expectedFormulaCount: 1,
+    sentinels: ["DOC-U", "😀", "before", "after"],
+    removedLiterals: ["$$𝑥+𝑦=𝑧$$"],
   },
   {
     name: "document-omml",

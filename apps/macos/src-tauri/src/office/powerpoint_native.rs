@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
+use std::fs::{read_to_string, remove_file};
 use std::io::Read;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -11,6 +13,7 @@ const WORD_BUNDLE_ID: &str = "com.microsoft.Word";
 const SHAPE_PREFIX: &str = "VisualTeX_";
 const WORD_METADATA_PREFIX: &str = "visualtex:v1:deflate:";
 const WORD_SELECTION_FIELD_SEPARATOR: &str = "<VISUALTEX_WORD_FIELD>";
+const WORD_DOUBLE_CLICK_BOUNDS_FILE: &str = "double-click-screen-bounds.txt";
 const POWERPOINT_SNAPSHOT_FIELD_SEPARATOR: &str = "<VISUALTEX_PPT_FIELD>";
 const POWERPOINT_SNAPSHOT_RECORD_SEPARATOR: &str = "<VISUALTEX_PPT_RECORD>";
 const MAX_EVENTS: usize = 64;
@@ -36,11 +39,38 @@ pub struct PowerPointNativeSelection {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+struct WordScreenBounds {
+    left: f64,
+    top: f64,
+    width: f64,
+    height: f64,
+}
+
+impl WordScreenBounds {
+    fn contains(&self, x: f64, y: f64) -> bool {
+        x.is_finite()
+            && y.is_finite()
+            && self.left.is_finite()
+            && self.top.is_finite()
+            && self.width.is_finite()
+            && self.height.is_finite()
+            && self.width > 0.0
+            && self.height > 0.0
+            && x >= self.left
+            && x <= self.left + self.width
+            && y >= self.top
+            && y <= self.top + self.height
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 struct WordNativeFormulaSelection {
     marker: String,
     width: f64,
     height: f64,
     macro_button_wrapped: bool,
+    screen_bounds: WordScreenBounds,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -881,6 +911,8 @@ fn valid_shape_name(value: &str) -> bool {
 fn word_formula_after_double_click<ReadSelection, Wait>(
     mut read_selection: ReadSelection,
     mut wait: Wait,
+    click_x: f64,
+    click_y: f64,
 ) -> Option<WordNativeFormulaSelection>
 where
     ReadSelection: FnMut() -> Result<WordNativeFormulaSelection, String>,
@@ -901,6 +933,7 @@ where
             && selection.height.is_finite()
             && selection.width > 0.0
             && selection.height > 0.0
+            && selection.screen_bounds.contains(click_x, click_y)
         {
             return Some(selection);
         }
@@ -1039,6 +1072,9 @@ pub fn start_double_click_monitor(
             return;
         }
         let frontmost = frontmost_bundle_id();
+        let mouse_location = NSEvent::mouseLocation();
+        let click_x = mouse_location.x;
+        let click_y = mouse_location.y;
         let app = app.clone();
         let bus = bus.clone();
         if frontmost.as_deref() == Some(POWERPOINT_BUNDLE_ID) {
@@ -1077,9 +1113,12 @@ pub fn start_double_click_monitor(
                 // VisualTeX. Resolve the selected image first and apply task-pane
                 // cleanup to every image carrying valid VisualTeX metadata,
                 // including the current macro-button-wrapped representation.
-                let Some(selection) =
-                    word_formula_after_double_click(selected_word_formula, std::thread::sleep)
-                else {
+                let Some(selection) = word_formula_after_double_click(
+                    selected_word_formula,
+                    std::thread::sleep,
+                    click_x,
+                    click_y,
+                ) else {
                     return;
                 };
                 if !selection.marker.starts_with(WORD_METADATA_PREFIX) {
@@ -1149,7 +1188,42 @@ fn frontmost_bundle_id() -> Option<String> {
 }
 
 #[cfg(target_os = "macos")]
+fn word_double_click_bounds_path() -> Result<PathBuf, String> {
+    let home = std::env::var_os("HOME")
+        .ok_or_else(|| "Unable to resolve the macOS home directory".to_string())?;
+    Ok(PathBuf::from(home)
+        .join("Library/Application Scripts/com.microsoft.Word/VisualTeXRuntime")
+        .join(WORD_DOUBLE_CLICK_BOUNDS_FILE))
+}
+
+#[cfg(target_os = "macos")]
+fn read_word_double_click_bounds() -> Result<WordScreenBounds, String> {
+    let path = word_double_click_bounds_path()?;
+    let text = read_to_string(&path)
+        .map_err(|error| format!("Unable to read Word double-click bounds {}: {error}", path.display()))?;
+    let fields = text.trim().split('|').collect::<Vec<_>>();
+    if fields.len() != 5 || fields[0] != "PASS" {
+        return Err(format!("Word returned invalid double-click bounds: {}", text.trim()));
+    }
+    let parse_number = |value: &str, label: &str| {
+        value
+            .trim()
+            .replace(',', ".")
+            .parse::<f64>()
+            .map_err(|error| format!("Invalid Word double-click {label}: {error}"))
+    };
+    Ok(WordScreenBounds {
+        left: parse_number(fields[1], "left")?,
+        top: parse_number(fields[2], "top")?,
+        width: parse_number(fields[3], "width")?,
+        height: parse_number(fields[4], "height")?,
+    })
+}
+
+#[cfg(target_os = "macos")]
 fn selected_word_formula() -> Result<WordNativeFormulaSelection, String> {
+    let bounds_path = word_double_click_bounds_path()?;
+    let _ = remove_file(&bounds_path);
     let output = run_applescript_with_timeout(
         r#"tell application "Microsoft Word"
 if not (exists active document) then error "No active Word document"
@@ -1186,6 +1260,8 @@ try
     set formulaField to field of formulaPicture
     if field type of formulaField is field macro button then set macroButtonWrapped to "1"
 end try
+if formulaMarker does not start with "visualtex:v1:deflate:" then error "The selected Word picture is not a VisualTeX formula"
+run VB macro macro name "VisualTeX_WriteSelectedDoubleClickScreenBounds"
 return formulaMarker & fieldSeparator & (width of formulaPicture as text) & fieldSeparator & (height of formulaPicture as text) & fieldSeparator & macroButtonWrapped
 end tell"#,
         APPLESCRIPT_QUERY_TIMEOUT,
@@ -1214,6 +1290,7 @@ end tell"#,
             "1" => true,
             value => return Err(format!("Invalid Word MacroButton state: {value}")),
         },
+        screen_bounds: read_word_double_click_bounds()?,
     })
 }
 
@@ -1350,9 +1427,17 @@ mod tests {
                     width: 84.0,
                     height: 21.0,
                     macro_button_wrapped: true,
+                    screen_bounds: WordScreenBounds {
+                        left: 100.0,
+                        top: 200.0,
+                        width: 84.0,
+                        height: 21.0,
+                    },
                 })
             },
             |delay| waits.push(delay),
+            120.0,
+            210.0,
         )
         .expect("Word formula selection");
 
@@ -1377,14 +1462,59 @@ mod tests {
                     width: 72.0,
                     height: 18.0,
                     macro_button_wrapped: false,
+                    screen_bounds: WordScreenBounds {
+                        left: 300.0,
+                        top: 400.0,
+                        width: 72.0,
+                        height: 18.0,
+                    },
                 })
             },
             |delay| waits.push(delay),
+            320.0,
+            409.0,
         )
         .expect("bare Word formula picture");
 
         assert!(waits.is_empty());
         assert!(!resolved.macro_button_wrapped);
+    }
+
+    #[test]
+    fn word_double_click_rejects_a_stale_formula_selection_outside_its_screen_bounds() {
+        let mut attempts = 0;
+        let mut waits = Vec::new();
+        let resolved = word_formula_after_double_click(
+            || {
+                attempts += 1;
+                Ok(WordNativeFormulaSelection {
+                    marker: "visualtex:v1:deflate:stale".to_string(),
+                    width: 72.0,
+                    height: 18.0,
+                    macro_button_wrapped: true,
+                    screen_bounds: WordScreenBounds {
+                        left: 300.0,
+                        top: 400.0,
+                        width: 72.0,
+                        height: 18.0,
+                    },
+                })
+            },
+            |delay| waits.push(delay),
+            40.0,
+            40.0,
+        );
+
+        assert!(resolved.is_none());
+        assert_eq!(attempts, 4);
+        assert_eq!(
+            waits,
+            vec![
+                Duration::from_millis(20),
+                Duration::from_millis(35),
+                Duration::from_millis(55),
+            ]
+        );
     }
 
     #[test]

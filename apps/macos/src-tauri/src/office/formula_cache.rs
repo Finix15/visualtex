@@ -232,6 +232,8 @@ mod tests {
             render_width_px: Some(80.0),
             render_height_px: Some(20.0),
             font_size_pt: Some(12.0),
+            formula_letter_font: None,
+            formula_chinese_font: None,
             reference_width_pt: Some(60.0),
             reference_height_pt: Some(15.0),
             reference_baseline_pt: Some(-3.0),
