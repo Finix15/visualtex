@@ -195,6 +195,29 @@ async function main() {
     }
     await typeKey("}", "BracketRight", "}", 8);
     await sleep(120);
+    const casesSuggestion = await evaluate(`(() => {
+      const field = document.querySelector("math-field");
+      const panel = document.querySelector('#visualtex-native-input-suggestion-popover');
+      return {
+        value: field.value,
+        raw: Array.from(field.shadowRoot?.querySelectorAll('.ML__raw-latex') ?? [])
+          .map((node) => node.textContent ?? "")
+          .join(""),
+        visible: panel?.classList.contains('is-visible') ?? false,
+        command: panel?.querySelector('li.ML__popover__current')?.dataset.command ?? '',
+      };
+    })()`);
+    assert.equal(casesSuggestion.raw.replace(/\s+/g, ""), "\\begin{cases}");
+    assert.equal(casesSuggestion.visible, true, "cases did not show the native-style suggestion popover");
+    assert.equal(casesSuggestion.command, "\\begin{cases}");
+    assert.doesNotMatch(
+      casesSuggestion.value,
+      /\\begin\{cases\}/,
+      "cases committed before the user accepted the native suggestion",
+    );
+
+    await typeKey(" ", "Space", " ");
+    await sleep(80);
     const typedCases = await evaluate(`(() => {
       const field = document.querySelector("math-field");
       return {
@@ -207,9 +230,9 @@ async function main() {
     assert.match(
       typedCases.value,
       /\\begin\{cases\}\\placeholder\{\} & \\placeholder\{\}\\end\{cases\}/,
-      "typing \\begin{cases} did not commit a real editable cases environment",
+      "Space did not accept the cases suggestion as a real editable environment",
     );
-    assert.equal(typedCases.raw, "", "completed cases input remained in raw-LaTeX mode");
+    assert.equal(typedCases.raw, "", "accepted cases input remained in raw-LaTeX mode");
 
     await typeKey("\\", "Backslash", "\\");
     for (const letter of "frac") {

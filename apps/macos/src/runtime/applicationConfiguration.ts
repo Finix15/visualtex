@@ -93,6 +93,7 @@ const editorSettingKeys = [
   "powerPointDefaultFontSizePt",
   "classicTileWidth",
   "classicDockHeight",
+  "keypadMinimizeOnCopy",
 ] as const satisfies readonly (keyof FormulaDocument["settings"])[];
 
 const maximumStorageEntryLength = 2_000_000;

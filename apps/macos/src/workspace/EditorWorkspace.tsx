@@ -137,6 +137,8 @@ export function EditorWorkspace({
   primaryActionLabel,
   officeHeaderLeadingControls,
   officeHeaderTrailingActions,
+  desktopHeaderControls,
+  keypadMode = false,
   onPrimaryAction,
   onCancel,
   onOpenExport,
@@ -886,8 +888,9 @@ export function EditorWorkspace({
         ref={workspaceRef}
         className={
           `workspace ${editorLayout === "classic" ? "is-classic-layout" : "is-standard-layout"}` +
-          (sidebarOpen ? " has-sidebar" : "") +
+          (!keypadMode && sidebarOpen ? " has-sidebar" : "") +
           (isOfficeWorkspace ? " is-office-workspace" : "") +
+          (keypadMode ? " is-keypad-mode" : "") +
           (highlightActiveLine ? " has-active-line-highlight" : "") +
           (sourceFocused ? " is-source-editor-focused" : "")
         }
@@ -898,14 +901,14 @@ export function EditorWorkspace({
         }
         data-editor-layout={editorLayout}
       >
-        {editorLayout === "standard" && sidebarOpen && (
+        {!keypadMode && editorLayout === "standard" && sidebarOpen && (
           <FormulaToolbar
             stabilizeTileLayout
             onInsert={(command) => editorRef.current?.insertCommand(command)}
           />
         )}
 
-        {editorLayout === "classic" && !sidebarOpen && (
+        {!keypadMode && editorLayout === "classic" && !sidebarOpen && (
           <button
             type="button"
             className="classic-tile-expand-button"
@@ -1240,6 +1243,11 @@ export function EditorWorkspace({
                   </div>
                 </PortalOrInline>
               ) : null}
+              {!isOfficeWorkspace && desktopHeaderControls ? (
+                <div className="desktop-editor-header-controls">
+                  {desktopHeaderControls}
+                </div>
+              ) : null}
             </div>
             <div className="canvas-tool-group">
               {showFileActions && onOpenExport && (
@@ -1350,7 +1358,7 @@ export function EditorWorkspace({
                   )}
                 </div>
               )}
-              {showOcrActions && ocrModels.length > 0 && ocrModel && (
+              {!keypadMode && showOcrActions && ocrModels.length > 0 && ocrModel && (
                 <label
                   className="canvas-ocr-model"
                   title={
@@ -1376,7 +1384,7 @@ export function EditorWorkspace({
                   </select>
                 </label>
               )}
-              <div className="canvas-controls">
+              {!keypadMode && <div className="canvas-controls">
                 <button
                   type="button"
                   className="icon-button compact"
@@ -1412,7 +1420,7 @@ export function EditorWorkspace({
                 >
                   <Plus size={14} />
                 </button>
-              </div>
+              </div>}
             </div>
             {isOfficeWorkspace && officeHeaderTrailingActions ? (
               <div className="office-inline-actions">
@@ -1421,7 +1429,13 @@ export function EditorWorkspace({
             ) : null}
           </header>
 
-          {editorLayout === "classic" ? (
+          {keypadMode ? (
+            <div className="keypad-editor-pane-body">
+              <div className="editor-pane-scroll">
+                {renderVisualEditor()}
+              </div>
+            </div>
+          ) : editorLayout === "classic" ? (
             <div
               ref={classicEditorBodyRef}
               className={
@@ -1651,7 +1665,7 @@ export function EditorWorkspace({
           )}
         </section>
 
-        {editorLayout === "classic" && sidebarOpen && (
+        {!keypadMode && editorLayout === "classic" && sidebarOpen && (
           <>
             <div
               className="workspace-panel-resizer classic-tile-resizer"

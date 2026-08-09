@@ -88,6 +88,7 @@ export interface FormulaDocument {
     powerPointDefaultFontSizePt?: number;
     classicTileWidth?: number;
     classicDockHeight?: number;
+    keypadMinimizeOnCopy?: boolean;
   };
 }
 

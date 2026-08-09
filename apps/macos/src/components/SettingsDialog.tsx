@@ -182,6 +182,9 @@ export function SettingsDialog({
   const highlightActiveLine = useEditorStore(
     (state) => state.highlightActiveLine,
   );
+  const keypadMinimizeOnCopy = useEditorStore(
+    (state) => state.keypadMinimizeOnCopy,
+  );
   const formulaInsetLeft = useEditorStore((state) => state.formulaInsetLeft);
   const formulaInsetRight = useEditorStore((state) => state.formulaInsetRight);
   const formulaToolButtonSize = useEditorStore(
@@ -206,6 +209,9 @@ export function SettingsDialog({
   );
   const setHighlightActiveLine = useEditorStore(
     (state) => state.setHighlightActiveLine,
+  );
+  const setKeypadMinimizeOnCopy = useEditorStore(
+    (state) => state.setKeypadMinimizeOnCopy,
   );
   const setFormulaInsetLeft = useEditorStore(
     (state) => state.setFormulaInsetLeft,
@@ -1132,6 +1138,30 @@ export function SettingsDialog({
                     data-show-line-numbers-setting
                     onChange={(event) =>
                       setShowLineNumbers(event.target.checked)
+                    }
+                  />
+                  <span className="switch-control" />
+                </label>
+
+                <label className="switch-row">
+                  <span>
+                    <strong>
+                      {isEn
+                        ? "Minimize after keypad copy"
+                        : "小键盘复制后最小化主应用"}
+                    </strong>
+                    <small>
+                      {isEn
+                        ? "In keypad mode, ⌘/Ctrl+S copies the current LaTeX format and then minimizes VisualTeX."
+                        : "小键盘模式下，⌘/Ctrl+S 会按当前 LaTeX 代码格式复制；开启后复制完成再最小化 VisualTeX。"}
+                    </small>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={keypadMinimizeOnCopy}
+                    data-keypad-minimize-on-copy-setting
+                    onChange={(event) =>
+                      setKeypadMinimizeOnCopy(event.target.checked)
                     }
                   />
                   <span className="switch-control" />

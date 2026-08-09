@@ -3802,6 +3802,10 @@ button:disabled {
   background: var(--bg);
 }
 
+.app-shell.is-keypad-mode {
+  grid-template-rows: minmax(0, 1fr);
+}
+
 .app-header {
   z-index: 80;
   grid-template-columns: minmax(220px, 1fr) minmax(150px, auto) minmax(440px, 1fr);
@@ -4383,6 +4387,107 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.desktop-editor-header-controls {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.editor-code-format-control {
+  min-width: 0;
+  margin-left: 0;
+}
+
+.editor-code-format-control .copy-primary {
+  min-width: 0;
+  max-width: 150px;
+  padding: 0 9px;
+}
+
+.editor-code-format-control .copy-primary > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.keypad-mode-toggle {
+  height: 30px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.keypad-mode-toggle:hover,
+.keypad-mode-toggle.is-active {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.app-shell.is-keypad-mode .workspace {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.workspace.is-keypad-mode .formula-workspace.editor-pane {
+  border-right: 0;
+}
+
+.workspace.is-keypad-mode .editor-pane-header {
+  padding-right: 9px;
+  padding-left: 9px;
+}
+
+.workspace.is-keypad-mode .pane-title-group {
+  width: auto;
+  flex: 1 1 auto;
+  justify-content: flex-start;
+  gap: 6px;
+}
+
+.workspace.is-keypad-mode .formula-alignment-controls {
+  min-width: 0;
+  gap: 1px;
+}
+
+.workspace.is-keypad-mode .desktop-editor-header-controls {
+  flex: 0 1 auto;
+  gap: 5px;
+}
+
+.workspace.is-keypad-mode .editor-code-format-control .copy-primary {
+  max-width: 124px;
+}
+
+.workspace.is-keypad-mode .keypad-mode-toggle {
+  padding-right: 7px;
+  padding-left: 7px;
+}
+
+.keypad-editor-pane-body {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
+  background: var(--bg-elevated);
+}
+
+.keypad-editor-pane-body .editor-pane-scroll > .editor-surface {
+  min-height: 100%;
 }
 
 .formula-alignment-controls {
@@ -6843,6 +6948,15 @@ textarea:disabled {
 }
 
 @media (max-width: 720px) {
+  .workspace .keypad-mode-toggle {
+    width: 30px;
+    padding: 0;
+  }
+
+  .workspace .keypad-mode-toggle > span {
+    display: none;
+  }
+
   .app-header {
     grid-template-columns: auto minmax(92px, 1fr) auto;
     padding-inline: 6px;

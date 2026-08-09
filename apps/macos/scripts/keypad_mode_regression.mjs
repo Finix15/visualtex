@@ -1,0 +1,328 @@
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { rm } from "node:fs/promises";
+import process from "node:process";
+
+const portOffset = process.pid % 700;
+const previewPort = 8500 + portOffset;
+const debugPort = 13500 + portOffset;
+const baseUrl = `http://127.0.0.1:${previewPort}`;
+const chromeProfile = `/tmp/visualtex-keypad-mode-${process.pid}`;
+const chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function waitFor(url, timeoutMs = 15000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    try {
+      const response = await fetch(url);
+      if (response.ok) return;
+    } catch {
+      // Retry while local processes start.
+    }
+    await sleep(80);
+  }
+  throw new Error(`Timed out waiting for ${url}`);
+}
+
+class CdpClient {
+  constructor(url) {
+    this.url = url;
+    this.nextId = 1;
+    this.pending = new Map();
+  }
+
+  async connect() {
+    this.socket = new WebSocket(this.url);
+    await new Promise((resolve, reject) => {
+      this.socket.addEventListener("open", resolve, { once: true });
+      this.socket.addEventListener("error", reject, { once: true });
+    });
+    this.socket.addEventListener("message", (event) => {
+      const message = JSON.parse(event.data);
+      if (!message.id) return;
+      const pending = this.pending.get(message.id);
+      if (!pending) return;
+      this.pending.delete(message.id);
+      if (message.error) pending.reject(new Error(message.error.message));
+      else pending.resolve(message.result);
+    });
+  }
+
+  send(method, params = {}) {
+    const id = this.nextId++;
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.socket.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
+  close() {
+    this.socket?.close();
+  }
+}
+
+async function main() {
+  const preview = spawn(
+    process.execPath,
+    [
+      "node_modules/vite/bin/vite.js",
+      "preview",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      String(previewPort),
+      "--strictPort",
+    ],
+    { cwd: process.cwd(), stdio: "ignore" },
+  );
+  let chrome;
+  let client;
+  try {
+    await waitFor(baseUrl);
+    chrome = spawn(
+      chromePath,
+      [
+        "--headless=new",
+        "--disable-gpu",
+        "--no-first-run",
+        "--no-default-browser-check",
+        `--remote-debugging-port=${debugPort}`,
+        `--user-data-dir=${chromeProfile}`,
+        "--window-size=619,368",
+        baseUrl,
+      ],
+      { stdio: "ignore" },
+    );
+    await waitFor(`http://127.0.0.1:${debugPort}/json/list`);
+    const targets = await (await fetch(`http://127.0.0.1:${debugPort}/json/list`)).json();
+    const page = targets.find(
+      (target) => target.type === "page" && target.url.startsWith(baseUrl),
+    );
+    if (!page) throw new Error("No VisualTeX Chrome page target found");
+    client = new CdpClient(page.webSocketDebuggerUrl);
+    await client.connect();
+    await client.send("Runtime.enable");
+    await client.send("Page.enable");
+    await sleep(500);
+
+    const evaluate = async (expression) => {
+      const result = await client.send("Runtime.evaluate", {
+        expression,
+        awaitPromise: true,
+        returnByValue: true,
+      });
+      if (result.exceptionDetails) {
+        throw new Error(
+          result.exceptionDetails.exception?.description ||
+            result.exceptionDetails.text ||
+            "Runtime.evaluate failed",
+        );
+      }
+      return result.result.value;
+    };
+
+    const clickSelector = async (selector) => {
+      const rect = await evaluate(`(() => {
+        const element = document.querySelector(${JSON.stringify(selector)});
+        if (!element) return null;
+        const box = element.getBoundingClientRect();
+        return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+      })()`);
+      if (!rect) throw new Error(`Unable to click missing selector: ${selector}`);
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: rect.x,
+        y: rect.y,
+        button: "left",
+        clickCount: 1,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: rect.x,
+        y: rect.y,
+        button: "left",
+        clickCount: 1,
+      });
+      await sleep(40);
+    };
+
+    await evaluate(`(() => {
+      localStorage.setItem('visualtex.onboarding.v3.completed', 'true');
+      localStorage.setItem('visualtex.onboarding.macos.desktop.v1.2.0.completed', 'true');
+      localStorage.setItem('visualtex.office.macos.native-first-run.v1.2.0.completed', 'true');
+      return true;
+    })()`);
+    await client.send("Page.reload", { ignoreCache: true });
+    await sleep(350);
+    await evaluate(`new Promise((resolve) => {
+      const done = () => document.querySelector("math-field") ? resolve(true) : setTimeout(done, 30);
+      done();
+    })`);
+
+    const normalProbe = await evaluate(`(() => {
+      const header = document.querySelector('.editor-pane-header');
+      return {
+        width: innerWidth,
+        height: innerHeight,
+        appHeader: Boolean(document.querySelector('.app-header')),
+        editorHeaderFormat: Boolean(document.querySelector('.editor-pane-header .editor-code-format-control')),
+        topHeaderFormat: Boolean(document.querySelector('.app-header .code-format-control')),
+        keypadButton: Boolean(document.querySelector('.editor-pane-header [data-keypad-mode-toggle]')),
+        headerClientWidth: header?.clientWidth ?? 0,
+        headerScrollWidth: header?.scrollWidth ?? 0,
+      };
+    })()`);
+    assert.ok(normalProbe.width <= 640 && normalProbe.height <= 400, `Unexpected keypad regression viewport: ${JSON.stringify(normalProbe)}`);
+    assert.equal(normalProbe.appHeader, true, "normal mode lost the main application header");
+    assert.equal(normalProbe.editorHeaderFormat, false, "normal mode must keep the LaTeX format control out of the editor header");
+    assert.equal(normalProbe.topHeaderFormat, true, "normal mode did not restore the LaTeX format control to the main application header");
+    assert.equal(normalProbe.keypadButton, true, "keypad mode button is missing from the editor header");
+    assert.ok(
+      normalProbe.headerScrollWidth <= normalProbe.headerClientWidth + 2,
+      `normal editor header overflows at the current compact window size: ${JSON.stringify(normalProbe)}`,
+    );
+
+    await evaluate(`document.querySelector('[data-keypad-mode-toggle]')?.click()`);
+    await sleep(100);
+    const keypadProbe = await evaluate(`(() => ({
+      shell: document.querySelector('.app-shell')?.classList.contains('is-keypad-mode') ?? false,
+      workspace: document.querySelector('.workspace')?.classList.contains('is-keypad-mode') ?? false,
+      appHeader: Boolean(document.querySelector('.app-header')),
+      alignment: Boolean(document.querySelector('.editor-pane-header .formula-alignment-controls')),
+      format: Boolean(document.querySelector('.editor-pane-header .editor-code-format-control')),
+      keypadButton: Boolean(document.querySelector('.editor-pane-header [data-keypad-mode-toggle]')),
+      formulaToolbar: Boolean(document.querySelector('.formula-toolbar')),
+      classicDock: Boolean(document.querySelector('.classic-bottom-dock')),
+      sourcePane: Boolean(document.querySelector('.source-pane-slot')),
+      sourceToggle: Boolean(document.querySelector('.source-toggle-row')),
+      canvasTools: Boolean(document.querySelector('.canvas-tool-group')),
+      exportAction: Boolean(document.querySelector('.workspace-export-trigger')),
+      inputBehavior: Boolean(document.querySelector('.canvas-input-behavior-trigger')),
+      quickOcr: Boolean(document.querySelector('[data-quick-ocr-button]')),
+      quickOcrMode: Boolean(document.querySelector('[data-quick-ocr-mode-trigger]')),
+      silentOcr: Boolean(document.querySelector('[data-silent-ocr-toggle]')),
+      ocrModel: Boolean(document.querySelector('.canvas-ocr-model')),
+      canvasZoom: Boolean(document.querySelector('.canvas-controls')), 
+      editor: Boolean(document.querySelector('.keypad-editor-pane-body math-field')),
+      headerClientWidth: document.querySelector('.editor-pane-header')?.clientWidth ?? 0,
+      headerScrollWidth: document.querySelector('.editor-pane-header')?.scrollWidth ?? 0,
+      alignmentWidth: document.querySelector('.formula-alignment-controls')?.getBoundingClientRect().width ?? 0,
+      desktopControlsWidth: document.querySelector('.desktop-editor-header-controls')?.getBoundingClientRect().width ?? 0,
+      canvasToolsWidth: document.querySelector('.canvas-tool-group')?.getBoundingClientRect().width ?? 0,
+      paneTitleWidth: document.querySelector('.pane-title-group')?.getBoundingClientRect().width ?? 0,
+    }))()`);
+    assert.equal(keypadProbe.shell, true, "app shell did not enter keypad mode");
+    assert.equal(keypadProbe.workspace, true, "workspace did not enter keypad mode");
+    assert.equal(keypadProbe.appHeader, false, "main application header is still rendered in keypad mode");
+    assert.equal(keypadProbe.alignment, true, "formula alignment controls disappeared in keypad mode");
+    assert.equal(keypadProbe.format, true, "LaTeX format selector disappeared in keypad mode");
+    assert.equal(keypadProbe.keypadButton, true, "keypad exit button disappeared in keypad mode");
+    assert.equal(keypadProbe.editor, true, "visual formula editor disappeared in keypad mode");
+    assert.ok(
+      keypadProbe.headerScrollWidth <= keypadProbe.headerClientWidth + 2,
+      `keypad editor header overflows at 619px: ${JSON.stringify(keypadProbe)}`,
+    );
+    for (const [name, value] of Object.entries({
+      formulaToolbar: keypadProbe.formulaToolbar,
+      classicDock: keypadProbe.classicDock,
+      sourcePane: keypadProbe.sourcePane,
+      sourceToggle: keypadProbe.sourceToggle,
+      ocrModel: keypadProbe.ocrModel,
+      canvasZoom: keypadProbe.canvasZoom,
+    })) {
+      assert.equal(value, false, `${name} must not be rendered in keypad mode`);
+    }
+    for (const [name, value] of Object.entries({
+      canvasTools: keypadProbe.canvasTools,
+      exportAction: keypadProbe.exportAction,
+      inputBehavior: keypadProbe.inputBehavior,
+      quickOcr: keypadProbe.quickOcr,
+      quickOcrMode: keypadProbe.quickOcrMode,
+      silentOcr: keypadProbe.silentOcr,
+    })) {
+      assert.equal(value, true, `${name} must remain available in keypad mode`);
+    }
+
+    await clickSelector('.editor-code-format-control .code-format-primary');
+    const visibleFormatHitTarget = await evaluate(`(() => {
+      const item = document.querySelector('[data-format="raw"]');
+      if (!item) return null;
+      const box = item.getBoundingClientRect();
+      const hit = document.elementFromPoint(
+        box.left + box.width / 2,
+        box.top + box.height / 2,
+      );
+      return hit?.closest('[data-format="raw"]')?.getAttribute('data-format') ?? null;
+    })()`);
+    assert.equal(
+      visibleFormatHitTarget,
+      "raw",
+      "the visible LaTeX format menu is blocked from real pointer input",
+    );
+    await clickSelector('[data-format="raw"]');
+    assert.equal(
+      await evaluate(`document.querySelector('[data-format="raw"]') === null`),
+      true,
+      "clicking a visible LaTeX format menu item did not close the menu",
+    );
+
+    await clickSelector('.editor-code-format-control .code-format-primary');
+    await evaluate(`document.querySelector('[data-format="align-star"]')?.scrollIntoView({ block: 'center' })`);
+    await sleep(40);
+    const alignFormatHitTarget = await evaluate(`(() => {
+      const item = document.querySelector('[data-format="align-star"]');
+      if (!item) return null;
+      const box = item.getBoundingClientRect();
+      const hit = document.elementFromPoint(
+        box.left + box.width / 2,
+        box.top + box.height / 2,
+      );
+      return hit?.closest('[data-format="align-star"]')?.getAttribute('data-format') ?? null;
+    })()`);
+    assert.equal(
+      alignFormatHitTarget,
+      "align-star",
+      "a scrolled LaTeX format menu item is blocked from real pointer input",
+    );
+    await clickSelector('[data-format="align-star"]');
+
+    await evaluate(`(() => {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText: async (text) => { window.__visualtexCopied = text; } },
+      });
+      window.__visualtexCopied = '';
+      return true;
+    })()`);
+    await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 's',
+      code: 'KeyS',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    }))`);
+    await sleep(80);
+    const copied = await evaluate(`window.__visualtexCopied ?? ''`);
+    assert.match(copied, /\\begin\{align\*\}/, "Ctrl+S did not copy the active align-star source format");
+    assert.doesNotMatch(copied, /^\$\$/m, "keypad Ctrl+S fell back to a hard-coded double-dollar format");
+
+    await evaluate(`document.querySelector('[data-keypad-mode-toggle]')?.click()`);
+    await sleep(50);
+    assert.equal(
+      await evaluate(`Boolean(document.querySelector('.app-header'))`),
+      true,
+      "exiting keypad mode did not restore the normal application header",
+    );
+
+    console.log("Keypad mode browser regression passed");
+  } finally {
+    client?.close();
+    chrome?.kill("SIGTERM");
+    preview.kill("SIGTERM");
+    await sleep(180);
+    await rm(chromeProfile, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+await main();

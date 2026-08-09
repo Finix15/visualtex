@@ -31,6 +31,8 @@ export interface EditorWorkspaceProps {
   primaryActionLabel?: string;
   officeHeaderLeadingControls?: ReactNode;
   officeHeaderTrailingActions?: ReactNode;
+  desktopHeaderControls?: ReactNode;
+  keypadMode?: boolean;
 
   onPrimaryAction?: () => Promise<void>;
   onCancel?: () => Promise<void>;

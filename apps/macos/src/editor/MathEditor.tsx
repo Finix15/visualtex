@@ -1053,8 +1053,13 @@ const accentCommandTemplates = new Map<string, string>([
   ["\\overleftrightarrow", "\\overleftrightarrow{\\placeholder{}}"],
   ["\\mathring", "\\mathring{\\placeholder{}}"],
 ]);
+const CASES_ENVIRONMENT_COMMAND = "\\begin{cases}";
+const CASES_ENVIRONMENT_TEMPLATE =
+  "\\begin{cases}\\placeholder{} & \\placeholder{}\\end{cases}";
+
 const rawPlaceholderCommandTemplates = new Map<string, string>([
   ...accentCommandTemplates,
+  [CASES_ENVIRONMENT_COMMAND, CASES_ENVIRONMENT_TEMPLATE],
   ["\\sqrt", "\\sqrt{\\placeholder{}}"],
   ["\\frac", "\\frac{\\placeholder{}}{\\placeholder{}}"],
   ["\\dfrac", "\\dfrac{\\placeholder{}}{\\placeholder{}}"],
@@ -1282,6 +1287,48 @@ let observedNativeInputPopoverSource: HTMLElement | null = null;
 let nativeSuggestionUsageSnapshot: Record<string, CommandUsage> = {};
 let nativeSuggestionPersonalizeSnapshot = true;
 let nativeInputPopoverManualCommand = "";
+let nativeInputPopoverActiveField: MathfieldElement | null = null;
+
+function casesEnvironmentSuggestionQuery(field: MathfieldElement) {
+  const raw = rawLatexInput(field).replace(/\s+/g, "");
+  if (!raw.startsWith("\\begin{")) return "";
+  if (!CASES_ENVIRONMENT_COMMAND.startsWith(raw)) return "";
+  return raw;
+}
+
+function renderCasesEnvironmentSuggestion(stable: HTMLElement, field: MathfieldElement) {
+  const query = casesEnvironmentSuggestionQuery(field);
+  if (!query) return false;
+
+  const preview = convertVisualTexLatexToMarkup(
+    "\\begin{cases}x & x>0\\\\0 & x=0\\end{cases}",
+    { defaultMode: "math" },
+  );
+  stable.dataset.visualtexEnvironmentSuggestion = "cases";
+  stable.innerHTML = `<ul><li role="button" data-command="\\begin{cases}" class="ML__popover__current has-visualtex-command-preview"><span class="ML__popover__latex">\\begin{cases}</span><span class="ML__popover__command">${preview}</span><span class="ML__popover__keybinding">Space</span></li></ul>`;
+
+  const caret =
+    field.shadowRoot?.querySelector<HTMLElement>(
+      ".ML__latex-caret, .ML__caret, .ML__text-caret",
+    ) ?? null;
+  const anchor = caret?.getBoundingClientRect() ?? field.getBoundingClientRect();
+  const width = Math.min(380, Math.max(250, window.innerWidth - 24));
+  const left = Math.max(
+    12,
+    Math.min(window.innerWidth - width - 12, anchor.left - 40),
+  );
+  const roomBelow = window.innerHeight - anchor.bottom;
+  stable.classList.toggle("bottom-tip", roomBelow < 190);
+  stable.classList.toggle("top-tip", roomBelow >= 190);
+  stable.style.left = `${left}px`;
+  stable.style.top =
+    roomBelow < 190
+      ? `${Math.max(12, anchor.top - 92)}px`
+      : `${Math.min(window.innerHeight - 72, anchor.bottom + 12)}px`;
+  stable.classList.add("is-visible");
+  stable.setAttribute("aria-hidden", "false");
+  return true;
+}
 
 function nativeSuggestionUsageId(command: string) {
   const normalized = command.trim();
@@ -1398,13 +1445,30 @@ function ensureStableNativeInputPopover() {
         "li[data-command]",
       ) ?? [],
     ).find((candidate) => candidate.dataset.command === command);
-    sourceItem?.dispatchEvent(
-      new MouseEvent("click", {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-      }),
-    );
+    if (sourceItem) {
+      sourceItem.dispatchEvent(
+        new MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+        }),
+      );
+      return;
+    }
+    if (
+      command === CASES_ENVIRONMENT_COMMAND &&
+      nativeInputPopoverActiveField?.isConnected
+    ) {
+      nativeInputPopoverActiveField.dataset.pendingNativeSuggestion = command;
+      nativeInputPopoverActiveField.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: " ",
+          code: "Space",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    }
   });
   document.body.append(panel);
   return panel;
@@ -1468,6 +1532,14 @@ function syncStableNativeInputPopover() {
   const stable = ensureStableNativeInputPopover();
 
   if (!source || !sourceVisible) {
+    if (
+      nativeInputPopoverActiveField?.isConnected &&
+      renderCasesEnvironmentSuggestion(stable, nativeInputPopoverActiveField)
+    ) {
+      window.clearTimeout(stableNativeInputPopoverHideTimer);
+      return;
+    }
+    delete stable.dataset.visualtexEnvironmentSuggestion;
     window.clearTimeout(stableNativeInputPopoverHideTimer);
     stableNativeInputPopoverHideTimer = window.setTimeout(() => {
       const latest = getNativeInputPopoverSource();
@@ -1485,6 +1557,7 @@ function syncStableNativeInputPopover() {
   }
 
   window.clearTimeout(stableNativeInputPopoverHideTimer);
+  delete stable.dataset.visualtexEnvironmentSuggestion;
   source.dataset.visualtexInputPopoverSource = "true";
   rankNativeSuggestionItems(source);
   const nextHtml = source.innerHTML;
@@ -3148,6 +3221,7 @@ function getVisibleNativeSuggestionItems(
   );
 
   if (!sourceVisible && !stableVisible) return [];
+  if (stable?.dataset.visualtexEnvironmentSuggestion) return stableItems;
   if (sourceVisible) return sourceItems;
   if (!field || !rawLatexInput(field).trim()) return [];
   return sourceItems.length ? sourceItems : stableItems;
@@ -4517,51 +4591,6 @@ function FormulaField(props: FormulaFieldProps) {
       );
       field.resetUndo();
     };
-    const commitCompletedRawCasesEnvironment = () => {
-      if (rawLatexInput(field).replace(/\s+/g, "") !== "\\begin{cases}") {
-        return false;
-      }
-      const anchor = rawCommandAnchors.get(field);
-      if (!anchor) return false;
-
-      const before = {
-        latex: anchor.latex,
-        selection: anchor.selection,
-      };
-      restoringRawCommandAnchor = true;
-      let inserted = false;
-      try {
-        restoreRawCommandInsertionAnchor(field, anchor);
-        inserted = field.insert(
-          "\\begin{cases}\\placeholder{} & \\placeholder{}\\end{cases}",
-          {
-            mode: "math",
-            format: "latex",
-            insertionMode: "replaceSelection",
-            selectionMode: "placeholder",
-            focus: true,
-            scrollIntoView: false,
-          },
-        );
-      } finally {
-        restoringRawCommandAnchor = false;
-      }
-      if (!inserted) return false;
-
-      rawCommandAnchors.delete(field);
-      delete field.dataset.pendingNativeSuggestion;
-      dismissNativeSuggestionPopover(field);
-      markVisualTexStructuralPlaceholders(field);
-      field.focus();
-      field.shadowRoot
-        ?.querySelector<HTMLElement>('[part="keyboard-sink"]')
-        ?.focus({ preventScroll: true });
-      const after = captureFieldSnapshot(field);
-      emitEdit(before, after, "replace", "keyboard");
-      propsRef.current.onInputActivity(field);
-      syncFrameSize();
-      return true;
-    };
     const handleCompositionStart = () => {
       compositionDeleteObserved = false;
       suppressPostCompositionDeleteUntil = 0;
@@ -4847,7 +4876,16 @@ function FormulaField(props: FormulaFieldProps) {
         return;
       }
       normalizeGuardedBackslashInput(event.timeStamp);
-      if (commitCompletedRawCasesEnvironment()) return;
+      nativeInputPopoverActiveField = field;
+      const casesSuggestionQuery = casesEnvironmentSuggestionQuery(field);
+      if (casesSuggestionQuery) {
+        field.dataset.pendingNativeSuggestion = CASES_ENVIRONMENT_COMMAND;
+      } else if (
+        field.dataset.pendingNativeSuggestion === CASES_ENVIRONMENT_COMMAND
+      ) {
+        delete field.dataset.pendingNativeSuggestion;
+      }
+      scheduleStableNativeInputPopoverSync();
       const before = lastSnapshotRef.current ?? captureFieldSnapshot(field);
       const directInputSetting =
         event instanceof InputEvent && isSingleDirectInput(event, field)
@@ -4964,12 +5002,18 @@ function FormulaField(props: FormulaFieldProps) {
         });
         return;
       }
+      nativeInputPopoverActiveField = field;
+      scheduleStableNativeInputPopoverSync();
       propsRef.current.onFocus(propsRef.current.index, field);
       lastSnapshotRef.current = captureFieldSnapshot(field);
     };
     const handleBlur = () => {
       clearPendingWrapperInput();
       rawCommandAnchors.delete(field);
+      if (nativeInputPopoverActiveField === field) {
+        nativeInputPopoverActiveField = null;
+        scheduleStableNativeInputPopoverSync();
+      }
       propsRef.current.onCommitPending();
     };
     const confirmPendingWrapperInput = (event: KeyboardEvent) => {
