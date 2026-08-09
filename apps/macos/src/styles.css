@@ -10330,11 +10330,40 @@ html body #visualtex-native-input-suggestion-popover .ML__popover__keybinding {
   gap: 5px;
 }
 
+.registered-custom-symbol-toolbar-item {
+  position: relative;
+  min-width: 0;
+}
+
 .formula-tile-button.is-registered-custom-symbol {
   position: relative;
+  width: 100%;
   min-width: 0;
   min-height: 58px;
   padding-bottom: 14px;
+  padding-right: 20px;
+}
+
+.registered-custom-symbol-toolbar-delete {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  z-index: 2;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--danger) 22%, var(--border));
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  color: var(--danger);
+  opacity: 0.82;
+}
+
+.registered-custom-symbol-toolbar-delete:hover {
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
+  opacity: 1;
 }
 
 .registered-custom-symbol-toolbar-command {
@@ -13294,6 +13323,11 @@ body[data-workspace-resize="dock"] * {
   background: var(--surface-selected);
 }
 
+.custom-symbol-registered-item.is-pending-delete {
+  border-color: color-mix(in srgb, var(--danger) 48%, var(--border));
+  background: color-mix(in srgb, var(--danger) 7%, var(--surface));
+}
+
 .custom-symbol-registered-main {
   min-width: 0;
   display: grid;
@@ -14030,6 +14064,13 @@ body[data-workspace-resize="dock"] * {
   vector-effect: non-scaling-stroke;
 }
 
+.custom-symbol-designer-resize-hit-target {
+  fill: transparent;
+  stroke: none;
+  pointer-events: all;
+  touch-action: none;
+}
+
 .custom-symbol-designer-resize-handle {
   fill: var(--surface);
   stroke: var(--accent);
@@ -14037,21 +14078,29 @@ body[data-workspace-resize="dock"] * {
   vector-effect: non-scaling-stroke;
 }
 
+.custom-symbol-designer-resize-hit-target.is-nw,
+.custom-symbol-designer-resize-hit-target.is-se,
 .custom-symbol-designer-resize-handle.is-nw,
 .custom-symbol-designer-resize-handle.is-se {
   cursor: nwse-resize;
 }
 
+.custom-symbol-designer-resize-hit-target.is-ne,
+.custom-symbol-designer-resize-hit-target.is-sw,
 .custom-symbol-designer-resize-handle.is-ne,
 .custom-symbol-designer-resize-handle.is-sw {
   cursor: nesw-resize;
 }
 
+.custom-symbol-designer-resize-hit-target.is-n,
+.custom-symbol-designer-resize-hit-target.is-s,
 .custom-symbol-designer-resize-handle.is-n,
 .custom-symbol-designer-resize-handle.is-s {
   cursor: ns-resize;
 }
 
+.custom-symbol-designer-resize-hit-target.is-e,
+.custom-symbol-designer-resize-hit-target.is-w,
 .custom-symbol-designer-resize-handle.is-e,
 .custom-symbol-designer-resize-handle.is-w {
   cursor: ew-resize;

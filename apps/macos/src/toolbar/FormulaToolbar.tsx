@@ -32,7 +32,10 @@ import {
 import { MathPreview } from "../components/MathPreview";
 import { FormulaHotkeyRecorderDialog } from "../components/FormulaHotkeyRecorderDialog";
 import { customSymbolCommands } from "../autocomplete/runtimeCommandRegistry";
-import { readCustomSymbolLibrary } from "../math/customSymbolRegistry";
+import {
+  deleteCustomSymbol,
+  readCustomSymbolLibrary,
+} from "../math/customSymbolRegistry";
 import { useCustomSymbolRevision } from "../math/customSymbolReact";
 import {
   createFormulaHotkeyTarget,
@@ -2068,28 +2071,55 @@ export function FormulaToolbar({
                       const latex = `\\${symbol.command}`;
                       const command = registeredCustomSymbolCommands.get(latex);
                       return (
-                        <button
-                          type="button"
-                          className="formula-tile-button is-registered-custom-symbol"
+                        <div
+                          className="registered-custom-symbol-toolbar-item"
                           key={symbol.id}
                           data-registered-custom-symbol-toolbar={symbol.id}
                           data-registered-custom-symbol-command={symbol.command}
-                          onClick={() => {
-                            if (command) onInsert(command);
-                          }}
-                          aria-label={`${symbol.name} · ${latex}`}
-                          title={`${symbol.name} · ${latex}`}
                         >
-                          <MathPreview
-                            latex={latex}
-                            className="formula-tile-preview"
-                            fit
-                            fluidHeight
-                          />
-                          <span className="registered-custom-symbol-toolbar-command">
-                            {latex}
-                          </span>
-                        </button>
+                          <button
+                            type="button"
+                            className="formula-tile-button is-registered-custom-symbol"
+                            onClick={() => {
+                              if (command) onInsert(command);
+                            }}
+                            aria-label={`${symbol.name} · ${latex}`}
+                            title={`${symbol.name} · ${latex}`}
+                          >
+                            <MathPreview
+                              latex={latex}
+                              className="formula-tile-preview"
+                              fit
+                              fluidHeight
+                            />
+                            <span className="registered-custom-symbol-toolbar-command">
+                              {latex}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            className="registered-custom-symbol-toolbar-delete"
+                            data-delete-registered-custom-symbol-toolbar={symbol.id}
+                            aria-label={
+                              isEn
+                                ? `Delete ${latex}`
+                                : `删除已注册字符 ${latex}`
+                            }
+                            title={isEn ? "Delete registered symbol" : "删除已注册字符"}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              const confirmed = window.confirm(
+                                isEn
+                                  ? `Delete ${latex}? Existing formulas will keep the source command but it will no longer render as this custom symbol.`
+                                  : `确定删除 ${latex} 吗？已有公式会保留源码，但该命令将不再渲染为这个自定义字符。`,
+                              );
+                              if (confirmed) deleteCustomSymbol(symbol.id);
+                            }}
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
                       );
                     })}
                   </div>

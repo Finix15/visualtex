@@ -269,6 +269,17 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
     return () => window.removeEventListener("keydown", keydown);
   }, [onClose, open]);
 
+  useEffect(() => {
+    if (!open || !pendingDeleteSymbolId) return;
+    const frame = requestAnimationFrame(() => {
+      const item = document.querySelector<HTMLElement>(
+        `[data-registered-custom-symbol="${pendingDeleteSymbolId}"]`,
+      );
+      item?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [open, pendingDeleteSymbolId]);
+
   const updateLayer = (
     id: string,
     update: (layer: CustomSymbolDesignerLayer) => CustomSymbolDesignerLayer,
@@ -638,6 +649,12 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
   const requestDeleteRegisteredSymbol = (symbol: CustomSymbolDefinition) => {
     if (pendingDeleteSymbolId !== symbol.id) {
       setPendingDeleteSymbolId(symbol.id);
+      setRegistrationState({
+        kind: "idle",
+        message: isEn
+          ? `Confirm deletion of \\${symbol.command} below.`
+          : `请在下方确认删除 \\${symbol.command}。`,
+      });
       return;
     }
     deleteCustomSymbol(symbol.id);
@@ -647,8 +664,13 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
       setSelectedLayerId(null);
       setSavedRegistrationFingerprint("");
       setDesignerSourceMode(null);
-      setRegistrationState({ kind: "idle", message: "" });
     }
+    setRegistrationState({
+      kind: "success",
+      message: isEn
+        ? `Deleted \\${symbol.command}`
+        : `已删除 \\${symbol.command}`,
+    });
   };
 
   const reset = () => {
@@ -719,7 +741,7 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
                   return (
                     <div
                       key={symbol.id}
-                      className={`custom-symbol-registered-item${active ? " is-active" : ""}`}
+                      className={`custom-symbol-registered-item${active ? " is-active" : ""}${pendingDelete ? " is-pending-delete" : ""}`}
                       data-registered-custom-symbol={symbol.id}
                       data-registered-custom-symbol-command={symbol.command}
                     >

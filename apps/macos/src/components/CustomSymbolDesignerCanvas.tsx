@@ -393,6 +393,38 @@ export function CustomSymbolDesignerCanvas({
     event.stopPropagation();
   };
 
+  const beginResizeFromHitTarget = (
+    event: ReactPointerEvent<SVGRectElement>,
+    layer: CustomSymbolDesignerLayer,
+  ) => {
+    if (layer.locked || eraserMode) return;
+    const group = event.currentTarget.closest(
+      ".custom-symbol-designer-layer",
+    ) as SVGGElement | null;
+    const matrix = group?.getScreenCTM();
+    if (!group || !matrix) return;
+
+    const bounds = layerBounds(layer);
+    let nearestHandle: ResizeHandle | null = null;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+    for (const handle of resizeHandles) {
+      const geometry = resizeGeometry(handle, bounds);
+      const screenPoint = new DOMPoint(
+        geometry.handleX,
+        geometry.handleY,
+      ).matrixTransform(matrix);
+      const distance = Math.hypot(
+        event.clientX - screenPoint.x,
+        event.clientY - screenPoint.y,
+      );
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestHandle = handle;
+      }
+    }
+    if (nearestHandle) beginResize(event, layer, nearestHandle);
+  };
+
   const beginCanvasPointer = (event: ReactPointerEvent<SVGSVGElement>) => {
     if (event.button !== 0 && event.button !== 1) return;
     if (eraserMode && event.button === 0) {
@@ -516,6 +548,10 @@ export function CustomSymbolDesignerCanvas({
   };
 
   const handleSizeWorld = Math.max(8, viewBox.width * 0.012);
+  // Keep resize handles visually compact while making their actual pointer target
+  // forgiving. The hit area is deliberately much larger than the painted square;
+  // overlapping targets are resolved to the nearest handle in screen space.
+  const resizeHitSizeWorld = Math.max(handleSizeWorld * 3, viewBox.width * 0.036);
   const zoomPercent = Math.max(
     8,
     Math.min(1200, Math.round((fitWidthRef.current / Math.max(viewBox.width, 1)) * 100)),
@@ -561,6 +597,8 @@ export function CustomSymbolDesignerCanvas({
     const scaleY = Math.max(Math.abs(layer.transform.scaleY ?? 1), 0.02);
     const handleWidth = handleSizeWorld / scaleX;
     const handleHeight = handleSizeWorld / scaleY;
+    const hitWidth = resizeHitSizeWorld / scaleX;
+    const hitHeight = resizeHitSizeWorld / scaleY;
     const isErase = eraseLayer(layer);
     return (
       <g
@@ -607,17 +645,27 @@ export function CustomSymbolDesignerCanvas({
                 {resizeHandles.map((handle) => {
                   const geometry = resizeGeometry(handle, bounds);
                   return (
-                    <rect
-                      key={handle}
-                      x={geometry.handleX - handleWidth / 2}
-                      y={geometry.handleY - handleHeight / 2}
-                      width={handleWidth}
-                      height={handleHeight}
-                      rx={Math.min(handleWidth, handleHeight) * 0.18}
-                      className={`custom-symbol-designer-resize-handle is-${handle}`}
-                      data-custom-symbol-resize-handle={handle}
-                      onPointerDown={(event) => beginResize(event, layer, handle)}
-                    />
+                    <g key={handle}>
+                      <rect
+                        x={geometry.handleX - hitWidth / 2}
+                        y={geometry.handleY - hitHeight / 2}
+                        width={hitWidth}
+                        height={hitHeight}
+                        className={`custom-symbol-designer-resize-hit-target is-${handle}`}
+                        data-custom-symbol-resize-hit-target={handle}
+                        onPointerDown={(event) => beginResizeFromHitTarget(event, layer)}
+                      />
+                      <rect
+                        x={geometry.handleX - handleWidth / 2}
+                        y={geometry.handleY - handleHeight / 2}
+                        width={handleWidth}
+                        height={handleHeight}
+                        rx={Math.min(handleWidth, handleHeight) * 0.18}
+                        className={`custom-symbol-designer-resize-handle is-${handle}`}
+                        data-custom-symbol-resize-handle={handle}
+                        pointerEvents="none"
+                      />
+                    </g>
                   );
                 })}
               </g>

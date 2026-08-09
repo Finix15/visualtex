@@ -141,8 +141,13 @@ const createNativeInlineRegression = process.argv.includes(
 const createNativeDisplayRegression = process.argv.includes(
   "--create-native-display",
 );
+const createNativeNumberedRegression = process.argv.includes(
+  "--create-native-numbered",
+);
 const createNativeRegression =
-  createNativeInlineRegression || createNativeDisplayRegression;
+  createNativeInlineRegression ||
+  createNativeDisplayRegression ||
+  createNativeNumberedRegression;
 const createImagePhysicalRegression =
   process.argv.includes("--create-image-physical-double-click") ||
   createImageNativeMonitorRegression ||
@@ -1676,9 +1681,11 @@ function runFormulaRegressionReport(testDocumentName, formulas) {
   const displayFormulaCount = formulas.filter(
     (formula) => formula.displayMode === "block",
   ).length;
-  const alignedFormulaCountExpected = formulas.filter((formula) =>
-    ["align", "align-star"].includes(formula.codeFormat),
-  ).length;
+  const alignedFormulaCountExpected = createNativeNumberedRegression
+    ? 1
+    : formulas.filter((formula) =>
+        ["align", "align-star"].includes(formula.codeFormat),
+      ).length;
   rmSync(formulaRegressionStatusPath, { force: true });
   runAppleScript([
     'tell application "Microsoft Word"',
@@ -1746,7 +1753,14 @@ function runFormulaRegressionReport(testDocumentName, formulas) {
         `Word OMML formula structure regression failed: ${JSON.stringify(report)}`,
       );
     }
-    const nativeSpacingExpectations = createNativeDisplayRegression
+    const nativeSpacingExpectations = createNativeNumberedRegression
+      ? [
+          ["minimumNativeSpaceBefore", 0],
+          ["maximumNativeSpaceBefore", 0],
+          ["minimumNativeSpaceAfter", 0],
+          ["maximumNativeSpaceAfter", 0],
+        ]
+      : createNativeDisplayRegression
       ? [
           // A freshly promoted unnumbered native display equation follows the
           // host document's Normal paragraph spacing. The default Word document
@@ -3520,13 +3534,17 @@ async function runCreatedImageFormulaRegression(
   beforeSessions,
   runPhysicalDoubleClickAfterReopen = false,
 ) {
-  const createdNumbered = createImageNumberedRegression;
+  const createdNumbered =
+    createImageNumberedRegression || createNativeNumberedRegression;
+  const requestedNumbered =
+    createNativeNumberedRegression ? false : createdNumbered;
   const createdNativeEquation = createNativeRegression;
   const createdDisplayMode =
     createSourceFormattedEquationRegression ||
     createImageDisplayRegression ||
     createImageNumberedRegression ||
-    createNativeDisplayRegression
+    createNativeDisplayRegression ||
+    createNativeNumberedRegression
       ? "block"
       : "inline";
   const createdLatex = createSourceFormattedEquationRegression
@@ -3541,7 +3559,9 @@ p(\mathbf{x},t)\,
 =
 0
 \end{equation}`
-    : "dfdfdf";
+    : createNativeNumberedRegression
+      ? String.raw`(a+b)^{n}=\sum_{k=0}^{n}\binom{n}{k}a^{n-k}b^{k}`
+      : "dfdfdf";
   const createMacroName = createdNativeEquation
     ? createdDisplayMode === "block"
       ? "VisualTeX_CreateNativeDisplay"
@@ -3589,7 +3609,7 @@ p(\mathbf{x},t)\,
     request.host !== "word" ||
     request.sessionId !== sessionId ||
     request.displayMode !== requestedDisplayMode ||
-    request.numbered !== createdNumbered ||
+    request.numbered !== requestedNumbered ||
     request.nativeEquation !== createdNativeEquation ||
     !request.formulaId ||
     !request.sourceDocumentId ||

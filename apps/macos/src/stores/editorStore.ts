@@ -68,6 +68,89 @@ export const MAX_CLASSIC_DOCK_HEIGHT = 2000;
 const legacyClassicTileWidthStorageKey = "visualtex-classic-tile-width";
 const legacyClassicDockHeightStorageKey = "visualtex-classic-dock-height";
 
+const officeFormulaPersistenceIsolatedKeys = new Set([
+  "title",
+  "lines",
+  "activeLineId",
+  "formulaAlignment",
+  "latexCodeFormat",
+  "formulaLetterFont",
+  "formulaChineseFont",
+  "history",
+]);
+
+function isOfficeFormulaPersistenceScope() {
+  if (typeof window === "undefined") return false;
+  try {
+    return (
+      new URLSearchParams(window.location.search).get("view") === "office-formula" ||
+      window.location.pathname.endsWith("/office-native-dialog.html")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function parsePersistedEditorEnvelope(raw: string | null) {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as {
+      state?: Record<string, unknown>;
+      version?: unknown;
+      [key: string]: unknown;
+    };
+    if (!parsed || typeof parsed !== "object" || !parsed.state || typeof parsed.state !== "object") {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+const editorPersistenceStorage = {
+  getItem(key: string): string | null {
+    const raw = safeStorage.getItem(key);
+    if (!isOfficeFormulaPersistenceScope()) return raw;
+    const parsed = parsePersistedEditorEnvelope(raw);
+    if (!parsed) return raw;
+    const state = { ...parsed.state };
+    for (const isolatedKey of officeFormulaPersistenceIsolatedKeys) {
+      delete state[isolatedKey];
+    }
+    return JSON.stringify({ ...parsed, state });
+  },
+
+  setItem(key: string, value: string): void {
+    if (!isOfficeFormulaPersistenceScope()) {
+      safeStorage.setItem(key, value);
+      return;
+    }
+    const incoming = parsePersistedEditorEnvelope(value);
+    if (!incoming) return;
+    const existing = parsePersistedEditorEnvelope(safeStorage.getItem(key));
+    const mergedState = { ...incoming.state };
+    for (const isolatedKey of officeFormulaPersistenceIsolatedKeys) {
+      if (existing?.state && Object.prototype.hasOwnProperty.call(existing.state, isolatedKey)) {
+        mergedState[isolatedKey] = existing.state[isolatedKey];
+      } else {
+        delete mergedState[isolatedKey];
+      }
+    }
+    safeStorage.setItem(
+      key,
+      JSON.stringify({
+        ...incoming,
+        state: mergedState,
+      }),
+    );
+  },
+
+  removeItem(key: string): void {
+    if (!isOfficeFormulaPersistenceScope()) safeStorage.removeItem(key);
+  },
+};
+
 export const DEFAULT_INPUT_BEHAVIOR_SETTINGS: InputBehaviorSettings = {
   autoEscapeShortcuts: true,
   autoExitSuperscript: true,
@@ -794,7 +877,7 @@ export const useEditorStore = create<EditorState>()(
     }),
     {
       name: "visualtex-editor",
-      storage: createJSONStorage(() => safeStorage),
+      storage: createJSONStorage(() => editorPersistenceStorage),
       partialize: (state) => ({
         title: state.title,
         lines: state.lines,

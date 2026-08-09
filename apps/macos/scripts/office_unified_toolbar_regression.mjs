@@ -131,7 +131,18 @@ async function main() {
     await client.evaluate(`(() => {
       localStorage.setItem(
         "visualtex-editor",
-        JSON.stringify({ state: { zoom: 0.5 }, version: 0 }),
+        JSON.stringify({
+          state: {
+            zoom: 0.5,
+            title: "Main application sentinel",
+            lines: [{ id: "main-sentinel-line", latex: "MAIN_APP_SENTINEL" }],
+            activeLineId: "main-sentinel-line",
+            formulaAlignment: "right",
+            latexCodeFormat: "equation",
+            history: [{ id: "main-history", latex: "MAIN_HISTORY_SENTINEL", createdAt: 1 }],
+          },
+          version: 0,
+        }),
       );
       localStorage.removeItem("visualtex-office-editor-zoom-60-migration-v1");
     })()`);
@@ -852,11 +863,23 @@ async function main() {
       return {
         marker: localStorage.getItem("visualtex-office-editor-zoom-60-migration-v1"),
         zoom: persisted?.state?.zoom,
+        title: persisted?.state?.title,
+        lineLatex: persisted?.state?.lines?.[0]?.latex,
+        activeLineId: persisted?.state?.activeLineId,
+        formulaAlignment: persisted?.state?.formulaAlignment,
+        latexCodeFormat: persisted?.state?.latexCodeFormat,
+        historyLatex: persisted?.state?.history?.[0]?.latex,
         text: document.querySelector('.canvas-controls > span')?.textContent?.trim() || '',
       };
     })()`);
     assert.equal(migratedZoom.marker, "done", JSON.stringify(migratedZoom));
     assert.ok(Math.abs(Number(migratedZoom.zoom) - 0.6) < 0.001, JSON.stringify(migratedZoom));
+    assert.equal(migratedZoom.title, "Main application sentinel", JSON.stringify(migratedZoom));
+    assert.equal(migratedZoom.lineLatex, "MAIN_APP_SENTINEL", JSON.stringify(migratedZoom));
+    assert.equal(migratedZoom.activeLineId, "main-sentinel-line", JSON.stringify(migratedZoom));
+    assert.equal(migratedZoom.formulaAlignment, "right", JSON.stringify(migratedZoom));
+    assert.equal(migratedZoom.latexCodeFormat, "equation", JSON.stringify(migratedZoom));
+    assert.equal(migratedZoom.historyLatex, "MAIN_HISTORY_SENTINEL", JSON.stringify(migratedZoom));
     assert.equal(migratedZoom.text, "60%", JSON.stringify(migratedZoom));
 
     await client.evaluate(`document.querySelector('.canvas-controls button:last-of-type')?.click()`);

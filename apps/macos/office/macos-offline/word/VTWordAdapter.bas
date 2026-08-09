@@ -5068,7 +5068,24 @@ Private Function VTNumberedFormulaRangeForId( _
         documentObject.Bookmarks(nativeBookmarkName))
     If nativeMath Is Nothing Then Exit Function
     Set nativeRange = nativeMath.Range.Duplicate
-    If nativeRange.Information(wdWithInTable) Then Exit Function
+    If nativeRange.Information(wdWithInTable) Then
+        If nativeRange.Tables.Count <> 1 Then Exit Function
+        Set layoutTable = nativeRange.Tables(1)
+        If layoutTable.Rows.Count <> 1 Or layoutTable.Columns.Count <> 3 Then
+            Exit Function
+        End If
+        Set formulaContainer = layoutTable.Cell(1, 2).Range.Duplicate
+        If formulaContainer.InlineShapes.Count <> 0 Or _
+           formulaContainer.OMaths.Count <> 1 Then
+            Exit Function
+        End If
+        If nativeRange.Start < formulaContainer.Start Or _
+           nativeRange.End > formulaContainer.End Then
+            Exit Function
+        End If
+        Set VTNumberedFormulaRangeForId = nativeRange.Duplicate
+        Exit Function
+    End If
 
     Set visibleNumberField = VTNativeEquationArrayReferenceField( _
         nativeRange, formulaId)
@@ -13248,8 +13265,12 @@ Private Function VTInsertDedicatedEquationHelperParagraph( _
 
     Dim documentObject As Document
     Dim tableRange As Range
+    Dim probeRange As Range
     Dim helperParagraph As Range
+    Dim candidateParagraph As Range
     Dim helperStart As Long
+    Dim probeStart As Long
+    Dim probeLimit As Long
 
     If layoutTable Is Nothing Then
         Err.Raise vbObjectError + 7553, "VisualTeX", _
@@ -13265,16 +13286,45 @@ Private Function VTInsertDedicatedEquationHelperParagraph( _
     ' rejected a visually empty insertion position. InsertParagraphAfter preserves that body
     ' line and gives the native SEQ field its own paragraph unconditionally.
     tableRange.InsertParagraphAfter
-    Set helperParagraph = documentObject.Range( _
-        Start:=helperStart, End:=helperStart).Paragraphs(1).Range.Duplicate
-    If helperParagraph.Start <> helperStart Or _
-       helperParagraph.Information(wdWithInTable) Or _
-       helperParagraph.Fields.Count <> 0 Or _
+
+    ' A collapsed Range exactly at the old Table.Range.End can still resolve
+    ' backward into the final cell marker (Chr(13) + Chr(7)) on Word 16.89.1.
+    ' Probe actual characters immediately after that boundary and select the
+    ' first paragraph that Word reports as outside the table. Do not accept a
+    ' later body paragraph: the dedicated helper must also be completely empty.
+    probeStart = helperStart
+    probeLimit = helperStart + 8
+    If probeLimit > documentObject.Content.End - 1 Then
+        probeLimit = documentObject.Content.End - 1
+    End If
+    Do While probeStart <= probeLimit
+        Set probeRange = documentObject.Range( _
+            Start:=probeStart, End:=probeStart + 1)
+        Set candidateParagraph = probeRange.Paragraphs(1).Range.Duplicate
+        If Not candidateParagraph.Information(wdWithInTable) And _
+           candidateParagraph.Start >= helperStart Then
+            Set helperParagraph = candidateParagraph
+            Exit Do
+        End If
+        probeStart = probeStart + 1
+    Loop
+
+    If helperParagraph Is Nothing Then
+        Err.Raise vbObjectError + 7553, "VisualTeX", _
+            "Word did not expose an Equation helper paragraph outside the table."
+    End If
+    If helperParagraph.Fields.Count <> 0 Or _
        helperParagraph.InlineShapes.Count <> 0 Or _
        helperParagraph.OMaths.Count <> 0 Or _
        VTWordRangeHasMeaningfulText(helperParagraph) Then
         Err.Raise vbObjectError + 7553, "VisualTeX", _
-            "Word did not create an independent empty Equation helper paragraph."
+            "Word did not create an independent empty Equation helper paragraph" & _
+            " [expectedStart=" & CStr(helperStart) & _
+            "; actualStart=" & CStr(helperParagraph.Start) & _
+            "; actualEnd=" & CStr(helperParagraph.End) & _
+            "; fields=" & CStr(helperParagraph.Fields.Count) & _
+            "; maths=" & CStr(helperParagraph.OMaths.Count) & _
+            "; text=" & Replace$(helperParagraph.Text, vbCr, "<CR>") & "]."
     End If
     Set VTInsertDedicatedEquationHelperParagraph = helperParagraph
 End Function
@@ -14161,8 +14211,12 @@ Private Sub VTCommitWordDispatch(ByVal sessionId As String, ByVal dispatch As Ob
                     nativeEquationRange, heightPoints, formulaId, captionText, _
                     numberCreated)
                 If numberCreated Then Set insertedNumber = numberLayoutRange
-                Set nativeEquationRange = VTResolveNativeEquationRange( _
-                    targetDocument, nativeEquationStart, 16)
+                Set nativeEquationRange = VTNumberedFormulaRangeForId( _
+                    targetDocument, formulaId)
+                If nativeEquationRange Is Nothing Then
+                    Set nativeEquationRange = VTResolveNativeEquationRange( _
+                        targetDocument, nativeEquationStart, 64)
+                End If
             Else
                 transactionStage = "promote-native-display"
                 Set nativeEquationRange = _
@@ -19124,8 +19178,17 @@ Private Function VTEnsureNativeEquationArrayNumber( _
         End If
     End If
 
-    operationStage = "normalize-source-formula"
-    nativeEquation.Type = wdOMathInline
+    ' Numbered native creates are inserted through VTInsertNativeEquationAtRange
+    ' in inline mode before this routine runs. Re-applying the same Type setter
+    ' is not harmless on Word 2021: some already-built complex OMath trees
+    ' (notably n-ary + delimiter/no-bar fraction combinations) raise runtime
+    ' error 445 even though they are already wdOMathInline. Only convert when
+    ' the object actually reports a different type.
+    operationStage = "normalize-source-formula-type"
+    If nativeEquation.Type <> wdOMathInline Then
+        nativeEquation.Type = wdOMathInline
+    End If
+    operationStage = "normalize-source-formula-buildup"
     nativeEquation.BuildUp
     Set exactEquationRange = nativeEquation.Range.Duplicate
     Set paragraphRange = VTWordParagraphContainingFormula(exactEquationRange)
@@ -19395,6 +19458,211 @@ ArrayFailed:
         ": " & operationErrorDescription
 End Function
 
+Private Function VTEnsureNativeEquationTableNumberNoBuild( _
+    ByVal equationRange As Range, _
+    ByVal formulaId As String) As Range
+
+    Dim documentObject As Document
+    Dim nativeEquation As OMath
+    Dim restoredEquation As OMath
+    Dim paragraphRange As Range
+    Dim beforeRange As Range
+    Dim afterRange As Range
+    Dim backupDocument As Document
+    Dim backupRange As Range
+    Dim cleanupRange As Range
+    Dim insertionRange As Range
+    Dim centerRange As Range
+    Dim numberRange As Range
+    Dim helperParagraph As Range
+    Dim sequenceField As Field
+    Dim layoutTable As Table
+    Dim paragraphStart As Long
+    Dim sourceCleared As Boolean
+    Dim operationStage As String
+    Dim operationErrorNumber As Long
+    Dim operationErrorDescription As String
+    Dim numberBookmarkName As String
+    Dim sequenceBookmarkName As String
+    Dim captionBookmarkName As String
+    Dim nativeBookmarkName As String
+
+    On Error GoTo LayoutFailed
+    operationStage = "validate-source"
+    If equationRange Is Nothing Or equationRange.OMaths.Count <> 1 Or _
+       Not VTIsCanonicalUuid(formulaId) Then
+        Err.Raise vbObjectError + 7564, "VisualTeX", _
+            "The no-BuildUp native Equation fallback target is invalid."
+    End If
+    Set documentObject = equationRange.Document
+    Set nativeEquation = equationRange.OMaths(1)
+    If nativeEquation.Range.Information(wdWithInTable) Then
+        Err.Raise vbObjectError + 7564, "VisualTeX", _
+            "The no-BuildUp native Equation fallback target is already in a table."
+    End If
+
+    Set paragraphRange = nativeEquation.Range.Paragraphs(1).Range.Duplicate
+    paragraphStart = paragraphRange.Start
+    If paragraphRange.OMaths.Count <> 1 Or _
+       paragraphRange.InlineShapes.Count <> 0 Then
+        Err.Raise vbObjectError + 7564, "VisualTeX", _
+            "The no-BuildUp native Equation must occupy a unique formula paragraph."
+    End If
+    Set beforeRange = paragraphRange.Duplicate
+    beforeRange.End = nativeEquation.Range.Start
+    Set afterRange = paragraphRange.Duplicate
+    afterRange.Start = nativeEquation.Range.End
+    If VTWordRangeHasMeaningfulText(beforeRange) Or _
+       VTWordRangeHasMeaningfulText(afterRange) Then
+        Err.Raise vbObjectError + 7564, "VisualTeX", _
+            "The no-BuildUp native Equation has surrounding body text."
+    End If
+
+    numberBookmarkName = VTEquationNumberBookmarkName(formulaId)
+    sequenceBookmarkName = VTEquationSequenceNumberBookmarkName(formulaId)
+    captionBookmarkName = VTEquationCaptionBookmarkName(formulaId)
+    nativeBookmarkName = VTNativeFormulaBookmarkName(formulaId)
+
+    operationStage = "backup-source"
+    Set backupDocument = Documents.Add(Visible:=False)
+    Set backupRange = backupDocument.Content.Duplicate
+    backupRange.Collapse wdCollapseStart
+    backupRange.FormattedText = nativeEquation.Range.FormattedText
+    If backupDocument.OMaths.Count <> 1 Then
+        Err.Raise vbObjectError + 7564, "VisualTeX", _
+            "Word could not back up the no-BuildUp native Equation."
+    End If
+    Set backupRange = backupDocument.OMaths(1).Range.Duplicate
+    documentObject.Activate
+
+    operationStage = "clear-source"
+    If documentObject.Bookmarks.Exists(nativeBookmarkName) Then
+        documentObject.Bookmarks(nativeBookmarkName).Delete
+    End If
+    Set cleanupRange = paragraphRange.Duplicate
+    If cleanupRange.End > cleanupRange.Start Then
+        cleanupRange.End = cleanupRange.End - 1
+    End If
+    If cleanupRange.End > cleanupRange.Start Then cleanupRange.Delete
+    sourceCleared = True
+
+    operationStage = "create-table"
+    Set insertionRange = documentObject.Range( _
+        Start:=paragraphStart, End:=paragraphStart)
+    Set layoutTable = documentObject.Tables.Add( _
+        Range:=insertionRange, NumRows:=1, NumColumns:=3)
+    VTConfigureNumberedDisplayTable layoutTable
+
+    operationStage = "restore-source-no-build"
+    Set centerRange = layoutTable.Cell(1, 2).Range.Duplicate
+    centerRange.End = centerRange.End - 1
+    centerRange.Collapse wdCollapseStart
+    centerRange.FormattedText = backupRange.FormattedText
+    If layoutTable.Cell(1, 2).Range.OMaths.Count <> 1 Or _
+       layoutTable.Cell(1, 2).Range.InlineShapes.Count <> 0 Then
+        Err.Raise vbObjectError + 7564, "VisualTeX", _
+            "Word did not restore exactly one native Equation in the fallback table."
+    End If
+    Set nativeEquation = layoutTable.Cell(1, 2).Range.OMaths(1)
+    nativeEquation.Range.Font.Position = 0
+    nativeEquation.Range.Font.Size = _
+        VTPreferredNativeDisplayFontSize(layoutTable.Cell(1, 2).Range)
+    layoutTable.Cell(1, 2).Range.ParagraphFormat.Alignment = _
+        wdAlignParagraphCenter
+    VTSetNativeFormulaBookmark _
+        documentObject, nativeEquation.Range.Duplicate, formulaId
+
+    operationStage = "create-number-fields"
+    VTEnsureEquationNumberFields layoutTable, formulaId
+    If Not documentObject.Bookmarks.Exists(numberBookmarkName) Then
+        Err.Raise vbObjectError + 7564, "VisualTeX", _
+            "Word did not create the visible number for the no-BuildUp native Equation."
+    End If
+
+    operationStage = "resolve-final-table"
+    Set numberRange = documentObject.Bookmarks( _
+        numberBookmarkName).Range.Duplicate
+    If Not numberRange.Information(wdWithInTable) Then
+        Err.Raise vbObjectError + 7564, "VisualTeX", _
+            "The no-BuildUp native Equation number left its fallback table."
+    End If
+    Set layoutTable = numberRange.Tables(1)
+    If layoutTable.Rows.Count <> 1 Or layoutTable.Columns.Count <> 3 Or _
+       layoutTable.Cell(1, 2).Range.OMaths.Count <> 1 Then
+        Err.Raise vbObjectError + 7564, "VisualTeX", _
+            "Word lost the no-BuildUp native Equation fallback structure."
+    End If
+    Set nativeEquation = layoutTable.Cell(1, 2).Range.OMaths(1)
+    nativeEquation.Range.Font.Position = 0
+    nativeEquation.Range.Font.Size = _
+        VTPreferredNativeDisplayFontSize(layoutTable.Cell(1, 2).Range)
+    layoutTable.Cell(1, 2).Range.ParagraphFormat.Alignment = _
+        wdAlignParagraphCenter
+    VTSetNativeFormulaBookmark _
+        documentObject, nativeEquation.Range.Duplicate, formulaId
+    VTConfigureNumberedDisplayTable layoutTable
+
+    backupDocument.Close SaveChanges:=wdDoNotSaveChanges
+    Set backupDocument = Nothing
+    Set VTEnsureNativeEquationTableNumberNoBuild = _
+        layoutTable.Range.Duplicate
+    Exit Function
+
+LayoutFailed:
+    operationErrorNumber = Err.Number
+    operationErrorDescription = Err.Description
+    On Error Resume Next
+    If Not documentObject Is Nothing Then
+        If documentObject.Bookmarks.Exists(captionBookmarkName) Then
+            Set helperParagraph = documentObject.Bookmarks( _
+                captionBookmarkName).Range.Paragraphs(1).Range.Duplicate
+        ElseIf documentObject.Bookmarks.Exists(sequenceBookmarkName) Then
+            Set sequenceField = VTEquationSequenceFieldForBookmark( _
+                documentObject, sequenceBookmarkName)
+            If Not sequenceField Is Nothing Then
+                Set helperParagraph = _
+                    sequenceField.Result.Paragraphs(1).Range.Duplicate
+            End If
+        End If
+        If documentObject.Bookmarks.Exists(numberBookmarkName) Then
+            documentObject.Bookmarks(numberBookmarkName).Delete
+        End If
+        If documentObject.Bookmarks.Exists(sequenceBookmarkName) Then
+            documentObject.Bookmarks(sequenceBookmarkName).Delete
+        End If
+        If documentObject.Bookmarks.Exists(captionBookmarkName) Then
+            documentObject.Bookmarks(captionBookmarkName).Delete
+        End If
+        If documentObject.Bookmarks.Exists(nativeBookmarkName) Then
+            documentObject.Bookmarks(nativeBookmarkName).Delete
+        End If
+        If Not helperParagraph Is Nothing Then
+            If VTHelperParagraphOwnsNativeEquationSequence( _
+               helperParagraph) Then helperParagraph.Delete
+        End If
+        If Not layoutTable Is Nothing Then layoutTable.Delete
+        If sourceCleared And Not backupRange Is Nothing Then
+            Set insertionRange = documentObject.Range( _
+                Start:=paragraphStart, End:=paragraphStart)
+            insertionRange.FormattedText = backupRange.FormattedText
+            Set restoredEquation = VTNativeMathNearStart( _
+                documentObject, paragraphStart, 64)
+            If Not restoredEquation Is Nothing Then
+                VTSetNativeFormulaBookmark _
+                    documentObject, restoredEquation.Range.Duplicate, formulaId
+            End If
+        End If
+    End If
+    If Not backupDocument Is Nothing Then
+        backupDocument.Close SaveChanges:=wdDoNotSaveChanges
+    End If
+    On Error GoTo 0
+    Err.Raise operationErrorNumber, _
+        "VisualTeX native Equation no-BuildUp fallback", _
+        "VTEnsureNativeEquationTableNumberNoBuild/" & operationStage & _
+        ": " & operationErrorDescription
+End Function
+
 Private Function VTEnsureNativeEquationNumber( _
     ByVal equationRange As Range, _
     ByVal renderedHeightPoints As Double, _
@@ -19402,9 +19670,15 @@ Private Function VTEnsureNativeEquationNumber( _
     ByVal captionText As String, _
     ByRef numberCreated As Boolean) As Range
 
+    Dim documentObject As Document
     Dim formulaRange As Range
+    Dim persistedMath As OMath
     Dim layoutTable As Table
     Dim numberBookmarkName As String
+    Dim nativeBookmarkName As String
+    Dim formulaStart As Long
+    Dim arrayErrorNumber As Long
+    Dim arrayErrorDescription As String
 
     If equationRange Is Nothing Then
         Err.Raise vbObjectError + 7470, "VisualTeX", _
@@ -19414,10 +19688,12 @@ Private Function VTEnsureNativeEquationNumber( _
         Err.Raise vbObjectError + 7470, "VisualTeX", _
             "The native equation number target is ambiguous."
     End If
+    Set documentObject = equationRange.Document
     numberBookmarkName = VTEquationNumberBookmarkName(formulaId)
-    numberCreated = Not equationRange.Document.Bookmarks.Exists( _
-        numberBookmarkName)
+    nativeBookmarkName = VTNativeFormulaBookmarkName(formulaId)
+    numberCreated = Not documentObject.Bookmarks.Exists(numberBookmarkName)
     Set formulaRange = equationRange.OMaths(1).Range.Duplicate
+    formulaStart = formulaRange.Start
 
     If formulaRange.Information(wdWithInTable) Then
         Set layoutTable = formulaRange.Tables(1)
@@ -19428,8 +19704,45 @@ Private Function VTEnsureNativeEquationNumber( _
         End If
     End If
 
+    On Error GoTo ArrayNumberFailed
     Set VTEnsureNativeEquationNumber = _
         VTEnsureNativeEquationArrayNumber(formulaRange, formulaId)
+    Exit Function
+
+ArrayNumberFailed:
+    arrayErrorNumber = Err.Number
+    arrayErrorDescription = Err.Description
+    On Error GoTo 0
+
+    ' Word 2021 for Mac can reject BuildUp with runtime error 445 for an
+    ' already-professional OMath (notably delimiter + noBar/binomial structures).
+    ' The failed BuildUp leaves that source OMath intact. Only this exact early
+    ' compatibility failure is eligible for the no-BuildUp table fallback; later
+    ' Equation-array failures may already have mutated the formula and must still
+    ' surface normally so the outer transaction can roll them back atomically.
+    If arrayErrorNumber = 445 And _
+       InStr(1, arrayErrorDescription, _
+           "VTEnsureNativeEquationArrayNumber/normalize-source-formula-buildup:", _
+           vbBinaryCompare) > 0 Then
+        Set formulaRange = Nothing
+        If documentObject.Bookmarks.Exists(nativeBookmarkName) Then
+            Set persistedMath = VTNativeMathForBookmark( _
+                documentObject.Bookmarks(nativeBookmarkName))
+            If Not persistedMath Is Nothing Then
+                Set formulaRange = persistedMath.Range.Duplicate
+            End If
+        End If
+        If formulaRange Is Nothing Then
+            Set formulaRange = VTResolveNativeEquationRange( _
+                documentObject, formulaStart, 64)
+        End If
+        Set VTEnsureNativeEquationNumber = _
+            VTEnsureNativeEquationTableNumberNoBuild(formulaRange, formulaId)
+        Exit Function
+    End If
+
+    Err.Raise arrayErrorNumber, "VisualTeX native Equation numbering", _
+        arrayErrorDescription
 End Function
 
 Private Function VTEnsureNumberedDisplayTable( _

@@ -431,15 +431,32 @@ async function main() {
       x: Number(document.querySelector('[data-designer-field="layer-scale-x"]')?.value || 1),
       y: Number(document.querySelector('[data-designer-field="layer-scale-y"]')?.value || 1),
       handles: document.querySelectorAll('[data-custom-symbol-resize-handle]').length,
+      hitTargets: document.querySelectorAll('[data-custom-symbol-resize-hit-target]').length,
     }))()`);
-    assert.equal(scaleBeforeHandle.handles, 8, "Selected layer should expose eight direct resize handles");
+    assert.equal(scaleBeforeHandle.handles, 8, "Selected layer should expose eight visual resize handles");
+    assert.equal(scaleBeforeHandle.hitTargets, 8, "Selected layer should expose eight forgiving resize hit targets");
     const resizeBox = await client.evaluate(`(() => {
       const handle = document.querySelector('[data-custom-symbol-resize-handle="se"]');
-      if (!handle) return null;
-      const rect = handle.getBoundingClientRect();
-      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      const hitTarget = document.querySelector('[data-custom-symbol-resize-hit-target="se"]');
+      if (!handle || !hitTarget) return null;
+      const handleRect = handle.getBoundingClientRect();
+      const hitRect = hitTarget.getBoundingClientRect();
+      const x = handleRect.right + Math.max(1, (hitRect.right - handleRect.right) * 0.5);
+      const y = handleRect.top + handleRect.height / 2;
+      return {
+        x,
+        y,
+        outsideVisualHandle: x > handleRect.right,
+        insideHitTarget:
+          x >= hitRect.left && x <= hitRect.right && y >= hitRect.top && y <= hitRect.bottom,
+        visualWidth: handleRect.width,
+        hitWidth: hitRect.width,
+      };
     })()`);
-    assert.ok(resizeBox, "Bottom-right resize handle must have a hit box");
+    assert.ok(resizeBox, "Bottom-right resize handle must have a forgiving hit target");
+    assert.equal(resizeBox.outsideVisualHandle, true, "Resize regression must begin outside the painted handle");
+    assert.equal(resizeBox.insideHitTarget, true, "Resize regression must begin inside the expanded hit target");
+    assert.ok(resizeBox.hitWidth >= resizeBox.visualWidth * 2.5, "Resize hit target should be substantially larger than the painted handle");
     await client.send("Input.dispatchMouseEvent", {
       type: "mousePressed",
       x: resizeBox.x,
@@ -472,7 +489,7 @@ async function main() {
       scaleAfterHandle.x !== scaleBeforeHandle.x || scaleAfterHandle.y !== scaleBeforeHandle.y,
       "Dragging a resize handle must change the selected layer scale",
     );
-    process.stdout.write("[custom-symbol-designer] direct resize handles verified\n");
+    process.stdout.write("[custom-symbol-designer] forgiving resize hit targets verified\n");
 
     const viewBoxBeforePan = await client.evaluate(`document.querySelector('[data-custom-symbol-canvas]')?.getAttribute('viewBox') || ''`);
     const emptyCanvasPoint = await client.evaluate(`(() => {
@@ -1043,6 +1060,14 @@ async function main() {
     await client.evaluate(`document.querySelector('.custom-symbol-designer-footer button').click()`);
     await waitUntil(client, `!document.querySelector('[data-custom-symbol-designer]')`);
     await waitUntil(client, `Boolean(document.querySelector('[data-registered-custom-symbol-command="selfdefa"]'))`);
+    const mainToolbarDeleteVisible = await client.evaluate(`(() => {
+      const button = document.querySelector('[data-delete-registered-custom-symbol-toolbar]');
+      if (!(button instanceof HTMLElement)) return false;
+      const rect = button.getBoundingClientRect();
+      const style = getComputedStyle(button);
+      return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+    })()`);
+    assert.equal(mainToolbarDeleteVisible, true, "Registered custom symbols must expose a visible delete button in the main toolbar");
 
     await client.evaluate(`(() => {
       const field = document.querySelector("math-field");
@@ -1059,7 +1084,7 @@ async function main() {
       field.position = field.lastOffset;
     })()`);
     await sleep(100);
-    await client.evaluate(`document.querySelector('[data-registered-custom-symbol-command="selfdefa"]').click()`);
+    await client.evaluate(`document.querySelector('[data-registered-custom-symbol-command="selfdefa"] .formula-tile-button.is-registered-custom-symbol').click()`);
     await waitUntil(client, `document.querySelector("math-field")?.value === "\\\\selfdefa"`);
     const toolbarInsert = await client.evaluate(`(() => {
       const field = document.querySelector("math-field");
@@ -1092,6 +1117,7 @@ async function main() {
     await client.evaluate(`document.querySelector('[data-confirm-delete-registered-custom-symbol]').click()`);
     await waitUntil(client, `JSON.parse(localStorage.getItem("visualtex.custom-symbols.v1")).symbols.length === 0`);
     await waitUntil(client, `!document.querySelector('[data-registered-custom-symbol-command="selfdefa"]')`);
+    await waitUntil(client, `document.querySelector('[data-custom-symbol-registration-status="success"]')?.textContent?.includes('selfdefa')`);
     const deletionState = await client.evaluate(`(() => {
       const field = document.querySelector("math-field");
       return {
