@@ -582,7 +582,7 @@ fn open_desktop_session_window(app: tauri::AppHandle, session_id: String) -> Res
         *current = Some(session_id.clone());
     }
     let build_result = WebviewWindowBuilder::new(&app, label, WebviewUrl::External(url))
-        .title("VisualTeX · Office 公式编辑器")
+        .title("Office 公式编辑器")
         .inner_size(1240.0, 820.0)
         .min_inner_size(640.0, 480.0)
         .resizable(true)

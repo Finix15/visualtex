@@ -38,6 +38,8 @@ internal static partial class Program
         try
         {
             RunNativeWordOmmlToOleAcceptance(client);
+            RunOmmlSelectionReadOnlyAcceptance();
+            RunMixedOmmlThenOleToLatexAcceptance(client);
             using (var host = new WordPerformanceHost(documentPath: null))
             {
                 var formulas = PopulateFormulaToLatexDocument(client, host);
@@ -50,14 +52,16 @@ internal static partial class Program
                 var oleDisplay = formulas.Single(item =>
                     item.ObjectMode == FormulaOleContract.NativeOleMode
                     && item.DisplayMode == "block");
-                var ommlDisplay = formulas.Single(item =>
-                    item.ObjectMode == FormulaOleContract.WordOmmlMode
-                    && item.DisplayMode == "block");
-
-                // Edit the selected OMML equation through Word's native equation
-                // model before restoring it. The reverse command must export the
-                // current Word content rather than stale VisualTeX metadata.
-                AppendToFormulaOmmlAndSelect(host.Document, ommlDisplay, "+5");
+                AssertFormulaToLatexRollbackAfterInjectedFailure(
+                    host,
+                    oleInline,
+                    expectedOle: 2,
+                    expectedOmml: 2);
+                AssertFormulaToLatexEmptyMetadataPreflight(
+                    host,
+                    oleInline,
+                    expectedOle: 2,
+                    expectedOmml: 2);
 
                 var insertedReference = InsertNumberingReference(
                     host.Application,
@@ -118,6 +122,159 @@ internal static partial class Program
             Environment.SetEnvironmentVariable(
                 "VISUALTEX_VSTO_REDRAW_ACCEPTANCE_LOG",
                 null);
+        }
+    }
+
+    private static void RunOmmlSelectionReadOnlyAcceptance()
+    {
+        using var host = new WordPerformanceHost(documentPath: null);
+        Word.Range? equationRange = null;
+        Word.Range? content = null;
+        Word.Bookmarks? bookmarks = null;
+        try
+        {
+            equationRange = InsertNativeWordOmml(
+                host,
+                "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"inline\"><mi>r</mi><mo>=</mo><mn>7</mn></math>",
+                display: false);
+            var beforeText = ReadFormulaToLatexDocumentText(host.Document);
+            bookmarks = host.Document.Bookmarks;
+            var beforeBookmarkCount = bookmarks.Count;
+            var beforeCustomXmlCount = host.Document.CustomXMLParts.Count;
+            AssertEqual(
+                0,
+                WordOmmlFormulaStore.FormulaIds(host.Document).Count,
+                "The read-only OMML selection fixture unexpectedly started with VisualTeX metadata.");
+
+            var caret = Math.Min(equationRange.End - 1, equationRange.Start + 1);
+            host.Application.Selection.SetRange(caret, caret);
+            var service = new WordFormulaService(host.Application);
+            var size = service.GetSelectedFormulaFontSize();
+            if (!size.HasValue)
+                throw new InvalidDataException(
+                    "Read-only OMML font-size probing did not recognize the native Word equation.");
+            _ = service.GetSelectedFormulaFontSize();
+
+            AssertEqual(
+                beforeText,
+                ReadFormulaToLatexDocumentText(host.Document),
+                "Reading the selected OMML font size changed Word document text.");
+            AssertEqual(
+                beforeBookmarkCount,
+                host.Document.Bookmarks.Count,
+                "Reading the selected OMML font size created a Word bookmark.");
+            AssertEqual(
+                beforeCustomXmlCount,
+                host.Document.CustomXMLParts.Count,
+                "Reading the selected OMML font size created a CustomXML metadata part.");
+            AssertEqual(
+                0,
+                WordOmmlFormulaStore.FormulaIds(host.Document).Count,
+                "Reading the selected OMML font size adopted a native Word equation into VisualTeX metadata.");
+            Console.WriteLine(
+                "Native OMML selection/font-size probing remained strictly read-only.");
+        }
+        finally
+        {
+            Release(bookmarks);
+            Release(content);
+            Release(equationRange);
+        }
+    }
+
+    private static void RunMixedOmmlThenOleToLatexAcceptance(
+        VisualTeXSessionClient client)
+    {
+        using var host = new WordPerformanceHost(documentPath: null);
+        Word.Selection? selection = null;
+        Word.Tables? tables = null;
+        Word.Frames? frames = null;
+        try
+        {
+            selection = host.Application.Selection;
+            selection.HomeKey(Word.WdUnits.wdStory);
+            var oleDisplay = InsertFormulaToLatexCase(
+                client,
+                host,
+                FormulaOleContract.NativeOleMode,
+                displayMode: "block",
+                numbered: true,
+                latex: "u=v",
+                mathVariable: "u",
+                mathNumber: "1");
+            selection.EndKey(Word.WdUnits.wdStory);
+            var ommlDisplay = InsertFormulaToLatexCase(
+                client,
+                host,
+                FormulaOleContract.WordOmmlMode,
+                displayMode: "block",
+                numbered: true,
+                latex: "p=2",
+                mathVariable: "p",
+                mathNumber: "2");
+            selection.EndKey(Word.WdUnits.wdStory);
+            var ommlInline = InsertFormulaToLatexCase(
+                client,
+                host,
+                FormulaOleContract.WordOmmlMode,
+                displayMode: "inline",
+                numbered: false,
+                latex: "q=3",
+                mathVariable: "q",
+                mathNumber: "3");
+
+            AssertFormulaObjectCounts(host.Document, expectedOle: 1, expectedOmml: 2);
+            var service = new WordFormulaService(host.Application);
+            var ommlResult = service.ConvertFormulaObjectsToLatex(
+                wholeDocument: true,
+                FormulaOleContract.WordOmmlMode);
+            AssertEqual(2, ommlResult.FormulaCount,
+                "The mixed-order fixture did not convert both OMML formulas first.");
+            AssertFormulaObjectCounts(host.Document, expectedOle: 1, expectedOmml: 0);
+            AssertDocumentContains(host.Document, "$$p=2$$");
+            AssertDocumentContains(host.Document, "$q=3$");
+            AssertDocumentDoesNotContain(host.Document, "$$u=v$$");
+
+            var oleResult = service.ConvertFormulaObjectsToLatex(
+                wholeDocument: true,
+                FormulaOleContract.NativeOleMode);
+            AssertEqual(1, oleResult.FormulaCount,
+                "The mixed-order fixture did not convert the remaining OLE formula.");
+            AssertFormulaObjectCounts(host.Document, expectedOle: 0, expectedOmml: 0);
+            frames = host.Document.Frames;
+            AssertEqual(0, frames.Count,
+                "Mixed OMML-then-OLE conversion left a hidden Word Frame around restored LaTeX source.");
+            Release(frames);
+            frames = null;
+            var text = ReadFormulaToLatexDocumentText(host.Document);
+            foreach (var expected in new[] { "$$u=v$$", "$$p=2$$", "$q=3$" })
+            {
+                var count = text.Split(
+                    new[] { expected },
+                    StringSplitOptions.None).Length - 1;
+                AssertEqual(1, count,
+                    $"Mixed OMML-then-OLE conversion did not preserve exactly one '{expected}' source.");
+            }
+            if (text.IndexOf("(1)", StringComparison.Ordinal) >= 0
+                || text.IndexOf("(2)", StringComparison.Ordinal) >= 0
+                || text.IndexOf("\r1\r", StringComparison.Ordinal) >= 0
+                || text.IndexOf("\r2\r", StringComparison.Ordinal) >= 0)
+            {
+                throw new InvalidDataException(
+                    "Mixed OMML-then-OLE conversion left equation-number residue after flattening numbered tables.\n"
+                    + text.Replace("\r", "<CR>").Replace("\a", "<CELL>"));
+            }
+            tables = host.Document.Tables;
+            AssertEqual(0, tables.Count,
+                "Mixed OMML-then-OLE conversion left a numbered formula table behind.");
+            Console.WriteLine(
+                "Mixed numbered OLE + numbered OMML + inline OMML conversion passed in OMML-first/OLE-second order.");
+        }
+        finally
+        {
+            Release(frames);
+            Release(tables);
+            Release(selection);
         }
     }
 
@@ -421,6 +578,117 @@ internal static partial class Program
         finally { Release(selection); }
     }
 
+    private static void AssertFormulaToLatexRollbackAfterInjectedFailure(
+        WordPerformanceHost host,
+        FormulaToLatexCase formula,
+        int expectedOle,
+        int expectedOmml)
+    {
+        var beforeText = ReadFormulaToLatexDocumentText(host.Document);
+        Environment.SetEnvironmentVariable(
+            "VISUALTEX_VSTO_FORMULA_TO_LATEX_FAIL_AFTER_DELETE",
+            formula.FormulaId);
+        try
+        {
+            SelectFormula(host, formula);
+            var service = new WordFormulaService(host.Application);
+            try
+            {
+                service.ConvertFormulaObjectsToLatex(
+                    wholeDocument: false,
+                    FormulaOleContract.NativeOleMode);
+                throw new InvalidDataException(
+                    "Injected formula-to-LaTeX failure did not interrupt conversion.");
+            }
+            catch (InvalidOperationException error)
+                when (error.Message.IndexOf(
+                    "Injected formula-to-LaTeX failure",
+                    StringComparison.Ordinal) >= 0)
+            {
+                // Expected. The service must restore the deleted formula before
+                // surfacing the conversion error to its caller.
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                "VISUALTEX_VSTO_FORMULA_TO_LATEX_FAIL_AFTER_DELETE",
+                null);
+        }
+
+        AssertEqual(
+            beforeText,
+            ReadFormulaToLatexDocumentText(host.Document),
+            "Formula-to-LaTeX rollback changed document text after an injected post-delete failure.");
+        AssertFormulaObjectCounts(host.Document, expectedOle, expectedOmml);
+        Word.Range? restored = null;
+        try
+        {
+            restored = ResolveFormulaToLatexRange(host.Document, formula);
+            if (restored.Start >= restored.End)
+                throw new InvalidDataException(
+                    "Formula-to-LaTeX rollback restored a collapsed formula range.");
+        }
+        finally { Release(restored); }
+        Console.WriteLine(
+            "Formula-to-LaTeX atomic rollback acceptance passed after an injected post-delete failure.");
+    }
+
+    private static void AssertFormulaToLatexEmptyMetadataPreflight(
+        WordPerformanceHost host,
+        FormulaToLatexCase formula,
+        int expectedOle,
+        int expectedOmml)
+    {
+        var beforeText = ReadFormulaToLatexDocumentText(host.Document);
+        Environment.SetEnvironmentVariable(
+            "VISUALTEX_VSTO_FORMULA_TO_LATEX_EMPTY_SOURCE",
+            formula.FormulaId);
+        try
+        {
+            SelectFormula(host, formula);
+            var service = new WordFormulaService(host.Application);
+            try
+            {
+                service.ConvertFormulaObjectsToLatex(
+                    wholeDocument: false,
+                    FormulaOleContract.NativeOleMode);
+                throw new InvalidDataException(
+                    "Formula-to-LaTeX accepted empty source metadata and deleted a visible formula.");
+            }
+            catch (InvalidDataException error)
+                when (error.Message.IndexOf(
+                    "LaTeX 元数据为空",
+                    StringComparison.Ordinal) >= 0)
+            {
+                // Expected: preflight must fail before the destructive undo record.
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                "VISUALTEX_VSTO_FORMULA_TO_LATEX_EMPTY_SOURCE",
+                null);
+        }
+
+        AssertEqual(
+            beforeText,
+            ReadFormulaToLatexDocumentText(host.Document),
+            "Empty formula metadata changed document text before conversion was rejected.");
+        AssertFormulaObjectCounts(host.Document, expectedOle, expectedOmml);
+        Word.Range? restored = null;
+        try
+        {
+            restored = ResolveFormulaToLatexRange(host.Document, formula);
+            if (restored.Start >= restored.End)
+                throw new InvalidDataException(
+                    "Empty-source preflight removed or collapsed the visible OLE formula.");
+        }
+        finally { Release(restored); }
+        Console.WriteLine(
+            "Formula-to-LaTeX empty-source preflight acceptance passed without deleting the visible formula.");
+    }
+
     private static void MaterializeInlineOleTypingAnchor(
         WordPerformanceHost host,
         FormulaToLatexCase formula)
@@ -614,7 +882,7 @@ internal static partial class Program
                      "BEFORE_OLE_DISPLAY",
                      "$$c=3$$",
                      "AFTER_OLE_DISPLAY",
-                     "$$d=4+5$$",
+                     "$$d=4$$",
                      "AFTER_OMML_DISPLAY",
                      "BEFORE_NATIVE_OMML",
                      "$n=5$",
@@ -648,7 +916,7 @@ internal static partial class Program
             "BEFORE_OLE_DISPLAY",
             "$$c=3$$",
             "AFTER_OLE_DISPLAY",
-            "$$d=4+5$$",
+            "$$d=4$$",
             "AFTER_OMML_DISPLAY",
             "BEFORE_NATIVE_OMML",
             "$n=5$",

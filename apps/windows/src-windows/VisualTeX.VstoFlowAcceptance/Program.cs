@@ -455,6 +455,10 @@ internal static partial class Program
             {
                 RunWordOmmlDoubleClickFixtures(client, artifactRoot);
             }
+            else if (string.Equals(mode, "word-office2021-omml-boundary", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordOffice2021OmmlBoundaryAcceptance(client, artifactRoot);
+            }
             else if (string.Equals(mode, "word-ole-real-double-click", StringComparison.OrdinalIgnoreCase))
             {
                 RunWordOleRealDoubleClick(client, artifactRoot);

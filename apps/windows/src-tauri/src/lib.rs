@@ -25,6 +25,10 @@ mod ocr_offline;
 #[cfg(windows)]
 mod ocr_python_bundle;
 mod office;
+#[cfg(windows)]
+mod windows_quick_ocr;
+#[cfg(windows)]
+mod windows_silent_ocr_hotkey;
 
 use ocr_install::{
     append_install_log, begin_install_log_session, cleanup_runtime_processes,
@@ -3660,6 +3664,23 @@ fn cancel_ocr_model_download(state: State<'_, OcrState>) -> bool {
     state.cancel_model_download()
 }
 
+#[cfg(windows)]
+#[tauri::command]
+fn configure_silent_ocr(
+    enabled: bool,
+    model: String,
+    copy_format: String,
+) -> Result<(), String> {
+    let normalized_model = model.trim();
+    if !ALLOWED_MODELS.iter().any(|allowed| allowed == &normalized_model) {
+        return Err("Unsupported silent OCR model".to_string());
+    }
+    if copy_format.trim().is_empty() {
+        return Err("Silent OCR LaTeX copy format is unavailable".to_string());
+    }
+    windows_silent_ocr_hotkey::set_registered(enabled)
+}
+
 fn shutdown_runtime(app: &AppHandle, started: &AtomicBool, reason: &str) {
     if started.swap(true, Ordering::SeqCst) {
         return;
@@ -3760,6 +3781,14 @@ pub fn run() {
             app.manage(office_state.clone());
             office::start(office_state);
 
+            #[cfg(windows)]
+            windows_silent_ocr_hotkey::initialize(app.handle()).map_err(|error| {
+                app_lifecycle::append_lifecycle_log(format!(
+                    "Silent OCR hotkey initialization failed: {error}"
+                ));
+                std::io::Error::other(error)
+            })?;
+
             if run_mode.schedules_ocr_warmup() {
                 // Preserve OCR model prewarming. It is independent from the main
                 // embedded index.html and from the removed Office editor WebView prewarm.
@@ -3806,6 +3835,9 @@ pub fn run() {
             get_ocr_model_download_status,
             download_ocr_model,
             cancel_ocr_model_download,
+            configure_silent_ocr,
+            windows_quick_ocr::capture_windows_quick_ocr,
+            windows_quick_ocr::write_windows_ocr_clipboard_text,
             office::lifecycle::set_app_theme,
             office::lifecycle::set_app_editor_layout,
             office::lifecycle::set_powerpoint_default_font_size,

@@ -145,6 +145,15 @@ function normalizeResultLatex(value: string) {
     .join("\n");
 }
 
+function hasTauriWebviewRuntime() {
+  const internals = (
+    window as Window & {
+      __TAURI_INTERNALS__?: { metadata?: unknown };
+    }
+  ).__TAURI_INTERNALS__;
+  return Boolean(internals?.metadata);
+}
+
 export function OcrDialog({
   open,
   language,
@@ -376,7 +385,7 @@ export function OcrDialog({
   }, [open, refreshInstallStatus, refreshModelCatalog, refreshRuntime]);
 
   useEffect(() => {
-    if (!open || !isTauriEnvironment()) return;
+    if (!open || !isTauriEnvironment() || !hasTauriWebviewRuntime()) return;
     let unlisten: (() => void) | undefined;
     let disposed = false;
 
@@ -448,7 +457,7 @@ export function OcrDialog({
   }, [importModelPackage, isEn, modelBusy, modelDownloadActive, open]);
 
   useEffect(() => {
-    if (!open || !isTauriEnvironment()) return;
+    if (!open || !isTauriEnvironment() || !hasTauriWebviewRuntime()) return;
     let unlisten: (() => void) | undefined;
     let cancelled = false;
     void listenOcrModelDownloadProgress((progress) => {
@@ -482,7 +491,12 @@ export function OcrDialog({
   }, [open, refreshRuntime]);
 
   useEffect(() => {
-    if (!open) return;
+    if (
+      !open ||
+      (!hasTauriWebviewRuntime() && !isOfficeCompanionEnvironment())
+    ) {
+      return;
+    }
     let unlisten: (() => void) | undefined;
     let cancelled = false;
     void listenOcrInstallProgress((progress) => {

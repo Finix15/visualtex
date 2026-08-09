@@ -2240,7 +2240,69 @@ internal static class WordEquationNumbering
     private static void RemoveNativeCaption(Document document, string formulaId)
     {
         DeleteBookmarkOnly(document, NativeNumberBookmarkName(formulaId));
-        DeleteBookmarkedRange(document, NativeCaptionBookmarkName(formulaId));
+        DeleteBookmarkedRangeAndContainingFrame(
+            document,
+            NativeCaptionBookmarkName(formulaId));
+    }
+
+    private static void DeleteBookmarkedRangeAndContainingFrame(
+        Document document,
+        string name)
+    {
+        Bookmarks? bookmarks = null;
+        Bookmark? bookmark = null;
+        Range? range = null;
+        Frames? frames = null;
+        Frame? frame = null;
+        try
+        {
+            bookmarks = document.Bookmarks;
+            if (!bookmarks.Exists(name)) return;
+            bookmark = bookmarks[name];
+            range = bookmark.Range;
+
+            // VisualTeX keeps the native SEQ caption in a 0.1 pt clipping Frame
+            // at the bottom-right page boundary so Word's native cross-reference
+            // dialog can still discover the target. Deleting only the bookmarked
+            // caption text leaves that empty Frame alive. A later numbered-formula
+            // -> LaTeX conversion can then insert the restored source at the same
+            // document position and Word silently adopts the new source into the
+            // surviving clipping Frame, making the LaTeX text effectively invisible.
+            // Remove the Frame formatting first; Frame.Delete preserves its text.
+            try
+            {
+                frames = range.Frames;
+                if (frames.Count > 0)
+                {
+                    frame = frames[1];
+                    frame.Delete();
+                    Release(frame);
+                    frame = null;
+                    Release(frames);
+                    frames = null;
+                    // Frame.Delete can update the bookmarked range object. Re-read
+                    // it before deleting the native caption contents.
+                    Release(range);
+                    range = bookmark.Range;
+                }
+            }
+            catch
+            {
+                // If Word refuses to expose a Frame, the bookmark deletion below
+                // still removes the caption. The conversion layer separately guards
+                // against any surviving clipping Frame adopting the LaTeX source.
+            }
+
+            range.Delete();
+        }
+        finally
+        {
+            Release(frame);
+            Release(frames);
+            Release(range);
+            Release(bookmark);
+            Release(bookmarks);
+        }
     }
 
     private static void RemoveOrphanEquationArtifacts(

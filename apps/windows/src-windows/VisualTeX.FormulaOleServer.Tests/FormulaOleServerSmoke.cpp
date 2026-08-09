@@ -3,6 +3,8 @@
 #include <objbase.h>
 #include <ole2.h>
 #include <shlobj.h>
+#include <shellscalingapi.h>
+#include <tlhelp32.h>
 #include <wincrypt.h>
 
 #include <filesystem>
@@ -19,6 +21,7 @@
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "oleaut32.lib")
 #pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "shcore.lib")
 #pragma comment(lib, "uuid.lib")
 
 namespace
@@ -259,6 +262,58 @@ void VerifyOleCreateProtocol(const std::filesystem::path& temp, const std::wstri
     }
 }
 
+void VerifyServerDpiAwareness(const std::filesystem::path& expectedServer)
+{
+    const std::wstring expected = std::filesystem::weakly_canonical(expectedServer).wstring();
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE)
+        throw std::runtime_error("CreateToolhelp32Snapshot failed while checking OLE server DPI awareness");
+
+    bool found = false;
+    PROCESSENTRY32W entry = {};
+    entry.dwSize = sizeof(entry);
+    if (Process32FirstW(snapshot, &entry))
+    {
+        do
+        {
+            HANDLE process = OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION,
+                FALSE,
+                entry.th32ProcessID);
+            if (process == nullptr)
+                continue;
+            wchar_t pathBuffer[32768] = {};
+            DWORD pathLength = static_cast<DWORD>(std::size(pathBuffer));
+            if (QueryFullProcessImageNameW(process, 0, pathBuffer, &pathLength))
+            {
+                std::error_code ignored;
+                const std::wstring candidate = std::filesystem::weakly_canonical(
+                    std::filesystem::path(std::wstring(pathBuffer, pathLength)),
+                    ignored).wstring();
+                if (!ignored && _wcsicmp(candidate.c_str(), expected.c_str()) == 0)
+                {
+                    PROCESS_DPI_AWARENESS awareness = PROCESS_DPI_UNAWARE;
+                    Check(GetProcessDpiAwareness(process, &awareness), "GetProcessDpiAwareness(OLE server)");
+                    if (awareness != PROCESS_PER_MONITOR_DPI_AWARE)
+                    {
+                        CloseHandle(process);
+                        CloseHandle(snapshot);
+                        throw std::runtime_error(
+                            "Formula OLE LocalServer is not per-monitor DPI aware; legacy MFPICT can shrink into the upper-left corner");
+                    }
+                    found = true;
+                    CloseHandle(process);
+                    break;
+                }
+            }
+            CloseHandle(process);
+        } while (Process32NextW(snapshot, &entry));
+    }
+    CloseHandle(snapshot);
+    if (!found)
+        throw std::runtime_error("Running Formula OLE LocalServer process was not found for DPI verification");
+}
+
 CComPtr<IVisualTeXFormulaObject> CreateFormulaObject()
 {
     CComPtr<IUnknown> unknown;
@@ -413,6 +468,166 @@ void VerifyPlaceholderPersistence(
     std::filesystem::remove(storagePath, ignored);
 }
 
+void VerifyPreinitializeHostExtentPreserved(
+    const std::filesystem::path& storagePath,
+    const std::filesystem::path& emf,
+    const std::filesystem::path& png,
+    const std::wstring& metadata)
+{
+    CComPtr<IStorage> storage;
+    Check(
+        StgCreateDocfile(
+            storagePath.c_str(),
+            STGM_CREATE | STGM_READWRITE | STGM_SHARE_EXCLUSIVE,
+            0,
+            &storage),
+        "StgCreateDocfile(preinitialize host extent)");
+
+    CComPtr<IVisualTeXFormulaObject> formula = CreateFormulaObject();
+    CComQIPtr<IPersistStorage> persist(formula);
+    CComQIPtr<IOleObject> oleObject(formula);
+    if (persist == nullptr || oleObject == nullptr)
+        throw std::runtime_error("Required OLE interfaces are unavailable for host extent acceptance");
+    Check(persist->InitNew(storage), "IPersistStorage::InitNew(preinitialize host extent)");
+
+    // PowerPoint 2021 Home can size the newly allocated OLE object before
+    // VisualTeX initializes its EMF/PNG preview. InitializeFromFiles must not
+    // replace this explicit container-owned extent with the preview's natural
+    // extent, otherwise the formula is painted at natural size in the upper-left
+    // corner of a larger PowerPoint Shape.
+    const SIZEL requested = {8467, 3387}; // approximately 240pt x 96pt
+    SIZEL actual = {};
+    Check(oleObject->SetExtent(DVASPECT_CONTENT, const_cast<SIZEL*>(&requested)),
+        "IOleObject::SetExtent(preinitialize host extent)");
+    Check(
+        formula->InitializeFromFiles(
+            CComBSTR(metadata.c_str()),
+            CComBSTR(emf.c_str()),
+            CComBSTR(png.c_str())),
+        "InitializeFromFiles(preinitialize host extent)");
+    Check(oleObject->GetExtent(DVASPECT_CONTENT, &actual),
+        "IOleObject::GetExtent(preinitialize host extent)");
+    if (actual.cx != requested.cx || actual.cy != requested.cy)
+        throw std::runtime_error("InitializeFromFiles replaced the explicit PowerPoint host extent");
+
+    CComQIPtr<IDataObject> dataObject(formula);
+    if (dataObject == nullptr)
+        throw std::runtime_error("IDataObject is unavailable for host extent acceptance");
+    FORMATETC metafilePictureFormat = {};
+    metafilePictureFormat.cfFormat = CF_METAFILEPICT;
+    metafilePictureFormat.dwAspect = DVASPECT_CONTENT;
+    metafilePictureFormat.lindex = -1;
+    metafilePictureFormat.tymed = TYMED_MFPICT;
+    STGMEDIUM metafilePictureMedium = {};
+    Check(
+        dataObject->GetData(&metafilePictureFormat, &metafilePictureMedium),
+        "GetData(CF_METAFILEPICT preinitialize host extent)");
+    auto* picture = static_cast<METAFILEPICT*>(GlobalLock(metafilePictureMedium.hMetaFilePict));
+    if (picture == nullptr)
+    {
+        ReleaseStgMedium(&metafilePictureMedium);
+        throw std::runtime_error("CF_METAFILEPICT could not be locked for host extent acceptance");
+    }
+    const LONG presentationWidth = picture->xExt;
+    const LONG presentationHeight = picture->yExt;
+    GlobalUnlock(metafilePictureMedium.hMetaFilePict);
+    ReleaseStgMedium(&metafilePictureMedium);
+    if (presentationWidth != requested.cx || presentationHeight != requested.cy)
+        throw std::runtime_error("Legacy PowerPoint OLE presentation did not preserve the explicit host extent");
+
+    dataObject.Release();
+    formula.Release();
+    oleObject.Release();
+    persist.Release();
+    storage.Release();
+    std::error_code ignored;
+    std::filesystem::remove(storagePath, ignored);
+}
+
+void VerifyPostinitializeHostExtentLocksPresentation(
+    const std::filesystem::path& storagePath,
+    const std::filesystem::path& emf,
+    const std::filesystem::path& png,
+    const std::wstring& metadata)
+{
+    CComPtr<IStorage> storage;
+    Check(
+        StgCreateDocfile(
+            storagePath.c_str(),
+            STGM_CREATE | STGM_READWRITE | STGM_SHARE_EXCLUSIVE,
+            0,
+            &storage),
+        "StgCreateDocfile(postinitialize host extent)");
+
+    CComPtr<IVisualTeXFormulaObject> formula = CreateFormulaObject();
+    CComQIPtr<IPersistStorage> persist(formula);
+    CComQIPtr<IOleObject> oleObject(formula);
+    CComQIPtr<IDataObject> dataObject(formula);
+    if (persist == nullptr || oleObject == nullptr || dataObject == nullptr)
+        throw std::runtime_error("Required OLE interfaces are unavailable for postinitialize host extent acceptance");
+    Check(persist->InitNew(storage), "IPersistStorage::InitNew(postinitialize host extent)");
+    Check(
+        formula->InitializeFromFiles(
+            CComBSTR(metadata.c_str()),
+            CComBSTR(emf.c_str()),
+            CComBSTR(png.c_str())),
+        "InitializeFromFiles(postinitialize host extent)");
+
+    // Other PowerPoint builds initialize first and call SetExtent afterwards.
+    // The first explicit container extent must become the intrinsic presentation
+    // extent used by legacy MFPICT caches. Later layout/resizing calls may change
+    // the live host extent but must not compound the cached presentation size.
+    SIZEL initialHost = {8467, 3387}; // approximately 240pt x 96pt
+    Check(oleObject->SetExtent(DVASPECT_CONTENT, &initialHost),
+        "IOleObject::SetExtent(postinitialize initial host extent)");
+
+    auto readPresentationExtent = [&]() -> SIZEL
+    {
+        FORMATETC format = {};
+        format.cfFormat = CF_METAFILEPICT;
+        format.dwAspect = DVASPECT_CONTENT;
+        format.lindex = -1;
+        format.tymed = TYMED_MFPICT;
+        STGMEDIUM medium = {};
+        Check(dataObject->GetData(&format, &medium),
+            "GetData(CF_METAFILEPICT postinitialize host extent)");
+        auto* picture = static_cast<METAFILEPICT*>(GlobalLock(medium.hMetaFilePict));
+        if (picture == nullptr)
+        {
+            ReleaseStgMedium(&medium);
+            throw std::runtime_error("CF_METAFILEPICT could not be locked for postinitialize host extent acceptance");
+        }
+        SIZEL result = {picture->xExt, picture->yExt};
+        GlobalUnlock(medium.hMetaFilePict);
+        ReleaseStgMedium(&medium);
+        return result;
+    };
+
+    SIZEL presentation = readPresentationExtent();
+    if (presentation.cx != initialHost.cx || presentation.cy != initialHost.cy)
+        throw std::runtime_error("First post-initialize PowerPoint host extent was not adopted by the legacy presentation");
+
+    SIZEL resizedHost = {12700, 5080}; // approximately 360pt x 144pt
+    Check(oleObject->SetExtent(DVASPECT_CONTENT, &resizedHost),
+        "IOleObject::SetExtent(postinitialize resized host extent)");
+    SIZEL liveExtent = {};
+    Check(oleObject->GetExtent(DVASPECT_CONTENT, &liveExtent),
+        "IOleObject::GetExtent(postinitialize resized host extent)");
+    if (liveExtent.cx != resizedHost.cx || liveExtent.cy != resizedHost.cy)
+        throw std::runtime_error("Live OLE host extent did not follow the later PowerPoint resize");
+    presentation = readPresentationExtent();
+    if (presentation.cx != initialHost.cx || presentation.cy != initialHost.cy)
+        throw std::runtime_error("Later PowerPoint resizing compounded the intrinsic legacy presentation extent");
+
+    dataObject.Release();
+    formula.Release();
+    oleObject.Release();
+    persist.Release();
+    storage.Release();
+    std::error_code ignored;
+    std::filesystem::remove(storagePath, ignored);
+}
+
 void RunSmoke(const std::filesystem::path& server)
 {
     ServerRegistration registration(server);
@@ -426,6 +641,8 @@ void RunSmoke(const std::filesystem::path& server)
     const std::filesystem::path png = temp / (L"ole-smoke-" + suffix + L".png");
     const std::filesystem::path storagePath = temp / (L"ole-smoke-" + suffix + L".ole");
     const std::filesystem::path placeholderStoragePath = temp / (L"ole-placeholder-" + suffix + L".ole");
+    const std::filesystem::path hostExtentStoragePath = temp / (L"ole-host-extent-" + suffix + L".ole");
+    const std::filesystem::path postHostExtentStoragePath = temp / (L"ole-post-host-extent-" + suffix + L".ole");
     WriteEmf(emf);
     WriteRasterEmf(rasterEmf);
     WritePng(png);
@@ -434,6 +651,8 @@ void RunSmoke(const std::filesystem::path& server)
         LR"({"schemaVersion":1,"formulaId":"11111111-2222-4333-8444-555555555555","title":"Smoke","latex":"x=y+1","lines":[{"id":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee","latex":"x=y+1"}],"codeFormat":"raw","displayMode":"inline","numbered":false,"renderWidthPx":320,"renderHeightPx":80,"baseline":62})";
 
     VerifyPlaceholderPersistence(placeholderStoragePath, emf, png, metadata);
+    VerifyPreinitializeHostExtentPreserved(hostExtentStoragePath, emf, png, metadata);
+    VerifyPostinitializeHostExtentLocksPresentation(postHostExtentStoragePath, emf, png, metadata);
 
     CComPtr<IStorage> storage;
     Check(
@@ -445,6 +664,7 @@ void RunSmoke(const std::filesystem::path& server)
         "StgCreateDocfile");
 
     CComPtr<IVisualTeXFormulaObject> formula = CreateFormulaObject();
+    VerifyServerDpiAwareness(server);
     CComQIPtr<IPersistStorage> persist(formula);
     if (persist == nullptr)
         throw std::runtime_error("IPersistStorage is unavailable");

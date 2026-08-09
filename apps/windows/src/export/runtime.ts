@@ -10,6 +10,11 @@ import type { MmlNode } from "mathjax-full/js/core/MmlTree/MmlNode.js";
 import { normalizeMathLiveCanonicalUprightCommands } from "../editor/normalizeChineseLatex.ts";
 import { normalizeExtendedIntegralLatexCommands } from "../math/extendedIntegralCompatibility.ts";
 import { applyVisualTexIntegralSvgGlyphs } from "../math/integralSvgExportCompatibility.ts";
+import {
+  applyCustomSymbolArtworkToSvg,
+  expandCustomSymbolsForMathMl,
+  expandCustomSymbolsForSvg,
+} from "../math/customSymbolRendering.ts";
 import { readErrorMessage } from "../errors/readErrorMessage.ts";
 import {
   assertNoUnfilledStructuralPlaceholders,
@@ -26,6 +31,14 @@ import type {
   SvgExportOptions,
   SvgExportResult,
 } from "./exportTypes";
+import {
+  DEFAULT_FORMULA_CHINESE_FONT,
+  DEFAULT_FORMULA_LETTER_FONT,
+  formulaChineseFontFamily,
+  formulaLetterFontFamilies,
+  normalizeFormulaChineseFont,
+  normalizeFormulaLetterFont,
+} from "../editor/formulaFontPreferences.ts";
 
 const DEFAULT_OPTIONS: SvgExportOptions = {
   displayMode: true,
@@ -308,6 +321,70 @@ function assertSelfContained(svg: string) {
   }
 }
 
+function escapeSvgAttribute(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function escapeSvgText(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function mathAlphabetBaseCharacter(codePointHex: string) {
+  const codePoint = Number.parseInt(codePointHex, 16);
+  if (!Number.isFinite(codePoint)) return "";
+  const source = String.fromCodePoint(codePoint);
+  const normalized = source.normalize("NFKD");
+  const characters = Array.from(normalized);
+  if (characters.length !== 1 || !/\p{L}/u.test(characters[0])) return "";
+  return characters[0];
+}
+
+function applyVisualTexSvgFontPreferences(
+  svg: string,
+  options: SvgExportOptions,
+) {
+  const letterFont = normalizeFormulaLetterFont(
+    options.formulaLetterFont ?? DEFAULT_FORMULA_LETTER_FONT,
+  );
+  const chineseFont = normalizeFormulaChineseFont(
+    options.formulaChineseFont ?? DEFAULT_FORMULA_CHINESE_FONT,
+  );
+  let output = svg;
+
+  const chineseFamily = escapeSvgAttribute(formulaChineseFontFamily(chineseFont));
+  output = output.replace(
+    /(<g\b[^>]*data-mml-node=["']mtext["'][^>]*>)([\s\S]*?)(<\/g>)/gi,
+    (_whole, opening: string, body: string, closing: string) =>
+      `${opening}${body.replace(
+        /font-family=["'][^"']*["']/gi,
+        `font-family="${chineseFamily}" data-visualtex-output-text-font="${escapeSvgAttribute(chineseFont)}"`,
+      )}${closing}`,
+  );
+
+  if (letterFont === DEFAULT_FORMULA_LETTER_FONT) return output;
+  const families = formulaLetterFontFamilies(letterFont);
+  output = output.replace(/<use\b([^>]*)><\/use>/gi, (whole, attributes: string) => {
+    const codePoint = attributes.match(/\bdata-c=["']([0-9A-F]+)["']/i)?.[1];
+    const href = attributes.match(/\bxlink:href=["']#([^"']+)["']/i)?.[1] ?? "";
+    const variant = href.match(/-TEX-(BI|B|I|N)-[0-9A-F]+$/i)?.[1]?.toUpperCase();
+    if (!codePoint || !variant) return whole;
+    const character = mathAlphabetBaseCharacter(codePoint);
+    if (!character) return whole;
+    const italic = variant === "I" || variant === "BI";
+    const bold = variant === "B" || variant === "BI";
+    const family = escapeSvgAttribute(italic ? families.italic : families.upright);
+    return `<text data-c="${codePoint}" data-visualtex-output-letter-font="${escapeSvgAttribute(letterFont)}" transform="scale(1,-1)" font-size="1000px" font-family="${family}"${italic ? ' font-style="italic"' : ""}${bold ? ' font-weight="700"' : ""}>${escapeSvgText(character)}</text>`;
+  });
+  return output;
+}
+
 function encodeUtf8Base64(value: string) {
   const bytes = new TextEncoder().encode(value);
   let binary = "";
@@ -323,7 +400,7 @@ export function svgToBase64(svg: string) {
 }
 
 export function latexToMathMl(latex: string, displayMode = true) {
-  const source = prepareLatex(latex);
+  const source = expandCustomSymbolsForMathMl(prepareLatex(latex));
   const root = mathMlDocument.convert(source, {
     display: displayMode,
     end: STATE.COMPILED,
@@ -340,7 +417,7 @@ export function latexToSvg(
   latex: string,
   options: SvgExportOptions = DEFAULT_OPTIONS,
 ): SvgExportResult {
-  const source = prepareLatex(latex);
+  const source = expandCustomSymbolsForSvg(prepareLatex(latex));
   const fontSizePt = positiveFinite(options.fontSizePt, DEFAULT_OPTIONS.fontSizePt);
   const paddingPx = nonNegativeFinite(options.paddingPx, DEFAULT_OPTIONS.paddingPx);
   const fontSizePx = fontSizePt * (96 / 72);
@@ -354,6 +431,8 @@ export function latexToSvg(
   });
   let svg = extractSvg(adaptor.outerHTML(container));
   svg = applyVisualTexIntegralSvgGlyphs(svg, options.displayMode);
+  svg = applyCustomSymbolArtworkToSvg(svg);
+  svg = applyVisualTexSvgFontPreferences(svg, options);
   const rootGeometry = resolveSvgRootGeometry(svg, fontSizePx, exPx);
   const viewBox = rootGeometry.viewBox;
   if (rootGeometry.fullViewportNestedSvg) {
@@ -438,8 +517,11 @@ export async function svgToPng(
   canvas.height = height;
   const context = canvas.getContext("2d");
   if (!context) throw new Error("Unable to create a PNG canvas context.");
-  if (options.background === "white") {
-    context.fillStyle = "#ffffff";
+  const requestedBackground = options.background ?? "transparent";
+  const opaqueBackground =
+    requestedBackground === "white" ? "#ffffff" : requestedBackground;
+  if (opaqueBackground !== "transparent") {
+    context.fillStyle = opaqueBackground;
     context.fillRect(0, 0, width, height);
   }
   context.drawImage(image, 0, 0, width, height);

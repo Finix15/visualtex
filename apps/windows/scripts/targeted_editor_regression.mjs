@@ -377,49 +377,17 @@ async function main() {
       }))()`, "desktop formula formatting controls");
 
       const dispatchFormattingToggle = async (selector) => {
-        const encodedSelector = JSON.stringify(selector);
         await evaluate(`(() => {
           const field = document.querySelector('math-field');
-          const button = document.querySelector(${encodedSelector});
-          if (!field || !(button instanceof HTMLElement)) return false;
+          if (!field) return false;
           field.focus();
           field.selection = {
             ranges: [[0, field.lastOffset]],
             direction: 'forward',
           };
-          const pointerOptions = {
-            bubbles: true,
-            composed: true,
-            cancelable: true,
-            button: 0,
-            buttons: 1,
-            pointerId: 1,
-            pointerType: 'mouse',
-          };
-          button.dispatchEvent(new PointerEvent('pointerdown', pointerOptions));
-          button.dispatchEvent(new MouseEvent('mousedown', {
-            bubbles: true,
-            composed: true,
-            cancelable: true,
-            button: 0,
-            buttons: 1,
-          }));
-          button.dispatchEvent(new MouseEvent('mouseup', {
-            bubbles: true,
-            composed: true,
-            cancelable: true,
-            button: 0,
-            buttons: 0,
-          }));
-          button.dispatchEvent(new MouseEvent('click', {
-            bubbles: true,
-            composed: true,
-            cancelable: true,
-            button: 0,
-            buttons: 0,
-          }));
           return true;
         })()`);
+        await clickSelectorWithPointer(selector);
         await sleep(100);
       };
 
@@ -1182,11 +1150,12 @@ async function main() {
         const dock = document.querySelector(".classic-bottom-dock");
         const toolbar = document.querySelector(".classic-bottom-toolbar");
         const strip = toolbar?.querySelector(".template-strip");
+        const categorySection = toolbar?.querySelector(".toolbar-category-section");
         const stripRect = strip?.getBoundingClientRect();
         const height = dock?.getBoundingClientRect().height ?? 0;
         const rowCount = Number(toolbar?.dataset.toolbarRowCount || 0);
-        const computedRowCount = strip
-          ? getComputedStyle(strip).gridTemplateRows.split(/\\s+/).filter(Boolean).length
+        const computedRowCount = categorySection
+          ? getComputedStyle(categorySection).gridTemplateRows.split(/\\s+/).filter(Boolean).length
           : 0;
         const buttonsVerticallyInside = Boolean(stripRect) &&
           [...(toolbar?.querySelectorAll(".template-button") ?? [])].every((button) => {
@@ -1206,7 +1175,7 @@ async function main() {
           buttonsVerticallyInside,
           resizeMode: document.body.dataset.workspaceResize ?? "",
         };
-      })()`, "live dock growth and toolbar row expansion");
+      })()`, "live dock growth and category row expansion");
       await client.send("Input.dispatchMouseEvent", {
         type: "mouseReleased",
         x: growDockStart.x,
@@ -1491,6 +1460,79 @@ async function main() {
         ),
       }))()`, "classic horizontal formula toolbar");
 
+      const toolbarPreviewVisibilityState = await waitForEvaluation(`(() => {
+        const section = document.querySelector(
+          '.classic-bottom-toolbar .toolbar-category-section[data-toolbar-category-section="common"]',
+        );
+        const buttons = [...(section?.querySelectorAll('.template-button') ?? [])];
+        const sectionStyle = section ? getComputedStyle(section) : null;
+        const previews = buttons.map((button) => {
+          const host = button.querySelector('.math-preview');
+          const content = host?.querySelector('.math-preview-fit-content');
+          const latex = host?.querySelector('.ML__latex');
+          const hostStyle = host ? getComputedStyle(host) : null;
+          const contentStyle = content ? getComputedStyle(content) : null;
+          const latexStyle = latex ? getComputedStyle(latex) : null;
+          const buttonStyle = getComputedStyle(button);
+          const buttonBounds = button.getBoundingClientRect();
+          const hostBounds = host?.getBoundingClientRect();
+          const latexBounds = latex?.getBoundingClientRect();
+          const latexColor = latexStyle?.color ?? '';
+          return {
+            commandId: button.dataset.commandId ?? '',
+            visible: Boolean(
+              host && content && latex &&
+              hostBounds && hostBounds.width > 4 && hostBounds.height > 4 &&
+              latexBounds && latexBounds.width > 0 && latexBounds.height > 0 &&
+              hostStyle?.display !== 'none' &&
+              hostStyle?.visibility !== 'hidden' &&
+              contentStyle?.display !== 'none' &&
+              contentStyle?.visibility !== 'hidden' &&
+              latexStyle?.visibility !== 'hidden' &&
+              Number.parseFloat(hostStyle?.opacity || '1') > 0.1 &&
+              Number.parseFloat(contentStyle?.opacity || '1') > 0.1 &&
+              Number.parseFloat(latexStyle?.opacity || '1') > 0.1 &&
+              latexColor !== 'transparent' &&
+              latexColor !== 'rgba(0, 0, 0, 0)'
+            ),
+            button: {
+              width: buttonBounds.width,
+              height: buttonBounds.height,
+              display: buttonStyle.display,
+              alignItems: buttonStyle.alignItems,
+              justifyContent: buttonStyle.justifyContent,
+            },
+            host: hostBounds ? { width: hostBounds.width, height: hostBounds.height } : null,
+            latex: latexBounds ? { width: latexBounds.width, height: latexBounds.height } : null,
+            hostDisplay: hostStyle?.display ?? '',
+            hostWidth: hostStyle?.width ?? '',
+            hostHeight: hostStyle?.height ?? '',
+            hostFlex: hostStyle?.flex ?? '',
+            hostColor: hostStyle?.color ?? '',
+            latexColor,
+            hostContain: hostStyle?.contain ?? '',
+            contentTransform: contentStyle?.transform ?? '',
+          };
+        });
+        const invalid = previews.filter((preview) => !preview.visible);
+        const windowsSafeCompositing = previews.every(
+          (preview) => preview.hostContain === 'none',
+        ) && sectionStyle?.transform === 'none' && sectionStyle?.contain === 'none';
+        return {
+          ready:
+            buttons.length > 0 &&
+            invalid.length === 0 &&
+            windowsSafeCompositing,
+          buttonCount: buttons.length,
+          invalid: invalid.slice(0, 3),
+          invalidCount: invalid.length,
+          first: previews[0] ?? null,
+          sectionTransform: sectionStyle?.transform ?? '',
+          sectionContain: sectionStyle?.contain ?? '',
+          windowsSafeCompositing,
+        };
+      })()`, "visible classic formula tool previews");
+
       const setActiveField = async (latex) => {
         await waitForEvaluation(`(() => {
           const fields = [...document.querySelectorAll("math-field")];
@@ -1644,6 +1686,7 @@ async function main() {
 
       console.log(JSON.stringify({
         startupFocusState,
+        toolbarPreviewVisibilityState,
         upperScriptState,
         scriptsState,
         lowerScriptState,
@@ -1707,18 +1750,17 @@ async function main() {
         return {
           ready:
             JSON.stringify(actualOrder) === JSON.stringify(expectedOrder) &&
-            gridColumnCount === 3 &&
-            rows.length === 3 &&
-            rows.every((row) => row.count === 3) &&
+            rows.length === 1 &&
+            rows[0]?.count === expectedOrder.length &&
             labelsFit &&
-            containerHeight <= 120,
+            containerHeight <= 48,
           actualOrder,
           gridColumnCount,
           rows,
           labelsFit,
           containerHeight,
         };
-      })()`, "three-by-three toolbar tabs");
+      })()`, "single-row scrolling toolbar tabs");
 
       const categories = [
         "common",
@@ -2276,6 +2318,69 @@ async function main() {
         '[data-tile-category="custom"]',
       ).click()`);
       await waitForEvaluation(`(() => ({
+        ready: Boolean(document.querySelector('[data-open-custom-symbol-designer]')),
+      }))()`, "custom symbol designer trigger");
+      await evaluate(`document.querySelector('[data-open-custom-symbol-designer]').click()`);
+      const customSymbolDesignerVisualState = await waitForEvaluation(`(() => {
+        const dialog = document.querySelector('[data-custom-symbol-designer]');
+        const stage = dialog?.querySelector('.custom-symbol-designer-stage');
+        const workspace = dialog?.querySelector('.custom-symbol-designer-workspace');
+        const paper = dialog?.querySelector('[data-custom-symbol-canvas-paper]');
+        const panelHeader = dialog?.querySelector('.custom-symbol-designer-panel > header');
+        const sidebars = [...(dialog?.querySelectorAll('.custom-symbol-designer-sidebar') ?? [])];
+        const rootStyle = getComputedStyle(document.documentElement);
+        const stageStyle = stage ? getComputedStyle(stage) : null;
+        const workspaceStyle = workspace ? getComputedStyle(workspace) : null;
+        const stageBounds = stage?.getBoundingClientRect();
+        const paperBounds = paper?.getBoundingClientRect();
+        const dialogBounds = dialog?.getBoundingClientRect();
+        const panelHeaderFontSize = Number.parseFloat(
+          panelHeader ? getComputedStyle(panelHeader).fontSize : '0',
+        );
+        const workspaceFill = workspaceStyle?.fill ?? '';
+        const sunken = rootStyle.getPropertyValue('--bg-sunken').trim();
+        return {
+          ready: Boolean(
+            dialog && stage && workspace && paper &&
+            sunken &&
+            workspaceFill &&
+            workspaceFill !== 'black' &&
+            workspaceFill !== 'rgb(0, 0, 0)' &&
+            stageBounds && stageBounds.width > 300 && stageBounds.height > 300 &&
+            paperBounds && paperBounds.width >= stageBounds.width * 0.45 &&
+            paperBounds.height >= stageBounds.height * 0.45 &&
+            dialogBounds && dialogBounds.left >= -1 && dialogBounds.top >= -1 &&
+            dialogBounds.right <= innerWidth + 1 && dialogBounds.bottom <= innerHeight + 1 &&
+            sidebars.length === 2 &&
+            sidebars.every((sidebar) => sidebar.scrollWidth <= sidebar.clientWidth + 1) &&
+            panelHeaderFontSize >= 10
+          ),
+          sunken,
+          workspaceFill,
+          stageBackground: stageStyle?.backgroundColor ?? '',
+          stage: stageBounds ? { width: stageBounds.width, height: stageBounds.height } : null,
+          paper: paperBounds ? { width: paperBounds.width, height: paperBounds.height } : null,
+          dialog: dialogBounds ? {
+            left: dialogBounds.left,
+            top: dialogBounds.top,
+            right: dialogBounds.right,
+            bottom: dialogBounds.bottom,
+          } : null,
+          panelHeaderFontSize,
+          sidebarOverflow: sidebars.map((sidebar) => ({
+            clientWidth: sidebar.clientWidth,
+            scrollWidth: sidebar.scrollWidth,
+            overflow: sidebar.scrollWidth - sidebar.clientWidth,
+          })),
+        };
+      })()`, "balanced custom symbol designer on Windows");
+      await evaluate(`document.querySelector(
+        '[data-custom-symbol-designer] button[aria-label="关闭"], [data-custom-symbol-designer] button[aria-label="Close"]',
+      )?.click()`);
+      await waitForEvaluation(`(() => ({
+        ready: !document.querySelector('[data-custom-symbol-designer]'),
+      }))()`, "closed custom symbol designer");
+      await waitForEvaluation(`(() => ({
         ready: Boolean(
           document.querySelector(".save-current-formula-tile:not(:disabled)"),
         ),
@@ -2372,6 +2477,7 @@ async function main() {
           {
             commonTilesState,
             insertedTileState,
+            customSymbolDesignerVisualState,
             customTileState,
             customTileContextState,
             deletedCustomTileState,
@@ -7333,6 +7439,32 @@ async function main() {
         input.dispatchEvent(new Event('input', { bubbles: true }));
         input.dispatchEvent(new Event('change', { bubbles: true }));
       })()`);
+      const themeChoiceState = await waitForEvaluation(`(() => {
+        const rootStyle = getComputedStyle(document.documentElement);
+        const swatches = [...document.querySelectorAll('.theme-choice-swatch')];
+        const widths = swatches.map((swatch) => swatch.getBoundingClientRect().width);
+        const rounded = widths.map((width) => Math.round(width * 10) / 10);
+        const distinctWidths = [...new Set(rounded)];
+        const surfaceSecondary = rootStyle.getPropertyValue('--surface-secondary').trim();
+        const sunken = rootStyle.getPropertyValue('--bg-sunken').trim();
+        const paper = rootStyle.getPropertyValue('--bg-paper').trim();
+        const canvas = rootStyle.getPropertyValue('--bg-canvas').trim();
+        return {
+          ready:
+            swatches.length >= 10 &&
+            distinctWidths.length === 1 &&
+            Math.abs((widths[0] ?? 0) - 46) <= 0.6 &&
+            Boolean(surfaceSecondary && sunken && paper && canvas),
+          count: swatches.length,
+          widths: rounded,
+          distinctWidths,
+          surfaceSecondary,
+          sunken,
+          paper,
+          canvas,
+        };
+      })()`, "uniform theme swatches and shared theme tokens");
+
       const powerPointDefaultSaved = await waitForEvaluation(`(() => {
         const input = document.querySelector(
           '[data-powerpoint-default-font-size]',
@@ -7528,6 +7660,7 @@ async function main() {
 
       console.log(JSON.stringify({
         powerPointDefaultInitial,
+        themeChoiceState,
         powerPointDefaultSaved,
         powerPointDefaultReloaded,
         defaults,

@@ -56,6 +56,7 @@ internal sealed class WordFormulaService
     {
         internal FormulaMetadata Metadata { get; set; } = new();
         internal string ObjectMode { get; set; } = string.Empty;
+        internal string LatexSource { get; set; } = string.Empty;
         internal int Start { get; set; }
         internal int End { get; set; }
         internal Range FormulaRange { get; set; } = null!;
@@ -905,10 +906,86 @@ internal sealed class WordFormulaService
 
     public float? GetSelectedFormulaFontSize()
     {
-        var selected = ReadSelection();
-        return selected.Metadata is null
-            ? null
-            : FormulaFontSize.ResolveSemanticFontSize(selected.Metadata);
+        // Ribbon getText/getEnabled callbacks run immediately after a Word
+        // SelectionChange. They must be strictly read-only: calling ReadSelection()
+        // here can adopt an unowned native OMath by adding a bookmark/CustomXML
+        // part, which mutates the document while Word is entering its native
+        // equation editor and can suppress the normal equation editing frame.
+        Document? document = null;
+        Selection? selection = null;
+        Range? range = null;
+        InlineShapes? shapes = null;
+        InlineShape? shape = null;
+        Bookmark? bookmark = null;
+        Range? equationRange = null;
+        try
+        {
+            document = _application.ActiveDocument;
+            if (document is null) return null;
+            selection = _application.Selection;
+            range = selection.Range;
+
+            shapes = range.InlineShapes;
+            if (shapes.Count == 1)
+            {
+                shape = shapes[1];
+                var metadata = WordFormulaMetadataReader.TryRead(shape);
+                if (metadata is not null)
+                    return FormulaFontSize.InferOleFontSize(
+                        shape.Width,
+                        shape.Height,
+                        metadata);
+            }
+
+            bookmark = WordOmmlFormulaStore.FindAtRange(document, range);
+            if (bookmark is not null)
+            {
+                var metadata = WordOmmlFormulaStore.TryRead(document, bookmark);
+                if (metadata is not null)
+                {
+                    equationRange = WordOmmlFormulaStore.GetEquationRange(bookmark);
+                    return ReadFormulaFontSizeWithoutMutation(
+                        equationRange,
+                        metadata);
+                }
+            }
+
+            equationRange = TryResolveNativeOmmlAtRange(document, range);
+            return equationRange is null
+                ? null
+                : ReadFormulaFontSizeWithoutMutation(equationRange, metadata: null);
+        }
+        catch { return null; }
+        finally
+        {
+            Release(equationRange);
+            Release(bookmark);
+            Release(shape);
+            Release(shapes);
+            Release(range);
+            Release(selection);
+            Release(document);
+        }
+    }
+
+    private static float ReadFormulaFontSizeWithoutMutation(
+        Range equationRange,
+        FormulaMetadata? metadata)
+    {
+        Microsoft.Office.Interop.Word.Font? font = null;
+        try
+        {
+            font = equationRange.Font;
+            var size = font.Size;
+            if (size > 0 && !float.IsNaN(size) && !float.IsInfinity(size))
+                return FormulaFontSize.Normalize(size);
+        }
+        catch { }
+        finally { Release(font); }
+
+        return metadata is null
+            ? FormulaFontSize.DefaultPt
+            : FormulaFontSize.ResolveSemanticFontSize(metadata);
     }
 
     public float SetSelectedFormulaFontSize(double requestedFontSizePt)
@@ -1922,24 +1999,60 @@ internal sealed class WordFormulaService
                         : $"所选内容中没有找到可转换的 {modeLabel} 公式。");
             }
 
+            // Preflight every source before opening a destructive Word undo record.
+            // Corrupt/empty metadata must never turn a visible formula into an empty
+            // replacement merely because the object itself can still be located.
+            foreach (var target in targets)
+            {
+                ApplyFormulaToLatexEmptySourceInjection(target);
+                target.LatexSource = BuildFormulaLatexSource(target.Metadata);
+            }
+
             viewState = CaptureViewState();
             undoRecord = BeginUndoRecord("VisualTeX 公式转为 LaTeX 代码");
-            var convertedIds = new List<string>(targets.Count);
-            foreach (var target in targets.OrderByDescending(item => item.Start))
+            if (undoRecord is null)
+                throw new InvalidOperationException(
+                    "Word 无法建立公式转 LaTeX 的撤销事务。为避免公式丢失，本次转换未开始。");
+
+            var undoRecordEnded = false;
+            var documentMutationStarted = false;
+            try
             {
-                ConvertFormulaTargetToLatex(document, target);
-                convertedIds.Add(target.Metadata.FormulaId);
+                var convertedIds = new List<string>(targets.Count);
+                foreach (var target in targets.OrderByDescending(item => item.Start))
+                {
+                    ConvertFormulaTargetToLatex(
+                        document,
+                        target,
+                        ref documentMutationStarted);
+                    convertedIds.Add(target.Metadata.FormulaId);
+                }
+                WordEquationNumbering.TryReconcile(document);
+                return new WordFormulaToLatexResult
+                {
+                    FormulaCount = convertedIds.Count,
+                    FormulaIds = convertedIds,
+                };
             }
-            WordEquationNumbering.TryReconcile(document);
-            return new WordFormulaToLatexResult
+            catch (Exception conversionError)
             {
-                FormulaCount = convertedIds.Count,
-                FormulaIds = convertedIds,
-            };
+                EndUndoRecord(undoRecord);
+                undoRecordEnded = true;
+                if (documentMutationStarted
+                    && !TryUndoFormulaToLatexConversion(document))
+                    throw new InvalidOperationException(
+                        "公式转 LaTeX 失败，而且 Word 无法自动撤销本次转换。请立即使用 Ctrl+Z，并保留当前文档以便排查。",
+                        conversionError);
+                throw;
+            }
+            finally
+            {
+                if (!undoRecordEnded)
+                    EndUndoRecord(undoRecord);
+            }
         }
         finally
         {
-            EndUndoRecord(undoRecord);
             RestoreViewState(document, viewState, preferredSelection: null);
             Release(undoRecord);
             ReleaseFormulaToLatexTargets(targets);
@@ -2141,10 +2254,14 @@ internal sealed class WordFormulaService
 
     private static void ConvertFormulaTargetToLatex(
         Document document,
-        FormulaToLatexTarget target)
+        FormulaToLatexTarget target,
+        ref bool documentMutationStarted)
     {
         var metadata = target.Metadata;
-        var latexSource = BuildFormulaLatexSource(metadata);
+        var latexSource = target.LatexSource;
+        if (string.IsNullOrWhiteSpace(latexSource))
+            throw new InvalidDataException(
+                $"公式 {metadata.FormulaId} 没有可安全恢复的 LaTeX 源码。");
         var formulaStart = target.FormulaRange.Start;
         Table? numberedTable = null;
         Range? tableRange = null;
@@ -2163,6 +2280,7 @@ internal sealed class WordFormulaService
 
             if (metadata.Numbered)
             {
+                documentMutationStarted = true;
                 WordEquationNumbering.FreezeFormulaCrossReferences(
                     document,
                     metadata.FormulaId);
@@ -2177,18 +2295,10 @@ internal sealed class WordFormulaService
                     StringComparison.Ordinal))
                 RemoveInlineOleTypingAnchorAfter(target.FormulaRange);
 
-            if (string.Equals(
-                    target.ObjectMode,
-                    FormulaOleContract.WordOmmlMode,
-                    StringComparison.Ordinal))
-            {
-                try { target.OmmlBookmark?.Delete(); } catch { }
-                WordOmmlFormulaStore.Delete(document, metadata.FormulaId);
-            }
-
             if (numberedTable is not null)
             {
                 numberedTable.Delete();
+                ThrowIfFormulaToLatexFailureInjected(target);
                 insertion = document.Range(formulaStart, formulaStart);
                 insertion.Text = latexSource + "\r";
                 inserted = document.Range(
@@ -2197,6 +2307,7 @@ internal sealed class WordFormulaService
             }
             else
             {
+                documentMutationStarted = true;
                 if (string.Equals(
                         target.ObjectMode,
                         FormulaOleContract.NativeOleMode,
@@ -2208,6 +2319,7 @@ internal sealed class WordFormulaService
                 {
                     target.FormulaRange.Delete();
                 }
+                ThrowIfFormulaToLatexFailureInjected(target);
                 insertion = document.Range(formulaStart, formulaStart);
                 insertion.Text = latexSource;
                 inserted = document.Range(
@@ -2216,7 +2328,21 @@ internal sealed class WordFormulaService
                 if (metadata.Numbered)
                     NormalizeFormerNumberedFormulaParagraph(document, inserted);
             }
+            DetachLatexSourceFromVisualTeXNumberingFrame(inserted, metadata);
+            VerifyLatexSourceRange(inserted, latexSource, metadata.FormulaId);
             NormalizeLatexSourceRange(inserted, metadata);
+
+            // Keep OMML metadata/bookmarks alive until the plain-text replacement
+            // has been verified. If writing fails, the enclosing custom Undo record
+            // can restore the original equation together with its ownership anchor.
+            if (string.Equals(
+                    target.ObjectMode,
+                    FormulaOleContract.WordOmmlMode,
+                    StringComparison.Ordinal))
+            {
+                try { target.OmmlBookmark?.Delete(); } catch { }
+                WordOmmlFormulaStore.Delete(document, metadata.FormulaId);
+            }
         }
         finally
         {
@@ -2225,6 +2351,58 @@ internal sealed class WordFormulaService
             Release(tableRange);
             Release(numberedTable);
         }
+    }
+
+    private static void DetachLatexSourceFromVisualTeXNumberingFrame(
+        Range inserted,
+        FormulaMetadata metadata)
+    {
+        if (!metadata.Numbered) return;
+        Frames? frames = null;
+        try
+        {
+            frames = inserted.Frames;
+            for (var index = frames.Count; index >= 1; index--)
+            {
+                Frame? frame = null;
+                try
+                {
+                    frame = frames[index];
+                    var clippedVisualTeXCaptionFrame =
+                        frame.Width <= 1f
+                        && frame.Height <= 1f
+                        && frame.LockAnchor
+                        && !frame.TextWrap
+                        && frame.RelativeHorizontalPosition
+                            == WdRelativeHorizontalPosition.wdRelativeHorizontalPositionPage
+                        && frame.RelativeVerticalPosition
+                            == WdRelativeVerticalPosition.wdRelativeVerticalPositionPage;
+                    if (clippedVisualTeXCaptionFrame)
+                        frame.Delete();
+                }
+                finally { Release(frame); }
+            }
+        }
+        finally { Release(frames); }
+
+        Frames? remaining = null;
+        try
+        {
+            remaining = inserted.Frames;
+            for (var index = 1; index <= remaining.Count; index++)
+            {
+                Frame? frame = null;
+                try
+                {
+                    frame = remaining[index];
+                    if (frame.Width <= 1f && frame.Height <= 1f)
+                        throw new InvalidDataException(
+                            $"公式 {metadata.FormulaId} 的 LaTeX 源码仍位于隐藏编号框架中。为避免源码不可见，转换已回滚。");
+                }
+                finally { Release(frame); }
+            }
+        }
+        finally { Release(remaining); }
     }
 
     private static string BuildFormulaLatexSource(FormulaMetadata metadata)
@@ -2236,6 +2414,9 @@ internal sealed class WordFormulaService
             .Replace("\r\n", "\n")
             .Replace('\r', '\n')
             .Trim();
+        if (string.IsNullOrWhiteSpace(latex))
+            throw new InvalidDataException(
+                $"公式 {metadata.FormulaId} 的 LaTeX 元数据为空。为避免删除原公式，转换已中止。");
         if (string.Equals(
                 metadata.DisplayMode,
                 "block",
@@ -2247,6 +2428,85 @@ internal sealed class WordFormulaService
         latex = FormulaEquationTag.Extract(latex).Latex
             .Replace('\n', ' ');
         return "$" + latex + "$";
+    }
+
+    private static string NormalizeFormulaToLatexVerificationText(string value) =>
+        (value ?? string.Empty)
+            .Replace("\r\n", "\n")
+            .Replace('\r', '\n')
+            .Replace('\v', '\n');
+
+    private static void VerifyLatexSourceRange(
+        Range inserted,
+        string expected,
+        string formulaId)
+    {
+        var actual = NormalizeFormulaToLatexVerificationText(
+            inserted.Text ?? string.Empty);
+        var normalizedExpected = NormalizeFormulaToLatexVerificationText(expected);
+        if (!string.Equals(actual, normalizedExpected, StringComparison.Ordinal))
+            throw new InvalidDataException(
+                $"公式 {formulaId} 的 LaTeX 写回校验失败。Word 实际写入内容与预期源码不一致。");
+
+        Frames? frames = null;
+        try
+        {
+            frames = inserted.Frames;
+            if (frames.Count > 0)
+                throw new InvalidDataException(
+                    $"公式 {formulaId} 的 LaTeX 源码被 Word Frame 包围。为避免源码不可见，本次转换已撤销。");
+        }
+        finally { Release(frames); }
+    }
+
+    private static void ApplyFormulaToLatexEmptySourceInjection(
+        FormulaToLatexTarget target)
+    {
+        if (!string.Equals(
+                Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE"),
+                "1",
+                StringComparison.Ordinal))
+            return;
+        var requested = Environment.GetEnvironmentVariable(
+            "VISUALTEX_VSTO_FORMULA_TO_LATEX_EMPTY_SOURCE");
+        if (string.IsNullOrWhiteSpace(requested)) return;
+        if (!string.Equals(requested, "1", StringComparison.Ordinal)
+            && !string.Equals(
+                requested,
+                target.Metadata.FormulaId,
+                StringComparison.OrdinalIgnoreCase))
+            return;
+        target.Metadata.Latex = string.Empty;
+        foreach (var line in target.Metadata.Lines)
+            line.Latex = string.Empty;
+    }
+
+    private static void ThrowIfFormulaToLatexFailureInjected(
+        FormulaToLatexTarget target)
+    {
+        if (!string.Equals(
+                Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE"),
+                "1",
+                StringComparison.Ordinal))
+            return;
+        var requested = Environment.GetEnvironmentVariable(
+            "VISUALTEX_VSTO_FORMULA_TO_LATEX_FAIL_AFTER_DELETE");
+        if (string.IsNullOrWhiteSpace(requested)) return;
+        if (!string.Equals(requested, "1", StringComparison.Ordinal)
+            && !string.Equals(
+                requested,
+                target.Metadata.FormulaId,
+                StringComparison.OrdinalIgnoreCase))
+            return;
+        throw new InvalidOperationException(
+            "Injected formula-to-LaTeX failure after deleting the source object.");
+    }
+
+    private static bool TryUndoFormulaToLatexConversion(Document document)
+    {
+        object times = 1;
+        try { return document.Undo(ref times); }
+        catch { return false; }
     }
 
     private static Table? TryGetVisualTeXNumberedTable(
@@ -5061,6 +5321,7 @@ internal sealed class WordFormulaService
         var metadataSaved = false;
         InlineFollowingTextVisibility? inlineFollowingTextVisibility = null;
         var sourceOmmlManagedByVisualTeX = false;
+        var moveCaretOutsideAfterInlineOmmlEdit = false;
         var oldNumberingArtifactsRemoved = false;
         var performanceWatch = Stopwatch.StartNew();
         long performanceCheckpoint = 0;
@@ -5152,6 +5413,9 @@ internal sealed class WordFormulaService
                         originalOmmlMetadata!.FormulaId);
                 insertion = oldRange.Duplicate;
             }
+            moveCaretOutsideAfterInlineOmmlEdit = oldShape is null
+                && session.DisplayMode == "inline"
+                && string.Equals(session.Mode, "edit", StringComparison.OrdinalIgnoreCase);
             if (oldShape is not null)
             {
                 var sourceOleMetadata = WordFormulaMetadataReader.TryRead(oldShape)
@@ -5349,6 +5613,30 @@ internal sealed class WordFormulaService
         finally
         {
             RestoreViewState(document, viewState, finalSelection);
+            if (document is not null
+                && equationRange is not null
+                && moveCaretOutsideAfterInlineOmmlEdit)
+            {
+                Range? finalInlineRange = null;
+                try
+                {
+                    finalInlineRange = ResolveCurrentInlineOmmlRange(
+                        document,
+                        equationRange,
+                        metadata.FormulaId);
+                    // Word 2021 keeps a collapsed caret at OMath.End on the math
+                    // side of the boundary. Its native right-arrow operation is
+                    // the reliable way to switch that same position to ordinary
+                    // text affinity after RestoreViewState selected the formula.
+                    MoveCaretOutsideInlineOmml(finalInlineRange);
+                }
+                catch
+                {
+                    // The replacement is already committed. A stale final range
+                    // must not roll back a valid equation.
+                }
+                finally { Release(finalInlineRange); }
+            }
             if (screenUpdatingSuspended)
             {
                 try { _application.ScreenUpdating = previousScreenUpdating; } catch { }
@@ -6489,7 +6777,31 @@ internal sealed class WordFormulaService
             paragraph = paragraphs[1];
             paragraphRange = paragraph.Range;
             var start = Math.Max(boundaryRange.End, paragraphRange.Start);
-            var end = paragraphRange.End;
+            // Paragraph.Range includes its final paragraph mark. That mark is not
+            // following prose and must never contribute to the character count:
+            // Word 2021 can move the temporary OMML guards while replacing the
+            // equation, and restoring one character too far then unhides a guard
+            // as a visible trailing ASCII space.
+            var end = Math.Max(paragraphRange.Start, paragraphRange.End - 1);
+            if (end <= start) return null;
+            // Older Word 2021 builds can serialize VisualTeX's hidden ordinary
+            // guard as a one-character range whose Text is empty. Trim only such
+            // hidden, known boundary artifacts from the tail before recording the
+            // amount of real following prose. This also repairs documents touched
+            // by builds that left the temporary guards behind.
+            while (end > start)
+            {
+                Range? trailingBoundary = null;
+                try
+                {
+                    trailingBoundary = document.Range(end - 1, end);
+                    if (!IsHiddenTextRange(trailingBoundary)
+                        || !IsKnownInlineBaselineSentinel(trailingBoundary.Text))
+                        break;
+                    end--;
+                }
+                finally { Release(trailingBoundary); }
+            }
             if (end <= start) return null;
             following = document.Range(start, end);
             font = following.Font;
@@ -6555,8 +6867,11 @@ internal sealed class WordFormulaService
             paragraph = paragraphs[1];
             paragraphRange = paragraph.Range;
             var start = Math.Max(formulaRange.End, paragraphRange.Start);
+            var paragraphBodyEnd = Math.Max(
+                paragraphRange.Start,
+                paragraphRange.End - 1);
             var end = Math.Min(
-                paragraphRange.End,
+                paragraphBodyEnd,
                 start + visibility.CharacterCount);
             if (end <= start) return;
             following = document.Range(start, end);
@@ -7312,7 +7627,14 @@ internal sealed class WordFormulaService
                     InlineMathGuard,
                     StringComparison.Ordinal)
                 && font.Hidden != 0;
-            if (!legacyGuard && !hiddenAsciiGuard) return false;
+            // Word 2021 (including build 16.0.14332) can expose the swallowed
+            // hidden ASCII guard at OMath.End as a one-character Range with an
+            // empty Text value. This helper is called only at End/End-1 of the
+            // formula, so Hidden + empty is the same VisualTeX-owned temporary
+            // boundary, not arbitrary user prose.
+            var hiddenEmptyGuard = string.IsNullOrEmpty(text)
+                && font.Hidden != 0;
+            if (!legacyGuard && !hiddenAsciiGuard && !hiddenEmptyGuard) return false;
 
             // Immediately after OMath.BuildUp, Word can report this external guard
             // as math-affiliated even though it is outside OMath.Range. The guard

@@ -359,7 +359,7 @@ void TraceOleFactoryCall(const wchar_t* method) noexcept
 }
 
 CFormulaOleObject::CFormulaOleObject() noexcept
-    : extent_(kDefaultExtent), naturalExtent_(kDefaultExtent)
+    : extent_(kDefaultExtent), naturalExtent_(kDefaultExtent), presentationExtent_(kDefaultExtent)
 {
     TraceOleCall(L"CFormulaOleObject::ctor");
 }
@@ -512,6 +512,12 @@ HRESULT CFormulaOleObject::SetExtent(DWORD drawAspect, SIZEL* size)
     if (size->cx <= 0 || size->cy <= 0)
         return E_INVALIDARG;
     extent_ = *size;
+    hostExtentExplicitlySet_ = true;
+    if (!presentationExtentLocked_)
+    {
+        presentationExtent_ = *size;
+        presentationExtentLocked_ = true;
+    }
     dirty_ = true;
     NotifyChanged();
     return S_OK;
@@ -641,8 +647,8 @@ HRESULT CFormulaOleObject::GetData(FORMATETC* format, STGMEDIUM* medium)
         // Using the mutable host extent here makes PowerPoint apply the host
         // resize twice when rebuilding its cache, which visibly squeezes or
         // flattens the formula after picture→OLE conversion.
-        picture->xExt = naturalExtent_.cx;
-        picture->yExt = naturalExtent_.cy;
+        picture->xExt = presentationExtent_.cx;
+        picture->yExt = presentationExtent_.cy;
         picture->hMF = metafile;
         GlobalUnlock(metafilePicture);
         medium->tymed = TYMED_MFPICT;
@@ -781,6 +787,9 @@ HRESULT CFormulaOleObject::InitNew(IStorage* storage)
     pngBytes_.clear();
     extent_ = kDefaultExtent;
     naturalExtent_ = kDefaultExtent;
+    presentationExtent_ = kDefaultExtent;
+    hostExtentExplicitlySet_ = false;
+    presentationExtentLocked_ = false;
     initialized_ = false;
     dirty_ = false;
     HRESULT result = storage->SetClass(CLSID_VisualTeXFormula);
@@ -826,6 +835,8 @@ HRESULT CFormulaOleObject::Load(IStorage* storage)
     storage_ = storage;
     initialized_ = !placeholder;
     dirty_ = false;
+    hostExtentExplicitlySet_ = false;
+    presentationExtentLocked_ = false;
     UpdateExtentFromEmf(true);
     return S_OK;
 }
@@ -1105,6 +1116,8 @@ HRESULT CFormulaOleObject::InitializeOrUpdate(
     std::vector<BYTE> previousPng = std::move(pngBytes_);
     const SIZEL previousExtent = extent_;
     const SIZEL previousNaturalExtent = naturalExtent_;
+    const SIZEL previousPresentationExtent = presentationExtent_;
+    const bool previousPresentationExtentLocked = presentationExtentLocked_;
     const bool previousInitialized = initialized_;
     const bool previousDirty = dirty_;
 
@@ -1130,6 +1143,8 @@ HRESULT CFormulaOleObject::InitializeOrUpdate(
             pngBytes_ = std::move(previousPng);
             extent_ = previousExtent;
             naturalExtent_ = previousNaturalExtent;
+            presentationExtent_ = previousPresentationExtent;
+            presentationExtentLocked_ = previousPresentationExtentLocked;
             initialized_ = previousInitialized;
             dirty_ = previousDirty;
             NotifyChanged();
@@ -1482,14 +1497,40 @@ void CFormulaOleObject::UpdateExtentFromEmf(bool resetHostExtent) noexcept
     if (!IsValidEmf(emfBytes_))
     {
         naturalExtent_ = kDefaultExtent;
-        if (resetHostExtent) extent_ = naturalExtent_;
+        if (resetHostExtent)
+        {
+            if (hostExtentExplicitlySet_)
+            {
+                presentationExtent_ = extent_;
+                presentationExtentLocked_ = true;
+            }
+            else
+            {
+                extent_ = naturalExtent_;
+                presentationExtent_ = naturalExtent_;
+                presentationExtentLocked_ = false;
+            }
+        }
         return;
     }
     HENHMETAFILE metafile = SetEnhMetaFileBits(static_cast<UINT>(emfBytes_.size()), emfBytes_.data());
     if (metafile == nullptr)
     {
         naturalExtent_ = kDefaultExtent;
-        if (resetHostExtent) extent_ = naturalExtent_;
+        if (resetHostExtent)
+        {
+            if (hostExtentExplicitlySet_)
+            {
+                presentationExtent_ = extent_;
+                presentationExtentLocked_ = true;
+            }
+            else
+            {
+                extent_ = naturalExtent_;
+                presentationExtent_ = naturalExtent_;
+                presentationExtentLocked_ = false;
+            }
+        }
         return;
     }
     ENHMETAHEADER header = {};
@@ -1505,7 +1546,20 @@ void CFormulaOleObject::UpdateExtentFromEmf(bool resetHostExtent) noexcept
         naturalExtent_.cx = width > 0 ? width : kDefaultExtent.cx;
         naturalExtent_.cy = height > 0 ? height : kDefaultExtent.cy;
     }
-    if (resetHostExtent) extent_ = naturalExtent_;
+    if (resetHostExtent)
+    {
+        if (hostExtentExplicitlySet_)
+        {
+            presentationExtent_ = extent_;
+            presentationExtentLocked_ = true;
+        }
+        else
+        {
+            extent_ = naturalExtent_;
+            presentationExtent_ = naturalExtent_;
+            presentationExtentLocked_ = false;
+        }
+    }
     DeleteEnhMetaFile(metafile);
 }
 

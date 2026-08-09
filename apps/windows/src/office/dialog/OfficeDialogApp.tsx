@@ -3,6 +3,10 @@ import { AlertCircle, Check, LoaderCircle, ScanLine, X } from "lucide-react";
 import { OcrDialog } from "../../components/OcrDialog";
 import { EditorWorkspace } from "../../workspace/EditorWorkspace";
 import {
+  readWorkspacePanelOpen,
+  writeWorkspacePanelOpen,
+} from "../../workspace/workspacePanelPreferences";
+import {
   historyManager,
   useHistorySnapshot,
 } from "../../history/HistoryManager";
@@ -62,7 +66,6 @@ import {
   getOcrRuntimeStatus,
   listenOcrRecognitionProgress,
   recognizeFormulaImage,
-  resolveAvailableOcrModel,
   warmupOcrModel,
   type OcrModelName,
 } from "../../ocr/ocrService";
@@ -246,7 +249,9 @@ export function OfficeDialogApp() {
     fingerprint: string;
     exportResult: OfficeExportResult;
   } | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 1040);
+  const [sidebarOpen, setSidebarOpen] = useState(() =>
+    readWorkspacePanelOpen("office-create", "tiles", window.innerWidth >= 1040),
+  );
   const [historyBusy, setHistoryBusy] = useState(false);
   const [autoCommitOnClose, setAutoCommitOnClose] = useState(true);
   const [displayMode, setDisplayMode] = useState<"inline" | "block">("inline");
@@ -375,6 +380,11 @@ export function OfficeDialogApp() {
   useEffect(() => {
     applyDocumentTheme(theme);
   }, [theme]);
+
+  const handleSidebarOpenChange = useCallback((open: boolean) => {
+    setSidebarOpen(open);
+    writeWorkspacePanelOpen("office-create", "tiles", open);
+  }, []);
 
   const selectedOcrModel =
     OCR_MODELS.find((item) => item.id === ocrModel) ??
@@ -1355,11 +1365,15 @@ export function OfficeDialogApp() {
         );
       }
 
-      const availableOcrModel = resolveAvailableOcrModel(runtime, ocrModel);
-      if (availableOcrModel !== ocrModel) {
-        setOcrModel(availableOcrModel);
-        window.localStorage.setItem(OCR_MODEL_STORAGE_KEY, availableOcrModel);
+      if (!runtime.installedModels.includes(ocrModel)) {
+        setOcrOpen(true);
+        throw new Error(
+          isEn
+            ? `Install ${selectedOcrModel.labelEn} before using it for OCR`
+            : `请先安装${selectedOcrModel.labelZh}模型，再使用该模型进行 OCR`,
+        );
       }
+      const availableOcrModel = ocrModel;
 
       unlisten = await listenOcrRecognitionProgress((progress) => {
         if (
@@ -1656,155 +1670,168 @@ export function OfficeDialogApp() {
     );
   }
 
+  const officeHeaderLeadingControls = (
+    <>
+      {session.host === "word" ? (
+        <div
+          className="office-display-mode-setting"
+          role="group"
+          aria-label={isEn ? "Word formula layout" : "Word 公式排版"}
+        >
+          <button
+            type="button"
+            className={displayMode === "inline" ? "is-active" : ""}
+            onClick={() => {
+              setDisplayMode("inline");
+              setNumbered(false);
+            }}
+            disabled={session.mode === "edit"}
+          >
+            {isEn ? "Inline" : "行内"}
+          </button>
+          <button
+            type="button"
+            className={displayMode === "block" ? "is-active" : ""}
+            onClick={() => setDisplayMode("block")}
+            disabled={session.mode === "edit"}
+          >
+            {isEn ? "Display" : "行间"}
+          </button>
+        </div>
+      ) : null}
+      <label
+        className="office-font-size-setting"
+        title={
+          session.host === "word" && session.mode === "create"
+            ? isEn
+              ? "Starts from the current Word paragraph font size"
+              : "默认读取当前 Word 段落正文的字号"
+            : isEn
+              ? "Formula font size"
+              : "公式字号"
+        }
+      >
+        <span>{isEn ? "Size" : "字号"}</span>
+        <select
+          value={officeFontSizePt}
+          data-office-font-size
+          aria-label={isEn ? "Formula font size" : "公式字号"}
+          onChange={(event) =>
+            setOfficeFontSizePt(
+              normalizeOfficeFontSizePt(event.target.value, officeFontSizePt),
+            )
+          }
+        >
+          <optgroup label={isEn ? "Chinese sizes" : "中文字号"}>
+            {OFFICE_CHINESE_FONT_SIZE_OPTIONS.map((option) => (
+              <option key={option.name} value={option.fontSizePt}>
+                {isEn
+                  ? `${option.name} (${option.fontSizePt} pt)`
+                  : `${option.name}（${option.fontSizePt} 磅）`}
+              </option>
+            ))}
+          </optgroup>
+          <optgroup label={isEn ? "Point sizes" : "磅值"}>
+            {officePointFontSizeOptions(officeFontSizePt).map((fontSizePt) => (
+              <option key={fontSizePt} value={fontSizePt}>
+                {isEn ? `${fontSizePt} pt` : `${fontSizePt} 磅`}
+              </option>
+            ))}
+          </optgroup>
+        </select>
+      </label>
+      {session.host === "word" && displayMode === "block" ? (
+        <label className="office-auto-commit-setting">
+          <input
+            type="checkbox"
+            checked={numbered}
+            onChange={(event) => setNumbered(event.target.checked)}
+          />
+          <span>{isEn ? "Number" : "编号"}</span>
+        </label>
+      ) : null}
+      <label className="office-auto-commit-setting">
+        <input
+          type="checkbox"
+          checked={autoCommitOnClose}
+          onChange={(event) => setAutoCommitOnClose(event.target.checked)}
+        />
+        <span>{isEn ? "Apply on close" : "关闭时应用"}</span>
+      </label>
+    </>
+  );
+
+  const officeHeaderTrailingActions = (
+    <div
+      className="office-inline-history-actions"
+      aria-label={isEn ? "History actions" : "历史操作"}
+    >
+      <button
+        type="button"
+        className="secondary-button"
+        onClick={() => setOcrOpen(true)}
+        disabled={inlineOcrIsBusy}
+      >
+        <ScanLine size={15} />
+        <span>{isEn ? "OCR" : "OCR"}</span>
+      </button>
+      <button
+        type="button"
+        className="secondary-button"
+        onClick={() => void historyManager.undo()}
+        disabled={historyBusy || !historyState.canUndo || historyState.isReplaying}
+      >
+        {isEn ? "Undo" : "撤销"}
+      </button>
+      <button
+        type="button"
+        className="secondary-button"
+        onClick={() => void historyManager.redo()}
+        disabled={historyBusy || !historyState.canRedo || historyState.isReplaying}
+      >
+        {isEn ? "Redo" : "重做"}
+      </button>
+      <span className="office-inline-action-divider" aria-hidden="true" />
+      <button
+        type="button"
+        className="secondary-button office-inline-cancel"
+        onClick={() => void handleCancel()}
+        aria-label={isEn ? "Cancel" : "取消"}
+      >
+        {isEn ? "Cancel" : "取消"}
+      </button>
+      <button
+        type="button"
+        className="primary-button office-inline-primary"
+        onClick={() => void handleCommit()}
+        aria-keyshortcuts="Control+S"
+        title={isEn ? "Apply and close (Ctrl+S)" : "应用并关闭（Ctrl+S）"}
+      >
+        {session.mode === "edit"
+          ? isEn
+            ? "Update"
+            : "更新公式"
+          : isEn
+            ? "Finish and insert"
+            : "完成并插入"}
+      </button>
+    </div>
+  );
+
   return (
     <div className="app-shell office-dialog-shell">
-      <header className="office-dialog-header">
-        <div>
-          <strong>VisualTeX</strong>
-          <span>
-            {session.host === "word" ? "Microsoft Word" : "Microsoft PowerPoint"}
-          </span>
-        </div>
-        <div className="office-dialog-options">
-          {session.host === "word" ? (
-            <div
-              className="office-display-mode-setting"
-              role="group"
-              aria-label={isEn ? "Word formula layout" : "Word 公式排版"}
-            >
-              <button
-                type="button"
-                className={displayMode === "inline" ? "is-active" : ""}
-                onClick={() => {
-                  setDisplayMode("inline");
-                  setNumbered(false);
-                }}
-                disabled={session.mode === "edit"}
-              >
-                {isEn ? "Inline" : "行内"}
-              </button>
-              <button
-                type="button"
-                className={displayMode === "block" ? "is-active" : ""}
-                onClick={() => setDisplayMode("block")}
-                disabled={session.mode === "edit"}
-              >
-                {isEn ? "Display" : "行间"}
-              </button>
-            </div>
-          ) : null}
-          <label
-            className="office-font-size-setting"
-            title={
-              session.host === "word" && session.mode === "create"
-                ? isEn
-                  ? "Starts from the current Word paragraph font size"
-                  : "默认读取当前 Word 段落正文的字号"
-                : isEn
-                  ? "Formula font size"
-                  : "公式字号"
-            }
-          >
-            <span>{isEn ? "Size" : "字号"}</span>
-            <select
-              value={officeFontSizePt}
-              data-office-font-size
-              aria-label={isEn ? "Formula font size" : "公式字号"}
-              onChange={(event) =>
-                setOfficeFontSizePt(
-                  normalizeOfficeFontSizePt(event.target.value, officeFontSizePt),
-                )
-              }
-            >
-              <optgroup label={isEn ? "Chinese sizes" : "中文字号"}>
-                {OFFICE_CHINESE_FONT_SIZE_OPTIONS.map((option) => (
-                  <option key={option.name} value={option.fontSizePt}>
-                    {isEn
-                      ? `${option.name} (${option.fontSizePt} pt)`
-                      : `${option.name}（${option.fontSizePt} 磅）`}
-                  </option>
-                ))}
-              </optgroup>
-              <optgroup label={isEn ? "Point sizes" : "磅值"}>
-                {officePointFontSizeOptions(officeFontSizePt).map((fontSizePt) => (
-                  <option key={fontSizePt} value={fontSizePt}>
-                    {isEn ? `${fontSizePt} pt` : `${fontSizePt} 磅`}
-                  </option>
-                ))}
-              </optgroup>
-            </select>
-          </label>
-          {session.host === "word" && displayMode === "block" ? (
-            <label className="office-auto-commit-setting">
-              <input
-                type="checkbox"
-                checked={numbered}
-                onChange={(event) => setNumbered(event.target.checked)}
-              />
-              <span>{isEn ? "Add equation number" : "添加公式编号"}</span>
-            </label>
-          ) : null}
-          <label className="office-auto-commit-setting">
-            <input
-              type="checkbox"
-              checked={autoCommitOnClose}
-              onChange={(event) => setAutoCommitOnClose(event.target.checked)}
-            />
-            <span>
-              {isEn ? "Apply when the window closes" : "关闭窗口时自动应用"}
-            </span>
-          </label>
-        </div>
-        <div className="office-history-actions" aria-label={isEn ? "History actions" : "历史操作"}>
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() => setOcrOpen(true)}
-            disabled={inlineOcrIsBusy}
-          >
-            <ScanLine size={15} />
-            {isEn ? "Image OCR" : "图片 OCR"}
-          </button>
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() => void historyManager.undo()}
-            disabled={historyBusy || !historyState.canUndo || historyState.isReplaying}
-          >
-            {isEn ? "Undo" : "撤销"}
-          </button>
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() => void historyManager.redo()}
-            disabled={historyBusy || !historyState.canRedo || historyState.isReplaying}
-          >
-            {isEn ? "Redo" : "重做"}
-          </button>
-        </div>
-      </header>
-
       <EditorWorkspace
         mode={session.mode === "edit" ? "office-edit" : "office-create"}
         showFileActions={false}
         showUpdateActions={false}
         showOfficeActions
         showOcrActions={true}
-        primaryActionLabel={
-          session.mode === "edit"
-            ? isEn
-              ? "Update formula"
-              : "更新公式"
-            : isEn
-              ? "Finish and insert"
-              : "完成并插入"
-        }
-        onPrimaryAction={handleCommit}
-        onCancel={handleCancel}
+        officeHeaderLeadingControls={officeHeaderLeadingControls}
+        officeHeaderTrailingActions={officeHeaderTrailingActions}
         editorRef={editorRef}
         editorInstanceKey={session.id}
         sidebarOpen={sidebarOpen}
-        onSidebarOpenChange={setSidebarOpen}
+        onSidebarOpenChange={handleSidebarOpenChange}
         onHistoryBusyChange={setHistoryBusy}
         onPasteImage={handleEditorImagePaste}
         onCopy={handleCopy}
