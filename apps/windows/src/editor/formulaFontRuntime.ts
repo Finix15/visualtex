@@ -35,15 +35,15 @@ function runtimeCss() {
 .math-preview .ML__lcGreek,
 .math-preview .ML__ucGreek,
 .math-preview .ML__latin {
-  font-family: ${letter.italic};
+  font-family: var(--visualtex-formula-italic-font-family, ${letter.italic});
 }
 .math-preview .ML__mathrm,
 .math-preview .ML__operator_name {
-  font-family: ${letter.upright};
+  font-family: var(--visualtex-formula-upright-font-family, ${letter.upright});
 }
 .math-preview .ML__text,
 .math-preview .ML__text span {
-  font-family: ${chinese}, ${letter.upright};
+  font-family: var(--visualtex-formula-chinese-font-family, ${chinese}), var(--visualtex-formula-upright-font-family, ${letter.upright});
 }
 `;
 }

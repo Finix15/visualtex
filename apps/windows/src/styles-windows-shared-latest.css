@@ -1060,8 +1060,25 @@
   padding-left: var(--formula-area-inset-left, 34px);
 }
 
-/* Settings live preview follows the actual editor inset model: the canvas owns
-   horizontal inset; the row only owns vertical spacing. */
+/* Settings live preview follows the actual editor inset model and must contain
+   every preview glyph inside the simulated toolbar button. */
+.formula-inset-preview-toolbar > span {
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.formula-inset-preview-toolbar > span .math-preview {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  contain: strict;
+}
+
 .formula-inset-preview-canvas {
   padding: 8px var(--preview-formula-inset-right, 34px) 9px
     var(--preview-formula-inset-left, 34px);
@@ -1085,11 +1102,37 @@
   font-size: 17px;
 }
 
+/* The settings font preview must be driven by its local preference variables,
+   not by MathLive's bundled KaTeX families or the globally persisted font. */
+.formula-font-live-preview .math-preview .ML__mathit,
+.formula-font-live-preview .math-preview .ML__mathnormal,
+.formula-font-live-preview .math-preview .ML__mathbfit,
+.formula-font-live-preview .math-preview .ML__lcGreek,
+.formula-font-live-preview .math-preview .ML__ucGreek,
+.formula-font-live-preview .math-preview .ML__latin {
+  font-family: var(--visualtex-formula-italic-font-family) !important;
+}
+
+.formula-font-live-preview .math-preview .ML__cmr,
+.formula-font-live-preview .math-preview .ML__mathbf,
+.formula-font-live-preview .math-preview .ML__mathrm,
+.formula-font-live-preview .math-preview .ML__operator_name {
+  font-family: var(--visualtex-formula-upright-font-family) !important;
+}
+
+.formula-font-live-preview .math-preview .ML__text,
+.formula-font-live-preview .math-preview .ML__text span,
+.formula-font-live-preview .math-preview .ML__textord {
+  font-family: var(--visualtex-formula-chinese-font-family),
+    var(--visualtex-formula-upright-font-family) !important;
+}
+
 /* Formula row vertical spacing is a live editor preference. */
 .formula-line .visual-mathfield {
   display: flex;
   align-items: center;
-  padding: var(--formula-row-vertical-inset, 5px) 20px !important;
+  padding-block: var(--formula-row-vertical-inset, 5px) !important;
+  padding-inline: 0 !important;
   line-height: 1.08;
 }
 
@@ -1201,14 +1244,22 @@
 }
 
 .formula-toolbar.is-horizontal .matrix-delimiter-options {
+  width: 100%;
+  min-width: 0;
   height: 58px;
-  gap: 0;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 3px;
+  overflow: hidden;
 }
 
 .formula-toolbar.is-horizontal .matrix-delimiter-options button {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   min-height: 0;
   height: 100%;
   padding: 2px;
+  overflow: hidden;
 }
 
 .formula-toolbar.is-horizontal .matrix-delimiter-options .math-preview {

@@ -869,7 +869,8 @@ public sealed class PowerPointFormulaService
             var newTop = top + (oldHeight - editedSize.Height) / 2f;
             redrawFreeze = FreezePowerPointWindowRedraw();
 
-            if (TryUpdateOle(oldShape, metadata, emfPath, pngPath))
+            if (!FormulaFontPreferencesChanged(originalMetadata, metadata)
+                && TryUpdateOle(oldShape, metadata, emfPath, pngPath))
             {
                 Configure(oldShape, metadata);
                 // Updating the embedded presentation may cause PowerPoint to
@@ -1353,6 +1354,24 @@ public sealed class PowerPointFormulaService
                 original.DisplayMode,
                 current.DisplayMode,
                 StringComparison.Ordinal);
+    }
+
+    private static bool FormulaFontPreferencesChanged(
+        FormulaMetadata? original,
+        FormulaMetadata current)
+    {
+        static string Letter(string? value) =>
+            string.IsNullOrWhiteSpace(value) ? "katex" : value!.Trim();
+        static string Chinese(string? value) =>
+            string.IsNullOrWhiteSpace(value) ? "system" : value!.Trim();
+        return !string.Equals(
+                Letter(original?.FormulaLetterFont),
+                Letter(current.FormulaLetterFont),
+                StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(
+                Chinese(original?.FormulaChineseFont),
+                Chinese(current.FormulaChineseFont),
+                StringComparison.OrdinalIgnoreCase);
     }
 
     private static string NormalizeFormulaText(string? value) =>

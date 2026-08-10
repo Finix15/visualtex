@@ -46,6 +46,13 @@ import type {
   MathEditorInsertionTarget,
 } from "../../editor/MathEditor";
 import { readErrorMessage } from "../../errors/readErrorMessage";
+import { normalizeChineseLatex } from "../../editor/normalizeChineseLatex";
+import {
+  DEFAULT_FORMULA_CHINESE_FONT,
+  DEFAULT_FORMULA_LETTER_FONT,
+  type FormulaChineseFont,
+  type FormulaLetterFont,
+} from "../../editor/formulaFontPreferences";
 import { readLocalStorage, writeLocalStorage } from "../../runtime/safeStorage";
 import { latexToMathMl, latexToSvg } from "../../export/latexToSvg";
 import { isIncompleteLatexDraft } from "../../math/latexCompatibility";
@@ -338,14 +345,23 @@ function documentFingerprint(
   displayMode: "inline" | "block",
   numbered: boolean,
   fontSizePt: number,
+  formulaLetterFont: FormulaLetterFont,
+  formulaChineseFont: FormulaChineseFont,
 ) {
   return JSON.stringify({
     title,
-    lines: lines.map((line) => line.latex),
+    // Compare the same canonical LaTeX representation that MathEditor uses
+    // after mount (upright e/i/d, Chinese text normalization, etc.). Raw
+    // Session source can be semantically identical but serialize differently;
+    // comparing raw text here can otherwise leave initial autosave suppressed
+    // forever.
+    lines: lines.map((line) => normalizeChineseLatex(line.latex)),
     codeFormat,
     displayMode,
     numbered,
     fontSizePt: normalizeOfficeFontSizePt(fontSizePt, fontSizePt),
+    formulaLetterFont,
+    formulaChineseFont,
   });
 }
 
@@ -354,6 +370,7 @@ export function OfficeDialogApp() {
   const loadedSessionIdRef = useRef("");
   const skipAutosaveForSessionRef = useRef("");
   const originalFingerprintRef = useRef("");
+  const loadedUiFingerprintRef = useRef("");
   const lastSavedFingerprintRef = useRef("");
   const readyMessageSentRef = useRef(false);
   const finalizingRef = useRef(false);
@@ -409,6 +426,7 @@ export function OfficeDialogApp() {
     loadedSessionIdRef.current = "";
     skipAutosaveForSessionRef.current = "";
     originalFingerprintRef.current = "";
+    loadedUiFingerprintRef.current = "";
     lastSavedFingerprintRef.current = "";
     readyMessageSentRef.current = false;
     finalizingRef.current = false;
@@ -426,6 +444,8 @@ export function OfficeDialogApp() {
   const setTheme = useEditorStore((state) => state.setTheme);
   const setEditorLayout = useEditorStore((state) => state.setEditorLayout);
   const latexCodeFormat = useEditorStore((state) => state.latexCodeFormat);
+  const formulaLetterFont = useEditorStore((state) => state.formulaLetterFont);
+  const formulaChineseFont = useEditorStore((state) => state.formulaChineseFont);
   const addHistory = useEditorStore((state) => state.addHistory);
   const historyState = useHistorySnapshot();
   const isEn = language === "en";
@@ -448,7 +468,10 @@ export function OfficeDialogApp() {
         if (!disposed) setPowerPointDefaultFontSizePt(20);
       })
       .finally(() => {
-        if (!disposed) setOfficePreferencesReady(true);
+        // Do not mark the full Office editor preferences as ready here. This
+        // request only seeds the PowerPoint default font size; the synchronized
+        // editor-preference request below is the one that actually applies
+        // formula fonts/theme/layout and owns officePreferencesReady.
       });
     return () => {
       disposed = true;
@@ -556,6 +579,8 @@ export function OfficeDialogApp() {
         displayMode,
         numbered,
         officeFontSizePt,
+        formulaLetterFont,
+        formulaChineseFont,
       ),
     [
       title,
@@ -564,6 +589,8 @@ export function OfficeDialogApp() {
       displayMode,
       numbered,
       officeFontSizePt,
+      formulaLetterFont,
+      formulaChineseFont,
     ],
   );
   const dirty =
@@ -573,15 +600,12 @@ export function OfficeDialogApp() {
 
   useEffect(() => {
     if (!session || loadedSessionIdRef.current === session.id) return;
-    if (
-      session.host === "powerpoint" &&
-      session.mode === "create" &&
-      session.status === "created" &&
-      !session.dirty &&
-      !officePreferencesReady
-    ) {
-      return;
-    }
+    // Font/layout preferences now participate in the immutable Office formula
+    // fingerprint and rendered OLE/OMML output. Do not establish the Session
+    // baseline before companion preferences have been applied, otherwise a
+    // later preference sync looks like a half-loaded render and autosave can
+    // suppress the required font redraw indefinitely.
+    if (!officePreferencesReady) return;
     loadedSessionIdRef.current = session.id;
     skipAutosaveForSessionRef.current = session.id;
     const sourceLines = session.lines.length
@@ -628,8 +652,21 @@ export function OfficeDialogApp() {
       session.displayMode,
       session.displayMode === "block" && Boolean(session.numbered),
       loadedFontSizePt,
+      session.originalMetadata?.formulaLetterFont ?? DEFAULT_FORMULA_LETTER_FONT,
+      session.originalMetadata?.formulaChineseFont ?? DEFAULT_FORMULA_CHINESE_FONT,
+    );
+    const loadedUiFingerprint = documentFingerprint(
+      session.title,
+      nextLines,
+      loadedCodeFormat,
+      session.displayMode,
+      session.displayMode === "block" && Boolean(session.numbered),
+      loadedFontSizePt,
+      formulaLetterFont,
+      formulaChineseFont,
     );
     originalFingerprintRef.current = loadedFingerprint;
+    loadedUiFingerprintRef.current = loadedUiFingerprint;
     lastSavedFingerprintRef.current = loadedFingerprint;
     latestCompleteExportRef.current = session.exportResult?.pngBase64
       ? { fingerprint: loadedFingerprint, exportResult: session.exportResult }
@@ -639,6 +676,8 @@ export function OfficeDialogApp() {
     isEn,
     officePreferencesReady,
     powerPointDefaultFontSizePt,
+    formulaLetterFont,
+    formulaChineseFont,
   ]);
 
   useEffect(() => {
@@ -772,6 +811,8 @@ export function OfficeDialogApp() {
     sourceLatex: string = currentRenderedLatex,
     sourceDisplayMode: "inline" | "block" = displayMode,
     sourceFontSizePt: number = officeFontSizePt,
+    sourceFormulaLetterFont: FormulaLetterFont = formulaLetterFont,
+    sourceFormulaChineseFont: FormulaChineseFont = formulaChineseFont,
   ): OfficeExportResult | null => {
     if (!sourceLatex.trim()) return null;
     const svg = latexToSvg(sourceLatex, {
@@ -779,6 +820,8 @@ export function OfficeDialogApp() {
       fontSizePt: sourceFontSizePt,
       paddingPx: sourceDisplayMode === "inline" ? 1 : 10,
       background: "transparent",
+      formulaLetterFont: sourceFormulaLetterFont,
+      formulaChineseFont: sourceFormulaChineseFont,
     });
     return {
       svg: svg.svg,
@@ -787,8 +830,16 @@ export function OfficeDialogApp() {
       width: svg.width,
       height: svg.height,
       baseline: svg.baseline,
+      formulaLetterFont: sourceFormulaLetterFont,
+      formulaChineseFont: sourceFormulaChineseFont,
     };
-  }, [currentRenderedLatex, displayMode, officeFontSizePt]);
+  }, [
+    currentRenderedLatex,
+    displayMode,
+    officeFontSizePt,
+    formulaLetterFont,
+    formulaChineseFont,
+  ]);
 
   const rasterizeSvgExportResult = useCallback(async (
     base: OfficeExportResult,
@@ -856,6 +907,10 @@ export function OfficeDialogApp() {
         sourceSession.originalMetadata?.renderFontSizePt,
       sourceSession.host,
     );
+    const sourceFormulaLetterFont =
+      sourceSession.originalMetadata?.formulaLetterFont ?? formulaLetterFont;
+    const sourceFormulaChineseFont =
+      sourceSession.originalMetadata?.formulaChineseFont ?? formulaChineseFont;
     if (sourceSession.objectMode === "wordOmml") {
       const mathMl = latexToMathMl(
         conversionLatex,
@@ -877,12 +932,16 @@ export function OfficeDialogApp() {
         width,
         height,
         baseline: sourceSession.originalMetadata?.baseline ?? height * 0.75,
+        formulaLetterFont: sourceFormulaLetterFont,
+        formulaChineseFont: sourceFormulaChineseFont,
       };
     }
     const base = generateSvgExportResult(
       conversionLatex,
       sourceSession.displayMode,
       conversionFontSizePt,
+      sourceFormulaLetterFont,
+      sourceFormulaChineseFont,
     );
     if (!base?.mathMl) {
       throw new Error("Unable to generate MathML for Office conversion.");
@@ -892,7 +951,12 @@ export function OfficeDialogApp() {
       throw new Error("Unable to generate a complete Office formula preview.");
     }
     return complete;
-  }, [generateSvgExportResult, rasterizeSvgExportResult]);
+  }, [
+    generateSvgExportResult,
+    rasterizeSvgExportResult,
+    formulaLetterFont,
+    formulaChineseFont,
+  ]);
 
   useEffect(() => {
     if (
@@ -1104,10 +1168,16 @@ export function OfficeDialogApp() {
       // autosave suppressed until every field matches the immutable Session
       // fingerprint; otherwise the half-loaded render is briefly persisted as
       // a false dirty edit.
-      if (currentFingerprint !== originalFingerprintRef.current) return;
+      if (currentFingerprint !== loadedUiFingerprintRef.current) return;
       skipAutosaveForSessionRef.current = "";
-      lastSavedFingerprintRef.current = currentFingerprint;
-      return;
+      if (currentFingerprint === originalFingerprintRef.current) {
+        lastSavedFingerprintRef.current = currentFingerprint;
+        return;
+      }
+      // The UI is fully loaded, but a persisted/global visual preference (for
+      // example formula fonts) differs from the formula's original metadata.
+      // Fall through so this stable difference is exported instead of being
+      // mistaken for a half-loaded Session.
     }
     if (
       lastSavedFingerprintRef.current === currentFingerprint &&

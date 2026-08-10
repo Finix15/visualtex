@@ -768,12 +768,6 @@ internal static class OfficeOlePreview
             FontStyle requestedStyle,
             out FontStyle resolvedStyle)
         {
-            var installed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var family in FontFamily.Families)
-            {
-                try { installed.Add(family.Name); }
-                finally { family.Dispose(); }
-            }
             var requested = requestedFamilies
                 .Split(',')
                 .Select(name => name.Trim().Trim('\'', '"'))
@@ -802,14 +796,27 @@ internal static class OfficeOlePreview
 
             foreach (var candidate in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
             {
-                if (!installed.Contains(candidate)) continue;
-                var family = new FontFamily(candidate);
+                // Do not pre-filter through FontFamily.Families by name. On a
+                // localized Windows install GDI+ exposes CJK family names in the
+                // OS language (for example SimSun/KaiTi resolve to localized
+                // family names), so comparing the English alias with family.Name
+                // incorrectly rejects a font that GDI+ can resolve perfectly.
+                // Constructing FontFamily from the alias lets GDI+ perform the
+                // Windows font-name mapping and gives us the actual family.
+                FontFamily? family = null;
                 try
                 {
+                    family = new FontFamily(candidate);
                     resolvedStyle = ResolveSupportedFontStyle(family, requestedStyle);
                     return new FontFamily(family.Name);
                 }
-                finally { family.Dispose(); }
+                catch (ArgumentException)
+                {
+                    // Candidate is not available on this machine; try the next
+                    // declared fallback instead of silently collapsing all CJK
+                    // aliases to GenericSerif.
+                }
+                finally { family?.Dispose(); }
             }
 
             var fallback = genericSans ? FontFamily.GenericSansSerif : FontFamily.GenericSerif;

@@ -1325,91 +1325,22 @@ async function main() {
 
     await evaluate(`(() => {
       localStorage.removeItem("visualtex.onboarding.v3.completed");
+      localStorage.removeItem("visualtex.onboarding.windows.desktop.v1.1.0.completed");
       location.reload();
     })()`);
     await sleep(850);
-    await evaluate(`new Promise((resolve) => {
-      const done = () => document.querySelector(".onboarding-dialog") ? resolve(true) : setTimeout(done, 30);
-      done();
-    })`);
-    for (let index = 0; index < 12; index += 1) {
-      const matrixStepVisible = await evaluate(
-        `Boolean(document.querySelector(".onboarding-matrix-font-demo"))`,
-      );
-      if (matrixStepVisible) break;
-      await evaluate(`document.querySelector(".onboarding-actions .primary-button").click()`);
-      await sleep(100);
-    }
-    const onboardingMatrixStep = await evaluate(`(() => ({
-      progressCount: document.querySelectorAll(".onboarding-progress > span").length,
-      visible: Boolean(document.querySelector(".onboarding-matrix-font-demo")),
-      title: document.querySelector("#onboarding-title")?.textContent ?? "",
-      selectedCells: document.querySelectorAll(".onboarding-mini-matrix-grid .is-selected").length,
-      fontCards: document.querySelectorAll(".onboarding-font-variants-preview > div > span").length,
-      text: document.querySelector(".onboarding-matrix-font-demo")?.textContent ?? "",
+    const removedOnboardingState = await evaluate(`(() => ({
+      dialogVisible: Boolean(document.querySelector(".onboarding-dialog")),
+      menuText: document.querySelector(".app-menu")?.textContent ?? "",
+      editorVisible: Boolean(document.querySelector("math-field")),
     }))()`);
     if (
-      onboardingMatrixStep.progressCount < 10 ||
-      !onboardingMatrixStep.visible ||
-      onboardingMatrixStep.selectedCells !== 11 ||
-      onboardingMatrixStep.fontCards !== 3 ||
-      !onboardingMatrixStep.text.includes("10 × 10")
+      removedOnboardingState.dialogVisible ||
+      removedOnboardingState.menuText.includes("新手教程") ||
+      removedOnboardingState.menuText.includes("Quick tour") ||
+      !removedOnboardingState.editorVisible
     ) {
-      throw new Error(`The onboarding matrix/font step is incomplete: ${JSON.stringify(onboardingMatrixStep)}`);
-    }
-
-    await evaluate(`document.querySelector(".onboarding-actions .primary-button").click()`);
-    await sleep(100);
-    const onboardingInputBehaviorStep = await evaluate(`(() => ({
-      visible: Boolean(document.querySelector(".onboarding-input-behavior-demo")),
-      title: document.querySelector("#onboarding-title")?.textContent ?? "",
-      toggles: document.querySelectorAll(".onboarding-input-toggle-list > span").length,
-      hasActiveToggle: Boolean(document.querySelector(".onboarding-input-toggle-list i.is-on")),
-      text: document.querySelector(".onboarding-input-behavior-demo")?.textContent ?? "",
-    }))()`);
-    if (
-      !onboardingInputBehaviorStep.visible ||
-      onboardingInputBehaviorStep.toggles !== 2 ||
-      !onboardingInputBehaviorStep.hasActiveToggle ||
-      !onboardingInputBehaviorStep.text.includes("Enter") ||
-      !onboardingInputBehaviorStep.text.includes("微分正体")
-    ) {
-      throw new Error(`The onboarding input-behavior step is incomplete: ${JSON.stringify(onboardingInputBehaviorStep)}`);
-    }
-
-    await evaluate(`document.querySelector(".onboarding-actions .primary-button").click()`);
-    await sleep(100);
-    const onboardingFormatStep = await evaluate(`(() => ({
-      progressCount: document.querySelectorAll(".onboarding-progress > span").length,
-      visible: Boolean(document.querySelector(".onboarding-code-format-demo")),
-      title: document.querySelector("#onboarding-title")?.textContent ?? "",
-      source: document.querySelector(".onboarding-code-format-demo pre")?.textContent ?? "",
-    }))()`);
-    if (
-      onboardingFormatStep.progressCount < 10 ||
-      !onboardingFormatStep.visible ||
-      !onboardingFormatStep.title.includes("LaTeX") ||
-      !onboardingFormatStep.source.includes("\\begin{align*}")
-    ) {
-      throw new Error(`The onboarding LaTeX format step is incomplete: ${JSON.stringify(onboardingFormatStep)}`);
-    }
-
-    await evaluate(`document.querySelector(".onboarding-actions .primary-button").click()`);
-    await sleep(100);
-    const onboardingExportStep = await evaluate(`(() => ({
-      visible: Boolean(document.querySelector(".onboarding-export-demo")),
-      title: document.querySelector("#onboarding-title")?.textContent ?? "",
-      formats: [...document.querySelectorAll(".onboarding-export-formats strong")].map((item) => item.textContent),
-      selected: document.querySelector(".onboarding-export-formats .is-selected strong")?.textContent ?? "",
-      path: document.querySelector(".onboarding-export-path strong")?.textContent ?? "",
-    }))()`);
-    if (
-      !onboardingExportStep.visible ||
-      onboardingExportStep.formats.join(",") !== "Markdown,SVG,PNG" ||
-      onboardingExportStep.selected !== "SVG" ||
-      !onboardingExportStep.path.includes("formula.svg")
-    ) {
-      throw new Error(`The onboarding export step is incomplete: ${JSON.stringify(onboardingExportStep)}`);
+      throw new Error(`Removed onboarding is still exposed: ${JSON.stringify(removedOnboardingState)}`);
     }
 
     if (process.env.VISUALTEX_TEST_QUIET !== "1") console.log(JSON.stringify({
@@ -1440,10 +1371,7 @@ async function main() {
       chineseIdeographicCommaValue,
       arrowUpLineState,
       arrowDownLineState,
-      onboardingMatrixStep,
-      onboardingInputBehaviorStep,
-      onboardingFormatStep,
-      onboardingExportStep,
+      removedOnboardingState,
     }, null, 2));
     console.log("Editor regression smoke test passed");
   } finally {

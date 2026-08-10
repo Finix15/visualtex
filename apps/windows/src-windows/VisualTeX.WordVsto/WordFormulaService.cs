@@ -1021,7 +1021,7 @@ internal sealed class WordFormulaService
                 RemoveInlineBaselineSentinel(document, metadata.FormulaId);
                 var alignInline = ShouldAlignInline(equationRange, metadata);
                 if (alignInline) metadata.DisplayMode = "inline";
-                ApplyOmmlFontSize(equationRange, target);
+                ApplyOmmlTypography(equationRange, target, metadata);
                 WordOmmlNativeSource.StampFingerprint(metadata, equationRange);
                 WordOmmlFormulaStore.Save(document, metadata);
                 if (alignInline)
@@ -1586,7 +1586,7 @@ internal sealed class WordFormulaService
                     sourceFingerprint: out sourceFingerprint);
             }
 
-            ApplyOmmlFontSize(equationRange, session.FontSizePt);
+            ApplyOmmlTypography(equationRange, session.FontSizePt, metadata);
             metadata.NativeOmmlFingerprint = sourceFingerprint;
             bookmark = WordOmmlFormulaStore.Wrap(document, equationRange, metadata);
             WordOmmlFormulaStore.Save(document, metadata);
@@ -4424,7 +4424,7 @@ internal sealed class WordFormulaService
                         sourceFingerprint: out sourceFingerprint,
                         replaceTarget: !display);
                 TraceOmmlStage("insert");
-                ApplyOmmlFontSize(equationRange, session.FontSizePt);
+                ApplyOmmlTypography(equationRange, session.FontSizePt, metadata);
                 TraceOmmlStage("font-size");
                 metadata.NativeOmmlFingerprint = sourceFingerprint;
                 bookmark = WordOmmlFormulaStore.Wrap(
@@ -5123,6 +5123,7 @@ internal sealed class WordFormulaService
             // controlled by the host paragraph/table.
             if (oldShape is not null
                 && session.DisplayMode != "inline"
+                && !FormulaFontPreferencesChanged(originalMetadata, metadata)
                 && TryUpdateOle(oldShape, metadata, emfPath, pngPath))
             {
                 TraceAcceptancePerformance(
@@ -5483,7 +5484,7 @@ internal sealed class WordFormulaService
                 performanceWatch,
                 ref performanceCheckpoint);
             ValidateInsertedOmml(equationRange);
-            ApplyOmmlFontSize(equationRange, session.FontSizePt);
+            ApplyOmmlTypography(equationRange, session.FontSizePt, metadata);
             metadata.NativeOmmlFingerprint = sourceFingerprint;
             TraceAcceptancePerformance(
                 "ReplaceOmml",
@@ -5757,6 +5758,24 @@ internal sealed class WordFormulaService
             Release(oldShape);
             Release(document);
         }
+    }
+
+    private static bool FormulaFontPreferencesChanged(
+        FormulaMetadata? original,
+        FormulaMetadata current)
+    {
+        static string Letter(string? value) =>
+            string.IsNullOrWhiteSpace(value) ? "katex" : value!.Trim();
+        static string Chinese(string? value) =>
+            string.IsNullOrWhiteSpace(value) ? "system" : value!.Trim();
+        return !string.Equals(
+                Letter(original?.FormulaLetterFont),
+                Letter(current.FormulaLetterFont),
+                StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(
+                Chinese(original?.FormulaChineseFont),
+                Chinese(current.FormulaChineseFont),
+                StringComparison.OrdinalIgnoreCase);
     }
 
     private static InlineShape AddOleObject(Document document, Range range) =>
@@ -6164,7 +6183,10 @@ internal sealed class WordFormulaService
         }
     }
 
-    private static void ApplyOmmlFontSize(Range equationRange, double fontSizePt)
+    private static void ApplyOmmlTypography(
+        Range equationRange,
+        double fontSizePt,
+        FormulaMetadata metadata)
     {
         Microsoft.Office.Interop.Word.Font? font = null;
         try
@@ -6174,8 +6196,60 @@ internal sealed class WordFormulaService
             font.Position = 0;
             font.Size = normalized;
             try { font.SizeBi = normalized; } catch { }
+
+            var westernFont = ResolveWordFormulaLetterFont(metadata.FormulaLetterFont);
+            var chineseFont = ResolveWordFormulaChineseFont(metadata.FormulaChineseFont);
+            try { font.Name = westernFont; } catch { }
+            try { font.NameAscii = westernFont; } catch { }
+            try { font.NameOther = westernFont; } catch { }
+            try { font.NameBi = westernFont; } catch { }
+            try { font.NameFarEast = chineseFont; } catch { }
         }
         finally { Release(font); }
+    }
+
+    private static string ResolveWordFormulaLetterFont(string? preference)
+    {
+        return preference switch
+        {
+            "times" => "Times New Roman",
+            "cambria" => "Cambria Math",
+            "stix" => InstalledWordFontOrFallback("STIX Two Math", "Times New Roman"),
+            "palatino" => InstalledWordFontOrFallback("Palatino Linotype", "Times New Roman"),
+            "helvetica" => "Arial",
+            // KaTeX is a bundled web font and cannot be assigned to a native
+            // Word OMath. Cambria Math is the stable native Office fallback.
+            _ => "Cambria Math",
+        };
+    }
+
+    private static string InstalledWordFontOrFallback(string requested, string fallback)
+    {
+        try
+        {
+            return FontFamily.Families.Any(family =>
+                string.Equals(family.Name, requested, StringComparison.OrdinalIgnoreCase))
+                ? requested
+                : fallback;
+        }
+        catch
+        {
+            return fallback;
+        }
+    }
+
+    private static string ResolveWordFormulaChineseFont(string? preference)
+    {
+        return preference switch
+        {
+            "songti" => "SimSun",
+            "kaiti" => "KaiTi",
+            "heiti" => "SimHei",
+            // PingFang is unavailable on Windows; Microsoft YaHei is the
+            // configured compatible sans-serif fallback used by VisualTeX.
+            "pingfang" => "Microsoft YaHei",
+            _ => "Microsoft YaHei",
+        };
     }
 
     private static void TryReconcileOmml(

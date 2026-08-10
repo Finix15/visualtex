@@ -5,7 +5,6 @@ import {
   Braces,
   Check,
   ChevronDown,
-  CircleHelp,
   Code2,
   FileDown,
   FilePlus2,
@@ -43,7 +42,6 @@ import { FormulaHotkeyManagerDialog } from "./components/FormulaHotkeyManagerDia
 import { HistoryPanel } from "./components/HistoryPanel";
 import { OcrDialog } from "./components/OcrDialog";
 import { ExportDialog } from "./components/ExportDialog";
-import { OnboardingTour } from "./components/OnboardingTour";
 import { UpdateDialog } from "./components/UpdateDialog";
 import { VisualTeXLogo } from "./components/VisualTeXLogo";
 import { EditorWorkspace } from "./workspace/EditorWorkspace";
@@ -102,11 +100,6 @@ import {
   PROJECT_URL,
   type UpdateCheckResult,
 } from "./update/updateService";
-import {
-  detectDesktopPlatform,
-  onboardingStorageKey,
-  shouldOpenOnboardingInitially,
-} from "./platform";
 import { readLocalStorage, writeLocalStorage } from "./runtime/safeStorage";
 import {
   captureQuickOcrScreenshot,
@@ -131,11 +124,6 @@ interface InlineOcrState {
 }
 
 const OCR_MODEL_STORAGE_KEY = "visualtex.ocr.model";
-const DESKTOP_PLATFORM = detectDesktopPlatform();
-const ONBOARDING_STORAGE_KEY = onboardingStorageKey(
-  DESKTOP_PLATFORM,
-  isTauriEnvironment(),
-);
 
 function App() {
   const editorRef = useRef<MathEditorHandle>(null);
@@ -150,12 +138,6 @@ function App() {
   const [ocrOpen, setOcrOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 1040);
-  const [onboardingOpen, setOnboardingOpen] = useState(() =>
-    shouldOpenOnboardingInitially(
-      readLocalStorage(ONBOARDING_STORAGE_KEY) === "true",
-      false,
-    ),
-  );
   const [copyMenuOpen, setCopyMenuOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [keypadMode, setKeypadMode] = useState(false);
@@ -298,7 +280,7 @@ function App() {
   };
 
   useEffect(() => {
-    if (onboardingOpen || initialEditorFocusDoneRef.current) return;
+    if (initialEditorFocusDoneRef.current) return;
     initialEditorFocusDoneRef.current = true;
     let repairTimer = 0;
     const frame = window.requestAnimationFrame(() => {
@@ -311,7 +293,7 @@ function App() {
       window.cancelAnimationFrame(frame);
       window.clearTimeout(repairTimer);
     };
-  }, [onboardingOpen]);
+  }, []);
 
   useEffect(() => {
     historyManager.configure({
@@ -968,14 +950,6 @@ function App() {
     action();
   };
 
-  const finishOnboarding = useCallback(() => {
-    writeLocalStorage(ONBOARDING_STORAGE_KEY, "true");
-    setOnboardingOpen(false);
-    window.requestAnimationFrame(() =>
-      editorRef.current?.focus({ target: "last", moveToEnd: true }),
-    );
-  }, []);
-
   const runUpdateCheck = useCallback(async (manual = true) => {
     if (manual) {
       setAutomaticUpdatePrompt(false);
@@ -1012,7 +986,6 @@ function App() {
   useEffect(() => {
     if (
       !checkUpdatesOnStartup ||
-      onboardingOpen ||
       automaticUpdateCheckRef.current
     ) {
       return;
@@ -1037,7 +1010,7 @@ function App() {
       window.clearTimeout(timer);
       window.removeEventListener("online", runWhenOnline);
     };
-  }, [checkUpdatesOnStartup, onboardingOpen, runUpdateCheck]);
+  }, [checkUpdatesOnStartup, runUpdateCheck]);
 
   useEffect(() => {
     const handleWindowKeyDown = (event: KeyboardEvent) => {
@@ -1053,7 +1026,6 @@ function App() {
         ocrOpen ||
         historyOpen ||
         exportOpen ||
-        onboardingOpen ||
         updateOpen
       ) {
         return;
@@ -1118,7 +1090,6 @@ function App() {
     ocrOpen,
     historyOpen,
     exportOpen,
-    onboardingOpen,
     updateOpen,
   ]);
 
@@ -1401,14 +1372,6 @@ function App() {
               >
                 <Settings2 size={16} />
                 <span>{isEn ? "Settings" : "设置"}</span>
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => runMenuAction(() => setOnboardingOpen(true))}
-              >
-                <CircleHelp size={16} />
-                <span>{isEn ? "Quick tour" : "新手教程"}</span>
               </button>
               <button
                 type="button"
@@ -1768,12 +1731,6 @@ function App() {
         onInsert={(value) => editorRef.current?.insertLatex(value, "ocr")}
         onAppend={(value) => editorRef.current?.appendLatex(value, "ocr")}
         onNotify={setToast}
-      />
-      <OnboardingTour
-        open={onboardingOpen}
-        language={language}
-        platform={DESKTOP_PLATFORM}
-        onFinish={finishOnboarding}
       />
       <UpdateDialog
         open={updateOpen}

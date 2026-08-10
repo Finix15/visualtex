@@ -130,8 +130,128 @@ internal static class WordEquationNumbering
 
     internal static int SetEquationNumberFormat(Document document, string formatId)
     {
+        var acceptanceTiming = string.Equals(
+            Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE"),
+            "1",
+            StringComparison.Ordinal)
+            ? System.Diagnostics.Stopwatch.StartNew()
+            : null;
         SetEquationNumberFormatPreference(document, formatId);
-        return Reconcile(document);
+        var fastPath = TryApplyEquationNumberFormatInPlace(document, out var updated);
+        var result = fastPath ? updated : Reconcile(document);
+        if (acceptanceTiming is not null)
+        {
+            acceptanceTiming.Stop();
+            Console.WriteLine(
+                $"    [perf] SetEquationNumberFormat.{(fastPath ? "fast" : "reconcile")}: {result} formulas in {acceptanceTiming.ElapsedMilliseconds}ms");
+        }
+        return result;
+    }
+
+    private static bool TryApplyEquationNumberFormatInPlace(
+        Document document,
+        out int updated)
+    {
+        updated = 0;
+        var acceptanceTiming = string.Equals(
+            Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE"),
+            "1",
+            StringComparison.Ordinal)
+            ? System.Diagnostics.Stopwatch.StartNew()
+            : null;
+        var checkpoint = 0L;
+        void TraceStage(string stage)
+        {
+            if (acceptanceTiming is null) return;
+            var elapsed = acceptanceTiming.ElapsedMilliseconds;
+            Console.WriteLine($"      [perf] number-format.{stage}: +{elapsed - checkpoint}ms ({elapsed}ms)");
+            checkpoint = elapsed;
+        }
+        var nativeSequenceName = GetNativeEquationSequenceName(document);
+        var captions = GetNativeEquationCaptionEntries(document, nativeSequenceName);
+        var activeFormulaIds = captions
+            .Select(item => item.FormulaId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (activeFormulaIds.Count != captions.Count)
+            return false;
+        TraceStage("caption-inventory");
+
+        // Changing only the display format must not rebuild otherwise healthy
+        // three-column equation structures. Validate the lightweight numbering
+        // bookmarks first; malformed/legacy documents still fall back to the
+        // full reconciliation path below.
+        Bookmarks? bookmarks = null;
+        Bookmark? bookmark = null;
+        Range? range = null;
+        try
+        {
+            bookmarks = document.Bookmarks;
+            var artifactFormulaIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (var index = 1; index <= bookmarks.Count; index++)
+            {
+                Release(bookmark);
+                bookmark = bookmarks[index];
+                if (TryFormulaIdFromBookmark(
+                        bookmark.Name,
+                        EquationBookmarkPrefix,
+                        out var formulaId)
+                    || TryFormulaIdFromBookmark(
+                        bookmark.Name,
+                        NativeCaptionBookmarkPrefix,
+                        out formulaId)
+                    || TryFormulaIdFromBookmark(
+                        bookmark.Name,
+                        NativeNumberBookmarkPrefix,
+                        out formulaId))
+                {
+                    artifactFormulaIds.Add(formulaId);
+                }
+            }
+            if (!artifactFormulaIds.SetEquals(activeFormulaIds))
+                return false;
+
+            foreach (var formulaId in activeFormulaIds)
+            {
+                if (!HasCompleteFormulaNumberingArtifacts(document, formulaId))
+                    return false;
+                var visibleName = EquationBookmarkName(formulaId);
+                if (!bookmarks.Exists(visibleName)) return false;
+                Release(bookmark);
+                bookmark = bookmarks[visibleName];
+                Release(range);
+                range = bookmark.Range;
+                if (!IsNumberedEquationTable(range))
+                    return false;
+            }
+        }
+        finally
+        {
+            Release(range);
+            Release(bookmark);
+            Release(bookmarks);
+        }
+
+        TraceStage("validate-artifacts");
+        if (activeFormulaIds.Count == 0)
+            return true;
+
+        // The hidden SEQ captions carry the chapter/section prefix and local
+        // ordinal. Updating them in document order is sufficient for a format
+        // switch; every table, formula object, metadata record and bookmark
+        // scaffold already exists and must remain untouched.
+        UpdateNativeEquationSequenceFields(
+            document,
+            nativeSequenceName,
+            captions,
+            formatOnly: true);
+        TraceStage("update-sequence");
+        // Refresh only REF fields. This updates both the visible number cells and
+        // user cross-references without the expensive document-wide Fields.Update
+        // plus structural OLE/OMML scans performed by Reconcile().
+        UpdateNativeCrossReferences(document);
+        TraceStage("update-references");
+        updated = activeFormulaIds.Count;
+        return true;
     }
 
     internal static void SetEquationNumberFormatPreference(
@@ -2803,8 +2923,21 @@ internal static class WordEquationNumbering
     private static void UpdateNativeEquationSequenceFields(Document document)
     {
         var nativeSequenceName = GetNativeEquationSequenceName(document);
-        var format = ReadEquationNumberFormat(document);
         var captions = GetNativeEquationCaptionEntries(document, nativeSequenceName);
+        UpdateNativeEquationSequenceFields(
+            document,
+            nativeSequenceName,
+            captions,
+            formatOnly: false);
+    }
+
+    private static void UpdateNativeEquationSequenceFields(
+        Document document,
+        string nativeSequenceName,
+        IReadOnlyList<NativeEquationCaptionEntry> captions,
+        bool formatOnly)
+    {
+        var format = ReadEquationNumberFormat(document);
         var headingAnchors = format.UsesHeading
             ? GetHeadingNumberAnchors(document, format.HeadingLevel)
             : Array.Empty<HeadingNumberAnchor>();
@@ -2824,7 +2957,8 @@ internal static class WordEquationNumbering
                 caption.FormulaId,
                 nativeSequenceName,
                 localOrdinal,
-                scope.Prefix);
+                scope.Prefix,
+                formatOnly);
         }
     }
 
@@ -3031,7 +3165,8 @@ internal static class WordEquationNumbering
         string formulaId,
         string nativeSequenceName,
         int ordinal,
-        string prefix)
+        string prefix,
+        bool formatOnly)
     {
         Bookmarks? bookmarks = null;
         Bookmark? numberBookmark = null;
@@ -3081,13 +3216,16 @@ internal static class WordEquationNumbering
             refreshedNumberRange = document.Range(paragraphRange.Start, fieldResult.End);
             numberBookmark = bookmarks.Add(numberName, refreshedNumberRange);
 
-            captionBookmark.Delete();
-            Release(captionBookmark);
-            captionBookmark = null;
-            Release(captionRange);
-            captionRange = paragraph.Range;
-            captionBookmark = bookmarks.Add(captionName, captionRange);
-            StyleNativeCaption(captionRange, refreshedNumberRange);
+            if (!formatOnly)
+            {
+                captionBookmark.Delete();
+                Release(captionBookmark);
+                captionBookmark = null;
+                Release(captionRange);
+                captionRange = paragraph.Range;
+                captionBookmark = bookmarks.Add(captionName, captionRange);
+                StyleNativeCaption(captionRange, refreshedNumberRange);
+            }
         }
         finally
         {

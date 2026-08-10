@@ -1401,6 +1401,8 @@ public sealed class OfficeSessionDocument
             RenderFontSizePt = ExportResult is not null
                 ? FormulaFontSize.Normalize(FontSizePt)
                 : OriginalMetadata?.RenderFontSizePt ?? FormulaFontSize.Normalize(FontSizePt),
+            FormulaLetterFont = ExportResult?.FormulaLetterFont ?? OriginalMetadata?.FormulaLetterFont,
+            FormulaChineseFont = ExportResult?.FormulaChineseFont ?? OriginalMetadata?.FormulaChineseFont,
             WordInlineOleWidthPt = OriginalMetadata?.WordInlineOleWidthPt,
             WordInlineOleHeightPt = OriginalMetadata?.WordInlineOleHeightPt,
             CreatedWithVersion = OriginalMetadata?.CreatedWithVersion ?? "1.0.18",
@@ -1456,4 +1458,10 @@ public sealed class OfficeExportDocument
 
     [JsonPropertyName("baseline")]
     public float? Baseline { get; set; }
+
+    [JsonPropertyName("formulaLetterFont")]
+    public string? FormulaLetterFont { get; set; }
+
+    [JsonPropertyName("formulaChineseFont")]
+    public string? FormulaChineseFont { get; set; }
 }

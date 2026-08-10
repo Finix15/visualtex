@@ -399,6 +399,14 @@ internal static partial class Program
             {
                 RunWordNativeCrossReference(client, artifactRoot);
             }
+            else if (string.Equals(mode, "word-formula-fonts", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordFormulaFontAcceptance(artifactRoot);
+            }
+            else if (string.Equals(mode, "office-ole-formula-fonts", StringComparison.OrdinalIgnoreCase))
+            {
+                RunOleFormulaFontAcceptance(artifactRoot);
+            }
             else if (string.Equals(mode, "word-create", StringComparison.OrdinalIgnoreCase))
             {
                 RunWord(client, artifactRoot, initialOnly: true);

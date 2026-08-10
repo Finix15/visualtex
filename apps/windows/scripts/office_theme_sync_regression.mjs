@@ -20,6 +20,8 @@ const chromeProfile = createBrowserProfilePath("visualtex-windows-office-theme")
 const chromePath = resolveChromiumExecutable();
 let currentTheme = "purple";
 let currentEditorLayout = "classic";
+let currentSessionHost = "word";
+let lastSessionPatch = null;
 let currentEditorPreferences = {
   zoom: 0.8,
   formulaInsetLeft: 31,
@@ -31,6 +33,38 @@ let currentEditorPreferences = {
   formulaChineseFont: "songti",
   keypadMinimizeOnCopy: false,
 };
+
+function sessionPayload(update = {}) {
+  return {
+    id: "theme-regression",
+    mode: "edit",
+    host: currentSessionHost,
+    formulaId: "theme-regression-formula",
+    sourceDocumentId: "theme-regression-document",
+    sourceObjectId: "theme-regression-object",
+    title: "Office compact geometry regression",
+    lines: [{ id: "line-1", latex: "E=mc^2,\\quad \\alpha+\\beta=\\gamma,\\quad \\text{中文公式}" }],
+    activeLineId: "line-1",
+    codeFormat: "raw",
+    displayMode: "inline",
+    objectMode: "nativeOle",
+    numbered: false,
+    fontSizePt: 10.5,
+    exportWidth: 320,
+    exportHeight: 80,
+    exportResult: null,
+    originalMetadata: null,
+    dirty: false,
+    status: "editing",
+    autoCommitOnClose: true,
+    explicitCancel: false,
+    error: null,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    expiresAt: Date.now() + 600000,
+    ...update,
+  };
+}
 
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
@@ -74,34 +108,14 @@ const server = createServer(async (request, response) => {
       return;
     }
     if (url.pathname === "/api/v1/sessions/theme-regression") {
-      writeJson(response, 200, {
-        id: "theme-regression",
-        mode: "edit",
-        host: "word",
-        formulaId: "theme-regression-formula",
-        sourceDocumentId: "theme-regression-document",
-        sourceObjectId: "theme-regression-object",
-        title: "Office compact geometry regression",
-        lines: [{ id: "line-1", latex: "e^{i\\pi}+1=0" }],
-        activeLineId: "line-1",
-        codeFormat: "raw",
-        displayMode: "inline",
-        objectMode: "wordOmml",
-        numbered: false,
-        fontSizePt: 10.5,
-        exportWidth: 320,
-        exportHeight: 80,
-        exportResult: null,
-        originalMetadata: null,
-        dirty: false,
-        status: "editing",
-        autoCommitOnClose: true,
-        explicitCancel: false,
-        error: null,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        expiresAt: Date.now() + 600000,
-      });
+      if (request.method === "PATCH") {
+        let raw = "";
+        for await (const chunk of request) raw += chunk;
+        lastSessionPatch = JSON.parse(raw || "{}");
+        writeJson(response, 200, sessionPayload(lastSessionPatch));
+        return;
+      }
+      writeJson(response, 200, sessionPayload());
       return;
     }
     if (url.pathname.startsWith("/api/v1/sessions/")) {
@@ -224,6 +238,44 @@ async function waitForPage() {
     await sleep(80);
   }
   throw new Error("Timed out waiting for the Office theme regression page");
+}
+
+async function waitForFontExportPatch(host, timeoutMs = 8_000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const exportResult = lastSessionPatch?.exportResult;
+    const svg = exportResult?.svg ?? "";
+    if (
+      exportResult?.formulaLetterFont === "helvetica" &&
+      exportResult?.formulaChineseFont === "kaiti" &&
+      svg.includes('data-visualtex-output-letter-font="helvetica"') &&
+      svg.includes('data-visualtex-output-text-font="kaiti"')
+    ) {
+      const customLetterTextCount = (svg.match(/data-visualtex-output-letter-font=/g) ?? []).length;
+      const customChineseTextCount = (svg.match(/data-visualtex-output-text-font=/g) ?? []).length;
+      const remainingMathJaxUses = [...svg.matchAll(/<use\b([^>]*)>/gi)].map((match) => ({
+        codePoint: match[1].match(/\bdata-c=["']([0-9A-F]+)["']/i)?.[1] ?? "",
+        href: match[1].match(/\bxlink:href=["']#([^"']+)["']/i)?.[1] ?? "",
+      }));
+      const remainingMathJaxUseCount = remainingMathJaxUses.length;
+      return {
+        host,
+        formulaLetterFont: exportResult.formulaLetterFont,
+        formulaChineseFont: exportResult.formulaChineseFont,
+        hasLetterMarker: true,
+        hasChineseMarker: true,
+        customLetterTextCount,
+        customChineseTextCount,
+        remainingMathJaxUseCount,
+        remainingMathJaxUses,
+        svgLength: svg.length,
+      };
+    }
+    await sleep(100);
+  }
+  throw new Error(
+    `Timed out waiting for ${host} Office OLE font export: ${JSON.stringify(lastSessionPatch)}`,
+  );
 }
 
 async function readAppearance(client) {
@@ -370,7 +422,7 @@ async function main() {
       formulaToolButtonSize: 60,
       formulaToolButtonPadding: 10,
       formulaRowVerticalInset: 13,
-      formulaLetterFont: "stix",
+      formulaLetterFont: "helvetica",
       formulaChineseFont: "kaiti",
       keypadMinimizeOnCopy: true,
     };
@@ -383,7 +435,7 @@ async function main() {
         synchronized.editorLayout === "standard" &&
         synchronized.zoom === 1.2 &&
         synchronized.formulaInsetLeft === 18 &&
-        synchronized.formulaLetterFont === "stix"
+        synchronized.formulaLetterFont === "helvetica"
       ) break;
     }
     assert.deepEqual(synchronized, {
@@ -395,7 +447,7 @@ async function main() {
       formulaToolButtonSize: 60,
       formulaToolButtonPadding: 10,
       formulaRowVerticalInset: 13,
-      formulaLetterFont: "stix",
+      formulaLetterFont: "helvetica",
       formulaChineseFont: "kaiti",
       keypadMinimizeOnCopy: true,
       background: "#0d120f",
@@ -404,8 +456,16 @@ async function main() {
       caret: "#8bd4ac",
     });
 
+    const wordOleFontExport = await waitForFontExportPatch("word");
+
+    currentSessionHost = "powerpoint";
+    lastSessionPatch = null;
+    await client.send("Page.reload", { ignoreCache: true });
+    await sleep(350);
+    const powerPointOleFontExport = await waitForFontExportPatch("powerpoint");
+
     process.stdout.write(
-      "Windows Office theme and editor-layout inheritance regression passed\n",
+      `Windows Office theme/editor-layout inheritance and OLE font export regression passed: ${JSON.stringify({ wordOleFontExport, powerPointOleFontExport })}\n`,
     );
   } finally {
     client?.close();

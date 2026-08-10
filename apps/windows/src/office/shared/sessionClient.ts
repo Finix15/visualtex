@@ -1,5 +1,9 @@
 import { readResponseErrorMessage } from "../../errors/readErrorMessage";
 import type { FormulaDocument } from "../../types/formula";
+import type {
+  FormulaChineseFont,
+  FormulaLetterFont,
+} from "../../editor/formulaFontPreferences";
 import type { CustomThemeState } from "../../themeCustomization";
 import type { VisualTeXFormulaMetadata } from "./formulaMetadata";
 
@@ -26,6 +30,8 @@ export interface OfficeExportResult {
   width: number;
   height: number;
   baseline?: number;
+  formulaLetterFont?: FormulaLetterFont;
+  formulaChineseFont?: FormulaChineseFont;
 }
 
 export interface NativePowerPointCommitSelection {

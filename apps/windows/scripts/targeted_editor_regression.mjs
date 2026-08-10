@@ -1370,9 +1370,16 @@ async function main() {
         const strip = toolbar?.querySelector(".template-strip");
         const builder = toolbar?.querySelector(".matrix-builder");
         const grid = toolbar?.querySelector(".matrix-size-grid");
+        const delimiterOptions = toolbar?.querySelector(".matrix-delimiter-options");
+        const delimiterButtons = [...(delimiterOptions?.querySelectorAll("button") ?? [])];
         const stripRect = strip?.getBoundingClientRect();
         const builderRect = builder?.getBoundingClientRect();
         const gridRect = grid?.getBoundingClientRect();
+        const delimiterRect = delimiterOptions?.getBoundingClientRect();
+        const maxDelimiterRight = delimiterButtons.reduce(
+          (right, button) => Math.max(right, button.getBoundingClientRect().right),
+          0,
+        );
         const rowCount = Number(toolbar?.dataset.toolbarRowCount || 0);
         return {
           ready:
@@ -1381,11 +1388,18 @@ async function main() {
             builderRect.top >= stripRect.top - 1 &&
             builderRect.bottom <= stripRect.bottom + 1 &&
             gridRect.top >= builderRect.top - 1 &&
-            gridRect.bottom <= builderRect.bottom + 1,
+            gridRect.bottom <= builderRect.bottom + 1 &&
+            delimiterButtons.length === 6 &&
+            Boolean(delimiterRect) &&
+            maxDelimiterRight <= gridRect.left - 1 &&
+            delimiterRect.right <= gridRect.left - 1,
           rowCount,
           stripHeight: stripRect?.height ?? 0,
           builderHeight: builderRect?.height ?? 0,
           gridHeight: gridRect?.height ?? 0,
+          delimiterCount: delimiterButtons.length,
+          delimiterRight: maxDelimiterRight,
+          gridLeft: gridRect?.left ?? 0,
         };
       })()`, "compact two-row matrix toolbar");
 
@@ -1418,8 +1432,14 @@ async function main() {
         const toolbar = document.querySelector(".classic-bottom-toolbar");
         const builder = toolbar?.querySelector(".matrix-builder");
         const grid = toolbar?.querySelector(".matrix-size-grid");
+        const delimiterOptions = toolbar?.querySelector(".matrix-delimiter-options");
+        const delimiterButtons = [...(delimiterOptions?.querySelectorAll("button") ?? [])];
         const builderRect = builder?.getBoundingClientRect();
         const gridRect = grid?.getBoundingClientRect();
+        const maxDelimiterRight = delimiterButtons.reduce(
+          (right, button) => Math.max(right, button.getBoundingClientRect().right),
+          0,
+        );
         const rowCount = Number(toolbar?.dataset.toolbarRowCount || 0);
         return {
           ready:
@@ -1428,10 +1448,15 @@ async function main() {
             gridRect.height >= ${compactMatrixState.gridHeight + 24} &&
             gridRect.height <= 153 &&
             gridRect.top >= builderRect.top - 1 &&
-            gridRect.bottom <= builderRect.bottom + 1,
+            gridRect.bottom <= builderRect.bottom + 1 &&
+            delimiterButtons.length === 6 &&
+            maxDelimiterRight <= gridRect.left - 1,
           rowCount,
           builderHeight: builderRect?.height ?? 0,
           gridHeight: gridRect?.height ?? 0,
+          delimiterCount: delimiterButtons.length,
+          delimiterRight: maxDelimiterRight,
+          gridLeft: gridRect?.left ?? 0,
         };
       })()`, "matrix picker grows with toolbar height");
       await client.send("Input.dispatchMouseEvent", {
@@ -7613,10 +7638,107 @@ async function main() {
       if (!interfaceCustomizationLayout.visible || !interfaceCustomizationLayout.portalToBody) {
         throw new Error(`Interface customization is still clipped by Settings: ${JSON.stringify(interfaceCustomizationLayout)}`);
       }
+
+      await evaluate(`(() => {
+        const input = document.querySelector('[data-formula-inset-left-setting]');
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+        setter.call(input, '72');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      })()`);
+      const insetAndPreviewState = await waitForEvaluation(`(() => {
+        const surface = document.querySelector('.editor-surface.multi-line-editor');
+        const row = document.querySelector('.formula-line');
+        const field = row?.querySelector('math-field');
+        const content = field?.shadowRoot?.querySelector('[part="content"]');
+        const surfaceRect = surface?.getBoundingClientRect();
+        const rowRect = row?.getBoundingClientRect();
+        const contentRect = content?.getBoundingClientRect();
+        const previewButtons = [...document.querySelectorAll(
+          '[data-formula-inset-preview] .formula-inset-preview-toolbar > span',
+        )];
+        const previewContained = previewButtons.every((button) => {
+          const buttonRect = button.getBoundingClientRect();
+          const preview = button.querySelector('.math-preview');
+          const previewRect = preview?.getBoundingClientRect();
+          const visual = preview?.querySelector('.ML__latex');
+          const visualRect = visual?.getBoundingClientRect();
+          return Boolean(
+            previewRect && visualRect &&
+            previewRect.left >= buttonRect.left - 1 &&
+            previewRect.right <= buttonRect.right + 1 &&
+            previewRect.top >= buttonRect.top - 1 &&
+            previewRect.bottom <= buttonRect.bottom + 1 &&
+            visualRect.left >= buttonRect.left - 1 &&
+            visualRect.right <= buttonRect.right + 1 &&
+            visualRect.top >= buttonRect.top - 1 &&
+            visualRect.bottom <= buttonRect.bottom + 1
+          );
+        });
+        const rowInset = rowRect && surfaceRect ? rowRect.left - surfaceRect.left : -1;
+        const contentInset = contentRect && rowRect ? contentRect.left - rowRect.left : -1;
+        return {
+          ready:
+            Boolean(surfaceRect && rowRect && contentRect) &&
+            Math.abs(rowInset - 72) <= 2 &&
+            contentInset >= -1 && contentInset <= 4 &&
+            previewButtons.length === 3 &&
+            previewContained,
+          rowInset,
+          contentInset,
+          previewCount: previewButtons.length,
+          previewContained,
+        };
+      })()`, "formula inset controls move MathLive content and preview stays contained");
+      if (!insetAndPreviewState.previewContained) {
+        throw new Error(`Settings live preview overflowed its toolbar tiles: ${JSON.stringify(insetAndPreviewState)}`);
+      }
       await evaluate(`document.querySelector('[data-interface-customization-close]')?.click()`);
       await waitForEvaluation(`(() => ({
         ready: !document.querySelector('[data-interface-customization-dialog]'),
       }))()`, "close interface customization portal");
+
+      await evaluate(`document.querySelector('[data-interface-customization-trigger]')?.click()`);
+      await waitForEvaluation(`(() => ({
+        ready: Boolean(document.querySelector('[data-interface-customization-dialog]')),
+      }))()`, "reopen interface customization for font preview");
+      await evaluate(`(() => {
+        const letter = document.querySelector('[data-formula-letter-font-setting]');
+        const chinese = document.querySelector('[data-formula-chinese-font-setting]');
+        letter.value = 'helvetica';
+        letter.dispatchEvent(new Event('change', { bubbles: true }));
+        chinese.value = 'kaiti';
+        chinese.dispatchEvent(new Event('change', { bubbles: true }));
+      })()`);
+      const formulaFontPreviewState = await waitForEvaluation(`(() => {
+        const preview = document.querySelector('[data-formula-font-preview]');
+        const mathLetter = preview?.querySelector('.ML__mathit, .ML__latin');
+        const chineseText = [...(preview?.querySelectorAll('.ML__text, .ML__textord') ?? [])]
+          .find((node) => (node.textContent ?? '').includes('中文'));
+        const letterFamily = mathLetter ? getComputedStyle(mathLetter).fontFamily : '';
+        const chineseFamily = chineseText ? getComputedStyle(chineseText).fontFamily : '';
+        const persisted = JSON.parse(localStorage.getItem('visualtex-editor') || '{}');
+        return {
+          ready:
+            Boolean(mathLetter && chineseText) &&
+            /Arial|Helvetica/i.test(letterFamily) &&
+            /KaiTi|Kaiti/i.test(chineseFamily) &&
+            persisted.state?.formulaLetterFont === 'helvetica' &&
+            persisted.state?.formulaChineseFont === 'kaiti',
+          letterFamily,
+          chineseFamily,
+          letterSetting: persisted.state?.formulaLetterFont ?? '',
+          chineseSetting: persisted.state?.formulaChineseFont ?? '',
+        };
+      })()`, "formula font live preview follows selected western and Chinese fonts");
+      if (!/Arial|Helvetica/i.test(formulaFontPreviewState.letterFamily)
+        || !/KaiTi|Kaiti/i.test(formulaFontPreviewState.chineseFamily)) {
+        throw new Error(`Formula font preview ignored selected fonts: ${JSON.stringify(formulaFontPreviewState)}`);
+      }
+      await evaluate(`document.querySelector('[data-interface-customization-close]')?.click()`);
+      await waitForEvaluation(`(() => ({
+        ready: !document.querySelector('[data-interface-customization-dialog]'),
+      }))()`, "close interface customization after font preview");
 
       const powerPointDefaultSaved = await waitForEvaluation(`(() => {
         const input = document.querySelector(

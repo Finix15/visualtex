@@ -162,6 +162,21 @@ internal static partial class Program
             AssertReferenceText(document, referenceBookmark, "(1-1)");
             AssertReferenceText(document, legacyReferenceBookmark, "(1-1)");
 
+            ApplyEquationNumberFormat(
+                addIn,
+                document,
+                EquationNumberFormat.Heading2DotId,
+                formulas,
+                new[] { "1.0.1", "1.0.2", "1.1.1", "2.0.1", "2.1.1", "2.1.2" });
+            ApplyEquationNumberFormat(
+                addIn,
+                document,
+                EquationNumberFormat.Heading1DashId,
+                formulas,
+                new[] { "1-1", "1-2", "1-3", "2-1", "2-2", "2-3" });
+            AssertReferenceText(document, referenceBookmark, "(1-1)");
+            AssertReferenceText(document, legacyReferenceBookmark, "(1-1)");
+
             document.SaveAs2(outputPath, Word.WdSaveFormat.wdFormatXMLDocument);
             document.Close(Word.WdSaveOptions.wdDoNotSaveChanges);
             Release(document);
@@ -442,6 +457,7 @@ internal static partial class Program
         IReadOnlyList<string> expectedNumbers)
     {
         var control = new EquationNumberRibbonControl(formatId);
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         addIn.OnEquationNumberFormatChanged(control, pressed: true);
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
         Exception? lastError = null;
@@ -455,6 +471,9 @@ internal static partial class Program
                     formatId,
                     formulas,
                     expectedNumbers);
+                stopwatch.Stop();
+                Console.WriteLine(
+                    $"  Equation-number format {formatId}: {formulas.Count} formulas in {stopwatch.ElapsedMilliseconds} ms.");
                 return;
             }
             catch (Exception error)

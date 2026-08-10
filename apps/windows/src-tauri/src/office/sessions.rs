@@ -86,6 +86,10 @@ pub struct OfficeExportResult {
     pub width: f64,
     pub height: f64,
     pub baseline: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formula_letter_font: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formula_chinese_font: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,6 +124,10 @@ pub struct VisualTeXFormulaMetadata {
     pub font_size_pt: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub render_font_size_pt: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formula_letter_font: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formula_chinese_font: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_omml_fingerprint: Option<String>,
     pub created_with_version: String,
@@ -824,6 +832,8 @@ mod tests {
                 baseline: Some(15.0),
                 font_size_pt: Some(14.0),
                 render_font_size_pt: Some(14.0),
+                formula_letter_font: Some("times".to_string()),
+                formula_chinese_font: Some("kaiti".to_string()),
                 native_omml_fingerprint: None,
                 created_with_version: "1.1.4".to_string(),
                 updated_with_version: "1.1.4".to_string(),
@@ -991,6 +1001,8 @@ mod tests {
             baseline: None,
             font_size_pt: None,
             render_font_size_pt: None,
+            formula_letter_font: None,
+            formula_chinese_font: None,
             native_omml_fingerprint: None,
             created_with_version: "1.0.6".to_string(),
             updated_with_version: "1.0.6".to_string(),

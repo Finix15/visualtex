@@ -1,4 +1,10 @@
 import { deflateSync, inflateSync, strFromU8, strToU8 } from "fflate";
+import {
+  FORMULA_CHINESE_FONT_OPTIONS,
+  FORMULA_LETTER_FONT_OPTIONS,
+  type FormulaChineseFont,
+  type FormulaLetterFont,
+} from "../../editor/formulaFontPreferences";
 
 export interface VisualTeXFormulaMetadata {
   schema: "visualtex-formula";
@@ -23,6 +29,9 @@ export interface VisualTeXFormulaMetadata {
   fontSizePt?: number;
   /** Point size used to create the current cached SVG/EMF/PNG preview. */
   renderFontSizePt?: number;
+  /** VisualTeX font preferences used for this formula's rendered/native Office form. */
+  formulaLetterFont?: FormulaLetterFont;
+  formulaChineseFont?: FormulaChineseFont;
   /** Physical Word inline OLE extent retained across OLE/OMML conversions. */
   wordInlineOleWidthPt?: number;
   wordInlineOleHeightPt?: number;
@@ -47,6 +56,8 @@ export interface CreateFormulaMetadataInput {
   baseline?: number;
   fontSizePt?: number;
   renderFontSizePt?: number;
+  formulaLetterFont?: FormulaLetterFont;
+  formulaChineseFont?: FormulaChineseFont;
   wordInlineOleWidthPt?: number;
   wordInlineOleHeightPt?: number;
   appVersion?: string;
@@ -153,6 +164,14 @@ export function isVisualTeXFormulaMetadata(
         candidate.renderFontSizePt >= 5 &&
         candidate.renderFontSizePt <= 200 &&
         Math.abs(candidate.renderFontSizePt * 2 - Math.round(candidate.renderFontSizePt * 2)) < 1e-6)) &&
+    (candidate.formulaLetterFont === undefined ||
+      FORMULA_LETTER_FONT_OPTIONS.some(
+        (item) => item.id === candidate.formulaLetterFont,
+      )) &&
+    (candidate.formulaChineseFont === undefined ||
+      FORMULA_CHINESE_FONT_OPTIONS.some(
+        (item) => item.id === candidate.formulaChineseFont,
+      )) &&
     ((candidate.wordInlineOleWidthPt === undefined &&
       candidate.wordInlineOleHeightPt === undefined) ||
       (candidate.displayMode === "inline" &&
@@ -185,6 +204,8 @@ export function createFormulaMetadata({
   baseline,
   fontSizePt,
   renderFontSizePt,
+  formulaLetterFont,
+  formulaChineseFont,
   wordInlineOleWidthPt,
   wordInlineOleHeightPt,
   appVersion = CURRENT_VISUALTEX_VERSION,
@@ -256,6 +277,12 @@ export function createFormulaMetadata({
     ...(resolvedBaseline !== undefined ? { baseline: resolvedBaseline } : {}),
     fontSizePt: resolvedFontSize,
     renderFontSizePt: resolvedRenderFontSize,
+    ...(formulaLetterFont ?? original?.formulaLetterFont
+      ? { formulaLetterFont: formulaLetterFont ?? original?.formulaLetterFont }
+      : {}),
+    ...(formulaChineseFont ?? original?.formulaChineseFont
+      ? { formulaChineseFont: formulaChineseFont ?? original?.formulaChineseFont }
+      : {}),
     ...resolvedInlineOleSize,
     ...(original?.nativeOmmlFingerprint
       ? { nativeOmmlFingerprint: original.nativeOmmlFingerprint }

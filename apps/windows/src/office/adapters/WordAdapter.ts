@@ -1040,6 +1040,8 @@ export class WordAdapter implements OfficeHostAdapter {
       renderWidthPx: session.exportResult?.width ?? session.exportWidth,
       renderHeightPx: session.exportResult?.height ?? session.exportHeight,
       baseline: session.exportResult?.baseline,
+      formulaLetterFont: session.exportResult?.formulaLetterFont,
+      formulaChineseFont: session.exportResult?.formulaChineseFont,
       original: session.originalMetadata,
     });
     await putCachedFormulaMetadata(metadata);

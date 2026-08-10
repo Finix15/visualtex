@@ -1705,6 +1705,16 @@ fn metadata_from_session(session: &OfficeFormulaSession) -> VisualTeXFormulaMeta
             .as_ref()
             .map(|_| session.font_size_pt)
             .or_else(|| original.and_then(|value| value.render_font_size_pt)),
+        formula_letter_font: session
+            .export_result
+            .as_ref()
+            .and_then(|value| value.formula_letter_font.clone())
+            .or_else(|| original.and_then(|value| value.formula_letter_font.clone())),
+        formula_chinese_font: session
+            .export_result
+            .as_ref()
+            .and_then(|value| value.formula_chinese_font.clone())
+            .or_else(|| original.and_then(|value| value.formula_chinese_font.clone())),
         native_omml_fingerprint: original
             .and_then(|value| value.native_omml_fingerprint.clone()),
         created_with_version: original
@@ -2651,6 +2661,8 @@ mod tests {
                 width: 120.0,
                 height: 30.0,
                 baseline: Some(22.0),
+                formula_letter_font: Some("times".to_string()),
+                formula_chinese_font: Some("kaiti".to_string()),
             }),
             original_metadata: None,
             dirty,
