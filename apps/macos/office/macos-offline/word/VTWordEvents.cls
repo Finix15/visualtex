@@ -24,12 +24,23 @@ End Sub
 Private Sub App_DocumentOpen(ByVal Doc As Word.Document)
     On Error Resume Next
     VTEnsureImageMacroMigrationScheduled
+    VTInvalidateWordEquationNumberingFormatControl
     On Error GoTo 0
 End Sub
 
 Private Sub App_NewDocument(ByVal Doc As Word.Document)
     On Error Resume Next
     VTEnsureImageMacroMigrationScheduled
+    VTInvalidateWordEquationNumberingFormatControl
+    On Error GoTo 0
+End Sub
+
+Private Sub App_WindowActivate( _
+    ByVal Doc As Word.Document, _
+    ByVal Wn As Word.Window)
+
+    On Error Resume Next
+    VTInvalidateWordEquationNumberingFormatControl
     On Error GoTo 0
 End Sub
 

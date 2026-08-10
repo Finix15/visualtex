@@ -4455,6 +4455,72 @@ fn extract_omath_fragment(word_open_xml: &str) -> Result<String, String> {
     Ok(fragment)
 }
 
+fn find_xml_start_tag(value: &str, tag: &str, start: usize) -> Option<usize> {
+    let exact = format!("<{tag}>");
+    let attributed = format!("<{tag} ");
+    [exact.as_str(), attributed.as_str()]
+        .iter()
+        .filter_map(|marker| value[start..].find(marker).map(|offset| start + offset))
+        .min()
+}
+
+fn strip_visualtex_numbered_equation_array(fragment: &str) -> Option<String> {
+    // VisualTeX display numbering is represented as one OMML Equation Array:
+    //   <m:eqArr><m:e>FORMULA <m:r><m:t>#</m:t>...</m:r>
+    //                    <m:d>REF VT_N_...</m:d></m:e></m:eqArr>
+    // Word expands WordOpenXML requested from only the FORMULA Range back to
+    // that complete OMath container, so VBA cannot crop the XML by Range alone.
+    // Strip only this exact VisualTeX-owned signature before the standard Word
+    // OMML -> MathML transform. Ordinary Word Equation Arrays remain untouched.
+    let eq_array_start = find_xml_start_tag(fragment, "m:eqArr", 0)?;
+    let eq_array_end_offset = fragment[eq_array_start..].find("</m:eqArr>")?;
+    let eq_array_end = eq_array_start + eq_array_end_offset;
+    let eq_array = &fragment[eq_array_start..eq_array_end];
+    if !eq_array.contains("REF VT_N_") {
+        return None;
+    }
+
+    let marker_relative = eq_array.rfind("<m:t>#</m:t>")?;
+    let marker = eq_array_start + marker_relative;
+    if !fragment[marker..eq_array_end].contains("REF VT_N_") {
+        return None;
+    }
+    let marker_run_start = ["<m:r>", "<m:r "]
+        .iter()
+        .filter_map(|tag| fragment[..marker].rfind(tag))
+        .max()?;
+    if marker_run_start < eq_array_start {
+        return None;
+    }
+    let marker_run_end_offset = fragment[marker..eq_array_end].find("</m:r>")?;
+    let marker_run_end = marker + marker_run_end_offset + "</m:r>".len();
+    if marker_run_end >= eq_array_end {
+        return None;
+    }
+
+    let properties_end = fragment[eq_array_start..marker_run_start]
+        .find("</m:eqArrPr>")
+        .map(|offset| eq_array_start + offset + "</m:eqArrPr>".len())
+        .unwrap_or(eq_array_start);
+    let entry_start = find_xml_start_tag(fragment, "m:e", properties_end)?;
+    if entry_start >= marker_run_start {
+        return None;
+    }
+    let entry_tag_end = fragment[entry_start..marker_run_start].find('>')? + entry_start;
+    let body_start = entry_tag_end + 1;
+    if body_start >= marker_run_start {
+        return None;
+    }
+    let body = fragment[body_start..marker_run_start].trim();
+    if body.is_empty() {
+        return None;
+    }
+
+    let omath_tag_end = fragment.find('>')?;
+    let omath_start = &fragment[..=omath_tag_end];
+    Some(format!("{omath_start}{body}</m:oMath>"))
+}
+
 fn decode_xslt_output(bytes: &[u8]) -> Result<String, String> {
     if bytes.starts_with(&[0xff, 0xfe]) || bytes.starts_with(&[0xfe, 0xff]) {
         let little_endian = bytes.starts_with(&[0xff, 0xfe]);
@@ -4481,6 +4547,7 @@ fn decode_xslt_output(bytes: &[u8]) -> Result<String, String> {
 
 pub(crate) fn word_omml_to_mathml(word_open_xml: &str) -> Result<String, String> {
     let fragment = extract_omath_fragment(word_open_xml)?;
+    let fragment = strip_visualtex_numbered_equation_array(&fragment).unwrap_or(fragment);
     let stylesheet = Path::new(
         "/Applications/Microsoft Word.app/Contents/Resources/omml2mathml.xsl",
     );
@@ -6053,6 +6120,71 @@ pub fn get_macos_offline_plugin_health() -> Result<Vec<MacOfflinePluginHealth>, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strips_only_visualtex_numbered_equation_array_wrapper() {
+        let numbered = concat!(
+            "<m:oMath xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\" ",
+            "xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">",
+            "<m:eqArr><m:eqArrPr/><m:e>",
+            "<m:r><m:t>x</m:t></m:r>",
+            "<m:r><m:t>#</m:t></m:r>",
+            "<m:d><m:e><m:r><m:t> REF VT_N_12345678 </m:t></m:r></m:e></m:d>",
+            "</m:e></m:eqArr></m:oMath>"
+        );
+        let stripped = strip_visualtex_numbered_equation_array(numbered)
+            .expect("VisualTeX numbered Equation Array should be stripped");
+        assert!(stripped.contains("<m:r><m:t>x</m:t></m:r>"));
+        assert!(!stripped.contains("<m:eqArr"));
+        assert!(!stripped.contains("<m:t>#</m:t>"));
+        assert!(!stripped.contains("VT_N_"));
+        assert!(stripped.starts_with("<m:oMath "));
+        assert!(stripped.ends_with("</m:oMath>"));
+
+        let ordinary = concat!(
+            "<m:oMath xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\">",
+            "<m:eqArr><m:eqArrPr/><m:e><m:r><m:t>x=y</m:t></m:r></m:e></m:eqArr>",
+            "</m:oMath>"
+        );
+        assert!(strip_visualtex_numbered_equation_array(ordinary).is_none());
+
+        let unrelated_hash = concat!(
+            "<m:oMath xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\">",
+            "<m:eqArr><m:eqArrPr/><m:e>",
+            "<m:r><m:t>x</m:t></m:r><m:r><m:t>#</m:t></m:r>",
+            "<m:r><m:t>ordinary text</m:t></m:r>",
+            "</m:e></m:eqArr></m:oMath>"
+        );
+        assert!(strip_visualtex_numbered_equation_array(unrelated_hash).is_none());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn numbered_equation_array_omml_to_latex_excludes_visualtex_number_field() {
+        let numbered = concat!(
+            "<m:oMath xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\" ",
+            "xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">",
+            "<m:eqArr><m:eqArrPr><m:maxDist m:val=\"1\"/></m:eqArrPr><m:e>",
+            "<m:sSup><m:e><m:r><m:t>x</m:t></m:r></m:e>",
+            "<m:sup><m:r><m:t>2</m:t></m:r></m:sup></m:sSup>",
+            "<m:r><m:rPr><m:sty m:val=\"p\"/></m:rPr><m:t>#</m:t></m:r>",
+            "<m:d><m:e><m:r><w:fldChar w:fldCharType=\"begin\"/></m:r>",
+            "<m:r><m:t xml:space=\"preserve\"> REF VT_N_12345678 </m:t></m:r>",
+            "<m:r><w:fldChar w:fldCharType=\"end\"/></m:r></m:e></m:d>",
+            "</m:e></m:eqArr></m:oMath>"
+        );
+        let math_ml = word_omml_to_mathml(numbered)
+            .expect("Word should convert the stripped formula body to MathML");
+        assert!(!math_ml.contains("VT_N_"));
+        assert!(!math_ml.contains("REF"));
+        let latex = crate::office::omml_batch::mathml_to_latex(&math_ml)
+            .expect("the stripped MathML should convert to LaTeX");
+        assert!(latex.contains('x'));
+        assert!(latex.contains('2'));
+        assert!(!latex.contains("VT_N_"));
+        assert!(!latex.contains("REF"));
+        assert!(!latex.contains("\\#"));
+    }
 
     #[test]
     fn formula_restore_manifest_from_environment_is_valid() {

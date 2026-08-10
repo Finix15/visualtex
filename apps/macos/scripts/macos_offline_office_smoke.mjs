@@ -297,6 +297,9 @@ expectIncludes(wordAdapter, "VTWriteLatexRedrawSource sessionId, sourceText", "W
 expectIncludes(wordAdapter, "VTResolveLatexRedrawWordOffsets", "Word redraw must resolve parser offsets against the live Word text before rendering and commit");
 expectIncludes(wordAdapter, "VTLatexRedrawWordOffsetsMatch", "Word redraw must verify exact source text before accepting an offset mode");
 expectIncludes(wordAdapter, "VTBuildWordOffsetsFromUtf16", "Word redraw must retain a supplementary-Unicode compatibility fallback when direct UTF-16 offsets do not match");
+expectIncludes(wordAdapter, "VTFindLatexRedrawWordOffsetsByVisibleText", "Word redraw must fall back to Word Find when hidden Field instructions make visible-text offsets diverge from Range coordinates");
+expectIncludes(wordAdapter, "Range coordinates include hidden Field instructions", "Word redraw must document why numbered formulas can invalidate raw parser offsets without any user text edit");
+expectIncludes(wordAdapter, 'Replace$(searchPrefix, "^", "^^")', "Word redraw visible-text fallback must escape LaTeX superscript carets for Word Find before exact Range verification");
 expectIncludes(wordAdapter, "Start:=targetStart + wordStarts(itemIndex)", "Word redraw must use verified Word offsets when validating and replacing source ranges");
 expectIncludes(wordAdapter, "For itemIndex = itemCount - 1 To 0 Step -1", "Word redraw must replace exact source ranges from right to left");
 expectIncludes(wordAdapter, "preserveParagraphTopology", "Word redraw must distinguish in-place replacement from interactive display-formula continuation behavior");
@@ -406,7 +409,17 @@ expectIncludes(rustRuntime, "pub(crate) fn word_omml_to_mathml", "The native bat
 expectIncludes(ommlBatchRuntime, "pub fn run_cli_if_requested", "The native runtime must expose the no-window OMML batch CLI");
 expectIncludes(ommlBatchRuntime, "pub fn mathml_to_latex", "The native runtime must translate MathML to LaTeX without opening the frontend");
 expectIncludes(wordAdapter, "VTWordNativeSignatureMatches", "Cached native-to-LaTeX restoration must reject formulas modified by the Word native editor");
+expectIncludes(wordAdapter, 'formulaStage = "write-native-signature"', "LaTeX redraw to OMML must persist a native structure signature after the final numbered/display structure is stable so a later restore can return the original LaTeX payload");
 expectIncludes(wordAdapter, "For itemIndex = formulaCount To 1 Step -1", "Bulk cached formula-to-LaTeX restoration must replace formulas from the end so Word ranges stay stable");
+expectIncludes(wordAdapter, "Private Function VTTryResolveFormulaRestoreNumbering", "Formula-to-LaTeX restore must resolve numbered image and native formulas by exact VisualTeX identity before mutation");
+expectIncludes(wordAdapter, "Private Function VTFormulaRestoreNumberingScaffoldOwnsRange", "Formula restore must recognize an exact live numbering scaffold even when an older document lost its matching format Variable");
+expectIncludes(rustRuntime, "strip_visualtex_numbered_equation_array", "Numbered OMML fallback conversion must remove only the verified VisualTeX eqArr/#/VT_N_ wrapper before Word OMML-to-MathML conversion");
+expectIncludes(wordAdapter, "Private Function VTReplaceFormulaRestoreRangeWithLatex", "Every formula-to-LaTeX path must use the shared numbered-structure-aware replacement helper");
+expectIncludes(wordAdapter, "legacyNumberTable.Delete", "Formula-to-LaTeX restore must remove a verified legacy 1x3 numbered table instead of leaving an empty scaffold around LaTeX");
+expectIncludes(wordAdapter, "Private Sub VTFinalizeFormulaRestoreNumbering", "Bulk formula restore must defer Equation scaffold cleanup until every source formula range has been replaced");
+expectIncludes(wordAdapter, "VTDeleteEquationNumberScaffold documentObject, formulaId, False", "Formula-to-LaTeX restore must delete the exact VT_N_/VT_R_/VT_C_ Equation scaffold and hidden SEQ helper");
+expectIncludes(wordAdapter, "Prefer the exact SEQ field result when resolving the hidden helper", "Equation scaffold deletion must resolve the hidden helper from VT_N_ before the collapsed VT_C_ paragraph-end fallback");
+expectIncludes(wordAdapter, "VTNormalizePlainWordParagraph paragraphRange", "Restored numbered LaTeX must remove the old Caption/tabbed numbering paragraph layout");
 expectIncludes(wordAdapter, "VTWriteFormulaRestoreAndLaunchSession", "Small native OMML restore requests must write both payloads and launch VisualTeX in one AppleScriptTask");
 expectIncludes(wordAdapter, "VT_WORD_FORMULA_RESTORE_COMBINED_MAX_BYTES", "Large formula restore manifests must retain the chunked compatibility fallback");
 expectIncludes(launcher, "Public Function VTWriteFormulaRestoreAndLaunchSession", "The shared Office launcher must expose the atomic formula-restore write-and-launch bridge");
@@ -777,9 +790,22 @@ expectIncludes(wordAdapter, "VTFindCommittedInlineShapeInDocument", "A newly num
 expectIncludes(wordAdapter, 'If numbered And mode = "create" Then', "Any failed numbered create, image or OMML, must remove its formula-specific numbering scaffold before restoring the source");
 expectIncludes(wordAdapter, "activeFormulaId = VTDocumentImportRequired", "Document import must remember the in-flight formula id before mutating Word so a mid-finalize failure can be rolled back completely");
 expectIncludes(wordAdapter, "VTDeleteEquationNumberScaffold _\n            targetDocument, activeFormulaId, False", "A failed in-flight document-import formula must remove its half-created VT_N_/VT_C_ numbering scaffold");
-expectIncludes(wordAdapter, "VTWordRibbonNumberingFormat", "Word must expose the Equation numbering-format Ribbon callback");
-expectIncludes(wordRibbon, 'label="编号格式"', "The compact Windows-parity Word Ribbon must expose the numbering-format command beside number refresh");
-expectIncludes(wordRibbon, 'onAction="VTWordRibbonNumberingFormat"', "The compact numbering-format control must retain its existing VBA callback");
+expectIncludes(wordAdapter, "Private Sub VTApplyEquationNumberingFormatPreset", "Word must route every numbering-format menu choice through one persistent format setter");
+for (const callback of [
+  "VTWordRibbonNumberingFormatSequence",
+  "VTWordRibbonNumberingFormatChapterDot",
+  "VTWordRibbonNumberingFormatChapterDash",
+  "VTWordRibbonNumberingFormatSectionDot",
+  "VTWordRibbonNumberingFormatSectionDash",
+]) {
+  expectIncludes(wordAdapter, `Public Sub ${callback}`, `The compact numbering-format menu must expose ${callback}`);
+  expectIncludes(wordRibbon, `onAction="${callback}"`, `The compact numbering-format menu must wire ${callback}`);
+}
+expect(!wordAdapter.includes("VisualTeX_ConfigureEquationNumberingFormat"), "Equation numbering format selection must not fall back to the legacy numeric InputBox dialog");
+expectIncludes(wordRibbon, '<menu id="VisualTeX.Mac.Word.NumberingFormat"', "The numbering-format control must keep the old compact button footprint while adding a drop-down arrow");
+expect(!wordRibbon.includes('<dropDown id="VisualTeX.Mac.Word.NumberingFormat"'), "The numbering-format control must not use the large Office dropDown that stretches the compact Ribbon rows");
+expect(!wordRibbon.includes('sizeString="按节编号 (2.3‐1)"'), "The numbering-format menu must not reserve a wide drop-down text box that distorts the Ribbon layout");
+expectIncludes(wordEvents, "VTInvalidateWordEquationNumberingFormatControl", "The numbering-format control must remain refreshable when Word opens, creates, or activates a document");
 expectIncludes(wordRibbon, '<group id="VisualTeX.Mac.Word.Group" label="VisualTeX">', "The macOS Word Ribbon must use the Windows-parity primary VisualTeX group");
 for (const rowId of [
   "VisualTeX.Mac.Word.ConvertRow",
@@ -850,10 +876,10 @@ expectIncludes(styles, "opacity: 1", "Batch-import disabled actions must not dis
 expectIncludes(styles, "border-top: 1px solid color-mix", "The batch-import footer must have a distinct high-contrast boundary");
 expectIncludes(wordRibbon, '<group id="VisualTeX.Mac.Word.FontSizeGroup" label="公式字号">', "Image formula point sizes must live in an independent Windows-parity Ribbon group");
 const numberingFormatStart = wordAdapter.indexOf(
-  "Public Sub VisualTeX_ConfigureEquationNumberingFormat()",
+  "Public Sub VTWordRibbonGetNumberingFormatItemCount(",
 );
 const numberingFormatEnd = wordAdapter.indexOf(
-  "Public Sub VisualTeX_UpdateEquationNumbers()",
+  "Public Sub VTWordRibbonOpen(",
   numberingFormatStart,
 );
 const numberingFormatSource = wordAdapter.slice(
@@ -862,13 +888,14 @@ const numberingFormatSource = wordAdapter.slice(
 );
 expect(
   numberingFormatStart >= 0 && numberingFormatEnd > numberingFormatStart,
-  "The Equation numbering-format procedure must remain discoverable for source-encoding regression checks",
+  "The Equation numbering-format callbacks must remain discoverable for source-encoding regression checks",
 );
 expect(
   !/[\u3400-\u9fff]/u.test(numberingFormatSource),
-  "The macOS VBA numbering-format dialog must generate every Chinese string through VTUnicodeText instead of source-code-page text",
+  "The macOS VBA numbering-format compatibility callbacks must generate Chinese labels through VTUnicodeText instead of source-code-page text",
 );
-expectIncludes(numberingFormatSource, "VTUnicodeText(", "The numbering-format dialog must construct its labels and prompts at runtime as Unicode");
+expectIncludes(numberingFormatSource, "VTUnicodeText(", "The numbering-format compatibility callbacks must construct their Chinese labels at runtime as Unicode");
+expect(!numberingFormatSource.includes("InputBox("), "The numbering-format drop-down must never ask the user to type a numeric option");
 expectIncludes(wordAdapter, "numberFontSizePt = VTVisibleEquationNumberFontSize", "Image Equation numbers must use the same document-level number size as native OMath numbers");
 expectIncludes(wordAdapter, "sourceHeightPoints = target.Height", "Image-to-OMML conversion must preserve the source formula height for number alignment");
 expectIncludes(wordAdapter, "VTEnsureNativeEquationNumber", "Image-to-OMML conversion must rebuild the shared numbered table around the native formula");

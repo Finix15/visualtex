@@ -35,6 +35,8 @@ Private Const VT_WORD_MIN_FORMULA_FONT_SIZE_PT As Double = 1#
 Private Const VT_WORD_MAX_FORMULA_FONT_SIZE_PT As Double = 512#
 Private Const VT_WORD_IMAGE_FONT_CONTROL_ID As String = _
     "VisualTeX.Mac.Word.ImageFontSize"
+Private Const VT_WORD_NUMBERING_FORMAT_CONTROL_ID As String = _
+    "VisualTeX.Mac.Word.NumberingFormat"
 Private Const VT_WORD_IMAGE_EDIT_MACRO As String = _
     "VisualTeX_EditImageField"
 Private Const VT_WORD_IMAGE_MACRO_SCHEMA_VARIABLE As String = _
@@ -5536,16 +5538,24 @@ Private Sub VTDeleteEquationNumberScaffold( _
         End If
         On Error GoTo 0
     End If
-    If documentObject.Bookmarks.Exists(captionBookmarkName) Then
-        Set sequenceHelperParagraph = documentObject.Bookmarks( _
-            captionBookmarkName).Range.Paragraphs(1).Range.Duplicate
-    ElseIf documentObject.Bookmarks.Exists(sequenceBookmarkName) Then
+    ' Prefer the exact SEQ field result when resolving the hidden helper.
+    ' VT_C_ is a collapsed Bookmark at the end of that helper paragraph; on
+    ' Word for Mac, Paragraphs(1) from a zero-length paragraph-end Range can
+    ' resolve to the following body paragraph. That left the real SEQ helper
+    ' behind after formula-to-LaTeX restoration even though VT_N_/VT_C_ were
+    ' already deleted. The VT_N_ result is the durable helper identity.
+    If documentObject.Bookmarks.Exists(sequenceBookmarkName) Then
         Set sequenceField = VTEquationSequenceFieldForBookmark( _
             documentObject, sequenceBookmarkName)
         If Not sequenceField Is Nothing Then
             Set sequenceHelperParagraph = _
                 sequenceField.Result.Paragraphs(1).Range.Duplicate
         End If
+    End If
+    If sequenceHelperParagraph Is Nothing And _
+       documentObject.Bookmarks.Exists(captionBookmarkName) Then
+        Set sequenceHelperParagraph = documentObject.Bookmarks( _
+            captionBookmarkName).Range.Paragraphs(1).Range.Duplicate
     End If
 
     VTReplaceDeletedEquationBodyReferences _
@@ -6205,6 +6215,237 @@ Private Function VTFormulaRestoreSelectionRange( _
     Set VTFormulaRestoreSelectionRange = formulaMath.Range.Duplicate
 End Function
 
+Private Function VTFormulaRestoreNumberingScaffoldOwnsRange( _
+    ByVal sourceRange As Range, _
+    ByVal formulaId As String) As Boolean
+
+    Dim documentObject As Document
+    Dim numberedRange As Range
+    Dim exactSource As Range
+    Dim exactNumbered As Range
+
+    If sourceRange Is Nothing Or Not VTIsCanonicalUuid(formulaId) Then
+        Exit Function
+    End If
+    Set documentObject = sourceRange.Document
+    If Not documentObject.Bookmarks.Exists( _
+       VTEquationNumberBookmarkName(formulaId)) And _
+       Not documentObject.Bookmarks.Exists( _
+       VTEquationSequenceNumberBookmarkName(formulaId)) And _
+       Not documentObject.Bookmarks.Exists( _
+       VTEquationCaptionBookmarkName(formulaId)) Then Exit Function
+
+    Set numberedRange = VTNumberedFormulaRangeForId( _
+        documentObject, formulaId)
+    If numberedRange Is Nothing Then Exit Function
+
+    If sourceRange.OMaths.Count = 1 And _
+       sourceRange.InlineShapes.Count = 0 Then
+        Set exactSource = sourceRange.OMaths(1).Range.Duplicate
+    ElseIf sourceRange.InlineShapes.Count = 1 And _
+           sourceRange.OMaths.Count = 0 Then
+        Set exactSource = sourceRange.InlineShapes(1).Range.Duplicate
+    Else
+        Exit Function
+    End If
+
+    If numberedRange.OMaths.Count = 1 And _
+       numberedRange.InlineShapes.Count = 0 Then
+        Set exactNumbered = numberedRange.OMaths(1).Range.Duplicate
+    ElseIf numberedRange.InlineShapes.Count = 1 And _
+           numberedRange.OMaths.Count = 0 Then
+        Set exactNumbered = numberedRange.InlineShapes(1).Range.Duplicate
+    Else
+        Exit Function
+    End If
+
+    VTFormulaRestoreNumberingScaffoldOwnsRange = _
+        (exactNumbered.Start = exactSource.Start And _
+         exactNumbered.End = exactSource.End)
+End Function
+
+Private Function VTTryResolveFormulaRestoreNumbering( _
+    ByVal sourceRange As Range, _
+    ByRef formulaId As String, _
+    ByRef legacyNumberTable As Table) As Boolean
+
+    Dim formulaShape As InlineShape
+    Dim nativeBookmark As Bookmark
+    Dim displayMode As String
+    Dim encodedMetadata As String
+    Dim metadataNeedsWrite As Boolean
+    Dim formatNeedsWrite As Boolean
+    Dim numbered As Boolean
+    Dim tableFormulaId As String
+
+    formulaId = ""
+    Set legacyNumberTable = Nothing
+    If sourceRange Is Nothing Then Exit Function
+
+    If sourceRange.InlineShapes.Count = 1 And _
+       sourceRange.OMaths.Count = 0 Then
+        Set formulaShape = sourceRange.InlineShapes(1)
+        If Not VTTryResolveVisualTeXInlineShapeReference( _
+           formulaShape, formulaId, displayMode, numbered, _
+           encodedMetadata, metadataNeedsWrite, formatNeedsWrite) Then
+            formulaId = ""
+            Exit Function
+        End If
+    ElseIf sourceRange.InlineShapes.Count = 0 And _
+           sourceRange.OMaths.Count = 1 Then
+        Set nativeBookmark = VTFindNativeFormulaBookmark( _
+            sourceRange.OMaths(1).Range, False)
+        If nativeBookmark Is Nothing Then Exit Function
+        If Not VTTryFormulaIdFromNativeBookmark( _
+           nativeBookmark.Name, formulaId) Then
+            formulaId = ""
+            Exit Function
+        End If
+        If VTFormulaRestoreNumberingScaffoldOwnsRange( _
+           sourceRange, formulaId) Then
+            displayMode = "block"
+            numbered = True
+        ElseIf Not VTTryReadWordFormulaFormat( _
+           sourceRange.Document, formulaId, displayMode, numbered) Then
+            formulaId = ""
+            Exit Function
+        End If
+    Else
+        Exit Function
+    End If
+
+    If displayMode <> "block" Or Not numbered Or _
+       Not VTIsCanonicalUuid(formulaId) Then
+        formulaId = ""
+        Exit Function
+    End If
+
+    If sourceRange.Information(wdWithInTable) Then
+        Set legacyNumberTable = sourceRange.Tables(1)
+        tableFormulaId = VTFormulaIdForValidNumberedTable( _
+            legacyNumberTable)
+        If StrComp(tableFormulaId, formulaId, vbTextCompare) <> 0 Then
+            Err.Raise vbObjectError + 7595, "VisualTeX", _
+                "The numbered formula is inside an unrecognized Word table."
+        End If
+    End If
+
+    VTTryResolveFormulaRestoreNumbering = True
+End Function
+
+Private Function VTReplaceFormulaRestoreRangeWithLatex( _
+    ByVal sourceRange As Range, _
+    ByVal replacementText As String, _
+    ByRef mutationOccurred As Boolean, _
+    ByVal numberedFormulaIds As Collection, _
+    ByVal numberedRestoreRanges As Collection) As Range
+
+    Dim targetDocument As Document
+    Dim insertionRange As Range
+    Dim restoredRange As Range
+    Dim legacyNumberTable As Table
+    Dim formulaId As String
+    Dim insertionStart As Long
+    Dim wasNumbered As Boolean
+
+    If sourceRange Is Nothing Or Len(replacementText) = 0 Then
+        Err.Raise vbObjectError + 7595, "VisualTeX", _
+            "The formula restore replacement is invalid."
+    End If
+    If numberedFormulaIds Is Nothing Or numberedRestoreRanges Is Nothing Then
+        Err.Raise vbObjectError + 7595, "VisualTeX", _
+            "The formula restore numbering plan is missing."
+    End If
+    Set targetDocument = sourceRange.Document
+    wasNumbered = VTTryResolveFormulaRestoreNumbering( _
+        sourceRange, formulaId, legacyNumberTable)
+
+    If Not legacyNumberTable Is Nothing Then
+        insertionStart = legacyNumberTable.Range.Start
+        mutationOccurred = True
+        legacyNumberTable.Delete
+    Else
+        insertionStart = sourceRange.Start
+        mutationOccurred = True
+        sourceRange.Delete
+    End If
+
+    Set insertionRange = targetDocument.Range( _
+        Start:=insertionStart, End:=insertionStart)
+    insertionRange.Text = replacementText
+    Set restoredRange = targetDocument.Range( _
+        Start:=insertionStart, _
+        End:=insertionStart + Len(replacementText))
+
+    If wasNumbered Then
+        numberedFormulaIds.Add formulaId
+        numberedRestoreRanges.Add restoredRange.Duplicate
+    End If
+
+    Set VTReplaceFormulaRestoreRangeWithLatex = restoredRange
+End Function
+
+Private Sub VTFinalizeFormulaRestoreNumbering( _
+    ByVal documentObject As Document, _
+    ByVal numberedFormulaIds As Collection, _
+    ByVal numberedRestoreRanges As Collection)
+
+    Dim restoredRange As Range
+    Dim paragraphRange As Range
+    Dim prefixRange As Range
+    Dim suffixRange As Range
+    Dim formulaId As String
+    Dim paragraphContentEnd As Long
+    Dim itemIndex As Long
+
+    If documentObject Is Nothing Or numberedFormulaIds Is Nothing Or _
+       numberedRestoreRanges Is Nothing Then Exit Sub
+    If numberedFormulaIds.Count <> numberedRestoreRanges.Count Then
+        Err.Raise vbObjectError + 7595, "VisualTeX", _
+            "The formula restore numbering plan is inconsistent."
+    End If
+
+    ' Defer scaffold cleanup until every source formula has already been
+    ' replaced. VTDeleteEquationNumberScaffold also freezes body REF fields;
+    ' doing that between range replacements can shift Word positions for an
+    ' earlier formula in the same bulk restore.
+    For itemIndex = 1 To numberedFormulaIds.Count
+        formulaId = CStr(numberedFormulaIds(itemIndex))
+        VTDeleteEquationNumberScaffold documentObject, formulaId, False
+    Next itemIndex
+
+    For itemIndex = 1 To numberedRestoreRanges.Count
+        Set restoredRange = numberedRestoreRanges(itemIndex)
+        If restoredRange Is Nothing Then GoTo NextRange
+        Set paragraphRange = restoredRange.Paragraphs(1).Range.Duplicate
+        Set prefixRange = documentObject.Range( _
+            Start:=paragraphRange.Start, End:=restoredRange.Start)
+        If Not VTWordRangeHasMeaningfulText(prefixRange) Then
+            prefixRange.Text = ""
+        End If
+
+        Set paragraphRange = restoredRange.Paragraphs(1).Range.Duplicate
+        paragraphContentEnd = paragraphRange.End
+        If paragraphContentEnd > paragraphRange.Start Then
+            If documentObject.Range( _
+               Start:=paragraphContentEnd - 1, _
+               End:=paragraphContentEnd).Text = vbCr Then
+                paragraphContentEnd = paragraphContentEnd - 1
+            End If
+        End If
+        If restoredRange.End < paragraphContentEnd Then
+            Set suffixRange = documentObject.Range( _
+                Start:=restoredRange.End, End:=paragraphContentEnd)
+            If Not VTWordRangeHasMeaningfulText(suffixRange) Then
+                suffixRange.Text = ""
+            End If
+        End If
+        Set paragraphRange = restoredRange.Paragraphs(1).Range.Duplicate
+        VTNormalizePlainWordParagraph paragraphRange
+NextRange:
+    Next itemIndex
+End Sub
+
 Private Function VTCollectFormulaRestoreTargets( _
     ByVal targetRange As Range, _
     ByVal sourceKind As String) As Collection
@@ -6295,6 +6536,10 @@ Private Function VTFormulaRestoreManifest( _
             If Not VTValidWordFormulaFontSize(fontSizePt) Then
                 fontSizePt = VTPreferredWordFormulaFontSize(sourceRange)
             End If
+            ' Word expands WordOpenXML for a partial OMath Range back to the
+            ' entire OMath container. Pass the exact complete XML here; the
+            ' native converter removes only the verified VisualTeX eqArr/#/VT_N_
+            ' numbering wrapper before OMML -> MathML conversion.
             payload = sourceRange.WordOpenXML
         Else
             Set formulaShape = targets(itemIndex)
@@ -6346,6 +6591,8 @@ Private Sub VTCommitSynchronousOmmlLatexResult( _
     Dim sourceRange As Range
     Dim rollbackRange As Range
     Dim undoRecord As Object
+    Dim numberedFormulaIds As Collection
+    Dim numberedRestoreRanges As Collection
     Dim sourceStarts() As Long
     Dim sourceEnds() As Long
     Dim sourceTexts() As String
@@ -6442,6 +6689,8 @@ Private Sub VTCommitSynchronousOmmlLatexResult( _
     undoRecordStarted = True
     VTBeginWordInternalMutation
     internalMutationStarted = True
+    Set numberedFormulaIds = New Collection
+    Set numberedRestoreRanges = New Collection
     anchorBookmark.Delete
 
     For itemIndex = itemCount - 1 To 0 Step -1
@@ -6449,9 +6698,12 @@ Private Sub VTCommitSynchronousOmmlLatexResult( _
         Set sourceRange = targetDocument.Range( _
             Start:=targetStart + sourceStarts(itemIndex), _
             End:=targetStart + sourceEnds(itemIndex))
-        sourceRange.Text = replacementTexts(itemIndex)
-        mutationOccurred = True
+        Set sourceRange = VTReplaceFormulaRestoreRangeWithLatex( _
+            sourceRange, replacementTexts(itemIndex), mutationOccurred, _
+            numberedFormulaIds, numberedRestoreRanges)
     Next itemIndex
+    VTFinalizeFormulaRestoreNumbering _
+        targetDocument, numberedFormulaIds, numberedRestoreRanges
 
     If internalMutationStarted Then
         VTEndWordInternalMutation
@@ -6797,6 +7049,8 @@ Private Function VTRestoreCachedImageFormulasToLatex( _
     Dim containerRange As Range
     Dim replacementRange As Range
     Dim undoRecord As Object
+    Dim numberedFormulaIds As Collection
+    Dim numberedRestoreRanges As Collection
     Dim formulaId As String
     Dim displayMode As String
     Dim numbered As Boolean
@@ -6867,13 +7121,18 @@ Private Function VTRestoreCachedImageFormulasToLatex( _
     undoRecordStarted = True
     VTBeginWordInternalMutation
     internalMutationStarted = True
+    Set numberedFormulaIds = New Collection
+    Set numberedRestoreRanges = New Collection
     For itemIndex = formulaCount To 1 Step -1
         Set replacementRange = targetDocument.Range( _
             Start:=sourceStarts(itemIndex), _
             End:=sourceEnds(itemIndex))
-        replacementRange.Text = replacementTexts(itemIndex)
-        mutationOccurred = True
+        Set replacementRange = VTReplaceFormulaRestoreRangeWithLatex( _
+            replacementRange, replacementTexts(itemIndex), mutationOccurred, _
+            numberedFormulaIds, numberedRestoreRanges)
     Next itemIndex
+    VTFinalizeFormulaRestoreNumbering _
+        targetDocument, numberedFormulaIds, numberedRestoreRanges
     If internalMutationStarted Then
         VTEndWordInternalMutation
         internalMutationStarted = False
@@ -7659,6 +7918,8 @@ Private Function VTRestoreCachedNativeFormulasToLatex( _
     Dim nativeBookmark As Bookmark
     Dim replacementRange As Range
     Dim undoRecord As Object
+    Dim numberedFormulaIds As Collection
+    Dim numberedRestoreRanges As Collection
     Dim formulaId As String
     Dim displayMode As String
     Dim numbered As Boolean
@@ -7721,13 +7982,18 @@ Private Function VTRestoreCachedNativeFormulasToLatex( _
     undoRecordStarted = True
     VTBeginWordInternalMutation
     internalMutationStarted = True
+    Set numberedFormulaIds = New Collection
+    Set numberedRestoreRanges = New Collection
     For itemIndex = formulaCount To 1 Step -1
         Set replacementRange = targetDocument.Range( _
             Start:=sourceStarts(itemIndex), _
             End:=sourceEnds(itemIndex))
-        replacementRange.Text = replacementTexts(itemIndex)
-        mutationOccurred = True
+        Set replacementRange = VTReplaceFormulaRestoreRangeWithLatex( _
+            replacementRange, replacementTexts(itemIndex), mutationOccurred, _
+            numberedFormulaIds, numberedRestoreRanges)
     Next itemIndex
+    VTFinalizeFormulaRestoreNumbering _
+        targetDocument, numberedFormulaIds, numberedRestoreRanges
     If internalMutationStarted Then
         VTEndWordInternalMutation
         internalMutationStarted = False
@@ -7960,6 +8226,117 @@ NotMatched:
     VTLatexRedrawWordOffsetsMatch = False
 End Function
 
+Private Function VTExactLatexTextRangeAt( _
+    ByVal documentObject As Document, _
+    ByVal candidateStart As Long, _
+    ByVal targetEnd As Long, _
+    ByVal sourceText As String) As Range
+
+    Dim candidateRange As Range
+    Dim utf16Cursor As Long
+    Dim wordCursor As Long
+    Dim rawLength As Long
+    Dim wordLength As Long
+
+    If documentObject Is Nothing Or Len(sourceText) = 0 Or _
+       candidateStart < 0 Or candidateStart >= targetEnd Then Exit Function
+
+    rawLength = Len(sourceText)
+    If candidateStart + rawLength <= targetEnd Then
+        Set candidateRange = documentObject.Range( _
+            Start:=candidateStart, End:=candidateStart + rawLength)
+        If StrComp(candidateRange.Text, sourceText, vbBinaryCompare) = 0 Then
+            Set VTExactLatexTextRangeAt = candidateRange.Duplicate
+            Exit Function
+        End If
+    End If
+
+    utf16Cursor = 0
+    wordCursor = 0
+    wordLength = VTAdvanceWordOffsetToUtf16Boundary( _
+        sourceText, Len(sourceText), utf16Cursor, wordCursor)
+    If wordLength > 0 And wordLength <> rawLength And _
+       candidateStart + wordLength <= targetEnd Then
+        Set candidateRange = documentObject.Range( _
+            Start:=candidateStart, End:=candidateStart + wordLength)
+        If StrComp(candidateRange.Text, sourceText, vbBinaryCompare) = 0 Then
+            Set VTExactLatexTextRangeAt = candidateRange.Duplicate
+        End If
+    End If
+End Function
+
+Private Function VTFindLatexRedrawWordOffsetsByVisibleText( _
+    ByVal documentObject As Document, _
+    ByVal targetStart As Long, _
+    ByVal targetEnd As Long, _
+    ByRef sourceTexts() As String, _
+    ByVal itemCount As Long, _
+    ByRef candidateStarts() As Long, _
+    ByRef candidateEnds() As Long) As Boolean
+
+    Const VT_FIND_PREFIX_LENGTH As Long = 180
+
+    Dim searchRange As Range
+    Dim exactRange As Range
+    Dim searchText As String
+    Dim searchPrefix As String
+    Dim searchStart As Long
+    Dim itemIndex As Long
+    Dim foundItem As Boolean
+
+    If documentObject Is Nothing Or itemCount < 1 Or _
+       targetEnd <= targetStart Then Exit Function
+
+    ReDim candidateStarts(0 To itemCount - 1)
+    ReDim candidateEnds(0 To itemCount - 1)
+    searchStart = targetStart
+
+    On Error GoTo NotFound
+    For itemIndex = 0 To itemCount - 1
+        searchText = sourceTexts(itemIndex)
+        If Len(searchText) = 0 Then Exit Function
+        searchPrefix = Left$(searchText, VT_FIND_PREFIX_LENGTH)
+        ' Word Find treats ^ sequences as special tokens even when wildcard
+        ' matching is disabled. LaTeX uses ^ constantly for superscripts, so
+        ' double each caret to request a literal caret from Word Find.
+        searchPrefix = Replace$(searchPrefix, "^", "^^")
+        foundItem = False
+
+        Do While searchStart < targetEnd
+            Set searchRange = documentObject.Range( _
+                Start:=searchStart, End:=targetEnd)
+            With searchRange.Find
+                .ClearFormatting
+                .Text = searchPrefix
+                .Forward = True
+                .Wrap = wdFindStop
+                .Format = False
+                .MatchCase = True
+                .MatchWildcards = False
+            End With
+            If Not searchRange.Find.Execute Then Exit Do
+
+            Set exactRange = VTExactLatexTextRangeAt( _
+                documentObject, searchRange.Start, targetEnd, searchText)
+            If Not exactRange Is Nothing Then
+                candidateStarts(itemIndex) = exactRange.Start - targetStart
+                candidateEnds(itemIndex) = exactRange.End - targetStart
+                searchStart = exactRange.End
+                foundItem = True
+                Exit Do
+            End If
+            searchStart = searchRange.Start + 1
+        Loop
+        If Not foundItem Then Exit Function
+    Next itemIndex
+
+    VTFindLatexRedrawWordOffsetsByVisibleText = True
+    Exit Function
+
+NotFound:
+    VTFindLatexRedrawWordOffsetsByVisibleText = False
+End Function
+
 Private Sub VTResolveLatexRedrawWordOffsets( _
     ByVal documentObject As Document, _
     ByVal targetStart As Long, _
@@ -7995,8 +8372,24 @@ Private Sub VTResolveLatexRedrawWordOffsets( _
         Exit Sub
     End If
 
+    ' Word Range coordinates include hidden Field instructions even though
+    ' Range.Text exposes only their visible result. Numbered formulas before a
+    ' LaTeX source therefore make parser text offsets diverge from raw Word
+    ' positions. Resolve the literal LaTeX spans through Word Find as the final,
+    ' exact fallback instead of misreporting that the document text changed.
+    If VTFindLatexRedrawWordOffsetsByVisibleText( _
+       documentObject, targetStart, targetEnd, sourceTexts, itemCount, _
+       wordStarts, wordEnds) Then
+        If VTLatexRedrawWordOffsetsMatch( _
+           documentObject, targetStart, targetEnd, sourceTexts, itemCount, _
+           wordStarts, wordEnds) Then
+            Exit Sub
+        End If
+    End If
+
     Err.Raise vbObjectError + 7594, "VisualTeX", _
-        "Word text changed before LaTeX redraw rendering."
+        "Word could not resolve the current LaTeX source ranges. " & _
+        "Reopen redraw from the current document."
 End Sub
 
 Private Sub VTStartWordLatexRedraw( _
@@ -8199,6 +8592,7 @@ Public Sub VTWordRibbonOnLoad(ByVal ribbon As IRibbonUI)
     VTEnsureOrphanWatchScheduled
     VTEnsureImageSizeWatchScheduled
     VTInvalidateWordImageFontSizeControl
+    VTInvalidateWordEquationNumberingFormatControl
     VTRefreshWordHealthQuietly
 End Sub
 
@@ -8266,8 +8660,142 @@ Public Sub VTWordRibbonNumbering(ByVal control As IRibbonControl)
     VisualTeX_UpdateEquationNumbers
 End Sub
 
-Public Sub VTWordRibbonNumberingFormat(ByVal control As IRibbonControl)
-    VisualTeX_ConfigureEquationNumberingFormat
+Public Sub VTWordRibbonGetNumberingFormatItemCount( _
+    ByVal control As IRibbonControl, _
+    ByRef returnedValue)
+
+    returnedValue = 5
+End Sub
+
+Public Sub VTWordRibbonGetNumberingFormatItemLabel( _
+    ByVal control As IRibbonControl, _
+    ByVal itemIndex As Integer, _
+    ByRef returnedValue)
+
+    Select Case itemIndex
+        Case 0
+            returnedValue = VTUnicodeText(39034, 24207, 32534, 21495) & _
+                " (1)"
+        Case 1
+            returnedValue = VTUnicodeText(25353, 31456, 32534, 21495) & _
+                " (2.1)"
+        Case 2
+            returnedValue = VTUnicodeText(25353, 31456, 32534, 21495) & _
+                " (2" & ChrW(8208) & "1)"
+        Case 3
+            returnedValue = VTUnicodeText(25353, 33410, 32534, 21495) & _
+                " (2.3.1)"
+        Case 4
+            returnedValue = VTUnicodeText(25353, 33410, 32534, 21495) & _
+                " (2.3" & ChrW(8208) & "1)"
+        Case Else
+            returnedValue = VTUnicodeText(32534, 21495, 26684, 24335)
+    End Select
+End Sub
+
+Public Sub VTWordRibbonGetNumberingFormatSelectedIndex( _
+    ByVal control As IRibbonControl, _
+    ByRef returnedValue)
+
+    Dim numberingMode As String
+    Dim separatorText As String
+
+    returnedValue = 0
+    On Error GoTo SelectedFinished
+    If Documents.Count > 0 Then
+        numberingMode = VTEquationNumberingMode(ActiveDocument)
+        separatorText = VTEquationNumberingSeparator(ActiveDocument)
+    ElseIf Not VTTryReadEquationNumberingPreference( _
+       numberingMode, separatorText) Then
+        Exit Sub
+    End If
+
+    Select Case numberingMode
+        Case VT_WORD_NUMBERING_MODE_CHAPTER
+            If separatorText = "-" Then
+                returnedValue = 2
+            Else
+                returnedValue = 1
+            End If
+        Case VT_WORD_NUMBERING_MODE_SECTION
+            If separatorText = "-" Then
+                returnedValue = 4
+            Else
+                returnedValue = 3
+            End If
+        Case Else
+            returnedValue = 0
+    End Select
+
+SelectedFinished:
+End Sub
+
+Private Sub VTApplyEquationNumberingFormatPreset(ByVal selectedIndex As Integer)
+    Dim numberingMode As String
+    Dim separatorText As String
+
+    On Error GoTo Failed
+    If Documents.Count = 0 Then
+        Err.Raise vbObjectError + 7401, "VisualTeX", _
+            "Open a Word document first."
+    End If
+
+    Select Case selectedIndex
+        Case 0
+            numberingMode = VT_WORD_NUMBERING_MODE_SEQUENCE
+            separatorText = "."
+        Case 1
+            numberingMode = VT_WORD_NUMBERING_MODE_CHAPTER
+            separatorText = "."
+        Case 2
+            numberingMode = VT_WORD_NUMBERING_MODE_CHAPTER
+            separatorText = "-"
+        Case 3
+            numberingMode = VT_WORD_NUMBERING_MODE_SECTION
+            separatorText = "."
+        Case 4
+            numberingMode = VT_WORD_NUMBERING_MODE_SECTION
+            separatorText = "-"
+        Case Else
+            Exit Sub
+    End Select
+
+    VTSetEquationNumberingFormat _
+        ActiveDocument, numberingMode, separatorText
+    VTInvalidateWordEquationNumberingFormatControl
+    VisualTeX_UpdateEquationNumbers
+    Exit Sub
+
+Failed:
+    VTShowError "equation numbering format", Err.Number, Err.Description
+End Sub
+
+Public Sub VTWordRibbonApplyNumberingFormat( _
+    ByVal control As IRibbonControl, _
+    ByVal selectedId As String, _
+    ByVal selectedIndex As Integer)
+
+    VTApplyEquationNumberingFormatPreset selectedIndex
+End Sub
+
+Public Sub VTWordRibbonNumberingFormatSequence(ByVal control As IRibbonControl)
+    VTApplyEquationNumberingFormatPreset 0
+End Sub
+
+Public Sub VTWordRibbonNumberingFormatChapterDot(ByVal control As IRibbonControl)
+    VTApplyEquationNumberingFormatPreset 1
+End Sub
+
+Public Sub VTWordRibbonNumberingFormatChapterDash(ByVal control As IRibbonControl)
+    VTApplyEquationNumberingFormatPreset 2
+End Sub
+
+Public Sub VTWordRibbonNumberingFormatSectionDot(ByVal control As IRibbonControl)
+    VTApplyEquationNumberingFormatPreset 3
+End Sub
+
+Public Sub VTWordRibbonNumberingFormatSectionDash(ByVal control As IRibbonControl)
+    VTApplyEquationNumberingFormatPreset 4
 End Sub
 
 Public Sub VTWordRibbonOpen(ByVal control As IRibbonControl)
@@ -10716,98 +11244,6 @@ Failed:
     VTShowError "Word image formula conversion", Err.Number, Err.Description
 End Sub
 
-Public Sub VisualTeX_ConfigureEquationNumberingFormat()
-    Dim modeChoice As String
-    Dim separatorChoice As String
-    Dim numberingMode As String
-    Dim separatorText As String
-    Dim currentMode As String
-    Dim currentDescription As String
-    Dim promptText As String
-    Dim dialogTitle As String
-
-    On Error GoTo Failed
-    If Documents.Count = 0 Then
-        Err.Raise vbObjectError + 7401, "VisualTeX", _
-            "Open a Word document first."
-    End If
-    dialogTitle = "VisualTeX " & _
-        VTUnicodeText(32534, 21495, 26684, 24335, 35774, 32622)
-    currentMode = VTEquationNumberingMode(ActiveDocument)
-    Select Case currentMode
-        Case VT_WORD_NUMBERING_MODE_CHAPTER
-            currentDescription = VTUnicodeText(25353, 31456, 32534, 21495)
-        Case VT_WORD_NUMBERING_MODE_SECTION
-            currentDescription = VTUnicodeText(25353, 33410, 32534, 21495)
-        Case Else
-            currentDescription = VTUnicodeText(39034, 24207, 32534, 21495)
-    End Select
-
-    promptText = VTUnicodeText( _
-        35831, 36873, 25321, 20844, 24335, 32534, 21495, 26041, 24335, 65306)
-    promptText = promptText & vbCrLf & VTUnicodeText( _
-        49, 32, 32, 39034, 24207, 32534, 21495, 65292, 20363, 22914, _
-        32, 40, 49, 41, 12289, 40, 50, 41)
-    promptText = promptText & vbCrLf & VTUnicodeText( _
-        50, 32, 32, 25353, 31456, 32534, 21495, 65292, 20363, 22914, _
-        32, 40, 50, 46, 49, 41)
-    promptText = promptText & vbCrLf & VTUnicodeText( _
-        51, 32, 32, 25353, 33410, 32534, 21495, 65292, 20363, 22914, _
-        32, 40, 50, 46, 51, 46, 49, 41)
-    promptText = promptText & vbCrLf & vbCrLf & _
-        VTUnicodeText(24403, 21069, 35774, 32622, 65306) & currentDescription
-    modeChoice = InputBox(Prompt:=promptText, Title:=dialogTitle)
-    If Len(Trim$(modeChoice)) = 0 Then Exit Sub
-    Select Case Trim$(modeChoice)
-        Case "1"
-            numberingMode = VT_WORD_NUMBERING_MODE_SEQUENCE
-            separatorText = "."
-        Case "2"
-            numberingMode = VT_WORD_NUMBERING_MODE_CHAPTER
-        Case "3"
-            numberingMode = VT_WORD_NUMBERING_MODE_SECTION
-        Case Else
-            Err.Raise vbObjectError + 7596, "VisualTeX", _
-                VTUnicodeText( _
-                    35831, 36755, 20837, 32, 49, 12289, 50, 32, 25110, 32, _
-                    51, 12290)
-    End Select
-
-    If numberingMode <> VT_WORD_NUMBERING_MODE_SEQUENCE Then
-        promptText = VTUnicodeText( _
-            35831, 36873, 25321, 26631, 39064, 32534, 21495, 19982, 20844, _
-            24335, 24207, 21495, 20043, 38388, 30340, 20998, 38548, 31526, _
-            65306)
-        promptText = promptText & vbCrLf & VTUnicodeText( _
-            49, 32, 32, 28857, 21495, 65292, 20363, 22914, 32, 40, 50, _
-            46, 49, 41)
-        promptText = promptText & vbCrLf & VTUnicodeText( _
-            50, 32, 32, 36830, 23383, 31526, 65292, 20363, 22914, 32, _
-            40, 50, 45, 49, 41)
-        separatorChoice = InputBox(Prompt:=promptText, Title:=dialogTitle)
-        If Len(Trim$(separatorChoice)) = 0 Then Exit Sub
-        Select Case Trim$(separatorChoice)
-            Case "1", "."
-                separatorText = "."
-            Case "2", "-"
-                separatorText = "-"
-            Case Else
-                Err.Raise vbObjectError + 7596, "VisualTeX", _
-                    VTUnicodeText( _
-                        35831, 36755, 20837, 32, 49, 32, 25110, 32, 50, _
-                        12290)
-        End Select
-    End If
-
-    VTSetEquationNumberingFormat _
-        ActiveDocument, numberingMode, separatorText
-    VisualTeX_UpdateEquationNumbers
-    Exit Sub
-
-Failed:
-    VTShowError "equation numbering format", Err.Number, Err.Description
-End Sub
-
 Public Sub VisualTeX_UpdateEquationNumbers()
     Dim updated As Long
     Dim movedHelpers As Long
@@ -11706,14 +12142,16 @@ Private Sub VTDocumentImportInsertFormula( _
         formulaRange.Font.Size = CSng(fontSizePt)
         formulaStage = "bookmark-native-final"
         VTSetNativeFormulaBookmark targetDocument, formulaRange, formulaId
-        formulaStage = "resolve-native-before-caret"
+        formulaStage = "resolve-native-before-signature"
         Set nativeMath = VTNativeMathForBookmark( _
             targetDocument.Bookmarks( _
                 VTNativeFormulaBookmarkName(formulaId)))
         If nativeMath Is Nothing Then
             Err.Raise vbObjectError + 7584, "VisualTeX", _
-                "Word lost the imported native equation before caret placement."
+                "Word lost the imported native equation before structure caching."
         End If
+        formulaStage = "write-native-signature"
+        VTSetWordNativeSignature targetDocument, formulaId, nativeMath
         Set formulaRange = nativeMath.Range.Duplicate
         insertedFormulaIds.Add formulaId
 
@@ -12373,6 +12811,8 @@ Private Sub VTCommitWordLatexRedrawDispatch( _
     Dim sharedVectorDocument As Document
     Dim undoRecord As Object
     Dim insertedFormulaIds As Collection
+    Dim numberedFormulaIds As Collection
+    Dim numberedRestoreRanges As Collection
     Dim sourceStarts() As Long
     Dim sourceEnds() As Long
     Dim wordStarts() As Long
@@ -12603,6 +13043,8 @@ Private Sub VTCommitWordLatexRedrawDispatch( _
     End If
     undoRecordStarted = True
     Set insertedFormulaIds = New Collection
+    Set numberedFormulaIds = New Collection
+    Set numberedRestoreRanges = New Collection
     VTBeginWordInternalMutation
     internalMutationStarted = True
     anchorBookmark.Delete
@@ -12616,26 +13058,30 @@ Private Sub VTCommitWordLatexRedrawDispatch( _
             Start:=targetStart + wordStarts(itemIndex), _
             End:=targetStart + wordEnds(itemIndex))
         itemKind = VTDocumentImportRequired(manifest, itemIndex, "kind")
-        sourceRange.Delete
-        mutationOccurred = True
-        Set cursorRange = targetDocument.Range( _
-            Start:=targetStart + wordStarts(itemIndex), _
-            End:=targetStart + wordStarts(itemIndex))
         If itemKind = "text" Then
             replacementText = VTBase64UrlDecodeUtf8( _
                 VTDocumentImportRequired( _
                     manifest, itemIndex, "textBase64"))
-            cursorRange.Text = replacementText
+            Set cursorRange = VTReplaceFormulaRestoreRangeWithLatex( _
+                sourceRange, replacementText, mutationOccurred, _
+                numberedFormulaIds, numberedRestoreRanges)
             cursorRange.Collapse wdCollapseEnd
-        ElseIf sharedVectorDocument Is Nothing Then
-            VTDocumentImportInsertFormula _
-                cursorRange, manifest, itemIndex, outputKind, _
-                insertedFormulaIds, sourceFontSizes(itemIndex), True
         Else
-            VTDocumentImportInsertFormula _
-                cursorRange, manifest, itemIndex, outputKind, _
-                insertedFormulaIds, sourceFontSizes(itemIndex), True, _
-                sharedVectorDocument
+            sourceRange.Delete
+            mutationOccurred = True
+            Set cursorRange = targetDocument.Range( _
+                Start:=targetStart + wordStarts(itemIndex), _
+                End:=targetStart + wordStarts(itemIndex))
+            If sharedVectorDocument Is Nothing Then
+                VTDocumentImportInsertFormula _
+                    cursorRange, manifest, itemIndex, outputKind, _
+                    insertedFormulaIds, sourceFontSizes(itemIndex), True
+            Else
+                VTDocumentImportInsertFormula _
+                    cursorRange, manifest, itemIndex, outputKind, _
+                    insertedFormulaIds, sourceFontSizes(itemIndex), True, _
+                    sharedVectorDocument
+            End If
         End If
         completedItems = itemCount - itemIndex
         If completedItems = itemCount Or _
@@ -12644,6 +13090,11 @@ Private Sub VTCommitWordLatexRedrawDispatch( _
                 sessionId, completedItems, itemCount, "inserting"
         End If
     Next itemIndex
+
+    If operationName = "formulaRestore" And outputKind = "latex" Then
+        VTFinalizeFormulaRestoreNumbering _
+            targetDocument, numberedFormulaIds, numberedRestoreRanges
+    End If
 
     If internalMutationStarted Then
         VTEndWordInternalMutation
@@ -24313,6 +24764,14 @@ Public Sub VTInvalidateWordImageFontSizeControl()
     On Error Resume Next
     If Not VT_WORD_RIBBON Is Nothing Then
         VT_WORD_RIBBON.InvalidateControl VT_WORD_IMAGE_FONT_CONTROL_ID
+    End If
+    On Error GoTo 0
+End Sub
+
+Public Sub VTInvalidateWordEquationNumberingFormatControl()
+    On Error Resume Next
+    If Not VT_WORD_RIBBON Is Nothing Then
+        VT_WORD_RIBBON.InvalidateControl VT_WORD_NUMBERING_FORMAT_CONTROL_ID
     End If
     On Error GoTo 0
 End Sub

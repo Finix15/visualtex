@@ -56,12 +56,27 @@
                     label="更新公式编号"
                     image="VisualTeXWordUpdateNumbers"
                     onAction="VTWordRibbonNumbering"/>
-            <button id="VisualTeX.Mac.Word.NumberingFormat"
-                    label="编号格式"
-                    image="VisualTeXWordNumberingFormat"
-                    onAction="VTWordRibbonNumberingFormat"
-                    screentip="设置公式编号格式"
-                    supertip="可选择顺序编号、按章编号或按节编号，并选择点号或连字符作为分隔符。设置仅应用于当前 Word 文档。"/>
+            <menu id="VisualTeX.Mac.Word.NumberingFormat"
+                  label="编号格式"
+                  image="VisualTeXWordNumberingFormat"
+                  screentip="选择公式编号格式"
+                  supertip="从下拉菜单直接选择完整编号格式。选择后立即应用于当前文档，并记为后续新文档的默认格式。">
+              <button id="VisualTeX.Mac.Word.NumberingFormat.Sequence"
+                      label="顺序编号 (1)"
+                      onAction="VTWordRibbonNumberingFormatSequence"/>
+              <button id="VisualTeX.Mac.Word.NumberingFormat.ChapterDot"
+                      label="按章编号 (2.1)"
+                      onAction="VTWordRibbonNumberingFormatChapterDot"/>
+              <button id="VisualTeX.Mac.Word.NumberingFormat.ChapterDash"
+                      label="按章编号 (2‐1)"
+                      onAction="VTWordRibbonNumberingFormatChapterDash"/>
+              <button id="VisualTeX.Mac.Word.NumberingFormat.SectionDot"
+                      label="按节编号 (2.3.1)"
+                      onAction="VTWordRibbonNumberingFormatSectionDot"/>
+              <button id="VisualTeX.Mac.Word.NumberingFormat.SectionDash"
+                      label="按节编号 (2.3‐1)"
+                      onAction="VTWordRibbonNumberingFormatSectionDash"/>
+            </menu>
           </box>
           <box id="VisualTeX.Mac.Word.ReferenceRow" boxStyle="horizontal">
             <button id="VisualTeX.Mac.Word.CrossReference"
