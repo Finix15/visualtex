@@ -112,7 +112,11 @@ assert.equal(restored.theme, "raycast");
 assert.equal(restored.editorLayout, "classic");
 assert.equal(restored.language, "en");
 assert.equal(restored.zoom, 1.25);
-assert.equal(restored.sourceOpen, true);
+assert.equal(
+  restored.sourceOpen,
+  false,
+  "legacy document settings.sourceOpen must not override the current workspace tools/source choice",
+);
 assert.equal(restored.autoPairDelimiters, false);
 assert.equal(restored.showLineNumbers, true);
 assert.equal(restored.highlightActiveLine, false);

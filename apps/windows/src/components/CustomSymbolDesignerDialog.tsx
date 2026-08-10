@@ -564,6 +564,26 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
     if (selectedLayerId === id) setSelectedLayerId(null);
   };
 
+  useEffect(() => {
+    if (!open || !selectedLayerId) return;
+    const handleDeleteKey = (event: KeyboardEvent) => {
+      if (event.key !== "Delete" && event.key !== "Backspace") return;
+      const target = event.target;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        (target instanceof HTMLElement && target.isContentEditable)
+      ) {
+        return;
+      }
+      event.preventDefault();
+      deleteLayer(selectedLayerId);
+    };
+    window.addEventListener("keydown", handleDeleteKey);
+    return () => window.removeEventListener("keydown", handleDeleteKey);
+  }, [open, selectedLayerId]);
+
   const updateSelectedTransform = (key: string, value: number) => {
     if (!selectedLayer) return;
     updateLayer(selectedLayer.id, (layer) => ({ ...layer, transform: { ...layer.transform, [key]: value } }));

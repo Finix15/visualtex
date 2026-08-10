@@ -1658,6 +1658,43 @@
   font-size: 9px;
 }
 
+.registered-custom-symbol-toolbar-item {
+  position: relative;
+  min-width: 0;
+}
+
+.registered-custom-symbol-toolbar-item > .formula-tile-button {
+  width: 100%;
+}
+
+.registered-custom-symbol-toolbar-delete {
+  position: absolute;
+  z-index: 2;
+  top: 4px;
+  right: 4px;
+  min-width: 0;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 5px;
+  border: 1px solid color-mix(in srgb, var(--danger) 32%, var(--border));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  color: var(--danger);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: 0 1px 4px color-mix(in srgb, var(--shadow-color, #000) 14%, transparent);
+  cursor: pointer;
+}
+
+.registered-custom-symbol-toolbar-delete:hover,
+.registered-custom-symbol-toolbar-delete.is-confirming {
+  border-color: color-mix(in srgb, var(--danger) 58%, var(--border));
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface));
+}
+
 .custom-symbol-delete-warning,
 .custom-symbol-designer-legacy-warning,
 .custom-symbol-registration-status,

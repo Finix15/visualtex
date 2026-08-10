@@ -55,8 +55,10 @@ const configurationStorageKeys = [
   "visualtex-custom-formula-background-colors",
   "visualtex-desktop-editor-toolbar-open",
   "visualtex-desktop-editor-tiles-open",
+  "visualtex-desktop-editor-source-open",
   "visualtex-office-editor-toolbar-open",
   "visualtex-office-editor-tiles-open",
+  "visualtex-office-editor-source-open",
   "visualtex.ocr.model",
   "visualtex.silent-ocr.enabled",
   "visualtex.quick-ocr.capture-mode",
@@ -71,8 +73,10 @@ const configurationStorageKeys = [
 const booleanConfigurationStorageKeys = new Set<string>([
   "visualtex-desktop-editor-toolbar-open",
   "visualtex-desktop-editor-tiles-open",
+  "visualtex-desktop-editor-source-open",
   "visualtex-office-editor-toolbar-open",
   "visualtex-office-editor-tiles-open",
+  "visualtex-office-editor-source-open",
   "visualtex.silent-ocr.enabled",
 ]);
 

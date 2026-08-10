@@ -726,6 +726,19 @@ async function main() {
       "persist reopened Office editor panels",
     );
 
+    await client.evaluate(`localStorage.removeItem('visualtex-office-editor-source-open')`);
+    await client.evaluate(`location.reload()`);
+    const defaultOfficeTools = await waitForEvaluation(
+      client,
+      `(() => ({
+        ready: Boolean(document.querySelector('[data-classic-bottom-view="tools"]')),
+        toolsSelected: document.querySelector('[data-classic-bottom-view="tools"]')?.getAttribute('aria-selected') === 'true',
+        sourceSelected: document.querySelector('[data-classic-bottom-view="source"]')?.getAttribute('aria-selected') === 'true',
+      }))()`,
+      "default Office editor to formula tools",
+    );
+    assert.equal(defaultOfficeTools.toolsSelected && !defaultOfficeTools.sourceSelected, true);
+
     await clickSelectorWithPointer(client, '[data-classic-bottom-view=source]');
     await sleep(900);
     const stableSourceTab = await client.evaluate(`(() => {
@@ -736,6 +749,7 @@ async function main() {
         sourceSelected: source?.getAttribute('aria-selected') === 'true',
         toolsSelected: tools?.getAttribute('aria-selected') === 'true',
         sourcePanel: dock?.classList.contains('is-source-panel') === true,
+        preference: localStorage.getItem('visualtex-office-editor-source-open'),
       };
     })()`);
     assert.equal(
@@ -743,7 +757,33 @@ async function main() {
       true,
       'Office Formula tools / LaTeX source tab must remain on the user-selected source view beyond the 500ms companion preference poll',
     );
+    assert.equal(stableSourceTab.preference, 'true');
+    await client.evaluate(`location.reload()`);
+    const restoredOfficeSource = await waitForEvaluation(
+      client,
+      `(() => ({
+        ready: Boolean(document.querySelector('[data-classic-bottom-view="source"]')),
+        sourceSelected: document.querySelector('[data-classic-bottom-view="source"]')?.getAttribute('aria-selected') === 'true',
+      }))()`,
+      "restore Office source tab after reload",
+    );
+    assert.equal(restoredOfficeSource.sourceSelected, true);
     await clickSelectorWithPointer(client, '[data-classic-bottom-view=tools]');
+    await sleep(120);
+    assert.equal(
+      await client.evaluate(`localStorage.getItem('visualtex-office-editor-source-open')`),
+      'false',
+    );
+    await client.evaluate(`location.reload()`);
+    const restoredOfficeTools = await waitForEvaluation(
+      client,
+      `(() => ({
+        ready: Boolean(document.querySelector('[data-classic-bottom-view="tools"]')),
+        toolsSelected: document.querySelector('[data-classic-bottom-view="tools"]')?.getAttribute('aria-selected') === 'true',
+      }))()`,
+      "restore Office formula-tools tab after reload",
+    );
+    assert.equal(restoredOfficeTools.toolsSelected, true);
 
     const resizedLayoutPreference = await client.evaluate(`(() => {
       const tile = document.querySelector('.classic-tile-resizer');

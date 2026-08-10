@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -242,7 +243,11 @@ export function EditorWorkspace({
     (state) => state.highlightActiveLine,
   );
   const sourceOpen = useEditorStore((state) => state.sourceOpen);
-  const setSourceOpen = useEditorStore((state) => state.setSourceOpen);
+  const setStoredSourceOpen = useEditorStore((state) => state.setSourceOpen);
+  const setSourceOpen = (open: boolean) => {
+    writeWorkspacePanelOpen(mode, "source", open);
+    setStoredSourceOpen(open);
+  };
   const latexCodeFormat = useEditorStore((state) => state.latexCodeFormat);
   const isEn = language === "en";
   const isOfficeWorkspace = mode !== "desktop";
@@ -293,6 +298,13 @@ export function EditorWorkspace({
       );
     };
   }, [sourceFocused]);
+
+  useLayoutEffect(() => {
+    // The desktop app and Office editor are separate workspaces. Remember the
+    // user's last tools/source tab independently for each one, and default new
+    // users to the formula tools instead of the source panel.
+    setStoredSourceOpen(readWorkspacePanelOpen(mode, "source", false));
+  }, [mode, setStoredSourceOpen]);
 
   useEffect(() => {
     setClassicTileWidth(persistedClassicTileWidth);

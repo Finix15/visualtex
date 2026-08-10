@@ -13,8 +13,8 @@ pub const OFFICE_BACKGROUND_ARGUMENT: &str = "--office-background";
 pub const OFFICE_BOOTSTRAP_ARGUMENT: &str = "--office-bootstrap";
 
 const MAIN_WINDOW_SIZE_FILE: &str = "main-window-size.json";
-const DEFAULT_MAIN_WINDOW_WIDTH: f64 = 1240.0;
-const DEFAULT_MAIN_WINDOW_HEIGHT: f64 = 820.0;
+const DEFAULT_MAIN_WINDOW_WIDTH: f64 = 1182.2857142857142;
+const DEFAULT_MAIN_WINDOW_HEIGHT: f64 = 728.0;
 const MIN_MAIN_WINDOW_WIDTH: f64 = 640.0;
 const MIN_MAIN_WINDOW_HEIGHT: f64 = 480.0;
 const MAX_MAIN_WINDOW_WIDTH: f64 = 4000.0;

@@ -32,7 +32,10 @@ import {
 import { MathPreview } from "../components/MathPreview";
 import { FormulaHotkeyRecorderDialog } from "../components/FormulaHotkeyRecorderDialog";
 import { customSymbolCommands } from "../autocomplete/runtimeCommandRegistry";
-import { readCustomSymbolLibrary } from "../math/customSymbolRegistry";
+import {
+  deleteCustomSymbol,
+  readCustomSymbolLibrary,
+} from "../math/customSymbolRegistry";
 import { useCustomSymbolRevision } from "../math/customSymbolReact";
 import {
   createFormulaHotkeyTarget,
@@ -846,6 +849,8 @@ export function FormulaToolbar({
     useState<SectionEditorState | null>(null);
   const [pendingSectionDeleteId, setPendingSectionDeleteId] =
     useState<string | null>(null);
+  const [pendingCustomSymbolDeleteId, setPendingCustomSymbolDeleteId] =
+    useState<string | null>(null);
   const [contextMenu, setContextMenu] =
     useState<FormulaContextMenuState | null>(null);
   const [hotkeyTarget, setHotkeyTarget] =
@@ -1624,6 +1629,17 @@ export function FormulaToolbar({
     removeBindingsForTarget(targetId);
     setContextMenu(null);
   };
+  const requestDeleteRegisteredCustomSymbol = (symbolId: string) => {
+    if (pendingCustomSymbolDeleteId !== symbolId) {
+      setPendingCustomSymbolDeleteId(symbolId);
+      return;
+    }
+    deleteCustomSymbol(symbolId);
+    removeBindingsForTarget(
+      formulaHotkeyTargetIdForCommand(`custom-symbol:${symbolId}`),
+    );
+    setPendingCustomSymbolDeleteId(null);
+  };
   const contextBinding = contextMenu
     ? hotkeyBindings.find(
         (binding) => binding.target.id === contextMenu.target.id,
@@ -2129,29 +2145,68 @@ export function FormulaToolbar({
                     {registeredCustomSymbols.map((symbol) => {
                       const latex = `\\${symbol.command}`;
                       const command = registeredCustomSymbolCommands.get(latex);
+                      const pendingDelete = pendingCustomSymbolDeleteId === symbol.id;
                       return (
-                        <button
-                          type="button"
-                          className="formula-tile-button is-registered-custom-symbol"
+                        <div
+                          className="registered-custom-symbol-toolbar-item"
                           key={symbol.id}
-                          data-registered-custom-symbol-toolbar={symbol.id}
-                          data-registered-custom-symbol-command={symbol.command}
-                          onClick={() => {
-                            if (command) onInsert(command);
-                          }}
-                          aria-label={`${symbol.name} · ${latex}`}
-                          title={`${symbol.name} · ${latex}`}
+                          data-registered-custom-symbol-toolbar-item={symbol.id}
                         >
-                          <MathPreview
-                            latex={latex}
-                            className="formula-tile-preview"
-                            fit
-                            fluidHeight
-                          />
-                          <span className="registered-custom-symbol-toolbar-command">
-                            {latex}
-                          </span>
-                        </button>
+                          <button
+                            type="button"
+                            className="formula-tile-button is-registered-custom-symbol"
+                            data-registered-custom-symbol-toolbar={symbol.id}
+                            data-registered-custom-symbol-command={symbol.command}
+                            onClick={() => {
+                              if (command) onInsert(command);
+                            }}
+                            aria-label={`${symbol.name} · ${latex}`}
+                            title={`${symbol.name} · ${latex}`}
+                          >
+                            <MathPreview
+                              latex={latex}
+                              className="formula-tile-preview"
+                              fit
+                              fluidHeight
+                            />
+                            <span className="registered-custom-symbol-toolbar-command">
+                              {latex}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            className={`registered-custom-symbol-toolbar-delete${pendingDelete ? " is-confirming" : ""}`}
+                            data-delete-registered-custom-symbol-toolbar={symbol.id}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              requestDeleteRegisteredCustomSymbol(symbol.id);
+                            }}
+                            onBlur={() => {
+                              if (pendingDelete) setPendingCustomSymbolDeleteId(null);
+                            }}
+                            aria-label={
+                              pendingDelete
+                                ? isEn
+                                  ? `Confirm deletion of ${symbol.name}`
+                                  : `确认删除${symbol.name}`
+                                : isEn
+                                  ? `Delete ${symbol.name}`
+                                  : `删除${symbol.name}`
+                            }
+                            title={
+                              pendingDelete
+                                ? isEn
+                                  ? "Click again to confirm"
+                                  : "再次点击确认删除"
+                                : isEn
+                                  ? "Delete custom symbol"
+                                  : "删除自定义字符"
+                            }
+                          >
+                            <Trash2 size={11} />
+                            <span>{pendingDelete ? (isEn ? "Confirm" : "确认") : isEn ? "Delete" : "删除"}</span>
+                          </button>
+                        </div>
                       );
                     })}
                   </div>

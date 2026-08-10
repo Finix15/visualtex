@@ -662,10 +662,10 @@ export const useEditorStore = create<EditorState>()(
               settings.zoom === undefined
                 ? state.zoom
                 : normalizeEditorZoom(settings.zoom),
-            sourceOpen:
-              typeof settings.sourceOpen === "boolean"
-                ? settings.sourceOpen
-                : state.sourceOpen,
+            // Tools/source is workspace UI state, not formula-document state.
+            // Keep the user's current workspace choice when opening old files
+            // that still carry the legacy settings.sourceOpen field.
+            sourceOpen: state.sourceOpen,
             latexCodeFormat: isLatexCodeFormat(settings.latexCodeFormat)
               ? settings.latexCodeFormat
               : state.latexCodeFormat,

@@ -2519,12 +2519,86 @@ async function main() {
           })),
         };
       })()`, "balanced custom symbol designer on Windows");
+      await evaluate(`document.querySelector('[data-add-custom-symbol-material]')?.click()`);
+      const designerLayerBeforeDelete = await waitForEvaluation(`(() => ({
+        ready: document.querySelectorAll('[data-custom-symbol-layer]').length > 0,
+        count: document.querySelectorAll('[data-custom-symbol-layer]').length,
+      }))()`, "custom-symbol designer layer before keyboard delete");
+      await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true }))`);
+      const designerLayerAfterDelete = await waitForEvaluation(`(() => ({
+        ready: document.querySelectorAll('[data-custom-symbol-layer]').length === 0,
+        count: document.querySelectorAll('[data-custom-symbol-layer]').length,
+      }))()`, "custom-symbol designer keyboard Delete");
+      if (designerLayerBeforeDelete.count <= designerLayerAfterDelete.count) {
+        throw new Error(`Delete key did not remove the selected custom-symbol layer: ${JSON.stringify({ designerLayerBeforeDelete, designerLayerAfterDelete })}`);
+      }
       await evaluate(`document.querySelector(
         '[data-custom-symbol-designer] button[aria-label="关闭"], [data-custom-symbol-designer] button[aria-label="Close"]',
       )?.click()`);
       await waitForEvaluation(`(() => ({
         ready: !document.querySelector('[data-custom-symbol-designer]'),
       }))()`, "closed custom symbol designer");
+
+      // Registered custom symbols must expose a real, visible delete control in
+      // the toolbar. The old top-right glyph could degrade into a '?' and there
+      // was no reliable deletion path from the toolbar itself.
+      await evaluate(`(() => {
+        const key = 'visualtex.custom-symbols.v1';
+        const value = {
+          version: 1,
+          symbols: [{
+            id: 'qa-custom-symbol-delete',
+            command: 'qaacustomglyph',
+            name: 'QA custom glyph',
+            role: 'ordinary',
+            limitsBehavior: 'auto',
+            metrics: { widthEm: 1, ascentEm: 1, descentEm: 0.1 },
+            artwork: {
+              shapes: [{
+                kind: 'line', x1: 80, y1: 500, x2: 920, y2: 500,
+                fill: false, strokeWidth: 80, lineCap: 'round',
+              }],
+            },
+            ommlFallback: null,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          }],
+        };
+        const oldValue = localStorage.getItem(key);
+        const newValue = JSON.stringify(value);
+        localStorage.setItem(key, newValue);
+        window.dispatchEvent(new StorageEvent('storage', { key, oldValue, newValue }));
+      })()`);
+      const registeredDeleteState = await waitForEvaluation(`(() => {
+        const item = document.querySelector('[data-registered-custom-symbol-toolbar-item="qa-custom-symbol-delete"]');
+        const button = document.querySelector('[data-delete-registered-custom-symbol-toolbar="qa-custom-symbol-delete"]');
+        const label = button?.textContent?.trim() ?? '';
+        return {
+          ready: Boolean(item && button && /删除|Delete/.test(label)),
+          label,
+          hasSvgIcon: Boolean(button?.querySelector('svg')),
+        };
+      })()`, "visible registered custom-symbol delete button");
+      if (!registeredDeleteState.hasSvgIcon) {
+        throw new Error(`Registered custom-symbol delete control has no SVG trash icon: ${JSON.stringify(registeredDeleteState)}`);
+      }
+      await evaluate(`document.querySelector('[data-delete-registered-custom-symbol-toolbar="qa-custom-symbol-delete"]')?.click()`);
+      const firstDeleteClick = await waitForEvaluation(`(() => ({
+        ready: document.querySelector('[data-delete-registered-custom-symbol-toolbar="qa-custom-symbol-delete"]')?.classList.contains('is-confirming') === true,
+        stillPresent: Boolean(document.querySelector('[data-registered-custom-symbol-toolbar-item="qa-custom-symbol-delete"]')),
+      }))()`, "custom-symbol delete confirmation");
+      if (!firstDeleteClick.stillPresent) {
+        throw new Error('Registered custom symbol was deleted without the required confirmation click');
+      }
+      await evaluate(`document.querySelector('[data-delete-registered-custom-symbol-toolbar="qa-custom-symbol-delete"]')?.click()`);
+      await waitForEvaluation(`(() => {
+        const stored = JSON.parse(localStorage.getItem('visualtex.custom-symbols.v1') || '{"symbols":[]}');
+        return {
+          ready: !document.querySelector('[data-registered-custom-symbol-toolbar-item="qa-custom-symbol-delete"]') &&
+            !stored.symbols?.some?.((symbol) => symbol.id === 'qa-custom-symbol-delete'),
+        };
+      })()`, "delete registered custom symbol from toolbar");
+
       await waitForEvaluation(`(() => ({
         ready: Boolean(
           document.querySelector(".save-current-formula-tile:not(:disabled)"),

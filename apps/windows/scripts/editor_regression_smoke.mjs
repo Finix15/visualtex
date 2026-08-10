@@ -256,6 +256,48 @@ async function main() {
       done();
     })`);
 
+    // The desktop tools/source tab is a view preference, not document state.
+    // New users start on Formula tools; later choices survive reloads.
+    await evaluate(`(() => {
+      localStorage.removeItem('visualtex-desktop-editor-source-open');
+      const persisted = JSON.parse(localStorage.getItem('visualtex-editor') || '{}');
+      persisted.state = { ...(persisted.state || {}), sourceOpen: true };
+      localStorage.setItem('visualtex-editor', JSON.stringify(persisted));
+    })()`);
+    await reloadEditor();
+    const defaultDesktopPanel = await evaluate(`(() => ({
+      tools: document.querySelector('[data-classic-bottom-view="tools"]')?.getAttribute('aria-selected'),
+      source: document.querySelector('[data-classic-bottom-view="source"]')?.getAttribute('aria-selected'),
+      preference: localStorage.getItem('visualtex-desktop-editor-source-open'),
+    }))()`);
+    if (defaultDesktopPanel.tools !== 'true' || defaultDesktopPanel.source !== 'false') {
+      throw new Error(`New desktop users must start on Formula tools: ${JSON.stringify(defaultDesktopPanel)}`);
+    }
+    await evaluate(`document.querySelector('[data-classic-bottom-view="source"]')?.click()`);
+    await sleep(120);
+    if (await evaluate(`localStorage.getItem('visualtex-desktop-editor-source-open')`) !== 'true') {
+      throw new Error('Desktop source-tab selection was not persisted');
+    }
+    await reloadEditor();
+    const restoredDesktopSource = await evaluate(
+      `document.querySelector('[data-classic-bottom-view="source"]')?.getAttribute('aria-selected')`,
+    );
+    if (restoredDesktopSource !== 'true') {
+      throw new Error('Desktop source-tab selection did not survive reload');
+    }
+    await evaluate(`document.querySelector('[data-classic-bottom-view="tools"]')?.click()`);
+    await sleep(120);
+    if (await evaluate(`localStorage.getItem('visualtex-desktop-editor-source-open')`) !== 'false') {
+      throw new Error('Desktop formula-tools selection was not persisted');
+    }
+    await reloadEditor();
+    const restoredDesktopTools = await evaluate(
+      `document.querySelector('[data-classic-bottom-view="tools"]')?.getAttribute('aria-selected')`,
+    );
+    if (restoredDesktopTools !== 'true') {
+      throw new Error('Desktop formula-tools selection did not survive reload');
+    }
+
     const setFieldAt = async (index, latex) => {
       await evaluate(`(() => {
         const field = document.querySelectorAll("math-field")[${index}];
@@ -1121,8 +1163,21 @@ async function main() {
       throw new Error(`LaTeX code-format menu is covered by the workspace: ${JSON.stringify(formatMenuState)}`);
     }
 
+    const sourceVisibleBeforeFormatChange = await evaluate(
+      `Boolean(document.querySelector(".source-panel"))`,
+    );
     await evaluate(`document.querySelector('[data-format="align-star"]').click()`);
     await sleep(260);
+    const sourceVisibleAfterFormatChange = await evaluate(
+      `Boolean(document.querySelector(".source-panel"))`,
+    );
+    if (sourceVisibleAfterFormatChange !== sourceVisibleBeforeFormatChange) {
+      throw new Error("Selecting a LaTeX code format unexpectedly switched the tools/source panel");
+    }
+    if (!sourceVisibleAfterFormatChange) {
+      await evaluate(`document.querySelector('[data-classic-bottom-view="source"]')?.click()`);
+      await sleep(140);
+    }
     const alignFormatState = await evaluate(`(() => {
       const source = document.querySelector(".source-panel .cm-content")?.innerText ?? "";
       const persisted = JSON.parse(localStorage.getItem("visualtex-editor") || "{}");
@@ -1133,12 +1188,12 @@ async function main() {
       };
     })()`);
     if (!alignFormatState.sourceVisible) {
-      throw new Error("Selecting a LaTeX code format did not open the source panel");
+      throw new Error("The source panel could not be opened explicitly after changing the LaTeX code format");
     }
     if (
       !alignFormatState.source.includes("\\begin{align*}") ||
-      !alignFormatState.source.includes("a&=b") ||
-      !alignFormatState.source.includes("c&=d") ||
+      !alignFormatState.source.includes("a=b") ||
+      !alignFormatState.source.includes("c=d") ||
       !alignFormatState.source.includes("\\end{align*}")
     ) {
       throw new Error(`align* source was not generated correctly: ${alignFormatState.source}`);
@@ -1273,7 +1328,7 @@ async function main() {
     if (
       dirtyFormatSwitchState.dirty ||
       !dirtyFormatSwitchState.source.includes("\\begin{align*}") ||
-      !dirtyFormatSwitchState.source.includes("a&=q") ||
+      !dirtyFormatSwitchState.source.includes("a=q") ||
       dirtyFormatSwitchState.formulas[0] !== "a=q" ||
       dirtyFormatSwitchState.formulas[1] !== "c=d"
     ) {

@@ -190,8 +190,6 @@ function App() {
   );
   const formulaLetterFont = useEditorStore((state) => state.formulaLetterFont);
   const formulaChineseFont = useEditorStore((state) => state.formulaChineseFont);
-  const sourceOpen = useEditorStore((state) => state.sourceOpen);
-  const setSourceOpen = useEditorStore((state) => state.setSourceOpen);
   const latexCodeFormat = useEditorStore((state) => state.latexCodeFormat);
   const setLatexCodeFormat = useEditorStore(
     (state) => state.setLatexCodeFormat,
@@ -804,7 +802,6 @@ function App() {
   const handleCodeFormatChange = (format: LatexCodeFormat) => {
     const definition = getLatexCodeFormatDefinition(format);
     setLatexCodeFormat(format);
-    if (!keypadMode) setSourceOpen(true);
     setCopyMenuOpen(false);
     setToast(
       isEn

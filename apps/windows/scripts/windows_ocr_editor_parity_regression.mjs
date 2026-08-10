@@ -18,6 +18,7 @@ const officeDialog = await source("src/office/dialog/OfficeDialogApp.tsx");
 const officeStyles = await source("src/styles-windows-shared-latest.css");
 const latestStyles = await source("src/styles-latest-macos-ui.css");
 const tauriLib = await source("src-tauri/src/lib.rs");
+const appLifecycle = await source("src-tauri/src/app_lifecycle.rs");
 const quickOcrNative = await source("src-tauri/src/windows_quick_ocr.rs");
 const silentOcrNative = await source("src-tauri/src/windows_silent_ocr_hotkey.rs");
 const officeServer = await source("src-tauri/src/office/server.rs");
@@ -88,18 +89,25 @@ assert.ok(officeStyles.includes(".classic-bottom-formatting-slot .formula-color-
 assert.ok(officeStyles.includes("bottom: calc(100% + 8px);"));
 assert.ok(officeStyles.includes("overflow: visible;"));
 
-// Editor state must survive closing and reopening: panel dimensions continue
-// to use persisted editorStore preferences, while the native Office window now
-// persists its user-resized width/height instead of resetting to 1240x820.
+// Editor state must survive closing and reopening: panel dimensions and the
+// tools/source choice are persisted per desktop/Office workspace. Native window
+// sizes retain an existing user's saved values and use the designed dimensions
+// only as the first-run fallback.
 assert.ok(editorWorkspace.includes("persistedClassicTileWidth"));
 assert.ok(editorWorkspace.includes("persistedClassicDockHeight"));
 assert.ok(editorWorkspace.includes('readWorkspacePanelOpen(mode, "toolbar")'));
+assert.ok(editorWorkspace.includes('readWorkspacePanelOpen(mode, "source", false)'));
+assert.ok(editorWorkspace.includes('writeWorkspacePanelOpen(mode, "source", open)'));
 assert.ok(officeDialog.includes('readWorkspacePanelOpen("office-edit", "tiles"'));
+assert.ok(officeServer.includes("DEFAULT_OFFICE_EDITOR_WIDTH: f64 = 852.0"));
+assert.ok(officeServer.includes("DEFAULT_OFFICE_EDITOR_HEIGHT: f64 = 500.57142857142856"));
 assert.ok(officeServer.includes("load_office_editor_window_size(&app)"));
 assert.ok(officeServer.includes("schedule_persist_office_editor_window_size"));
 assert.ok(officeServer.includes("editor-window-size.json"));
 assert.ok(tauriLib.includes("tauri::WindowEvent::Resized(size)"));
 assert.ok(tauriLib.includes("schedule_persist_office_editor_window_size"));
+assert.ok(appLifecycle.includes("DEFAULT_MAIN_WINDOW_WIDTH: f64 = 1182.2857142857142"));
+assert.ok(appLifecycle.includes("DEFAULT_MAIN_WINDOW_HEIGHT: f64 = 728.0"));
 
 // The main and Office editors share the complete preference snapshot, not just
 // a theme label. All modern palettes must survive the Rust companion boundary.
