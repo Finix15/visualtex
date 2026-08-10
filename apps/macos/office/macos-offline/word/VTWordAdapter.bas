@@ -27,8 +27,6 @@ Private Const VT_WORD_NUMBERING_MODE_VARIABLE As String = _
     "VT_EquationNumberingMode"
 Private Const VT_WORD_NUMBERING_SEPARATOR_VARIABLE As String = _
     "VT_EquationNumberingSeparator"
-Private Const VT_WORD_NUMBERING_PREFERENCE_FILE As String = _
-    "/VisualTeXNumberingPreference.txt"
 Private Const VT_WORD_NUMBERING_MODE_SEQUENCE As String = "sequence"
 Private Const VT_WORD_NUMBERING_MODE_CHAPTER As String = "chapter"
 Private Const VT_WORD_NUMBERING_MODE_SECTION As String = "section"
@@ -89,6 +87,10 @@ Private VT_WORD_IMAGE_SIZE_WATCH_SCHEDULED As Boolean
 Private VT_WORD_IMAGE_SIZE_WATCH_RUNNING As Boolean
 Private VT_WORD_ORPHAN_WATCH_SCHEDULED As Boolean
 Private VT_WORD_ORPHAN_WATCH_RUNNING As Boolean
+Private VT_WORD_NUMBERING_PREFERENCE_CACHE_LOADED As Boolean
+Private VT_WORD_NUMBERING_PREFERENCE_CACHE_AVAILABLE As Boolean
+Private VT_WORD_NUMBERING_PREFERENCE_CACHE_MODE As String
+Private VT_WORD_NUMBERING_PREFERENCE_CACHE_SEPARATOR As String
 
 Private Function VTWordVbeBuildTemplateActive() As Boolean
     Dim projectDocumentName As String
@@ -5018,9 +5020,14 @@ Private Function VTNumberedFormulaRangeForId( _
     Dim nativeRange As Range
     Dim layoutTable As Table
     Dim nativeMath As OMath
+    Dim imageShape As InlineShape
     Dim visibleNumberField As Field
     Dim numberBookmarkName As String
     Dim nativeBookmarkName As String
+    Dim displayMode As String
+    Dim encodedMetadata As String
+    Dim formulaReference As String
+    Dim numbered As Boolean
 
     If documentObject Is Nothing Or Not VTIsCanonicalUuid(formulaId) Then
         Exit Function
@@ -5054,6 +5061,35 @@ Private Function VTNumberedFormulaRangeForId( _
                 Set VTNumberedFormulaRangeForId = _
                     formulaContainer.OMaths(1).Range.Duplicate
                 Exit Function
+            End If
+        End If
+    End If
+
+    ' During a newly inserted image formula transaction, Word for Mac can
+    ' invalidate or temporarily detach the freshly-created VT_R_ Range while a
+    ' neighboring SEQ field is updated. The image itself already has a stronger
+    ' durable identity at this point: formulaId + stored metadata + canonical
+    ' Title. Resolve that exact object before falling back to native OMath. Never
+    ' use a nearest-image scan, because that could bind a new number to a
+    ' neighboring formula.
+    If VTTryReadWordFormulaFormat( _
+       documentObject, formulaId, displayMode, numbered) Then
+        If displayMode = "block" And numbered Then
+            If VTTryReadWordMetadataPayload( _
+               documentObject, formulaId, encodedMetadata) Then
+                If VTIsEncodedMetadata(encodedMetadata) Then
+                    formulaReference = _
+                        VTFormulaReference(formulaId, displayMode, numbered)
+                    Set imageShape = VTFindCommittedInlineShapeInDocument( _
+                        documentObject, encodedMetadata, formulaReference)
+                    If Not imageShape Is Nothing Then
+                        If Not imageShape.Range.Information(wdWithInTable) Then
+                            Set VTNumberedFormulaRangeForId = _
+                                imageShape.Range.Duplicate
+                            Exit Function
+                        End If
+                    End If
+                End If
             End If
         End If
     End If
@@ -10781,6 +10817,7 @@ Public Sub VisualTeX_UpdateEquationNumbers()
     If Documents.Count = 0 Then
         Err.Raise vbObjectError + 7401, "VisualTeX", "Open a Word document first."
     End If
+    VTMaterializeDocumentEquationNumberingFormat ActiveDocument
     updated = VTPruneOrphanedEquationNumberScaffolds(ActiveDocument)
     movedHelpers = VTRepairMixedNumberHelperOrder( _
         ActiveDocument, referenceBindings)
@@ -10931,6 +10968,7 @@ Private Function VTEquationNumberCrossReferenceItems( _
     Dim items() As String
 
     If documentObject Is Nothing Then Exit Function
+    VTMaterializeDocumentEquationNumberingFormat documentObject
     VTPruneOrphanedEquationNumberScaffolds documentObject
     VTReconcileEquationNumbers documentObject
     formulaIds = VTValidNumberedFormulaIds(documentObject)
@@ -10955,7 +10993,8 @@ End Function
 
 Private Function VTInsertEquationNumberReferenceAtRange( _
     ByVal targetRange As Range, _
-    ByVal itemIndex As Long) As Range
+    ByVal itemIndex As Long, _
+    Optional ByVal documentAlreadyReconciled As Boolean = False) As Range
 
     Dim documentObject As Document
     Dim formulaIds As Variant
@@ -10974,8 +11013,11 @@ Private Function VTInsertEquationNumberReferenceAtRange( _
             "The Equation cross-reference insertion Range is missing."
     End If
     Set documentObject = targetRange.Document
-    VTPruneOrphanedEquationNumberScaffolds documentObject
-    VTReconcileEquationNumbers documentObject
+    VTMaterializeDocumentEquationNumberingFormat documentObject
+    If Not documentAlreadyReconciled Then
+        VTPruneOrphanedEquationNumberScaffolds documentObject
+        VTReconcileEquationNumbers documentObject
+    End If
     formulaIds = VTValidNumberedFormulaIds(documentObject)
     itemCount = VTVariantArrayCount(formulaIds)
     If itemIndex < 1 Or itemIndex > itemCount Then
@@ -11084,7 +11126,7 @@ Public Sub VisualTeX_OpenEquationCrossReference()
     End If
 
     Set insertedRange = VTInsertEquationNumberReferenceAtRange( _
-        Selection.Range.Duplicate, itemIndex)
+        Selection.Range.Duplicate, itemIndex, True)
     insertedRange.Collapse wdCollapseEnd
     insertedRange.Select
     Exit Sub
@@ -12724,6 +12766,7 @@ Private Sub VTCommitWordDocumentImportDispatch( _
     Dim activeParagraphStyle As String
     Dim activeParagraphAlignment As String
     Dim activeListKind As String
+    Dim activeFormulaId As String
     Dim itemCount As Long
     Dim itemIndex As Long
     Dim itemListLevel As Long
@@ -12893,9 +12936,12 @@ Private Sub VTCommitWordDocumentImportDispatch( _
                     VTDocumentImportRequired( _
                         manifest, itemIndex, "textBase64")
             Case "formula"
+                activeFormulaId = VTDocumentImportRequired( _
+                    manifest, itemIndex, "formulaId")
                 VTDocumentImportInsertFormula _
                     cursorRange, manifest, itemIndex, outputKind, _
                     insertedFormulaIds
+                activeFormulaId = ""
             Case Else
                 Err.Raise vbObjectError + 7586, "VisualTeX", _
                     "The document import contains an unsupported item."
@@ -12957,9 +13003,21 @@ Failed:
     End If
     If Not insertedFormulaIds Is Nothing Then
         For Each formulaId In insertedFormulaIds
+            VTDeleteEquationNumberScaffold _
+                targetDocument, CStr(formulaId), False
             VTDeleteDocumentImportedFormulaState _
                 targetDocument, CStr(formulaId)
         Next formulaId
+    End If
+    If Not targetDocument Is Nothing And _
+       VTIsCanonicalUuid(activeFormulaId) Then
+        ' The current item can fail before VTDocumentImportInsertFormula records
+        ' it as successfully inserted. Clean the exact in-flight numbering helper
+        ' and state as well, so a retry never inherits VT_N_/VT_C_ half-scaffolds.
+        VTDeleteEquationNumberScaffold _
+            targetDocument, activeFormulaId, False
+        VTDeleteDocumentImportedFormulaState _
+            targetDocument, activeFormulaId
     End If
     If Not targetDocument Is Nothing Then
         If Not targetDocument.Bookmarks.Exists(bookmarkName) Then
@@ -14452,11 +14510,11 @@ RollbackCandidate:
     VTWriteWordFailureTrace _
         sessionId, transactionStage, transactionErrorNumber, transactionErrorDescription
     On Error Resume Next
-    If nativeEquation And numbered And mode = "create" Then
-        ' A failed native create can already have produced VT_N_/VT_R_/VT_C_
-        ' Bookmarks plus the external SEQ helper paragraph before a later
-        ' validation raises. Remove that entire formula-specific scaffold first;
-        ' otherwise the next create sees the failed helper and changes behavior.
+    If numbered And mode = "create" Then
+        ' A failed numbered create (image or native) can already have produced
+        ' VT_N_/VT_R_/VT_C_ plus an external SEQ helper before a later validation
+        ' raises. Remove that exact formula-specific scaffold first; otherwise a
+        ' retry sees the half-created helper and changes behavior.
         VTDeleteEquationNumberScaffold targetDocument, formulaId, False
     End If
     If Not insertedNumber Is Nothing Then insertedNumber.Delete
@@ -14906,6 +14964,7 @@ Private Function VTInsertEquationNumber( _
 
     Set formulaShape = VTEnsureVisualTeXImageMacroButton(formulaShape)
     Set documentObject = formulaShape.Range.Document
+    VTMaterializeDocumentEquationNumberingFormat documentObject
     Set paragraphRange = formulaShape.Range.Paragraphs(1).Range.Duplicate
     Set formulaContainerRange = _
         VTVisualTeXImageContainerRange(formulaShape)
@@ -19691,6 +19750,7 @@ Private Function VTEnsureNativeEquationNumber( _
             "The native equation number target is ambiguous."
     End If
     Set documentObject = equationRange.Document
+    VTMaterializeDocumentEquationNumberingFormat documentObject
     numberBookmarkName = VTEquationNumberBookmarkName(formulaId)
     nativeBookmarkName = VTNativeFormulaBookmarkName(formulaId)
     numberCreated = Not documentObject.Bookmarks.Exists(numberBookmarkName)
@@ -21126,6 +21186,7 @@ Private Sub VTReconcileEquationNumbers( _
     Dim nativeBookmarkCompatible As Boolean
 
     If documentObject Is Nothing Then Exit Sub
+    VTMaterializeDocumentEquationNumberingFormat documentObject
     equationLabelName = VTNativeEquationLabelName()
 
     ' Phase 1a: capture stable anchors and VisualTeX identities without changing
@@ -22884,36 +22945,38 @@ Private Sub VTDeleteDocumentVariable(ByVal documentObject As Document, ByVal var
     On Error GoTo 0
 End Sub
 
-Private Function VTEquationNumberingPreferencePath() As String
-    VTEquationNumberingPreferencePath = _
-        VTWordApplicationScriptsRoot() & _
-        VT_WORD_NUMBERING_PREFERENCE_FILE
-End Function
-
 Private Function VTTryReadEquationNumberingPreference( _
     ByRef numberingMode As String, _
     ByRef separatorText As String) As Boolean
 
-    Dim preferencePath As String
+    Dim encodedPreference As String
     Dim preferenceLine As String
     Dim fields As Variant
-    Dim fileNumber As Integer
-    Dim fileOpened As Boolean
     Dim storedMode As String
     Dim storedSeparator As String
 
     numberingMode = ""
     separatorText = ""
-    preferencePath = VTEquationNumberingPreferencePath()
+
+    If VT_WORD_NUMBERING_PREFERENCE_CACHE_LOADED Then
+        If VT_WORD_NUMBERING_PREFERENCE_CACHE_AVAILABLE Then
+            numberingMode = VT_WORD_NUMBERING_PREFERENCE_CACHE_MODE
+            separatorText = VT_WORD_NUMBERING_PREFERENCE_CACHE_SEPARATOR
+            VTTryReadEquationNumberingPreference = True
+        End If
+        Exit Function
+    End If
 
     On Error GoTo PreferenceUnavailable
-    fileNumber = FreeFile
-    Open preferencePath For Input Access Read As #fileNumber
-    fileOpened = True
-    If LOF(fileNumber) <= 0 Or LOF(fileNumber) > 256 Then GoTo PreferenceUnavailable
-    Line Input #fileNumber, preferenceLine
-    Close #fileNumber
-    fileOpened = False
+    encodedPreference = VTFileBridgeCall( _
+        "ReadVisualTeXNumberingPreference", "")
+    If Len(encodedPreference) = 0 Then
+        VT_WORD_NUMBERING_PREFERENCE_CACHE_LOADED = True
+        VT_WORD_NUMBERING_PREFERENCE_CACHE_AVAILABLE = False
+        Exit Function
+    End If
+    preferenceLine = VTBase64UrlDecodeUtf8(encodedPreference)
+    If Len(preferenceLine) = 0 Or Len(preferenceLine) > 256 Then Exit Function
 
     fields = Split(Trim$(preferenceLine), "|")
     If UBound(fields) <> 1 Then Exit Function
@@ -22932,24 +22995,23 @@ Private Function VTTryReadEquationNumberingPreference( _
 
     numberingMode = storedMode
     separatorText = storedSeparator
+    VT_WORD_NUMBERING_PREFERENCE_CACHE_LOADED = True
+    VT_WORD_NUMBERING_PREFERENCE_CACHE_AVAILABLE = True
+    VT_WORD_NUMBERING_PREFERENCE_CACHE_MODE = storedMode
+    VT_WORD_NUMBERING_PREFERENCE_CACHE_SEPARATOR = storedSeparator
     VTTryReadEquationNumberingPreference = True
     Exit Function
 
 PreferenceUnavailable:
-    On Error Resume Next
-    If fileOpened Then Close #fileNumber
     Err.Clear
-    On Error GoTo 0
 End Function
 
 Private Sub VTWriteEquationNumberingPreference( _
     ByVal numberingMode As String, _
     ByVal separatorText As String)
 
-    Dim preferencePath As String
-    Dim temporaryPath As String
-    Dim fileNumber As Integer
-    Dim fileOpened As Boolean
+    Dim encodedPreference As String
+    Dim ignoredResponse As String
     Dim errorNumber As Long
     Dim errorDescription As String
 
@@ -22969,37 +23031,88 @@ Private Sub VTWriteEquationNumberingPreference( _
                 "The Equation numbering mode is invalid."
     End Select
 
-    preferencePath = VTEquationNumberingPreferencePath()
-    temporaryPath = preferencePath & ".tmp"
     On Error GoTo PreferenceWriteFailed
-    On Error Resume Next
-    Kill temporaryPath
-    Err.Clear
-    On Error GoTo PreferenceWriteFailed
-    fileNumber = FreeFile
-    Open temporaryPath For Output Access Write As #fileNumber
-    fileOpened = True
-    Print #fileNumber, numberingMode & "|" & separatorText;
-    Close #fileNumber
-    fileOpened = False
-    On Error Resume Next
-    Kill preferencePath
-    Err.Clear
-    On Error GoTo PreferenceWriteFailed
-    Name temporaryPath As preferencePath
+    encodedPreference = VTBase64UrlEncodeUtf8( _
+        numberingMode & "|" & separatorText)
+    ignoredResponse = VTFileBridgeCall( _
+        "WriteVisualTeXNumberingPreference", encodedPreference)
+    VT_WORD_NUMBERING_PREFERENCE_CACHE_LOADED = True
+    VT_WORD_NUMBERING_PREFERENCE_CACHE_AVAILABLE = True
+    VT_WORD_NUMBERING_PREFERENCE_CACHE_MODE = numberingMode
+    VT_WORD_NUMBERING_PREFERENCE_CACHE_SEPARATOR = separatorText
     Exit Sub
 
 PreferenceWriteFailed:
     errorNumber = Err.Number
     errorDescription = Err.Description
-    On Error Resume Next
-    If fileOpened Then Close #fileNumber
-    Kill temporaryPath
     Err.Clear
-    On Error GoTo 0
     Err.Raise errorNumber, "VisualTeX numbering preference", _
         "Unable to persist the Equation numbering format: " & _
         errorDescription
+End Sub
+
+Private Sub VTMaterializeDocumentEquationNumberingFormat( _
+    ByVal documentObject As Document)
+
+    Dim storedMode As String
+    Dim storedSeparator As String
+    Dim preferredMode As String
+    Dim preferredSeparator As String
+    Dim numberingMode As String
+    Dim separatorText As String
+    Dim hasStoredMode As Boolean
+    Dim hasStoredSeparator As Boolean
+
+    If documentObject Is Nothing Then Exit Sub
+
+    hasStoredMode = VTTryGetDocumentVariable( _
+        documentObject, VT_WORD_NUMBERING_MODE_VARIABLE, storedMode)
+    If hasStoredMode Then
+        storedMode = LCase$(Trim$(storedMode))
+        Select Case storedMode
+            Case VT_WORD_NUMBERING_MODE_SEQUENCE, _
+                 VT_WORD_NUMBERING_MODE_CHAPTER, _
+                 VT_WORD_NUMBERING_MODE_SECTION
+                numberingMode = storedMode
+        End Select
+    End If
+
+    If Len(numberingMode) > 0 Then
+        hasStoredSeparator = VTTryGetDocumentVariable( _
+            documentObject, VT_WORD_NUMBERING_SEPARATOR_VARIABLE, _
+            storedSeparator)
+        storedSeparator = Trim$(storedSeparator)
+        If numberingMode = VT_WORD_NUMBERING_MODE_SEQUENCE Then
+            separatorText = "."
+        ElseIf hasStoredSeparator And _
+               (storedSeparator = "." Or storedSeparator = "-") Then
+            separatorText = storedSeparator
+        Else
+            separatorText = "."
+        End If
+    ElseIf VTTryReadEquationNumberingPreference( _
+       preferredMode, preferredSeparator) Then
+        numberingMode = preferredMode
+        separatorText = preferredSeparator
+    Else
+        numberingMode = VT_WORD_NUMBERING_MODE_SEQUENCE
+        separatorText = "."
+    End If
+
+    ' Materialize an inherited global preference before any numbered formula
+    ' Range/Field mutation begins. This prevents repeated AppleScriptTask reads
+    ' from re-entering Word while SEQ/REF helpers and formula ranges are being
+    ' rebuilt, and makes the format stable for the lifetime of this document.
+    If Not hasStoredMode Or _
+       StrComp(Trim$(storedMode), numberingMode, vbTextCompare) <> 0 Then
+        VTSetDocumentVariable _
+            documentObject, VT_WORD_NUMBERING_MODE_VARIABLE, numberingMode
+    End If
+    If Not hasStoredSeparator Or _
+       StrComp(Trim$(storedSeparator), separatorText, vbBinaryCompare) <> 0 Then
+        VTSetDocumentVariable _
+            documentObject, VT_WORD_NUMBERING_SEPARATOR_VARIABLE, separatorText
+    End If
 End Sub
 
 Private Function VTEquationNumberingMode( _
@@ -23058,10 +23171,13 @@ Private Function VTEquationNumberingDisplaySeparator( _
     ByVal documentObject As Document) As String
 
     If VTEquationNumberingSeparator(documentObject) = "-" Then
-        ' OMath turns an ASCII hyphen into a mathematical minus. Use that same
-        ' character in the shared VT_N_ source so image, OMath and body REF
-        ' numbers have identical text metrics and alignment.
-        VTEquationNumberingDisplaySeparator = ChrW(8722)
+        ' Keep chapter/section Equation numbers typographically compact. Word
+        ' treats U+2212 MINUS SIGN (and an ASCII hyphen promoted by OMath) as a
+        ' binary math operator, which adds visible spacing around the separator
+        ' inside numbered OMML. U+2010 HYPHEN is a punctuation separator instead:
+        ' the shared VT_N_ Bookmark therefore renders identically in image text,
+        ' native OMath REF results and ordinary body cross-references.
+        VTEquationNumberingDisplaySeparator = ChrW(8208)
     Else
         VTEquationNumberingDisplaySeparator = "."
     End If

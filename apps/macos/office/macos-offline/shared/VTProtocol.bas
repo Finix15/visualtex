@@ -494,7 +494,7 @@ Private Function VTFileBridgeScriptName() As String
     End If
 End Function
 
-Private Function VTFileBridgeCall(ByVal handlerName As String, ByVal parameterValue As String) As String
+Public Function VTFileBridgeCall(ByVal handlerName As String, ByVal parameterValue As String) As String
     Dim response As String
     Dim fields() As String
     Dim detail As String

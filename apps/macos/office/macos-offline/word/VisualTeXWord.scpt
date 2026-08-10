@@ -7,6 +7,7 @@ use framework "Foundation"
 property runtimeSuffix : "Library/Application Scripts/com.microsoft.Word/VisualTeXRuntime"
 property maximumRelativePathLength : 1024
 property expectedHost : "word"
+property numberingPreferenceFileName : "VisualTeXNumberingPreference.txt"
 property cachedVisualTeXExecutable : ""
 
 on OpenVisualTeXSession(sessionId)
@@ -161,6 +162,40 @@ on WriteVisualTeXFile(argumentText)
     end try
 end WriteVisualTeXFile
 
+on WriteVisualTeXNumberingPreference(encodedData)
+    try
+        set targetPath to my numberingPreferencePath()
+        my writeEncodedFileAtomically(targetPath, encodedData as text)
+        return "ok|1"
+    on error errorMessage number errorNumber
+        return my errorResponse(errorNumber, errorMessage)
+    end try
+end WriteVisualTeXNumberingPreference
+
+on ReadVisualTeXNumberingPreference(ignoredValue)
+    try
+        set targetPath to my numberingPreferencePath()
+        set fileManager to current application's NSFileManager's defaultManager()
+        if not ((fileManager's fileExistsAtPath:targetPath) as boolean) then return "ok|"
+        set preferenceData to current application's NSData's dataWithContentsOfFile:targetPath
+        if preferenceData is missing value then error "VisualTeX could not read the numbering preference" number 7132
+        if (preferenceData's |length|() as integer) > 256 then error "VisualTeX numbering preference is too large" number 7133
+        set encodedPreference to (preferenceData's base64EncodedStringWithOptions:0) as text
+        set encodedPreference to my replaceText(encodedPreference, "+", "-")
+        set encodedPreference to my replaceText(encodedPreference, "/", "_")
+        repeat while encodedPreference ends with "="
+            if (count characters of encodedPreference) is 1 then
+                set encodedPreference to ""
+            else
+                set encodedPreference to text 1 thru -2 of encodedPreference
+            end if
+        end repeat
+        return "ok|" & encodedPreference
+    on error errorMessage number errorNumber
+        return my errorResponse(errorNumber, errorMessage)
+    end try
+end ReadVisualTeXNumberingPreference
+
 on AppendVisualTeXFile(argumentText)
     try
         set {relativePath, encodedData} to my splitPair(argumentText as text)
@@ -231,6 +266,11 @@ on ensureRuntimeRoot()
     my ensureDirectory(rootPath)
     return rootPath
 end ensureRuntimeRoot
+
+on numberingPreferencePath()
+    set homePath to POSIX path of (path to home folder)
+    return homePath & "Library/Application Scripts/com.microsoft.Word/" & numberingPreferenceFileName
+end numberingPreferencePath
 
 on ensureDirectory(targetPath)
     do shell script "/bin/mkdir -p " & quoted form of targetPath & " && /bin/chmod 700 " & quoted form of targetPath
