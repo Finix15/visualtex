@@ -199,6 +199,18 @@ Public Sub VisualTeX_AssertWordHostSelfTest()
     VTInitializeWordEvents
 End Sub
 
+Public Sub VisualTeX_DumpActiveDocumentOpenXmlForRegression()
+    Dim outputPath As String
+
+    If Documents.Count = 0 Then
+        Err.Raise vbObjectError + 7996, "VisualTeX regression", _
+            "No active Word document is available for OpenXML inspection."
+    End If
+    outputPath = VTApplicationSupportRoot() & _
+        "/Tests/document-import-openxml.xml"
+    VTWriteTextAtomic outputPath, ActiveDocument.Content.WordOpenXML
+End Sub
+
 Public Sub VisualTeX_ExportActiveDocumentPdfForRegression()
     Dim requestPath As String
     Dim statusPath As String
@@ -11680,7 +11692,11 @@ Private Sub VTDocumentImportInsertText( _
     If Len(plainText) = 0 Then Exit Sub
     plainText = Replace$(plainText, vbCrLf, vbLf)
     plainText = Replace$(plainText, vbCr, vbLf)
-    plainText = Replace$(plainText, vbLf, vbCr)
+    ' One manifest text item represents one logical Word paragraph. Preserve
+    ' any internal source line breaks as manual line breaks instead of creating
+    ' extra Word paragraphs behind the paragraph metadata's back. Real paragraph
+    ' boundaries are created only by VTFinalizeDocumentImportParagraph.
+    plainText = Replace$(plainText, vbLf, Chr$(11))
 
     insertionStart = cursorRange.Start
     replacesInlineMathAnchor = _
@@ -11965,7 +11981,8 @@ Private Sub VTDocumentImportInsertFormula( _
     ByRef insertedFormulaIds As Collection, _
     Optional ByVal overrideFontSizePt As Double = 0#, _
     Optional ByVal preserveParagraphTopology As Boolean = False, _
-    Optional ByVal sharedVectorDocument As Variant)
+    Optional ByVal sharedVectorDocument As Variant, _
+    Optional ByVal sharedNativeDocument As Variant)
 
     Dim targetDocument As Document
     Dim targetRange As Range
@@ -11976,6 +11993,7 @@ Private Sub VTDocumentImportInsertFormula( _
     Dim latexBase64 As String
     Dim ommlBase64 As String
     Dim nativeDocumentPath As String
+    Dim nativeBatchDocumentIndex As Long
     Dim displayMode As String
     Dim numbered As Boolean
     Dim metadata As String
@@ -12082,16 +12100,28 @@ Private Sub VTDocumentImportInsertFormula( _
     Set targetRange = cursorRange.Duplicate
     targetRange.Collapse wdCollapseStart
     If displayMode = "block" Then
-        Set targetRange = VTPrepareWordCreateInsertionRange( _
-            targetRange, displayMode)
+        If Not preserveParagraphTopology And Not numbered Then
+            Set targetRange = _
+                VTPrepareBatchUnnumberedDisplayInsertionRange(targetRange)
+        Else
+            Set targetRange = VTPrepareWordCreateInsertionRange( _
+                targetRange, displayMode)
+        End If
     End If
-
     If outputKind = "omml" Then
         formulaStage = "insert-native"
-        Set formulaRange = VTInsertNativeEquationAtRange( _
-            targetRange, ommlBase64, nativeDocumentPath, _
-            displayMode, displayMode = "block", False)
-
+        If IsObject(sharedNativeDocument) Then
+            nativeBatchDocumentIndex = CLng(Val(VTDispatchOptional( _
+                manifest, _
+                VTDocumentImportItemKey(itemIndex, "nativeBatchDocumentIndex"))))
+            Set formulaRange = VTInsertNativeEquationFromSharedDocument( _
+                targetRange, sharedNativeDocument, nativeBatchDocumentIndex, _
+                displayMode, displayMode = "block")
+        Else
+            Set formulaRange = VTInsertNativeEquationAtRange( _
+                targetRange, ommlBase64, nativeDocumentPath, _
+                displayMode, displayMode = "block", False)
+        End If
         ' Word for Mac can invalidate a live OMath Range while document
         ' Variables are added or replaced. Persist the formula identity before
         ' writing state, then reacquire the OMath from the durable Bookmark.
@@ -12120,7 +12150,6 @@ Private Sub VTDocumentImportInsertFormula( _
                 "Word lost the imported native equation after storing its state."
         End If
         Set formulaRange = nativeMath.Range.Duplicate
-
         ' VTInsertNativeEquationAtRange already applies the requested inline or
         ' display type. Only numbered display equations need extra layout here.
         If displayMode = "block" And numbered Then
@@ -12154,15 +12183,18 @@ Private Sub VTDocumentImportInsertFormula( _
         VTSetWordNativeSignature targetDocument, formulaId, nativeMath
         Set formulaRange = nativeMath.Range.Duplicate
         insertedFormulaIds.Add formulaId
-
         formulaStage = "place-native-caret"
         If displayMode = "block" Then
             If preserveParagraphTopology Then
                 Set cursorRange = targetDocument.Range( _
                     Start:=formulaRange.End, End:=formulaRange.End)
+            ElseIf numbered Then
+                Set cursorRange = VTContinuationRangeAfterDisplayFormula( _
+                    formulaRange, formulaId)
             Else
-                VTPlaceCaretAfterDisplayFormula formulaRange, formulaId
-                Set cursorRange = Selection.Range.Duplicate
+                Set cursorRange = _
+                    VTBatchContinuationRangeAfterUnnumberedDisplayFormula( _
+                        formulaRange)
             End If
         Else
             ' A collapsed Range at OMath.Range.End remains inside the equation
@@ -12268,9 +12300,13 @@ Private Sub VTDocumentImportInsertFormula( _
             If formulaRange Is Nothing Then Set formulaRange = candidate.Range.Duplicate
             Set cursorRange = targetDocument.Range( _
                 Start:=formulaRange.End, End:=formulaRange.End)
+        ElseIf numbered Then
+            Set cursorRange = VTContinuationRangeAfterDisplayFormula( _
+                candidate.Range, formulaId)
         Else
-            VTPlaceCaretAfterDisplayFormula candidate.Range, formulaId
-            Set cursorRange = Selection.Range.Duplicate
+            Set cursorRange = _
+                VTBatchContinuationRangeAfterUnnumberedDisplayFormula( _
+                    candidate.Range)
         End If
     Else
         Set formulaRange = VTVisualTeXImageContainerRange(candidate)
@@ -12286,6 +12322,136 @@ FormulaFailed:
     Err.Raise formulaErrorNumber, _
         "VisualTeX Word document formula import", _
         formulaStage & ": " & formulaErrorDescription
+End Sub
+
+Private Sub VTCleanupFailedDocumentImportFormula( _
+    ByVal documentObject As Document, _
+    ByVal formulaId As String)
+
+    Dim nativeBookmarkName As String
+    Dim nativeRange As Range
+    Dim imageRange As Range
+    Dim formulaShape As InlineShape
+    Dim candidateFormulaId As String
+    Dim candidateDisplayMode As String
+    Dim candidateNumbered As Boolean
+
+    If documentObject Is Nothing Or Not VTIsCanonicalUuid(formulaId) Then Exit Sub
+    On Error Resume Next
+    nativeBookmarkName = VTNativeFormulaBookmarkName(formulaId)
+    If documentObject.Bookmarks.Exists(nativeBookmarkName) Then
+        Set nativeRange = documentObject.Bookmarks( _
+            nativeBookmarkName).Range.Duplicate
+    End If
+    For Each formulaShape In documentObject.InlineShapes
+        candidateFormulaId = ""
+        candidateDisplayMode = ""
+        candidateNumbered = False
+        If VTTryParseFormulaReference( _
+           formulaShape.Title, candidateFormulaId, _
+           candidateDisplayMode, candidateNumbered) Then
+            If StrComp(candidateFormulaId, formulaId, vbTextCompare) = 0 Then
+                Set imageRange = VTVisualTeXImageContainerRange(formulaShape)
+                Exit For
+            End If
+        End If
+    Next formulaShape
+    If Not imageRange Is Nothing Then imageRange.Delete
+    If Not nativeRange Is Nothing Then nativeRange.Delete
+    VTDeleteEquationNumberScaffold documentObject, formulaId, False
+    VTDeleteDocumentImportedFormulaState documentObject, formulaId
+    Err.Clear
+    On Error GoTo 0
+End Sub
+
+Private Function VTTryDocumentImportInsertFormula( _
+    ByRef cursorRange As Range, _
+    ByVal manifest As Object, _
+    ByVal itemIndex As Long, _
+    ByVal outputKind As String, _
+    ByRef insertedFormulaIds As Collection, _
+    ByRef failureDescription As String, _
+    Optional ByVal overrideFontSizePt As Double = 0#, _
+    Optional ByVal preserveParagraphTopology As Boolean = False, _
+    Optional ByVal sharedVectorDocument As Variant, _
+    Optional ByVal sharedNativeDocument As Variant) As Boolean
+
+    Dim documentObject As Document
+    Dim formulaId As String
+    Dim insertionStart As Long
+    Dim failureNumber As Long
+
+    failureDescription = ""
+    If cursorRange Is Nothing Then Exit Function
+    Set documentObject = cursorRange.Document
+    insertionStart = cursorRange.Start
+    formulaId = VTDocumentImportRequired(manifest, itemIndex, "formulaId")
+    On Error GoTo Failed
+    VTDocumentImportInsertFormula _
+        cursorRange, manifest, itemIndex, outputKind, insertedFormulaIds, _
+        overrideFontSizePt, preserveParagraphTopology, _
+        sharedVectorDocument, sharedNativeDocument
+    VTTryDocumentImportInsertFormula = True
+    Exit Function
+
+Failed:
+    failureNumber = Err.Number
+    failureDescription = Err.Description
+    On Error Resume Next
+    VTCleanupFailedDocumentImportFormula documentObject, formulaId
+    Set cursorRange = documentObject.Range( _
+        Start:=insertionStart, End:=insertionStart)
+    Err.Clear
+    On Error GoTo 0
+    If failureNumber = 0 Then failureNumber = vbObjectError + 7584
+End Function
+
+Private Function VTDocumentImportFormulaFallbackText( _
+    ByVal manifest As Object, _
+    ByVal itemIndex As Long) As String
+
+    Dim latexText As String
+    Dim displayMode As String
+
+    latexText = VTBase64UrlDecodeUtf8(VTDocumentImportRequired( _
+        manifest, itemIndex, "latexBase64"))
+    displayMode = VTDocumentImportRequired(manifest, itemIndex, "displayMode")
+    If displayMode = "block" Then
+        VTDocumentImportFormulaFallbackText = "$$" & latexText & "$$"
+    Else
+        VTDocumentImportFormulaFallbackText = "$" & latexText & "$"
+    End If
+End Function
+
+Private Sub VTInsertDocumentImportFormulaFallback( _
+    ByRef cursorRange As Range, _
+    ByVal manifest As Object, _
+    ByVal itemIndex As Long)
+
+    Dim documentObject As Document
+    Dim insertionRange As Range
+    Dim fallbackText As String
+    Dim displayMode As String
+    Dim insertionStart As Long
+
+    If cursorRange Is Nothing Then Exit Sub
+    Set documentObject = cursorRange.Document
+    insertionStart = cursorRange.Start
+    fallbackText = VTDocumentImportFormulaFallbackText(manifest, itemIndex)
+    displayMode = VTDocumentImportRequired(manifest, itemIndex, "displayMode")
+    Set insertionRange = documentObject.Range( _
+        Start:=insertionStart, End:=insertionStart)
+    If displayMode = "block" Then
+        insertionRange.InsertBefore fallbackText & vbCr
+        Set cursorRange = documentObject.Range( _
+            Start:=insertionStart + Len(fallbackText) + 1, _
+            End:=insertionStart + Len(fallbackText) + 1)
+    Else
+        insertionRange.InsertBefore fallbackText
+        Set cursorRange = documentObject.Range( _
+            Start:=insertionStart + Len(fallbackText), _
+            End:=insertionStart + Len(fallbackText))
+    End If
 End Sub
 
 Private Sub VTTraceDocumentImportStage( _
@@ -12809,6 +12975,7 @@ Private Sub VTCommitWordLatexRedrawDispatch( _
     Dim cursorRange As Range
     Dim rollbackRange As Range
     Dim sharedVectorDocument As Document
+    Dim sharedNativeDocument As Document
     Dim undoRecord As Object
     Dim insertedFormulaIds As Collection
     Dim numberedFormulaIds As Collection
@@ -12826,13 +12993,17 @@ Private Sub VTCommitWordLatexRedrawDispatch( _
     Dim itemKind As String
     Dim operationName As String
     Dim replacementText As String
+    Dim formulaFailureDescription As String
     Dim sharedVectorDocumentPath As String
+    Dim nativeBatchDocumentPath As String
     Dim targetStart As Long
     Dim targetEnd As Long
     Dim originalTargetLength As Long
     Dim previousEnd As Long
     Dim itemIndex As Long
     Dim completedItems As Long
+    Dim nativeBatchFormulaCount As Long
+    Dim skippedFormulaCount As Long
     Dim progressInterval As Long
     Dim previousDisplayAlerts As Long
     Dim previousScreenUpdating As Boolean
@@ -13032,6 +13203,39 @@ Private Sub VTCommitWordLatexRedrawDispatch( _
             End If
             targetDocument.Activate
         End If
+    ElseIf outputKind = "omml" Then
+        nativeBatchDocumentPath = VTDispatchOptional( _
+            manifest, "nativeBatchDocumentPath")
+        If Len(nativeBatchDocumentPath) > 0 Then
+            If Not IsNumeric(VTDispatchOptional( _
+               manifest, "nativeBatchFormulaCount")) Then
+                Err.Raise vbObjectError + 7591, "VisualTeX", _
+                    "The shared LaTeX redraw native batch count is invalid."
+            End If
+            nativeBatchFormulaCount = CLng(VTDispatchOptional( _
+                manifest, "nativeBatchFormulaCount"))
+            If nativeBatchFormulaCount <> itemCount Then
+                Err.Raise vbObjectError + 7591, "VisualTeX", _
+                    "The shared LaTeX redraw native batch count is incomplete."
+            End If
+            transactionStage = "redraw-open-shared-native-document"
+            VTValidateAbsoluteVisualTeXPath nativeBatchDocumentPath
+            If Not VTPathFileExists(nativeBatchDocumentPath) Then
+                Err.Raise vbObjectError + 7591, "VisualTeX", _
+                    "The shared LaTeX redraw native document is missing."
+            End If
+            Set sharedNativeDocument = Documents.Open( _
+                FileName:=nativeBatchDocumentPath, _
+                ConfirmConversions:=False, _
+                ReadOnly:=True, _
+                AddToRecentFiles:=False, _
+                Visible:=False)
+            If sharedNativeDocument.OMaths.Count <> itemCount Then
+                Err.Raise vbObjectError + 7591, "VisualTeX", _
+                    "The shared LaTeX redraw native document is incomplete."
+            End If
+            targetDocument.Activate
+        End If
     End If
 
     transactionStage = "redraw-start-undo"
@@ -13072,15 +13276,33 @@ Private Sub VTCommitWordLatexRedrawDispatch( _
             Set cursorRange = targetDocument.Range( _
                 Start:=targetStart + wordStarts(itemIndex), _
                 End:=targetStart + wordStarts(itemIndex))
-            If sharedVectorDocument Is Nothing Then
-                VTDocumentImportInsertFormula _
-                    cursorRange, manifest, itemIndex, outputKind, _
-                    insertedFormulaIds, sourceFontSizes(itemIndex), True
+            formulaFailureDescription = ""
+            If Not sharedVectorDocument Is Nothing Then
+                If Not VTTryDocumentImportInsertFormula( _
+                   cursorRange, manifest, itemIndex, outputKind, _
+                   insertedFormulaIds, formulaFailureDescription, _
+                   sourceFontSizes(itemIndex), True, _
+                   sharedVectorDocument) Then
+                    cursorRange.InsertBefore sourceTexts(itemIndex)
+                    skippedFormulaCount = skippedFormulaCount + 1
+                End If
+            ElseIf Not sharedNativeDocument Is Nothing Then
+                If Not VTTryDocumentImportInsertFormula( _
+                   cursorRange, manifest, itemIndex, outputKind, _
+                   insertedFormulaIds, formulaFailureDescription, _
+                   sourceFontSizes(itemIndex), True, Empty, _
+                   sharedNativeDocument) Then
+                    cursorRange.InsertBefore sourceTexts(itemIndex)
+                    skippedFormulaCount = skippedFormulaCount + 1
+                End If
             Else
-                VTDocumentImportInsertFormula _
-                    cursorRange, manifest, itemIndex, outputKind, _
-                    insertedFormulaIds, sourceFontSizes(itemIndex), True, _
-                    sharedVectorDocument
+                If Not VTTryDocumentImportInsertFormula( _
+                   cursorRange, manifest, itemIndex, outputKind, _
+                   insertedFormulaIds, formulaFailureDescription, _
+                   sourceFontSizes(itemIndex), True) Then
+                    cursorRange.InsertBefore sourceTexts(itemIndex)
+                    skippedFormulaCount = skippedFormulaCount + 1
+                End If
             End If
         End If
         completedItems = itemCount - itemIndex
@@ -13103,6 +13325,11 @@ Private Sub VTCommitWordLatexRedrawDispatch( _
     If Not sharedVectorDocument Is Nothing Then
         sharedVectorDocument.Close SaveChanges:=wdDoNotSaveChanges
         Set sharedVectorDocument = Nothing
+        targetDocument.Activate
+    End If
+    If Not sharedNativeDocument Is Nothing Then
+        sharedNativeDocument.Close SaveChanges:=wdDoNotSaveChanges
+        Set sharedNativeDocument = Nothing
         targetDocument.Activate
     End If
     If undoRecordStarted Then
@@ -13133,6 +13360,11 @@ Failed:
     If Not sharedVectorDocument Is Nothing Then
         sharedVectorDocument.Close SaveChanges:=wdDoNotSaveChanges
         Set sharedVectorDocument = Nothing
+        targetDocument.Activate
+    End If
+    If Not sharedNativeDocument Is Nothing Then
+        sharedNativeDocument.Close SaveChanges:=wdDoNotSaveChanges
+        Set sharedNativeDocument = Nothing
         targetDocument.Activate
     End If
     If undoRecordStarted Then
@@ -13202,8 +13434,10 @@ Private Sub VTCommitWordDocumentImportDispatch( _
     Dim anchorBookmark As Bookmark
     Dim cursorRange As Range
     Dim rollbackRange As Range
+    Dim sharedNativeDocument As Document
     Dim formulaId As Variant
     Dim manifestPath As String
+    Dim nativeBatchDocumentPath As String
     Dim sourceDocumentId As String
     Dim bookmarkName As String
     Dim operationName As String
@@ -13218,12 +13452,17 @@ Private Sub VTCommitWordDocumentImportDispatch( _
     Dim activeParagraphAlignment As String
     Dim activeListKind As String
     Dim activeFormulaId As String
+    Dim formulaFailureDescription As String
     Dim itemCount As Long
     Dim itemIndex As Long
+    Dim nativeBatchFormulaCount As Long
+    Dim skippedFormulaCount As Long
     Dim itemListLevel As Long
     Dim activeListLevel As Long
     Dim insertionStart As Long
     Dim insertedEnd As Long
+    Dim itemInsertionStart As Long
+    Dim progressInterval As Long
     Dim activeParagraphStart As Long
     Dim itemParagraphStart As Boolean
     Dim itemParagraphEnd As Boolean
@@ -13297,6 +13536,8 @@ Private Sub VTCommitWordDocumentImportDispatch( _
             "The document import item count is outside the supported range."
     End If
     VTUpdateDocumentImportProgress sessionId, 0, itemCount, "inserting"
+    progressInterval = itemCount \ 10
+    If progressInterval < 1 Then progressInterval = 1
 
     Set targetDocument = ActiveDocument
     Set anchorBookmark = targetDocument.Bookmarks(bookmarkName)
@@ -13306,11 +13547,47 @@ Private Sub VTCommitWordDocumentImportDispatch( _
         Start:=insertionStart, End:=insertionStart)
     anchorBookmark.Delete
     Set insertedFormulaIds = New Collection
+    If outputKind = "omml" Then
+        nativeBatchDocumentPath = VTDispatchOptional( _
+            manifest, "nativeBatchDocumentPath")
+        If Len(nativeBatchDocumentPath) > 0 Then
+            If Not IsNumeric(VTDispatchOptional( _
+               manifest, "nativeBatchFormulaCount")) Then
+                Err.Raise vbObjectError + 7586, "VisualTeX", _
+                    "The shared native-equation batch count is invalid."
+            End If
+            nativeBatchFormulaCount = CLng(VTDispatchOptional( _
+                manifest, "nativeBatchFormulaCount"))
+            If nativeBatchFormulaCount < 1 Or _
+               nativeBatchFormulaCount > 1000 Then
+                Err.Raise vbObjectError + 7586, "VisualTeX", _
+                    "The shared native-equation batch count is outside the supported range."
+            End If
+            VTValidateAbsoluteVisualTeXPath nativeBatchDocumentPath
+            If Not VTPathFileExists(nativeBatchDocumentPath) Then
+                Err.Raise vbObjectError + 7586, "VisualTeX", _
+                    "The shared native-equation staging document is missing."
+            End If
+            transactionStage = "open-shared-native-document"
+            Set sharedNativeDocument = Documents.Open( _
+                FileName:=nativeBatchDocumentPath, _
+                ConfirmConversions:=False, _
+                ReadOnly:=True, _
+                AddToRecentFiles:=False, _
+                Visible:=False)
+            If sharedNativeDocument.OMaths.Count <> nativeBatchFormulaCount Then
+                Err.Raise vbObjectError + 7586, "VisualTeX", _
+                    "The shared native-equation staging document is incomplete."
+            End If
+            targetDocument.Activate
+        End If
+    End If
     VTBeginWordInternalMutation
     internalMutationStarted = True
 
     For itemIndex = 0 To itemCount - 1
         VTTraceDocumentImportStage sessionId, "item-start", itemIndex
+        itemInsertionStart = cursorRange.Start
         itemKind = VTDocumentImportRequired( _
             manifest, itemIndex, "kind")
         itemParagraphId = VTDocumentImportParagraphValue( _
@@ -13389,10 +13666,25 @@ Private Sub VTCommitWordDocumentImportDispatch( _
             Case "formula"
                 activeFormulaId = VTDocumentImportRequired( _
                     manifest, itemIndex, "formulaId")
-                VTDocumentImportInsertFormula _
-                    cursorRange, manifest, itemIndex, outputKind, _
-                    insertedFormulaIds
-                activeFormulaId = ""
+                formulaFailureDescription = ""
+                If sharedNativeDocument Is Nothing Then
+                    If Not VTTryDocumentImportInsertFormula( _
+                       cursorRange, manifest, itemIndex, outputKind, _
+                       insertedFormulaIds, formulaFailureDescription) Then
+                        VTInsertDocumentImportFormulaFallback _
+                            cursorRange, manifest, itemIndex
+                        skippedFormulaCount = skippedFormulaCount + 1
+                    End If
+                Else
+                    If Not VTTryDocumentImportInsertFormula( _
+                       cursorRange, manifest, itemIndex, outputKind, _
+                       insertedFormulaIds, formulaFailureDescription, _
+                       0#, False, Empty, sharedNativeDocument) Then
+                        VTInsertDocumentImportFormulaFallback _
+                            cursorRange, manifest, itemIndex
+                        skippedFormulaCount = skippedFormulaCount + 1
+                    End If
+                End If
             Case Else
                 Err.Raise vbObjectError + 7586, "VisualTeX", _
                     "The document import contains an unsupported item."
@@ -13418,10 +13710,13 @@ Private Sub VTCommitWordDocumentImportDispatch( _
             VTTraceDocumentImportStage sessionId, "paragraph-finalize-complete", itemIndex
         End If
         insertedEnd = cursorRange.Start
+        activeFormulaId = ""
         VTTraceDocumentImportStage sessionId, "item-complete", itemIndex
-        VTUpdateDocumentImportProgress _
-            sessionId, itemIndex + 1, itemCount, "inserting"
-        cursorRange.Select
+        If itemIndex + 1 = itemCount Or _
+           (itemIndex + 1) Mod progressInterval = 0 Then
+            VTUpdateDocumentImportProgress _
+                sessionId, itemIndex + 1, itemCount, "inserting"
+        End If
     Next itemIndex
 
     If Len(activeParagraphId) > 0 Then
@@ -13431,6 +13726,11 @@ Private Sub VTCommitWordDocumentImportDispatch( _
     If internalMutationStarted Then
         VTEndWordInternalMutation
         internalMutationStarted = False
+    End If
+    If Not sharedNativeDocument Is Nothing Then
+        sharedNativeDocument.Close SaveChanges:=wdDoNotSaveChanges
+        Set sharedNativeDocument = Nothing
+        targetDocument.Activate
     End If
     cursorRange.Collapse wdCollapseStart
     cursorRange.Select
@@ -13443,28 +13743,33 @@ Failed:
     errorNumber = Err.Number
     errorDescription = Err.Description
     On Error Resume Next
-    VTUpdateDocumentImportProgress sessionId, 0, itemCount, "error"
+    VTUpdateDocumentImportProgress sessionId, itemIndex, itemCount, "error"
     VTWriteWordFailureTrace _
         sessionId, transactionStage, errorNumber, errorDescription
     If internalMutationStarted Then VTEndWordInternalMutation
-    If insertedEnd > insertionStart Then
-        Set rollbackRange = targetDocument.Range( _
-            Start:=insertionStart, End:=insertedEnd)
-        rollbackRange.Delete
+    If Not sharedNativeDocument Is Nothing Then
+        sharedNativeDocument.Close SaveChanges:=wdDoNotSaveChanges
+        Set sharedNativeDocument = Nothing
+        If Not targetDocument Is Nothing Then targetDocument.Activate
     End If
-    If Not insertedFormulaIds Is Nothing Then
-        For Each formulaId In insertedFormulaIds
-            VTDeleteEquationNumberScaffold _
-                targetDocument, CStr(formulaId), False
-            VTDeleteDocumentImportedFormulaState _
-                targetDocument, CStr(formulaId)
-        Next formulaId
+
+    ' Never delete content from earlier completed items. The old rollback used
+    ' insertionStart..insertedEnd, which removed every successful item while
+    ' leaving the current failed item behind. Remove only the current item's
+    ' local text tail; formula-specific structure is cleaned by exact identity.
+    If Not targetDocument Is Nothing And Not cursorRange Is Nothing Then
+        If itemInsertionStart >= 0 And _
+           cursorRange.Start > itemInsertionStart Then
+            Set rollbackRange = targetDocument.Range( _
+                Start:=itemInsertionStart, End:=cursorRange.Start)
+            rollbackRange.Delete
+        End If
     End If
     If Not targetDocument Is Nothing And _
        VTIsCanonicalUuid(activeFormulaId) Then
         ' The current item can fail before VTDocumentImportInsertFormula records
-        ' it as successfully inserted. Clean the exact in-flight numbering helper
-        ' and state as well, so a retry never inherits VT_N_/VT_C_ half-scaffolds.
+        ' it as successfully inserted. Clean only that exact in-flight formula;
+        ' previously completed formula metadata must remain valid.
         VTDeleteEquationNumberScaffold _
             targetDocument, activeFormulaId, False
         VTDeleteDocumentImportedFormulaState _
@@ -13473,7 +13778,7 @@ Failed:
     If Not targetDocument Is Nothing Then
         If Not targetDocument.Bookmarks.Exists(bookmarkName) Then
             Set cursorRange = targetDocument.Range( _
-                Start:=insertionStart, End:=insertionStart)
+                Start:=itemInsertionStart, End:=itemInsertionStart)
             targetDocument.Bookmarks.Add _
                 Name:=bookmarkName, Range:=cursorRange
         End If
@@ -13567,6 +13872,39 @@ Failed:
     Err.Raise callbackErrorNumber, "VisualTeX Word callback", _
         callbackErrorDescription
 End Sub
+
+Private Function VTPrepareBatchUnnumberedDisplayInsertionRange( _
+    ByVal requestedRange As Range) As Range
+
+    Dim insertionRange As Range
+    Dim paragraphRange As Range
+
+    If requestedRange Is Nothing Then
+        Err.Raise vbObjectError + 7551, "VisualTeX", _
+            "The batch display insertion Range is missing."
+    End If
+    Set insertionRange = requestedRange.Duplicate
+    insertionRange.Collapse wdCollapseStart
+    If insertionRange.Information(wdWithInTable) Then
+        Set VTPrepareBatchUnnumberedDisplayInsertionRange = _
+            VTPrepareWordCreateInsertionRange(insertionRange, "block")
+        Exit Function
+    End If
+    Set paragraphRange = insertionRange.Paragraphs(1).Range.Duplicate
+    If paragraphRange.Fields.Count <> 0 Or _
+       paragraphRange.InlineShapes.Count <> 0 Or _
+       paragraphRange.OMaths.Count <> 0 Or _
+       VTWordRangeHasMeaningfulText(paragraphRange) Then
+        Set VTPrepareBatchUnnumberedDisplayInsertionRange = _
+            VTPrepareWordCreateInsertionRange(insertionRange, "block")
+        Exit Function
+    End If
+
+    ' Document import already owns this empty paragraph. Do not normalize it as
+    ' plain body text just before the formula insertion immediately rewrites the
+    ' same paragraph as a display-equation paragraph.
+    Set VTPrepareBatchUnnumberedDisplayInsertionRange = insertionRange
+End Function
 
 Private Function VTPrepareWordCreateInsertionRange( _
     ByVal requestedRange As Range, _
@@ -13917,9 +14255,9 @@ Private Function VTEnsurePlainContinuationParagraph( _
     Set VTEnsurePlainContinuationParagraph = continuationParagraph
 End Function
 
-Private Sub VTPlaceCaretAfterDisplayFormula( _
+Private Function VTContinuationRangeAfterDisplayFormula( _
     ByVal formulaRange As Range, _
-    ByVal formulaId As String)
+    ByVal formulaId As String) As Range
 
     Dim documentObject As Document
     Dim sourceParagraph As Range
@@ -13969,6 +14307,101 @@ Private Sub VTPlaceCaretAfterDisplayFormula( _
     caretRange.Font.Position = 0
     caretRange.Font.Hidden = False
     caretRange.Font.Color = wdColorAutomatic
+    Set VTContinuationRangeAfterDisplayFormula = caretRange.Duplicate
+End Function
+
+Private Function VTBatchContinuationRangeAfterUnnumberedDisplayFormula( _
+    ByVal formulaRange As Range) As Range
+
+    Dim documentObject As Document
+    Dim exactRange As Range
+    Dim sourceParagraph As Range
+    Dim continuationParagraph As Range
+    Dim probeRange As Range
+    Dim insertionRange As Range
+    Dim caretRange As Range
+    Dim continuationStart As Long
+    Dim markerStart As Long
+
+    If formulaRange Is Nothing Or formulaRange.Information(wdWithInTable) Then
+        Err.Raise vbObjectError + 7553, "VisualTeX", _
+            "The batch display formula continuation target is invalid."
+    End If
+    Set documentObject = formulaRange.Document
+    If formulaRange.OMaths.Count = 1 Then
+        Set exactRange = formulaRange.OMaths(1).Range.Duplicate
+    ElseIf formulaRange.InlineShapes.Count = 1 Then
+        Set exactRange = formulaRange.InlineShapes(1).Range.Duplicate
+    Else
+        Err.Raise vbObjectError + 7553, "VisualTeX", _
+            "The batch display formula continuation target is ambiguous."
+    End If
+    Set sourceParagraph = exactRange.Paragraphs(1).Range.Duplicate
+    If exactRange.Start < sourceParagraph.Start Or _
+       exactRange.End > sourceParagraph.End Then
+        Err.Raise vbObjectError + 7553, "VisualTeX", _
+            "The batch display formula left its dedicated paragraph."
+    End If
+
+    ' Batch import owns the paragraph immediately after an unnumbered display
+    ' formula. Do not run the interactive continuation normalizer here: the next
+    ' text item applies its paragraph style before inserting content, while a
+    ' following formula prepares its own dedicated paragraph. Reuse an existing
+    ' empty paragraph or create exactly one at the formula boundary.
+    continuationStart = sourceParagraph.End
+    If continuationStart < documentObject.Content.End Then
+        Set probeRange = documentObject.Range( _
+            Start:=continuationStart, End:=continuationStart + 1)
+        Set continuationParagraph = probeRange.Paragraphs(1).Range.Duplicate
+        If continuationParagraph.Start < continuationStart Or _
+           continuationParagraph.Information(wdWithInTable) Or _
+           continuationParagraph.Fields.Count <> 0 Or _
+           continuationParagraph.InlineShapes.Count <> 0 Or _
+           continuationParagraph.OMaths.Count <> 0 Or _
+           VTWordRangeHasMeaningfulText(continuationParagraph) Then
+            Set continuationParagraph = Nothing
+        End If
+    End If
+
+    If continuationParagraph Is Nothing Then
+        markerStart = sourceParagraph.End - 1
+        If markerStart < sourceParagraph.Start Then
+            Err.Raise vbObjectError + 7553, "VisualTeX", _
+                "The batch display formula paragraph has no insertion boundary."
+        End If
+        Set insertionRange = documentObject.Range( _
+            Start:=markerStart, End:=markerStart)
+        insertionRange.Text = vbCr
+        continuationStart = markerStart + 1
+        Set probeRange = documentObject.Range( _
+            Start:=continuationStart, End:=continuationStart + 1)
+        Set continuationParagraph = probeRange.Paragraphs(1).Range.Duplicate
+        If continuationParagraph.Start <> continuationStart Or _
+           continuationParagraph.Information(wdWithInTable) Or _
+           continuationParagraph.Fields.Count <> 0 Or _
+           continuationParagraph.InlineShapes.Count <> 0 Or _
+           continuationParagraph.OMaths.Count <> 0 Or _
+           VTWordRangeHasMeaningfulText(continuationParagraph) Then
+            Err.Raise vbObjectError + 7553, "VisualTeX", _
+                "Word did not expose an empty batch continuation paragraph."
+        End If
+    End If
+
+    Set caretRange = documentObject.Range( _
+        Start:=continuationParagraph.Start, _
+        End:=continuationParagraph.Start)
+    Set VTBatchContinuationRangeAfterUnnumberedDisplayFormula = _
+        caretRange.Duplicate
+End Function
+
+Private Sub VTPlaceCaretAfterDisplayFormula( _
+    ByVal formulaRange As Range, _
+    ByVal formulaId As String)
+
+    Dim caretRange As Range
+
+    Set caretRange = VTContinuationRangeAfterDisplayFormula( _
+        formulaRange, formulaId)
     caretRange.Select
 End Sub
 
@@ -22030,6 +22463,137 @@ Private Function VTInsertNativeEquationAtTarget( _
         displayMode, _
         displaySizing, _
         replaceTarget)
+End Function
+
+Private Function VTInsertNativeEquationFromSharedDocument( _
+    ByVal targetRange As Range, _
+    ByVal sharedDocument As Document, _
+    ByVal sharedEquationIndex As Long, _
+    ByVal displayMode As String, _
+    ByVal displaySizing As Boolean) As Range
+
+    Dim targetDocument As Document
+    Dim stagingEquationRange As Range
+    Dim insertionRange As Range
+    Dim probeRange As Range
+    Dim candidateRange As Range
+    Dim nativeEquation As OMath
+    Dim candidateMath As OMath
+    Dim failedMath As OMath
+    Dim insertionStart As Long
+    Dim stagingEquationLength As Long
+    Dim probeStart As Long
+    Dim probeEnd As Long
+    Dim candidateDistance As Long
+    Dim bestDistance As Long
+    Dim matchCount As Long
+    Dim preferredSize As Single
+    Dim resolvedEquationStart As Long
+    Dim conversionErrorNumber As Long
+    Dim conversionErrorDescription As String
+
+    If targetRange Is Nothing Or sharedDocument Is Nothing Then
+        Err.Raise vbObjectError + 7450, "VisualTeX", _
+            "The shared native-equation insertion target is missing."
+    End If
+    If sharedEquationIndex < 1 Or _
+       sharedEquationIndex > sharedDocument.OMaths.Count Then
+        Err.Raise vbObjectError + 7451, "VisualTeX", _
+            "The shared native-equation staging index is invalid."
+    End If
+    If displayMode <> "inline" And displayMode <> "block" Then
+        Err.Raise vbObjectError + 7451, "VisualTeX", _
+            "The native-equation display mode is invalid."
+    End If
+
+    Set targetDocument = targetRange.Document
+    If displaySizing Or displayMode = "block" Then
+        preferredSize = VTPreferredNativeDisplayFontSize(targetRange)
+    Else
+        preferredSize = VTPreferredEquationFontSize(targetRange, False)
+    End If
+    insertionStart = targetRange.Start
+    Set stagingEquationRange = _
+        sharedDocument.OMaths(sharedEquationIndex).Range.Duplicate
+    stagingEquationLength = _
+        stagingEquationRange.End - stagingEquationRange.Start
+    If stagingEquationLength < 1 Then
+        Err.Raise vbObjectError + 7451, "VisualTeX", _
+            "The shared native-equation staging item is empty."
+    End If
+
+    On Error GoTo RollbackConversion
+    Set insertionRange = targetRange.Duplicate
+    insertionRange.Collapse wdCollapseStart
+    insertionRange.FormattedText = stagingEquationRange.FormattedText
+    targetDocument.Activate
+
+    ' Resolve only the insertion neighborhood. The legacy single-formula path
+    ' snapshots and scans every OMath in the document so it can distinguish an
+    ' arbitrary replacement target. Batch import always inserts at an empty
+    ' collapsed cursor, so a local probe is both exact and dramatically faster.
+    probeStart = insertionStart - 1
+    If probeStart < 0 Then probeStart = 0
+    probeEnd = insertionStart + stagingEquationLength + 8
+    If probeEnd > targetDocument.Content.End Then _
+        probeEnd = targetDocument.Content.End
+    If probeEnd <= probeStart Then probeEnd = probeStart + 1
+    Set probeRange = targetDocument.Range( _
+        Start:=probeStart, End:=probeEnd)
+    bestDistance = 2147483647
+    For Each candidateMath In probeRange.OMaths
+        If VTOMathHasMeaningfulContent(candidateMath) Then
+            candidateDistance = Abs(candidateMath.Range.Start - insertionStart)
+            If candidateDistance < bestDistance Then
+                bestDistance = candidateDistance
+                matchCount = 1
+                Set nativeEquation = candidateMath
+            ElseIf candidateDistance = bestDistance Then
+                matchCount = matchCount + 1
+            End If
+        End If
+    Next candidateMath
+    If matchCount <> 1 Or nativeEquation Is Nothing Then
+        Err.Raise vbObjectError + 7434, "VisualTeX", _
+            "Word did not transfer exactly one native equation from the shared staging document."
+    End If
+
+    Set candidateRange = nativeEquation.Range.Duplicate
+    resolvedEquationStart = candidateRange.Start
+    candidateRange.Font.Position = 0
+    candidateRange.Font.Size = preferredSize
+    If displayMode = "inline" Then
+        Set candidateRange = VTFinalizeInlineNativeEquation(candidateRange)
+    Else
+        nativeEquation.Type = wdOMathDisplay
+        nativeEquation.Justification = wdOMathJcCenter
+        Set candidateRange = VTResolveNativeEquationRange( _
+            targetDocument, resolvedEquationStart, 16)
+        VTNormalizeUnnumberedDisplayParagraph candidateRange
+        Set candidateRange = VTResolveNativeEquationRange( _
+            targetDocument, resolvedEquationStart, 16)
+    End If
+    Set VTInsertNativeEquationFromSharedDocument = candidateRange.Duplicate
+    Exit Function
+
+RollbackConversion:
+    conversionErrorNumber = Err.Number
+    conversionErrorDescription = Err.Description
+    On Error Resume Next
+    If Not nativeEquation Is Nothing Then
+        nativeEquation.Range.Delete
+    Else
+        Set failedMath = VTNativeMathNearStart( _
+            targetDocument, insertionStart, stagingEquationLength + 8)
+        If Not failedMath Is Nothing Then
+            If Abs(failedMath.Range.Start - insertionStart) <= 2 Then _
+                failedMath.Range.Delete
+        End If
+    End If
+    On Error GoTo 0
+    Err.Raise conversionErrorNumber, _
+        "VisualTeX Word shared native equation insertion", _
+        conversionErrorDescription
 End Function
 
 Private Function VTInsertNativeEquationAtRange( _

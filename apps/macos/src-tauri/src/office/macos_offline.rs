@@ -39,6 +39,7 @@ const RESULT_WORD_SVG_DOCX_FILE: &str = "formula-svg.docx";
 const DOCUMENT_IMPORT_MANIFEST_FILE: &str = "document-import.txt";
 const DOCUMENT_IMPORT_PROGRESS_FILE: &str = "document-import-progress.txt";
 const LATEX_REDRAW_VECTOR_BATCH_FILE: &str = "latex-redraw-vectors.docx";
+const DOCUMENT_NATIVE_BATCH_FILE: &str = "document-native-batch.docx";
 const LATEX_REDRAW_SOURCE_FILE: &str = "latex-redraw-source.txt";
 const LATEX_REDRAW_PREFLIGHT_MANIFEST_FILE: &str = "latex-redraw-preflight.txt";
 const LATEX_REDRAW_FONT_SIZES_FILE: &str = "latex-redraw-font-sizes.txt";
@@ -831,6 +832,10 @@ fn document_import_manifest_path(session_id: &str) -> Result<PathBuf, String> {
 
 fn latex_redraw_vector_batch_path(session_id: &str) -> Result<PathBuf, String> {
     Ok(session_directory(OfficeHost::Word, session_id)?.join(LATEX_REDRAW_VECTOR_BATCH_FILE))
+}
+
+fn document_native_batch_path(session_id: &str) -> Result<PathBuf, String> {
+    Ok(session_directory(OfficeHost::Word, session_id)?.join(DOCUMENT_NATIVE_BATCH_FILE))
 }
 
 fn latex_redraw_preflight_manifest_path(session_id: &str) -> Result<PathBuf, String> {
@@ -3912,6 +3917,44 @@ fn build_word_svg_batch_docx(entries: &[WordSvgBatchEntry]) -> Result<Vec<u8>, S
     build_stored_zip(&zip_entries)
 }
 
+fn build_word_omml_batch_docx(omml_fragments: &[String]) -> Result<Vec<u8>, String> {
+    if omml_fragments.is_empty() || omml_fragments.len() > 1000 {
+        return Err("Word OMML batch must contain 1 to 1000 equations".to_string());
+    }
+    let content_types = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>"#;
+    let package_relationships = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>"#;
+    let mut document = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\"><w:body>\n",
+    );
+    for fragment in omml_fragments {
+        let normalized = fragment.trim();
+        if !normalized.starts_with("<m:oMath")
+            || !normalized.ends_with("</m:oMath>")
+            || normalized.contains("<!DOCTYPE")
+            || normalized.contains("<!ENTITY")
+        {
+            return Err("Word OMML batch contains an invalid equation fragment".to_string());
+        }
+        document.push_str("<w:p>");
+        document.push_str(normalized);
+        document.push_str("</w:p>\n");
+    }
+    document.push_str("<w:sectPr/></w:body></w:document>");
+    build_stored_zip(&[
+        ("[Content_Types].xml", content_types.as_slice()),
+        ("_rels/.rels", package_relationships.as_slice()),
+        ("word/document.xml", document.as_bytes()),
+    ])
+}
+
 fn materialize_word_svg_package(
     session: &OfficeFormulaSession,
     geometry: WordGeometry,
@@ -5168,7 +5211,19 @@ fn commit_document_import_blocking(
     } else {
         None
     };
+    let native_batch_document_path = if input.output_kind == "omml" {
+        Some(document_native_batch_path(&session_id)?)
+    } else {
+        None
+    };
+    if let Some(batch_path) = native_batch_document_path.as_ref() {
+        entries.push((
+            "nativeBatchDocumentPath".to_string(),
+            batch_path.to_string_lossy().to_string(),
+        ));
+    }
     let mut redraw_vector_entries = Vec::new();
+    let mut native_batch_entries = Vec::<String>::new();
     let mut metadata_to_cache = Vec::new();
     let mut formula_count = 0usize;
     let mut text_bytes = 0usize;
@@ -5377,6 +5432,17 @@ fn commit_document_import_blocking(
                 let native_docx = decode_document_native_docx(omml_docx_base64)?;
                 let native_document_path = native_word_document_path(formula_id)?;
                 atomic_write(&native_document_path, &native_docx, 0o600)?;
+                let native_batch_document_index = if native_batch_document_path.is_some() {
+                    let omml_bytes = URL_SAFE_NO_PAD
+                        .decode(omml_base64)
+                        .map_err(|_| "Document formula OMML payload is not valid Base64URL".to_string())?;
+                    let omml_fragment = String::from_utf8(omml_bytes)
+                        .map_err(|_| "Document formula OMML payload is not UTF-8".to_string())?;
+                    native_batch_entries.push(omml_fragment);
+                    native_batch_entries.len()
+                } else {
+                    0
+                };
 
                 let mut resolved_metadata = metadata.clone();
                 let canonical_latex = validate_document_formula_metadata_match(
@@ -5473,6 +5539,12 @@ fn commit_document_import_blocking(
                     format!("{prefix}nativeDocumentPath"),
                     native_document_path.to_string_lossy().to_string(),
                 ));
+                if native_batch_document_index > 0 {
+                    entries.push((
+                        format!("{prefix}nativeBatchDocumentIndex"),
+                        native_batch_document_index.to_string(),
+                    ));
+                }
                 entries.push((format!("{prefix}imagePath"), image_path));
                 entries.push((format!("{prefix}vectorDocumentPath"), vector_document_path));
                 if vector_document_index > 0 {
@@ -5540,6 +5612,14 @@ fn commit_document_import_blocking(
     if let Some(batch_path) = redraw_vector_batch_path.as_ref() {
         let package = build_word_svg_batch_docx(&redraw_vector_entries)?;
         atomic_write(batch_path, &package, 0o600)?;
+    }
+    if let Some(batch_path) = native_batch_document_path.as_ref() {
+        let package = build_word_omml_batch_docx(&native_batch_entries)?;
+        atomic_write(batch_path, &package, 0o600)?;
+        entries.push((
+            "nativeBatchFormulaCount".to_string(),
+            native_batch_entries.len().to_string(),
+        ));
     }
 
     let manifest = dynamic_dispatch_text(&entries)?;

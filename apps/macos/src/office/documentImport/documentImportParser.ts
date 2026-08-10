@@ -1784,34 +1784,51 @@ export function parseLatexMarkdownDocument(
   let literals: ExtractedLiteral[] = [];
   let theoremDefinitions = new Map<string, TheoremEnvironmentDefinition>();
   let theoremEnvironmentNames = new Set<string>();
+
   if (sourceKind === "markdown") {
-    normalized = normalizeMarkdownStructure(normalized);
-  } else {
-    normalized = normalizeLatexExtensionsFlat(normalized);
-  }
-  if (sourceKind === "latex") {
-    theoremDefinitions = theoremDefinitionsFromSource(normalized);
-    theoremEnvironmentNames = new Set(theoremDefinitions.keys());
-    const literalized = extractLatexLiteralFallbacks(
+    // Protect math before Markdown structural normalization. Setext headings,
+    // tables and list syntax may use characters such as `=`, `-` and `|` that
+    // are also perfectly valid inside multi-line LaTeX. Extracting formulas to
+    // private-use tokens first prevents Markdown from rewriting a display
+    // equation before the formula parser gets a chance to see it.
+    const extracted = extractFormulas(
       normalized,
+      defaultFontSizePt,
+      sourceKind,
       theoremEnvironmentNames,
     );
-    normalized = stripLatexComments(
-      literalized.text,
-      theoremEnvironmentNames,
+    const structured = normalizeMarkdownStructure(extracted.text);
+    return parseStructuredLines(
+      structured,
+      extracted.formulas,
+      literals,
+      sourceKind,
     );
-    literals = literalized.literals;
   }
+
+  normalized = normalizeLatexExtensionsFlat(normalized);
+  theoremDefinitions = theoremDefinitionsFromSource(normalized);
+  theoremEnvironmentNames = new Set(theoremDefinitions.keys());
+  const literalized = extractLatexLiteralFallbacks(
+    normalized,
+    theoremEnvironmentNames,
+  );
+  normalized = stripLatexComments(
+    literalized.text,
+    theoremEnvironmentNames,
+  );
+  literals = literalized.literals;
+
   const extracted = extractFormulas(
     normalized,
     defaultFontSizePt,
     sourceKind,
     theoremEnvironmentNames,
   );
-  const structured =
-    sourceKind === "latex"
-      ? normalizeLatexStructure(extracted.text, theoremDefinitions)
-      : extracted.text;
+  const structured = normalizeLatexStructure(
+    extracted.text,
+    theoremDefinitions,
+  );
   return parseStructuredLines(
     structured,
     extracted.formulas,
