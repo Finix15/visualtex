@@ -454,7 +454,13 @@ async function main() {
     const alignedExpression = `
       (async () => {
         const module = await import(${JSON.stringify(`${baseUrl}/src/office/omml/latexToOmml.ts`)});
-        return module.latexLinesToOmml(['a=b+c', 'long=d'], 'block', 'align');
+        const marker = String.raw\`\\class{visualtex-align-marker}{\\kern0pt}\`;
+        const explicit = module.latexLinesToOmml([
+          \`a\${marker}=b+c\`,
+          \`long\${marker}=d\`,
+        ], 'block', 'align');
+        const implicit = module.latexLinesToOmml(['a=b+c', 'long=d'], 'block', 'align');
+        return { explicit, implicit };
       })()
     `;
     const alignedEvaluation = await evaluateWithNavigationRetry({
@@ -465,19 +471,24 @@ async function main() {
     if (alignedEvaluation.exceptionDetails) {
       throw new Error(alignedEvaluation.exceptionDetails.exception?.description ?? "Aligned OMML generation failed.");
     }
-    const aligned = alignedEvaluation.result?.value;
+    const aligned = alignedEvaluation.result?.value?.explicit;
+    const implicitAligned = alignedEvaluation.result?.value?.implicit;
     expectIncludes(aligned, "<m:eqArrPr><m:baseJc m:val=\"center\"/></m:eqArrPr>", "Aligned rows must use one centered equation array.");
     expect(
       (aligned.match(/&amp;/g) ?? []).length === 2,
-      "Every align row must expose exactly one OMML equation-array alignment control.",
+      "Every explicit align point must expose exactly one OMML equation-array alignment control.",
+    );
+    expect(
+      (implicitAligned.match(/&amp;/g) ?? []).length === 0,
+      "Align OMML must not invent alignment controls when the user did not type &.",
     );
     expect(
       (aligned.match(/<m:oMath\b/g) ?? []).length === 1,
       "Aligned OMML must contain exactly one formula root and no empty formula objects.",
     );
     expect(
-      /<m:rPr>(?:<m:scr[^>]*\/>|<m:sty[^>]*\/>)+<\/m:rPr><m:t>&amp;=<\/m:t>/.test(aligned),
-      "Each OMML equation-array alignment control must precede its relationship operator.",
+      /&amp;[\s\S]*?=/.test(aligned),
+      "Each explicit OMML equation-array alignment control must remain before its relationship operator.",
     );
 
     const docxExpression = `

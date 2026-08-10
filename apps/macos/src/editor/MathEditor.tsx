@@ -24,6 +24,7 @@ import type {
   FormulaAlignment,
   FormulaLine,
   InputBehaviorSettingKey,
+  LatexCodeFormat,
   InputBehaviorSettings,
 } from "../types/formula";
 import type {
@@ -41,7 +42,10 @@ import {
 } from "../history/HistoryManager";
 import { getEditorDocumentSnapshot } from "../history/documentHistory";
 import { searchCommands } from "../autocomplete/CommandSearchEngine";
-import { commandRegistry } from "../autocomplete/commandRegistry";
+import {
+  findRuntimeCommandByCommand,
+  getRuntimeCommandRegistry,
+} from "../autocomplete/runtimeCommandRegistry";
 import { CommandSuggestionPopup } from "../autocomplete/CommandSuggestionPopup";
 import {
   createFormulaLine,
@@ -67,6 +71,14 @@ import {
   convertVisualTexLatexToMarkup,
   installMathLiveContourIntegralShadowStyle,
 } from "./mathLiveIntegralCompatibility";
+import { applyCustomSymbolMacrosToMathfield } from "../math/customSymbolRegistry";
+import {
+  containsCustomSymbolCommand,
+  installCustomSymbolGlobalStyle,
+  installCustomSymbolShadowStyle,
+  refreshCustomSymbolMathfield,
+} from "../math/customSymbolRendering";
+import { useCustomSymbolRevision } from "../math/customSymbolReact";
 import { ImeCompositionGuard } from "./imeCompositionGuard";
 import {
   nativeSuggestionPreviewHasVisibleInk,
@@ -84,6 +96,11 @@ import {
   type FormulaChineseFont,
   type FormulaLetterFont,
 } from "./formulaFontPreferences";
+import {
+  usesExplicitAlignmentPoints,
+  VISUALTEX_ALIGNMENT_MARKER_CLASS,
+  VISUALTEX_ALIGNMENT_MARKER_LATEX,
+} from "./alignmentMarkers";
 
 export interface MathEditorInsertionTarget {
   lineId: string;
@@ -141,6 +158,7 @@ interface Props {
   lines: FormulaLine[];
   activeLineId: string | null;
   formulaAlignment: FormulaAlignment;
+  latexCodeFormat: LatexCodeFormat;
   zoom: number;
   reuseLineSlots?: boolean;
   readOnly?: boolean;
@@ -231,6 +249,23 @@ function rawLatexInput(field: MathfieldElement) {
     .filter((node) => !node.classList.contains("ML__suggestion"))
     .map((node) => node.textContent ?? "")
     .join("");
+}
+
+type MathLiveInternalField = {
+  _mathfield?: {
+    model?: {
+      parentEnvironment?: {
+        environmentName?: string;
+      } | null;
+    };
+  };
+};
+
+function activeMathLiveEnvironmentName(field: MathfieldElement) {
+  return (
+    (field as unknown as MathLiveInternalField)._mathfield?.model?.parentEnvironment
+      ?.environmentName ?? null
+  );
 }
 
 function structuralBoundaryOffsetFromPoint(
@@ -1018,8 +1053,13 @@ const accentCommandTemplates = new Map<string, string>([
   ["\\overleftrightarrow", "\\overleftrightarrow{\\placeholder{}}"],
   ["\\mathring", "\\mathring{\\placeholder{}}"],
 ]);
+const CASES_ENVIRONMENT_COMMAND = "\\begin{cases}";
+const CASES_ENVIRONMENT_TEMPLATE =
+  "\\begin{cases}\\placeholder{} & \\placeholder{}\\end{cases}";
+
 const rawPlaceholderCommandTemplates = new Map<string, string>([
   ...accentCommandTemplates,
+  [CASES_ENVIRONMENT_COMMAND, CASES_ENVIRONMENT_TEMPLATE],
   ["\\sqrt", "\\sqrt{\\placeholder{}}"],
   ["\\frac", "\\frac{\\placeholder{}}{\\placeholder{}}"],
   ["\\dfrac", "\\dfrac{\\placeholder{}}{\\placeholder{}}"],
@@ -1084,7 +1124,7 @@ function visibleCommandSuggestions(
     rawQuery,
     usage,
     personalize,
-    commandRegistry.length,
+    getRuntimeCommandRegistry().length,
   )
     .filter((command) =>
       structuredSuggestionCommands.has(command.command)
@@ -1156,9 +1196,7 @@ function selectAdjacentAccentPlaceholder(
 function exactWrapperCommand(rawQuery: string) {
   const normalizedQuery = rawQuery.trim();
   if (!wrapperCommandPreviews.has(normalizedQuery)) return null;
-  return (
-    commandRegistry.find((command) => command.command === normalizedQuery) ?? null
-  );
+  return findRuntimeCommandByCommand(normalizedQuery);
 }
 
 function findAcceptedWrapperRange(
@@ -1249,15 +1287,53 @@ let observedNativeInputPopoverSource: HTMLElement | null = null;
 let nativeSuggestionUsageSnapshot: Record<string, CommandUsage> = {};
 let nativeSuggestionPersonalizeSnapshot = true;
 let nativeInputPopoverManualCommand = "";
+let nativeInputPopoverActiveField: MathfieldElement | null = null;
+
+function casesEnvironmentSuggestionQuery(field: MathfieldElement) {
+  const raw = rawLatexInput(field).replace(/\s+/g, "");
+  if (!raw.startsWith("\\begin{")) return "";
+  if (!CASES_ENVIRONMENT_COMMAND.startsWith(raw)) return "";
+  return raw;
+}
+
+function renderCasesEnvironmentSuggestion(stable: HTMLElement, field: MathfieldElement) {
+  const query = casesEnvironmentSuggestionQuery(field);
+  if (!query) return false;
+
+  const preview = convertVisualTexLatexToMarkup(
+    "\\begin{cases}x & x>0\\\\0 & x=0\\end{cases}",
+    { defaultMode: "math" },
+  );
+  stable.dataset.visualtexEnvironmentSuggestion = "cases";
+  stable.innerHTML = `<ul><li role="button" data-command="\\begin{cases}" class="ML__popover__current has-visualtex-command-preview"><span class="ML__popover__latex">\\begin{cases}</span><span class="ML__popover__command">${preview}</span><span class="ML__popover__keybinding">Space</span></li></ul>`;
+
+  const caret =
+    field.shadowRoot?.querySelector<HTMLElement>(
+      ".ML__latex-caret, .ML__caret, .ML__text-caret",
+    ) ?? null;
+  const anchor = caret?.getBoundingClientRect() ?? field.getBoundingClientRect();
+  const width = Math.min(380, Math.max(250, window.innerWidth - 24));
+  const left = Math.max(
+    12,
+    Math.min(window.innerWidth - width - 12, anchor.left - 40),
+  );
+  const roomBelow = window.innerHeight - anchor.bottom;
+  stable.classList.toggle("bottom-tip", roomBelow < 190);
+  stable.classList.toggle("top-tip", roomBelow >= 190);
+  stable.style.left = `${left}px`;
+  stable.style.top =
+    roomBelow < 190
+      ? `${Math.max(12, anchor.top - 92)}px`
+      : `${Math.min(window.innerHeight - 72, anchor.bottom + 12)}px`;
+  stable.classList.add("is-visible");
+  stable.setAttribute("aria-hidden", "false");
+  return true;
+}
 
 function nativeSuggestionUsageId(command: string) {
   const normalized = command.trim();
   return (
-    commandRegistry.find(
-      (candidate) =>
-        candidate.command === normalized ||
-        candidate.insertTemplate === normalized,
-    )?.id ?? `mathlive-native:${normalized}`
+    findRuntimeCommandByCommand(normalized)?.id ?? `mathlive-native:${normalized}`
   );
 }
 
@@ -1369,13 +1445,30 @@ function ensureStableNativeInputPopover() {
         "li[data-command]",
       ) ?? [],
     ).find((candidate) => candidate.dataset.command === command);
-    sourceItem?.dispatchEvent(
-      new MouseEvent("click", {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-      }),
-    );
+    if (sourceItem) {
+      sourceItem.dispatchEvent(
+        new MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+        }),
+      );
+      return;
+    }
+    if (
+      command === CASES_ENVIRONMENT_COMMAND &&
+      nativeInputPopoverActiveField?.isConnected
+    ) {
+      nativeInputPopoverActiveField.dataset.pendingNativeSuggestion = command;
+      nativeInputPopoverActiveField.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: " ",
+          code: "Space",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    }
   });
   document.body.append(panel);
   return panel;
@@ -1439,6 +1532,14 @@ function syncStableNativeInputPopover() {
   const stable = ensureStableNativeInputPopover();
 
   if (!source || !sourceVisible) {
+    if (
+      nativeInputPopoverActiveField?.isConnected &&
+      renderCasesEnvironmentSuggestion(stable, nativeInputPopoverActiveField)
+    ) {
+      window.clearTimeout(stableNativeInputPopoverHideTimer);
+      return;
+    }
+    delete stable.dataset.visualtexEnvironmentSuggestion;
     window.clearTimeout(stableNativeInputPopoverHideTimer);
     stableNativeInputPopoverHideTimer = window.setTimeout(() => {
       const latest = getNativeInputPopoverSource();
@@ -1456,6 +1557,7 @@ function syncStableNativeInputPopover() {
   }
 
   window.clearTimeout(stableNativeInputPopoverHideTimer);
+  delete stable.dataset.visualtexEnvironmentSuggestion;
   source.dataset.visualtexInputPopoverSource = "true";
   rankNativeSuggestionItems(source);
   const nextHtml = source.innerHTML;
@@ -3119,6 +3221,7 @@ function getVisibleNativeSuggestionItems(
   );
 
   if (!sourceVisible && !stableVisible) return [];
+  if (stable?.dataset.visualtexEnvironmentSuggestion) return stableItems;
   if (sourceVisible) return sourceItems;
   if (!field || !rawLatexInput(field).trim()) return [];
   return sourceItems.length ? sourceItems : stableItems;
@@ -4085,6 +4188,7 @@ function FormulaField(props: FormulaFieldProps) {
       initialRowHeight + "px",
     );
     installMathLiveContourIntegralShadowStyle(field);
+    installCustomSymbolShadowStyle(field);
     installVisualTexStructuralPlaceholderStyle(field);
 
     let pointerPlaceholderFrame = 0;
@@ -4772,6 +4876,16 @@ function FormulaField(props: FormulaFieldProps) {
         return;
       }
       normalizeGuardedBackslashInput(event.timeStamp);
+      nativeInputPopoverActiveField = field;
+      const casesSuggestionQuery = casesEnvironmentSuggestionQuery(field);
+      if (casesSuggestionQuery) {
+        field.dataset.pendingNativeSuggestion = CASES_ENVIRONMENT_COMMAND;
+      } else if (
+        field.dataset.pendingNativeSuggestion === CASES_ENVIRONMENT_COMMAND
+      ) {
+        delete field.dataset.pendingNativeSuggestion;
+      }
+      scheduleStableNativeInputPopoverSync();
       const before = lastSnapshotRef.current ?? captureFieldSnapshot(field);
       const directInputSetting =
         event instanceof InputEvent && isSingleDirectInput(event, field)
@@ -4801,6 +4915,7 @@ function FormulaField(props: FormulaFieldProps) {
       }
       clearPendingAutoExit();
     normalizeCompletedDifferentialDisplay(field);
+    installCustomSymbolShadowStyle(field);
     const inputType =
       event instanceof InputEvent ? event.inputType || "insertText" : "insertText";
     let postInputSnapshot = captureFieldSnapshot(field);
@@ -4887,12 +5002,18 @@ function FormulaField(props: FormulaFieldProps) {
         });
         return;
       }
+      nativeInputPopoverActiveField = field;
+      scheduleStableNativeInputPopoverSync();
       propsRef.current.onFocus(propsRef.current.index, field);
       lastSnapshotRef.current = captureFieldSnapshot(field);
     };
     const handleBlur = () => {
       clearPendingWrapperInput();
       rawCommandAnchors.delete(field);
+      if (nativeInputPopoverActiveField === field) {
+        nativeInputPopoverActiveField = null;
+        scheduleStableNativeInputPopoverSync();
+      }
       propsRef.current.onCommitPending();
     };
     const confirmPendingWrapperInput = (event: KeyboardEvent) => {
@@ -5633,7 +5754,11 @@ function FormulaField(props: FormulaFieldProps) {
         expand: false,
       },
     };
-    if (/\\bm(?:\s|\{|$)/.test(propsRef.current.latex)) {
+    applyCustomSymbolMacrosToMathfield(field);
+    if (
+      /\\bm(?:\s|\{|$)/.test(propsRef.current.latex) ||
+      containsCustomSymbolCommand(propsRef.current.latex)
+    ) {
       field.setValue(propsRef.current.latex, {
         mode: "math",
         format: "latex",
@@ -5646,6 +5771,7 @@ function FormulaField(props: FormulaFieldProps) {
     // context menu completely instead of hiding it after it opens.
     field.menuItems = [];
     installMathLiveContourIntegralShadowStyle(field);
+    installCustomSymbolShadowStyle(field);
     installVisualTexStructuralPlaceholderStyle(field);
     applyVisualTexFormulaFonts(
       field,
@@ -5819,6 +5945,7 @@ function FormulaField(props: FormulaFieldProps) {
     // model first so upright operators and plain command candidates never
     // depend on a remount or app restart.
     normalizeCompletedDifferentialDisplay(field);
+    installCustomSymbolShadowStyle(field);
 
     // 本地输入仅因中文规范化而与 store 等值时，不重建 MathLive 模型；
     // 只更新事务基准，保留当前光标、选区和删除键内部状态。
@@ -5836,6 +5963,7 @@ function FormulaField(props: FormulaFieldProps) {
         selectionMode: "after",
         silenceNotifications: true,
       });
+      installCustomSymbolShadowStyle(field);
       field.resetUndo();
     }
 
@@ -5921,6 +6049,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       lines,
       activeLineId,
       formulaAlignment,
+      latexCodeFormat,
       zoom,
       reuseLineSlots = false,
       readOnly = false,
@@ -5998,14 +6127,112 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
     const formulaHotkeyBindings = useFormulaHotkeyStore(
       (state) => state.bindings,
     );
+    const customSymbolRevision = useCustomSymbolRevision();
     const isEn = language === "en";
     const interactionReadOnly = readOnly || previewOnly;
     previewOnlyRef.current = previewOnly;
+
+    useEffect(() => {
+      installCustomSymbolGlobalStyle();
+      fieldRefs.current.forEach((field) => refreshCustomSymbolMathfield(field));
+    }, [customSymbolRevision]);
 
     linesRef.current = lines;
     const resolvedActiveLineId =
       lines.find((line) => line.id === activeLineId)?.id ?? lines[0]?.id ?? null;
     activeLineIdRef.current = resolvedActiveLineId;
+
+    const refreshExplicitAlignmentLayout = () => {
+      const registered = Array.from(fieldRefs.current.values());
+      for (const field of registered) {
+        const host = field.closest<HTMLElement>(".mathfield-host");
+        host?.classList.remove("has-explicit-align-marker");
+        field.style.removeProperty("margin-left");
+      }
+      if (!usesExplicitAlignmentPoints(latexCodeFormat)) return;
+
+      const marked = linesRef.current.flatMap((line) => {
+        const field = fieldRefs.current.get(line.id);
+        if (!field?.isConnected) return [];
+        const host = field.closest<HTMLElement>(".mathfield-host");
+        const marker = field.shadowRoot?.querySelector<HTMLElement>(
+          `.${VISUALTEX_ALIGNMENT_MARKER_CLASS}`,
+        );
+        if (!host || !marker) return [];
+        const fieldBounds = field.getBoundingClientRect();
+        const markerBounds = marker.getBoundingClientRect();
+        return [
+          {
+            field,
+            host,
+            anchorOffset: markerBounds.left - fieldBounds.left,
+            leftExtent: markerBounds.left - fieldBounds.left,
+            rightExtent: fieldBounds.right - markerBounds.left,
+          },
+        ];
+      });
+      if (!marked.length) return;
+
+      const sharedLeftExtent = Math.max(
+        0,
+        ...marked.map((entry) => entry.leftExtent),
+      );
+      const sharedRightExtent = Math.max(
+        0,
+        ...marked.map((entry) => entry.rightExtent),
+      );
+      const alignedWidth = sharedLeftExtent + sharedRightExtent;
+
+      for (const entry of marked) {
+        const hostWidth = entry.host.getBoundingClientRect().width;
+        const groupStart =
+          formulaAlignment === "left"
+            ? 0
+            : formulaAlignment === "right"
+              ? Math.max(0, hostWidth - alignedWidth)
+              : Math.max(0, (hostWidth - alignedWidth) / 2);
+        const fieldOffset = Math.max(
+          0,
+          groupStart + sharedLeftExtent - entry.anchorOffset,
+        );
+        entry.host.classList.add("has-explicit-align-marker");
+        entry.field.style.marginLeft = `${fieldOffset}px`;
+      }
+    };
+
+    useLayoutEffect(() => {
+      let firstFrame = 0;
+      let secondFrame = 0;
+      const schedule = () => {
+        window.cancelAnimationFrame(firstFrame);
+        window.cancelAnimationFrame(secondFrame);
+        firstFrame = window.requestAnimationFrame(() => {
+          refreshExplicitAlignmentLayout();
+          secondFrame = window.requestAnimationFrame(
+            refreshExplicitAlignmentLayout,
+          );
+        });
+      };
+      schedule();
+      window.addEventListener("resize", schedule);
+      window.addEventListener(EDITOR_LAYOUT_REFRESH_EVENT, schedule);
+      return () => {
+        window.cancelAnimationFrame(firstFrame);
+        window.cancelAnimationFrame(secondFrame);
+        window.removeEventListener("resize", schedule);
+        window.removeEventListener(EDITOR_LAYOUT_REFRESH_EVENT, schedule);
+      };
+    }, [
+      fieldRenderEpoch,
+      formulaAlignment,
+      formulaInsetLeft,
+      formulaInsetRight,
+      formulaRowVerticalInset,
+      latexCodeFormat,
+      lines,
+      showLineNumbers,
+      zoom,
+    ]);
 
     const captureEditorScrollSnapshot = (
       preferredLineId?: string | null,
@@ -7823,6 +8050,51 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         }
       }
 
+      const alignmentCaretDepth =
+        field.getElementInfo(field.position)?.depth ??
+        field.getElementInfo(Math.max(0, field.position - 1))?.depth ??
+        0;
+      const insertsExplicitAlignmentPoint =
+        usesExplicitAlignmentPoints(latexCodeFormat) &&
+        alignmentCaretDepth === 0 &&
+        event.key === "&" &&
+        !event.isComposing &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        field.mode !== "latex" &&
+        !rawCommandActive &&
+        activeMathLiveEnvironmentName(field) === null;
+      if (insertsExplicitAlignmentPoint) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const inserted = applyDiscreteFormulaMutation(
+          lineId,
+          field,
+          "keyboard",
+          () =>
+            field.insert(VISUALTEX_ALIGNMENT_MARKER_LATEX, {
+              mode: "math",
+              format: "latex",
+              insertionMode: "replaceSelection",
+              selectionMode: "after",
+              focus: true,
+              scrollIntoView: false,
+            }),
+        );
+        if (inserted) {
+          suppressedSuggestionRef.current = null;
+          queryRef.current = "";
+          setQuery("");
+          selectSuggestionIndex(0);
+          focusLine(lineId, {
+            latex: normalizeChineseLatex(field.value),
+            selection: captureSelection(field),
+          });
+        }
+        return;
+      }
+
       const insertsVisibleMathSpace =
         !event.isComposing &&
         !event.altKey &&
@@ -7840,6 +8112,31 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         // Only when nothing consumes the key do we insert an explicit LaTeX
         // control space on the microtask immediately after key dispatch.
         scheduleUnconsumedMathSpace(lineId, field);
+        return;
+      }
+
+      if (
+        event.key === "Enter" &&
+        activeMathLiveEnvironmentName(field) === "cases"
+      ) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const insertedRow = applyDiscreteFormulaMutation(
+          lineId,
+          field,
+          "keyboard",
+          () => field.executeCommand("addRowAfter"),
+        );
+        if (insertedRow) {
+          suppressedSuggestionRef.current = null;
+          queryRef.current = "";
+          setQuery("");
+          selectSuggestionIndex(0);
+          focusLine(lineId, {
+            latex: normalizeChineseLatex(field.value),
+            selection: captureSelection(field),
+          });
+        }
         return;
       }
 

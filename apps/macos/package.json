@@ -20,6 +20,8 @@
     "test:input-behavior": "npm run build:desktop && node scripts/input_behavior_regression.mjs",
     "test:radical-render": "npm run build:desktop && node scripts/radical_render_regression.mjs",
     "test:formula-hotkeys": "npm run build:desktop && node scripts/formula_hotkey_regression.mjs",
+    "test:align-cases": "npm run build:desktop && node scripts/align_cases_regression.mjs",
+    "test:keypad-mode": "npm run build:desktop && node scripts/keypad_mode_regression.mjs",
     "test:history": "node scripts/history_manager_smoke.mjs",
     "test:latex-format": "node --experimental-strip-types scripts/latex_format_smoke.mjs",
     "test:markdown-export": "node --experimental-strip-types scripts/markdown_export_smoke.mjs",

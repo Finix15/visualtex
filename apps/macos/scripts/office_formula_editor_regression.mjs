@@ -4,13 +4,24 @@ import {
   normalizeFormulaEditorDocument,
   serializeFormulaEditorDocument,
 } from "../src/office/shared/formulaEditorDocument.ts";
-import { createFormulaMetadata } from "../src/office/shared/formulaMetadata.ts";
+import {
+  createFormulaMetadata,
+  decodeFormulaMetadata,
+  encodeFormulaMetadata,
+  formulaMetadataFromXml,
+  formulaMetadataToXml,
+} from "../src/office/shared/formulaMetadata.ts";
 import {
   renderOfficeFormulaArtifacts,
   tryRenderOfficeFormulaDraftArtifacts,
 } from "../src/office/shared/formulaRenderArtifacts.ts";
 import { latexToSvg } from "../src/export/latexToSvg.ts";
 import { errorMessage } from "../src/runtime/errorMessage.ts";
+import { VISUALTEX_ALIGNMENT_MARKER_LATEX } from "../src/editor/alignmentMarkers.ts";
+import {
+  registerCustomSymbol,
+  replaceCustomSymbolLibrary,
+} from "../src/math/customSymbolRegistry.ts";
 import {
   clearsOfficeEditorActivation,
   isOfficeEditorActivation,
@@ -34,6 +45,111 @@ if (!("children" in elementPrototype)) {
     },
   });
 }
+
+replaceCustomSymbolLibrary({ version: 1, symbols: [] });
+const customSymbolNow = Date.now();
+registerCustomSymbol({
+  id: "office-metadata-selfdefa",
+  command: "selfdefa",
+  name: "Office metadata custom symbol",
+  role: "relation",
+  limitsBehavior: "auto",
+  metrics: { widthEm: 0.8, ascentEm: 0.64, descentEm: 0.1 },
+  artwork: {
+    shapes: [
+      {
+        kind: "circle",
+        cx: 400,
+        cy: 360,
+        r: 245,
+        fill: false,
+        strokeWidth: 72,
+      },
+      {
+        kind: "line",
+        x1: 130,
+        y1: 360,
+        x2: 670,
+        y2: 360,
+        fill: false,
+        strokeWidth: 72,
+        lineCap: "round",
+      },
+      {
+        kind: "path",
+        operation: "erase",
+        d: "M220 360L580 360",
+        fill: false,
+        strokeWidth: 110,
+        lineCap: "round",
+      },
+    ],
+  },
+  ommlFallback: "\\approx",
+  createdAt: customSymbolNow,
+  updatedAt: customSymbolNow,
+});
+const customSymbolLines = [{ id: "office-custom-symbol-line", latex: "\\selfdefa" }];
+const customSymbolRendered = renderOfficeFormulaArtifacts({
+  lines: customSymbolLines,
+  codeFormat: "raw",
+  displayMode: "inline",
+  host: "word",
+  includeWordOmml: true,
+});
+const customSymbolMetadata = createFormulaMetadata({
+  formulaId: "12345678-1234-4234-9234-123456789abc",
+  title: "Custom symbol metadata round trip",
+  lines: customSymbolLines,
+  codeFormat: "raw",
+  sourceLatex: customSymbolRendered.canonicalLatex,
+  displayMode: "inline",
+});
+const customSymbolEncodedMetadata = encodeFormulaMetadata(customSymbolMetadata);
+const customSymbolDecodedMetadata = decodeFormulaMetadata(customSymbolEncodedMetadata);
+assert.ok(customSymbolDecodedMetadata);
+assert.equal(customSymbolDecodedMetadata.latex, "\\selfdefa");
+const customSymbolXml = formulaMetadataToXml(customSymbolMetadata);
+const customSymbolXmlMetadata = formulaMetadataFromXml(customSymbolXml);
+assert.ok(customSymbolXmlMetadata);
+assert.equal(customSymbolXmlMetadata.latex, "\\selfdefa");
+const reopenedCustomSymbolDocument = normalizeFormulaEditorDocument(
+  customSymbolXmlMetadata.lines,
+  customSymbolXmlMetadata.codeFormat,
+);
+const reopenedCustomSymbolRendered = renderOfficeFormulaArtifacts({
+  lines: reopenedCustomSymbolDocument.lines,
+  codeFormat: reopenedCustomSymbolDocument.codeFormat,
+  displayMode: customSymbolXmlMetadata.displayMode,
+  host: "word",
+  includeWordOmml: true,
+});
+assert.equal(reopenedCustomSymbolRendered.canonicalLatex, "\\selfdefa");
+assert.match(
+  reopenedCustomSymbolRendered.svg.svg,
+  /data-visualtex-custom-symbol="office-metadata-selfdefa"/,
+);
+assert.match(
+  reopenedCustomSymbolRendered.svg.svg,
+  /<mask\b[^>]*id="visualtex-custom-symbol-erase-office-metadata-selfdefa-/,
+  "Word SVG must preserve custom-symbol transparent eraser masks after metadata reopen",
+);
+const powerpointErasedCustomSymbol = renderOfficeFormulaArtifacts({
+  lines: reopenedCustomSymbolDocument.lines,
+  codeFormat: reopenedCustomSymbolDocument.codeFormat,
+  displayMode: customSymbolXmlMetadata.displayMode,
+  host: "powerpoint",
+  includeWordOmml: false,
+});
+assert.match(
+  powerpointErasedCustomSymbol.svg.svg,
+  /<mask\b[^>]*id="visualtex-custom-symbol-erase-office-metadata-selfdefa-/,
+  "PowerPoint SVG must preserve custom-symbol transparent eraser masks",
+);
+assert.equal(powerpointErasedCustomSymbol.omml, null);
+assert.match(reopenedCustomSymbolRendered.omml?.omml ?? "", /≈/);
+assert.doesNotMatch(reopenedCustomSymbolRendered.omml?.omml ?? "", /selfdefa/);
+replaceCustomSymbolLibrary({ version: 1, symbols: [] });
 
 const warmActivation = {
   sessionId: "12345678-1234-4234-9234-123456789abc",
@@ -149,7 +265,10 @@ a &= b + c \\
 d &= e
 \end{align}`,
     codeFormat: "align",
-    lines: ["a = b + c", "d = e"],
+    lines: [
+      `a ${VISUALTEX_ALIGNMENT_MARKER_LATEX}= b + c`,
+      `d ${VISUALTEX_ALIGNMENT_MARKER_LATEX}= e`,
+    ],
   },
   {
     name: "align-star",
@@ -158,7 +277,10 @@ x &= y \\
 y &= z
 \end{align*}`,
     codeFormat: "align-star",
-    lines: ["x = y", "y = z"],
+    lines: [
+      `x ${VISUALTEX_ALIGNMENT_MARKER_LATEX}= y`,
+      `y ${VISUALTEX_ALIGNMENT_MARKER_LATEX}= z`,
+    ],
   },
   {
     name: "aligned",
@@ -167,7 +289,10 @@ p &= q \\
 r &= s
 \end{aligned}`,
     codeFormat: "aligned",
-    lines: ["p = q", "r = s"],
+    lines: [
+      `p ${VISUALTEX_ALIGNMENT_MARKER_LATEX}= q`,
+      `r ${VISUALTEX_ALIGNMENT_MARKER_LATEX}= s`,
+    ],
   },
   {
     name: "gather",
@@ -214,7 +339,10 @@ c &= d
 \end{split}
 \end{equation}`,
     codeFormat: "equation-split",
-    lines: ["a = b", "c = d"],
+    lines: [
+      `a ${VISUALTEX_ALIGNMENT_MARKER_LATEX}= b`,
+      `c ${VISUALTEX_ALIGNMENT_MARKER_LATEX}= d`,
+    ],
   },
   {
     name: "equation-star-split",
@@ -225,7 +353,10 @@ c &= d
 \end{split}
 \end{equation*}`,
     codeFormat: "equation-star-split",
-    lines: ["a = b", "c = d"],
+    lines: [
+      `a ${VISUALTEX_ALIGNMENT_MARKER_LATEX}= b`,
+      `c ${VISUALTEX_ALIGNMENT_MARKER_LATEX}= d`,
+    ],
   },
 ];
 
@@ -447,7 +578,10 @@ e&=f &\quad g&=h
 assert.equal(alignat.codeFormat, "align");
 assert.deepEqual(
   alignat.lines.map((line) => line.latex),
-  ["a=b \\quad c=d", "e=f \\quad g=h"],
+  [
+    `a${VISUALTEX_ALIGNMENT_MARKER_LATEX}=b ${VISUALTEX_ALIGNMENT_MARKER_LATEX}\\quad c${VISUALTEX_ALIGNMENT_MARKER_LATEX}=d`,
+    `e${VISUALTEX_ALIGNMENT_MARKER_LATEX}=f ${VISUALTEX_ALIGNMENT_MARKER_LATEX}\\quad g${VISUALTEX_ALIGNMENT_MARKER_LATEX}=h`,
+  ],
 );
 
 const alreadyNormalized = normalizeFormulaEditorDocument(

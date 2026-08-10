@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -29,6 +31,9 @@ import {
 } from "../autocomplete/commandRegistry";
 import { MathPreview } from "../components/MathPreview";
 import { FormulaHotkeyRecorderDialog } from "../components/FormulaHotkeyRecorderDialog";
+import { customSymbolCommands } from "../autocomplete/runtimeCommandRegistry";
+import { readCustomSymbolLibrary } from "../math/customSymbolRegistry";
+import { useCustomSymbolRevision } from "../math/customSymbolReact";
 import {
   createFormulaHotkeyTarget,
   formatFormulaHotkeyChord,
@@ -39,6 +44,11 @@ import {
 } from "../shortcuts/formulaHotkeys";
 import { useEditorStore } from "../stores/editorStore";
 import { useFormulaHotkeyStore } from "../stores/formulaHotkeyStore";
+
+const LazyCustomSymbolDesignerDialog = lazy(async () => {
+  const module = await import("../components/CustomSymbolDesignerDialog");
+  return { default: module.CustomSymbolDesignerDialog };
+});
 
 type MatrixDelimiter =
   | "matrix"
@@ -789,6 +799,9 @@ export function FormulaToolbar({
     useState<FormulaContextMenuState | null>(null);
   const [hotkeyTarget, setHotkeyTarget] =
     useState<FormulaHotkeyTarget | null>(null);
+  const [customSymbolDesignerOpen, setCustomSymbolDesignerOpen] = useState(false);
+  const [customSymbolDesignerActivated, setCustomSymbolDesignerActivated] =
+    useState(false);
   const [activeCategory, setActiveCategory] =
     useState<ToolbarCategory>("common");
   const [fullPreviewCategories, setFullPreviewCategories] = useState<
@@ -811,6 +824,18 @@ export function FormulaToolbar({
     Record<string, number>
   >({});
   const language = useEditorStore((state) => state.language);
+  const customSymbolRevision = useCustomSymbolRevision();
+  const registeredCustomSymbols = useMemo(
+    () => readCustomSymbolLibrary().symbols,
+    [customSymbolRevision],
+  );
+  const registeredCustomSymbolCommands = useMemo(
+    () =>
+      new Map(
+        customSymbolCommands().map((command) => [command.command, command]),
+      ),
+    [customSymbolRevision],
+  );
   const formulaToolButtonSize = useEditorStore(
     (state) => state.formulaToolButtonSize,
   );
@@ -1926,6 +1951,20 @@ export function FormulaToolbar({
                   <FolderPlus size={14} />
                   {isEn ? "Section" : "分区"}
                 </button>
+                <button
+                  type="button"
+                  className="open-custom-symbol-designer"
+                  data-open-custom-symbol-designer
+                  onClick={() => {
+                    setContextMenu(null);
+                    setCustomSymbolDesignerActivated(true);
+                    setCustomSymbolDesignerOpen(true);
+                  }}
+                  title={isEn ? "Open custom symbol designer" : "打开自定义字符设计器"}
+                >
+                  <Pencil size={14} />
+                  {isEn ? "Symbol designer" : "字符设计器"}
+                </button>
               </div>
               <span>
                 {!activeCustomSection
@@ -2015,6 +2054,47 @@ export function FormulaToolbar({
             </div>
           ) : (
             <div className="formula-tile-list is-custom">
+              {registeredCustomSymbols.length > 0 ? (
+                <section
+                  className="registered-custom-symbol-toolbar-section"
+                  data-registered-custom-symbol-toolbar-section
+                >
+                  <header>
+                    <strong>{isEn ? "Registered symbols" : "已注册字符"}</strong>
+                    <span>{registeredCustomSymbols.length}</span>
+                  </header>
+                  <div className="registered-custom-symbol-toolbar-grid">
+                    {registeredCustomSymbols.map((symbol) => {
+                      const latex = `\\${symbol.command}`;
+                      const command = registeredCustomSymbolCommands.get(latex);
+                      return (
+                        <button
+                          type="button"
+                          className="formula-tile-button is-registered-custom-symbol"
+                          key={symbol.id}
+                          data-registered-custom-symbol-toolbar={symbol.id}
+                          data-registered-custom-symbol-command={symbol.command}
+                          onClick={() => {
+                            if (command) onInsert(command);
+                          }}
+                          aria-label={`${symbol.name} · ${latex}`}
+                          title={`${symbol.name} · ${latex}`}
+                        >
+                          <MathPreview
+                            latex={latex}
+                            className="formula-tile-preview"
+                            fit
+                            fluidHeight
+                          />
+                          <span className="registered-custom-symbol-toolbar-command">
+                            {latex}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+              ) : null}
               {customTileDefinitions.length === 0 &&
                 customTileLibrary.sections.length === 0 && (
                   <div className="formula-tile-empty">
@@ -2393,6 +2473,15 @@ export function FormulaToolbar({
         </div>
       )}
 
+      {customSymbolDesignerActivated ? (
+        <Suspense fallback={null}>
+          <LazyCustomSymbolDesignerDialog
+            open={customSymbolDesignerOpen}
+            language={language}
+            onClose={() => setCustomSymbolDesignerOpen(false)}
+          />
+        </Suspense>
+      ) : null}
       <FormulaHotkeyRecorderDialog
         target={hotkeyTarget}
         onClose={() => setHotkeyTarget(null)}

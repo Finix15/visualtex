@@ -1,5 +1,11 @@
 import { validateLatex } from "mathlive/ssr";
 import { normalizeMathLiveCanonicalUprightCommands } from "../editor/normalizeChineseLatex.ts";
+import { findCustomSymbolByCommand } from "../math/customSymbolRegistry";
+import {
+  restoreLatexAlignmentMarkers,
+  stripVisualTexAlignmentMarkers,
+  VISUALTEX_ALIGNMENT_MARKER_LATEX,
+} from "../editor/alignmentMarkers";
 import type { LatexCodeFormat } from "../types/formula";
 
 export type LatexCodeFormatGroup = "single" | "multi";
@@ -263,112 +269,7 @@ function updateEnvironmentStack(stack: string[], token: EnvironmentToken) {
   if (matchingIndex >= 0) stack.splice(matchingIndex, 1);
 }
 
-function hasTopLevelAlignmentMarker(latex: string): boolean {
-  let braceDepth = 0;
-  const environments: string[] = [];
-
-  for (let index = 0; index < latex.length; index += 1) {
-    const token = readEnvironmentToken(latex, index);
-    if (token) {
-      updateEnvironmentStack(environments, token);
-      index = token.end - 1;
-      continue;
-    }
-
-    const character = latex[index];
-    if (character === "{" && !isEscaped(latex, index)) braceDepth += 1;
-    else if (character === "}" && !isEscaped(latex, index)) {
-      braceDepth = Math.max(0, braceDepth - 1);
-    } else if (
-      character === "&" &&
-      !isEscaped(latex, index) &&
-      braceDepth === 0 &&
-      environments.length === 0
-    ) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-const relationCommands = [
-  "\\Longleftrightarrow",
-  "\\Longrightarrow",
-  "\\Leftrightarrow",
-  "\\Rightarrow",
-  "\\leftrightarrow",
-  "\\rightarrow",
-  "\\leftarrow",
-  "\\subseteq",
-  "\\supseteq",
-  "\\notin",
-  "\\approx",
-  "\\equiv",
-  "\\simeq",
-  "\\propto",
-  "\\mapsto",
-  "\\subset",
-  "\\supset",
-  "\\cong",
-  "\\neq",
-  "\\leq",
-  "\\geq",
-  "\\sim",
-  "\\to",
-  "\\ne",
-  "\\le",
-  "\\ge",
-  "\\in",
-] as const;
-
-function findTopLevelRelationIndex(latex: string): number {
-  let braceDepth = 0;
-  const environments: string[] = [];
-
-  for (let index = 0; index < latex.length; index += 1) {
-    const token = readEnvironmentToken(latex, index);
-    if (token) {
-      updateEnvironmentStack(environments, token);
-      index = token.end - 1;
-      continue;
-    }
-
-    const character = latex[index];
-    if (character === "{" && !isEscaped(latex, index)) {
-      braceDepth += 1;
-      continue;
-    }
-    if (character === "}" && !isEscaped(latex, index)) {
-      braceDepth = Math.max(0, braceDepth - 1);
-      continue;
-    }
-    if (braceDepth !== 0 || environments.length !== 0) continue;
-
-    if (character === "=" || character === "<" || character === ">") {
-      return index;
-    }
-
-    if (character !== "\\") continue;
-    for (const command of relationCommands) {
-      if (!latex.startsWith(command, index)) continue;
-      const nextCharacter = latex[index + command.length];
-      if (nextCharacter && /[A-Za-z]/.test(nextCharacter)) continue;
-      return index;
-    }
-  }
-
-  return -1;
-}
-
-function addAlignmentMarker(latex: string): string {
-  if (!latex || hasTopLevelAlignmentMarker(latex)) return latex;
-  const relationIndex = findTopLevelRelationIndex(latex);
-  if (relationIndex < 0) return latex;
-  return `${latex.slice(0, relationIndex)}&${latex.slice(relationIndex)}`;
-}
-
-function stripTopLevelAlignmentMarkers(latex: string): string {
+function encodeTopLevelAlignmentMarkers(latex: string): string {
   let result = "";
   let braceDepth = 0;
   const environments: string[] = [];
@@ -394,6 +295,7 @@ function stripTopLevelAlignmentMarkers(latex: string): string {
       braceDepth === 0 &&
       environments.length === 0
     ) {
+      result += VISUALTEX_ALIGNMENT_MARKER_LATEX;
       continue;
     }
     result += character;
@@ -402,10 +304,12 @@ function stripTopLevelAlignmentMarkers(latex: string): string {
   return result.trim();
 }
 
-function formatRows(lines: string[], alignRelations: boolean): string {
+function formatRows(lines: string[], preserveAlignmentMarkers: boolean): string {
   return lines
     .map((line, index) => {
-      const content = alignRelations ? addAlignmentMarker(line) : line;
+      const content = preserveAlignmentMarkers
+        ? restoreLatexAlignmentMarkers(line)
+        : stripVisualTexAlignmentMarkers(line);
       return index < lines.length - 1 ? `${content} \\\\` : content;
     })
     .join("\n");
@@ -518,24 +422,25 @@ export function formatLatexLines(
   format: LatexCodeFormat,
 ): string {
   const lines = filledLogicalFormulaLines(logicalLines);
+  const plainLines = lines.map(stripVisualTexAlignmentMarkers);
 
   switch (format) {
     case "raw":
-      return lines.join("\n");
+      return plainLines.join("\n");
     case "inline-dollar":
-      return lines.map((line) => `$${line}$`).join("\n");
+      return plainLines.map((line) => `$${line}$`).join("\n");
     case "inline-text-double-dollar":
-      return lines.map(formatInlineTextDoubleDollar).join("\n");
+      return plainLines.map(formatInlineTextDoubleDollar).join("\n");
     case "inline-paren":
-      return lines.map((line) => `\\(${line}\\)`).join("\n");
+      return plainLines.map((line) => `\\(${line}\\)`).join("\n");
     case "display-dollar":
-      return lines.map((line) => `$$\n${line}\n$$`).join("\n\n");
+      return plainLines.map((line) => `$$\n${line}\n$$`).join("\n\n");
     case "display-bracket":
-      return lines.map((line) => `\\[\n${line}\n\\]`).join("\n\n");
+      return plainLines.map((line) => `\\[\n${line}\n\\]`).join("\n\n");
     case "equation":
-      return lines.map((line) => wrapEnvironment("equation", line)).join("\n\n");
+      return plainLines.map((line) => wrapEnvironment("equation", line)).join("\n\n");
     case "equation-star":
-      return lines.map((line) => wrapEnvironment("equation*", line)).join("\n\n");
+      return plainLines.map((line) => wrapEnvironment("equation*", line)).join("\n\n");
     case "align":
       return wrapEnvironment("align", formatRows(lines, true));
     case "align-star":
@@ -702,7 +607,7 @@ function parseInlineTextDoubleDollarLines(source: string): string[] {
 function parseMultilineEnvironment(source: string, name: string): string[] {
   const body = extractEnvironmentBodies(source, name)[0];
   if (body === undefined) return [];
-  return splitTopLevelRows(body).map(stripTopLevelAlignmentMarkers);
+  return splitTopLevelRows(body).map(encodeTopLevelAlignmentMarkers);
 }
 
 function parseByFormat(source: string, format: LatexCodeFormat): string[] {
@@ -954,7 +859,14 @@ function validateFormulaDraft(latex: string): string | null {
   if (!hasCompleteRequiredCommandArguments(latex)) {
     return "incomplete-command-arguments";
   }
-  const errors = validateLatex(latex);
+  const errors = validateLatex(latex).filter(
+    (error) =>
+      !(
+        error.code === "unknown-command" &&
+        typeof error.arg === "string" &&
+        findCustomSymbolByCommand(error.arg)
+      ),
+  );
   return errors.length ? errors[0]?.code ?? "invalid-latex" : null;
 }
 
