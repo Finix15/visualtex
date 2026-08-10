@@ -435,8 +435,10 @@ export function SettingsDialog({
           ? selectedPath
           : `${selectedPath}.${VISUALTEX_CONFIGURATION_EXTENSION}`;
         await invoke("write_export_file", {
-          path,
-          dataBase64: encodeUtf8Base64(contents),
+          request: {
+            path,
+            base64: encodeUtf8Base64(contents),
+          },
         });
       } else {
         downloadConfigurationInBrowser(contents, filename);

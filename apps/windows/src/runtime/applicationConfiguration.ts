@@ -3,7 +3,8 @@ import { useEditorStore } from "../stores/editorStore";
 import { safeStorage } from "./safeStorage";
 import { publishSynchronizedTheme } from "../themeSync";
 import { OCR_MODELS } from "../ocr/ocrService";
-import type { FormulaDocument } from "../types/formula";
+import type { CommandUsage } from "../types/command";
+import type { FormulaDocument, FormulaHistoryItem } from "../types/formula";
 import {
   CUSTOM_SYMBOL_STORAGE_KEY,
   refreshCustomSymbolLibraryFromStorage,
@@ -23,12 +24,25 @@ export interface VisualTexConfigurationWindowState {
   officeEditor?: VisualTexConfigurationWindowSize | null;
 }
 
+export interface VisualTexConfigurationPersonalization {
+  usage?: Record<string, CommandUsage>;
+  history?: FormulaHistoryItem[];
+}
+
+export interface VisualTexConfigurationWordPreferences {
+  defaultDisplayEquationNumbered?: boolean;
+  defaultEquationNumberFormat?: string;
+}
+
 export interface VisualTexUserConfiguration {
   schema: typeof VISUALTEX_CONFIGURATION_SCHEMA;
   version: typeof VISUALTEX_CONFIGURATION_VERSION;
   exportedAt: string;
   editorSettings: Partial<FormulaDocument["settings"]>;
   storage: Record<string, string>;
+  capturedStorageKeys?: string[];
+  personalization?: VisualTexConfigurationPersonalization;
+  word?: VisualTexConfigurationWordPreferences;
   windows?: VisualTexConfigurationWindowState;
 }
 
@@ -47,6 +61,10 @@ const configurationStorageKeys = [
   "visualtex.silent-ocr.enabled",
   "visualtex.quick-ocr.capture-mode",
   "visualtex.custom-theme.v1",
+  "visualtex.formula-letter-font",
+  "visualtex.formula-chinese-font",
+  "visualtex-classic-tile-width",
+  "visualtex-classic-dock-height",
   CUSTOM_SYMBOL_STORAGE_KEY,
 ] as const;
 
@@ -99,16 +117,25 @@ const editorSettingKeys = [
 ] as const satisfies readonly (keyof FormulaDocument["settings"])[];
 
 const maximumStorageEntryLength = 2_000_000;
-const maximumConfigurationLength = 8_000_000;
+const maximumConfigurationLength = 64_000_000;
+const maximumUsageCommands = 10_000;
+const maximumUsageMapEntries = 256;
+const maximumHistoryItems = 30;
+const maximumHistoryLatexLength = 1_000_000;
+const validWordNumberFormats = new Set([
+  "continuous",
+  "heading1-dot",
+  "heading1-dash",
+  "heading2-dot",
+  "heading2-dash",
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function normalizeEditorSettings(value: unknown) {
-  if (!isRecord(value)) {
-    throw new Error("The configuration is missing editor settings.");
-  }
+  if (!isRecord(value)) return {};
   const settings: Partial<FormulaDocument["settings"]> = {};
   for (const key of editorSettingKeys) {
     if (Object.prototype.hasOwnProperty.call(value, key)) {
@@ -141,6 +168,105 @@ function normalizeWindowState(value: unknown): VisualTexConfigurationWindowState
   const officeEditor = normalizeWindowSize(value.officeEditor);
   if (!main && !officeEditor) return undefined;
   return { main, officeEditor };
+}
+
+function normalizeCapturedStorageKeys(value: unknown) {
+  if (!Array.isArray(value)) return undefined;
+  const allowed = new Set<string>(configurationStorageKeys);
+  return Array.from(
+    new Set(value.filter((key): key is string => typeof key === "string" && allowed.has(key))),
+  );
+}
+
+function normalizeCountMap(value: unknown) {
+  const result: Record<string, number> = {};
+  if (!isRecord(value)) return result;
+  for (const [key, raw] of Object.entries(value).slice(0, maximumUsageMapEntries)) {
+    const count = Number(raw);
+    if (!key || !Number.isFinite(count) || count < 0) continue;
+    result[key] = Math.min(Number.MAX_SAFE_INTEGER, Math.floor(count));
+  }
+  return result;
+}
+
+function normalizeUsage(value: unknown): Record<string, CommandUsage> | undefined {
+  if (!isRecord(value)) return undefined;
+  const result: Record<string, CommandUsage> = {};
+  for (const [key, raw] of Object.entries(value).slice(0, maximumUsageCommands)) {
+    if (!isRecord(raw)) continue;
+    const commandId =
+      typeof raw.commandId === "string" && raw.commandId.trim()
+        ? raw.commandId.trim()
+        : key.trim();
+    if (!commandId) continue;
+    const useCount = Number(raw.useCount);
+    const lastUsedAt = Number(raw.lastUsedAt);
+    const recentUses = Array.isArray(raw.recentUses)
+      ? raw.recentUses
+          .map(Number)
+          .filter((item) => Number.isFinite(item) && item >= 0)
+          .slice(-12)
+      : [];
+    result[commandId] = {
+      commandId,
+      useCount:
+        Number.isFinite(useCount) && useCount >= 0
+          ? Math.min(Number.MAX_SAFE_INTEGER, Math.floor(useCount))
+          : 0,
+      lastUsedAt:
+        Number.isFinite(lastUsedAt) && lastUsedAt >= 0 ? lastUsedAt : 0,
+      recentUses,
+      acceptedPrefixes: normalizeCountMap(raw.acceptedPrefixes),
+      contextCounts: normalizeCountMap(raw.contextCounts),
+      pinned: raw.pinned === true,
+    };
+  }
+  return result;
+}
+
+function normalizeHistory(value: unknown): FormulaHistoryItem[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const result: FormulaHistoryItem[] = [];
+  for (let index = 0; index < value.length && result.length < maximumHistoryItems; index += 1) {
+    const raw = value[index];
+    if (!isRecord(raw) || typeof raw.latex !== "string") continue;
+    const latex = raw.latex.slice(0, maximumHistoryLatexLength);
+    if (!latex.trim()) continue;
+    const createdAt = Number(raw.createdAt);
+    result.push({
+      id:
+        typeof raw.id === "string" && raw.id.trim()
+          ? raw.id.trim()
+          : `imported-history-${index}`,
+      latex,
+      createdAt:
+        Number.isFinite(createdAt) && createdAt >= 0 ? createdAt : 0,
+    });
+  }
+  return result;
+}
+
+function normalizePersonalization(value: unknown): VisualTexConfigurationPersonalization | undefined {
+  if (!isRecord(value)) return undefined;
+  const usage = normalizeUsage(value.usage);
+  const history = normalizeHistory(value.history);
+  if (usage === undefined && history === undefined) return undefined;
+  return { usage, history };
+}
+
+function normalizeWordPreferences(value: unknown): VisualTexConfigurationWordPreferences | undefined {
+  if (!isRecord(value)) return undefined;
+  const result: VisualTexConfigurationWordPreferences = {};
+  if (typeof value.defaultDisplayEquationNumbered === "boolean") {
+    result.defaultDisplayEquationNumbered = value.defaultDisplayEquationNumbered;
+  }
+  if (
+    typeof value.defaultEquationNumberFormat === "string" &&
+    validWordNumberFormats.has(value.defaultEquationNumberFormat)
+  ) {
+    result.defaultEquationNumberFormat = value.defaultEquationNumberFormat;
+  }
+  return Object.keys(result).length ? result : undefined;
 }
 
 function normalizeStorage(value: unknown) {
@@ -192,7 +318,8 @@ export function parseVisualTexConfiguration(source: string): VisualTexUserConfig
   if (parsed.schema !== VISUALTEX_CONFIGURATION_SCHEMA) {
     throw new Error("This file is not a VisualTeX configuration file.");
   }
-  if (parsed.version !== VISUALTEX_CONFIGURATION_VERSION) {
+  const sourceVersion = parsed.version === undefined ? 1 : Number(parsed.version);
+  if (!Number.isInteger(sourceVersion) || sourceVersion < 1) {
     throw new Error("This VisualTeX configuration version is not supported.");
   }
   return {
@@ -202,6 +329,9 @@ export function parseVisualTexConfiguration(source: string): VisualTexUserConfig
       typeof parsed.exportedAt === "string" ? parsed.exportedAt : new Date(0).toISOString(),
     editorSettings: normalizeEditorSettings(parsed.editorSettings),
     storage: normalizeStorage(parsed.storage),
+    capturedStorageKeys: normalizeCapturedStorageKeys(parsed.capturedStorageKeys),
+    personalization: normalizePersonalization(parsed.personalization),
+    word: normalizeWordPreferences(parsed.word),
     windows: normalizeWindowState(parsed.windows),
   };
 }
@@ -224,6 +354,44 @@ async function readWindowConfiguration(): Promise<VisualTexConfigurationWindowSt
   }
 }
 
+async function readWordPreferences(): Promise<VisualTexConfigurationWordPreferences | undefined> {
+  if (!isTauri()) return undefined;
+  try {
+    return normalizeWordPreferences(
+      await invoke<VisualTexConfigurationWordPreferences>(
+        "get_word_numbering_user_configuration",
+      ),
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+async function applyWordPreferences(
+  word: VisualTexConfigurationWordPreferences | undefined,
+) {
+  if (!word || !isTauri()) return;
+  const current = await readWordPreferences();
+  const merged: VisualTexConfigurationWordPreferences = {
+    defaultDisplayEquationNumbered:
+      word.defaultDisplayEquationNumbered ??
+      current?.defaultDisplayEquationNumbered ??
+      false,
+    defaultEquationNumberFormat:
+      word.defaultEquationNumberFormat ??
+      current?.defaultEquationNumberFormat ??
+      "continuous",
+  };
+  try {
+    await invoke("apply_word_numbering_user_configuration", {
+      configuration: merged,
+    });
+  } catch {
+    // Older runtimes do not know this command. Cross-version imports should
+    // still restore every preference that the running version understands.
+  }
+}
+
 async function applyWindowConfiguration(
   windows: VisualTexConfigurationWindowState | undefined,
 ) {
@@ -238,7 +406,8 @@ async function applyWindowConfiguration(
 }
 
 export async function buildVisualTexConfiguration(): Promise<VisualTexUserConfiguration> {
-  const editorSettings = useEditorStore.getState().toDocument().settings;
+  const editorState = useEditorStore.getState();
+  const editorSettings = editorState.toDocument().settings;
   const storage: Record<string, string> = {};
   for (const key of configurationStorageKeys) {
     const value = safeStorage.getItem(key);
@@ -250,6 +419,12 @@ export async function buildVisualTexConfiguration(): Promise<VisualTexUserConfig
     exportedAt: new Date().toISOString(),
     editorSettings: { ...editorSettings },
     storage,
+    capturedStorageKeys: [...configurationStorageKeys],
+    personalization: {
+      usage: normalizeUsage(editorState.usage) ?? {},
+      history: normalizeHistory(editorState.history) ?? [],
+    },
+    word: await readWordPreferences(),
     windows: await readWindowConfiguration(),
   };
 }
@@ -269,12 +444,34 @@ export async function applyVisualTexConfiguration(
     settings: mergedSettings,
   });
 
+  const capturedStorageKeys = configuration.capturedStorageKeys
+    ? new Set(configuration.capturedStorageKeys)
+    : null;
   for (const key of configurationStorageKeys) {
     const value = configuration.storage[key];
-    if (typeof value === "string") safeStorage.setItem(key, value);
-    else safeStorage.removeItem(key);
+    if (typeof value === "string") {
+      safeStorage.setItem(key, value);
+    } else if (capturedStorageKeys?.has(key)) {
+      safeStorage.removeItem(key);
+    }
   }
   refreshCustomSymbolLibraryFromStorage();
+
+  if (configuration.personalization) {
+    const personalizationUpdate: {
+      usage?: Record<string, CommandUsage>;
+      history?: FormulaHistoryItem[];
+    } = {};
+    if (configuration.personalization.usage !== undefined) {
+      personalizationUpdate.usage = configuration.personalization.usage;
+    }
+    if (configuration.personalization.history !== undefined) {
+      personalizationUpdate.history = configuration.personalization.history;
+    }
+    if (Object.keys(personalizationUpdate).length) {
+      useEditorStore.setState(personalizationUpdate);
+    }
+  }
 
   publishSynchronizedTheme(useEditorStore.getState().theme);
   if (isTauri()) {
@@ -282,5 +479,6 @@ export async function applyVisualTexConfiguration(
       theme: useEditorStore.getState().theme,
     }).catch(() => undefined);
   }
+  await applyWordPreferences(configuration.word);
   await applyWindowConfiguration(configuration.windows);
 }

@@ -1257,9 +1257,52 @@ let nativeInputPopoverActiveField: MathfieldElement | null = null;
 
 function casesEnvironmentSuggestionQuery(field: MathfieldElement) {
   const raw = rawLatexInput(field).replace(/\s+/g, "");
-  if (!raw.startsWith("\\begin{")) return "";
+  // `\\begin{cases}` is an environment rather than a MathLive command, so
+  // MathLive never contributes it to the native `\\b...` candidate pool by
+  // itself. VisualTeX injects it as a normal candidate from the first `b`, then
+  // lets the same usage-frequency ranking decide where it appears alongside
+  // every other native b-command.
+  if (raw.length < "\\b".length) return "";
   if (!CASES_ENVIRONMENT_COMMAND.startsWith(raw)) return "";
   return raw;
+}
+
+function createCasesEnvironmentSuggestionItem() {
+  const preview = convertVisualTexLatexToMarkup(
+    "\\begin{cases}x & x>0\\\\0 & x=0\\end{cases}",
+    { defaultMode: "math" },
+  );
+  const item = document.createElement("li");
+  item.setAttribute("role", "button");
+  item.dataset.command = CASES_ENVIRONMENT_COMMAND;
+  item.dataset.visualtexEnvironmentSuggestion = "cases";
+  item.className = "has-visualtex-command-preview";
+  item.innerHTML = `<span class="ML__popover__latex">\\begin{cases}</span><span class="ML__popover__command">${preview}</span><span class="ML__popover__keybinding">Space</span>`;
+  return item;
+}
+
+function syncCasesEnvironmentSuggestionItem(
+  panel: HTMLElement,
+  field: MathfieldElement,
+) {
+  const query = casesEnvironmentSuggestionQuery(field);
+  const synthetic = panel.querySelector<HTMLElement>(
+    'li[data-visualtex-environment-suggestion="cases"]',
+  );
+  const nativeAlreadyProvidesCases = Array.from(
+    panel.querySelectorAll<HTMLElement>("li[data-command]"),
+  ).some(
+    (item) =>
+      item !== synthetic && item.dataset.command === CASES_ENVIRONMENT_COMMAND,
+  );
+  if (!query || nativeAlreadyProvidesCases) {
+    synthetic?.remove();
+    return;
+  }
+  if (synthetic) return;
+  const list = panel.querySelector("ul");
+  if (!list) return;
+  list.append(createCasesEnvironmentSuggestionItem());
 }
 
 function renderCasesEnvironmentSuggestion(
@@ -1417,7 +1460,10 @@ function ensureStableNativeInputPopover() {
         "li[data-command]",
       ) ?? [],
     ).find((candidate) => candidate.dataset.command === command);
-    if (sourceItem) {
+    if (
+      sourceItem &&
+      sourceItem.dataset.visualtexEnvironmentSuggestion !== "cases"
+    ) {
       sourceItem.dispatchEvent(
         new MouseEvent("click", {
           bubbles: true,
@@ -1497,6 +1543,9 @@ function syncStableNativeInputPopoverSelection(command: string) {
 function syncStableNativeInputPopover() {
   bindNativeInputPopoverSource();
   const source = getNativeInputPopoverSource();
+  if (source && nativeInputPopoverActiveField?.isConnected) {
+    syncCasesEnvironmentSuggestionItem(source, nativeInputPopoverActiveField);
+  }
   const sourceVisible = Boolean(
     source?.classList.contains("is-visible") &&
       source.querySelector("li[data-command]"),
@@ -5053,14 +5102,6 @@ function FormulaField(props: FormulaFieldProps) {
       }
       normalizeGuardedBackslashInput(event.timeStamp);
       nativeInputPopoverActiveField = field;
-      const casesSuggestionQuery = casesEnvironmentSuggestionQuery(field);
-      if (casesSuggestionQuery) {
-        field.dataset.pendingNativeSuggestion = CASES_ENVIRONMENT_COMMAND;
-      } else if (
-        field.dataset.pendingNativeSuggestion === CASES_ENVIRONMENT_COMMAND
-      ) {
-        delete field.dataset.pendingNativeSuggestion;
-      }
       scheduleStableNativeInputPopoverSync();
       const before = lastSnapshotRef.current ?? captureFieldSnapshot(field);
       const directInputSetting =

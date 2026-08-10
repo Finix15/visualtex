@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
+using Microsoft.Win32;
 using Microsoft.Office.Interop.Word;
 using VisualTeX.WindowsOffice.Contracts;
 using Range = Microsoft.Office.Interop.Word.Range;
@@ -86,6 +87,40 @@ internal static class WordEquationNumbering
     private const string NativeCaptionBookmarkPrefix = "VTEqCap_";
     private const string NativeNumberBookmarkPrefix = "VTEqNum_";
     private const string EquationNumberFormatVariableName = "VisualTeXEquationNumberFormat";
+    private const string UserPreferenceRegistryPath = @"Software\VisualTeX\Word";
+    private const string DefaultNumberedPreferenceName = "DefaultDisplayEquationNumbered";
+    private const string DefaultNumberFormatPreferenceName = "DefaultEquationNumberFormat";
+
+    internal static bool GetDefaultDisplayEquationNumbered()
+    {
+        var value = ReadUserPreference(DefaultNumberedPreferenceName);
+        if (value is int integer) return integer != 0;
+        if (value is string text)
+        {
+            if (bool.TryParse(text, out var boolean)) return boolean;
+            if (int.TryParse(text, out var numeric)) return numeric != 0;
+        }
+        return false;
+    }
+
+    internal static void SetDefaultDisplayEquationNumbered(bool numbered) =>
+        WriteUserPreference(
+            DefaultNumberedPreferenceName,
+            numbered ? 1 : 0,
+            RegistryValueKind.DWord);
+
+    internal static string GetDefaultEquationNumberFormatId() =>
+        EquationNumberFormat.Resolve(
+            ReadUserPreference(DefaultNumberFormatPreferenceName) as string).Id;
+
+    internal static void SetDefaultEquationNumberFormatPreference(string formatId)
+    {
+        var format = EquationNumberFormat.Resolve(formatId);
+        WriteUserPreference(
+            DefaultNumberFormatPreferenceName,
+            format.Id,
+            RegistryValueKind.String);
+    }
 
     internal static string GetEquationNumberFormatId(Document document) =>
         ReadEquationNumberFormat(document).Id;
@@ -104,11 +139,22 @@ internal static class WordEquationNumbering
         string formatId)
     {
         var format = EquationNumberFormat.Resolve(formatId);
+        SetDefaultEquationNumberFormatPreference(format.Id);
         WriteEquationNumberFormat(document, format.Id);
     }
 
     private static EquationNumberFormat ReadEquationNumberFormat(Document document)
     {
+        return TryReadDocumentEquationNumberFormatId(document, out var formatId)
+            ? EquationNumberFormat.Resolve(formatId)
+            : EquationNumberFormat.Resolve(GetDefaultEquationNumberFormatId());
+    }
+
+    private static bool TryReadDocumentEquationNumberFormatId(
+        Document document,
+        out string formatId)
+    {
+        formatId = EquationNumberFormat.ContinuousId;
         Variables? variables = null;
         Variable? variable = null;
         try
@@ -118,17 +164,70 @@ internal static class WordEquationNumbering
             try
             {
                 variable = variables.get_Item(ref index);
-                return EquationNumberFormat.Resolve(variable.Value);
+                formatId = EquationNumberFormat.Resolve(variable.Value).Id;
+                return true;
             }
             catch (COMException)
             {
-                return EquationNumberFormat.Resolve(null);
+                return false;
             }
         }
         finally
         {
             Release(variable);
             Release(variables);
+        }
+    }
+
+    private static void EnsureDocumentEquationNumberFormatPreference(Document document)
+    {
+        if (TryReadDocumentEquationNumberFormatId(document, out _)) return;
+        WriteEquationNumberFormat(document, GetDefaultEquationNumberFormatId());
+    }
+
+    private static RegistryView[] UserPreferenceRegistryViews() =>
+        Environment.Is64BitOperatingSystem
+            ? new[] { RegistryView.Registry64, RegistryView.Registry32 }
+            : new[] { RegistryView.Default };
+
+    private static object? ReadUserPreference(string name)
+    {
+        foreach (var view in UserPreferenceRegistryViews())
+        {
+            try
+            {
+                using var root = RegistryKey.OpenBaseKey(RegistryHive.CurrentUser, view);
+                using var key = root.OpenSubKey(UserPreferenceRegistryPath, writable: false);
+                var value = key?.GetValue(name);
+                if (value is not null) return value;
+            }
+            catch
+            {
+                // Preferences are optional. A locked or unavailable registry
+                // must never block formula insertion or numbering.
+            }
+        }
+        return null;
+    }
+
+    private static void WriteUserPreference(
+        string name,
+        object value,
+        RegistryValueKind valueKind)
+    {
+        foreach (var view in UserPreferenceRegistryViews())
+        {
+            try
+            {
+                using var root = RegistryKey.OpenBaseKey(RegistryHive.CurrentUser, view);
+                using var key = root.CreateSubKey(UserPreferenceRegistryPath, writable: true);
+                key?.SetValue(name, value, valueKind);
+            }
+            catch
+            {
+                // Keep document operations functional even if persistence is
+                // unavailable on a restricted machine.
+            }
         }
     }
 
@@ -211,6 +310,7 @@ internal static class WordEquationNumbering
         var formulaFontSizePoints = (float)FormulaFontSize.ResolveSemanticFontSize(metadata);
         if (metadata.Numbered)
         {
+            EnsureDocumentEquationNumberFormatPreference(document);
             ConfigureNumberedDisplayFormula(
                 document,
                 formulaRange,
@@ -524,6 +624,9 @@ internal static class WordEquationNumbering
                 }
                 finally { Release(formulaRange); }
             }
+
+            if (numberedFormulaIds.Count > 0)
+                EnsureDocumentEquationNumberFormatPreference(document);
 
             RemoveOrphanEquationArtifacts(document, numberedFormulaIds);
             RebuildNativeNumberBookmarksFromCaptions(

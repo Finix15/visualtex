@@ -74,6 +74,34 @@ struct AppWindowConfiguration {
     office_editor: Option<ConfigurationWindowSize>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WordNumberingUserConfiguration {
+    default_display_equation_numbered: bool,
+    default_equation_number_format: String,
+}
+
+#[tauri::command]
+fn get_word_numbering_user_configuration() -> Result<WordNumberingUserConfiguration, String> {
+    let (default_display_equation_numbered, default_equation_number_format) =
+        office::windows_backend::word_numbering_user_preferences();
+    Ok(WordNumberingUserConfiguration {
+        default_display_equation_numbered,
+        default_equation_number_format,
+    })
+}
+
+#[tauri::command]
+fn apply_word_numbering_user_configuration(
+    configuration: WordNumberingUserConfiguration,
+) -> Result<WordNumberingUserConfiguration, String> {
+    office::windows_backend::set_word_numbering_user_preferences(
+        configuration.default_display_equation_numbered,
+        &configuration.default_equation_number_format,
+    )?;
+    get_word_numbering_user_configuration()
+}
+
 #[tauri::command]
 fn get_app_window_configuration(app: AppHandle) -> Result<AppWindowConfiguration, String> {
     let main = app_lifecycle::configuration_main_window_size(&app)
@@ -3889,6 +3917,8 @@ pub fn run() {
             windows_quick_ocr::write_windows_ocr_clipboard_text,
             get_app_window_configuration,
             apply_app_window_configuration,
+            get_word_numbering_user_configuration,
+            apply_word_numbering_user_configuration,
             office::lifecycle::set_app_theme,
             office::lifecycle::set_app_editor_layout,
             office::lifecycle::set_app_editor_preferences,

@@ -62,7 +62,8 @@
     "verify:frontend-dist": "node scripts/verify_frontend_dist.mjs",
     "verify:embedded-frontend": "node scripts/verify_embedded_frontend_assets.mjs",
     "test:windows-app-lifecycle": "node scripts/windows_app_lifecycle_smoke.mjs",
-    "test:windows-ocr-editor-parity": "node scripts/windows_ocr_editor_parity_regression.mjs"
+    "test:windows-ocr-editor-parity": "node scripts/windows_ocr_editor_parity_regression.mjs",
+    "test:windows-cases": "npm run build:desktop && node scripts/windows_cases_regression.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.8.1",
