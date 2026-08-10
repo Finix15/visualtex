@@ -316,6 +316,7 @@ internal sealed class WordFormulaService
         Bookmarks bookmarks,
         FormulaMetadata metadata)
     {
+        var originalFormulaId = metadata.FormulaId;
         var newFormulaId = Guid.NewGuid().ToString("D");
         var rekeyed = WordFormulaMetadataReader.CloneWithFormulaId(
             metadata,
@@ -328,12 +329,65 @@ internal sealed class WordFormulaService
         if (rekeyed.Numbered
             && string.Equals(rekeyed.DisplayMode, "block", StringComparison.Ordinal))
         {
-            // Copying an entire numbered Word table can disturb the original
-            // formula's same-name bookmarks before VisualTeX sees the pasted
-            // copy. Once the copy has its own effective FormulaId, rebuild the
-            // complete document inventory so both the original and the copy get
-            // independent caption/number/reference anchors.
-            WordEquationNumbering.Reconcile(document);
+            InlineShape? originalShape = null;
+            Range? originalRange = null;
+            try
+            {
+                // Word may move the copied table's visible-number bookmark away
+                // from the original table when both carry the same FormulaId.
+                // Repair only the two affected formulas instead of running a
+                // document-wide Reconcile(), which used to freeze Word for
+                // several seconds even in a six-formula document.
+                var copyOwnsOriginalArtifacts =
+                    WordEquationNumbering.FormulaRangeOwnsNumberingArtifacts(
+                        document,
+                        shapeRange,
+                        originalFormulaId);
+                if (copyOwnsOriginalArtifacts)
+                {
+                    WordEquationNumbering.RemoveFormulaNumberingArtifacts(
+                        document,
+                        originalFormulaId);
+                    originalShape = FindByFormulaId(document, originalFormulaId);
+                    if (originalShape is not null)
+                    {
+                        var originalMetadata = WordFormulaMetadataReader.TryRead(originalShape);
+                        if (originalMetadata?.Numbered == true
+                            && string.Equals(
+                                originalMetadata.DisplayMode,
+                                "block",
+                                StringComparison.Ordinal))
+                        {
+                            originalRange = originalShape.Range;
+                            WordEquationNumbering.ReconcileFormula(
+                                document,
+                                originalRange,
+                                originalShape.Height,
+                                originalMetadata,
+                                numberingOrderMayHaveChanged: false);
+                        }
+                    }
+                }
+
+                WordEquationNumbering.ReconcileFormula(
+                    document,
+                    shapeRange,
+                    shape.Height,
+                    rekeyed,
+                    numberingOrderMayHaveChanged: true,
+                    reuseExistingNumberedTableFormatting: true);
+            }
+            catch
+            {
+                // Preserve the old repair safety net for genuinely malformed
+                // legacy documents. Healthy copies stay on the local fast path.
+                WordEquationNumbering.Reconcile(document);
+            }
+            finally
+            {
+                Release(originalRange);
+                Release(originalShape);
+            }
         }
         return rekeyed;
     }
@@ -5148,7 +5202,11 @@ internal sealed class WordFormulaService
                 if (session.DisplayMode == "inline")
                     RestoreTypingBaselineAfter(oldShape);
                 else
-                    TryReconcileShape(document, oldShape, metadata);
+                    TryReconcileShape(
+                        document,
+                        oldShape,
+                        metadata,
+                        NumberingOrderMayHaveChanged(originalMetadata, metadata));
                 TraceAcceptancePerformance(
                     "ReplaceOle",
                     "reconcile",
@@ -5222,7 +5280,11 @@ internal sealed class WordFormulaService
             }
             else
             {
-                TryReconcileShape(document, replacement, metadata);
+                TryReconcileShape(
+                    document,
+                    replacement,
+                    metadata,
+                    NumberingOrderMayHaveChanged(originalMetadata, metadata));
                 finalSelection = DuplicateOleRangeByFormulaId(
                     document,
                     metadata.FormulaId);
@@ -5537,7 +5599,12 @@ internal sealed class WordFormulaService
                     moveCaretOutsideMath: false,
                     followingTextVisibility: inlineFollowingTextVisibility);
             if (session.DisplayMode == "block")
-                TryReconcileOmml(document, replacement!, equationRange, metadata);
+                TryReconcileOmml(
+                    document,
+                    replacement!,
+                    equationRange,
+                    metadata,
+                    NumberingOrderMayHaveChanged(session.OriginalMetadata, metadata));
             TraceAcceptancePerformance(
                 "ReplaceOmml",
                 "reconcile",
@@ -6095,7 +6162,8 @@ internal sealed class WordFormulaService
     private static void TryReconcileShape(
         Document document,
         InlineShape shape,
-        FormulaMetadata metadata)
+        FormulaMetadata metadata,
+        bool numberingOrderMayHaveChanged = true)
     {
         Range? range = null;
         try
@@ -6110,9 +6178,22 @@ internal sealed class WordFormulaService
                 document,
                 range,
                 shape.Height,
-                metadata);
+                metadata,
+                numberingOrderMayHaveChanged);
         }
         finally { Release(range); }
+    }
+
+    private static bool NumberingOrderMayHaveChanged(
+        FormulaMetadata? originalMetadata,
+        FormulaMetadata metadata)
+    {
+        if (originalMetadata is null) return true;
+        return originalMetadata.Numbered != metadata.Numbered
+            || !string.Equals(
+                originalMetadata.DisplayMode,
+                metadata.DisplayMode,
+                StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool TryReadStoredWordInlineOleSize(
@@ -6256,7 +6337,8 @@ internal sealed class WordFormulaService
         Document document,
         Bookmark bookmark,
         Range equationRange,
-        FormulaMetadata metadata)
+        FormulaMetadata metadata,
+        bool numberingOrderMayHaveChanged = true)
     {
         var display = string.Equals(
             metadata.DisplayMode,
@@ -6277,7 +6359,8 @@ internal sealed class WordFormulaService
             document,
             equationRange,
             height,
-            metadata);
+            metadata,
+            numberingOrderMayHaveChanged);
     }
 
     private static void Configure(

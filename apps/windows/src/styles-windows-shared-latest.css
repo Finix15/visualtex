@@ -52,6 +52,20 @@
   --toolbar-category-set: #c8e4d9;
 }
 
+/* Keep the formula-tile collapse control on the same row as Custom/Common.
+   The base two-column grid otherwise wraps the third control onto a new row. */
+.formula-tile-tabs.has-collapse {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 28px;
+  align-items: center;
+}
+
+.formula-tile-tabs.has-collapse .formula-tile-collapse-button {
+  grid-column: 3;
+  margin-left: 0;
+  width: 28px;
+  min-width: 28px;
+}
+
 :root[data-theme="beige"] {
   color-scheme: light;
   --bg-global: #e4d5bf;

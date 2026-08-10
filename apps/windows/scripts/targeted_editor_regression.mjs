@@ -1092,6 +1092,33 @@ async function main() {
         };
       })()`, "classic resizable panels");
 
+      const tileTabGeometry = await waitForEvaluation(`(() => {
+        const panel = document.querySelector('.classic-tile-toolbar');
+        const custom = panel?.querySelector('[data-tile-category="custom"]');
+        const common = panel?.querySelector('[data-tile-category="common"]');
+        const collapse = panel?.querySelector('[data-formula-tile-collapse]');
+        if (!(custom instanceof HTMLElement)
+          || !(common instanceof HTMLElement)
+          || !(collapse instanceof HTMLElement)) return { ready: false };
+        const customRect = custom.getBoundingClientRect();
+        const commonRect = common.getBoundingClientRect();
+        const collapseRect = collapse.getBoundingClientRect();
+        const sameRow = Math.max(
+          Math.abs(customRect.top - commonRect.top),
+          Math.abs(commonRect.top - collapseRect.top),
+        ) <= 2;
+        return {
+          ready: sameRow && collapseRect.left >= commonRect.right - 1,
+          sameRow,
+          custom: { left: customRect.left, top: customRect.top, right: customRect.right },
+          common: { left: commonRect.left, top: commonRect.top, right: commonRect.right },
+          collapse: { left: collapseRect.left, top: collapseRect.top, right: collapseRect.right },
+        };
+      })()`, "classic tile collapse button to the right of Common");
+      if (!tileTabGeometry.sameRow) {
+        throw new Error(`Classic tile collapse button wrapped onto another row: ${JSON.stringify(tileTabGeometry)}`);
+      }
+
       const handleCenter = async (selector) =>
         evaluate(`(() => {
           const handle = document.querySelector(${JSON.stringify(selector)});

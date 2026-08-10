@@ -589,6 +589,10 @@ internal static partial class Program
             {
                 RunWordOleCopyEditAcceptance(artifactRoot);
             }
+            else if (string.Equals(mode, "word-numbered-formula-performance", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordNumberedFormulaPerformanceAcceptance(artifactRoot);
+            }
             else if (string.Equals(mode, "word-bulk-import-performance", StringComparison.OrdinalIgnoreCase))
             {
                 var objectMode = args

@@ -1955,7 +1955,7 @@ export function FormulaToolbar({
           aria-label={isEn ? "Formula tiles" : "公式磁贴"}
         >
           <nav
-            className="formula-tile-tabs"
+            className={`formula-tile-tabs${onCollapseTiles ? " has-collapse" : ""}`}
             aria-label={isEn ? "Tile categories" : "磁贴分类"}
           >
             <button

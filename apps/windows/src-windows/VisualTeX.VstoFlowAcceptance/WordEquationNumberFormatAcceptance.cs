@@ -572,7 +572,27 @@ internal static partial class Program
                 "The equation reference bookmark is missing.");
             bookmark = bookmarks[bookmarkName];
             range = bookmark.Range;
-            AssertEqual(expected, (range.Text ?? string.Empty).Trim(),
+            var actual = (range.Text ?? string.Empty).Trim();
+            if (!string.Equals(expected, actual, StringComparison.Ordinal)
+                && expected.StartsWith("(", StringComparison.Ordinal)
+                && actual.EndsWith(")", StringComparison.Ordinal)
+                && range.Start > document.Content.Start)
+            {
+                Word.Range? expanded = null;
+                try
+                {
+                    // Word can shrink a test-only bookmark around a REF field so
+                    // the literal opening parenthesis sits immediately outside
+                    // its start. Validate the rendered document text rather than
+                    // treating that bookmark-boundary movement as lost content.
+                    expanded = document.Range(range.Start - 1, range.End);
+                    var expandedText = (expanded.Text ?? string.Empty).Trim();
+                    if (expandedText.StartsWith("(", StringComparison.Ordinal))
+                        actual = expandedText;
+                }
+                finally { Release(expanded); }
+            }
+            AssertEqual(expected, actual,
                 "The native equation cross-reference did not follow the selected format.");
         }
         finally
