@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, Check, LoaderCircle, ScanLine, X } from "lucide-react";
+import { createUuid } from "../../runtime/browserCompatibility";
+import {
+  AlertCircle,
+  Check,
+  LoaderCircle,
+  Redo2,
+  ScanLine,
+  Undo2,
+  X,
+} from "lucide-react";
 import { OcrDialog } from "../../components/OcrDialog";
 import { EditorWorkspace } from "../../workspace/EditorWorkspace";
 import {
@@ -28,12 +37,16 @@ import {
   copyLatex,
   isLatexCodeFormat,
 } from "../../clipboard/LatexCopyService";
-import type { LatexCodeFormat } from "../../types/formula";
+import type {
+  InputBehaviorSettingKey,
+  LatexCodeFormat,
+} from "../../types/formula";
 import type {
   MathEditorHandle,
   MathEditorInsertionTarget,
 } from "../../editor/MathEditor";
 import { readErrorMessage } from "../../errors/readErrorMessage";
+import { readLocalStorage, writeLocalStorage } from "../../runtime/safeStorage";
 import { latexToMathMl, latexToSvg } from "../../export/latexToSvg";
 import { isIncompleteLatexDraft } from "../../math/latexCompatibility";
 import {
@@ -47,17 +60,25 @@ import {
   type OfficeExportResult,
   type OfficeFormulaSession,
   type OfficeHost,
+  type OfficePreferences,
 } from "../api/sessionClient";
 import { useOfficeSession } from "./useOfficeSession";
 import { attachFormulaEquationTag } from "../shared/formulaEquationTag";
+import {
+  normalizeFormulaEditorDocument,
+  serializeFormulaEditorRenderDocument,
+  type FormulaEditorLine,
+} from "../shared/formulaEditorDocument";
 import { messageOfficeParent } from "./dialogMessages";
 import { registerOfficeApplyShortcut } from "./officeApplyShortcut";
 import {
   applyDocumentTheme,
   normalizeSynchronizedTheme,
+  readPublishedSynchronizedTheme,
   readSynchronizedTheme,
   subscribeSynchronizedTheme,
 } from "../../themeSync";
+import { saveCustomTheme } from "../../themeCustomization";
 import {
   DEFAULT_OCR_MODEL,
   OCR_MODELS,
@@ -84,6 +105,8 @@ interface InlineOcrState {
   model: OcrModelName;
 }
 
+const OFFICE_EDITOR_ZOOM_60_MIGRATION_KEY =
+  "visualtex-office-editor-zoom-60-migration-v1";
 const OCR_MODEL_STORAGE_KEY = "visualtex.ocr.model";
 const USE_NATIVE_POWERPOINT_COMMIT =
   document
@@ -148,10 +171,105 @@ function normalizeOfficeCodeFormat(codeFormat: string): LatexCodeFormat {
   return "raw";
 }
 
+function normalizeOfficeFormulaDocument(
+  lines: FormulaEditorLine[],
+  codeFormat: unknown,
+) {
+  return normalizeFormulaEditorDocument(
+    lines,
+    typeof codeFormat === "string" ? normalizeOfficeCodeFormat(codeFormat) : codeFormat,
+  );
+}
+
+function serializeOfficeRenderLatex(
+  lines: FormulaEditorLine[],
+  codeFormat: unknown,
+  displayMode: "inline" | "block",
+  equationTag?: string | null,
+) {
+  const document = normalizeOfficeFormulaDocument(lines, codeFormat);
+  const tag = displayMode === "block" ? equationTag?.trim() : "";
+  if (!tag || document.lines.length === 0) {
+    return serializeFormulaEditorRenderDocument(document);
+  }
+  const taggedLines = document.lines.map((line, index) =>
+    index === document.lines.length - 1
+      ? { ...line, latex: attachFormulaEquationTag(line.latex, tag) }
+      : line,
+  );
+  return serializeFormulaEditorRenderDocument({ ...document, lines: taggedLines });
+}
+
 function normalizeOfficeFontSizePt(value: unknown, fallback: number) {
   const numeric = typeof value === "number" ? value : Number(value);
   const resolved = Number.isFinite(numeric) ? numeric : fallback;
   return Math.round(Math.min(200, Math.max(5, resolved)) * 2) / 2;
+}
+
+function applyOfficeEditorPreferences(
+  preferences: OfficePreferences,
+  applyTheme: (value: unknown) => void,
+  applyEditorLayout: (value: unknown) => void,
+) {
+  const payload = preferences.editorPreferences;
+  if (!payload) return;
+  if (payload.customTheme) saveCustomTheme(payload.customTheme);
+  const settings = payload.settings;
+  if (!settings) return;
+
+  const editor = useEditorStore.getState();
+  if (settings.theme !== undefined) applyTheme(settings.theme);
+  if (settings.editorLayout !== undefined) applyEditorLayout(settings.editorLayout);
+  if (settings.language === "cn" || settings.language === "en") {
+    editor.setLanguage(settings.language);
+  }
+  if (typeof settings.zoom === "number") editor.setZoom(settings.zoom);
+  if (settings.formulaAlignment) {
+    editor.setFormulaAlignment(settings.formulaAlignment);
+  }
+  if (typeof settings.autoPairDelimiters === "boolean") {
+    editor.setAutoPairDelimiters(settings.autoPairDelimiters);
+  }
+  if (typeof settings.showLineNumbers === "boolean") {
+    editor.setShowLineNumbers(settings.showLineNumbers);
+  }
+  if (typeof settings.highlightActiveLine === "boolean") {
+    editor.setHighlightActiveLine(settings.highlightActiveLine);
+  }
+  if (typeof settings.formulaInsetLeft === "number") {
+    editor.setFormulaInsetLeft(settings.formulaInsetLeft);
+  }
+  if (typeof settings.formulaInsetRight === "number") {
+    editor.setFormulaInsetRight(settings.formulaInsetRight);
+  }
+  if (typeof settings.formulaToolButtonSize === "number") {
+    editor.setFormulaToolButtonSize(settings.formulaToolButtonSize);
+  }
+  if (typeof settings.formulaToolButtonPadding === "number") {
+    editor.setFormulaToolButtonPadding(settings.formulaToolButtonPadding);
+  }
+  if (typeof settings.formulaRowVerticalInset === "number") {
+    editor.setFormulaRowVerticalInset(settings.formulaRowVerticalInset);
+  }
+  if (settings.pngExportBackground !== undefined) {
+    editor.setPngExportBackground(settings.pngExportBackground);
+  }
+  if (settings.formulaLetterFont !== undefined) {
+    editor.setFormulaLetterFont(settings.formulaLetterFont);
+  }
+  if (settings.formulaChineseFont !== undefined) {
+    editor.setFormulaChineseFont(settings.formulaChineseFont);
+  }
+  if (settings.inputBehavior) {
+    for (const [key, enabled] of Object.entries(settings.inputBehavior)) {
+      if (typeof enabled === "boolean") {
+        editor.setInputBehavior(key as InputBehaviorSettingKey, enabled);
+      }
+    }
+  }
+  if (typeof settings.keypadMinimizeOnCopy === "boolean") {
+    editor.setKeypadMinimizeOnCopy(settings.keypadMinimizeOnCopy);
+  }
 }
 
 function requireOfficeSessionFontSizePt(value: unknown, host: OfficeHost) {
@@ -250,7 +368,7 @@ export function OfficeDialogApp() {
     exportResult: OfficeExportResult;
   } | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(() =>
-    readWorkspacePanelOpen("office-create", "tiles", window.innerWidth >= 1040),
+    readWorkspacePanelOpen("office-edit", "tiles", window.innerWidth >= 1040),
   );
   const [historyBusy, setHistoryBusy] = useState(false);
   const [autoCommitOnClose, setAutoCommitOnClose] = useState(true);
@@ -279,6 +397,13 @@ export function OfficeDialogApp() {
   const inlineOcrRunIdRef = useRef(0);
   const inlineOcrClearTimerRef = useRef<number | null>(null);
   const { sessionId, session, loading, error, reload, save } = useOfficeSession();
+
+  useEffect(() => {
+    if (readLocalStorage(OFFICE_EDITOR_ZOOM_60_MIGRATION_KEY) !== "done") {
+      useEditorStore.getState().setZoom(0.6);
+      writeLocalStorage(OFFICE_EDITOR_ZOOM_60_MIGRATION_KEY, "done");
+    }
+  }, []);
 
   useEffect(() => {
     loadedSessionIdRef.current = "";
@@ -347,10 +472,30 @@ export function OfficeDialogApp() {
     };
     const syncFromCompanion = async () => {
       try {
-        const status = await getOfficeTheme();
+        const [status, preferences] = await Promise.all([
+          getOfficeTheme(),
+          getOfficePreferences(),
+        ]);
         if (!disposed) {
+          // Shared visual/editor preferences stay live, but Office-window view
+          // state (source tab and resizable panel dimensions) is deliberately
+          // excluded inside applyOfficeEditorPreferences. Those values persist
+          // in this Office WebView and must never be overwritten by the main
+          // app's 500ms companion snapshot.
+          applyOfficeEditorPreferences(
+            preferences,
+            applyTheme,
+            applyEditorLayout,
+          );
           applyTheme(status.theme);
           applyEditorLayout(status.editorLayout);
+          setPowerPointDefaultFontSizePt(
+            normalizeOfficeFontSizePt(
+              preferences.powerpointDefaultFontSizePt,
+              20,
+            ),
+          );
+          setOfficePreferencesReady(true);
         }
       } catch {
         // Keep the last applied appearance while the companion is restarting.
@@ -361,6 +506,13 @@ export function OfficeDialogApp() {
     const unsubscribeBrowser = subscribeSynchronizedTheme(applyTheme);
     void syncFromCompanion();
     const interval = window.setInterval(() => void syncFromCompanion(), 500);
+    // Browser/Vite parity and independent Office WebViews can miss a storage or
+    // BroadcastChannel notification during creation. Re-read the published
+    // active theme without the one-shot ?theme= bootstrap value so later main
+    // window theme changes always win.
+    const publishedThemeInterval = window.setInterval(() => {
+      applyTheme(readPublishedSynchronizedTheme());
+    }, 80);
     const handleFocus = () => void syncFromCompanion();
     const handleVisibility = () => {
       if (document.visibilityState === "visible") void syncFromCompanion();
@@ -372,6 +524,7 @@ export function OfficeDialogApp() {
       disposed = true;
       unsubscribeBrowser();
       window.clearInterval(interval);
+      window.clearInterval(publishedThemeInterval);
       window.removeEventListener("focus", handleFocus);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
@@ -383,7 +536,7 @@ export function OfficeDialogApp() {
 
   const handleSidebarOpenChange = useCallback((open: boolean) => {
     setSidebarOpen(open);
-    writeWorkspacePanelOpen("office-create", "tiles", open);
+    writeWorkspacePanelOpen("office-edit", "tiles", open);
   }, []);
 
   const selectedOcrModel =
@@ -431,9 +584,14 @@ export function OfficeDialogApp() {
     }
     loadedSessionIdRef.current = session.id;
     skipAutosaveForSessionRef.current = session.id;
-    const nextLines = session.lines.length
+    const sourceLines = session.lines.length
       ? session.lines
-      : [{ id: crypto.randomUUID(), latex: "" }];
+      : [{ id: createUuid(), latex: "" }];
+    const normalizedDocument = normalizeOfficeFormulaDocument(
+      sourceLines,
+      session.codeFormat,
+    );
+    const nextLines = normalizedDocument.lines;
     useEditorStore.getState().replaceDocumentState({
       title: session.title || (isEn ? "Office Formula" : "Office 公式"),
       lines: nextLines,
@@ -445,7 +603,7 @@ export function OfficeDialogApp() {
       formulaAlignment: useEditorStore.getState().formulaAlignment,
       selectionByLineId: {},
     });
-    const loadedCodeFormat = normalizeOfficeCodeFormat(session.codeFormat);
+    const loadedCodeFormat = normalizedDocument.codeFormat;
     useEditorStore.getState().setLatexCodeFormat(loadedCodeFormat);
     setAutoCommitOnClose(session.autoCommitOnClose);
     setDisplayMode(session.displayMode);
@@ -594,18 +752,29 @@ export function OfficeDialogApp() {
     return () => historyManager.configure(null);
   }, [captureSnapshot]);
 
+  const currentRenderedLatex = useMemo(
+    () =>
+      serializeOfficeRenderLatex(
+        lines,
+        latexCodeFormat,
+        displayMode,
+        session?.originalMetadata?.equationTag,
+      ),
+    [
+      lines,
+      latexCodeFormat,
+      displayMode,
+      session?.originalMetadata?.equationTag,
+    ],
+  );
+
   const generateSvgExportResult = useCallback((
-    sourceLatex: string = latex,
+    sourceLatex: string = currentRenderedLatex,
     sourceDisplayMode: "inline" | "block" = displayMode,
     sourceFontSizePt: number = officeFontSizePt,
-    sourceEquationTag: string | null | undefined =
-      session?.originalMetadata?.equationTag,
   ): OfficeExportResult | null => {
     if (!sourceLatex.trim()) return null;
-    const renderedLatex = sourceDisplayMode === "block"
-      ? attachFormulaEquationTag(sourceLatex, sourceEquationTag)
-      : sourceLatex;
-    const svg = latexToSvg(renderedLatex, {
+    const svg = latexToSvg(sourceLatex, {
       displayMode: sourceDisplayMode === "block",
       fontSizePt: sourceFontSizePt,
       paddingPx: sourceDisplayMode === "inline" ? 1 : 10,
@@ -614,17 +783,12 @@ export function OfficeDialogApp() {
     return {
       svg: svg.svg,
       svgBase64: svg.base64,
-      mathMl: latexToMathMl(renderedLatex, sourceDisplayMode === "block"),
+      mathMl: latexToMathMl(sourceLatex, sourceDisplayMode === "block"),
       width: svg.width,
       height: svg.height,
       baseline: svg.baseline,
     };
-  }, [
-    latex,
-    displayMode,
-    officeFontSizePt,
-    session?.originalMetadata?.equationTag,
-  ]);
+  }, [currentRenderedLatex, displayMode, officeFontSizePt]);
 
   const rasterizeSvgExportResult = useCallback(async (
     base: OfficeExportResult,
@@ -651,24 +815,20 @@ export function OfficeDialogApp() {
   }, []);
 
   const generateExportResult = useCallback(async (
-    sourceLatex: string = latex,
+    sourceLatex: string = currentRenderedLatex,
     sourceDisplayMode: "inline" | "block" = displayMode,
     sourceFontSizePt: number = officeFontSizePt,
-    sourceEquationTag: string | null | undefined =
-      session?.originalMetadata?.equationTag,
   ): Promise<OfficeExportResult | null> => {
     const base = generateSvgExportResult(
       sourceLatex,
       sourceDisplayMode,
       sourceFontSizePt,
-      sourceEquationTag,
     );
     return base ? rasterizeSvgExportResult(base) : null;
   }, [
-    latex,
+    currentRenderedLatex,
     displayMode,
     officeFontSizePt,
-    session?.originalMetadata?.equationTag,
     generateSvgExportResult,
     rasterizeSvgExportResult,
   ]);
@@ -676,23 +836,29 @@ export function OfficeDialogApp() {
   const generateSessionExportResult = useCallback(async (
     sourceSession: OfficeFormulaSession,
   ): Promise<OfficeExportResult> => {
-    const conversionLines = sourceSession.lines.length
+    const sourceLines = sourceSession.lines.length
       ? sourceSession.lines
-      : [{ id: crypto.randomUUID(), latex: "" }];
-    const conversionLatex = joinFormulaLines(conversionLines);
+      : [{ id: createUuid(), latex: "" }];
+    const conversionDocument = normalizeOfficeFormulaDocument(
+      sourceLines,
+      sourceSession.codeFormat,
+    );
+    const conversionLines = conversionDocument.lines;
+    const conversionLatex = serializeOfficeRenderLatex(
+      conversionLines,
+      conversionDocument.codeFormat,
+      sourceSession.displayMode,
+      sourceSession.originalMetadata?.equationTag,
+    );
     const conversionFontSizePt = requireOfficeSessionFontSizePt(
       sourceSession.fontSizePt ??
         sourceSession.originalMetadata?.fontSizePt ??
         sourceSession.originalMetadata?.renderFontSizePt,
       sourceSession.host,
     );
-    const sourceEquationTag = sourceSession.originalMetadata?.equationTag;
     if (sourceSession.objectMode === "wordOmml") {
-      const renderedLatex = sourceSession.displayMode === "block"
-        ? attachFormulaEquationTag(conversionLatex, sourceEquationTag)
-        : conversionLatex;
       const mathMl = latexToMathMl(
-        renderedLatex,
+        conversionLatex,
         sourceSession.displayMode === "block",
       );
       if (!mathMl?.trim()) {
@@ -717,7 +883,6 @@ export function OfficeDialogApp() {
       conversionLatex,
       sourceSession.displayMode,
       conversionFontSizePt,
-      sourceEquationTag,
     );
     if (!base?.mathMl) {
       throw new Error("Unable to generate MathML for Office conversion.");
@@ -744,10 +909,14 @@ export function OfficeDialogApp() {
         // Use the immutable Session snapshot. The editor store is populated in
         // another React effect and can still contain a previous formula during
         // the first hidden conversion render.
-        const conversionLines = session.lines.length
+        const sourceLines = session.lines.length
           ? session.lines
-          : [{ id: crypto.randomUUID(), latex: "" }];
-        const conversionLatex = joinFormulaLines(conversionLines);
+          : [{ id: createUuid(), latex: "" }];
+        const conversionDocument = normalizeOfficeFormulaDocument(
+          sourceLines,
+          session.codeFormat,
+        );
+        const conversionLines = conversionDocument.lines;
         const conversionDisplayMode = session.displayMode;
         const conversionNumbered =
           conversionDisplayMode === "block" && Boolean(session.numbered);
@@ -771,7 +940,7 @@ export function OfficeDialogApp() {
           title: session.title,
           lines: conversionLines,
           activeLineId: conversionActiveLineId,
-          codeFormat: normalizeOfficeCodeFormat(session.codeFormat),
+          codeFormat: conversionDocument.codeFormat,
           displayMode: conversionDisplayMode,
           numbered: conversionNumbered,
           fontSizePt: conversionFontSizePt,
@@ -827,9 +996,14 @@ export function OfficeDialogApp() {
             let queuedSession: OfficeFormulaSession | null = null;
             try {
               queuedSession = await getOfficeSession(queuedSessionId);
-              const conversionLines = queuedSession.lines.length
+              const sourceLines = queuedSession.lines.length
                 ? queuedSession.lines
-                : [{ id: crypto.randomUUID(), latex: "" }];
+                : [{ id: createUuid(), latex: "" }];
+              const conversionDocument = normalizeOfficeFormulaDocument(
+                sourceLines,
+                queuedSession.codeFormat,
+              );
+              const conversionLines = conversionDocument.lines;
               const conversionFontSizePt = requireOfficeSessionFontSizePt(
                 queuedSession.fontSizePt ??
                   queuedSession.originalMetadata?.fontSizePt ??
@@ -845,7 +1019,7 @@ export function OfficeDialogApp() {
                   conversionLines.some((line) => line.id === queuedSession?.activeLineId)
                     ? queuedSession.activeLineId
                     : conversionLines[0]?.id ?? null,
-                codeFormat: normalizeOfficeCodeFormat(queuedSession.codeFormat),
+                codeFormat: conversionDocument.codeFormat,
                 displayMode: queuedSession.displayMode,
                 numbered:
                   queuedSession.displayMode === "block" && Boolean(queuedSession.numbered),
@@ -1750,14 +1924,6 @@ export function OfficeDialogApp() {
           <span>{isEn ? "Number" : "编号"}</span>
         </label>
       ) : null}
-      <label className="office-auto-commit-setting">
-        <input
-          type="checkbox"
-          checked={autoCommitOnClose}
-          onChange={(event) => setAutoCommitOnClose(event.target.checked)}
-        />
-        <span>{isEn ? "Apply on close" : "关闭时应用"}</span>
-      </label>
     </>
   );
 
@@ -1777,24 +1943,31 @@ export function OfficeDialogApp() {
       </button>
       <button
         type="button"
-        className="secondary-button"
+        className="icon-button compact office-history-icon-button"
+        data-office-undo-action
+        aria-label={isEn ? "Undo" : "撤销"}
+        title={isEn ? "Undo" : "撤销"}
         onClick={() => void historyManager.undo()}
         disabled={historyBusy || !historyState.canUndo || historyState.isReplaying}
       >
-        {isEn ? "Undo" : "撤销"}
+        <Undo2 size={16} strokeWidth={2} />
       </button>
       <button
         type="button"
-        className="secondary-button"
+        className="icon-button compact office-history-icon-button"
+        data-office-redo-action
+        aria-label={isEn ? "Redo" : "重做"}
+        title={isEn ? "Redo" : "重做"}
         onClick={() => void historyManager.redo()}
         disabled={historyBusy || !historyState.canRedo || historyState.isReplaying}
       >
-        {isEn ? "Redo" : "重做"}
+        <Redo2 size={16} strokeWidth={2} />
       </button>
       <span className="office-inline-action-divider" aria-hidden="true" />
       <button
         type="button"
         className="secondary-button office-inline-cancel"
+        data-office-cancel-action
         onClick={() => void handleCancel()}
         aria-label={isEn ? "Cancel" : "取消"}
       >
@@ -1803,6 +1976,7 @@ export function OfficeDialogApp() {
       <button
         type="button"
         className="primary-button office-inline-primary"
+        data-office-primary-action
         onClick={() => void handleCommit()}
         aria-keyshortcuts="Control+S"
         title={isEn ? "Apply and close (Ctrl+S)" : "应用并关闭（Ctrl+S）"}
@@ -1824,7 +1998,7 @@ export function OfficeDialogApp() {
         mode={session.mode === "edit" ? "office-edit" : "office-create"}
         showFileActions={false}
         showUpdateActions={false}
-        showOfficeActions
+        showOfficeActions={false}
         showOcrActions={true}
         officeHeaderLeadingControls={officeHeaderLeadingControls}
         officeHeaderTrailingActions={officeHeaderTrailingActions}

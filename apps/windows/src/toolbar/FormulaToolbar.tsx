@@ -187,6 +187,18 @@ function loadCommonToolbarCommandIds() {
 
 function compactCustomTileWidth(latex: string) {
   const normalized = latex.replace(/\s+/g, "");
+  const commandBody = normalized.charCodeAt(0) === 92 ? normalized.slice(1) : "";
+  if (commandBody && /^[A-Za-z]+$/.test(commandBody)) {
+    return 24;
+  }
+  if (
+    commandBody &&
+    /^[A-Za-z]+(?:(?:_|\^)(?:\{[^{}]+\}|[A-Za-z0-9]+)){1,2}$/.test(
+      commandBody,
+    )
+  ) {
+    return 42;
+  }
   if (/^(?:\\[A-Za-z]+|[A-Za-z0-9])$/.test(normalized)) {
     return 24;
   }
@@ -274,9 +286,17 @@ function normalizeCustomTileRowWeights(items: CustomTileRowItem[]) {
       if (index > 100) break;
     }
   } else if (total < customTileRowUnits) {
-    const expandable = [...normalized].sort(
-      (left, right) => right.naturalWidth - left.naturalWidth,
-    );
+    // Keep genuinely compact one-symbol tiles compact. Filling spare row units
+    // should widen the formulas that actually need room rather than turning a
+    // single \beta/letter into a full two-unit tile on Windows font metrics.
+    const widerItems = normalized
+      .filter((item) => item.naturalWidth > 28)
+      .sort((left, right) => right.naturalWidth - left.naturalWidth);
+    const expandable = widerItems.length > 0
+      ? widerItems
+      : [...normalized].sort(
+          (left, right) => right.naturalWidth - left.naturalWidth,
+        );
     let index = 0;
     while (total < customTileRowUnits && expandable.length > 0) {
       expandable[index % expandable.length].weight += 1;
@@ -349,9 +369,22 @@ function buildCustomTileRows(
     );
     const fill =
       items.length > 1 || totalMinimumWidth >= safeWidth * 0.58;
+    const normalizedItems = fill
+      ? normalizeCustomTileRowWeights(items)
+      : items;
+    const hasNonCompactItem = normalizedItems.some(
+      (item) => compactCustomTileWidth(item.tile.latex) !== 24,
+    );
+    if (fill && hasNonCompactItem) {
+      for (const item of normalizedItems) {
+        if (compactCustomTileWidth(item.tile.latex) === 24) {
+          item.weight = 1;
+        }
+      }
+    }
     return {
       id: `${index}-${items.map((item) => item.tile.id).join("-")}`,
-      items: fill ? normalizeCustomTileRowWeights(items) : items,
+      items: normalizedItems,
       fill,
     };
   });
@@ -1259,8 +1292,13 @@ export function FormulaToolbar({
             (availableHeight + rowGap) / (targetRowHeight + rowGap),
           ),
         );
+        const matrixPickerSize = Math.max(
+          40,
+          Math.min(152, Math.floor(availableHeight - 8)),
+        );
 
         root.style.setProperty("--toolbar-row-count", String(nextRowCount));
+        root.style.setProperty("--matrix-picker-size", `${matrixPickerSize}px`);
         root.dataset.toolbarRowCount = String(nextRowCount);
         setHorizontalRowCount((current) =>
           current === nextRowCount ? current : nextRowCount,

@@ -60,6 +60,59 @@ const OCR_WORKER_WAIT_NOTICE_INTERVAL: Duration = Duration::from_secs(2);
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfigurationWindowSize {
+    width: f64,
+    height: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppWindowConfiguration {
+    main: Option<ConfigurationWindowSize>,
+    office_editor: Option<ConfigurationWindowSize>,
+}
+
+#[tauri::command]
+fn get_app_window_configuration(app: AppHandle) -> Result<AppWindowConfiguration, String> {
+    let main = app_lifecycle::configuration_main_window_size(&app)
+        .map(|(width, height)| ConfigurationWindowSize { width, height });
+    #[cfg(target_os = "windows")]
+    let office_editor = office::server::configuration_office_editor_window_size(&app)
+        .map(|(width, height)| ConfigurationWindowSize { width, height });
+    #[cfg(not(target_os = "windows"))]
+    let office_editor = None;
+
+    Ok(AppWindowConfiguration {
+        main,
+        office_editor,
+    })
+}
+
+#[tauri::command]
+fn apply_app_window_configuration(
+    app: AppHandle,
+    configuration: AppWindowConfiguration,
+) -> Result<AppWindowConfiguration, String> {
+    if let Some(requested) = configuration.main {
+        app_lifecycle::apply_configuration_main_window_size(
+            &app,
+            requested.width,
+            requested.height,
+        )?;
+    }
+    #[cfg(target_os = "windows")]
+    if let Some(requested) = configuration.office_editor {
+        office::server::apply_configuration_office_editor_window_size(
+            &app,
+            requested.width,
+            requested.height,
+        )?;
+    }
+    get_app_window_configuration(app)
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OcrEventRecord {
@@ -3667,18 +3720,12 @@ fn cancel_ocr_model_download(state: State<'_, OcrState>) -> bool {
 #[cfg(windows)]
 #[tauri::command]
 fn configure_silent_ocr(
+    app: AppHandle,
     enabled: bool,
     model: String,
     copy_format: String,
 ) -> Result<(), String> {
-    let normalized_model = model.trim();
-    if !ALLOWED_MODELS.iter().any(|allowed| allowed == &normalized_model) {
-        return Err("Unsupported silent OCR model".to_string());
-    }
-    if copy_format.trim().is_empty() {
-        return Err("Silent OCR LaTeX copy format is unavailable".to_string());
-    }
-    windows_silent_ocr_hotkey::set_registered(enabled)
+    windows_silent_ocr_hotkey::configure(&app, enabled, &model, &copy_format)
 }
 
 fn shutdown_runtime(app: &AppHandle, started: &AtomicBool, reason: &str) {
@@ -3836,10 +3883,15 @@ pub fn run() {
             download_ocr_model,
             cancel_ocr_model_download,
             configure_silent_ocr,
+            windows_silent_ocr_hotkey::get_silent_ocr_hud_status,
             windows_quick_ocr::capture_windows_quick_ocr,
+            windows_quick_ocr::minimize_visualtex_main_window,
             windows_quick_ocr::write_windows_ocr_clipboard_text,
+            get_app_window_configuration,
+            apply_app_window_configuration,
             office::lifecycle::set_app_theme,
             office::lifecycle::set_app_editor_layout,
+            office::lifecycle::set_app_editor_preferences,
             office::lifecycle::set_powerpoint_default_font_size,
             office::lifecycle::get_powerpoint_default_font_size,
             office::lifecycle::get_office_companion_status,
@@ -3890,6 +3942,29 @@ pub fn run() {
     let shutdown_started = Arc::new(AtomicBool::new(false));
     let shutdown_for_events = shutdown_started.clone();
     app.run(move |app, event| match event {
+        #[cfg(target_os = "windows")]
+        tauri::RunEvent::WindowEvent {
+            label,
+            event: tauri::WindowEvent::Resized(size),
+            ..
+        } if label == "main" => {
+            app_lifecycle::schedule_persist_main_window_size(app, size.width, size.height);
+        }
+        #[cfg(target_os = "windows")]
+        tauri::RunEvent::WindowEvent {
+            label,
+            event: tauri::WindowEvent::Resized(size),
+            ..
+        } if label == "office-session-editor" => {
+            if let Some(window) = app.get_webview_window("office-session-editor") {
+                let scale_factor = window.scale_factor().unwrap_or(1.0).max(f64::EPSILON);
+                office::server::schedule_persist_office_editor_window_size(
+                    app.clone(),
+                    f64::from(size.width) / scale_factor,
+                    f64::from(size.height) / scale_factor,
+                );
+            }
+        }
         #[cfg(target_os = "windows")]
         tauri::RunEvent::WindowEvent {
             label,

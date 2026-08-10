@@ -1,5 +1,4 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { useEditorStore } from "../stores/editorStore";
 import { safeStorage } from "./safeStorage";
 import { publishSynchronizedTheme } from "../themeSync";
@@ -96,6 +95,7 @@ const editorSettingKeys = [
   "powerPointDefaultFontSizePt",
   "classicTileWidth",
   "classicDockHeight",
+  "keypadMinimizeOnCopy",
 ] as const satisfies readonly (keyof FormulaDocument["settings"])[];
 
 const maximumStorageEntryLength = 2_000_000;
@@ -216,15 +216,9 @@ async function readWindowConfiguration(): Promise<VisualTexConfigurationWindowSt
     };
   }
   try {
-    const appWindow = getCurrentWindow();
-    const physical = await appWindow.innerSize();
-    const scaleFactor = Math.max(0.1, await appWindow.scaleFactor());
-    return {
-      main: {
-        width: physical.width / scaleFactor,
-        height: physical.height / scaleFactor,
-      },
-    };
+    return await invoke<VisualTexConfigurationWindowState>(
+      "get_app_window_configuration",
+    );
   } catch {
     return undefined;
   }
@@ -233,13 +227,11 @@ async function readWindowConfiguration(): Promise<VisualTexConfigurationWindowSt
 async function applyWindowConfiguration(
   windows: VisualTexConfigurationWindowState | undefined,
 ) {
-  if (!windows?.main || !isTauri()) return;
+  if (!windows || !isTauri()) return;
   try {
-    const appWindow = getCurrentWindow();
-    await appWindow.setSize(
-      new LogicalSize(windows.main.width, windows.main.height),
-    );
-    await appWindow.center();
+    await invoke("apply_app_window_configuration", {
+      configuration: windows,
+    });
   } catch {
     // Window geometry backup must not make importing the remaining settings fail.
   }

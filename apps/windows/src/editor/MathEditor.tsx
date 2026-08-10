@@ -14,6 +14,7 @@ import {
   type Style,
 } from "mathlive";
 import { flushSync } from "react-dom";
+import { ClipboardCopy } from "lucide-react";
 import type {
   CommandSource,
   CommandUsage,
@@ -23,6 +24,7 @@ import type {
   FormulaAlignment,
   FormulaLine,
   InputBehaviorSettingKey,
+  LatexCodeFormat,
   InputBehaviorSettings,
 } from "../types/formula";
 import type {
@@ -94,6 +96,11 @@ import {
   type FormulaChineseFont,
   type FormulaLetterFont,
 } from "./formulaFontPreferences";
+import {
+  usesExplicitAlignmentPoints,
+  VISUALTEX_ALIGNMENT_MARKER_CLASS,
+  VISUALTEX_ALIGNMENT_MARKER_LATEX,
+} from "./alignmentMarkers";
 
 export interface MathEditorInsertionTarget {
   lineId: string;
@@ -151,6 +158,7 @@ interface Props {
   lines: FormulaLine[];
   activeLineId: string | null;
   formulaAlignment: FormulaAlignment;
+  latexCodeFormat: LatexCodeFormat;
   zoom: number;
   reuseLineSlots?: boolean;
   readOnly?: boolean;
@@ -161,47 +169,6 @@ interface Props {
   onCopyPng?: () => Promise<void>;
   onHistoryBusyChange?: (busy: boolean) => void;
   overlay?: ReactNode;
-}
-
-const mathLiveContextStyleColors = new Set([
-  "red",
-  "orange",
-  "yellow",
-  "lime",
-  "green",
-  "teal",
-  "cyan",
-  "blue",
-  "indigo",
-  "purple",
-  "magenta",
-  "black",
-  "dark-grey",
-  "grey",
-  "light-grey",
-  "white",
-]);
-
-function mathLiveContextMenuStyle(
-  id: unknown,
-): Pick<Style, "color" | "backgroundColor"> | null {
-  if (typeof id !== "string") return null;
-
-  const backgroundPrefix = "background-color-";
-  if (id.startsWith(backgroundPrefix)) {
-    const color = id.slice(backgroundPrefix.length);
-    return mathLiveContextStyleColors.has(color)
-      ? { backgroundColor: color }
-      : null;
-  }
-
-  const foregroundPrefix = "color-";
-  if (id.startsWith(foregroundPrefix)) {
-    const color = id.slice(foregroundPrefix.length);
-    return mathLiveContextStyleColors.has(color) ? { color } : null;
-  }
-
-  return null;
 }
 
 interface FormulaFieldEdit {
@@ -283,6 +250,23 @@ function rawLatexInput(field: MathfieldElement) {
     .filter((node) => !node.classList.contains("ML__suggestion"))
     .map((node) => node.textContent ?? "")
     .join("");
+}
+
+type MathLiveInternalField = {
+  _mathfield?: {
+    model?: {
+      parentEnvironment?: {
+        environmentName?: string;
+      } | null;
+    };
+  };
+};
+
+function activeMathLiveEnvironmentName(field: MathfieldElement) {
+  return (
+    (field as unknown as MathLiveInternalField)._mathfield?.model?.parentEnvironment
+      ?.environmentName ?? null
+  );
 }
 
 function structuralBoundaryOffsetFromPoint(
@@ -1035,8 +1019,13 @@ const accentCommandTemplates = new Map<string, string>([
   ["\\overleftrightarrow", "\\overleftrightarrow{\\placeholder{}}"],
   ["\\mathring", "\\mathring{\\placeholder{}}"],
 ]);
+const CASES_ENVIRONMENT_COMMAND = "\\begin{cases}";
+const CASES_ENVIRONMENT_TEMPLATE =
+  "\\begin{cases}\\placeholder{} & \\placeholder{}\\end{cases}";
+
 const rawPlaceholderCommandTemplates = new Map<string, string>([
   ...accentCommandTemplates,
+  [CASES_ENVIRONMENT_COMMAND, CASES_ENVIRONMENT_TEMPLATE],
   ["\\sqrt", "\\sqrt{\\placeholder{}}"],
   ["\\frac", "\\frac{\\placeholder{}}{\\placeholder{}}"],
   ["\\dfrac", "\\dfrac{\\placeholder{}}{\\placeholder{}}"],
@@ -1086,6 +1075,8 @@ const wrapperCommandPreviews = new Map<string, string>([
   ["\\mathscr", "\\mathscr{gG}"],
   ["\\mathfrak", "\\mathfrak{ABC}"],
   ["\\boldsymbol", "\\boldsymbol{\\alpha A}"],
+  ["\\bm", "\\bm{\\alpha A}"],
+  ["\\mathbfit", "\\mathbfit{ABC}"],
   ["\\mathnormal", "\\mathnormal{ABC}"],
 ]);
 function visibleCommandSuggestions(
@@ -1262,6 +1253,51 @@ let observedNativeInputPopoverSource: HTMLElement | null = null;
 let nativeSuggestionUsageSnapshot: Record<string, CommandUsage> = {};
 let nativeSuggestionPersonalizeSnapshot = true;
 let nativeInputPopoverManualCommand = "";
+let nativeInputPopoverActiveField: MathfieldElement | null = null;
+
+function casesEnvironmentSuggestionQuery(field: MathfieldElement) {
+  const raw = rawLatexInput(field).replace(/\s+/g, "");
+  if (!raw.startsWith("\\begin{")) return "";
+  if (!CASES_ENVIRONMENT_COMMAND.startsWith(raw)) return "";
+  return raw;
+}
+
+function renderCasesEnvironmentSuggestion(
+  stable: HTMLElement,
+  field: MathfieldElement,
+) {
+  const query = casesEnvironmentSuggestionQuery(field);
+  if (!query) return false;
+
+  const preview = convertVisualTexLatexToMarkup(
+    "\\begin{cases}x & x>0\\\\0 & x=0\\end{cases}",
+    { defaultMode: "math" },
+  );
+  stable.dataset.visualtexEnvironmentSuggestion = "cases";
+  stable.innerHTML = `<ul><li role="button" data-command="\\begin{cases}" class="ML__popover__current has-visualtex-command-preview"><span class="ML__popover__latex">\\begin{cases}</span><span class="ML__popover__command">${preview}</span><span class="ML__popover__keybinding">Space</span></li></ul>`;
+
+  const caret =
+    field.shadowRoot?.querySelector<HTMLElement>(
+      ".ML__latex-caret, .ML__caret, .ML__text-caret",
+    ) ?? null;
+  const anchor = caret?.getBoundingClientRect() ?? field.getBoundingClientRect();
+  const width = Math.min(380, Math.max(250, window.innerWidth - 24));
+  const left = Math.max(
+    12,
+    Math.min(window.innerWidth - width - 12, anchor.left - 40),
+  );
+  const roomBelow = window.innerHeight - anchor.bottom;
+  stable.classList.toggle("bottom-tip", roomBelow < 190);
+  stable.classList.toggle("top-tip", roomBelow >= 190);
+  stable.style.left = `${left}px`;
+  stable.style.top =
+    roomBelow < 190
+      ? `${Math.max(12, anchor.top - 92)}px`
+      : `${Math.min(window.innerHeight - 72, anchor.bottom + 12)}px`;
+  stable.classList.add("is-visible");
+  stable.setAttribute("aria-hidden", "false");
+  return true;
+}
 
 function nativeSuggestionUsageId(command: string) {
   const normalized = command.trim();
@@ -1284,12 +1320,23 @@ function nativeSuggestionFrequency(command: string) {
 }
 
 function rankNativeSuggestionItems(panel: HTMLElement) {
-  const items = Array.from(
+  const allItems = Array.from(
     panel.querySelectorAll<HTMLElement>("li[data-command]"),
   );
-  if (!items.length) return;
-  const parent = items[0]?.parentElement;
-  if (!parent || items.some((item) => item.parentElement !== parent)) return;
+  if (!allItems.length) return;
+  const parent = allItems[0]?.parentElement;
+  if (!parent || allItems.some((item) => item.parentElement !== parent)) return;
+
+  const seenCommands = new Set<string>();
+  const items = allItems.filter((item) => {
+    const command = item.dataset.command?.trim() ?? "";
+    if (!command || !seenCommands.has(command)) {
+      if (command) seenCommands.add(command);
+      return true;
+    }
+    item.remove();
+    return false;
+  });
 
   const ranked = nativeSuggestionPersonalizeSnapshot
     ? items
@@ -1370,13 +1417,30 @@ function ensureStableNativeInputPopover() {
         "li[data-command]",
       ) ?? [],
     ).find((candidate) => candidate.dataset.command === command);
-    sourceItem?.dispatchEvent(
-      new MouseEvent("click", {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-      }),
-    );
+    if (sourceItem) {
+      sourceItem.dispatchEvent(
+        new MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+        }),
+      );
+      return;
+    }
+    if (
+      command === CASES_ENVIRONMENT_COMMAND &&
+      nativeInputPopoverActiveField?.isConnected
+    ) {
+      nativeInputPopoverActiveField.dataset.pendingNativeSuggestion = command;
+      nativeInputPopoverActiveField.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: " ",
+          code: "Space",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    }
   });
   document.body.append(panel);
   return panel;
@@ -1440,6 +1504,14 @@ function syncStableNativeInputPopover() {
   const stable = ensureStableNativeInputPopover();
 
   if (!source || !sourceVisible) {
+    if (
+      nativeInputPopoverActiveField?.isConnected &&
+      renderCasesEnvironmentSuggestion(stable, nativeInputPopoverActiveField)
+    ) {
+      window.clearTimeout(stableNativeInputPopoverHideTimer);
+      return;
+    }
+    delete stable.dataset.visualtexEnvironmentSuggestion;
     window.clearTimeout(stableNativeInputPopoverHideTimer);
     stableNativeInputPopoverHideTimer = window.setTimeout(() => {
       const latest = getNativeInputPopoverSource();
@@ -1457,6 +1529,7 @@ function syncStableNativeInputPopover() {
   }
 
   window.clearTimeout(stableNativeInputPopoverHideTimer);
+  delete stable.dataset.visualtexEnvironmentSuggestion;
   source.dataset.visualtexInputPopoverSource = "true";
   rankNativeSuggestionItems(source);
   const nextHtml = source.innerHTML;
@@ -4979,6 +5052,16 @@ function FormulaField(props: FormulaFieldProps) {
         return;
       }
       normalizeGuardedBackslashInput(event.timeStamp);
+      nativeInputPopoverActiveField = field;
+      const casesSuggestionQuery = casesEnvironmentSuggestionQuery(field);
+      if (casesSuggestionQuery) {
+        field.dataset.pendingNativeSuggestion = CASES_ENVIRONMENT_COMMAND;
+      } else if (
+        field.dataset.pendingNativeSuggestion === CASES_ENVIRONMENT_COMMAND
+      ) {
+        delete field.dataset.pendingNativeSuggestion;
+      }
+      scheduleStableNativeInputPopoverSync();
       const before = lastSnapshotRef.current ?? captureFieldSnapshot(field);
       const directInputSetting =
         event instanceof InputEvent && isSingleDirectInput(event, field)
@@ -5084,12 +5167,27 @@ function FormulaField(props: FormulaFieldProps) {
       };
     };
     const handleFocus = () => {
+      if (field.classList.contains(visualTexSourcePreviewClass)) {
+        field.blur();
+        queueMicrotask(() => {
+          document
+            .querySelector<HTMLElement>(".source-panel .cm-content")
+            ?.focus({ preventScroll: true });
+        });
+        return;
+      }
+      nativeInputPopoverActiveField = field;
+      scheduleStableNativeInputPopoverSync();
       propsRef.current.onFocus(propsRef.current.index, field);
       lastSnapshotRef.current = captureFieldSnapshot(field);
     };
     const handleBlur = () => {
       clearPendingWrapperInput();
       rawCommandAnchors.delete(field);
+      if (nativeInputPopoverActiveField === field) {
+        nativeInputPopoverActiveField = null;
+        scheduleStableNativeInputPopoverSync();
+      }
       propsRef.current.onCommitPending();
     };
     const confirmPendingWrapperInput = (event: KeyboardEvent) => {
@@ -5728,52 +5826,12 @@ function FormulaField(props: FormulaFieldProps) {
 
       propsRef.current.onKeyDown(propsRef.current.index, event, field);
     };
-    let contextStyleSelection: MathSelectionSnapshot | null = null;
-    const captureContextStyleSelection = () => {
-      // Capture before MathLive handles the right click. Its native handler
-      // collapses the selection while opening the menu, so applying a style
-      // later would otherwise affect only the caret position.
-      contextStyleSelection ??= captureSelection(field);
+    const suppressMathLiveContextMenu = (event: Event) => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const pointer = event as MouseEvent;
+      propsRef.current.onContextMenu?.(pointer.clientX, pointer.clientY);
     };
-    const handleContextStylePointerDown = (event: Event) => {
-      const pointerEvent = event as PointerEvent;
-      if (
-        pointerEvent.button === 2 ||
-        (pointerEvent.button === 0 && pointerEvent.ctrlKey)
-      ) {
-        contextStyleSelection = captureSelection(field);
-      }
-    };
-    const applyContextMenuStyle = (
-      style: Pick<Style, "color" | "backgroundColor">,
-    ) => {
-      const selection = contextStyleSelection
-        ? clampSelection(contextStyleSelection, field.lastOffset)
-        : captureSelection(field);
-      field.focus();
-      field.selection = selection;
-      contextStyleSelection = null;
-      field.applyStyle(style, { operation: "toggle" });
-      syncFrameSize();
-    };
-    type MathLiveMenuItem = (typeof field.menuItems)[number];
-    const overrideContextStyleMenuItems = (
-      items: readonly MathLiveMenuItem[],
-    ): MathLiveMenuItem[] =>
-      items.map((item) => {
-        if ("submenu" in item) {
-          return {
-            ...item,
-            submenu: overrideContextStyleMenuItems(item.submenu),
-          };
-        }
-        const style = "id" in item ? mathLiveContextMenuStyle(item.id) : null;
-        if (!style) return item;
-        return {
-          ...item,
-          onMenuSelect: () => applyContextMenuStyle(style),
-        };
-      });
     const handlePaste = (event: ClipboardEvent) => {
       const clipboard = event.clipboardData;
       if (!clipboard) return;
@@ -5841,21 +5899,10 @@ function FormulaField(props: FormulaFieldProps) {
       });
     };
     const handlePointerDown = (event: PointerEvent) => {
-      const clickedMathLiveMenu = event.composedPath().some(
-        (target) =>
-          target instanceof HTMLElement &&
-          Boolean(target.closest("menu.ui-menu-container")),
-      );
-      if (clickedMathLiveMenu) return;
-
       const opensContextMenu =
         event.button === 2 || (event.button === 0 && event.ctrlKey);
-      if (opensContextMenu) {
-        contextStyleSelection = captureSelection(field);
-        return;
-      }
+      if (opensContextMenu) return;
       if (event.button !== 0) return;
-      contextStyleSelection = null;
       installPointerPlaceholderSnapshotStyle(field);
       visualTexPointerSelectingFields.add(field);
       field.classList.add(visualTexPointerSelectingClass);
@@ -5940,6 +5987,7 @@ function FormulaField(props: FormulaFieldProps) {
       },
     };
     applyCustomSymbolMacrosToMathfield(field);
+    field.menuItems = [];
     if (
       /\\bm(?:\s|\{|$)/.test(propsRef.current.latex) ||
       containsCustomSymbolCommand(propsRef.current.latex)
@@ -5952,23 +6000,6 @@ function FormulaField(props: FormulaFieldProps) {
         silenceNotifications: true,
       });
     }
-    const styledMenuItems = overrideContextStyleMenuItems(field.menuItems);
-    field.menuItems = propsRef.current.onCopyPng
-      ? [
-          ...styledMenuItems,
-          { type: "divider" as const },
-          {
-            id: "visualtex-copy-png",
-            label:
-              propsRef.current.language === "en"
-                ? "Copy PNG to Clipboard"
-                : "复制 PNG 到剪贴板",
-            onMenuSelect: () => {
-              void propsRef.current.onCopyPng?.();
-            },
-          },
-        ]
-      : styledMenuItems;
     installMathLiveContourIntegralShadowStyle(field);
     installCustomSymbolShadowStyle(field);
     installVisualTexStructuralPlaceholderStyle(field);
@@ -6009,15 +6040,11 @@ function FormulaField(props: FormulaFieldProps) {
     keyboardSink?.addEventListener("keyup", scheduleInputActivity, true);
     field.addEventListener("paste", handlePaste, true);
     field.shadowRoot?.addEventListener(
-      "pointerdown",
-      handleContextStylePointerDown,
-      true,
-    );
-    field.shadowRoot?.addEventListener(
       "contextmenu",
-      captureContextStyleSelection,
+      suppressMathLiveContextMenu,
       true,
     );
+    host.addEventListener("contextmenu", suppressMathLiveContextMenu, true);
     host.addEventListener("pointerdown", handlePointerDown, true);
     window.addEventListener("pointerup", handlePointerSelectionEnd, true);
     window.addEventListener("pointercancel", handlePointerSelectionEnd, true);
@@ -6086,15 +6113,11 @@ function FormulaField(props: FormulaFieldProps) {
       keyboardSink?.removeEventListener("keyup", scheduleInputActivity, true);
       field.removeEventListener("paste", handlePaste, true);
       field.shadowRoot?.removeEventListener(
-        "pointerdown",
-        handleContextStylePointerDown,
-        true,
-      );
-      field.shadowRoot?.removeEventListener(
         "contextmenu",
-        captureContextStyleSelection,
+        suppressMathLiveContextMenu,
         true,
       );
+      host.removeEventListener("contextmenu", suppressMathLiveContextMenu, true);
       host.removeEventListener("pointerdown", handlePointerDown, true);
       window.removeEventListener("pointerup", handlePointerSelectionEnd, true);
       window.removeEventListener("pointercancel", handlePointerSelectionEnd, true);
@@ -6248,6 +6271,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       lines,
       activeLineId,
       formulaAlignment,
+      latexCodeFormat,
       zoom,
       reuseLineSlots = false,
       readOnly = false,
@@ -6268,7 +6292,6 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
     const activeLineIdRef = useRef<string | null>(activeLineId);
     const focusRequestRef = useRef(0);
     const previewOnlyRef = useRef(previewOnly);
-    const contextMenuPngBusyRef = useRef(false);
     const greekLetterHotkeyLineIdRef = useRef<string | null>(null);
     const suppressedHistoryLineIdRef = useRef<string | null>(null);
     const multiLineSelectionRef = useRef<MultiLineSelectionState | null>(null);
@@ -6291,6 +6314,11 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
     const [fieldRenderEpoch, setFieldRenderEpoch] = useState(0);
     const [query, setQuery] = useState("");
     const [selectedIndex, setSelectedIndex] = useState(0);
+    const [contextMenu, setContextMenu] = useState<{
+      left: number;
+      top: number;
+    } | null>(null);
+    const [contextMenuBusy, setContextMenuBusy] = useState(false);
     const [popupPosition, setPopupPosition] = useState({ left: 72, top: 132 });
     const selectedIndexRef = useRef(0);
     const queryRef = useRef("");
@@ -6335,6 +6363,98 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
     const resolvedActiveLineId =
       lines.find((line) => line.id === activeLineId)?.id ?? lines[0]?.id ?? null;
     activeLineIdRef.current = resolvedActiveLineId;
+
+    const refreshExplicitAlignmentLayout = () => {
+      const registered = Array.from(fieldRefs.current.values());
+      for (const field of registered) {
+        const host = field.closest<HTMLElement>(".mathfield-host");
+        host?.classList.remove("has-explicit-align-marker");
+        field.style.removeProperty("margin-left");
+      }
+      if (!usesExplicitAlignmentPoints(latexCodeFormat)) return;
+
+      const marked = linesRef.current.flatMap((line) => {
+        const field = fieldRefs.current.get(line.id);
+        if (!field?.isConnected) return [];
+        const host = field.closest<HTMLElement>(".mathfield-host");
+        const marker = field.shadowRoot?.querySelector<HTMLElement>(
+          `.${VISUALTEX_ALIGNMENT_MARKER_CLASS}`,
+        );
+        if (!host || !marker) return [];
+        const fieldBounds = field.getBoundingClientRect();
+        const markerBounds = marker.getBoundingClientRect();
+        return [
+          {
+            field,
+            host,
+            anchorOffset: markerBounds.left - fieldBounds.left,
+            leftExtent: markerBounds.left - fieldBounds.left,
+            rightExtent: fieldBounds.right - markerBounds.left,
+          },
+        ];
+      });
+      if (!marked.length) return;
+
+      const sharedLeftExtent = Math.max(
+        0,
+        ...marked.map((entry) => entry.leftExtent),
+      );
+      const sharedRightExtent = Math.max(
+        0,
+        ...marked.map((entry) => entry.rightExtent),
+      );
+      const alignedWidth = sharedLeftExtent + sharedRightExtent;
+
+      for (const entry of marked) {
+        const hostWidth = entry.host.getBoundingClientRect().width;
+        const groupStart =
+          formulaAlignment === "left"
+            ? 0
+            : formulaAlignment === "right"
+              ? Math.max(0, hostWidth - alignedWidth)
+              : Math.max(0, (hostWidth - alignedWidth) / 2);
+        const fieldOffset = Math.max(
+          0,
+          groupStart + sharedLeftExtent - entry.anchorOffset,
+        );
+        entry.host.classList.add("has-explicit-align-marker");
+        entry.field.style.marginLeft = `${fieldOffset}px`;
+      }
+    };
+
+    useLayoutEffect(() => {
+      let firstFrame = 0;
+      let secondFrame = 0;
+      const schedule = () => {
+        window.cancelAnimationFrame(firstFrame);
+        window.cancelAnimationFrame(secondFrame);
+        firstFrame = window.requestAnimationFrame(() => {
+          refreshExplicitAlignmentLayout();
+          secondFrame = window.requestAnimationFrame(
+            refreshExplicitAlignmentLayout,
+          );
+        });
+      };
+      schedule();
+      window.addEventListener("resize", schedule);
+      window.addEventListener(EDITOR_LAYOUT_REFRESH_EVENT, schedule);
+      return () => {
+        window.cancelAnimationFrame(firstFrame);
+        window.cancelAnimationFrame(secondFrame);
+        window.removeEventListener("resize", schedule);
+        window.removeEventListener(EDITOR_LAYOUT_REFRESH_EVENT, schedule);
+      };
+    }, [
+      fieldRenderEpoch,
+      formulaAlignment,
+      formulaInsetLeft,
+      formulaInsetRight,
+      formulaRowVerticalInset,
+      latexCodeFormat,
+      lines,
+      showLineNumbers,
+      zoom,
+    ]);
 
     const captureEditorScrollSnapshot = (
       preferredLineId?: string | null,
@@ -7822,6 +7942,48 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       stabilizeEditorScroll(scrollSnapshot, targetLine.id, false);
     };
 
+    const scheduleUnconsumedMathSpace = (
+      lineId: string,
+      field: MathfieldElement,
+    ) => {
+      const beforeNativeSpace = captureFieldSnapshot(field);
+      queueMicrotask(() => {
+        if (!field.isConnected) return;
+        const afterNativeSpace = captureFieldSnapshot(field);
+        if (
+          beforeNativeSpace.latex !== afterNativeSpace.latex ||
+          JSON.stringify(beforeNativeSpace.selection) !==
+            JSON.stringify(afterNativeSpace.selection)
+        ) {
+          return;
+        }
+
+        const inserted = applyDiscreteFormulaMutation(
+          lineId,
+          field,
+          "keyboard",
+          () =>
+            field.insert("\\ ", {
+              mode: "math",
+              format: "latex",
+              insertionMode: "replaceSelection",
+              selectionMode: "after",
+              focus: true,
+              scrollIntoView: false,
+            }),
+        );
+        if (!inserted) return;
+        suppressedSuggestionRef.current = null;
+        queryRef.current = "";
+        setQuery("");
+        selectSuggestionIndex(0);
+        focusLine(lineId, {
+          latex: normalizeChineseLatex(field.value),
+          selection: captureSelection(field),
+        });
+      });
+    };
+
     const handleKeyDown = (
       index: number,
       lineId: string,
@@ -8092,6 +8254,92 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
           // MathLive can safely handle it itself.
           return;
         }
+      }
+
+      const alignmentCaretDepth =
+        field.getElementInfo(field.position)?.depth ??
+        field.getElementInfo(Math.max(0, field.position - 1))?.depth ??
+        0;
+      const insertsExplicitAlignmentPoint =
+        usesExplicitAlignmentPoints(latexCodeFormat) &&
+        alignmentCaretDepth === 0 &&
+        event.key === "&" &&
+        !event.isComposing &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        field.mode !== "latex" &&
+        !rawCommandActive &&
+        activeMathLiveEnvironmentName(field) === null;
+      if (insertsExplicitAlignmentPoint) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const inserted = applyDiscreteFormulaMutation(
+          lineId,
+          field,
+          "keyboard",
+          () =>
+            field.insert(VISUALTEX_ALIGNMENT_MARKER_LATEX, {
+              mode: "math",
+              format: "latex",
+              insertionMode: "replaceSelection",
+              selectionMode: "after",
+              focus: true,
+              scrollIntoView: false,
+            }),
+        );
+        if (inserted) {
+          suppressedSuggestionRef.current = null;
+          queryRef.current = "";
+          setQuery("");
+          selectSuggestionIndex(0);
+          focusLine(lineId, {
+            latex: normalizeChineseLatex(field.value),
+            selection: captureSelection(field),
+          });
+        }
+        return;
+      }
+
+      const insertsVisibleMathSpace =
+        !event.isComposing &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.shiftKey &&
+        (event.key === " " || event.code === "Space") &&
+        !rawCommandActive &&
+        field.mode !== "latex" &&
+        !field.dataset.pendingWrapperCommand &&
+        liveSuggestions.length === 0;
+      if (insertsVisibleMathSpace) {
+        scheduleUnconsumedMathSpace(lineId, field);
+        return;
+      }
+
+      if (
+        event.key === "Enter" &&
+        activeMathLiveEnvironmentName(field) === "cases"
+      ) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const insertedRow = applyDiscreteFormulaMutation(
+          lineId,
+          field,
+          "keyboard",
+          () => field.executeCommand("addRowAfter"),
+        );
+        if (insertedRow) {
+          suppressedSuggestionRef.current = null;
+          queryRef.current = "";
+          setQuery("");
+          selectSuggestionIndex(0);
+          focusLine(lineId, {
+            latex: normalizeChineseLatex(field.value),
+            selection: captureSelection(field),
+          });
+        }
+        return;
       }
 
       if (event.key === "Enter") {
@@ -9035,9 +9283,40 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       setActiveIndex(index);
     }, [lines, activeLineId]);
 
+    useEffect(() => {
+      if (!contextMenu) return;
+      const close = () => setContextMenu(null);
+      const handleKeyDown = (event: KeyboardEvent) => {
+        if (event.key === "Escape") close();
+      };
+      window.addEventListener("pointerdown", close);
+      window.addEventListener("blur", close);
+      window.addEventListener("keydown", handleKeyDown);
+      return () => {
+        window.removeEventListener("pointerdown", close);
+        window.removeEventListener("blur", close);
+        window.removeEventListener("keydown", handleKeyDown);
+      };
+    }, [contextMenu]);
+
+    useEffect(() => {
+      if (previewOnly) setContextMenu(null);
+    }, [previewOnly]);
+
+    const openContextMenu = (clientX: number, clientY: number) => {
+      if (previewOnly) return;
+      const menuWidth = 188;
+      const menuHeight = 42;
+      setContextMenu({
+        left: Math.max(8, Math.min(clientX, window.innerWidth - menuWidth - 8)),
+        top: Math.max(8, Math.min(clientY, window.innerHeight - menuHeight - 8)),
+      });
+    };
+
     const copyPngFromContextMenu = async () => {
-      if (contextMenuPngBusyRef.current) return;
-      contextMenuPngBusyRef.current = true;
+      if (contextMenuBusy) return;
+      setContextMenuBusy(true);
+      setContextMenu(null);
       try {
         if (onCopyPng) {
           await onCopyPng();
@@ -9054,7 +9333,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       } catch (error) {
         console.error("Unable to copy formula PNG from the context menu", error);
       } finally {
-        contextMenuPngBusyRef.current = false;
+        setContextMenuBusy(false);
       }
     };
 
@@ -9138,13 +9417,37 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
                     handleKeyDown(lineIndex, lineId, event, field)
                   }
                   onPasteImage={onPasteImage}
-                  onCopyPng={copyPngFromContextMenu}
+                  onContextMenu={openContextMenu}
                   onPasteLatexLines={pasteLatexLines}
                 />
               </div>
             );
           })}
         </div>
+        {contextMenu && (
+          <div
+            className="formula-editor-context-menu"
+            role="menu"
+            aria-label={language === "en" ? "Formula actions" : "公式操作"}
+            style={{ left: contextMenu.left, top: contextMenu.top }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            <button
+              type="button"
+              role="menuitem"
+              disabled={contextMenuBusy}
+              onClick={() => void copyPngFromContextMenu()}
+            >
+              <ClipboardCopy size={15} />
+              <span>
+                {language === "en"
+                  ? "Copy PNG to Clipboard"
+                  : "复制 PNG 到剪贴板"}
+              </span>
+            </button>
+          </div>
+        )}
         <CommandSuggestionPopup
           suggestions={previewOnly ? [] : suggestions}
           selectedIndex={selectedIndex}

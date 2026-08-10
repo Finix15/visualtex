@@ -131,12 +131,62 @@ function MathPreviewComponent({
     if (!host || !content) return;
 
     if (staticLayout) {
-      content.style.setProperty("--math-preview-fit-scale", "1");
       host.style.removeProperty("--math-preview-fluid-height");
       host.style.removeProperty("--math-preview-intrinsic-width");
-      host.dataset.fitReady = "static";
-      host.dataset.fitScale = "1";
-      return;
+      let staticAnimationFrame = 0;
+      let disposed = false;
+      const measureStatic = () => {
+        staticAnimationFrame = 0;
+        content.style.setProperty("--math-preview-fit-scale", "1");
+        let scale = 1;
+        if (fit) {
+          const visualRoot =
+            content.querySelector<HTMLElement>(".ML__latex") ?? content;
+          const visualRect = visualRoot.getBoundingClientRect();
+          const contentRect = content.getBoundingClientRect();
+          const naturalWidth = Math.max(
+            1,
+            content.scrollWidth,
+            contentRect.width,
+            visualRect.width,
+          );
+          const naturalHeight = Math.max(
+            1,
+            content.offsetHeight,
+            contentRect.height,
+            visualRect.height,
+          );
+          const containedScale = Math.min(
+            Math.max(1, host.clientWidth * fitInsetRatio) / naturalWidth,
+            Math.max(1, host.clientHeight * fitInsetRatio) / naturalHeight,
+          );
+          // Horizontal toolbar static previews historically render at 0.92x.
+          // Keep that visual ceiling, but allow narrower Windows/WebView2
+          // glyph boxes to shrink further when containment requires it.
+          scale = Math.max(
+            Number.EPSILON,
+            Math.min(0.92, maximumFitScale, containedScale),
+          );
+        }
+        content.style.setProperty(
+          "--math-preview-fit-scale",
+          scale.toFixed(4),
+        );
+        host.dataset.fitReady = "static";
+        host.dataset.fitScale = scale.toFixed(4);
+      };
+      const scheduleStaticMeasure = () => {
+        if (disposed) return;
+        if (staticAnimationFrame) cancelAnimationFrame(staticAnimationFrame);
+        staticAnimationFrame = requestAnimationFrame(measureStatic);
+      };
+      measureStatic();
+      scheduleStaticMeasure();
+      void document.fonts?.ready.then(scheduleStaticMeasure);
+      return () => {
+        disposed = true;
+        if (staticAnimationFrame) cancelAnimationFrame(staticAnimationFrame);
+      };
     }
 
     let animationFrame = 0;
@@ -150,14 +200,21 @@ function MathPreviewComponent({
       const visualRoot =
         content.querySelector<HTMLElement>(".ML__latex") ?? content;
       const visualRect = visualRoot.getBoundingClientRect();
+      // WebView2 can give the MathLive subtree narrower metrics than the
+      // surrounding max-content flex box (notably for multi-integral glyphs).
+      // Include the unscaled fit-content box itself so the containment scale
+      // is based on what is actually painted, rather than an inner estimate.
+      const contentRect = content.getBoundingClientRect();
       const naturalWidth = Math.max(
         1,
         content.scrollWidth,
+        contentRect.width,
         visualRect.width,
       );
       const naturalHeight = Math.max(
         1,
         content.offsetHeight,
+        contentRect.height,
         visualRect.height,
       );
       onMeasureRef.current?.({ width: naturalWidth, height: naturalHeight });
@@ -238,6 +295,9 @@ function MathPreviewComponent({
     void document.fonts?.ready.then(scheduleMeasure);
     const resizeObserver = new ResizeObserver(scheduleMeasure);
     resizeObserver.observe(host);
+    resizeObserver.observe(content);
+    const observedVisualRoot = content.querySelector<HTMLElement>(".ML__latex");
+    if (observedVisualRoot) resizeObserver.observe(observedVisualRoot);
 
     return () => {
       if (animationFrame) cancelAnimationFrame(animationFrame);

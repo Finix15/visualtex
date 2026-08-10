@@ -714,8 +714,10 @@ For every $N$, the partial sum converges.
 \end{proof}`,
     check: (parsed) =>
       parsed.format === "latex" &&
-      blocksOf(parsed, "quote").length === 1 &&
-      text(parsed).includes("证明（Spectral argument）：") &&
+      blocksOf(parsed, "heading").some(
+        (block) => block.level === 4 && block.runs.some((run) => run.kind === "text" && run.text.includes("证明（Spectral argument）")),
+      ) &&
+      blocksOf(parsed, "quote").length === 0 &&
       text(parsed).includes("partial sum converges") &&
       text(parsed).includes("□") &&
       formulas(parsed).some((run) => run.latex === "N"),
@@ -725,8 +727,11 @@ For every $N$, the partial sum converges.
     format: "latex",
     source: String.raw`\begin{lemma*}A starred lemma.\end{lemma*}`,
     check: (parsed) =>
+      blocksOf(parsed, "heading").some(
+        (block) => block.level === 4 && block.runs.some((run) => run.kind === "text" && run.text === "引理"),
+      ) &&
       blocksOf(parsed, "quote").length === 1 &&
-      text(parsed).includes("引理：") &&
+      !text(parsed).includes("引理 1") &&
       text(parsed).includes("A starred lemma."),
   },
   {
@@ -740,8 +745,10 @@ The approximation error tends to zero.
 \end{document}`,
     check: (parsed) =>
       parsed.format === "latex" &&
+      blocksOf(parsed, "heading").some(
+        (block) => block.level === 4 && block.runs.some((run) => run.kind === "text" && run.text.includes("Spectral Claim 1（Finite truncation）")),
+      ) &&
       blocksOf(parsed, "quote").length === 1 &&
-      text(parsed).includes("Spectral Claim（Finite truncation）：") &&
       text(parsed).includes("approximation error tends to zero") &&
       !text(parsed).includes("newtheorem"),
   },
@@ -750,9 +757,57 @@ The approximation error tends to zero.
     format: "latex",
     source: String.raw`\begin{theorem}Every finite subgroup is...\end{theorem}`,
     check: (parsed) =>
+      blocksOf(parsed, "heading").some(
+        (block) => block.level === 4 && block.runs.some((run) => run.kind === "text" && run.text === "定理 1"),
+      ) &&
       blocksOf(parsed, "quote").length === 1 &&
-      text(parsed).includes("定理：") &&
       text(parsed).includes("Every finite subgroup is..."),
+  },
+  {
+    name: "newtheorem shared counters",
+    format: "latex",
+    source: String.raw`\newtheorem{thm}{定理}
+\newtheorem{lem}[thm]{引理}
+\begin{thm}First.\end{thm}
+\begin{lem}Second.\end{lem}`,
+    check: (parsed) => {
+      const headingText = blocksOf(parsed, "heading")
+        .flatMap((block) => block.runs)
+        .filter((run): run is Extract<DocumentImportRun, { kind: "text" }> => run.kind === "text")
+        .map((run) => run.text);
+      return headingText.includes("定理 1") && headingText.includes("引理 2");
+    },
+  },
+  {
+    name: "newtheorem star is unnumbered",
+    format: "latex",
+    source: String.raw`\newtheorem*{specialremark}{特别说明}
+\begin{specialremark}[边界情况]No number.\end{specialremark}`,
+    check: (parsed) => {
+      const headingText = blocksOf(parsed, "heading")
+        .flatMap((block) => block.runs)
+        .filter((run): run is Extract<DocumentImportRun, { kind: "text" }> => run.kind === "text")
+        .map((run) => run.text)
+        .join("|");
+      return headingText.includes("特别说明（边界情况）") && !headingText.includes("特别说明 1");
+    },
+  },
+  {
+    name: "nested proof overrides theorem quote body style",
+    format: "latex",
+    source: String.raw`\begin{theorem}
+Theorem body.
+\begin{proof}
+Proof body $x=1$.\qed
+\end{proof}
+Theorem tail.
+\end{theorem}`,
+    check: (parsed) =>
+      blocksOf(parsed, "heading").length === 2 &&
+      blocksOf(parsed, "quote").some((block) => block.runs.some((run) => run.kind === "text" && run.text.includes("Theorem body"))) &&
+      blocksOf(parsed, "paragraph").some((block) => block.runs.some((run) => run.kind === "text" && run.text.includes("Proof body"))) &&
+      blocksOf(parsed, "quote").some((block) => block.runs.some((run) => run.kind === "text" && run.text.includes("Theorem tail"))) &&
+      formulas(parsed).some((run) => run.latex === "x=1"),
   },
   {
     name: "custom macro expansion",

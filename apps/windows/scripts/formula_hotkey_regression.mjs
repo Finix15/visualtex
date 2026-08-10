@@ -413,7 +413,7 @@ async function main() {
         }, 80);
       }, 80);
     })`);
-    assert.equal(managerState.rows, 1);
+    assert.equal(managerState.rows, 10);
     assert.ok(managerState.hotkey);
     assert.ok(managerState.keycapCenterDelta <= 1, JSON.stringify(managerState));
     await evaluate(`document.querySelector(".formula-hotkey-manager-dialog .dialog-header .icon-button")?.click()`);
@@ -488,6 +488,26 @@ async function main() {
                   preview?.dataset.fitReady === "static",
                 unifiedFit: button.classList.contains("is-unified-fit"),
                 wide: button.classList.contains("is-wide-preview"),
+                previewRect: previewRect
+                  ? {
+                      left: previewRect.left,
+                      right: previewRect.right,
+                      top: previewRect.top,
+                      bottom: previewRect.bottom,
+                      width: previewRect.width,
+                      height: previewRect.height,
+                    }
+                  : null,
+                contentRect: contentRect
+                  ? {
+                      left: contentRect.left,
+                      right: contentRect.right,
+                      top: contentRect.top,
+                      bottom: contentRect.bottom,
+                      width: contentRect.width,
+                      height: contentRect.height,
+                    }
+                  : null,
                 contained: Boolean(
                   previewRect &&
                   contentRect &&
@@ -513,7 +533,11 @@ async function main() {
         assert.equal(detail.unifiedFit, true, JSON.stringify({ category, id, detail }));
         assert.equal(detail.fontSize, 24, JSON.stringify({ category, id, detail }));
         assert.equal(detail.fitReady, true, JSON.stringify({ category, id, detail }));
-        assert.ok(detail.scale > 0 && detail.scale <= 1, JSON.stringify({ category, id, detail }));
+        const maximumScale = Math.min(1.55, Math.max(1, detail.width / 42));
+        assert.ok(
+          detail.scale > 0 && detail.scale <= maximumScale + 0.001,
+          JSON.stringify({ category, id, detail, maximumScale }),
+        );
         assert.equal(detail.contained, true, JSON.stringify({ category, id, detail }));
       }
     }

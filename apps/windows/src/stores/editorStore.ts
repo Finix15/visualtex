@@ -19,6 +19,7 @@ import {
 import { normalizeChineseLatex } from "../editor/normalizeChineseLatex";
 import { normalizeMultilineLatex } from "../editor/normalizeChineseLatex";
 import { normalizeFormulaLinePhysicalWhitespace } from "../math/formulaLineLatex";
+import { createUuid } from "../runtime/browserCompatibility";
 import { safeStorage } from "../runtime/safeStorage";
 import {
   DEFAULT_PNG_EXPORT_BACKGROUND,
@@ -231,7 +232,7 @@ function normalizeFormulaLineLatex(latex: string) {
 
 export function createFormulaLine(
   latex = "",
-  id: string = crypto.randomUUID(),
+  id: string = createUuid(),
 ): FormulaLine {
   return {
     id,
@@ -247,8 +248,8 @@ function uniqueLineId(candidate: unknown, usedIds: Set<string>) {
     usedIds.add(normalized);
     return normalized;
   }
-  let nextId: string = crypto.randomUUID();
-  while (usedIds.has(nextId)) nextId = crypto.randomUUID();
+  let nextId: string = createUuid();
+  while (usedIds.has(nextId)) nextId = createUuid();
   usedIds.add(nextId);
   return nextId;
 }
@@ -330,6 +331,7 @@ interface EditorState {
   formulaChineseFont: FormulaChineseFont;
   classicTileWidth: number;
   classicDockHeight: number;
+  keypadMinimizeOnCopy: boolean;
   inputBehavior: InputBehaviorSettings;
   personalize: boolean;
   suggestionCount: number;
@@ -363,6 +365,7 @@ interface EditorState {
   setFormulaChineseFont: (font: FormulaChineseFont) => void;
   setClassicTileWidth: (width: number) => void;
   setClassicDockHeight: (height: number) => void;
+  setKeypadMinimizeOnCopy: (enabled: boolean) => void;
   setInputBehavior: (
     setting: InputBehaviorSettingKey,
     enabled: boolean,
@@ -418,6 +421,7 @@ export const useEditorStore = create<EditorState>()(
         MIN_CLASSIC_DOCK_HEIGHT,
         MAX_CLASSIC_DOCK_HEIGHT,
       ),
+      keypadMinimizeOnCopy: true,
       inputBehavior: { ...DEFAULT_INPUT_BEHAVIOR_SETTINGS },
       personalize: true,
       suggestionCount: 6,
@@ -539,6 +543,8 @@ export const useEditorStore = create<EditorState>()(
         safeStorage.setItem(legacyClassicDockHeightStorageKey, String(normalized));
         set({ classicDockHeight: normalized });
       },
+      setKeypadMinimizeOnCopy: (keypadMinimizeOnCopy) =>
+        set({ keypadMinimizeOnCopy }),
       setInputBehavior: (setting, enabled) =>
         set((state) => ({
           inputBehavior: {
@@ -598,7 +604,7 @@ export const useEditorStore = create<EditorState>()(
           );
           if (!latex.trim() || state.history[0]?.latex === latex) return state;
           const next: FormulaHistoryItem = {
-            id: crypto.randomUUID(),
+            id: createUuid(),
             latex,
             createdAt: Date.now(),
           };
@@ -740,6 +746,10 @@ export const useEditorStore = create<EditorState>()(
               settings.classicDockHeight === undefined
                 ? state.classicDockHeight
                 : normalizeClassicDockHeight(settings.classicDockHeight),
+            keypadMinimizeOnCopy:
+              typeof settings.keypadMinimizeOnCopy === "boolean"
+                ? settings.keypadMinimizeOnCopy
+                : state.keypadMinimizeOnCopy,
           };
         }),
       toDocument: () => {
@@ -784,6 +794,7 @@ export const useEditorStore = create<EditorState>()(
             powerPointDefaultFontSizePt: state.powerPointDefaultFontSizePt,
             classicTileWidth: state.classicTileWidth,
             classicDockHeight: state.classicDockHeight,
+            keypadMinimizeOnCopy: state.keypadMinimizeOnCopy,
           },
         };
       },
@@ -815,6 +826,7 @@ export const useEditorStore = create<EditorState>()(
         formulaChineseFont: state.formulaChineseFont,
         classicTileWidth: state.classicTileWidth,
         classicDockHeight: state.classicDockHeight,
+        keypadMinimizeOnCopy: state.keypadMinimizeOnCopy,
         inputBehavior: state.inputBehavior,
         personalize: state.personalize,
         suggestionCount: state.suggestionCount,
@@ -897,6 +909,10 @@ export const useEditorStore = create<EditorState>()(
                   MAX_CLASSIC_DOCK_HEIGHT,
                 )
               : normalizeClassicDockHeight(persisted.classicDockHeight),
+          keypadMinimizeOnCopy:
+            typeof persisted.keypadMinimizeOnCopy === "boolean"
+              ? persisted.keypadMinimizeOnCopy
+              : true,
           inputBehavior: normalizeInputBehaviorSettings(
             persisted.inputBehavior,
           ),

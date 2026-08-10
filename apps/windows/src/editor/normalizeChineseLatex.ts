@@ -1,4 +1,8 @@
-import { normalizeExtendedIntegralLatexCommands } from "../math/extendedIntegralCompatibility.ts";
+import {
+  EXTENDED_INTEGRAL_COMMANDS,
+  EXTENDED_INTEGRAL_COMMAND_PATTERN_SOURCE,
+  normalizeExtendedIntegralLatexCommands,
+} from "../math/extendedIntegralCompatibility.ts";
 
 const chineseChar = /[\u3400-\u9fff\uf900-\ufaff，。；：！？、（）【】《》“”‘’]/;
 
@@ -429,17 +433,22 @@ const DISABLED_AUTO_ESCAPE_SHORTCUT_KEYS = new Set([
 
 export function resolveVisualTexInlineShortcuts(
   mathLiveDefaults: Readonly<VisualTexInlineShortcutDefinitions>,
-  enabled: boolean,
+  autoEscapeShortcuts: boolean,
 ): VisualTexInlineShortcutDefinitions {
-  if (!enabled) return {};
-  const safeMathLiveDefaults = Object.fromEntries(
-    Object.entries(mathLiveDefaults).filter(
-      ([shortcut]) => !DISABLED_AUTO_ESCAPE_SHORTCUT_KEYS.has(shortcut),
-    ),
-  );
+  const shortcutMappings = autoEscapeShortcuts
+    ? Object.fromEntries(
+        Object.entries(mathLiveDefaults).filter(
+          ([shortcut]) => !DISABLED_AUTO_ESCAPE_SHORTCUT_KEYS.has(shortcut),
+        ),
+      )
+    : {};
   return {
-    ...safeMathLiveDefaults,
-    ...visualTexAutoEscapeInlineShortcuts,
+    ...shortcutMappings,
+    ...(autoEscapeShortcuts ? visualTexAutoEscapeInlineShortcuts : {}),
+    // Upright differential detection is semantic input normalization, not a
+    // general shortcut escape. Keep it active even when plain-text shortcuts
+    // such as alpha, >= or hat are disabled.
+    ...visualTexUprightInlineShortcuts,
   };
 }
 
@@ -463,8 +472,20 @@ function transformOutsideProtectedCommands(
       continue;
     }
 
-    result += transform(source.slice(chunkStart, index));
     const end = readBracedCommand(source, index);
+    const semanticUprightSymbol =
+      (commandMatch[1] === "mathrm" || commandMatch[1] === "textrm") &&
+      /^\\(?:mathrm|textrm)\{[dDeij]\}$/.test(source.slice(index, end));
+    if (semanticUprightSymbol) {
+      // Keep canonical one-symbol upright atoms in the surrounding semantic
+      // chunk. Incremental MathLive input can normalize the denominator first
+      // (for example \frac{d^2y}{\mathrm{d}x^2}); splitting at that atom
+      // would hide the still-italic numerator from derivative detection.
+      index = end;
+      continue;
+    }
+
+    result += transform(source.slice(chunkStart, index));
     result += source.slice(index, end);
     index = end;
     chunkStart = end;
@@ -559,8 +580,10 @@ export function normalizeMathLiveCanonicalUprightCommands(
 }
 
 const differentialFractionCommands = ["\\dfrac", "\\tfrac", "\\frac"];
-const integralCommandPattern =
-  /\\(?:oiiint|oiint|oint|iiint|iint|int)(?![A-Za-z])/g;
+const integralCommandPattern = new RegExp(
+  `\\\\(?:${EXTENDED_INTEGRAL_COMMAND_PATTERN_SOURCE})(?![A-Za-z])`,
+  "g",
+);
 const nonVariableCommands = new Set([
   "sin",
   "cos",
@@ -579,12 +602,7 @@ const nonVariableCommands = new Set([
   "min",
   "det",
   "gcd",
-  "int",
-  "iint",
-  "iiint",
-  "oint",
-  "oiint",
-  "oiiint",
+  ...EXTENDED_INTEGRAL_COMMANDS,
   "sum",
   "prod",
   "frac",

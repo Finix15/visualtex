@@ -136,6 +136,8 @@ export function EditorWorkspace({
   showOcrActions,
   officeHeaderLeadingControls,
   officeHeaderTrailingActions,
+  desktopHeaderControls,
+  keypadMode = false,
   onOpenExport,
   editorRef,
   editorInstanceKey,
@@ -173,8 +175,6 @@ export function EditorWorkspace({
     });
   };
   const [officeFormattingMount, setOfficeFormattingMount] =
-    useState<HTMLDivElement | null>(null);
-  const [officeCanvasToolsMount, setOfficeCanvasToolsMount] =
     useState<HTMLDivElement | null>(null);
   const [formulaColorMenu, setFormulaColorMenu] =
     useState<FormulaColorMenu | null>(null);
@@ -798,6 +798,7 @@ export function EditorWorkspace({
         activeLineId={visualActiveLineId}
         reuseLineSlots={reuseEditorLineSlots}
         formulaAlignment={formulaAlignment}
+        latexCodeFormat={latexCodeFormat}
         zoom={zoom}
         readOnly={false}
         previewOnly={sourceFocused}
@@ -815,33 +816,13 @@ export function EditorWorkspace({
 
   return (
     <>
-      {showOfficeActions && isOfficeWorkspace && (
-        <div
-          className="office-workspace-actions office-control-bar"
-          data-workspace-mode={mode}
-          aria-label={isEn ? "Office formula controls" : "Office 公式控制栏"}
-        >
-          <div className="office-control-bar-leading">
-            {officeHeaderLeadingControls}
-          </div>
-          <div
-            className="office-control-bar-tools"
-            ref={setOfficeCanvasToolsMount}
-          />
-          {officeHeaderTrailingActions ? (
-            <div className="office-control-bar-actions">
-              {officeHeaderTrailingActions}
-            </div>
-          ) : null}
-        </div>
-      )}
-
       <main
         ref={workspaceRef}
         className={
           `workspace ${editorLayout === "classic" ? "is-classic-layout" : "is-standard-layout"}` +
-          (sidebarOpen ? " has-sidebar" : "") +
+          (!keypadMode && sidebarOpen ? " has-sidebar" : "") +
           (isOfficeWorkspace ? " is-office-workspace" : "") +
+          (keypadMode ? " is-keypad-mode" : "") +
           (highlightActiveLine ? " has-active-line-highlight" : "") +
           (sourceFocused ? " is-source-editor-focused" : "")
         }
@@ -851,15 +832,16 @@ export function EditorWorkspace({
           } as CSSProperties
         }
         data-editor-layout={editorLayout}
+        data-office-actions={showOfficeActions ? "true" : undefined}
       >
-        {editorLayout === "standard" && sidebarOpen && (
+        {!keypadMode && editorLayout === "standard" && sidebarOpen && (
           <FormulaToolbar
             stabilizeTileLayout
             onInsert={(command) => editorRef.current?.insertCommand(command)}
           />
         )}
 
-        {editorLayout === "classic" && !sidebarOpen && (
+        {!keypadMode && editorLayout === "classic" && !sidebarOpen && (
           <button
             type="button"
             className="classic-tile-expand-button"
@@ -880,6 +862,11 @@ export function EditorWorkspace({
             }
           >
             <div className="pane-title-group">
+              {isOfficeWorkspace && officeHeaderLeadingControls ? (
+                <div className="office-inline-options">
+                  {officeHeaderLeadingControls}
+                </div>
+              ) : null}
               {isOfficeWorkspace && editorLayout !== "classic" ? (
                 <div
                   className="office-formatting-mount"
@@ -1193,11 +1180,13 @@ export function EditorWorkspace({
                   </div>
                 </PortalOrInline>
               ) : null}
+              {!isOfficeWorkspace && desktopHeaderControls ? (
+                <div className="desktop-editor-header-controls">
+                  {desktopHeaderControls}
+                </div>
+              ) : null}
             </div>
-            <PortalOrInline
-              target={isOfficeWorkspace ? officeCanvasToolsMount : null}
-            >
-              <div className="canvas-tool-group">
+            <div className="canvas-tool-group">
               {showFileActions && onOpenExport && (
                 <button
                   type="button"
@@ -1287,8 +1276,8 @@ export function EditorWorkspace({
                       className={`silent-ocr-toggle${silentOcrEnabled ? " is-active" : ""}`}
                       title={
                         isEn
-                          ? "Enable the Windows silent-OCR shortcut while VisualTeX is active"
-                          : "开启 Windows 静默 OCR 快捷键；VisualTeX 激活时可直接截图识别并复制 LaTeX"
+                          ? "Press Ctrl+Alt+O anywhere to capture, recognize, and copy LaTeX in the background"
+                          : "开启后可在任意应用中按 Ctrl+Alt+O 框选截图，后台识别并按当前源码格式复制 LaTeX"
                       }
                     >
                       <input
@@ -1306,7 +1295,7 @@ export function EditorWorkspace({
                   )}
                 </div>
               )}
-              {showOcrActions && ocrModels.length > 0 && ocrModel && (
+              {!keypadMode && showOcrActions && ocrModels.length > 0 && ocrModel && (
                 <label
                   className="canvas-ocr-model"
                   title={
@@ -1332,7 +1321,7 @@ export function EditorWorkspace({
                   </select>
                 </label>
               )}
-              <div className="canvas-controls">
+              {!keypadMode && <div className="canvas-controls">
                 <button
                   type="button"
                   className="icon-button compact"
@@ -1368,12 +1357,22 @@ export function EditorWorkspace({
                 >
                   <Plus size={14} />
                 </button>
+              </div>}
+            </div>
+            {isOfficeWorkspace && officeHeaderTrailingActions ? (
+              <div className="office-inline-actions">
+                {officeHeaderTrailingActions}
               </div>
-              </div>
-            </PortalOrInline>
+            ) : null}
           </header>
 
-          {editorLayout === "classic" ? (
+          {keypadMode ? (
+            <div className="keypad-editor-pane-body">
+              <div className="editor-pane-scroll">
+                {renderVisualEditor()}
+              </div>
+            </div>
+          ) : editorLayout === "classic" ? (
             <div
               ref={classicEditorBodyRef}
               className={
@@ -1453,9 +1452,13 @@ export function EditorWorkspace({
                 >
                   {isOfficeWorkspace ? (
                     <div
-                      className="classic-bottom-formatting office-formatting-mount"
                       ref={setOfficeFormattingMount}
-                      aria-label={isEn ? "Formula formatting" : "公式格式"}
+                      className="classic-bottom-formatting-slot"
+                      aria-label={
+                        isEn
+                          ? "Formula alignment and formatting"
+                          : "公式对齐与格式"
+                      }
                     />
                   ) : (
                     <span className="classic-bottom-tab-spacer" aria-hidden="true" />
@@ -1477,7 +1480,9 @@ export function EditorWorkspace({
                       }}
                     >
                       <Braces size={16} />
-                      {isEn ? "Formula tools" : "公式工具"}
+                      <span className="classic-bottom-tab-label">
+                        {isEn ? "Formula tools" : "公式工具"}
+                      </span>
                     </button>
                     <button
                       type="button"
@@ -1491,7 +1496,9 @@ export function EditorWorkspace({
                       }}
                     >
                       <Code2 size={16} />
-                      {isEn ? "LaTeX source" : "LaTeX 源码"}
+                      <span className="classic-bottom-tab-label">
+                        {isEn ? "LaTeX source" : "LaTeX 源码"}
+                      </span>
                     </button>
                   </div>
                   <div className="classic-bottom-actions">
@@ -1592,7 +1599,7 @@ export function EditorWorkspace({
           )}
         </section>
 
-        {editorLayout === "classic" && sidebarOpen && (
+        {!keypadMode && editorLayout === "classic" && sidebarOpen && (
           <>
             <div
               className="workspace-panel-resizer classic-tile-resizer"

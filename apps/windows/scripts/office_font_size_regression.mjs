@@ -90,7 +90,16 @@ const server = createServer(async (request, response) => {
       return;
     }
     if (url.pathname === "/api/v1/preferences") {
-      writeJson(response, 200, { powerpointDefaultFontSizePt: 28 });
+      writeJson(response, 200, {
+        powerpointDefaultFontSizePt: 28,
+        editorPreferences: {
+          settings: {
+            sourceOpen: false,
+            classicTileWidth: 520,
+            classicDockHeight: 420,
+          },
+        },
+      });
       return;
     }
     if (url.pathname === `/api/v1/sessions/${sessionId}`) {
@@ -609,9 +618,8 @@ async function main() {
     const officeControlBarState = await waitForEvaluation(
       client,
       `(() => {
-        const bar = document.querySelector('.office-control-bar');
+        const bar = document.querySelector('.editor-pane-header.is-office-editor-header');
         const tileTabs = document.querySelector('.classic-tile-toolbar .formula-tile-tabs');
-        const hiddenPaneHeader = document.querySelector('.editor-pane-header.is-office-editor-header');
         const cancel = bar?.querySelector('.office-inline-cancel');
         const primary = bar?.querySelector('.office-inline-primary');
         const size = bar?.querySelector('[data-office-font-size]');
@@ -629,9 +637,9 @@ async function main() {
           barRect && tileRect && barRect.bottom <= tileRect.top + 1,
         );
         const text = bar?.textContent ?? '';
-        const paneHeaderHidden = hiddenPaneHeader
-          ? getComputedStyle(hiddenPaneHeader).display === 'none'
-          : true;
+        const paneHeaderVisible = bar
+          ? getComputedStyle(bar).display !== 'none'
+          : false;
         return {
           ready: Boolean(
             bar &&
@@ -643,7 +651,7 @@ async function main() {
             canvasTools &&
             sameRow &&
             aboveTiles &&
-            paneHeaderHidden &&
+            paneHeaderVisible &&
             !text.includes('VisualTeX') &&
             !text.includes('Microsoft Word') &&
             !text.includes('新建 Office 公式') &&
@@ -651,18 +659,18 @@ async function main() {
           ),
           sameRow,
           aboveTiles,
-          paneHeaderHidden,
+          paneHeaderVisible,
           barHeight: barRect?.height ?? 0,
           barBottom: barRect?.bottom ?? 0,
           tileTop: tileRect?.top ?? 0,
           text,
         };
       })()`,
-      "Office control bar above formula tile tabs",
+      "Office editor header above formula tile tabs",
     );
     assert.equal(officeControlBarState.sameRow, true);
     assert.equal(officeControlBarState.aboveTiles, true);
-    assert.equal(officeControlBarState.paneHeaderHidden, true);
+    assert.equal(officeControlBarState.paneHeaderVisible, true);
 
     await client.evaluate(`(() => {
       document.querySelector('[data-formula-tile-collapse]')?.click();
@@ -687,7 +695,7 @@ async function main() {
       client,
       `(() => ({
         ready: Boolean(
-          document.querySelector('.office-control-bar') &&
+          document.querySelector('.editor-pane-header.is-office-editor-header') &&
           document.querySelector('.classic-tile-expand-button') &&
           document.querySelector('.classic-bottom-dock.is-collapsed') &&
           !document.querySelector('.classic-tile-toolbar')
@@ -717,6 +725,25 @@ async function main() {
       }))()`,
       "persist reopened Office editor panels",
     );
+
+    await clickSelectorWithPointer(client, '[data-classic-bottom-view=source]');
+    await sleep(900);
+    const stableSourceTab = await client.evaluate(`(() => {
+      const source = document.querySelector('[data-classic-bottom-view="source"]');
+      const tools = document.querySelector('[data-classic-bottom-view="tools"]');
+      const dock = document.querySelector('.classic-bottom-dock');
+      return {
+        sourceSelected: source?.getAttribute('aria-selected') === 'true',
+        toolsSelected: tools?.getAttribute('aria-selected') === 'true',
+        sourcePanel: dock?.classList.contains('is-source-panel') === true,
+      };
+    })()`);
+    assert.equal(
+      stableSourceTab.sourceSelected && !stableSourceTab.toolsSelected && stableSourceTab.sourcePanel,
+      true,
+      'Office Formula tools / LaTeX source tab must remain on the user-selected source view beyond the 500ms companion preference poll',
+    );
+    await clickSelectorWithPointer(client, '[data-classic-bottom-view=tools]');
 
     const resizedLayoutPreference = await client.evaluate(`(() => {
       const tile = document.querySelector('.classic-tile-resizer');
@@ -749,6 +776,17 @@ async function main() {
         };
       })()`,
       "persist resized Office editor panels",
+    );
+    await sleep(900);
+    const stablePanelSizes = await client.evaluate(`(() => {
+      const tile = Number(document.querySelector('.classic-tile-resizer')?.getAttribute('aria-valuenow'));
+      const dock = Number(document.querySelector('.classic-dock-resizer')?.getAttribute('aria-valuenow'));
+      return { tile, dock };
+    })()`);
+    assert.ok(
+      Math.abs(stablePanelSizes.tile - persistedPanelSizes.tile) < 1 &&
+        Math.abs(stablePanelSizes.dock - persistedPanelSizes.dock) < 1,
+      `Office panel sizes were overwritten by companion polling: ${JSON.stringify({ persistedPanelSizes, stablePanelSizes })}`,
     );
     await client.evaluate(`location.reload()`);
     const restoredPanelSizes = await waitForEvaluation(
@@ -855,6 +893,57 @@ async function main() {
     assert.ok(commonBefore.ids.includes("div"));
     assert.ok(!commonBefore.ids.includes("notin"));
     assert.ok(!commonBefore.ids.includes("leftarrow"));
+
+    const toolbarPreviewContainment = await waitForEvaluation(
+      client,
+      `(() => {
+        const buttons = [...document.querySelectorAll('.formula-toolbar .template-button[data-command-id]')]
+          .filter((button) => {
+            const rect = button.getBoundingClientRect();
+            const style = getComputedStyle(button);
+            return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+          });
+        const tolerance = 1.5;
+        const details = buttons.map((button) => {
+          const buttonRect = button.getBoundingClientRect();
+          const fit = button.querySelector('.math-preview-fit-content');
+          const latex = button.querySelector('.ML__latex');
+          const fitRect = fit?.getBoundingClientRect();
+          const latexRect = latex?.getBoundingClientRect();
+          const fits = Boolean(
+            fitRect &&
+            fitRect.left >= buttonRect.left - tolerance &&
+            fitRect.right <= buttonRect.right + tolerance &&
+            fitRect.top >= buttonRect.top - tolerance &&
+            fitRect.bottom <= buttonRect.bottom + tolerance,
+          );
+          const latexFits = Boolean(
+            latexRect &&
+            latexRect.left >= buttonRect.left - tolerance &&
+            latexRect.right <= buttonRect.right + tolerance &&
+            latexRect.top >= buttonRect.top - tolerance &&
+            latexRect.bottom <= buttonRect.bottom + tolerance,
+          );
+          return {
+            id: button.dataset.commandId ?? '',
+            fits,
+            latexFits,
+            button: { left: buttonRect.left, right: buttonRect.right, top: buttonRect.top, bottom: buttonRect.bottom },
+            fit: fitRect ? { left: fitRect.left, right: fitRect.right, top: fitRect.top, bottom: fitRect.bottom } : null,
+            latex: latexRect ? { left: latexRect.left, right: latexRect.right, top: latexRect.top, bottom: latexRect.bottom } : null,
+            scale: fit ? getComputedStyle(fit).transform : '',
+          };
+        });
+        const overflow = details.filter((item) => !item.fits || !item.latexFits);
+        return {
+          ready: buttons.length > 20 && overflow.length === 0,
+          count: buttons.length,
+          overflow,
+        };
+      })()`,
+      "Office formula toolbar previews contained by their tiles",
+    );
+    assert.equal(toolbarPreviewContainment.overflow.length, 0, JSON.stringify(toolbarPreviewContainment.overflow));
 
     const arithmeticOperatorState = await waitForEvaluation(
       client,
@@ -1001,7 +1090,7 @@ async function main() {
         const background = document.querySelector(
           '[data-formula-selection-background]',
         );
-        const formattingMount = document.querySelector('.classic-bottom-formatting');
+        const formattingMount = document.querySelector('.classic-bottom-formatting-slot');
         const bottomTabs = document.querySelector('.classic-bottom-tab-group');
         const formattingBounds = formattingMount?.getBoundingClientRect();
         const bottomTabBounds = bottomTabs?.getBoundingClientRect();
@@ -1034,6 +1123,13 @@ async function main() {
     assert.equal(formattingControls.persistentControlsAbsent, true);
     assert.equal(formattingControls.formattingAtFarLeft, true);
 
+    await client.send('Emulation.setDeviceMetricsOverride', {
+      width: 500,
+      height: 760,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    await sleep(120);
     await client.evaluate(`(() => {
       const field = document.querySelector('math-field');
       if (!field) return false;
@@ -1081,6 +1177,7 @@ async function main() {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
       return true;
     })()`);
+    await client.send('Emulation.clearDeviceMetricsOverride');
     if (process.argv.includes('--layout-only')) {
       console.log(JSON.stringify({
         officeControlBarState,
@@ -1405,7 +1502,7 @@ async function main() {
     );
 
     const shortcutMetadata = await client.evaluate(`(() => {
-      const primary = document.querySelector('.office-workspace-actions .primary-button');
+      const primary = document.querySelector('.office-inline-primary');
       window.__visualtexLateSaveShortcutCount = 0;
       window.addEventListener('keydown', (event) => {
         if (event.ctrlKey && (event.code === 'KeyS' || event.key.toLowerCase() === 's')) {
@@ -1416,9 +1513,9 @@ async function main() {
         ariaKeyShortcuts: primary?.getAttribute('aria-keyshortcuts') ?? '',
         title: primary?.getAttribute('title') ?? '',
         legacyHelperVisible:
-          (document.querySelector('.office-workspace-actions')?.textContent ?? '')
+          (document.querySelector('.editor-pane-header.is-office-editor-header')?.textContent ?? '')
             .includes('点击完成、按 Ctrl+S') ||
-          (document.querySelector('.office-workspace-actions')?.textContent ?? '')
+          (document.querySelector('.editor-pane-header.is-office-editor-header')?.textContent ?? '')
             .includes('Finish, press Ctrl+S'),
       };
     })()`);
@@ -1426,9 +1523,44 @@ async function main() {
     assert.ok(shortcutMetadata.title.includes("Ctrl+S"));
     assert.equal(shortcutMetadata.legacyHelperVisible, false);
 
+    const committingBeforeShortcut = updates.filter(
+      (update) => update.status === "committing",
+    ).length;
     const shiftSave = await dispatchOfficeShortcut(client, { shiftKey: true });
-    assert.equal(shiftSave.defaultPrevented, false);
+    // Ctrl+Shift+S is now a shipped formula shortcut (sum). The Office apply
+    // filter must still ignore it, while MathEditor is allowed to consume it.
+    assert.equal(shiftSave.defaultPrevented, true);
+    assert.equal(shiftSave.dispatchResult, false);
     assert.equal(shiftSave.lateCaptureCount, 1);
+    await sleep(120);
+    assert.equal(
+      updates.filter((update) => update.status === "committing").length,
+      committingBeforeShortcut,
+      "Ctrl+Shift+S must not start an Office commit",
+    );
+    // Ctrl+Shift+S legitimately inserts the shipped sum template. Restore a
+    // complete formula before testing the independent Office Ctrl+S apply path;
+    // otherwise its structural placeholders must (correctly) block commit.
+    await client.evaluate(`(() => {
+      const field = document.querySelector('math-field');
+      if (!field) return false;
+      field.setValue('abcde', {
+        mode: 'math',
+        format: 'latex',
+        insertionMode: 'replaceAll',
+        selectionMode: 'after',
+      });
+      field.focus();
+      return true;
+    })()`);
+    await waitForEvaluation(
+      client,
+      `(() => ({
+        ready: document.querySelector('math-field')?.value === 'abcde',
+      }))()`,
+      "restore valid formula after Ctrl+Shift+S formula shortcut",
+    );
+    await sleep(160);
 
     const altSave = await dispatchOfficeShortcut(client, { altKey: true });
     assert.equal(altSave.defaultPrevented, false);
@@ -1450,8 +1582,9 @@ async function main() {
     assert.equal(repeatedSave.dispatchResult, false);
     assert.equal(repeatedSave.lateCaptureCount, 3);
     await sleep(150);
-    assert.ok(
-      !updates.some((update) => update.status === "committing"),
+    assert.equal(
+      updates.filter((update) => update.status === "committing").length,
+      committingBeforeShortcut,
       "Repeated Ctrl+S must be swallowed without starting a commit",
     );
 
@@ -1472,8 +1605,8 @@ async function main() {
     assert.equal(closeRequests, 1, "Ctrl+S should close the Office editor after applying");
     assert.equal(
       updates.filter((update) => update.status === "committing").length,
-      1,
-      "One Ctrl+S press must enqueue exactly one commit",
+      committingBeforeShortcut + 1,
+      "One Ctrl+S press must enqueue exactly one additional commit",
     );
 
     // Reproduce the hidden-converter race directly. The previous PowerPoint

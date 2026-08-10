@@ -20,6 +20,17 @@ const chromeProfile = createBrowserProfilePath("visualtex-windows-office-theme")
 const chromePath = resolveChromiumExecutable();
 let currentTheme = "purple";
 let currentEditorLayout = "classic";
+let currentEditorPreferences = {
+  zoom: 0.8,
+  formulaInsetLeft: 31,
+  formulaInsetRight: 37,
+  formulaToolButtonSize: 52,
+  formulaToolButtonPadding: 7,
+  formulaRowVerticalInset: 9,
+  formulaLetterFont: "times",
+  formulaChineseFont: "songti",
+  keypadMinimizeOnCopy: false,
+};
 
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
@@ -49,8 +60,52 @@ const server = createServer(async (request, response) => {
       });
       return;
     }
+    if (url.pathname === "/api/v1/preferences") {
+      writeJson(response, 200, {
+        powerpointDefaultFontSizePt: 20,
+        editorPreferences: {
+          settings: {
+            theme: currentTheme,
+            editorLayout: currentEditorLayout,
+            ...currentEditorPreferences,
+          },
+        },
+      });
+      return;
+    }
+    if (url.pathname === "/api/v1/sessions/theme-regression") {
+      writeJson(response, 200, {
+        id: "theme-regression",
+        mode: "edit",
+        host: "word",
+        formulaId: "theme-regression-formula",
+        sourceDocumentId: "theme-regression-document",
+        sourceObjectId: "theme-regression-object",
+        title: "Office compact geometry regression",
+        lines: [{ id: "line-1", latex: "e^{i\\pi}+1=0" }],
+        activeLineId: "line-1",
+        codeFormat: "raw",
+        displayMode: "inline",
+        objectMode: "wordOmml",
+        numbered: false,
+        fontSizePt: 10.5,
+        exportWidth: 320,
+        exportHeight: 80,
+        exportResult: null,
+        originalMetadata: null,
+        dirty: false,
+        status: "editing",
+        autoCommitOnClose: true,
+        explicitCancel: false,
+        error: null,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        expiresAt: Date.now() + 600000,
+      });
+      return;
+    }
     if (url.pathname.startsWith("/api/v1/sessions/")) {
-      writeJson(response, 404, { error: "Theme regression does not need a session" });
+      writeJson(response, 404, { error: "Unknown theme regression session" });
       return;
     }
     if (url.pathname.startsWith("/dialog/")) {
@@ -173,13 +228,22 @@ async function waitForPage() {
 
 async function readAppearance(client) {
   return client.evaluate(`(() => {
-    let editorLayout = null;
+    let editorState = {};
     try {
-      editorLayout = JSON.parse(localStorage.getItem('visualtex-editor') || '{}')?.state?.editorLayout ?? null;
+      editorState = JSON.parse(localStorage.getItem('visualtex-editor') || '{}')?.state ?? {};
     } catch {}
     return {
       theme: document.documentElement.dataset.theme,
-      editorLayout,
+      editorLayout: editorState.editorLayout ?? null,
+      zoom: editorState.zoom ?? null,
+      formulaInsetLeft: editorState.formulaInsetLeft ?? null,
+      formulaInsetRight: editorState.formulaInsetRight ?? null,
+      formulaToolButtonSize: editorState.formulaToolButtonSize ?? null,
+      formulaToolButtonPadding: editorState.formulaToolButtonPadding ?? null,
+      formulaRowVerticalInset: editorState.formulaRowVerticalInset ?? null,
+      formulaLetterFont: editorState.formulaLetterFont ?? null,
+      formulaChineseFont: editorState.formulaChineseFont ?? null,
+      keypadMinimizeOnCopy: editorState.keypadMinimizeOnCopy ?? null,
       background: getComputedStyle(document.documentElement).getPropertyValue('--bg').trim().toLowerCase(),
       surface: getComputedStyle(document.documentElement).getPropertyValue('--surface').trim().toLowerCase(),
       formulaSurface: getComputedStyle(document.documentElement).getPropertyValue('--formula-surface').trim().toLowerCase(),
@@ -216,31 +280,124 @@ async function main() {
     await client.connect();
     await client.send("Runtime.enable");
     await client.send("Page.enable");
-    await sleep(500);
 
-    assert.deepEqual(await readAppearance(client), {
+    let initialAppearance;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      await sleep(100);
+      initialAppearance = await readAppearance(client);
+      if (
+        initialAppearance.theme === "purple" &&
+        initialAppearance.zoom === 0.8 &&
+        initialAppearance.formulaInsetLeft === 31 &&
+        initialAppearance.formulaInsetRight === 37 &&
+        initialAppearance.formulaLetterFont === "times" &&
+        initialAppearance.formulaChineseFont === "songti" &&
+        initialAppearance.keypadMinimizeOnCopy === false
+      ) break;
+    }
+
+    assert.deepEqual(initialAppearance, {
       theme: "purple",
       editorLayout: "classic",
+      zoom: 0.8,
+      formulaInsetLeft: 31,
+      formulaInsetRight: 37,
+      formulaToolButtonSize: 52,
+      formulaToolButtonPadding: 7,
+      formulaRowVerticalInset: 9,
+      formulaLetterFont: "times",
+      formulaChineseFont: "songti",
+      keypadMinimizeOnCopy: false,
       background: "#120e16",
       surface: "#362842",
       formulaSurface: "#433252",
       caret: "#d7c2ff",
     });
 
+    await client.send("Emulation.setDeviceMetricsOverride", {
+      width: 1280,
+      height: 820,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    await sleep(220);
+    const compactGeometry = await client.evaluate(`(() => {
+      const slot = document.querySelector('.classic-bottom-formatting-slot')?.getBoundingClientRect();
+      const tabs = document.querySelector('.classic-bottom-tabs')?.getBoundingClientRect();
+      const group = document.querySelector('.classic-bottom-tab-group')?.getBoundingClientRect();
+      const actions = document.querySelector('.classic-bottom-actions')?.getBoundingClientRect();
+      const editorScroll = document.querySelector('.editor-pane-scroll');
+      const editorSurface = document.querySelector('.editor-surface');
+      const firstLine = document.querySelector('.formula-line');
+      const editorScrollRect = editorScroll?.getBoundingClientRect();
+      const editorSurfaceRect = editorSurface?.getBoundingClientRect();
+      const firstLineRect = firstLine?.getBoundingClientRect();
+      const editorSurfaceStyle = editorSurface ? getComputedStyle(editorSurface) : null;
+      const rect = (value) => value ? ({ left: value.left, right: value.right, top: value.top, bottom: value.bottom, width: value.width, height: value.height }) : null;
+      return {
+        slot: rect(slot), tabs: rect(tabs), group: rect(group), actions: rect(actions), width: innerWidth, height: innerHeight,
+        editorTop: {
+          surfacePaddingTop: editorSurfaceStyle ? parseFloat(editorSurfaceStyle.paddingTop) : null,
+          surfaceTopGap: editorSurfaceRect && editorScrollRect ? editorSurfaceRect.top - editorScrollRect.top : null,
+          firstLineTopGap: firstLineRect && editorSurfaceRect ? firstLineRect.top - editorSurfaceRect.top : null,
+        },
+      };
+    })()`);
+    assert.ok(
+      compactGeometry.slot &&
+        compactGeometry.tabs &&
+        compactGeometry.slot.left <= compactGeometry.tabs.left + 12 &&
+        compactGeometry.slot.top >= compactGeometry.tabs.top - 1 &&
+        compactGeometry.slot.bottom <= compactGeometry.tabs.bottom + 1,
+      JSON.stringify(compactGeometry),
+    );
+    assert.ok(
+      compactGeometry.editorTop.surfacePaddingTop >= 4 &&
+        compactGeometry.editorTop.surfacePaddingTop <= 8 &&
+        Math.abs(compactGeometry.editorTop.surfaceTopGap) <= 1 &&
+        compactGeometry.editorTop.firstLineTopGap >= 0 &&
+        compactGeometry.editorTop.firstLineTopGap <= 10,
+      JSON.stringify(compactGeometry),
+    );
+
     currentTheme = "green";
     currentEditorLayout = "standard";
+    currentEditorPreferences = {
+      ...currentEditorPreferences,
+      zoom: 1.2,
+      formulaInsetLeft: 18,
+      formulaInsetRight: 22,
+      formulaToolButtonSize: 60,
+      formulaToolButtonPadding: 10,
+      formulaRowVerticalInset: 13,
+      formulaLetterFont: "stix",
+      formulaChineseFont: "kaiti",
+      keypadMinimizeOnCopy: true,
+    };
     let synchronized;
     for (let attempt = 0; attempt < 20; attempt += 1) {
       await sleep(100);
       synchronized = await readAppearance(client);
       if (
         synchronized.theme === "green" &&
-        synchronized.editorLayout === "standard"
+        synchronized.editorLayout === "standard" &&
+        synchronized.zoom === 1.2 &&
+        synchronized.formulaInsetLeft === 18 &&
+        synchronized.formulaLetterFont === "stix"
       ) break;
     }
     assert.deepEqual(synchronized, {
       theme: "green",
       editorLayout: "standard",
+      zoom: 1.2,
+      formulaInsetLeft: 18,
+      formulaInsetRight: 22,
+      formulaToolButtonSize: 60,
+      formulaToolButtonPadding: 10,
+      formulaRowVerticalInset: 13,
+      formulaLetterFont: "stix",
+      formulaChineseFont: "kaiti",
+      keypadMinimizeOnCopy: true,
       background: "#0d120f",
       surface: "#25352d",
       formulaSurface: "#2a3b32",

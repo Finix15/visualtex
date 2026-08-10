@@ -205,7 +205,7 @@ async function main() {
 
     const clickSelectorWithPointer = async (selector) => {
       const point = await waitForEvaluation(`(() => {
-        const element = document.querySelector(${JSON.stringify("__SELECTOR__")});
+        const element = document.querySelector(__SELECTOR__);
         if (!(element instanceof HTMLElement)) return { ready: false };
         const rect = element.getBoundingClientRect();
         return {
@@ -213,7 +213,7 @@ async function main() {
           x: rect.left + rect.width / 2,
           y: rect.top + rect.height / 2,
         };
-      })()`.replace("__SELECTOR__", selector), `pointer target ${selector}`);
+      })()`.replace("__SELECTOR__", JSON.stringify(selector)), `pointer target ${selector}`);
       await client.send("Input.dispatchMouseEvent", {
         type: "mousePressed",
         x: point.x,
@@ -461,6 +461,64 @@ async function main() {
         boldRestored: boldUprightRestored,
       };
 
+      await setFormattingValue('abc');
+      await evaluate(`(() => {
+        const field = document.querySelector('math-field');
+        if (!field) return false;
+        field.focus();
+        field.selection = { ranges: [[0, field.lastOffset]], direction: 'forward' };
+        return true;
+      })()`);
+      await clickSelectorWithPointer('[data-formula-selection-color]');
+      const compactColorPopover = await waitForEvaluation(`(() => {
+        const popover = document.querySelector('[data-formula-color-popover="color"]');
+        const presets = popover?.querySelector('.formula-color-presets');
+        const custom = popover?.querySelector('.formula-custom-colors-panel');
+        if (!(popover instanceof HTMLElement) || !(presets instanceof HTMLElement) || !(custom instanceof HTMLElement)) {
+          return { ready: false };
+        }
+        const rect = popover.getBoundingClientRect();
+        const presetRect = presets.getBoundingClientRect();
+        const customRect = custom.getBoundingClientRect();
+        return {
+          ready: rect.width <= 200 && customRect.top >= presetRect.bottom - 1,
+          width: rect.width,
+          presetBottom: presetRect.bottom,
+          customTop: customRect.top,
+        };
+      })()`, 'compact formula color popover');
+      if (compactColorPopover.width > 200) {
+        throw new Error(`Formula color popover is still oversized: ${JSON.stringify(compactColorPopover)}`);
+      }
+      await clickSelectorWithPointer('[data-formula-color="#111827"]');
+      await sleep(100);
+      const textColorApplied = await readFormattingValue();
+      if (!textColorApplied.includes('111827') || !textColorApplied.includes('abc')) {
+        throw new Error(`Formula text color was not applied to the selected content: ${textColorApplied}`);
+      }
+
+      await setFormattingValue('xyz');
+      await evaluate(`(() => {
+        const field = document.querySelector('math-field');
+        if (!field) return false;
+        field.focus();
+        field.selection = { ranges: [[0, field.lastOffset]], direction: 'forward' };
+        return true;
+      })()`);
+      await clickSelectorWithPointer('[data-formula-selection-background]');
+      await clickSelectorWithPointer('[data-formula-color="#fef3c7"]');
+      await sleep(100);
+      const backgroundColorApplied = await readFormattingValue();
+      if (!backgroundColorApplied.toLowerCase().includes('fef3c7') || !backgroundColorApplied.includes('xyz')) {
+        throw new Error(`Formula background color was not applied to the selected content: ${backgroundColorApplied}`);
+      }
+
+      const selectionColors = {
+        text: textColorApplied,
+        background: backgroundColorApplied,
+        popover: compactColorPopover,
+      };
+
       const removedPersistentControls = await evaluate(`(() => ({
         typingBold: Boolean(document.querySelector('[data-formula-typing-bold]')),
         typingItalic: Boolean(document.querySelector('[data-formula-typing-italic]')),
@@ -472,6 +530,7 @@ async function main() {
       console.log(JSON.stringify({
         selectionBold,
         selectionItalic,
+        selectionColors,
         removedPersistentControls,
       }, null, 2));
       console.log("Targeted desktop formula formatting regression passed");
@@ -1015,9 +1074,11 @@ async function main() {
         const dock = document.querySelector(".classic-bottom-dock");
         const toolbar = document.querySelector(".classic-bottom-toolbar");
         const strip = toolbar?.querySelector(".template-strip");
+        const categorySection = toolbar?.querySelector(".toolbar-category-section");
         const rowCount = Number(toolbar?.dataset.toolbarRowCount || 0);
-        const computedRowCount = strip
-          ? getComputedStyle(strip).gridTemplateRows.split(/\\s+/).filter(Boolean).length
+        const rowGrid = categorySection ?? strip;
+        const computedRowCount = rowGrid
+          ? getComputedStyle(rowGrid).gridTemplateRows.split(/\\s+/).filter(Boolean).length
           : 0;
         return {
           ready:
@@ -1214,11 +1275,13 @@ async function main() {
         const dock = document.querySelector(".classic-bottom-dock");
         const toolbar = document.querySelector(".classic-bottom-toolbar");
         const strip = toolbar?.querySelector(".template-strip");
+        const categorySection = toolbar?.querySelector(".toolbar-category-section");
         const stripRect = strip?.getBoundingClientRect();
         const height = dock?.getBoundingClientRect().height ?? 0;
         const rowCount = Number(toolbar?.dataset.toolbarRowCount || 0);
-        const computedRowCount = strip
-          ? getComputedStyle(strip).gridTemplateRows.split(/\\s+/).filter(Boolean).length
+        const rowGrid = categorySection ?? strip;
+        const computedRowCount = rowGrid
+          ? getComputedStyle(rowGrid).gridTemplateRows.split(/\\s+/).filter(Boolean).length
           : 0;
         const buttonsVerticallyInside = Boolean(stripRect) &&
           [...(toolbar?.querySelectorAll(".template-button") ?? [])].every((button) => {
@@ -1275,9 +1338,11 @@ async function main() {
       const dockRestoreTwoRows = await waitForEvaluation(`(() => {
         const toolbar = document.querySelector(".classic-bottom-toolbar");
         const strip = toolbar?.querySelector(".template-strip");
+        const categorySection = toolbar?.querySelector(".toolbar-category-section");
         const rowCount = Number(toolbar?.dataset.toolbarRowCount || 0);
-        const computedRowCount = strip
-          ? getComputedStyle(strip).gridTemplateRows.split(/\\s+/).filter(Boolean).length
+        const rowGrid = categorySection ?? strip;
+        const computedRowCount = rowGrid
+          ? getComputedStyle(rowGrid).gridTemplateRows.split(/\\s+/).filter(Boolean).length
           : 0;
         return {
           ready:
@@ -1323,6 +1388,60 @@ async function main() {
           gridHeight: gridRect?.height ?? 0,
         };
       })()`, "compact two-row matrix toolbar");
+
+      const growMatrixDockStart = await handleCenter(".classic-dock-resizer");
+      if (!growMatrixDockStart) throw new Error("Missing dock handle for matrix growth check");
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: growMatrixDockStart.x,
+        y: growMatrixDockStart.y,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: growMatrixDockStart.x,
+        y: growMatrixDockStart.y,
+        button: "left",
+        buttons: 1,
+        clickCount: 1,
+      });
+      for (let step = 1; step <= 4; step += 1) {
+        await client.send("Input.dispatchMouseEvent", {
+          type: "mouseMoved",
+          x: growMatrixDockStart.x,
+          y: growMatrixDockStart.y - step * 20,
+          button: "left",
+          buttons: 1,
+        });
+        await sleep(26);
+      }
+      const grownMatrixState = await waitForEvaluation(`(() => {
+        const toolbar = document.querySelector(".classic-bottom-toolbar");
+        const builder = toolbar?.querySelector(".matrix-builder");
+        const grid = toolbar?.querySelector(".matrix-size-grid");
+        const builderRect = builder?.getBoundingClientRect();
+        const gridRect = grid?.getBoundingClientRect();
+        const rowCount = Number(toolbar?.dataset.toolbarRowCount || 0);
+        return {
+          ready:
+            rowCount >= 3 &&
+            Boolean(builderRect && gridRect) &&
+            gridRect.height >= ${compactMatrixState.gridHeight + 24} &&
+            gridRect.height <= 153 &&
+            gridRect.top >= builderRect.top - 1 &&
+            gridRect.bottom <= builderRect.bottom + 1,
+          rowCount,
+          builderHeight: builderRect?.height ?? 0,
+          gridHeight: gridRect?.height ?? 0,
+        };
+      })()`, "matrix picker grows with toolbar height");
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: growMatrixDockStart.x,
+        y: growMatrixDockStart.y - 80,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+      });
 
       await evaluate(`document.querySelector('[data-classic-bottom-view="source"]')?.click()`);
       const sourceBefore = await waitForEvaluation(`(() => {
@@ -1406,6 +1525,7 @@ async function main() {
             dockShrinkDuringDrag,
             dockRestoreTwoRows,
             compactMatrixState,
+            grownMatrixState,
             sourceBefore,
             sourceDuringDrag,
             persistedState,
@@ -7465,6 +7585,39 @@ async function main() {
         };
       })()`, "uniform theme swatches and shared theme tokens");
 
+      await evaluate(`document.querySelector('[data-interface-customization-trigger]')?.click()`);
+      const interfaceCustomizationLayout = await waitForEvaluation(`(() => {
+        const dialog = document.querySelector('[data-interface-customization-dialog]');
+        const backdrop = dialog?.parentElement;
+        const rect = dialog?.getBoundingClientRect();
+        const visible = Boolean(
+          rect &&
+          rect.left >= -1 &&
+          rect.top >= -1 &&
+          rect.right <= window.innerWidth + 1 &&
+          rect.bottom <= window.innerHeight + 1,
+        );
+        return {
+          ready: Boolean(dialog && backdrop && visible && backdrop.parentElement === document.body),
+          visible,
+          portalToBody: backdrop?.parentElement === document.body,
+          rect: rect ? {
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+          } : null,
+          settingsOverflow: getComputedStyle(document.querySelector('.settings-dialog')).overflow,
+        };
+      })()`, "unclipped interface customization portal");
+      if (!interfaceCustomizationLayout.visible || !interfaceCustomizationLayout.portalToBody) {
+        throw new Error(`Interface customization is still clipped by Settings: ${JSON.stringify(interfaceCustomizationLayout)}`);
+      }
+      await evaluate(`document.querySelector('[data-interface-customization-close]')?.click()`);
+      await waitForEvaluation(`(() => ({
+        ready: !document.querySelector('[data-interface-customization-dialog]'),
+      }))()`, "close interface customization portal");
+
       const powerPointDefaultSaved = await waitForEvaluation(`(() => {
         const input = document.querySelector(
           '[data-powerpoint-default-font-size]',
@@ -7661,6 +7814,7 @@ async function main() {
       console.log(JSON.stringify({
         powerPointDefaultInitial,
         themeChoiceState,
+        interfaceCustomizationLayout,
         powerPointDefaultSaved,
         powerPointDefaultReloaded,
         defaults,

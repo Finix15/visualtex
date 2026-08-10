@@ -2080,6 +2080,150 @@ math-field[data-visualtex-greek-mode="true"] {
   color: var(--danger);
 }
 
+.formula-editor-context-menu {
+  position: fixed;
+  z-index: 2050;
+  min-width: 176px;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+
+.formula-editor-context-menu button {
+  width: 100%;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.formula-editor-context-menu button > svg {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.formula-editor-context-menu button:hover,
+.formula-editor-context-menu button:focus-visible {
+  background: color-mix(in srgb, var(--accent-soft) 72%, transparent);
+  outline: none;
+}
+
+.formula-editor-context-menu button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+html[data-visualtex-view="silent-ocr-hud"],
+html[data-visualtex-view="silent-ocr-hud"] body,
+html[data-visualtex-view="silent-ocr-hud"] #root {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
+  background: transparent !important;
+}
+
+.silent-ocr-hud-page {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 10px;
+  background: transparent;
+}
+
+.silent-ocr-hud-page .windows-quick-ocr-hud {
+  position: relative;
+  left: auto;
+  bottom: auto;
+  width: min(356px, calc(100vw - 20px));
+  max-width: none;
+  transform: none;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 97%, transparent);
+}
+
+.silent-ocr-hud-icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: color-mix(in srgb, currentColor 10%, var(--surface));
+}
+
+.silent-ocr-hud-page .windows-quick-ocr-hud.is-busy .silent-ocr-hud-icon svg {
+  animation: visualtex-silent-ocr-spin 0.9s linear infinite;
+}
+
+.silent-ocr-hud-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.silent-ocr-hud-copy > strong {
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.silent-ocr-hud-message {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.silent-ocr-hud-progress {
+  height: 3px;
+  margin-top: 2px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.silent-ocr-hud-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: currentColor;
+  transition: width 180ms ease-out;
+}
+
+.silent-ocr-hud-page .windows-quick-ocr-hud.is-success .silent-ocr-hud-progress,
+.silent-ocr-hud-page .windows-quick-ocr-hud.is-error .silent-ocr-hud-progress {
+  opacity: 0.72;
+}
+
+@keyframes visualtex-silent-ocr-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @media (max-width: 760px) {
   .settings-subdialog,
   .settings-dialog {

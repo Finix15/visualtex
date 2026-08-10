@@ -31,9 +31,7 @@ function readPersistedEditorTheme(): Theme | null {
   }
 }
 
-export function readSynchronizedTheme(): Theme {
-  const urlTheme = new URLSearchParams(window.location.search).get("theme");
-  if (urlTheme) return normalizeSynchronizedTheme(urlTheme);
+export function readPublishedSynchronizedTheme(): Theme {
   try {
     const activeTheme = window.localStorage.getItem(ACTIVE_THEME_STORAGE_KEY);
     if (activeTheme) return normalizeSynchronizedTheme(activeTheme);
@@ -41,6 +39,12 @@ export function readSynchronizedTheme(): Theme {
     // Fall through to the persisted editor store.
   }
   return readPersistedEditorTheme() ?? "light";
+}
+
+export function readSynchronizedTheme(): Theme {
+  const urlTheme = new URLSearchParams(window.location.search).get("theme");
+  if (urlTheme) return normalizeSynchronizedTheme(urlTheme);
+  return readPublishedSynchronizedTheme();
 }
 
 export function applyDocumentTheme(theme: Theme) {

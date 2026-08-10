@@ -3,12 +3,122 @@ use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+use serde::{Deserialize, Serialize};
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 pub const OFFICE_BACKGROUND_ARGUMENT: &str = "--office-background";
 pub const OFFICE_BOOTSTRAP_ARGUMENT: &str = "--office-bootstrap";
+
+const MAIN_WINDOW_SIZE_FILE: &str = "main-window-size.json";
+const DEFAULT_MAIN_WINDOW_WIDTH: f64 = 1240.0;
+const DEFAULT_MAIN_WINDOW_HEIGHT: f64 = 820.0;
+const MIN_MAIN_WINDOW_WIDTH: f64 = 640.0;
+const MIN_MAIN_WINDOW_HEIGHT: f64 = 480.0;
+const MAX_MAIN_WINDOW_WIDTH: f64 = 4000.0;
+const MAX_MAIN_WINDOW_HEIGHT: f64 = 3000.0;
+static MAIN_WINDOW_SIZE_WRITE_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MainWindowSizePreference {
+    width: f64,
+    height: f64,
+}
+
+fn normalize_main_window_size(width: f64, height: f64) -> MainWindowSizePreference {
+    let width = if width.is_finite() { width } else { DEFAULT_MAIN_WINDOW_WIDTH };
+    let height = if height.is_finite() { height } else { DEFAULT_MAIN_WINDOW_HEIGHT };
+    MainWindowSizePreference {
+        width: width.clamp(MIN_MAIN_WINDOW_WIDTH, MAX_MAIN_WINDOW_WIDTH),
+        height: height.clamp(MIN_MAIN_WINDOW_HEIGHT, MAX_MAIN_WINDOW_HEIGHT),
+    }
+}
+
+fn main_window_size_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Unable to resolve VisualTeX app-data directory: {error}"))?;
+    Ok(app_data.join(MAIN_WINDOW_SIZE_FILE))
+}
+
+fn read_main_window_size(app: &AppHandle) -> Option<MainWindowSizePreference> {
+    let path = main_window_size_path(app).ok()?;
+    let bytes = fs::read(path).ok()?;
+    let size = serde_json::from_slice::<MainWindowSizePreference>(&bytes).ok()?;
+    Some(normalize_main_window_size(size.width, size.height))
+}
+
+fn write_main_window_size(app: &AppHandle, size: MainWindowSizePreference) -> Result<(), String> {
+    let path = main_window_size_path(app)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let bytes = serde_json::to_vec_pretty(&size).map_err(|error| error.to_string())?;
+    fs::write(path, bytes).map_err(|error| error.to_string())
+}
+
+pub(crate) fn configuration_main_window_size(app: &AppHandle) -> Option<(f64, f64)> {
+    if let Some(window) = app.get_webview_window("main") {
+        if let (Ok(physical), Ok(scale_factor)) = (window.inner_size(), window.scale_factor()) {
+            let scale_factor = scale_factor.max(0.1);
+            let size = normalize_main_window_size(
+                f64::from(physical.width) / scale_factor,
+                f64::from(physical.height) / scale_factor,
+            );
+            return Some((size.width, size.height));
+        }
+    }
+    read_main_window_size(app).map(|size| (size.width, size.height))
+}
+
+pub(crate) fn apply_configuration_main_window_size(
+    app: &AppHandle,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    let size = normalize_main_window_size(width, height);
+    write_main_window_size(app, size)?;
+    if let Some(window) = app.get_webview_window("main") {
+        window
+            .set_size(tauri::LogicalSize::new(size.width, size.height))
+            .map_err(|error| error.to_string())?;
+        window.center().map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+pub(crate) fn schedule_persist_main_window_size(
+    app: &AppHandle,
+    physical_width: u32,
+    physical_height: u32,
+) {
+    if physical_width == 0 || physical_height == 0 {
+        return;
+    }
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let scale_factor = window.scale_factor().unwrap_or(1.0).max(0.1);
+    let size = normalize_main_window_size(
+        f64::from(physical_width) / scale_factor,
+        f64::from(physical_height) / scale_factor,
+    );
+    let generation = MAIN_WINDOW_SIZE_WRITE_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        if MAIN_WINDOW_SIZE_WRITE_GENERATION.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        if let Err(error) = write_main_window_size(&app, size) {
+            append_lifecycle_log(format!("Unable to persist main window size: {error}"));
+        }
+    });
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppRunMode {
@@ -237,15 +347,20 @@ pub fn ensure_main_window(app: &AppHandle) -> Result<WebviewWindow, String> {
         error
     })?;
 
-    append_lifecycle_log("creating main window from WebviewUrl::App(index.html)");
+    let saved_size = read_main_window_size(app)
+        .unwrap_or_else(|| normalize_main_window_size(DEFAULT_MAIN_WINDOW_WIDTH, DEFAULT_MAIN_WINDOW_HEIGHT));
+    append_lifecycle_log(format!(
+        "creating main window from WebviewUrl::App(index.html) at {}x{}",
+        saved_size.width, saved_size.height
+    ));
     let window = WebviewWindowBuilder::new(
         app,
         "main",
         WebviewUrl::App("index.html".into()),
     )
     .title("VisualTeX")
-    .inner_size(1240.0, 820.0)
-    .min_inner_size(640.0, 480.0)
+    .inner_size(saved_size.width, saved_size.height)
+    .min_inner_size(MIN_MAIN_WINDOW_WIDTH, MIN_MAIN_WINDOW_HEIGHT)
     .resizable(true)
     .center()
     .focused(true)

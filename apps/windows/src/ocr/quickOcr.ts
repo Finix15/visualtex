@@ -38,18 +38,6 @@ async function captureWindowsClipboardImage(launchCapture: boolean) {
   });
 }
 
-async function minimizeForOcrCapture() {
-  try {
-    await getCurrentWindow().minimize();
-    // Give DWM/WebView2 one frame to leave the capture surface before the
-    // Snipping Tool is opened. Without this delay the VisualTeX window can
-    // still appear in the first captured frame on slower systems.
-    await new Promise((resolve) => window.setTimeout(resolve, 160));
-  } catch {
-    // The native capture bridge still works if the host refuses minimization.
-  }
-}
-
 export async function restoreQuickOcrWindow() {
   if (!hasTauriRuntime()) return;
   try {
@@ -75,7 +63,6 @@ export async function writeSilentOcrClipboardText(text: string) {
  * desktop-capture implementation.
  */
 export async function captureQuickOcrScreenshot() {
-  await minimizeForOcrCapture();
   return captureWindowsClipboardImage(true);
 }
 
@@ -85,7 +72,6 @@ export async function captureQuickOcrScreenshot() {
  * Windows screenshot shortcut; the next clipboard image is consumed by OCR.
  */
 export async function waitForQuickOcrSystemScreenshot() {
-  await minimizeForOcrCapture();
   return captureWindowsClipboardImage(false);
 }
 

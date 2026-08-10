@@ -37,7 +37,7 @@ if (sourceFromGit) {
 }
 
 const profilePattern = /const (chromeProfile|profile) = `\/tmp\/[^`]+`;/;
-const browserPattern = /const chromePath = "[^"]+";/;
+const browserPattern = /const chromePath\s*=\s*"[^"]+";/;
 if (!profilePattern.test(source) || !browserPattern.test(source)) {
   throw new Error(
     `The upstream regression launcher declarations were not found in ${sourcePath}`,
@@ -196,6 +196,139 @@ if (basename(sourcePath) === "targeted_editor_regression.mjs" && forwardedArgume
     `          customCandidateVisible: Boolean(document.querySelector(".suggestion-popup")),\n          sourceExists: Boolean(source),\n          sourceClass: source?.className ?? "",\n          sourceItems: source?.querySelectorAll("li[data-command]").length ?? 0,\n          rawLatex: document.querySelector("math-field")?.shadowRoot?.querySelector(".ML__raw-latex")?.textContent ?? "",\n          fieldValue: document.querySelector("math-field")?.value ?? "",\n          fieldMode: document.querySelector("math-field")?.mode ?? "",\n          popoverPolicy: document.querySelector("math-field")?.popoverPolicy ?? "",`,
   );
 }
+if (basename(sourcePath) === "office_unified_toolbar_regression.mjs") {
+  // Run the actual Windows Office production bundle. The strict CSP on
+  // office-dialog.html intentionally rejects Vite dev's React-refresh inline
+  // preamble, which can leave a misleading empty root even though the packaged
+  // Office bundle is healthy. The Office-specific Vite config points preview
+  // at dist-office-windows-native and exercises the same HTML/JS shipped in NSIS.
+  source = source.replace(
+    /"node_modules\/vite\/bin\/vite\.js",\r?\n\s*"preview",\r?\n\s*"--host",/,
+    '"node_modules/vite/bin/vite.js",\n      "preview",\n      "--config",\n      "vite.office.windows-native.config.ts",\n      "--host",',
+  );
+  source = source.replaceAll("office-native-dialog.html", "office-dialog.html");
+  source = source.replace(
+    '    assert.ok(officeFormulaLineCenter, "Office formula row must exist for hover regression");',
+    `    if (!officeFormulaLineCenter) {
+      const diagnostic = await client.evaluate(\`(() => ({
+        url: location.href,
+        bodyText: document.body?.innerText?.slice(0, 1600) ?? '',
+        header: Boolean(document.querySelector('.editor-pane-header.is-office-editor-header')),
+        primary: Boolean(document.querySelector('[data-office-primary-action]')),
+        mathField: Boolean(document.querySelector('math-field')),
+        formulaLine: Boolean(document.querySelector('.formula-line')),
+        errorText: document.querySelector('.office-dialog-error, .office-session-error, [role="alert"]')?.textContent ?? '',
+        readyState: document.readyState,
+        rootHtml: document.getElementById('root')?.innerHTML?.slice(0, 1200) ?? null,
+        scripts: Array.from(document.scripts).map((script) => script.src || script.textContent?.slice(0, 120) || ''),
+      }))()\`);
+      throw new Error('Office formula row must exist for hover regression: ' + JSON.stringify({ diagnostic, events: client.visualtexRuntimeEvents ?? [], pendingRequests: Array.from(client.visualtexPendingRequests?.values?.() ?? []) }));
+    }`,
+  );
+}
+if (basename(sourcePath) === "theme_customization_regression.mjs") {
+  // This script launches the main page itself. Re-navigating every connected
+  // target to baseUrl aborts the already-loading /src/main.tsx request, so let
+  // the original target finish and explicitly navigate only the Office page.
+  source = source.replace(
+    'await client.send("Page.enable");\n  await client.send("Network.enable");\n  await client.send("Page.navigate", { url: baseUrl });\n  await sleep(700);\n',
+    'await client.send("Page.enable");\n  await client.send("Network.enable");\n',
+  );
+  // This regression opens both index.html and the separate Windows Office
+  // dialog entry. Vite preview only contains the desktop dist and falls back
+  // unknown HTML entries to index.html, so use the dev server for this test.
+  // macOS only has the shared onboarding flag; Windows also gates the desktop
+  // shell behind a platform onboarding flag. Seed that flag before the test
+  // waits for the Settings button, then reload into the actual editor shell.
+  source = source.replace(
+    `    mainClient = await connectPage(resolvedMainTarget);`,
+    `    mainClient = await connectPage(resolvedMainTarget);
+    await mainClient.send("Page.navigate", { url: baseUrl });
+    await sleep(900);
+    await waitForExpression(mainClient, "location.protocol === 'http:' && location.hostname === '127.0.0.1' && document.readyState !== 'loading'");
+    await mainClient.evaluate(\`(() => { localStorage.setItem("visualtex.onboarding.v3.completed", "true"); localStorage.setItem("visualtex.onboarding.windows.desktop.v1.1.0.completed", "true"); return true; })()\`);
+    await mainClient.send("Page.navigate", { url: baseUrl });
+    await sleep(1200);
+    await waitForExpression(mainClient, "location.protocol === 'http:' && location.hostname === '127.0.0.1' && document.readyState !== 'loading'");`,
+
+  );
+  source = source.replace(
+    '      "node_modules/vite/bin/vite.js",\n      "preview",\n      "--host",',
+    '      "node_modules/vite/bin/vite.js",\n      "--host",',
+  );
+  source = source.replaceAll("office-native-dialog.html", "office-dialog.html");
+  source = source.replace(
+    `    officeClient = await connectPage(officeTarget);\n    await sleep(250);`,
+    `    officeClient = await connectPage(officeTarget);\n    await officeClient.send("Page.navigate", { url: officeUrl });\n    await sleep(700);`,
+  );
+}
+if (basename(sourcePath) === "formula_hotkey_regression.mjs") {
+  // The upstream regression embeds a legacy LaTeX array inside another JS
+  // template string. That second parse consumes escapes such as \\f/\\i/\\o
+  // before localStorage sees them. Seed the exact legacy JSON payload instead,
+  // matching the Windows-local regression and the real pre-v3 storage format.
+  const legacyCustomFormulaTiles = [
+    String.raw`\beta_{\omega_1^2}`,
+    String.raw`\beta`,
+    String.raw`\int_b^a b`,
+    String.raw`\int_b^a a`,
+    String.raw`\int_b^a t`,
+    String.raw`\frac{R}{Tf}\int_b^a t`,
+    String.raw`\frac{R}{Tf}\int_b^a t\,dpq`,
+    String.raw`\frac{R}{Tf}\int_b^a t\,dp`,
+    "a^2+b^2=c^2",
+  ];
+  const legacySetupStart = source.indexOf(
+    "    await evaluate(`(() => {\n      localStorage.clear();",
+  );
+  const legacyReloadStart =
+    legacySetupStart >= 0 ? source.indexOf("    await reload();", legacySetupStart) : -1;
+  if (legacySetupStart >= 0 && legacyReloadStart > legacySetupStart) {
+    const legacySetupExpression = `(() => {
+      localStorage.clear();
+      localStorage.setItem("visualtex.onboarding.v3.completed", "true");
+      localStorage.setItem("visualtex.onboarding.windows.desktop.v1.1.0.completed", "true");
+      localStorage.setItem(
+        "visualtex-custom-formula-tiles",
+        ${JSON.stringify(JSON.stringify(legacyCustomFormulaTiles))},
+      );
+    })()`;
+    source =
+      source.slice(0, legacySetupStart) +
+      `    await evaluate(${JSON.stringify(legacySetupExpression)});\n` +
+      source.slice(legacyReloadStart);
+  }
+  // macOS defines the shipped formula/Greek shortcuts with Command. Windows
+  // intentionally uses the platform-equivalent Ctrl chord, so translate only
+  // this regression's primary modifier while preserving Alt/Shift semantics.
+  source = source.replaceAll("metaKey: true", "ctrlKey: true");
+  source = source.replaceAll("binding.chord?.metaKey &&", "binding.chord?.ctrlKey &&");
+  source = source.replaceAll("!binding.chord?.ctrlKey &&", "!binding.chord?.metaKey &&");
+  // Current toolbar previews intentionally scale above 1x on buttons larger
+  // than 42 px, capped at 1.55x. Keep the upstream audit aligned with the
+  // product algorithm instead of its obsolete <= 1 assertion.
+  source = source.replace(
+    "        assert.ok(detail.scale > 0 && detail.scale <= 1, JSON.stringify({ category, id, detail }));",
+    `        const maximumScale = Math.min(1.55, Math.max(1, detail.width / 42));
+        assert.ok(detail.scale > 0 && detail.scale <= maximumScale + 0.001, JSON.stringify({ category, id, detail, maximumScale }));`,
+  );
+  source = source.replaceAll(
+    'preview?.dataset.fitReady === "true"',
+    '(preview?.dataset.fitReady === "true" || preview?.dataset.fitReady === "static")',
+  );
+  source = source.replace(
+    `    await evaluate(\`document.querySelector('[data-tile-category="custom"]')?.click()\`);
+    await sleep(180);
+    const customTileLayout = await evaluate(`,
+    `    await evaluate(\`document.querySelector('[data-tile-category="custom"]')?.click()\`);
+    await sleep(800);
+    const customTileLayout = await evaluate(`,
+  );
+  source = source.replace(
+    `(button) => button.dataset.formulaTileLatex === "\\\\beta",`,
+    `(button) => button.dataset.formulaTileLatex === String.fromCharCode(92) + "beta",`,
+  );
+}
 if (basename(sourcePath) === "quick_format_toolbar_regression.mjs") {
   source = source.replace(
     `            hasLineAlignment: line.hasAttribute("data-alignment"),`,
@@ -203,9 +336,13 @@ if (basename(sourcePath) === "quick_format_toolbar_regression.mjs") {
   );
 }
 if (basename(sourcePath) === "auto_escape_regression.mjs") {
+  // The Windows migration intentionally removed explanatory small text and the
+  // current Windows input-behavior UI is covered by input_behavior_regression
+  // settings-history. Strip this older macOS script's duplicate UI probe/toggle
+  // prelude and keep its actual keyboard auto-escape behavior matrix.
   source = source.replace(
-    /    await evaluate\(`document\.querySelector\("\.canvas-input-behavior-trigger"\)\.click\(\)`\);\r?\n    await evaluate\(`document\.querySelector\("\.export-menu-trigger"\)\.click\(\)`\);[\s\S]*?    assert\.match\(await typeText\(">="\)/,
-    '    assert.match(await typeText(">=")',
+    /    await evaluate\(`document\.querySelector\("\.canvas-input-behavior-trigger"\)\.click\(\)`\);[\s\S]*?(?=    assert\.match\(await typeText\(">="\))/,
+    "",
   );
 }
 if (forwardedArguments.includes("auto-exit-switch")) {

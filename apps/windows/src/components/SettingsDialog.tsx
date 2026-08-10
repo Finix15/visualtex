@@ -5,6 +5,7 @@ import {
   type ChangeEvent,
   type CSSProperties,
 } from "react";
+import { createPortal } from "react-dom";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import {
@@ -64,6 +65,7 @@ import {
   type CustomThemeState,
   type ThemePaletteColors,
 } from "../themeCustomization";
+import { publishSynchronizedTheme } from "../themeSync";
 
 const THEME_CORE_COLOR_FIELDS: readonly [keyof ThemePaletteColors, string, string][] = [
   ["accent", "Accent", "强调色"],
@@ -182,6 +184,9 @@ export function SettingsDialog({
   const highlightActiveLine = useEditorStore(
     (state) => state.highlightActiveLine,
   );
+  const keypadMinimizeOnCopy = useEditorStore(
+    (state) => state.keypadMinimizeOnCopy,
+  );
   const formulaInsetLeft = useEditorStore((state) => state.formulaInsetLeft);
   const formulaInsetRight = useEditorStore((state) => state.formulaInsetRight);
   const formulaToolButtonSize = useEditorStore(
@@ -206,6 +211,9 @@ export function SettingsDialog({
   );
   const setHighlightActiveLine = useEditorStore(
     (state) => state.setHighlightActiveLine,
+  );
+  const setKeypadMinimizeOnCopy = useEditorStore(
+    (state) => state.setKeypadMinimizeOnCopy,
   );
   const setFormulaInsetLeft = useEditorStore(
     (state) => state.setFormulaInsetLeft,
@@ -249,6 +257,10 @@ export function SettingsDialog({
     (state) => state.setCheckUpdatesOnStartup,
   );
   const isEn = language === "en";
+  const selectTheme = (nextTheme: Parameters<typeof setTheme>[0]) => {
+    setTheme(nextTheme);
+    publishSynchronizedTheme(nextTheme);
+  };
   const formulaLetterFamilies = formulaLetterFontFamilies(formulaLetterFont);
   const formulaChineseFamily = formulaChineseFontFamily(formulaChineseFont);
 
@@ -333,7 +345,7 @@ export function SettingsDialog({
     setCustomTheme((current) => {
       const next = update(current);
       publishCustomTheme(next);
-      setTheme("custom");
+      selectTheme("custom");
       return next;
     });
   };
@@ -353,7 +365,7 @@ export function SettingsDialog({
     const next = createDefaultCustomTheme();
     setCustomTheme(next);
     publishCustomTheme(next);
-    setTheme("custom");
+    selectTheme("custom");
   };
 
   const renderThemeColorFields = (
@@ -628,7 +640,7 @@ export function SettingsDialog({
                       className={theme === definition.id ? "is-active" : ""}
                       aria-pressed={theme === definition.id}
                       data-theme-choice={definition.id}
-                      onClick={() => setTheme(definition.id)}
+                      onClick={() => selectTheme(definition.id)}
                     >
                       <span className="theme-choice-swatch" aria-hidden="true">
                         {swatches.map((color) => (
@@ -860,8 +872,9 @@ export function SettingsDialog({
           </button>
         </footer>
 
-        {interfaceCustomizationOpen && (
-          <div
+        {interfaceCustomizationOpen &&
+          createPortal(
+            <div
             className="settings-subdialog-backdrop"
             role="presentation"
             onMouseDown={(event) => {
@@ -925,7 +938,7 @@ export function SettingsDialog({
                         type="button"
                         className={theme === "custom" ? "primary-button" : "secondary-button"}
                         data-theme-use-custom
-                        onClick={() => setTheme("custom")}
+                        onClick={() => selectTheme("custom")}
                       >
                         {isEn ? "Use Custom" : "使用自定义"}
                       </button>
@@ -943,7 +956,7 @@ export function SettingsDialog({
                             className={theme === preset.id ? "is-active" : ""}
                             aria-pressed={theme === preset.id}
                             data-theme-preset={preset.id}
-                            onClick={() => setTheme(preset.id)}
+                            onClick={() => selectTheme(preset.id)}
                           >
                             <span
                               className="theme-preset-aa"
@@ -1132,6 +1145,30 @@ export function SettingsDialog({
                     data-show-line-numbers-setting
                     onChange={(event) =>
                       setShowLineNumbers(event.target.checked)
+                    }
+                  />
+                  <span className="switch-control" />
+                </label>
+
+                <label className="switch-row">
+                  <span>
+                    <strong>
+                      {isEn
+                        ? "Minimize after keypad copy"
+                        : "小键盘复制后最小化主应用"}
+                    </strong>
+                    <small>
+                      {isEn
+                        ? "In keypad mode, Ctrl+S copies the current LaTeX format and then minimizes VisualTeX."
+                        : "小键盘模式下，Ctrl+S 会按当前 LaTeX 代码格式复制；开启后复制完成再最小化 VisualTeX。"}
+                    </small>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={keypadMinimizeOnCopy}
+                    data-keypad-minimize-on-copy-setting
+                    onChange={(event) =>
+                      setKeypadMinimizeOnCopy(event.target.checked)
                     }
                   />
                   <span className="switch-control" />
@@ -1497,8 +1534,9 @@ export function SettingsDialog({
                 </button>
               </footer>
             </section>
-          </div>
-        )}
+          </div>,
+            document.body,
+          )}
       </section>
     </div>
   );

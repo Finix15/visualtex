@@ -7,6 +7,7 @@ use std::os::windows::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
+use tauri::{AppHandle, Manager};
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const MIN_TIMEOUT_MS: u64 = 1_000;
@@ -15,6 +16,10 @@ const CF_UNICODETEXT: u32 = 13;
 const GMEM_MOVEABLE: u32 = 0x0002;
 const CLIPBOARD_OPEN_RETRIES: usize = 25;
 const CLIPBOARD_OPEN_RETRY_DELAY_MS: u64 = 20;
+const SW_MINIMIZE: i32 = 6;
+const SW_RESTORE: i32 = 9;
+const FOREGROUND_RESTORE_RETRIES: usize = 8;
+const FOREGROUND_RESTORE_RETRY_DELAY_MS: u64 = 80;
 
 #[link(name = "user32")]
 unsafe extern "system" {
@@ -22,6 +27,14 @@ unsafe extern "system" {
     fn CloseClipboard() -> i32;
     fn EmptyClipboard() -> i32;
     fn SetClipboardData(format: u32, memory: *mut c_void) -> *mut c_void;
+    fn FindWindowW(class_name: *const u16, window_name: *const u16) -> *mut c_void;
+    fn ShowWindowAsync(hwnd: *mut c_void, command: i32) -> i32;
+    fn SetForegroundWindow(hwnd: *mut c_void) -> i32;
+    fn BringWindowToTop(hwnd: *mut c_void) -> i32;
+    fn GetForegroundWindow() -> *mut c_void;
+    fn GetWindowThreadProcessId(hwnd: *mut c_void, process_id: *mut u32) -> u32;
+    fn AttachThreadInput(thread_id_attach: u32, thread_id_attach_to: u32, attach: i32) -> i32;
+    fn SetFocus(hwnd: *mut c_void) -> *mut c_void;
 }
 
 #[link(name = "kernel32")]
@@ -30,6 +43,7 @@ unsafe extern "system" {
     fn GlobalLock(memory: *mut c_void) -> *mut c_void;
     fn GlobalUnlock(memory: *mut c_void) -> i32;
     fn GlobalFree(memory: *mut c_void) -> *mut c_void;
+    fn GetCurrentThreadId() -> u32;
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -156,7 +170,113 @@ fn capture_windows_clipboard_image(
     })
 }
 
-fn write_clipboard_text(text: &str) -> Result<(), String> {
+#[tauri::command]
+pub(crate) fn minimize_visualtex_main_window(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("main") {
+        if window.minimize().is_ok() {
+            thread::sleep(Duration::from_millis(45));
+            if window.is_minimized().unwrap_or(false) {
+                return Ok(());
+            }
+        }
+    }
+
+    let title = "VisualTeX"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let hwnd = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
+    if hwnd.is_null() {
+        return Err("Unable to locate the VisualTeX main window to minimize".to_string());
+    }
+    if unsafe { ShowWindowAsync(hwnd, SW_MINIMIZE) } == 0 {
+        return Err(format!(
+            "Windows refused to minimize the VisualTeX main window: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
+fn restore_visualtex_foreground_window() -> Result<(), String> {
+    let title = "VisualTeX"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let hwnd = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
+    if hwnd.is_null() {
+        return Err("Unable to locate the VisualTeX main window after screenshot capture".to_string());
+    }
+
+    for _ in 0..FOREGROUND_RESTORE_RETRIES {
+        unsafe {
+            let _ = ShowWindowAsync(hwnd, SW_RESTORE);
+        }
+        let foreground = unsafe { GetForegroundWindow() };
+        let current_thread = unsafe { GetCurrentThreadId() };
+        let foreground_thread = if foreground.is_null() {
+            0
+        } else {
+            unsafe { GetWindowThreadProcessId(foreground, std::ptr::null_mut()) }
+        };
+        let target_thread = unsafe { GetWindowThreadProcessId(hwnd, std::ptr::null_mut()) };
+
+        let attached_foreground = foreground_thread != 0 && foreground_thread != current_thread;
+        let attached_target = target_thread != 0
+            && target_thread != current_thread
+            && target_thread != foreground_thread;
+        if attached_foreground {
+            unsafe {
+                let _ = AttachThreadInput(current_thread, foreground_thread, 1);
+            }
+        }
+        if attached_target {
+            unsafe {
+                let _ = AttachThreadInput(current_thread, target_thread, 1);
+            }
+        }
+        unsafe {
+            let _ = BringWindowToTop(hwnd);
+            let _ = SetForegroundWindow(hwnd);
+            let _ = SetFocus(hwnd);
+        }
+        if attached_target {
+            unsafe {
+                let _ = AttachThreadInput(current_thread, target_thread, 0);
+            }
+        }
+        if attached_foreground {
+            unsafe {
+                let _ = AttachThreadInput(current_thread, foreground_thread, 0);
+            }
+        }
+
+        if unsafe { GetForegroundWindow() } == hwnd {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(FOREGROUND_RESTORE_RETRY_DELAY_MS));
+    }
+
+    Err(format!(
+        "Windows refused to activate the VisualTeX main window: {}",
+        std::io::Error::last_os_error()
+    ))
+}
+
+pub(crate) fn capture_windows_quick_ocr_bytes(
+    launch_capture: bool,
+    timeout_ms: u64,
+) -> Result<Option<Vec<u8>>, String> {
+    let Some(capture) = capture_windows_clipboard_image(launch_capture, timeout_ms)? else {
+        return Ok(None);
+    };
+    BASE64_STANDARD
+        .decode(capture.data_base64.as_bytes())
+        .map(Some)
+        .map_err(|error| format!("Windows screenshot bridge returned invalid image data: {error}"))
+}
+
+pub(crate) fn write_clipboard_text(text: &str) -> Result<(), String> {
     let mut opened = false;
     for _ in 0..CLIPBOARD_OPEN_RETRIES {
         if unsafe { OpenClipboard(std::ptr::null_mut()) } != 0 {
@@ -231,14 +351,43 @@ fn write_clipboard_text(text: &str) -> Result<(), String> {
 
 #[tauri::command]
 pub(crate) async fn capture_windows_quick_ocr(
+    app: AppHandle,
     launch_capture: bool,
     timeout_ms: u64,
 ) -> Result<Option<WindowsQuickOcrCapture>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    if let Some(window) = app.get_webview_window("main") {
+        window
+            .minimize()
+            .map_err(|error| format!("Unable to minimize VisualTeX for quick OCR: {error}"))?;
+        // Let WebView2/DWM fully leave the capture surface before opening the
+        // system selector. This mirrors the macOS native quick-OCR flow and is
+        // intentionally done in Rust so a frontend focus race cannot skip it.
+        tokio::time::sleep(Duration::from_millis(180)).await;
+    }
+    let capture_result = tauri::async_runtime::spawn_blocking(move || {
         capture_windows_clipboard_image(launch_capture, timeout_ms)
     })
     .await
-    .map_err(|error| format!("Windows screenshot bridge task failed: {error}"))?
+    .map_err(|error| format!("Windows screenshot bridge task failed: {error}"))
+    .and_then(|result| result);
+
+    // Snipping Tool can still own the foreground for a short period after it
+    // commits the clipboard image. Wait for that overlay to leave, restore the
+    // Tauri window, then use the native Win32 foreground path with retries.
+    tokio::time::sleep(Duration::from_millis(140)).await;
+    let restore_result = crate::app_lifecycle::ensure_main_window(&app)
+        .map(|_| ())
+        .and_then(|_| restore_visualtex_foreground_window());
+    match (capture_result, restore_result) {
+        (Ok(capture), Ok(())) => Ok(capture),
+        (Err(capture_error), Ok(())) => Err(capture_error),
+        (Ok(_), Err(restore_error)) => Err(format!(
+            "Unable to restore VisualTeX after quick OCR: {restore_error}"
+        )),
+        (Err(capture_error), Err(restore_error)) => Err(format!(
+            "{capture_error}; additionally unable to restore VisualTeX: {restore_error}"
+        )),
+    }
 }
 
 #[tauri::command]
