@@ -47,6 +47,7 @@ const PLACEHOLDER_PNG_BASE64: &str =
 pub struct MacOfflineHostInstallStatus {
     application_installed: bool,
     application_running: bool,
+    files_present: bool,
     files_installed: bool,
     health_reported: bool,
     loaded: bool,
@@ -207,6 +208,36 @@ fn ensure_office_hosts_stopped() -> Result<(), String> {
             running.join(" and ")
         ))
     }
+}
+
+#[cfg(target_os = "macos")]
+fn request_office_application_quit(process_name: &str, bundle_identifier: &str) -> Result<(), String> {
+    if !application_running(process_name) {
+        return Ok(());
+    }
+    let script = format!("tell application id \"{bundle_identifier}\" to quit");
+    let mut child = Command::new("/usr/bin/osascript")
+        .args(["-e", &script])
+        .spawn()
+        .map_err(|error| format!("Unable to request {process_name} to quit: {error}"))?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn request_office_application_quit(_process_name: &str, _bundle_identifier: &str) -> Result<(), String> {
+    Ok(())
+}
+
+pub fn request_office_hosts_quit_for_update() -> Result<(), String> {
+    if !cfg!(target_os = "macos") {
+        return Err("Office add-in update assistance is available only on macOS".to_string());
+    }
+    request_office_application_quit(WORD_PROCESS_NAME, "com.microsoft.Word")?;
+    request_office_application_quit(POWERPOINT_PROCESS_NAME, "com.microsoft.Powerpoint")?;
+    Ok(())
 }
 
 fn resource_root(app: &AppHandle) -> Result<PathBuf, String> {
@@ -380,6 +411,27 @@ fn known_word_startup_paths(home: &Path) -> Vec<PathBuf> {
     paths
 }
 
+fn read_directory_with_interrupted_retry(directory: &Path) -> Result<fs::ReadDir, String> {
+    let mut interrupted_attempts = 0;
+    loop {
+        match fs::read_dir(directory) {
+            Ok(entries) => return Ok(entries),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::Interrupted
+                    && interrupted_attempts < 3 =>
+            {
+                interrupted_attempts += 1;
+            }
+            Err(error) => {
+                return Err(format!(
+                    "Unable to inspect {}: {error}",
+                    directory.display()
+                ))
+            }
+        }
+    }
+}
+
 fn collect_word_startup_paths(
     directory: &Path,
     depth: usize,
@@ -388,12 +440,17 @@ fn collect_word_startup_paths(
     if depth > 8 || !directory.is_dir() {
         return Ok(());
     }
-    let entries = fs::read_dir(directory)
-        .map_err(|error| format!("Unable to inspect {}: {error}", directory.display()))?;
+    let entries = read_directory_with_interrupted_retry(directory)?;
     for entry in entries {
-        let entry = entry.map_err(|error| {
-            format!("Unable to inspect an Office startup directory entry: {error}")
-        })?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => {
+                return Err(format!(
+                    "Unable to inspect an Office startup directory entry: {error}"
+                ))
+            }
+        };
         let path = entry.path();
         if !path.is_dir() {
             continue;
@@ -415,7 +472,11 @@ pub(crate) fn discover_word_startup_paths() -> Result<Vec<PathBuf>, String> {
     let home = user_home()?;
     let root = home.join(OFFICE_GROUP_CONTAINER);
     let mut paths = known_word_startup_paths(&home);
-    if root.is_dir() {
+    // Standard Office 2021/2024 installations already expose a stable Startup
+    // location. Only recurse through the group container as a compatibility
+    // fallback; scanning unrelated SolutionPackages can fail transiently on
+    // macOS and must never suppress detection of a stale VisualTeX add-in.
+    if paths.is_empty() && root.is_dir() {
         collect_word_startup_paths(&root, 0, &mut paths)?;
     }
     paths.sort();
@@ -464,11 +525,14 @@ fn discover_word_startup_artifacts() -> Result<Vec<PathBuf>, String> {
         if !startup.is_dir() {
             continue;
         }
-        for entry in fs::read_dir(&startup)
-            .map_err(|error| format!("Unable to inspect {}: {error}", startup.display()))?
-        {
-            let entry = entry
-                .map_err(|error| format!("Unable to inspect a Word Startup entry: {error}"))?;
+        for entry in read_directory_with_interrupted_retry(&startup)? {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => {
+                    return Err(format!("Unable to inspect a Word Startup entry: {error}"))
+                }
+            };
             let path = entry.path();
             if entry
                 .file_type()
@@ -514,12 +578,16 @@ fn known_powerpoint_addin_directories() -> Result<Vec<PathBuf>, String> {
 fn discover_powerpoint_addin_artifacts() -> Result<Vec<PathBuf>, String> {
     let mut artifacts = Vec::new();
     for directory in known_powerpoint_addin_directories()? {
-        for entry in fs::read_dir(&directory)
-            .map_err(|error| format!("Unable to inspect {}: {error}", directory.display()))?
-        {
-            let entry = entry.map_err(|error| {
-                format!("Unable to inspect a VisualTeX PowerPoint add-in entry: {error}")
-            })?;
+        for entry in read_directory_with_interrupted_retry(&directory)? {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => {
+                    return Err(format!(
+                        "Unable to inspect a VisualTeX PowerPoint add-in entry: {error}"
+                    ))
+                }
+            };
             let path = entry.path();
             if entry
                 .file_type()
@@ -1056,6 +1124,7 @@ fn host_status(
     app_name: &str,
     process_name: &str,
     install_paths: Vec<PathBuf>,
+    files_present: bool,
     files_installed: bool,
 ) -> Result<MacOfflineHostInstallStatus, String> {
     let application_running = application_running(process_name);
@@ -1077,9 +1146,16 @@ fn host_status(
             plugin_version = Some(env!("CARGO_PKG_VERSION").to_string());
         }
     }
+    // A stale health record is only historical evidence that an add-in once
+    // loaded. It must never make a missing or byte-mismatched add-in look
+    // currently installed after an app/plugin update.
+    if !files_installed {
+        loaded = false;
+    }
     Ok(MacOfflineHostInstallStatus {
         application_installed: application_installed(app_name),
         application_running,
+        files_present,
         files_installed,
         health_reported,
         loaded,
@@ -1114,6 +1190,8 @@ pub fn status(app: &AppHandle) -> Result<MacOfflineOfficeInstallStatus, String> 
         canonical_placeholder.clone(),
     ];
     let powerpoint_support_paths = vec![powerpoint_script.clone()];
+    let word_files_present = !discovered_word_artifacts.is_empty();
+    let powerpoint_files_present = !discovered_powerpoint_artifacts.is_empty();
     let word_files_installed = word_support_paths.iter().all(|path| path.is_file())
         && addin_installation_matches(&word_source, &word_destinations, &discovered_word_artifacts);
     let powerpoint_files_installed = powerpoint_support_paths.iter().all(|path| path.is_file())
@@ -1138,6 +1216,7 @@ pub fn status(app: &AppHandle) -> Result<MacOfflineOfficeInstallStatus, String> 
             WORD_APP_NAME,
             WORD_PROCESS_NAME,
             word_paths,
+            word_files_present,
             word_files_installed,
         )?,
         powerpoint: host_status(
@@ -1145,6 +1224,7 @@ pub fn status(app: &AppHandle) -> Result<MacOfflineOfficeInstallStatus, String> 
             POWERPOINT_APP_NAME,
             POWERPOINT_PROCESS_NAME,
             powerpoint_paths,
+            powerpoint_files_present,
             powerpoint_files_installed,
         )?,
         compiled_artifacts_available: compiled_artifacts_available(&root),
@@ -1372,6 +1452,11 @@ pub fn uninstall_macos_offline_office_addins(
     app: AppHandle,
 ) -> Result<MacOfflineOfficeInstallStatus, String> {
     uninstall(&app)
+}
+
+#[tauri::command]
+pub fn request_quit_macos_office_hosts_for_addin_update() -> Result<(), String> {
+    request_office_hosts_quit_for_update()
 }
 
 #[tauri::command]

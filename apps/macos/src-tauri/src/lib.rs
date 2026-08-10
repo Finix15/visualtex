@@ -1820,6 +1820,7 @@ pub fn run() {
             office::macos_offline_installer::install_macos_offline_office_addins,
             office::macos_offline_installer::repair_macos_offline_office_addins,
             office::macos_offline_installer::uninstall_macos_offline_office_addins,
+            office::macos_offline_installer::request_quit_macos_office_hosts_for_addin_update,
             office::macos_offline_installer::reveal_macos_powerpoint_addin,
             office::macos_offline_installer::open_macos_powerpoint_addin_tutorial
         ])

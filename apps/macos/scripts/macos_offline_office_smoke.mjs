@@ -754,6 +754,10 @@ expectIncludes(wordAdapter, "Private Sub VTRepairLiveNumberedTableScaffolds", "N
 expectIncludes(wordAdapter, '"(" & Trim$(numberText) & ")  " & previewText', "The Equation picker must show each complete live number together with its formula preview");
 expectIncludes(wordAdapter, "VT_WORD_NUMBERING_MODE_CHAPTER", "Word must support document-level chapter Equation numbering");
 expectIncludes(wordAdapter, "VT_WORD_NUMBERING_MODE_SECTION", "Word must support document-level section Equation numbering");
+expectIncludes(wordAdapter, '"/VisualTeXNumberingPreference.txt"', "Word must persist the user's last Equation numbering format outside any one document");
+expectIncludes(wordAdapter, "VTWordApplicationScriptsRoot()", "The persistent numbering-format preference must live outside the disposable VisualTeXRuntime directory so Word and VisualTeX restarts do not reset it");
+expectIncludes(wordAdapter, "VTTryReadEquationNumberingPreference", "Documents without their own numbering format must inherit the persistent Word-level default");
+expectIncludes(wordAdapter, "VTWriteEquationNumberingPreference numberingMode, separatorText", "Choosing an Equation numbering format must update the persistent default as well as the active document");
 expectIncludes(wordAdapter, '" \\s " & CStr(restartLevel)', "Chapter and section Equation sequences must use Word's native heading-level reset switch");
 expectIncludes(wordAdapter, "VTRefreshFormattedSequenceBookmark", "Visible image, OMath and body references must share one complete formatted number Bookmark");
 expectIncludes(wordAdapter, "VTComparableEquationNumberText(expectedNumberText)", "Final native OMath acceptance must compare the visible REF with the complete formatted Equation number rather than the local ordinal only");
@@ -1468,6 +1472,10 @@ expect(!inputBehaviorMenu.includes("分别选择哪些单槽结构"), "Caret aut
 expect(!inputBehaviorMenu.includes("这里只控制 VisualTeX 的大型命令候选框"), "Command suggestion heading must not render explanatory subtext");
 expect(!updateDialog.includes("关闭后不会自动联网检查"), "Update preference must not render the removed explanatory subtext");
 expectIncludes(dialogApp, "isMacosOfflineTauriTransport()", "Native Office formula editors must avoid Office.js parent messaging");
+expectIncludes(dialogApp, '"visualtex.office.word.create.numbered"', "Word create dialogs must persist the last Add Equation Number choice");
+expectIncludes(dialogApp, "readOfficeWordCreateNumberedPreference(sessionNumbered)", "A new Word display formula must restore the remembered numbering choice");
+expectIncludes(dialogApp, "session.mode === \"create\" &&\n      session.displayMode === \"block\"", "Only new Word display formulas may inherit the remembered numbering choice");
+expectIncludes(dialogApp, "writeOfficeWordCreateNumberedPreference(nextNumbered)", "Changing Add Equation Number must update the remembered create preference immediately");
 expectIncludes(dialogApp, "const residentEditorWorkspace", "The native Office window must keep its editor workspace mounted while parked");
 expectIncludes(dialogApp, 'className="office-resident-editor-workspace"', "The resident Office editor wrapper must have an explicit layout class instead of becoming an anonymous Grid item");
 const officeDialogShellStyles =
@@ -1805,6 +1813,21 @@ expectIncludes(installer, "macro_responsive", "A running current add-in that ans
 expectIncludes(installer, "Err(error) => (false, false, None, Some(error))", "A corrupt health file must degrade one host instead of failing the whole status view");
 expectIncludes(installer, "word_paths.extend(word_support_paths)", "Word installed status must include its active Startup DOTM, AppleScriptTask and placeholder resources");
 expectIncludes(installer, "addin_installation_matches", "Installed status must require byte-identical add-ins and reject stale loadable copies");
+expectIncludes(installer, "files_present", "Installer status must distinguish a stale installed add-in from a first-time missing add-in");
+expectIncludes(installer, "if !files_installed", "A stale Office health record must never report a missing or byte-mismatched DOTM/PPAM as currently loaded");
+expectIncludes(installer, "if paths.is_empty() && root.is_dir()", "Standard Office installs must not recursively scan unrelated group-container packages before checking the known Word Startup path");
+expectIncludes(installer, "read_directory_with_interrupted_retry", "Office add-in discovery must retry transient interrupted directory reads instead of suppressing update detection");
+expectIncludes(installer, "request_office_hosts_quit_for_update", "The updater must request a normal Word and PowerPoint quit before replacing loaded VBA add-ins");
+expectIncludes(desktopApp, "staleInstalledAddins", "Desktop startup must distinguish an existing stale Office add-in from first-time setup");
+expectIncludes(desktopApp, 'setMacOfficePromptMode("repair")', "A previously configured but missing Office add-in must use repair mode instead of reopening first-time setup");
+expectIncludes(desktopApp, "setPowerpointRegistrationRequired", "Desktop startup must remember whether PowerPoint genuinely needs first-time PPAM registration before opening the Office prompt");
+expectIncludes(desktopApp, 'setMacOfficePromptMode("update")', "A stale DOTM or PPAM must enter the explicit Office add-in update flow");
+expectIncludes(desktopApp, "setMacOfficeFirstRunOpen(true)", "A stale Office add-in must always show the update prompt instead of being replaced silently");
+expectIncludes(desktopApp, "Office 插件已更新到当前 VisualTeX 版本", "A completed Office add-in update must visibly confirm that the current VisualTeX version is installed");
+expectIncludes(macFirstRun, '"request_quit_macos_office_hosts_for_addin_update"', "When Office is running, the update prompt must continue the add-in update without manual file deletion");
+expectIncludes(macFirstRun, "无需手动删除旧文件", "The macOS update prompt must explicitly tell users that stale DOTM and PPAM files are replaced automatically");
+expectIncludes(macFirstRun, "原有登记保持不变", "A current PowerPoint PPAM must not be mislabeled as requiring first-time registration during a Word repair");
+expectIncludes(macFirstRun, "修复 VisualTeX Office 插件", "Missing files after an earlier setup must be presented as repair rather than first-time configuration");
 expectIncludes(installer, "powerpoint_script.clone()", "PowerPoint installed status must include its AppleScriptTask resource");
 expectIncludes(installer, 'health.plugin_version.as_deref() == Some(env!("CARGO_PKG_VERSION"))', "Installer must reject stale plug-in health versions");
 expect(!installer.includes("source_revision_matches"), "Runtime health must not reject a current-version add-in only because an optional sourceRevision field is absent");

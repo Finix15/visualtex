@@ -103,7 +103,6 @@ import {
   detectDesktopPlatform,
   onboardingStorageKey,
   shouldOpenOnboardingInitially,
-  shouldShowMacOfficeFirstRun,
 } from "./platform";
 import {
   readLocalStorage,
@@ -132,6 +131,8 @@ interface InlineOcrState {
 
 interface MacOfficeStartupHostStatus {
   applicationInstalled: boolean;
+  applicationRunning: boolean;
+  filesPresent: boolean;
   filesInstalled: boolean;
 }
 
@@ -164,22 +165,23 @@ function App() {
   const [ocrOpen, setOcrOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 1040);
-  const [macOfficeFirstRunOpen, setMacOfficeFirstRunOpen] = useState(() =>
-    shouldShowMacOfficeFirstRun(
-      DESKTOP_PLATFORM,
-      isTauriEnvironment(),
-      readLocalStorage(MAC_OFFICE_FIRST_RUN_STORAGE_KEY) === "true",
-    ),
-  );
+  const isMacDesktop = DESKTOP_PLATFORM === "macos" && isTauriEnvironment();
+  // macOS Office setup/update mode must be chosen from the real DOTM/PPAM
+  // status first. Opening the legacy first-run UI before that check can turn a
+  // repair/update into a false "register PowerPoint again" prompt.
+  const [macOfficeFirstRunOpen, setMacOfficeFirstRunOpen] = useState(false);
+  const [macOfficePromptMode, setMacOfficePromptMode] = useState<
+    "setup" | "update" | "repair"
+  >("setup");
+  const [powerpointRegistrationRequired, setPowerpointRegistrationRequired] =
+    useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(() =>
-    shouldOpenOnboardingInitially(
-      readLocalStorage(ONBOARDING_STORAGE_KEY) === "true",
-      shouldShowMacOfficeFirstRun(
-        DESKTOP_PLATFORM,
-        isTauriEnvironment(),
-        readLocalStorage(MAC_OFFICE_FIRST_RUN_STORAGE_KEY) === "true",
-      ),
-    ),
+    isMacDesktop
+      ? false
+      : shouldOpenOnboardingInitially(
+          readLocalStorage(ONBOARDING_STORAGE_KEY) === "true",
+          false,
+        ),
   );
   const [copyMenuOpen, setCopyMenuOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -380,25 +382,74 @@ function App() {
       "get_macos_offline_office_install_status",
     )
       .then((status) => {
-        if (cancelled || !status.compiledArtifactsAvailable) return;
-        const needsCurrentAddins =
-          (status.word.applicationInstalled && !status.word.filesInstalled) ||
-          (status.powerpoint.applicationInstalled &&
-            !status.powerpoint.filesInstalled);
-        if (!needsCurrentAddins) return;
+        if (cancelled) return;
+        if (!status.compiledArtifactsAvailable) {
+          if (readLocalStorage(ONBOARDING_STORAGE_KEY) !== "true") {
+            setOnboardingOpen(true);
+          }
+          return;
+        }
 
-        // The local completion flag records that the user saw an earlier setup
-        // dialog. It must not suppress a later in-version DOTM/PPAM replacement
-        // when the installed Office files no longer match this application.
+        const wordNeedsCurrentAddin =
+          status.word.applicationInstalled && !status.word.filesInstalled;
+        const powerpointNeedsCurrentAddin =
+          status.powerpoint.applicationInstalled &&
+          !status.powerpoint.filesInstalled;
+        const needsCurrentAddins =
+          wordNeedsCurrentAddin || powerpointNeedsCurrentAddin;
+
+        // Remember whether PowerPoint genuinely has never had a PPAM at the
+        // start of this flow. A current PPAM that merely is not running must not
+        // be turned into a false "register once" requirement because Word needs
+        // repair or because the first-run storage flag is stale.
+        setPowerpointRegistrationRequired(
+          status.powerpoint.applicationInstalled &&
+            !status.powerpoint.filesPresent,
+        );
+
+        if (!needsCurrentAddins) {
+          setMacOfficeFirstRunOpen(false);
+          if (readLocalStorage(ONBOARDING_STORAGE_KEY) !== "true") {
+            setOnboardingOpen(true);
+          }
+          return;
+        }
+
+        const staleInstalledAddins =
+          (wordNeedsCurrentAddin && status.word.filesPresent) ||
+          (powerpointNeedsCurrentAddin && status.powerpoint.filesPresent);
+        const previouslyConfigured =
+          readLocalStorage(MAC_OFFICE_FIRST_RUN_STORAGE_KEY) === "true" ||
+          status.word.filesPresent ||
+          status.powerpoint.filesPresent;
+
         setOnboardingOpen(false);
+        if (staleInstalledAddins) {
+          setMacOfficePromptMode("update");
+        } else if (previouslyConfigured) {
+          setMacOfficePromptMode("repair");
+        } else {
+          setMacOfficePromptMode("setup");
+        }
+        // Never mutate DOTM/PPAM silently. The user sees whether this is first
+        // setup, a version update, or a repair of missing files before install.
         setMacOfficeFirstRunOpen(true);
       })
-      .catch(() => undefined);
+      .catch(() => {
+        if (cancelled) return;
+        // A status failure is not evidence of a version update. Surface it as a
+        // repair/inspection flow rather than misleading the user with setup or
+        // update-specific PowerPoint registration guidance.
+        setPowerpointRegistrationRequired(false);
+        setMacOfficePromptMode("repair");
+        setOnboardingOpen(false);
+        setMacOfficeFirstRunOpen(true);
+      });
 
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isEn]);
 
   useEffect(() => {
     const checkpointTimer = window.setInterval(() => {
@@ -994,10 +1045,22 @@ function App() {
     }
     setToast(
       installed
-        ? isEn ? "Native Office add-ins are ready" : "原生 Office 加载项已就绪"
-        : isEn ? "You can finish native Office setup later in Settings" : "之后可在设置中完成原生 Office 插件配置",
+        ? macOfficePromptMode === "update"
+          ? isEn
+            ? "Office add-ins were updated to this VisualTeX version"
+            : "Office 插件已更新到当前 VisualTeX 版本"
+          : macOfficePromptMode === "repair"
+            ? isEn
+              ? "Office add-ins were repaired"
+              : "Office 插件已修复"
+            : isEn
+              ? "Native Office add-ins are ready"
+              : "原生 Office 加载项已就绪"
+        : isEn
+          ? "You can finish native Office setup later in Settings"
+          : "之后可在设置中完成原生 Office 插件配置",
     );
-  }, [isEn]);
+  }, [isEn, macOfficePromptMode]);
 
   const finishOnboarding = useCallback(() => {
     writeLocalStorage(ONBOARDING_STORAGE_KEY, "true");
@@ -1681,6 +1744,8 @@ function App() {
       <MacOfficeFirstRunPrompt
         open={macOfficeFirstRunOpen}
         language={language}
+        mode={macOfficePromptMode}
+        powerpointRegistrationRequired={powerpointRegistrationRequired}
         onComplete={finishMacOfficeFirstRun}
       />
       <OnboardingTour

@@ -15,6 +15,8 @@ import { PowerPointAddinGuide } from "./PowerPointAddinGuide";
 
 interface MacOfflineHostStatus {
   applicationInstalled: boolean;
+  applicationRunning: boolean;
+  filesPresent: boolean;
   filesInstalled: boolean;
   loaded: boolean;
   pluginVersion: string | null;
@@ -37,6 +39,8 @@ interface MacOfflineOfficeStatus {
 interface Props {
   open: boolean;
   language: Language;
+  mode?: "setup" | "update" | "repair";
+  powerpointRegistrationRequired?: boolean;
   onComplete: (installed: boolean) => void;
 }
 
@@ -46,7 +50,17 @@ function messageFrom(error: unknown, fallback: string) {
   return fallback;
 }
 
-export function MacOfficeFirstRunPrompt({ open, language, onComplete }: Props) {
+function wait(milliseconds: number) {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+export function MacOfficeFirstRunPrompt({
+  open,
+  language,
+  mode = "setup",
+  powerpointRegistrationRequired = false,
+  onComplete,
+}: Props) {
   const [status, setStatus] = useState<MacOfflineOfficeStatus | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -94,9 +108,19 @@ export function MacOfficeFirstRunPrompt({ open, language, onComplete }: Props) {
       (!status.powerpoint.applicationInstalled || status.powerpoint.filesInstalled),
   );
   const powerpointNeedsRegistration = Boolean(
-    status?.powerpoint.applicationInstalled &&
+    powerpointRegistrationRequired &&
+      status?.powerpoint.applicationInstalled &&
       status.powerpoint.filesInstalled &&
       !status.powerpoint.loaded,
+  );
+  const officeHostsRunning = Boolean(
+    status?.word.applicationRunning || status?.powerpoint.applicationRunning,
+  );
+  const updateRequired = Boolean(
+    mode !== "setup" &&
+      ((status?.word.applicationInstalled && !status.word.filesInstalled) ||
+        (status?.powerpoint.applicationInstalled &&
+          !status.powerpoint.filesInstalled)),
   );
 
   const install = async () => {
@@ -107,6 +131,13 @@ export function MacOfficeFirstRunPrompt({ open, language, onComplete }: Props) {
         "install_macos_offline_office_addins",
       );
       setStatus(next);
+      if (
+        mode !== "setup" &&
+        (!next.word.applicationInstalled || next.word.filesInstalled) &&
+        (!next.powerpoint.applicationInstalled || next.powerpoint.filesInstalled)
+      ) {
+        onComplete(true);
+      }
     } catch (reason) {
       setError(
         messageFrom(
@@ -114,6 +145,48 @@ export function MacOfficeFirstRunPrompt({ open, language, onComplete }: Props) {
           isEn
             ? "VisualTeX could not install the native Word and PowerPoint add-ins."
             : "VisualTeX 无法安装 Word 和 PowerPoint 原生加载项。",
+        ),
+      );
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const quitOfficeAndUpdate = async () => {
+    setBusy("quit-update");
+    setError("");
+    try {
+      await invoke("request_quit_macos_office_hosts_for_addin_update");
+      const deadline = Date.now() + 120_000;
+      while (Date.now() < deadline) {
+        await wait(500);
+        const current = await refresh();
+        if (!current.word.applicationRunning && !current.powerpoint.applicationRunning) {
+          const next = await invoke<MacOfflineOfficeStatus>(
+            "install_macos_offline_office_addins",
+          );
+          setStatus(next);
+          if (
+            (!next.word.applicationInstalled || next.word.filesInstalled) &&
+            (!next.powerpoint.applicationInstalled || next.powerpoint.filesInstalled)
+          ) {
+            onComplete(true);
+          }
+          return;
+        }
+      }
+      throw new Error(
+        isEn
+          ? "Timed out waiting for Word and PowerPoint to quit. Finish any Save prompts, then try again."
+          : "等待 Word 和 PowerPoint 退出超时。请先处理 Office 的保存提示，然后重试。",
+      );
+    } catch (reason) {
+      setError(
+        messageFrom(
+          reason,
+          isEn
+            ? "VisualTeX could not finish the Office add-in update."
+            : "VisualTeX 无法完成 Office 插件更新。",
         ),
       );
     } finally {
@@ -154,48 +227,72 @@ export function MacOfficeFirstRunPrompt({ open, language, onComplete }: Props) {
           <span><Download size={20} /></span>
           <div>
             <strong id="office-first-run-title">
-              {isEn ? "Set up VisualTeX for Word and PowerPoint" : "配置 Word 与 PowerPoint 的 VisualTeX 插件"}
+              {mode === "update"
+                ? isEn
+                  ? "Update the VisualTeX Office add-ins"
+                  : "更新 VisualTeX Office 插件"
+                : mode === "repair"
+                  ? isEn
+                    ? "Repair the VisualTeX Office add-ins"
+                    : "修复 VisualTeX Office 插件"
+                  : isEn
+                    ? "Set up VisualTeX for Word and PowerPoint"
+                    : "配置 Word 与 PowerPoint 的 VisualTeX 插件"}
             </strong>
             <p>
-              {isEn
-                ? "VisualTeX installs a Word DOTM template and a PowerPoint PPAM add-in. Both run locally and open the desktop formula editor when needed."
-                : "VisualTeX 会安装 Word DOTM 模板和 PowerPoint PPAM 加载项；两者都在本机运行，并在需要时打开桌面公式编辑器。"}
+              {mode === "update"
+                ? isEn
+                  ? "The installed DOTM or PPAM belongs to an older VisualTeX build. You do not need to delete it manually; VisualTeX will replace the old add-ins with the versions bundled in this app."
+                  : "检测到已安装的 DOTM 或 PPAM 属于旧版 VisualTeX。无需手动删除旧文件，VisualTeX 会直接用当前应用内置版本覆盖更新。"
+                : mode === "repair"
+                  ? isEn
+                    ? "VisualTeX detected a missing or incomplete Office add-in installation. It will restore the required DOTM/PPAM files without asking you to re-register an already configured PowerPoint add-in."
+                    : "检测到 Office 插件文件缺失或安装不完整。VisualTeX 会恢复所需 DOTM/PPAM；已经配置过的 PowerPoint 加载项不会因此要求重新登记。"
+                  : isEn
+                    ? "VisualTeX installs a Word DOTM template and a PowerPoint PPAM add-in. Both run locally and open the desktop formula editor when needed."
+                    : "VisualTeX 会安装 Word DOTM 模板和 PowerPoint PPAM 加载项；两者都在本机运行，并在需要时打开桌面公式编辑器。"}
             </p>
           </div>
         </header>
 
         <div className="office-first-run-hosts">
-          <article className={status?.word.loaded ? "is-loaded" : status?.word.filesInstalled ? "is-files-ready" : ""}>
+          <article className={status?.word.filesInstalled && status.word.loaded ? "is-loaded" : status?.word.filesInstalled ? "is-files-ready" : ""}>
             <FileText size={20} />
             <div>
               <strong>Microsoft Word · DOTM</strong>
               <small>
                 {!status?.word.applicationInstalled
                   ? isEn ? "Word not detected" : "未检测到 Word"
-                  : status.word.loaded
+                  : status.word.filesInstalled && status.word.loaded
                     ? isEn ? "Installed and loaded" : "已安装并加载"
                     : status.word.filesInstalled
                       ? isEn ? "Installed; restart Word" : "已安装，请重启 Word"
-                      : isEn ? "Not installed" : "尚未安装"}
+                      : status.word.filesPresent
+                        ? isEn ? "Older add-in detected; update required" : "检测到旧插件，需要更新"
+                        : isEn ? "Not installed" : "尚未安装"}
               </small>
             </div>
-            {status?.word.loaded ? <CheckCircle2 size={17} /> : status?.word.filesInstalled ? <ShieldAlert size={17} /> : null}
+            {status?.word.filesInstalled && status.word.loaded ? <CheckCircle2 size={17} /> : status?.word.filesInstalled ? <ShieldAlert size={17} /> : null}
           </article>
-          <article className={status?.powerpoint.loaded ? "is-loaded" : status?.powerpoint.filesInstalled ? "is-files-ready" : ""}>
+          <article className={status?.powerpoint.filesInstalled && status.powerpoint.loaded ? "is-loaded" : status?.powerpoint.filesInstalled ? "is-files-ready" : ""}>
             <Presentation size={20} />
             <div>
               <strong>Microsoft PowerPoint · PPAM</strong>
               <small>
                 {!status?.powerpoint.applicationInstalled
                   ? isEn ? "PowerPoint not detected" : "未检测到 PowerPoint"
-                  : status.powerpoint.loaded
+                  : status.powerpoint.filesInstalled && status.powerpoint.loaded
                     ? isEn ? "Installed and loaded" : "已安装并加载"
                     : status.powerpoint.filesInstalled
-                      ? isEn ? "Installed; register once" : "已安装，需要登记一次"
-                      : isEn ? "Not installed" : "尚未安装"}
+                      ? powerpointRegistrationRequired
+                        ? isEn ? "Installed; register once" : "已安装，需要登记一次"
+                        : isEn ? "Installed; registration is preserved" : "已安装，原有登记保持不变"
+                      : status.powerpoint.filesPresent
+                        ? isEn ? "Older add-in detected; update required" : "检测到旧插件，需要更新"
+                        : isEn ? "Not installed" : "尚未安装"}
               </small>
             </div>
-            {status?.powerpoint.loaded ? <CheckCircle2 size={17} /> : status?.powerpoint.filesInstalled ? <ShieldAlert size={17} /> : null}
+            {status?.powerpoint.filesInstalled && status.powerpoint.loaded ? <CheckCircle2 size={17} /> : status?.powerpoint.filesInstalled ? <ShieldAlert size={17} /> : null}
           </article>
         </div>
 
@@ -245,10 +342,29 @@ export function MacOfficeFirstRunPrompt({ open, language, onComplete }: Props) {
         ) : (
           <div className="office-first-run-note">
             <p>
-              {isEn
-                ? "Word loads VisualTeX automatically from its Startup folder after Word restarts. PowerPoint needs one manual registration through Tools → PowerPoint Add-ins; later updates keep the same PPAM path."
-                : "Word 重启后会从 Startup 目录自动加载 VisualTeX。PowerPoint 需要在“工具 → PowerPoint 加载项”中手动登记一次；后续更新会继续覆盖同一个 PPAM 路径。"}
+              {mode === "update"
+                ? isEn
+                  ? "VisualTeX updates the existing DOTM and PPAM in place. PowerPoint keeps the same registered PPAM path, so an update does not require registering the add-in again."
+                  : "VisualTeX 会在原路径直接覆盖旧 DOTM 和 PPAM。PowerPoint 会继续使用原先登记的 PPAM 路径，版本更新不需要重新登记加载项。"
+                : mode === "repair"
+                  ? isEn
+                    ? "VisualTeX will restore the missing Office files. Any PowerPoint PPAM that was already registered keeps the same path and does not need to be registered again."
+                    : "VisualTeX 会恢复缺失的 Office 插件文件。已经登记过的 PowerPoint PPAM 路径保持不变，不需要重新登记。"
+                  : powerpointRegistrationRequired
+                    ? isEn
+                      ? "Word loads VisualTeX automatically from its Startup folder after Word restarts. PowerPoint needs one manual registration through Tools → PowerPoint Add-ins; later updates keep the same PPAM path."
+                      : "Word 重启后会从 Startup 目录自动加载 VisualTeX。PowerPoint 首次安装需要在“工具 → PowerPoint 加载项”中登记一次；后续更新不会要求重新登记。"
+                    : isEn
+                      ? "VisualTeX will install the required Office files. Existing PowerPoint registration is preserved."
+                      : "VisualTeX 会安装所需 Office 插件文件；已有的 PowerPoint 登记状态会保留。"}
             </p>
+            {mode !== "setup" && updateRequired && officeHostsRunning && (
+              <p className="is-warning">
+                {isEn
+                  ? "Save your Office documents first. VisualTeX must let Word and PowerPoint quit normally before replacing loaded VBA add-ins. Click the update button below; any unsaved Office document will still receive its normal Save prompt."
+                  : "请先保存 Office 文档。已加载的 VBA 插件必须在 Word 和 PowerPoint 正常退出后才能替换。点击下方更新按钮即可；如有未保存文档，Office 仍会正常弹出保存提示。"}
+              </p>
+            )}
             {!officeDetected && status && (
               <p className="is-warning">
                 {isEn
@@ -258,9 +374,13 @@ export function MacOfficeFirstRunPrompt({ open, language, onComplete }: Props) {
             )}
             {nativeFilesReady && (
               <p className="is-warning">
-                {isEn
-                  ? "The files are installed, but this does not mean Word or PowerPoint has loaded them. Fully quit Word with Command-Q and reopen it; register the PPAM in PowerPoint once."
-                  : "文件已安装不等于 Office 已加载。请用 ⌘Q 完全退出 Word 后重新打开；PowerPoint 还需要手动登记 PPAM 一次。"}
+                {powerpointRegistrationRequired
+                  ? isEn
+                    ? "The files are installed. Restart Word, then register the PowerPoint PPAM once to finish first-time setup."
+                    : "插件文件已安装。请重新打开 Word，并完成一次 PowerPoint PPAM 登记以结束首次配置。"
+                  : isEn
+                    ? "The current add-in files are ready. Reopen Word or PowerPoint so Office loads the repaired/updated files."
+                    : "当前插件文件已就绪。重新打开 Word 或 PowerPoint 后，Office 会加载修复/更新后的插件。"}
               </p>
             )}
             {error && <p className="is-warning" role="alert">{error}</p>}
@@ -287,12 +407,36 @@ export function MacOfficeFirstRunPrompt({ open, language, onComplete }: Props) {
             type="button"
             className="primary-button"
             disabled={busy !== null || (!nativeFilesReady && !officeDetected)}
-            onClick={() => nativeFilesReady ? onComplete(true) : void install()}
+            onClick={() => {
+              if (nativeFilesReady) {
+                onComplete(true);
+              } else if (mode !== "setup" && officeHostsRunning) {
+                void quitOfficeAndUpdate();
+              } else {
+                void install();
+              }
+            }}
           >
-            {busy === "install" ? <LoaderCircle className="is-spinning" size={16} /> : nativeFilesReady ? <CheckCircle2 size={16} /> : <Download size={16} />}
+            {busy === "install" || busy === "quit-update" ? (
+              <LoaderCircle className="is-spinning" size={16} />
+            ) : nativeFilesReady ? (
+              <CheckCircle2 size={16} />
+            ) : (
+              <Download size={16} />
+            )}
             {nativeFilesReady
-              ? isEn ? "Continue" : "继续"
-              : isEn ? "Install DOTM and PPAM" : "安装 DOTM 和 PPAM"}
+              ? mode === "setup"
+                ? isEn ? "Continue" : "继续"
+                : isEn ? "Done" : "完成"
+              : mode === "update"
+                ? officeHostsRunning
+                  ? isEn ? "Quit Office and update add-ins" : "退出 Office 并更新插件"
+                  : isEn ? "Update DOTM and PPAM" : "更新 DOTM 和 PPAM"
+                : mode === "repair"
+                  ? officeHostsRunning
+                    ? isEn ? "Quit Office and repair add-ins" : "退出 Office 并修复插件"
+                    : isEn ? "Repair DOTM and PPAM" : "修复 DOTM 和 PPAM"
+                  : isEn ? "Install DOTM and PPAM" : "安装 DOTM 和 PPAM"}
           </button>
         </footer>
       </section>

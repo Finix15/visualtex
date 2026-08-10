@@ -148,9 +148,10 @@ async function main() {
     })()`);
     await client.send("Page.addScriptToEvaluateOnNewDocument", {
       source: `(() => {
+        const numberingProbe = new URLSearchParams(location.search).get("numberingProbe");
         let mockSession = {
           id: ${JSON.stringify(sessionId)},
-          mode: "edit",
+          mode: numberingProbe === "create" ? "create" : "edit",
           host: "word",
           formulaId: "formula-test",
           sourceDocumentId: "document-test",
@@ -159,8 +160,8 @@ async function main() {
           lines: [{ id: "line-1", latex: "e^{i\\\\pi}+1=0" }],
           activeLineId: "line-1",
           codeFormat: "raw",
-          displayMode: "inline",
-          numbered: false,
+          displayMode: numberingProbe ? "block" : "inline",
+          numbered: numberingProbe === "edit-numbered",
           fontSizePt: 10.5,
           exportWidth: 320,
           exportHeight: 80,
@@ -968,6 +969,127 @@ async function main() {
       JSON.stringify(restoredPanels),
     );
 
+    const numberingPreferenceKey = "visualtex.office.word.create.numbered";
+    const numberingProbeUrl = `${officeUrl}&numberingProbe=create`;
+    const waitForNumberingCheckbox = async () => {
+      const started = Date.now();
+      while (Date.now() - started < 12000) {
+        const ready = await client.evaluate(`Boolean(
+          document.querySelector('.is-numbering-setting input[type="checkbox"]')
+        )`);
+        if (ready) return;
+        await sleep(80);
+      }
+      throw new Error("Office numbering preference probe did not become ready");
+    };
+
+    await client.evaluate(`localStorage.setItem(${JSON.stringify(numberingPreferenceKey)}, "false")`);
+    await client.send("Page.navigate", { url: numberingProbeUrl });
+    await waitForNumberingCheckbox();
+    const numberingInitial = await client.evaluate(`(() => {
+      const checkbox = document.querySelector('.is-numbering-setting input[type="checkbox"]');
+      return {
+        checked: checkbox?.checked ?? null,
+        disabled: checkbox?.disabled ?? null,
+        stored: localStorage.getItem(${JSON.stringify(numberingPreferenceKey)}),
+      };
+    })()`);
+    assert.deepEqual(
+      numberingInitial,
+      { checked: false, disabled: false, stored: "false" },
+      JSON.stringify(numberingInitial),
+    );
+
+    await client.evaluate(`document.querySelector('.is-numbering-setting input[type="checkbox"]')?.click()`);
+    await sleep(120);
+    const numberingAfterEnable = await client.evaluate(`(() => {
+      const checkbox = document.querySelector('.is-numbering-setting input[type="checkbox"]');
+      return {
+        checked: checkbox?.checked ?? null,
+        stored: localStorage.getItem(${JSON.stringify(numberingPreferenceKey)}),
+      };
+    })()`);
+    assert.deepEqual(
+      numberingAfterEnable,
+      { checked: true, stored: "true" },
+      JSON.stringify(numberingAfterEnable),
+    );
+
+    await client.send("Page.navigate", { url: numberingProbeUrl });
+    await waitForNumberingCheckbox();
+    const numberingRestoredEnabled = await client.evaluate(`(() => {
+      const checkbox = document.querySelector('.is-numbering-setting input[type="checkbox"]');
+      return {
+        checked: checkbox?.checked ?? null,
+        stored: localStorage.getItem(${JSON.stringify(numberingPreferenceKey)}),
+      };
+    })()`);
+    assert.deepEqual(
+      numberingRestoredEnabled,
+      { checked: true, stored: "true" },
+      JSON.stringify(numberingRestoredEnabled),
+    );
+
+    await client.evaluate(`document.querySelector('.is-numbering-setting input[type="checkbox"]')?.click()`);
+    await sleep(120);
+    await client.send("Page.navigate", { url: numberingProbeUrl });
+    await waitForNumberingCheckbox();
+    const numberingRestoredDisabled = await client.evaluate(`(() => {
+      const checkbox = document.querySelector('.is-numbering-setting input[type="checkbox"]');
+      return {
+        checked: checkbox?.checked ?? null,
+        stored: localStorage.getItem(${JSON.stringify(numberingPreferenceKey)}),
+      };
+    })()`);
+    assert.deepEqual(
+      numberingRestoredDisabled,
+      { checked: false, stored: "false" },
+      JSON.stringify(numberingRestoredDisabled),
+    );
+
+    await client.evaluate(`localStorage.setItem(${JSON.stringify(numberingPreferenceKey)}, "true")`);
+    await client.send("Page.navigate", { url: `${officeUrl}&numberingProbe=edit-unnumbered` });
+    await waitForNumberingCheckbox();
+    const editUnnumberedIgnoresPreference = await client.evaluate(`(() => {
+      const checkbox = document.querySelector('.is-numbering-setting input[type="checkbox"]');
+      return {
+        checked: checkbox?.checked ?? null,
+        disabled: checkbox?.disabled ?? null,
+        stored: localStorage.getItem(${JSON.stringify(numberingPreferenceKey)}),
+      };
+    })()`);
+    assert.deepEqual(
+      editUnnumberedIgnoresPreference,
+      { checked: false, disabled: true, stored: "true" },
+      JSON.stringify(editUnnumberedIgnoresPreference),
+    );
+
+    await client.evaluate(`localStorage.setItem(${JSON.stringify(numberingPreferenceKey)}, "false")`);
+    await client.send("Page.navigate", { url: `${officeUrl}&numberingProbe=edit-numbered` });
+    await waitForNumberingCheckbox();
+    const editNumberedIgnoresPreference = await client.evaluate(`(() => {
+      const checkbox = document.querySelector('.is-numbering-setting input[type="checkbox"]');
+      return {
+        checked: checkbox?.checked ?? null,
+        disabled: checkbox?.disabled ?? null,
+        stored: localStorage.getItem(${JSON.stringify(numberingPreferenceKey)}),
+      };
+    })()`);
+    assert.deepEqual(
+      editNumberedIgnoresPreference,
+      { checked: true, disabled: true, stored: "false" },
+      JSON.stringify(editNumberedIgnoresPreference),
+    );
+
+    const numberingPreferenceRegression = {
+      initial: numberingInitial,
+      afterEnable: numberingAfterEnable,
+      restoredEnabled: numberingRestoredEnabled,
+      restoredDisabled: numberingRestoredDisabled,
+      editUnnumbered: editUnnumberedIgnoresPreference,
+      editNumbered: editNumberedIgnoresPreference,
+    };
+
     console.log(JSON.stringify({
       wide,
       compact,
@@ -983,6 +1105,7 @@ async function main() {
       restoredZoom,
       collapsedPanelsBeforeReload,
       restoredPanels,
+      numberingPreferenceRegression,
     }, null, 2));
     console.log("Office unified toolbar regression passed");
   } finally {

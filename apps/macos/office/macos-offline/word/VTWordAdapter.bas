@@ -27,6 +27,8 @@ Private Const VT_WORD_NUMBERING_MODE_VARIABLE As String = _
     "VT_EquationNumberingMode"
 Private Const VT_WORD_NUMBERING_SEPARATOR_VARIABLE As String = _
     "VT_EquationNumberingSeparator"
+Private Const VT_WORD_NUMBERING_PREFERENCE_FILE As String = _
+    "/VisualTeXNumberingPreference.txt"
 Private Const VT_WORD_NUMBERING_MODE_SEQUENCE As String = "sequence"
 Private Const VT_WORD_NUMBERING_MODE_CHAPTER As String = "chapter"
 Private Const VT_WORD_NUMBERING_MODE_SECTION As String = "section"
@@ -22882,40 +22884,173 @@ Private Sub VTDeleteDocumentVariable(ByVal documentObject As Document, ByVal var
     On Error GoTo 0
 End Sub
 
+Private Function VTEquationNumberingPreferencePath() As String
+    VTEquationNumberingPreferencePath = _
+        VTWordApplicationScriptsRoot() & _
+        VT_WORD_NUMBERING_PREFERENCE_FILE
+End Function
+
+Private Function VTTryReadEquationNumberingPreference( _
+    ByRef numberingMode As String, _
+    ByRef separatorText As String) As Boolean
+
+    Dim preferencePath As String
+    Dim preferenceLine As String
+    Dim fields As Variant
+    Dim fileNumber As Integer
+    Dim fileOpened As Boolean
+    Dim storedMode As String
+    Dim storedSeparator As String
+
+    numberingMode = ""
+    separatorText = ""
+    preferencePath = VTEquationNumberingPreferencePath()
+
+    On Error GoTo PreferenceUnavailable
+    fileNumber = FreeFile
+    Open preferencePath For Input Access Read As #fileNumber
+    fileOpened = True
+    If LOF(fileNumber) <= 0 Or LOF(fileNumber) > 256 Then GoTo PreferenceUnavailable
+    Line Input #fileNumber, preferenceLine
+    Close #fileNumber
+    fileOpened = False
+
+    fields = Split(Trim$(preferenceLine), "|")
+    If UBound(fields) <> 1 Then Exit Function
+    storedMode = LCase$(Trim$(CStr(fields(0))))
+    storedSeparator = Trim$(CStr(fields(1)))
+    Select Case storedMode
+        Case VT_WORD_NUMBERING_MODE_SEQUENCE
+            storedSeparator = "."
+        Case VT_WORD_NUMBERING_MODE_CHAPTER, _
+             VT_WORD_NUMBERING_MODE_SECTION
+            If storedSeparator <> "." And storedSeparator <> "-" Then _
+                Exit Function
+        Case Else
+            Exit Function
+    End Select
+
+    numberingMode = storedMode
+    separatorText = storedSeparator
+    VTTryReadEquationNumberingPreference = True
+    Exit Function
+
+PreferenceUnavailable:
+    On Error Resume Next
+    If fileOpened Then Close #fileNumber
+    Err.Clear
+    On Error GoTo 0
+End Function
+
+Private Sub VTWriteEquationNumberingPreference( _
+    ByVal numberingMode As String, _
+    ByVal separatorText As String)
+
+    Dim preferencePath As String
+    Dim temporaryPath As String
+    Dim fileNumber As Integer
+    Dim fileOpened As Boolean
+    Dim errorNumber As Long
+    Dim errorDescription As String
+
+    numberingMode = LCase$(Trim$(numberingMode))
+    separatorText = Trim$(separatorText)
+    Select Case numberingMode
+        Case VT_WORD_NUMBERING_MODE_SEQUENCE
+            separatorText = "."
+        Case VT_WORD_NUMBERING_MODE_CHAPTER, _
+             VT_WORD_NUMBERING_MODE_SECTION
+            If separatorText <> "." And separatorText <> "-" Then
+                Err.Raise vbObjectError + 7596, "VisualTeX", _
+                    "The Equation numbering separator must be . or -."
+            End If
+        Case Else
+            Err.Raise vbObjectError + 7596, "VisualTeX", _
+                "The Equation numbering mode is invalid."
+    End Select
+
+    preferencePath = VTEquationNumberingPreferencePath()
+    temporaryPath = preferencePath & ".tmp"
+    On Error GoTo PreferenceWriteFailed
+    On Error Resume Next
+    Kill temporaryPath
+    Err.Clear
+    On Error GoTo PreferenceWriteFailed
+    fileNumber = FreeFile
+    Open temporaryPath For Output Access Write As #fileNumber
+    fileOpened = True
+    Print #fileNumber, numberingMode & "|" & separatorText;
+    Close #fileNumber
+    fileOpened = False
+    On Error Resume Next
+    Kill preferencePath
+    Err.Clear
+    On Error GoTo PreferenceWriteFailed
+    Name temporaryPath As preferencePath
+    Exit Sub
+
+PreferenceWriteFailed:
+    errorNumber = Err.Number
+    errorDescription = Err.Description
+    On Error Resume Next
+    If fileOpened Then Close #fileNumber
+    Kill temporaryPath
+    Err.Clear
+    On Error GoTo 0
+    Err.Raise errorNumber, "VisualTeX numbering preference", _
+        "Unable to persist the Equation numbering format: " & _
+        errorDescription
+End Sub
+
 Private Function VTEquationNumberingMode( _
     ByVal documentObject As Document) As String
 
     Dim storedMode As String
+    Dim preferredMode As String
+    Dim preferredSeparator As String
 
     VTEquationNumberingMode = VT_WORD_NUMBERING_MODE_SEQUENCE
-    If documentObject Is Nothing Then Exit Function
-    If Not VTTryGetDocumentVariable( _
-       documentObject, VT_WORD_NUMBERING_MODE_VARIABLE, storedMode) Then
-        Exit Function
+    If Not documentObject Is Nothing Then
+        If VTTryGetDocumentVariable( _
+           documentObject, VT_WORD_NUMBERING_MODE_VARIABLE, storedMode) Then
+            storedMode = LCase$(Trim$(storedMode))
+            Select Case storedMode
+                Case VT_WORD_NUMBERING_MODE_SEQUENCE, _
+                     VT_WORD_NUMBERING_MODE_CHAPTER, _
+                     VT_WORD_NUMBERING_MODE_SECTION
+                    VTEquationNumberingMode = storedMode
+                    Exit Function
+            End Select
+        End If
     End If
-    storedMode = LCase$(Trim$(storedMode))
-    Select Case storedMode
-        Case VT_WORD_NUMBERING_MODE_SEQUENCE, _
-             VT_WORD_NUMBERING_MODE_CHAPTER, _
-             VT_WORD_NUMBERING_MODE_SECTION
-            VTEquationNumberingMode = storedMode
-    End Select
+    If VTTryReadEquationNumberingPreference( _
+       preferredMode, preferredSeparator) Then
+        VTEquationNumberingMode = preferredMode
+    End If
 End Function
 
 Private Function VTEquationNumberingSeparator( _
     ByVal documentObject As Document) As String
 
     Dim storedSeparator As String
+    Dim preferredMode As String
+    Dim preferredSeparator As String
 
     VTEquationNumberingSeparator = "."
-    If documentObject Is Nothing Then Exit Function
-    If VTTryGetDocumentVariable( _
-       documentObject, VT_WORD_NUMBERING_SEPARATOR_VARIABLE, _
-       storedSeparator) Then
-        storedSeparator = Trim$(storedSeparator)
-        If storedSeparator = "." Or storedSeparator = "-" Then
-            VTEquationNumberingSeparator = storedSeparator
+    If Not documentObject Is Nothing Then
+        If VTTryGetDocumentVariable( _
+           documentObject, VT_WORD_NUMBERING_SEPARATOR_VARIABLE, _
+           storedSeparator) Then
+            storedSeparator = Trim$(storedSeparator)
+            If storedSeparator = "." Or storedSeparator = "-" Then
+                VTEquationNumberingSeparator = storedSeparator
+                Exit Function
+            End If
         End If
+    End If
+    If VTTryReadEquationNumberingPreference( _
+       preferredMode, preferredSeparator) Then
+        VTEquationNumberingSeparator = preferredSeparator
     End If
 End Function
 
@@ -22965,6 +23100,7 @@ Private Sub VTSetEquationNumberingFormat( _
             Err.Raise vbObjectError + 7596, "VisualTeX", _
                 "The Equation numbering mode is invalid."
     End Select
+    VTWriteEquationNumberingPreference numberingMode, separatorText
     VTSetDocumentVariable _
         documentObject, VT_WORD_NUMBERING_MODE_VARIABLE, numberingMode
     VTSetDocumentVariable _

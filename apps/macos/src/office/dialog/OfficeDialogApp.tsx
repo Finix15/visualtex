@@ -105,6 +105,8 @@ const DEFAULT_OCR_MODEL: OcrModelName = "PP-FormulaNet_plus-M";
 const OFFICE_EDITOR_ZOOM_60_MIGRATION_KEY =
   "visualtex-office-editor-zoom-60-migration-v1";
 const OCR_MODEL_STORAGE_KEY = "visualtex.ocr.model";
+const OFFICE_WORD_CREATE_NUMBERED_STORAGE_KEY =
+  "visualtex.office.word.create.numbered";
 const USE_NATIVE_POWERPOINT_COMMIT =
   document
     .querySelector<HTMLMetaElement>(
@@ -113,6 +115,20 @@ const USE_NATIVE_POWERPOINT_COMMIT =
     ?.content.toLowerCase() === "true";
 
 const OFFICE_COMMIT_RESULT_TIMEOUT_MS = 45_000;
+
+function readOfficeWordCreateNumberedPreference(fallback: boolean) {
+  const stored = readLocalStorage(OFFICE_WORD_CREATE_NUMBERED_STORAGE_KEY);
+  if (stored === "true") return true;
+  if (stored === "false") return false;
+  return fallback;
+}
+
+function writeOfficeWordCreateNumberedPreference(numbered: boolean) {
+  writeLocalStorage(
+    OFFICE_WORD_CREATE_NUMBERED_STORAGE_KEY,
+    numbered ? "true" : "false",
+  );
+}
 
 function officeExportResultFromArtifacts(
   artifacts: OfficeFormulaRenderArtifacts,
@@ -626,7 +642,22 @@ export function OfficeDialogApp() {
     }
     setAutoCommitOnClose(session.autoCommitOnClose);
     setDisplayMode(session.displayMode);
-    setNumbered(session.displayMode === "block" && Boolean(session.numbered));
+    const sessionNumbered =
+      session.displayMode === "block" && Boolean(session.numbered);
+    const loadedNumbered =
+      session.host === "word" &&
+      session.mode === "create" &&
+      session.displayMode === "block"
+        ? readOfficeWordCreateNumberedPreference(sessionNumbered)
+        : sessionNumbered;
+    setNumbered(loadedNumbered);
+    if (
+      session.host === "word" &&
+      session.mode === "create" &&
+      session.displayMode === "block"
+    ) {
+      writeOfficeWordCreateNumberedPreference(loadedNumbered);
+    }
     const loadedFontSizePt =
       session.host === "powerpoint" &&
       session.mode === "create" &&
@@ -1788,7 +1819,16 @@ export function OfficeDialogApp() {
           <button
             type="button"
             className={displayMode === "block" ? "is-active" : ""}
-            onClick={() => setDisplayMode("block")}
+            onClick={() => {
+              setDisplayMode("block");
+              if (session.mode === "create") {
+                setNumbered(
+                  readOfficeWordCreateNumberedPreference(
+                    Boolean(session.numbered),
+                  ),
+                );
+              }
+            }}
             disabled={session.mode === "edit"}
           >
             {isEn ? "Display" : "行间"}
@@ -1841,7 +1881,13 @@ export function OfficeDialogApp() {
           <input
             type="checkbox"
             checked={numbered}
-            onChange={(event) => setNumbered(event.target.checked)}
+            onChange={(event) => {
+              const nextNumbered = event.target.checked;
+              setNumbered(nextNumbered);
+              if (session.mode === "create") {
+                writeOfficeWordCreateNumberedPreference(nextNumbered);
+              }
+            }}
             disabled={session.mode === "edit"}
           />
           <span>{isEn ? "Add equation number" : "添加公式编号"}</span>
