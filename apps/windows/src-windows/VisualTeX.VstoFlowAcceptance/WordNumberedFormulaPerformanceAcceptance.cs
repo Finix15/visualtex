@@ -9,6 +9,9 @@ namespace VisualTeX.VstoFlowAcceptance;
 
 internal static partial class Program
 {
+    private const string NumberedMiddleInsertionAnchorText =
+        "VisualTeX numbered performance middle anchor";
+
     private static void RunWordNumberedFormulaPerformanceAcceptance(string artifactRoot)
     {
         Directory.CreateDirectory(artifactRoot);
@@ -41,10 +44,46 @@ internal static partial class Program
             var service = new WordFormulaService(application);
             var formulaIds = new List<string>();
             var insertTimings = new List<long>();
+            var targetFormulaCount = int.TryParse(
+                Environment.GetEnvironmentVariable("VISUALTEX_NUMBERED_PERF_COUNT"),
+                out var parsedTargetFormulaCount)
+                ? Math.Max(6, Math.Min(200, parsedTargetFormulaCount))
+                : 6;
+            var timingCheckpoints = new HashSet<int>(new[] { 1, 6, 10, 20, 40, 80, 100, 200 });
 
-            for (var index = 1; index <= 6; index++)
+            for (var index = 1; index <= targetFormulaCount; index++)
             {
                 application.Selection.EndKey(Word.WdUnits.wdStory);
+                if (targetFormulaCount >= 100 && index == 21)
+                {
+                    // Create the structural-test anchor from a known main-story
+                    // end position before formula #21 captures its insertion
+                    // range. Never trust the selection returned by formula #20.
+                    Word.Range? anchorProbe = null;
+                    Word.Frames? anchorProbeFrames = null;
+                    try
+                    {
+                        anchorProbe = application.Selection.Range;
+                        if ((bool)anchorProbe.get_Information(Word.WdInformation.wdWithInTable))
+                            throw new InvalidOperationException(
+                                "The #20/#21 fixture anchor is still inside a table after EndKey(wdStory).");
+                        anchorProbeFrames = anchorProbe.Frames;
+                        if (anchorProbeFrames.Count > 0)
+                            throw new InvalidOperationException(
+                                "The #20/#21 fixture anchor is still inside a caption frame after EndKey(wdStory).");
+                    }
+                    finally
+                    {
+                        Release(anchorProbeFrames);
+                        Release(anchorProbe);
+                    }
+                    application.Selection.TypeText(NumberedMiddleInsertionAnchorText);
+                    application.Selection.TypeParagraph();
+                    application.Selection.TypeText(
+                        "VisualTeX numbered performance middle spacer");
+                    application.Selection.TypeParagraph();
+                    application.Selection.EndKey(Word.WdUnits.wdStory);
+                }
                 var range = application.Selection.Range;
                 var formulaId = Guid.NewGuid().ToString("D");
                 var session = CreateNumberedPerformanceSession(
@@ -61,10 +100,39 @@ internal static partial class Program
                 watch.Stop();
                 insertTimings.Add(watch.ElapsedMilliseconds);
                 formulaIds.Add(formulaId);
+
+                // A successful numbered display insertion must leave the caret
+                // in ordinary body text. If Word keeps it inside the three-cell
+                // equation table or the clipped native-caption frame, the next
+                // user keystroke becomes part of numbering infrastructure.
+                Word.Range? typingProbe = null;
+                Word.Frames? typingProbeFrames = null;
+                try
+                {
+                    typingProbe = application.Selection.Range;
+                    if ((bool)typingProbe.get_Information(Word.WdInformation.wdWithInTable))
+                        throw new InvalidOperationException(
+                            $"Numbered OLE append #{index} left the caret inside its equation table.");
+                    typingProbeFrames = typingProbe.Frames;
+                    if (typingProbeFrames.Count > 0)
+                        throw new InvalidOperationException(
+                            $"Numbered OLE append #{index} left the caret inside a caption frame.");
+                }
+                finally
+                {
+                    Release(typingProbeFrames);
+                    Release(typingProbe);
+                }
+
+                if (timingCheckpoints.Contains(index) || index == targetFormulaCount)
+                {
+                    Console.WriteLine(
+                        $"    [perf] numbered OLE append #{index}: {watch.ElapsedMilliseconds}ms");
+                }
             }
 
-            AssertEqual(6, document.Tables.Count,
-                "Numbered OLE performance fixture did not create six equation tables.");
+            AssertEqual(targetFormulaCount, document.Tables.Count,
+                $"Numbered OLE performance fixture did not create {targetFormulaCount} equation tables.");
             AssertNumberedFormulaArtifacts(document, formulaIds);
             AssertVisibleEquationNumbers(document, formulaIds, 1);
 
@@ -72,21 +140,24 @@ internal static partial class Program
             Word.Range? editRange = null;
             try
             {
-                editShape = FindNumberedOleByFormulaId(document, formulaIds[2]);
+                var editIndex = targetFormulaCount >= 50 ? 49 : 2;
+                editShape = FindNumberedOleByFormulaId(document, formulaIds[editIndex]);
                 var originalMetadata = WordFormulaMetadataReader.TryRead(editShape)
                     ?? throw new InvalidOperationException("Numbered OLE edit metadata is missing.");
                 editRange = editShape.Range;
                 var editSession = CreateNumberedPerformanceSession(
                     "edit",
-                    formulaIds[2],
+                    formulaIds[editIndex],
                     document.FullName,
                     WordRangeReference(editRange.Start, editRange.End),
                     originalMetadata,
-                    @"x_3=33");
+                    $"x_{{{editIndex + 1}}}=333");
                 var watch = Stopwatch.StartNew();
                 service.ReplaceOle(editSession, pngPath, emfPath);
                 watch.Stop();
-                Console.WriteLine($"    [perf] numbered OLE edit: {watch.ElapsedMilliseconds}ms");
+                Console.WriteLine(
+                    $"    [perf] numbered OLE edit #{editIndex + 1} at {targetFormulaCount} formulas: "
+                    + $"{watch.ElapsedMilliseconds}ms");
                 if (watch.ElapsedMilliseconds > 1500)
                     throw new InvalidDataException(
                         $"Numbered OLE edit still took {watch.ElapsedMilliseconds}ms.");
@@ -264,17 +335,44 @@ internal static partial class Program
             AssertNumberedFormulaArtifacts(document, formulaIds);
             AssertVisibleEquationNumbers(document, formulaIds, 1);
             Console.WriteLine(
-                $"    [perf] sixth numbered OLE insert: {insertTimings[5]}ms "
-                + $"(all inserts: {string.Join(",", insertTimings)}ms)");
-            if (insertTimings[5] > 1500)
+                $"    [perf] final numbered OLE insert #{targetFormulaCount}: "
+                + $"{insertTimings[targetFormulaCount - 1]}ms");
+            if (insertTimings[targetFormulaCount - 1] > 1500)
                 throw new InvalidDataException(
-                    $"The sixth numbered OLE insertion still took {insertTimings[5]}ms.");
+                    $"The final numbered OLE insertion #{targetFormulaCount} still took "
+                    + $"{insertTimings[targetFormulaCount - 1]}ms.");
 
+            var baseDocumentPath = Path.Combine(
+                artifactRoot,
+                "word-numbered-formula-performance.docx");
             document.SaveAs2(
-                Path.Combine(artifactRoot, "word-numbered-formula-performance.docx"),
+                baseDocumentPath,
                 Word.WdSaveFormat.wdFormatXMLDocument);
+            if (targetFormulaCount >= 100)
+            {
+                RunHundredFormulaStructuralPerformanceScenarios(
+                    application,
+                    baseDocumentPath,
+                    formulaIds,
+                    pngPath,
+                    emfPath,
+                    artifactRoot);
+                document.Activate();
+            }
+            var skipOmmlScale = string.Equals(
+                Environment.GetEnvironmentVariable("VISUALTEX_NUMBERED_PERF_SKIP_OMML"),
+                "1",
+                StringComparison.Ordinal);
+            if (targetFormulaCount >= 10 && !skipOmmlScale)
+            {
+                RunNumberedOmmlAppendScaleAcceptance(
+                    application,
+                    targetFormulaCount,
+                    artifactRoot);
+                document.Activate();
+            }
             Console.WriteLine(
-                "Word numbered formula performance acceptance passed: six-formula OLE insert, "
+                $"Word numbered formula performance acceptance passed: {targetFormulaCount}-formula OLE/OMML append, "
                 + "OLE edit, OMML edit and copied-table identity repair stayed on localized numbering paths.");
         }
         finally
@@ -295,6 +393,701 @@ internal static partial class Program
                 if (string.IsNullOrWhiteSpace(path)) continue;
                 try { File.Delete(path!); } catch { }
             }
+        }
+    }
+
+    private static void RunWordExistingNumberedPerformanceAcceptance(string artifactRoot)
+    {
+        Directory.CreateDirectory(artifactRoot);
+        var baseDocumentPath = Environment.GetEnvironmentVariable(
+            "VISUALTEX_NUMBERED_PERF_BASE_DOC");
+        if (string.IsNullOrWhiteSpace(baseDocumentPath) || !File.Exists(baseDocumentPath))
+            throw new FileNotFoundException(
+                "VISUALTEX_NUMBERED_PERF_BASE_DOC must point to an existing numbered Word fixture.",
+                baseDocumentPath);
+
+        var scenarioPath = Path.Combine(
+            artifactRoot,
+            "word-numbered-existing-performance.docx");
+        File.Copy(baseDocumentPath, scenarioPath, overwrite: true);
+        var tempRoot = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "VisualTeX",
+            "office",
+            "temp");
+        Directory.CreateDirectory(tempRoot);
+        var svgPath = Path.Combine(tempRoot, $"{Guid.NewGuid():N}.svg");
+        var pngPath = Path.Combine(tempRoot, $"{Guid.NewGuid():N}.png");
+        string? emfPath = null;
+        Word.Application? application = null;
+        Word.Document? document = null;
+        Word.InlineShape? editShape = null;
+        Word.Range? editRange = null;
+        Word.Range? appendRange = null;
+        try
+        {
+            File.WriteAllText(
+                svgPath,
+                CreateFontAcceptanceSvg("Times New Roman", "SimSun"),
+                new UTF8Encoding(false));
+            WriteAcceptancePng(pngPath, "x=1", 240, 72);
+            emfPath = OfficeOlePreview.CreateVectorEmfFromSvg(svgPath, 240, 72);
+
+            application = CreateWordApplication(visible: false);
+            document = application.Documents.Open(
+                scenarioPath,
+                ReadOnly: false,
+                AddToRecentFiles: false,
+                Visible: false);
+            document.Activate();
+            var formulaIds = ReadNumberedFormulaIdsInDocumentOrder(document)
+                .Select(id => Guid.TryParseExact(id, "N", out var parsedId)
+                    ? parsedId.ToString("D")
+                    : id)
+                .ToArray();
+            if (formulaIds.Length < 50)
+                throw new InvalidDataException(
+                    $"Existing-numbered performance fixture needs at least 50 formulas; found {formulaIds.Length}.");
+            var service = new WordFormulaService(application);
+
+            var editIndex = 49;
+            editShape = FindNumberedOleByFormulaId(document, formulaIds[editIndex]);
+            var originalMetadata = WordFormulaMetadataReader.TryRead(editShape)
+                ?? throw new InvalidOperationException("Existing numbered OLE edit metadata is missing.");
+            editRange = editShape.Range;
+            var editSession = CreateNumberedPerformanceSession(
+                "edit",
+                formulaIds[editIndex],
+                document.FullName,
+                WordRangeReference(editRange.Start, editRange.End),
+                originalMetadata,
+                "x_{50}=5050");
+            var editWatch = Stopwatch.StartNew();
+            service.ReplaceOle(editSession, pngPath, emfPath);
+            editWatch.Stop();
+            Console.WriteLine(
+                $"    [perf] existing numbered OLE edit #50 at {formulaIds.Length} formulas: {editWatch.ElapsedMilliseconds}ms");
+
+            application.Selection.EndKey(Word.WdUnits.wdStory);
+            application.Selection.TypeParagraph();
+            appendRange = application.Selection.Range;
+            var appendedFormulaId = Guid.NewGuid().ToString("D");
+            var appendSession = CreateNumberedPerformanceSession(
+                "create",
+                appendedFormulaId,
+                document.FullName,
+                WordRangeReference(appendRange.Start, appendRange.End),
+                originalMetadata: null,
+                latex: "x_{101}=101");
+            var appendWatch = Stopwatch.StartNew();
+            service.InsertOle(appendSession, pngPath, emfPath);
+            appendWatch.Stop();
+            Console.WriteLine(
+                $"    [perf] existing numbered OLE append at {formulaIds.Length + 1} formulas: {appendWatch.ElapsedMilliseconds}ms");
+
+            Word.Range? typingProbe = null;
+            Word.Frames? typingProbeFrames = null;
+            try
+            {
+                typingProbe = application.Selection.Range;
+                if ((bool)typingProbe.get_Information(Word.WdInformation.wdWithInTable))
+                    throw new InvalidOperationException("Existing numbered append left the caret inside its equation table.");
+                typingProbeFrames = typingProbe.Frames;
+                if (typingProbeFrames.Count > 0)
+                    throw new InvalidOperationException("Existing numbered append left the caret inside a caption frame.");
+            }
+            finally
+            {
+                Release(typingProbeFrames);
+                Release(typingProbe);
+            }
+
+            var targetWatch = Stopwatch.StartNew();
+            var targets = WordEquationNumbering.GetEquationReferenceTargets(document);
+            targetWatch.Stop();
+            Console.WriteLine(
+                $"    [perf] equation reference target inventory at {targets.Count} formulas: {targetWatch.ElapsedMilliseconds}ms");
+            if (targets.Count < formulaIds.Length)
+                throw new InvalidDataException(
+                    $"Equation reference target inventory lost formulas: expected at least {formulaIds.Length}, actual {targets.Count}.");
+
+            var target = targets.FirstOrDefault(item => string.Equals(
+                    item.FormulaId,
+                    formulaIds[Math.Min(79, formulaIds.Length - 1)],
+                    StringComparison.OrdinalIgnoreCase))
+                ?? targets[Math.Min(79, targets.Count - 1)];
+            application.Selection.EndKey(Word.WdUnits.wdStory);
+            application.Selection.TypeParagraph();
+            application.Selection.TypeText("See ");
+            var referenceWatch = Stopwatch.StartNew();
+            WordEquationNumbering.InsertEquationReference(
+                document,
+                application.Selection,
+                target,
+                EquationReferenceStyle.Parenthesized);
+            referenceWatch.Stop();
+            Console.WriteLine(
+                $"    [perf] equation reference insertion at {targets.Count} formulas: {referenceWatch.ElapsedMilliseconds}ms");
+
+            document.Save();
+            Console.WriteLine("Word existing numbered daily-operation performance acceptance passed.");
+        }
+        finally
+        {
+            Release(appendRange);
+            Release(editRange);
+            Release(editShape);
+            try { document?.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
+            Release(document);
+            try { QuitWordApplicationIfOwned(application); } catch { }
+            Release(application);
+            ForceComCleanup();
+            foreach (var path in new[] { svgPath, pngPath, emfPath })
+            {
+                if (string.IsNullOrWhiteSpace(path)) continue;
+                try { File.Delete(path!); } catch { }
+            }
+        }
+    }
+
+    private static void RunWordNumberFormatPerformanceAcceptance(string artifactRoot)
+    {
+        Directory.CreateDirectory(artifactRoot);
+        var baseDocumentPath = Environment.GetEnvironmentVariable(
+            "VISUALTEX_NUMBERED_PERF_BASE_DOC");
+        if (string.IsNullOrWhiteSpace(baseDocumentPath) || !File.Exists(baseDocumentPath))
+            throw new FileNotFoundException(
+                "VISUALTEX_NUMBERED_PERF_BASE_DOC must point to the saved 100-formula Word fixture.",
+                baseDocumentPath);
+
+        var scenarioPath = Path.Combine(
+            artifactRoot,
+            "word-number-format-performance.docx");
+        File.Copy(baseDocumentPath, scenarioPath, overwrite: true);
+        Word.Application? application = null;
+        Word.Document? document = null;
+        Word.Range? markerRange = null;
+        Word.Find? markerFind = null;
+        Word.Paragraphs? markerParagraphs = null;
+        Word.Paragraph? markerParagraph = null;
+        Word.Range? headingRange = null;
+        try
+        {
+            application = CreateWordApplication(visible: false);
+            document = application.Documents.Open(
+                scenarioPath,
+                ReadOnly: false,
+                AddToRecentFiles: false,
+                Visible: false);
+            document.Activate();
+            var formulaIds = ReadNumberedFormulaIdsInDocumentOrder(document);
+            AssertEqual(100, formulaIds.Count,
+                "Number-format performance fixture must contain 100 numbered formulas.");
+
+            markerRange = document.Content.Duplicate;
+            markerFind = markerRange.Find;
+            markerFind.ClearFormatting();
+            markerFind.Text = NumberedMiddleInsertionAnchorText;
+            markerFind.Forward = true;
+            markerFind.Wrap = Word.WdFindWrap.wdFindStop;
+            markerFind.Format = false;
+            if (!markerFind.Execute())
+                throw new InvalidOperationException(
+                    "Number-format performance fixture is missing the preserved heading anchor.");
+            if ((bool)markerRange.get_Information(Word.WdInformation.wdWithInTable)
+                || markerRange.Frames.Count > 0)
+                throw new InvalidOperationException(
+                    "Number-format performance heading anchor is not ordinary body text.");
+
+            markerParagraphs = markerRange.Paragraphs;
+            markerParagraph = markerParagraphs[1];
+            headingRange = markerParagraph.Range;
+            headingRange.Text = "1. 性能验收章节\r";
+            object headingStyle = Word.WdBuiltinStyle.wdStyleHeading1;
+            headingRange.set_Style(ref headingStyle);
+
+            void AssertNumbers(string separator)
+            {
+                for (var index = 0; index < formulaIds.Count; index++)
+                {
+                    var expected = index < 20
+                        ? $"0{separator}{index + 1}"
+                        : $"1{separator}{index - 19}";
+                    var visible = ReadEquationNumberBookmarkText(
+                        document,
+                        WordEquationNumbering.EquationBookmarkName(formulaIds[index]));
+                    var native = ReadEquationNumberBookmarkText(
+                        document,
+                        WordEquationNumbering.NativeNumberBookmarkName(formulaIds[index]));
+                    AssertEqual(expected, visible,
+                        $"Visible formula #{index + 1} is stale after heading-format switch.");
+                    AssertEqual(expected, native,
+                        $"Native formula #{index + 1} is stale after heading-format switch.");
+                }
+            }
+
+            var dotWatch = Stopwatch.StartNew();
+            var dotUpdated = WordEquationNumbering.SetEquationNumberFormat(
+                document,
+                EquationNumberFormat.Heading1DotId);
+            dotWatch.Stop();
+            AssertEqual(100, dotUpdated,
+                "Heading-dot format switch did not update all 100 formulas.");
+            AssertNumbers(".");
+            Console.WriteLine(
+                $"    [perf] 100-formula heading1-dot format switch: {dotWatch.ElapsedMilliseconds}ms");
+
+            var dashWatch = Stopwatch.StartNew();
+            var dashUpdated = WordEquationNumbering.SetEquationNumberFormat(
+                document,
+                EquationNumberFormat.Heading1DashId);
+            dashWatch.Stop();
+            AssertEqual(100, dashUpdated,
+                "Heading-dash format switch did not update all 100 formulas.");
+            AssertNumbers("-");
+            Console.WriteLine(
+                $"    [perf] 100-formula heading1-dash format switch: {dashWatch.ElapsedMilliseconds}ms");
+
+            document.Save();
+            Console.WriteLine("Word equation-number format performance acceptance passed.");
+        }
+        finally
+        {
+            Release(headingRange);
+            Release(markerParagraph);
+            Release(markerParagraphs);
+            Release(markerFind);
+            Release(markerRange);
+            try { document?.Close(Word.WdSaveOptions.wdSaveChanges); } catch { }
+            Release(document);
+            try { QuitWordApplicationIfOwned(application); } catch { }
+            Release(application);
+            ForceComCleanup();
+        }
+    }
+
+    private static void RunWordNumberedStructuralPerformanceAcceptance(string artifactRoot)
+    {
+        Directory.CreateDirectory(artifactRoot);
+        var baseDocumentPath = Environment.GetEnvironmentVariable(
+            "VISUALTEX_NUMBERED_PERF_BASE_DOC");
+        if (string.IsNullOrWhiteSpace(baseDocumentPath) || !File.Exists(baseDocumentPath))
+            throw new FileNotFoundException(
+                "VISUALTEX_NUMBERED_PERF_BASE_DOC must point to the saved 100-formula Word fixture.",
+                baseDocumentPath);
+
+        var tempRoot = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "VisualTeX",
+            "office",
+            "temp");
+        Directory.CreateDirectory(tempRoot);
+        var svgPath = Path.Combine(tempRoot, $"{Guid.NewGuid():N}.svg");
+        var pngPath = Path.Combine(tempRoot, $"{Guid.NewGuid():N}.png");
+        string? emfPath = null;
+        Word.Application? application = null;
+        Word.Document? inventoryDocument = null;
+        try
+        {
+            File.WriteAllText(
+                svgPath,
+                CreateFontAcceptanceSvg("Times New Roman", "SimSun"),
+                new UTF8Encoding(false));
+            WriteAcceptancePng(pngPath, "x=1", 240, 72);
+            emfPath = OfficeOlePreview.CreateVectorEmfFromSvg(svgPath, 240, 72);
+            application = CreateWordApplication(visible: false);
+            inventoryDocument = application.Documents.Open(
+                baseDocumentPath,
+                ReadOnly: true,
+                AddToRecentFiles: false,
+                Visible: false);
+            var formulaIds = ReadNumberedFormulaIdsInDocumentOrder(inventoryDocument);
+            if (formulaIds.Count != 100)
+                throw new InvalidDataException(
+                    $"Structural performance base document must contain 100 numbered formulas; found {formulaIds.Count}.");
+            inventoryDocument.Close(Word.WdSaveOptions.wdDoNotSaveChanges);
+            Release(inventoryDocument);
+            inventoryDocument = null;
+
+            RunHundredFormulaStructuralPerformanceScenarios(
+                application,
+                baseDocumentPath,
+                formulaIds,
+                pngPath,
+                emfPath,
+                artifactRoot);
+            Console.WriteLine("Word numbered structural performance acceptance passed.");
+        }
+        finally
+        {
+            try { inventoryDocument?.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
+            Release(inventoryDocument);
+            try { QuitWordApplicationIfOwned(application); } catch { }
+            Release(application);
+            ForceComCleanup();
+            foreach (var path in new[] { svgPath, pngPath, emfPath })
+            {
+                if (string.IsNullOrWhiteSpace(path)) continue;
+                try { File.Delete(path!); } catch { }
+            }
+        }
+    }
+
+    private static IReadOnlyList<string> ReadNumberedFormulaIdsInDocumentOrder(
+        Word.Document document)
+    {
+        var entries = new List<(string FormulaId, int Position)>();
+        Word.Bookmarks? bookmarks = null;
+        try
+        {
+            bookmarks = document.Bookmarks;
+            for (var index = 1; index <= bookmarks.Count; index++)
+            {
+                Word.Bookmark? bookmark = null;
+                Word.Range? range = null;
+                try
+                {
+                    bookmark = bookmarks[index];
+                    const string prefix = "VTEqNum_";
+                    var name = bookmark.Name;
+                    if (!name.StartsWith(prefix, StringComparison.Ordinal)) continue;
+                    var formulaId = name.Substring(prefix.Length);
+                    range = bookmark.Range;
+                    entries.Add((formulaId, range.Start));
+                }
+                finally
+                {
+                    Release(range);
+                    Release(bookmark);
+                }
+            }
+        }
+        finally { Release(bookmarks); }
+        return entries
+            .OrderBy(entry => entry.Position)
+            .Select(entry => entry.FormulaId)
+            .ToArray();
+    }
+
+    private static void RunHundredFormulaStructuralPerformanceScenarios(
+        Word.Application application,
+        string baseDocumentPath,
+        IReadOnlyList<string> formulaIds,
+        string pngPath,
+        string emfPath,
+        string artifactRoot)
+    {
+        RunHundredFormulaMiddleInsertPerformance(
+            application,
+            baseDocumentPath,
+            formulaIds,
+            pngPath,
+            emfPath,
+            artifactRoot);
+        RunHundredFormulaCopyToEndPerformance(
+            application,
+            baseDocumentPath,
+            formulaIds,
+            artifactRoot);
+    }
+
+    private static void RunHundredFormulaMiddleInsertPerformance(
+        Word.Application application,
+        string baseDocumentPath,
+        IReadOnlyList<string> formulaIds,
+        string pngPath,
+        string emfPath,
+        string artifactRoot)
+    {
+        var scenarioPath = Path.Combine(
+            artifactRoot,
+            "word-numbered-middle-insert-performance.docx");
+        File.Copy(baseDocumentPath, scenarioPath, overwrite: true);
+        Word.Document? document = null;
+        Word.Range? insertionRange = null;
+        try
+        {
+            document = application.Documents.Open(
+                scenarioPath,
+                ReadOnly: false,
+                AddToRecentFiles: false,
+                Visible: false);
+            document.Activate();
+            var service = new WordFormulaService(application);
+            Word.Find? anchorFind = null;
+            Word.Frames? anchorFrames = null;
+            try
+            {
+                insertionRange = document.Content.Duplicate;
+                anchorFind = insertionRange.Find;
+                anchorFind.ClearFormatting();
+                anchorFind.Text = NumberedMiddleInsertionAnchorText;
+                anchorFind.Forward = true;
+                anchorFind.Wrap = Word.WdFindWrap.wdFindStop;
+                anchorFind.Format = false;
+                if (!anchorFind.Execute())
+                    throw new InvalidOperationException(
+                        "Middle-insert acceptance could not find the preserved body paragraph.");
+                var anchorStart = insertionRange.Start;
+                var anchorEnd = insertionRange.End;
+                var anchorInTable = (bool)insertionRange.get_Information(
+                    Word.WdInformation.wdWithInTable);
+                var anchorTableCount = insertionRange.Tables.Count;
+                var anchorFrameCount = insertionRange.Frames.Count;
+                Console.WriteLine(
+                    $"    [diag] preserved middle anchor: {anchorStart}:{anchorEnd}; "
+                    + $"inTable={anchorInTable}; tables={anchorTableCount}; frames={anchorFrameCount}");
+                insertionRange.Text = string.Empty;
+                insertionRange.Collapse(Word.WdCollapseDirection.wdCollapseStart);
+                if (anchorInTable)
+                    throw new InvalidOperationException(
+                        "Middle-insert acceptance anchor unexpectedly moved inside a table.");
+                anchorFrames = insertionRange.Frames;
+                if (anchorFrames.Count > 0)
+                    throw new InvalidOperationException(
+                        "Middle-insert acceptance anchor unexpectedly moved inside a caption frame.");
+                application.Selection.SetRange(insertionRange.Start, insertionRange.End);
+            }
+            finally
+            {
+                Release(anchorFrames);
+                Release(anchorFind);
+            }
+            var formulaId = Guid.NewGuid().ToString("D");
+            var session = CreateNumberedPerformanceSession(
+                "create",
+                formulaId,
+                document.FullName,
+                WordRangeReference(insertionRange.Start, insertionRange.End),
+                originalMetadata: null,
+                latex: @"x_{20.5}=205");
+
+            var watch = Stopwatch.StartNew();
+            service.InsertOle(session, pngPath, emfPath);
+            watch.Stop();
+            Console.WriteLine(
+                $"    [perf] numbered OLE insert between #20/#21 at 100 formulas: "
+                + $"{watch.ElapsedMilliseconds}ms");
+
+            var expectedFormulaIds = formulaIds.ToList();
+            expectedFormulaIds.Insert(20, formulaId);
+            AssertEqual(101, document.Tables.Count,
+                "Middle insertion did not create the 101st numbered table.");
+            AssertNumberedFormulaArtifacts(document, expectedFormulaIds);
+            AssertVisibleEquationNumbers(document, expectedFormulaIds, 1);
+            document.Save();
+        }
+        finally
+        {
+            Release(insertionRange);
+            try { document?.Close(Word.WdSaveOptions.wdSaveChanges); } catch { }
+            Release(document);
+        }
+    }
+
+    private static void RunHundredFormulaCopyToEndPerformance(
+        Word.Application application,
+        string baseDocumentPath,
+        IReadOnlyList<string> formulaIds,
+        string artifactRoot)
+    {
+        var scenarioPath = Path.Combine(
+            artifactRoot,
+            "word-numbered-copy-50-to-end-performance.docx");
+        File.Copy(baseDocumentPath, scenarioPath, overwrite: true);
+        Word.Document? document = null;
+        Word.Table? sourceTable = null;
+        Word.Range? sourceRange = null;
+        Word.Table? copiedTable = null;
+        Word.InlineShape? copiedShape = null;
+        Word.Range? copiedShapeRange = null;
+        try
+        {
+            document = application.Documents.Open(
+                scenarioPath,
+                ReadOnly: false,
+                AddToRecentFiles: false,
+                Visible: false);
+            document.Activate();
+            var service = new WordFormulaService(application);
+            sourceTable = document.Tables[50];
+            sourceRange = sourceTable.Range.Duplicate;
+            sourceRange.Copy();
+            application.Selection.EndKey(Word.WdUnits.wdStory);
+            application.Selection.TypeParagraph();
+
+            var pasteWatch = Stopwatch.StartNew();
+            application.Selection.Paste();
+            pasteWatch.Stop();
+            AssertEqual(101, document.Tables.Count,
+                "Copy-to-end scenario did not paste the 101st numbered table.");
+
+            copiedTable = document.Tables[101];
+            copiedShape = copiedTable.Cell(1, 2).Range.InlineShapes[1];
+            copiedShapeRange = copiedShape.Range;
+            copiedShapeRange.Select();
+            var repairWatch = Stopwatch.StartNew();
+            var copiedSelection = service.ReadSelection();
+            repairWatch.Stop();
+            if (string.IsNullOrWhiteSpace(copiedSelection.FormulaId)
+                || string.Equals(
+                    copiedSelection.FormulaId,
+                    formulaIds[49],
+                    StringComparison.OrdinalIgnoreCase)
+                || formulaIds.Any(id => string.Equals(
+                    id,
+                    copiedSelection.FormulaId,
+                    StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException(
+                    "Copied #50 formula did not receive an independent FormulaId.");
+
+            Console.WriteLine(
+                $"    [perf] copy #50 table to end at 100 formulas: paste={pasteWatch.ElapsedMilliseconds}ms; "
+                + $"identity/number repair={repairWatch.ElapsedMilliseconds}ms");
+            var expectedFormulaIds = formulaIds.ToList();
+            expectedFormulaIds.Add(copiedSelection.FormulaId!);
+            AssertNumberedFormulaArtifacts(document, expectedFormulaIds);
+            AssertVisibleEquationNumbers(document, expectedFormulaIds, 1);
+            document.Save();
+        }
+        finally
+        {
+            Release(copiedShapeRange);
+            Release(copiedShape);
+            Release(copiedTable);
+            Release(sourceRange);
+            Release(sourceTable);
+            try { document?.Close(Word.WdSaveOptions.wdSaveChanges); } catch { }
+            Release(document);
+        }
+    }
+
+    private static void RunWordNumberedOmmlPerformanceAcceptance(string artifactRoot)
+    {
+        Directory.CreateDirectory(artifactRoot);
+        Word.Application? application = null;
+        var originalNumberFormat = WordEquationNumbering.GetDefaultEquationNumberFormatId();
+        try
+        {
+            var targetFormulaCount = int.TryParse(
+                Environment.GetEnvironmentVariable("VISUALTEX_NUMBERED_PERF_COUNT"),
+                out var parsedTargetFormulaCount)
+                ? Math.Max(10, Math.Min(200, parsedTargetFormulaCount))
+                : 100;
+            application = CreateWordApplication(visible: false);
+            RunNumberedOmmlAppendScaleAcceptance(
+                application,
+                targetFormulaCount,
+                artifactRoot);
+            Console.WriteLine(
+                $"Word numbered OMML performance acceptance passed at {targetFormulaCount} formulas.");
+        }
+        finally
+        {
+            try { QuitWordApplicationIfOwned(application); } catch { }
+            Release(application);
+            WordEquationNumbering.SetDefaultEquationNumberFormatPreference(originalNumberFormat);
+            ForceComCleanup();
+        }
+    }
+
+    private static void RunNumberedOmmlAppendScaleAcceptance(
+        Word.Application application,
+        int targetFormulaCount,
+        string artifactRoot)
+    {
+        Word.Document? document = null;
+        var formulaIds = new List<string>();
+        var timingCheckpoints = new HashSet<int>(new[] { 1, 10, 20, 40, 80, 100, 200 });
+        try
+        {
+            document = application.Documents.Add();
+            document.Activate();
+            WordEquationNumbering.SetEquationNumberFormatPreference(document, "continuous");
+            var service = new WordFormulaService(application);
+            var insertTimings = new List<long>(targetFormulaCount);
+            for (var index = 1; index <= targetFormulaCount; index++)
+            {
+                application.Selection.EndKey(Word.WdUnits.wdStory);
+                var range = application.Selection.Range;
+                var formulaId = Guid.NewGuid().ToString("D");
+                var session = CreateNumberedPerformanceSession(
+                    "create",
+                    formulaId,
+                    document.FullName,
+                    WordRangeReference(range.Start, range.End),
+                    originalMetadata: null,
+                    latex: $"y_{{{index}}}={index}");
+                session.ObjectMode = FormulaOleContract.WordOmmlMode;
+                Release(range);
+
+                var watch = Stopwatch.StartNew();
+                service.InsertOmml(session, PerformanceMathMl(index, 0));
+                watch.Stop();
+                insertTimings.Add(watch.ElapsedMilliseconds);
+                formulaIds.Add(formulaId);
+                if (timingCheckpoints.Contains(index) || index == targetFormulaCount)
+                {
+                    Console.WriteLine(
+                        $"    [perf] numbered OMML append #{index}: {watch.ElapsedMilliseconds}ms");
+                }
+            }
+
+            AssertEqual(targetFormulaCount, document.Tables.Count,
+                $"Numbered OMML scale fixture did not create {targetFormulaCount} equation tables.");
+            AssertNumberedFormulaArtifacts(document, formulaIds);
+            AssertVisibleEquationNumbers(document, formulaIds, 1);
+
+            var editIndex = targetFormulaCount >= 50 ? 49 : targetFormulaCount / 2;
+            Word.Bookmark? bookmark = null;
+            Word.Range? equationRange = null;
+            try
+            {
+                var formulaId = formulaIds[editIndex];
+                bookmark = WordOmmlFormulaStore.FindByFormulaId(document, formulaId)
+                    ?? throw new InvalidOperationException(
+                        $"Numbered OMML scale edit bookmark {editIndex + 1} is missing.");
+                var metadata = WordOmmlFormulaStore.TryRead(document, bookmark)
+                    ?? throw new InvalidOperationException(
+                        $"Numbered OMML scale edit metadata {editIndex + 1} is missing.");
+                equationRange = WordOmmlFormulaStore.GetEquationRange(bookmark);
+                var editSession = CreateNumberedPerformanceSession(
+                    "edit",
+                    formulaId,
+                    document.FullName,
+                    WordRangeReference(equationRange.Start, equationRange.End),
+                    metadata,
+                    $"y_{{{editIndex + 1}}}=999");
+                editSession.ObjectMode = FormulaOleContract.WordOmmlMode;
+                var watch = Stopwatch.StartNew();
+                service.ReplaceOmml(editSession, PerformanceMathMl(editIndex + 1, 9));
+                watch.Stop();
+                Console.WriteLine(
+                    $"    [perf] numbered OMML edit #{editIndex + 1} at {targetFormulaCount} formulas: "
+                    + $"{watch.ElapsedMilliseconds}ms");
+                if (watch.ElapsedMilliseconds > 1500)
+                    throw new InvalidDataException(
+                        $"Numbered OMML edit #{editIndex + 1} took {watch.ElapsedMilliseconds}ms "
+                        + $"at {targetFormulaCount} formulas.");
+            }
+            finally
+            {
+                Release(equationRange);
+                Release(bookmark);
+            }
+
+            if (insertTimings[targetFormulaCount - 1] > 1500)
+                throw new InvalidDataException(
+                    $"The final numbered OMML insertion #{targetFormulaCount} still took "
+                    + $"{insertTimings[targetFormulaCount - 1]}ms.");
+            document.SaveAs2(
+                Path.Combine(artifactRoot, "word-numbered-omml-scale-performance.docx"),
+                Word.WdSaveFormat.wdFormatXMLDocument);
+        }
+        finally
+        {
+            try { document?.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
+            Release(document);
         }
     }
 

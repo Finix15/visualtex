@@ -1524,7 +1524,12 @@ internal sealed class WordFormulaService
             }
             else
             {
-                TryReconcileShape(document, shape, metadata);
+                TryReconcileShape(
+                    document,
+                    shape,
+                    metadata,
+                    reuseExistingNumberedTableFormatting: session.Numbered,
+                    knownNumberedTable: numberedTable);
                 if (session.Numbered)
                 {
                     MoveCaretToNormalTypingParagraphAfterNumberedDisplay(
@@ -1582,6 +1587,8 @@ internal sealed class WordFormulaService
         UndoRecord? undoRecord = null;
         InlineFollowingTextVisibility? inlineFollowingTextVisibility = null;
         var metadataSaved = false;
+        var performanceWatch = Stopwatch.StartNew();
+        long performanceCheckpoint = 0;
         try
         {
             undoRecord = BeginUndoRecord(
@@ -1640,11 +1647,21 @@ internal sealed class WordFormulaService
                     sourceFingerprint: out sourceFingerprint);
             }
 
+            TraceAcceptancePerformance(
+                "InsertOmml",
+                "insert-native-omml",
+                performanceWatch,
+                ref performanceCheckpoint);
             ApplyOmmlTypography(equationRange, session.FontSizePt, metadata);
             metadata.NativeOmmlFingerprint = sourceFingerprint;
             bookmark = WordOmmlFormulaStore.Wrap(document, equationRange, metadata);
-            WordOmmlFormulaStore.Save(document, metadata);
+            WordOmmlFormulaStore.SaveNew(document, metadata);
             metadataSaved = true;
+            TraceAcceptancePerformance(
+                "InsertOmml",
+                "save-new-metadata",
+                performanceWatch,
+                ref performanceCheckpoint);
             if (session.DisplayMode == "inline")
             {
                 FinalizeInlineOmmlBoundary(
@@ -1656,7 +1673,18 @@ internal sealed class WordFormulaService
             }
             else
             {
-                TryReconcileOmml(document, bookmark!, equationRange, metadata);
+                TryReconcileOmml(
+                    document,
+                    bookmark!,
+                    equationRange,
+                    metadata,
+                    reuseExistingNumberedTableFormatting: session.Numbered,
+                    knownNumberedTable: numberedTable);
+                TraceAcceptancePerformance(
+                    "InsertOmml",
+                    "reconcile",
+                    performanceWatch,
+                    ref performanceCheckpoint);
                 if (session.Numbered)
                 {
                     MoveCaretToNormalTypingParagraphAfterNumberedDisplay(
@@ -5035,6 +5063,7 @@ internal sealed class WordFormulaService
         Range? oldRange = null;
         Range? insertion = null;
         InlineShape? replacement = null;
+        Table? numberedTable = null;
         Range? rollbackEquationRange = null;
         Bookmark? rollbackBookmark = null;
         UndoRecord? undoRecord = null;
@@ -5068,6 +5097,10 @@ internal sealed class WordFormulaService
                 document,
                 session.FormulaId,
                 session.SourceObjectId);
+            if (session.DisplayMode == "block" && session.Numbered)
+                numberedTable = WordEquationNumbering.FindNumberedEquationTable(
+                    document,
+                    session.FormulaId);
             TraceAcceptancePerformance(
                 "ReplaceOle",
                 "locate-target",
@@ -5206,15 +5239,24 @@ internal sealed class WordFormulaService
                         document,
                         oldShape,
                         metadata,
-                        NumberingOrderMayHaveChanged(originalMetadata, metadata));
+                        NumberingOrderMayHaveChanged(originalMetadata, metadata),
+                        reuseExistingNumberedTableFormatting: numberedTable is not null,
+                        knownNumberedTable: numberedTable);
                 TraceAcceptancePerformance(
                     "ReplaceOle",
                     "reconcile",
                     performanceWatch,
                     ref performanceCheckpoint);
-                finalSelection = DuplicateOleRangeByFormulaId(
-                    document,
-                    metadata.FormulaId);
+                // The in-place OLE update keeps this exact InlineShape alive.
+                // Re-finding the same FormulaId after the update can enumerate
+                // every InlineShape in a large document; duplicate the live
+                // object range directly instead.
+                finalSelection = oldShape.Range.Duplicate;
+                TraceAcceptancePerformance(
+                    "ReplaceOle",
+                    "selection",
+                    performanceWatch,
+                    ref performanceCheckpoint);
                 return Result(session, document);
             }
 
@@ -5346,6 +5388,7 @@ internal sealed class WordFormulaService
             Release(finalSelection);
             Release(rollbackBookmark);
             Release(rollbackEquationRange);
+            Release(numberedTable);
             Release(replacement);
             Release(insertion);
             Release(oldRange);
@@ -5395,6 +5438,10 @@ internal sealed class WordFormulaService
                 ?? throw new InvalidOperationException("No active Word document.");
             EnsureWritable(document);
             EnsureSourceDocument(document, session.SourceDocumentId);
+            if (session.DisplayMode == "block" && session.Numbered)
+                numberedTable = WordEquationNumbering.FindNumberedEquationTable(
+                    document,
+                    session.FormulaId);
             viewState = CaptureViewState();
             try
             {
@@ -5604,7 +5651,9 @@ internal sealed class WordFormulaService
                     replacement!,
                     equationRange,
                     metadata,
-                    NumberingOrderMayHaveChanged(session.OriginalMetadata, metadata));
+                    NumberingOrderMayHaveChanged(session.OriginalMetadata, metadata),
+                    reuseExistingNumberedTableFormatting: numberedTable is not null,
+                    knownNumberedTable: numberedTable);
             TraceAcceptancePerformance(
                 "ReplaceOmml",
                 "reconcile",
@@ -5868,6 +5917,7 @@ internal sealed class WordFormulaService
                 throw new InvalidOperationException(
                     "The inserted Word object does not expose the VisualTeX native OLE interface.");
             FormulaOleInterop.Initialize(formula, metadata, emfPath, pngPath);
+            WordFormulaMetadataReader.CacheMetadata(shape, metadata);
         }
         finally
         {
@@ -5892,6 +5942,7 @@ internal sealed class WordFormulaService
             catch { return false; }
             if (oleObject is not IVisualTeXFormulaObject formula) return false;
             FormulaOleInterop.Update(formula, metadata, emfPath, pngPath);
+            WordFormulaMetadataReader.CacheMetadata(shape, metadata);
             return true;
         }
         finally
@@ -6163,7 +6214,9 @@ internal sealed class WordFormulaService
         Document document,
         InlineShape shape,
         FormulaMetadata metadata,
-        bool numberingOrderMayHaveChanged = true)
+        bool numberingOrderMayHaveChanged = true,
+        bool reuseExistingNumberedTableFormatting = false,
+        Table? knownNumberedTable = null)
     {
         Range? range = null;
         try
@@ -6179,7 +6232,9 @@ internal sealed class WordFormulaService
                 range,
                 shape.Height,
                 metadata,
-                numberingOrderMayHaveChanged);
+                numberingOrderMayHaveChanged,
+                reuseExistingNumberedTableFormatting,
+                knownNumberedTable);
         }
         finally { Release(range); }
     }
@@ -6338,7 +6393,9 @@ internal sealed class WordFormulaService
         Bookmark bookmark,
         Range equationRange,
         FormulaMetadata metadata,
-        bool numberingOrderMayHaveChanged = true)
+        bool numberingOrderMayHaveChanged = true,
+        bool reuseExistingNumberedTableFormatting = false,
+        Table? knownNumberedTable = null)
     {
         var display = string.Equals(
             metadata.DisplayMode,
@@ -6360,7 +6417,9 @@ internal sealed class WordFormulaService
             equationRange,
             height,
             metadata,
-            numberingOrderMayHaveChanged);
+            numberingOrderMayHaveChanged,
+            reuseExistingNumberedTableFormatting,
+            knownNumberedTable);
     }
 
     private static void Configure(
@@ -8376,6 +8435,11 @@ internal sealed class WordFormulaService
         Cell? centerCell = null;
         Cell? numberCell = null;
         Range? centerCellRange = null;
+        Range? numberCellRange = null;
+        ParagraphFormat? centerFormat = null;
+        ParagraphFormat? numberFormat = null;
+        ListFormat? centerListFormat = null;
+        ListFormat? numberListFormat = null;
         Borders? borders = null;
         Columns? columns = null;
         Column? leftColumn = null;
@@ -8412,6 +8476,41 @@ internal sealed class WordFormulaService
             centerCell.VerticalAlignment = WdCellVerticalAlignment.wdCellAlignVerticalCenter;
             numberCell.VerticalAlignment = WdCellVerticalAlignment.wdCellAlignVerticalCenter;
             centerCellRange = centerCell.Range;
+            numberCellRange = numberCell.Range;
+            centerFormat = centerCellRange.ParagraphFormat;
+            numberFormat = numberCellRange.ParagraphFormat;
+            centerFormat.Alignment = WdParagraphAlignment.wdAlignParagraphCenter;
+            numberFormat.Alignment = WdParagraphAlignment.wdAlignParagraphRight;
+            centerFormat.LeftIndent = centerFormat.RightIndent = 0f;
+            centerFormat.FirstLineIndent = 0f;
+            numberFormat.LeftIndent = numberFormat.RightIndent = 0f;
+            numberFormat.FirstLineIndent = 0f;
+            centerFormat.SpaceBefore = centerFormat.SpaceAfter = 0f;
+            numberFormat.SpaceBefore = numberFormat.SpaceAfter = 0f;
+            centerFormat.LineSpacingRule = WdLineSpacing.wdLineSpaceSingle;
+            numberFormat.LineSpacingRule = WdLineSpacing.wdLineSpaceSingle;
+            centerFormat.KeepTogether = 0;
+            centerFormat.KeepWithNext = 0;
+            centerFormat.PageBreakBefore = 0;
+            centerFormat.WidowControl = 0;
+            numberFormat.KeepTogether = 0;
+            numberFormat.KeepWithNext = 0;
+            numberFormat.PageBreakBefore = 0;
+            numberFormat.WidowControl = 0;
+            try { centerFormat.DisableLineHeightGrid = -1; } catch { }
+            try { numberFormat.DisableLineHeightGrid = -1; } catch { }
+            try
+            {
+                centerListFormat = centerCellRange.ListFormat;
+                centerListFormat.RemoveNumbers(WdNumberType.wdNumberParagraph);
+            }
+            catch { }
+            try
+            {
+                numberListFormat = numberCellRange.ListFormat;
+                numberListFormat.RemoveNumbers(WdNumberType.wdNumberParagraph);
+            }
+            catch { }
             var insertion = centerCellRange.Duplicate;
             insertion.End = Math.Max(insertion.Start, insertion.End - 1);
             insertion.Collapse(WdCollapseDirection.wdCollapseStart);
@@ -8420,6 +8519,11 @@ internal sealed class WordFormulaService
         finally
         {
             Release(tableAnchor);
+            Release(numberListFormat);
+            Release(centerListFormat);
+            Release(numberFormat);
+            Release(centerFormat);
+            Release(numberCellRange);
             Release(rightColumn);
             Release(centerColumn);
             Release(leftColumn);

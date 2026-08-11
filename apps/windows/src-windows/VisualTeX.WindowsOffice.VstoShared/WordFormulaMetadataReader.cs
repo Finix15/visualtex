@@ -12,23 +12,36 @@ internal static class WordFormulaMetadataReader
     public static FormulaMetadata? TryRead(InlineShape shape)
     {
         if (shape is null) return null;
-        FormulaMetadata? metadata;
-        if (IsNativeOle(shape))
+        var cached = TryReadCached(shape);
+        if (cached is not null) return cached;
+        return IsNativeOle(shape)
+            ? ApplyIdentityBookmark(shape, TryReadNativeOle(shape))
+            : null;
+    }
+
+    internal static FormulaMetadata? TryReadCached(InlineShape shape) =>
+        ApplyIdentityBookmark(shape, TryReadCachedPreview(shape));
+
+    internal static FormulaMetadata? TryReadCachedPreview(InlineShape shape)
+    {
+        if (shape is null) return null;
+        string? encoded = null;
+        try { encoded = shape.AlternativeText; } catch { }
+        var metadata = FormulaMetadataCodec.Decode(encoded);
+        if (metadata is null)
         {
-            metadata = TryReadNativeOle(shape);
-        }
-        else
-        {
-            string? encoded = null;
-            try { encoded = shape.AlternativeText; } catch { }
+            try { encoded = shape.Title; } catch { encoded = null; }
             metadata = FormulaMetadataCodec.Decode(encoded);
-            if (metadata is null)
-            {
-                try { encoded = shape.Title; } catch { encoded = null; }
-                metadata = FormulaMetadataCodec.Decode(encoded);
-            }
         }
-        return ApplyIdentityBookmark(shape, metadata);
+        return metadata;
+    }
+
+    internal static void CacheMetadata(InlineShape shape, FormulaMetadata metadata)
+    {
+        if (shape is null || metadata is null) return;
+        var encoded = FormulaMetadataCodec.Encode(metadata);
+        try { shape.AlternativeText = encoded; } catch { }
+        try { shape.Title = encoded; } catch { }
     }
 
     internal static string IdentityBookmarkName(string formulaId)
@@ -87,6 +100,7 @@ internal static class WordFormulaMetadataReader
                     throw new InvalidOperationException(
                         "The VisualTeX native OLE object is unavailable.");
                 FormulaOleInterop.UpdateMetadata(formula, metadata);
+                CacheMetadata(shape, metadata);
                 return;
             }
             finally
@@ -96,9 +110,7 @@ internal static class WordFormulaMetadataReader
             }
         }
 
-        var encoded = FormulaMetadataCodec.Encode(metadata);
-        shape.Title = encoded;
-        shape.AlternativeText = encoded;
+        CacheMetadata(shape, metadata);
     }
 
     public static bool IsNativeOle(InlineShape shape)
