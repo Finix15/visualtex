@@ -136,6 +136,29 @@ function preparePatchedNsisTemplate() {
   }
   template = template.replace(oldSameVersionLeave, newSameVersionLeave);
 
+  const oldMaintenancePageAnchor = [
+    "; 4. Custom page to ask user if he wants to reinstall/uninstall",
+    ";    only if a previous installation was detected",
+    "Var ReinstallPageCheck",
+    "Page custom PageReinstall PageLeaveReinstall",
+  ].join("\n");
+  const newMaintenancePageAnchor = [
+    "; 4. VisualTeX native Office integration choice and Office-process guard",
+    ";    This must run before Tauri maintenance can uninstall an existing build.",
+    "Page custom VisualTeXOfficePageCreate VisualTeXOfficePageLeave",
+    "",
+    "; 5. Custom page to ask user if he wants to reinstall/uninstall",
+    ";    only if a previous installation was detected",
+    "Var ReinstallPageCheck",
+    "Page custom PageReinstall PageLeaveReinstall",
+  ].join("\n");
+  if (!template.includes(oldMaintenancePageAnchor)) {
+    throw new Error(
+      "The Tauri NSIS maintenance-page anchor changed unexpectedly; refusing a build where Office may be uninstalled before the running-Office guard",
+    );
+  }
+  template = template.replace(oldMaintenancePageAnchor, newMaintenancePageAnchor);
+
   const oldInstallerPageSequence = [
     "; 5. Choose install directory page",
     "!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive",
@@ -145,12 +168,9 @@ function preparePatchedNsisTemplate() {
     "Var AppStartMenuFolder",
   ].join("\n");
   const newInstallerPageSequence = [
-    "; 5. Choose install directory page",
+    "; 6. Choose install directory page",
     "!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive",
     "!insertmacro MUI_PAGE_DIRECTORY",
-    "",
-    "; 6. VisualTeX native Office integration choice",
-    "Page custom VisualTeXOfficePageCreate VisualTeXOfficePageLeave",
     "",
     "; 7. VisualTeX optional offline OCR resources choice",
     "Page custom VisualTeXOcrPageCreate VisualTeXOcrPageLeave",
@@ -160,7 +180,7 @@ function preparePatchedNsisTemplate() {
   ].join("\n");
   if (!template.includes(oldInstallerPageSequence)) {
     throw new Error(
-      "The Tauri NSIS installer page sequence changed unexpectedly; refusing a build where VisualTeX Office/OCR choices might be hidden",
+      "The Tauri NSIS installer page sequence changed unexpectedly; refusing a build where the VisualTeX OCR choice might be hidden",
     );
   }
   template = template.replace(oldInstallerPageSequence, newInstallerPageSequence);
