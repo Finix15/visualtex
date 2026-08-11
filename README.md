@@ -32,11 +32,28 @@
   <img src="apps/macos/public/qq-group-card.svg" width="300" alt="VisualTeX QQ 交流群 1045801770" />
 </div>
 
-VisualTeX 是一款面向数学、物理、工程与科研写作的桌面公式编辑器。它提供结构化可视化输入、LaTeX 源码双向同步、本地图片公式识别，以及 Word 和 PowerPoint 原生公式工作流。Windows 版本还支持将 Word 选区或全文中的 LaTeX 代码批量重绘为 OMML 或可再次编辑的 VisualTeX OLE 公式。
+VisualTeX 是一款面向数学、物理、工程与科研写作的桌面公式编辑器。它提供结构化可视化输入、LaTeX 源码双向同步、本地图片公式识别，以及 Word 和 PowerPoint 原生公式工作流。Word 插件支持将选区或全文中的 LaTeX 代码批量重绘为原生公式或可再次编辑的 VisualTeX 公式，并提供编号、交叉引用与文档导入能力。
 
 ## 下载应用与 OCR 模型
 
 访问 **[VisualTeX 官网](https://visualtex.pauljianliao.com/)** 下载应用、Windows 安装包和 PP-FormulaNet OCR 模型。GitHub 版本也可从 [Releases](https://github.com/paulhe666/visualtex/releases) 获取。
+
+## VisualTeX 1.2.5 新功能
+
+- **小键盘模式**：面向紧凑公式输入重新设计布局；普通模式与小键盘模式分别记忆窗口尺寸。
+- **显式对齐与分段函数编辑**：`align` / `aligned` 可直接使用 `&` 指定对齐点；`cases` 完善多行、对齐、大括号与 Enter 行为。
+- **自定义快捷键与快速输入**：公式工具、常用工具和自定义磁贴均可配置快捷键，并统一持久化；支持希腊字母快捷输入。
+- **自定义符号设计器**：可自行绘制、组合并注册数学符号，进入公式工具栏、自动补全、MathLive 渲染及 SVG / PNG 导出链路。
+- **完整主题自定义**：主背景、纸张、层级、选中状态、强调色和公式光标等统一纳入主题系统，编辑器、设置和帮助窗口同步跟随。
+- **快捷 OCR 与静默 OCR**：支持截图后快速识别，以及后台识别并直接将 LaTeX 写入剪贴板；新增识别状态 HUD。
+- **Office 编辑器预热与性能优化**：Word / PowerPoint 编辑器采用常驻 / 预热式生命周期，减少重复冷启动和前台切换。
+- **Office 插件安装 / 更新 / 修复**：自动检测 DOTM / PPAM 缺失、旧版本、文件不完整或 PowerPoint 未注册，并支持直接覆盖更新。
+- **Word 编号与交叉引用重构**：支持顺序、章节、节编号及多种分隔形式；更新编号可按文档物理顺序全局修复，并强化中间插入、交叉引用、旧结构修复和大量公式性能。
+- **Word 重绘与文档导入增强**：加强复杂文档中的公式 identity / metadata、批量定位、段落布局与双击编辑目标保持。
+- **内置帮助手册**：可直接在 VisualTeX 内查看编辑器、快捷键、磁贴、`align`、`cases`、矩阵、小键盘、OCR、Office 等功能说明。
+- **Windows PowerPoint 格式转换**：支持图片、OLE、OMML 公式之间的格式转换。
+
+完整更新说明见 [VisualTeX 1.2.5 Release](https://github.com/paulhe666/visualtex/releases/tag/v1.2.5)。
 
 ## 实际界面
 
@@ -65,6 +82,8 @@ VisualTeX 是一款面向数学、物理、工程与科研写作的桌面公式�
 
 - 结构化输入分式、根式、积分、求和、极限、上下标、希腊字母、集合与关系符号；
 - 支持多公式行、1×1 至 10×10 矩阵、定界符和基于选区的结构插入；
+- 支持小键盘模式，并分别记忆普通模式与小键盘模式的窗口尺寸；
+- `align` / `aligned` 支持通过 `&` 自主指定可视化对齐点，`cases` 支持更稳定的多行分段函数编辑；
 - 支持标准布局与经典布局；经典布局将公式工具和 LaTeX 源码停靠在底部，并可随时折叠；
 - “操作逻辑”可开关常用数学输入自动转义：`alpha` 输入希腊字母，`>=` 输入大于等于号，`pp`、`ss`、`mm`、`dd`、`eq` 分别输入加号、减号、乘号、除号和等号；关闭后所有无反斜杠快捷转义均停用，同时 `xx` 始终保留为普通变量；
 - 可分别控制上下标、重音和字体命令的自动跳出，以及不同类型的命令候选框；
@@ -72,7 +91,10 @@ VisualTeX 是一款面向数学、物理、工程与科研写作的桌面公式�
 - 粗体按钮使用标准 `\mathbf{...}`，粗体、数学斜体与 `\mathrm{...}` 正体均支持再次点击恢复；
 - 自动识别微分元 `d`、自然常数 `e`、虚数单位 `i/j` 和常见算子并转换为规范正体，不依赖快捷转义开关；
 - 文档级撤销与重做会恢复公式内容、活动行、光标和选区；
-- 支持公式缩放、蓝白浅色、暖米色、深色、深紫色和深绿色主题，以及中文/英文界面、本地历史和 JSON 文档。
+- 公式工具、常用工具和自定义磁贴可绑定快捷键，并支持统一管理、冲突替换和持久化；
+- 支持希腊字母快捷输入、常用工具自定义和自定义磁贴分区；
+- 内置自定义符号设计器，可绘制、组合、裁剪并注册自定义数学字符；
+- 支持公式缩放、蓝白浅色、暖米色、深色、深紫色和深绿色主题，以及完整主题颜色自定义、中文/英文界面、本地历史和 JSON 文档。
 
 ### LaTeX 源码
 
@@ -100,7 +122,10 @@ VisualTeX 是一款面向数学、物理、工程与科研写作的桌面公式�
 - 选择、拖入或直接粘贴公式图片，识别结果可插回原光标位置；
 - 使用 PaddleOCR PP-FormulaNet plus-S、plus-M 和 plus-L；
 - 支持深色背景、透明图片、进度显示和取消；
-- 图片只在本机处理，不上传第三方服务。
+- 图片只在本机处理，不上传第三方服务；
+- 支持快捷 OCR：截图后自动返回编辑流程并回填识别结果；
+- 支持静默 OCR：后台完成识别并将 LaTeX 直接写入剪贴板；
+- OCR 状态 HUD 会显示识别过程和完成状态。
 
 ## macOS 版本
 
@@ -112,9 +137,15 @@ macOS 版本位于 [`apps/macos`](apps/macos)，使用完全离线的原生 Offi
 - PowerPoint 通过固定路径 PPAM 加载项工作；
 - VBA、AppleScriptTask、Office Group Container 与 Tauri 本地窗口组成离线 Session 流程；
 - Word 支持图片公式和原生 OMML 行内/行间公式；
+- 支持重绘所选、重绘全文和 LaTeX / Markdown 文档导入，并保持公式身份、段落布局和双击编辑目标；
 - 支持图片公式转换为 Word 原生公式、图片与 OMML 公式编号、交叉引用、按钮编辑和双击编辑；
+- Word 编号支持顺序、章节、节编号和不同分隔形式，并可通过“更新编号”按文档物理顺序全局修复；
+- 强化中间插入、交叉引用、旧 `SEQ` / helper 修复，以及大量公式下的连续插入和更新性能；
+- DOTM / PPAM 支持安装、更新、修复和版本检测，可直接覆盖旧版插件；
+- Office 编辑窗口采用常驻 / 预热式生命周期，减少连续编辑时的重复冷启动；
 - 图片行间公式编号采用稳定的静态显示与原生 SEQ 引用源，点击或更新字段时不会发生数字下沉；
 - PowerPoint 支持新建、替换、删除和双击编辑 VisualTeX 公式；
+- 主应用内置帮助手册，覆盖编辑器、快捷键、小键盘、OCR、自定义符号以及 Word / PowerPoint 工作流；
 - 原生加载项不依赖 Office.js、XML Manifest、系统可信证书或外部网络；本地 companion 仅为 Session/OCR 使用私有回环 TLS。
 
 ## Windows 版本
@@ -129,6 +160,7 @@ Windows 版本位于 [`apps/windows`](apps/windows)，使用 VSTO 与真正的 C
 - Word 支持 OLE 与 OMML 行内/行间公式、格式转换、编号和引用；
 - Word Ribbon 支持批量导入，以及将选区或全文 LaTeX 重绘为 OMML/OLE，并按正文上下文继承字号；
 - PowerPoint 支持 OLE 公式的新建、编辑、删除与图片导出；
+- PowerPoint 支持图片、OLE、OMML 公式之间的格式转换；
 - Office 原生双击可重新打开 VisualTeX 编辑器；
 - 兼容图片模式用于跨平台文档和旧公式迁移。
 
@@ -178,11 +210,28 @@ npm run tauri:build
 
 # English
 
-VisualTeX is a desktop formula editor for mathematics, physics, engineering, and scientific writing. It combines structured visual input, two-way LaTeX source editing, local formula-image recognition, and native Word and PowerPoint workflows. On Windows, LaTeX found in a Word selection or the full document can be redrawn in bulk as native OMML or editable VisualTeX OLE formulas.
+VisualTeX is a desktop formula editor for mathematics, physics, engineering, and scientific writing. It combines structured visual input, two-way LaTeX source editing, local formula-image recognition, and native Word and PowerPoint workflows. The Word integration supports bulk redraw from a selection or full document, editable formula workflows, numbering, cross-references, and document import.
 
 ## Application and OCR model downloads
 
 Visit the **[VisualTeX website](https://visualtex.pauljianliao.com/)** to download the application, Windows installer, and PP-FormulaNet OCR models. GitHub builds are also available from [Releases](https://github.com/paulhe666/visualtex/releases).
+
+## What's new in VisualTeX 1.2.5
+
+- **Keypad Mode**: a compact formula-entry layout with independent window-size memory for Normal Mode and Keypad Mode.
+- **Explicit alignment and piecewise editing**: use `&` directly in `align` / `aligned` to choose visual alignment points; `cases` has improved multiline, brace, alignment, and Enter behavior.
+- **Custom hotkeys and quick input**: formula tools, Common tools, and custom tiles can use persistent shortcuts; Greek-letter quick input is integrated into the same editor configuration.
+- **Custom Symbol Designer**: draw, compose, and register mathematical symbols for the toolbar, autocomplete, MathLive rendering, and SVG / PNG export.
+- **Full theme customization**: backgrounds, paper, surface levels, selection states, accents, and formula-caret colors are managed by one theme system across the editor, settings, and Help Manual.
+- **Quick OCR and Silent OCR**: streamlined screenshot recognition plus background OCR that writes LaTeX directly to the clipboard, with a recognition status HUD.
+- **Prewarmed Office editor lifecycle**: Word / PowerPoint editors stay persistent or prewarmed to reduce repeated cold starts and focus switching.
+- **Office add-in Install / Update / Repair**: detects missing, outdated, incomplete, or unregistered DOTM / PPAM add-ins and can replace older versions directly.
+- **Reworked Word numbering and cross-references**: sequential, chapter, and section numbering with multiple separators, global repair by physical document order, stronger middle-insertion and reference handling, legacy-structure repair, and better large-document performance.
+- **Improved Word redraw and document import**: stricter formula identity / metadata, safer bulk target recovery, paragraph-layout preservation, and stable double-click edit targets.
+- **In-app Help Manual**: documentation for the editor, hotkeys, tiles, `align`, `cases`, matrices, Keypad Mode, OCR, custom symbols, Word, and PowerPoint.
+- **Windows PowerPoint format conversion**: convert formulas between picture, OLE, and OMML formats.
+
+See the full notes in the [VisualTeX 1.2.5 Release](https://github.com/paulhe666/visualtex/releases/tag/v1.2.5).
 
 ## Real application renders
 
@@ -211,6 +260,8 @@ The following images are real VisualTeX runtime captures, not mockups. The first
 
 - Structured fractions, roots, integrals, sums, limits, scripts, Greek letters, sets, and relations;
 - Multiple formula rows, 1×1 to 10×10 matrices, delimiters, and selection-aware structure insertion;
+- Keypad Mode with independent window-size memory from Normal Mode;
+- Explicit `&` alignment-point control for `align` / `aligned`, plus more stable multiline `cases` editing;
 - Standard and classic workspace layouts; the classic layout docks formula tools and LaTeX source at the bottom and can be collapsed;
 - Optional plain-text conversion: `alpha` inserts a Greek letter, `>=` inserts greater-than-or-equal, and `pp`, `ss`, `mm`, `dd`, and `eq` insert plus, minus, multiplication, division, and equals; disabling it turns off every no-backslash shortcut, while `xx` always remains ordinary variable input;
 - Independent controls for automatic exits from scripts, accents, and font commands, plus separate command-suggestion panels;
@@ -218,7 +269,10 @@ The following images are real VisualTeX runtime captures, not mockups. The first
 - Bold uses standard `\mathbf{...}` output, while bold, default math italic, and `\mathrm{...}` upright styles can all be toggled back;
 - Differential `d`, constants `e`, imaginary units `i/j`, and common operators are automatically normalized to upright forms independently of shortcut conversion settings;
 - Document-level undo and redo with active-row, caret, and selection restoration;
-- Formula zoom, blue-and-white light, warm beige, dark, deep purple, and deep green themes, Chinese and English UI, local history, and JSON documents.
+- Persistent hotkeys for formula tools, Common tools, and custom tiles, with centralized management and conflict replacement;
+- Greek-letter quick input, configurable Common tools, and custom tile groups;
+- A built-in Custom Symbol Designer for drawing, composing, cropping, and registering mathematical glyphs;
+- Formula zoom, blue-and-white light, warm beige, dark, deep purple, and deep green themes, full theme-color customization, Chinese and English UI, local history, and JSON documents.
 
 ### LaTeX source
 
@@ -246,7 +300,10 @@ The following images are real VisualTeX runtime captures, not mockups. The first
 - Select, drag, or paste formula images and insert recognized LaTeX at the saved caret;
 - PaddleOCR PP-FormulaNet plus-S, plus-M, and plus-L models;
 - Dark-background and transparent-image preprocessing, progress reporting, and cancellation;
-- Images remain on the local device.
+- Images remain on the local device;
+- Quick OCR streamlines screenshot capture, recognition, editor return, and result insertion;
+- Silent OCR recognizes in the background and writes LaTeX directly to the clipboard;
+- An OCR status HUD reports recognition progress and completion.
 
 ## macOS application
 
@@ -257,9 +314,15 @@ The macOS application lives in [`apps/macos`](apps/macos) and uses a fully offli
 - A Word DOTM global template and a fixed-path PowerPoint PPAM add-in;
 - VBA, AppleScriptTask, the Office Group Container, and local Tauri Session windows;
 - Word picture formulas and native OMML inline or display formulas;
+- Redraw Selection, Redraw Document, and LaTeX / Markdown document import with formula identity, paragraph layout, and double-click edit targets preserved;
 - Picture-to-OMML conversion, picture and OMML equation numbering, cross-references, Ribbon editing, and double-click editing;
+- Sequential, chapter-based, and section-based Word numbering with multiple separators and global repair by physical document order;
+- Stronger middle insertion, cross-reference coordination, legacy `SEQ` / helper repair, and large-document numbering performance;
+- DOTM / PPAM Install, Update, Repair, and version detection with direct replacement of older add-ins;
+- A persistent / prewarmed Office editor lifecycle to reduce repeated cold-start delays;
 - Stable static picture-number display backed by a native SEQ source, preventing the number from dropping after selection or field refresh;
 - PowerPoint formula creation, replacement, deletion, and double-click editing;
+- An in-app Help Manual covering editor workflows, hotkeys, Keypad Mode, OCR, custom symbols, Word, and PowerPoint;
 - The native add-ins require no Office.js, XML manifests, system-trusted certificate, or external network; a private loopback TLS companion is used only for Session/OCR services.
 
 ## Windows application
@@ -274,6 +337,7 @@ The Windows application lives in [`apps/windows`](apps/windows) and uses VSTO wi
 - Word OLE and OMML inline/display formulas, conversion, numbering, and references;
 - Word Ribbon batch import plus selection-wide or document-wide LaTeX redraw to OMML/OLE with context-aware font sizing;
 - PowerPoint OLE creation, editing, deletion, and picture export;
+- PowerPoint conversion between picture, OLE, and OMML formula formats;
 - Native Office double-click activation;
 - A picture mode for cross-platform documents and legacy migration.
 
