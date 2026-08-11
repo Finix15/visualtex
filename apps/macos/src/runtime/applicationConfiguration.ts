@@ -4,6 +4,7 @@ import { safeStorage } from "./safeStorage";
 import { publishSynchronizedTheme } from "../themeSync";
 import { OCR_MODELS } from "../ocr/ocrService";
 import type { FormulaDocument } from "../types/formula";
+import type { CommandUsage } from "../types/command";
 import {
   CUSTOM_SYMBOL_STORAGE_KEY,
   refreshCustomSymbolLibraryFromStorage,
@@ -29,6 +30,7 @@ export interface VisualTexUserConfiguration {
   exportedAt: string;
   editorSettings: Partial<FormulaDocument["settings"]>;
   storage: Record<string, string>;
+  usage?: Record<string, CommandUsage>;
   windows?: VisualTexConfigurationWindowState;
 }
 
@@ -98,6 +100,9 @@ const editorSettingKeys = [
 
 const maximumStorageEntryLength = 2_000_000;
 const maximumConfigurationLength = 8_000_000;
+const maximumUsageEntries = 4096;
+const maximumUsageMapEntries = 512;
+const maximumUsageKeyLength = 256;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -139,6 +144,72 @@ function normalizeWindowState(value: unknown): VisualTexConfigurationWindowState
   const officeEditor = normalizeWindowSize(value.officeEditor);
   if (!main && !officeEditor) return undefined;
   return { main, officeEditor };
+}
+
+function normalizeUsageCounter(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return 0;
+  return Math.min(Number.MAX_SAFE_INTEGER, Math.floor(value));
+}
+
+function normalizeUsageCounterMap(value: unknown) {
+  const result: Record<string, number> = {};
+  if (!isRecord(value)) return result;
+  for (const [key, rawCount] of Object.entries(value).slice(0, maximumUsageMapEntries)) {
+    if (!key || key.length > maximumUsageKeyLength) continue;
+    const count = normalizeUsageCounter(rawCount);
+    if (count > 0) result[key] = count;
+  }
+  return result;
+}
+
+function normalizeCommandUsage(value: unknown): Record<string, CommandUsage> | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) return {};
+  const result: Record<string, CommandUsage> = {};
+  for (const [storageId, rawUsage] of Object.entries(value).slice(0, maximumUsageEntries)) {
+    if (!storageId || storageId.length > maximumUsageKeyLength || !isRecord(rawUsage)) {
+      continue;
+    }
+    const commandId =
+      typeof rawUsage.commandId === "string" &&
+      rawUsage.commandId.length > 0 &&
+      rawUsage.commandId.length <= maximumUsageKeyLength
+        ? rawUsage.commandId
+        : storageId;
+    const recentUses = Array.isArray(rawUsage.recentUses)
+      ? rawUsage.recentUses
+          .filter(
+            (item): item is number =>
+              typeof item === "number" && Number.isFinite(item) && item >= 0,
+          )
+          .map((item) => Math.floor(item))
+          .slice(-12)
+      : [];
+    result[storageId] = {
+      commandId,
+      useCount: normalizeUsageCounter(rawUsage.useCount),
+      lastUsedAt: normalizeUsageCounter(rawUsage.lastUsedAt),
+      recentUses,
+      acceptedPrefixes: normalizeUsageCounterMap(rawUsage.acceptedPrefixes),
+      contextCounts: normalizeUsageCounterMap(rawUsage.contextCounts),
+      pinned: rawUsage.pinned === true,
+    };
+  }
+  return result;
+}
+
+function cloneCommandUsage(usage: Record<string, CommandUsage>) {
+  return Object.fromEntries(
+    Object.entries(usage).map(([commandId, item]) => [
+      commandId,
+      {
+        ...item,
+        recentUses: [...item.recentUses],
+        acceptedPrefixes: { ...item.acceptedPrefixes },
+        contextCounts: { ...item.contextCounts },
+      },
+    ]),
+  );
 }
 
 function normalizeStorage(value: unknown) {
@@ -200,6 +271,7 @@ export function parseVisualTexConfiguration(source: string): VisualTexUserConfig
       typeof parsed.exportedAt === "string" ? parsed.exportedAt : new Date(0).toISOString(),
     editorSettings: normalizeEditorSettings(parsed.editorSettings),
     storage: normalizeStorage(parsed.storage),
+    usage: normalizeCommandUsage(parsed.usage),
     windows: normalizeWindowState(parsed.windows),
   };
 }
@@ -223,7 +295,8 @@ async function readWindowConfiguration(): Promise<VisualTexConfigurationWindowSt
 }
 
 export async function buildVisualTexConfiguration(): Promise<VisualTexUserConfiguration> {
-  const editorSettings = useEditorStore.getState().toDocument().settings;
+  const editorState = useEditorStore.getState();
+  const editorSettings = editorState.toDocument().settings;
   const storage: Record<string, string> = {};
   for (const key of configurationStorageKeys) {
     const value = safeStorage.getItem(key);
@@ -235,6 +308,7 @@ export async function buildVisualTexConfiguration(): Promise<VisualTexUserConfig
     exportedAt: new Date().toISOString(),
     editorSettings: { ...editorSettings },
     storage,
+    usage: cloneCommandUsage(editorState.usage),
     windows: await readWindowConfiguration(),
   };
 }
@@ -253,6 +327,9 @@ export async function applyVisualTexConfiguration(
     ...currentDocument,
     settings: mergedSettings,
   });
+  if (configuration.usage !== undefined) {
+    useEditorStore.setState({ usage: cloneCommandUsage(configuration.usage) });
+  }
 
   for (const key of configurationStorageKeys) {
     const value = configuration.storage[key];

@@ -186,6 +186,36 @@ async function main() {
       return true;
     })()`);
     await typeKey("\\", "Backslash", "\\");
+    await typeKey("b", "KeyB", "b");
+    await sleep(120);
+    const shortCasesSuggestion = await evaluate(`(() => {
+      const panel = document.querySelector('#visualtex-native-input-suggestion-popover');
+      return {
+        visible: panel?.classList.contains('is-visible') ?? false,
+        commands: Array.from(panel?.querySelectorAll('li[data-command]') ?? [])
+          .map((item) => item.dataset.command ?? ''),
+      };
+    })()`);
+    assert.equal(
+      shortCasesSuggestion.visible,
+      true,
+      "\\b did not show the native-style suggestion popover",
+    );
+    assert.ok(
+      shortCasesSuggestion.commands.includes("\\begin{cases}"),
+      `\\b did not include the cases environment: ${JSON.stringify(shortCasesSuggestion.commands)}`,
+    );
+
+    await client.send("Page.reload", { ignoreCache: true });
+    await sleep(500);
+    await evaluate(`(() => {
+      const field = document.querySelector("math-field");
+      field.setValue("", { insertionMode: "replaceAll" });
+      field.focus();
+      field.shadowRoot?.querySelector('[part="keyboard-sink"]')?.focus();
+      return true;
+    })()`);
+    await typeKey("\\", "Backslash", "\\");
     for (const letter of "begin") {
       await typeKey(letter, `Key${letter.toUpperCase()}`);
     }
@@ -205,11 +235,19 @@ async function main() {
           .join(""),
         visible: panel?.classList.contains('is-visible') ?? false,
         command: panel?.querySelector('li.ML__popover__current')?.dataset.command ?? '',
+        commands: Array.from(panel?.querySelectorAll('li[data-command]') ?? []).map((item) => ({
+          command: item.dataset.command ?? '',
+          current: item.classList.contains('ML__popover__current'),
+        })),
       };
     })()`);
     assert.equal(casesSuggestion.raw.replace(/\s+/g, ""), "\\begin{cases}");
     assert.equal(casesSuggestion.visible, true, "cases did not show the native-style suggestion popover");
-    assert.equal(casesSuggestion.command, "\\begin{cases}");
+    assert.equal(
+      casesSuggestion.command,
+      "\\begin{cases}",
+      JSON.stringify(casesSuggestion),
+    );
     assert.doesNotMatch(
       casesSuggestion.value,
       /\\begin\{cases\}/,

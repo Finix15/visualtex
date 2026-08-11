@@ -102,8 +102,7 @@ interface InlineOcrState {
 }
 
 const DEFAULT_OCR_MODEL: OcrModelName = "PP-FormulaNet_plus-M";
-const OFFICE_EDITOR_ZOOM_60_MIGRATION_KEY =
-  "visualtex-office-editor-zoom-60-migration-v1";
+const EDITOR_PERSISTENCE_STORAGE_KEY = "visualtex-editor";
 const OCR_MODEL_STORAGE_KEY = "visualtex.ocr.model";
 const OFFICE_WORD_CREATE_NUMBERED_STORAGE_KEY =
   "visualtex.office.word.create.numbered";
@@ -128,6 +127,81 @@ function writeOfficeWordCreateNumberedPreference(numbered: boolean) {
     OFFICE_WORD_CREATE_NUMBERED_STORAGE_KEY,
     numbered ? "true" : "false",
   );
+}
+
+function syncOfficeEditorSystemSettings(raw?: string | null) {
+  const source = raw === undefined
+    ? readLocalStorage(EDITOR_PERSISTENCE_STORAGE_KEY)
+    : raw;
+  if (!source) return;
+  let persisted: Record<string, unknown> | null = null;
+  try {
+    const envelope = JSON.parse(source) as { state?: unknown };
+    if (envelope.state && typeof envelope.state === "object") {
+      persisted = envelope.state as Record<string, unknown>;
+    }
+  } catch {
+    return;
+  }
+  if (!persisted) return;
+
+  const editor = useEditorStore.getState();
+  const applyNumber = (
+    key: string,
+    current: number,
+    setter: (value: number) => void,
+  ) => {
+    const value = persisted?.[key];
+    if (typeof value === "number" && Number.isFinite(value) && value !== current) {
+      setter(value);
+    }
+  };
+  const applyBoolean = (
+    key: string,
+    current: boolean,
+    setter: (value: boolean) => void,
+  ) => {
+    const value = persisted?.[key];
+    if (typeof value === "boolean" && value !== current) setter(value);
+  };
+
+  if (
+    (persisted.editorLayout === "standard" || persisted.editorLayout === "classic") &&
+    persisted.editorLayout !== editor.editorLayout
+  ) {
+    editor.setEditorLayout(persisted.editorLayout);
+  }
+  if (
+    (persisted.language === "cn" || persisted.language === "en") &&
+    persisted.language !== editor.language
+  ) {
+    editor.setLanguage(persisted.language);
+  }
+  applyNumber("zoom", editor.zoom, editor.setZoom);
+  applyBoolean("autoPairDelimiters", editor.autoPairDelimiters, editor.setAutoPairDelimiters);
+  applyBoolean("showLineNumbers", editor.showLineNumbers, editor.setShowLineNumbers);
+  applyBoolean("highlightActiveLine", editor.highlightActiveLine, editor.setHighlightActiveLine);
+  applyNumber("formulaInsetLeft", editor.formulaInsetLeft, editor.setFormulaInsetLeft);
+  applyNumber("formulaInsetRight", editor.formulaInsetRight, editor.setFormulaInsetRight);
+  applyNumber("formulaToolButtonSize", editor.formulaToolButtonSize, editor.setFormulaToolButtonSize);
+  applyNumber("formulaToolButtonPadding", editor.formulaToolButtonPadding, editor.setFormulaToolButtonPadding);
+  applyNumber("formulaRowVerticalInset", editor.formulaRowVerticalInset, editor.setFormulaRowVerticalInset);
+  applyBoolean("personalize", editor.personalize, editor.setPersonalize);
+  applyNumber("suggestionCount", editor.suggestionCount, editor.setSuggestionCount);
+  applyNumber("classicTileWidth", editor.classicTileWidth, editor.setClassicTileWidth);
+  applyNumber("classicDockHeight", editor.classicDockHeight, editor.setClassicDockHeight);
+  applyBoolean("keypadMinimizeOnCopy", editor.keypadMinimizeOnCopy, editor.setKeypadMinimizeOnCopy);
+
+  const persistedInputBehavior = persisted.inputBehavior;
+  if (persistedInputBehavior && typeof persistedInputBehavior === "object") {
+    const inputBehavior = persistedInputBehavior as Record<string, unknown>;
+    for (const key of Object.keys(editor.inputBehavior) as Array<keyof typeof editor.inputBehavior>) {
+      const value = inputBehavior[key];
+      if (typeof value === "boolean" && value !== editor.inputBehavior[key]) {
+        editor.setInputBehavior(key, value);
+      }
+    }
+  }
 }
 
 function officeExportResultFromArtifacts(
@@ -395,10 +469,18 @@ export function OfficeDialogApp() {
   }, []);
 
   useEffect(() => {
-    if (readLocalStorage(OFFICE_EDITOR_ZOOM_60_MIGRATION_KEY) !== "done") {
-      useEditorStore.getState().setZoom(0.6);
-      writeLocalStorage(OFFICE_EDITOR_ZOOM_60_MIGRATION_KEY, "done");
-    }
+    const sync = (raw?: string | null) => syncOfficeEditorSystemSettings(raw);
+    sync();
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === EDITOR_PERSISTENCE_STORAGE_KEY) sync(event.newValue);
+    };
+    const handleFocus = () => sync();
+    window.addEventListener("storage", handleStorage);
+    window.addEventListener("focus", handleFocus);
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+      window.removeEventListener("focus", handleFocus);
+    };
   }, []);
 
   useEffect(() => {

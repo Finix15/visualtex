@@ -1291,21 +1291,48 @@ let nativeInputPopoverActiveField: MathfieldElement | null = null;
 
 function casesEnvironmentSuggestionQuery(field: MathfieldElement) {
   const raw = rawLatexInput(field).replace(/\s+/g, "");
-  if (!raw.startsWith("\\begin{")) return "";
+  if (!raw.startsWith("\\") || raw.length < 2) return "";
   if (!CASES_ENVIRONMENT_COMMAND.startsWith(raw)) return "";
   return raw;
+}
+
+function casesEnvironmentSuggestionItemMarkup() {
+  const preview = convertVisualTexLatexToMarkup(
+    "\\begin{cases}x & x>0\\\\0 & x=0\\end{cases}",
+    { defaultMode: "math" },
+  );
+  return `<li role="button" data-command="\\begin{cases}" class="has-visualtex-command-preview"><span class="ML__popover__latex">\\begin{cases}</span><span class="ML__popover__command">${preview}</span><span class="ML__popover__keybinding">Space</span></li>`;
+}
+
+function appendCasesEnvironmentSuggestion(
+  panel: HTMLElement,
+  field: MathfieldElement,
+) {
+  if (!casesEnvironmentSuggestionQuery(field)) return false;
+  const items = Array.from(
+    panel.querySelectorAll<HTMLElement>("li[data-command]"),
+  );
+  const list = items[0]?.parentElement ?? panel.querySelector<HTMLElement>("ul");
+  if (!list) return false;
+  const existing = items.some(
+    (item) => item.dataset.command === CASES_ENVIRONMENT_COMMAND,
+  );
+  if (!existing) {
+    list.insertAdjacentHTML("beforeend", casesEnvironmentSuggestionItemMarkup());
+  }
+  panel.dataset.visualtexEnvironmentSuggestion = "cases";
+  return true;
 }
 
 function renderCasesEnvironmentSuggestion(stable: HTMLElement, field: MathfieldElement) {
   const query = casesEnvironmentSuggestionQuery(field);
   if (!query) return false;
 
-  const preview = convertVisualTexLatexToMarkup(
-    "\\begin{cases}x & x>0\\\\0 & x=0\\end{cases}",
-    { defaultMode: "math" },
-  );
   stable.dataset.visualtexEnvironmentSuggestion = "cases";
-  stable.innerHTML = `<ul><li role="button" data-command="\\begin{cases}" class="ML__popover__current has-visualtex-command-preview"><span class="ML__popover__latex">\\begin{cases}</span><span class="ML__popover__command">${preview}</span><span class="ML__popover__keybinding">Space</span></li></ul>`;
+  stable.innerHTML = `<ul>${casesEnvironmentSuggestionItemMarkup()}</ul>`;
+  stable
+    .querySelector<HTMLElement>("li[data-command]")
+    ?.classList.add("ML__popover__current");
 
   const caret =
     field.shadowRoot?.querySelector<HTMLElement>(
@@ -1340,9 +1367,11 @@ function nativeSuggestionUsageId(command: string) {
 function nativeSuggestionFrequency(command: string) {
   const usage = nativeSuggestionUsageSnapshot[nativeSuggestionUsageId(command)];
   return {
-    count: usage?.contextCounts
-      ? usage.contextCounts.candidate ?? 0
-      : usage?.useCount ?? 0,
+    // Rank native MathLive candidates by the same overall command frequency
+    // learned from toolbar, shortcut and candidate usage. This lets a commonly
+    // used environment such as cases rise for a short prefix like \\b even when
+    // most of its previous uses came from the visual toolbar.
+    count: usage?.useCount ?? 0,
     lastUsedAt: usage?.lastUsedAt ?? 0,
   };
 }
@@ -1439,13 +1468,13 @@ function ensureStableNativeInputPopover() {
     const item = target.closest<HTMLElement>("li[data-command]");
     const command = item?.dataset.command ?? "";
     if (!command) return;
-    recordNativeSuggestionUsage(command);
     const sourceItem = Array.from(
       getNativeInputPopoverSource()?.querySelectorAll<HTMLElement>(
         "li[data-command]",
       ) ?? [],
     ).find((candidate) => candidate.dataset.command === command);
     if (sourceItem) {
+      recordNativeSuggestionUsage(command);
       sourceItem.dispatchEvent(
         new MouseEvent("click", {
           bubbles: true,
@@ -1562,7 +1591,23 @@ function syncStableNativeInputPopover() {
   rankNativeSuggestionItems(source);
   const nextHtml = source.innerHTML;
   if (stable.innerHTML !== nextHtml) stable.innerHTML = nextHtml;
+  if (
+    nativeInputPopoverActiveField?.isConnected &&
+    appendCasesEnvironmentSuggestion(stable, nativeInputPopoverActiveField)
+  ) {
+    // Keep high-frequency environments in the same stable candidate list as
+    // MathLive's native commands. This lets short prefixes such as \\b, \\be,
+    // and \\begin discover cases without replacing beta/bar/etc.
+  }
   rankNativeSuggestionItems(stable);
+  if (
+    nativeInputPopoverActiveField?.isConnected &&
+    casesEnvironmentSuggestionQuery(nativeInputPopoverActiveField) ===
+      CASES_ENVIRONMENT_COMMAND
+  ) {
+    nativeInputPopoverManualCommand = CASES_ENVIRONMENT_COMMAND;
+    syncStableNativeInputPopoverSelection(CASES_ENVIRONMENT_COMMAND);
+  }
   stable.classList.toggle("top-tip", source.classList.contains("top-tip"));
   stable.classList.toggle(
     "bottom-tip",
@@ -4878,9 +4923,8 @@ function FormulaField(props: FormulaFieldProps) {
       normalizeGuardedBackslashInput(event.timeStamp);
       nativeInputPopoverActiveField = field;
       const casesSuggestionQuery = casesEnvironmentSuggestionQuery(field);
-      if (casesSuggestionQuery) {
-        field.dataset.pendingNativeSuggestion = CASES_ENVIRONMENT_COMMAND;
-      } else if (
+      if (
+        !casesSuggestionQuery &&
         field.dataset.pendingNativeSuggestion === CASES_ENVIRONMENT_COMMAND
       ) {
         delete field.dataset.pendingNativeSuggestion;
@@ -5073,9 +5117,21 @@ function FormulaField(props: FormulaFieldProps) {
           item.classList.contains("ML__popover__current"),
         )?.dataset.command ||
         "";
-      const placeholderCommand = rawQuery || selectedNativeCommand;
+      const placeholderCommand =
+        selectedNativeCommand || rawQuery;
       const placeholderTemplate = exactRawPlaceholderTemplate(placeholderCommand);
       if (!placeholderTemplate) return false;
+      const recordAcceptedEnvironmentSuggestion = () => {
+        if (
+          placeholderCommand === CASES_ENVIRONMENT_COMMAND &&
+          selectedNativeCommand === CASES_ENVIRONMENT_COMMAND
+        ) {
+          recordNativeSuggestionUsage(
+            CASES_ENVIRONMENT_COMMAND,
+            rawQuery || CASES_ENVIRONMENT_COMMAND,
+          );
+        }
+      };
 
       const anchor = rawCommandAnchors.get(field);
       const rawInput = rawLatexInput(field).trim();
@@ -5160,6 +5216,7 @@ function FormulaField(props: FormulaFieldProps) {
         const after = captureFieldSnapshot(field);
         emitEdit(before, after, "replace", "candidate");
         propsRef.current.onInputActivity(field);
+        recordAcceptedEnvironmentSuggestion();
         syncFrameSize();
         return true;
       }
@@ -5197,6 +5254,7 @@ function FormulaField(props: FormulaFieldProps) {
       const after = captureFieldSnapshot(field);
       emitEdit(before, after, "replace", "candidate");
       propsRef.current.onInputActivity(field);
+      recordAcceptedEnvironmentSuggestion();
       syncFrameSize();
       return true;
     };

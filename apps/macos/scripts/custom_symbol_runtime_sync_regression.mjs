@@ -861,6 +861,21 @@ async function main() {
     process.stdout.write("[custom-symbol-runtime] export and Office rendering verified\n");
 
     const configurationSnapshot = await mainClient.evaluate(`(async () => {
+      const editorStore = await import("/src/stores/editorStore.ts");
+      window.__visualtexEditorStore = editorStore;
+      editorStore.useEditorStore.setState({
+        usage: {
+          cases: {
+            commandId: "cases",
+            useCount: 17,
+            lastUsedAt: 1720000000000,
+            recentUses: [1719999999000, 1720000000000],
+            acceptedPrefixes: { b: 5, begin: 8 },
+            contextCounts: { candidate: 13, toolbar: 4 },
+            pinned: true,
+          },
+        },
+      });
       const configuration = await window.__visualtexApplicationConfiguration.buildVisualTexConfiguration();
       window.__visualtexCustomSymbolConfigurationSnapshot = configuration;
       const raw = configuration.storage["visualtex.custom-symbols.v1"] || "";
@@ -869,10 +884,20 @@ async function main() {
         commands: raw
           ? JSON.parse(raw).symbols.map((symbol) => symbol.command)
           : [],
+        casesUsage: configuration.usage?.cases ?? null,
       };
     })()`);
     assert.equal(configurationSnapshot.hasStorageEntry, true);
     assert.deepEqual(configurationSnapshot.commands, ["selfdefa"]);
+    assert.deepEqual(configurationSnapshot.casesUsage, {
+      commandId: "cases",
+      useCount: 17,
+      lastUsedAt: 1720000000000,
+      recentUses: [1719999999000, 1720000000000],
+      acceptedPrefixes: { b: 5, begin: 8 },
+      contextCounts: { candidate: 13, toolbar: 4 },
+      pinned: true,
+    });
     process.stdout.write("[custom-symbol-runtime] configuration export verified\n");
 
     const caretBeforeDelete = await mainClient.evaluate(`(() => {
@@ -884,6 +909,7 @@ async function main() {
     assert.equal(caretBeforeDelete, "A+\\selfdefa");
 
     await mainClient.evaluate(`(() => {
+      window.__visualtexEditorStore.useEditorStore.setState({ usage: {} });
       window.__visualtexCustomSymbolRegistry.deleteCustomSymbol("regression-live-selfdefa");
       return true;
     })()`);
@@ -946,9 +972,11 @@ async function main() {
       value: document.querySelector("math-field")?.value || "",
       commands: window.__visualtexCustomSymbolRegistry
         .readCustomSymbolLibrary().symbols.map((symbol) => symbol.command),
+      casesUsage: window.__visualtexEditorStore.useEditorStore.getState().usage.cases ?? null,
     }))()`);
     assert.match(restoredConfiguration.value, /\\selfdefa/);
     assert.deepEqual(restoredConfiguration.commands, ["selfdefa"]);
+    assert.deepEqual(restoredConfiguration.casesUsage, configurationSnapshot.casesUsage);
     process.stdout.write("[custom-symbol-runtime] configuration restore verified\n");
 
     await mainClient.evaluate(`(() => {

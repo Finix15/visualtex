@@ -1806,6 +1806,267 @@ Private Function VTRegressionCreateNumberedImageAtCaret( _
         formulaRange.InlineShapes(1)
 End Function
 
+Private Sub VTRegressionAssertChapterNumberOrdinal( _
+    ByVal documentObject As Document, _
+    ByVal formulaId As String, _
+    ByVal expectedOrdinal As Long)
+
+    Dim sequenceBookmarkName As String
+    Dim numberBookmarkName As String
+    Dim sequenceField As Field
+    Dim numberRange As Range
+    Dim expectedSuffix As String
+
+    If documentObject Is Nothing Or Not VTIsCanonicalUuid(formulaId) Or _
+       expectedOrdinal < 1 Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The chapter-numbering regression assertion target is invalid."
+    End If
+    sequenceBookmarkName = VTEquationSequenceNumberBookmarkName(formulaId)
+    numberBookmarkName = VTEquationNumberBookmarkName(formulaId)
+    Set sequenceField = VTEquationSequenceFieldForBookmark( _
+        documentObject, sequenceBookmarkName)
+    If sequenceField Is Nothing Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The chapter-numbering regression lost its SEQ field."
+    End If
+    If VTEquationSequenceResultText(sequenceField) <> CStr(expectedOrdinal) Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The chapter-numbering regression SEQ result is stale" & _
+            " [actual=" & VTEquationSequenceResultText(sequenceField) & _
+            "; expected=" & CStr(expectedOrdinal) & "]."
+    End If
+    If Not documentObject.Bookmarks.Exists(numberBookmarkName) Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The chapter-numbering regression lost its visible number Bookmark."
+    End If
+    Set numberRange = documentObject.Bookmarks( _
+        numberBookmarkName).Range.Duplicate
+    expectedSuffix = CStr(expectedOrdinal) & ")"
+    If Len(numberRange.Text) < Len(expectedSuffix) Or _
+       Right$(numberRange.Text, Len(expectedSuffix)) <> expectedSuffix Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The chapter-numbering regression visible number is stale" & _
+            " [actual=" & numberRange.Text & _
+            "; expectedSuffix=" & expectedSuffix & "]."
+    End If
+End Sub
+
+Public Sub VisualTeX_RunWordChapterPrependNumberingRegression()
+    Const formulaCount As Long = 4
+    Const latexBase64 As String = "eF4yK3leMg"
+
+    Dim testDocument As Document
+    Dim formulaShape As InlineShape
+    Dim insertionRange As Range
+    Dim sequenceField As Field
+    Dim resultPath As String
+    Dim resultText As String
+    Dim regressionStage As String
+    Dim regressionErrorNumber As Long
+    Dim regressionErrorDescription As String
+    Dim formulaId As String
+    Dim firstFormulaId As String
+    Dim prependFormulaId As String
+    Dim itemIndex As Long
+
+    On Error GoTo RegressionFailed
+    resultPath = VTApplicationSupportRoot() & _
+        "/Tests/word-chapter-prepend-numbering-regression-result.txt"
+    Set testDocument = Documents.Add(Visible:=True)
+    testDocument.ActiveWindow.View.Type = wdPrintView
+    testDocument.Activate
+    VTSetEquationNumberingFormat _
+        testDocument, VT_WORD_NUMBERING_MODE_CHAPTER, "-"
+
+    regressionStage = "create-initial-four"
+    For itemIndex = 1 To formulaCount
+        formulaId = VTRegressionPerformanceFormulaId(910000000 + itemIndex)
+        Set formulaShape = VTRegressionCreateNumberedImage( _
+            testDocument, formulaId, latexBase64, 96!, 28!)
+        VTRegressionAssertChapterNumberOrdinal _
+            testDocument, formulaId, itemIndex
+    Next itemIndex
+
+    regressionStage = "prepend-before-first"
+    firstFormulaId = VTRegressionPerformanceFormulaId(910000001)
+    prependFormulaId = VTRegressionPerformanceFormulaId(919999999)
+    Set insertionRange = VTRegressionInsertBlankParagraphBeforeFormula( _
+        testDocument, firstFormulaId)
+    Set formulaShape = VTRegressionCreateNumberedImageAtCaret( _
+        testDocument, insertionRange, prependFormulaId, _
+        latexBase64, 96!, 28!)
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, prependFormulaId, 1
+    For itemIndex = 1 To formulaCount
+        formulaId = VTRegressionPerformanceFormulaId(910000000 + itemIndex)
+        VTRegressionAssertChapterNumberOrdinal _
+            testDocument, formulaId, itemIndex + 1
+    Next itemIndex
+
+    regressionStage = "explicit-update-repairs-stale-seq"
+    formulaId = firstFormulaId
+    Set sequenceField = VTEquationSequenceFieldForBookmark( _
+        testDocument, VTEquationSequenceNumberBookmarkName(formulaId))
+    If sequenceField Is Nothing Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The chapter-numbering regression could not poison the old SEQ result."
+    End If
+    sequenceField.Result.Text = "1"
+    Set sequenceField = VTEquationSequenceFieldForBookmark( _
+        testDocument, VTEquationSequenceNumberBookmarkName(formulaId))
+    If sequenceField Is Nothing Or _
+       VTEquationSequenceResultText(sequenceField) <> "1" Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "Word did not preserve the intentionally stale SEQ regression state."
+    End If
+    VTUpdateEquationNumbersCore testDocument, True
+    VTRegressionAssertChapterNumberOrdinal testDocument, prependFormulaId, 1
+    For itemIndex = 1 To formulaCount
+        formulaId = VTRegressionPerformanceFormulaId(910000000 + itemIndex)
+        VTRegressionAssertChapterNumberOrdinal _
+            testDocument, formulaId, itemIndex + 1
+    Next itemIndex
+
+    resultText = "PASS" & vbLf & _
+        "prepend=1,2,3,4,5" & vbLf & _
+        "explicitUpdateRepair=PASS" & vbLf
+    VTWriteTextAtomic resultPath, resultText
+    testDocument.Saved = True
+    testDocument.Close SaveChanges:=wdDoNotSaveChanges
+    Set testDocument = Nothing
+    Exit Sub
+
+RegressionFailed:
+    regressionErrorNumber = Err.Number
+    regressionErrorDescription = Err.Description
+    On Error Resume Next
+    resultText = "FAIL" & vbLf & _
+        "stage=" & regressionStage & vbLf & _
+        "errorNumber=" & CStr(regressionErrorNumber) & vbLf & _
+        "errorDescription=" & _
+            Replace$(Replace$(regressionErrorDescription, vbCr, " "), _
+                vbLf, " ") & vbLf
+    VTWriteTextAtomic resultPath, resultText
+    If Not testDocument Is Nothing Then
+        testDocument.Saved = True
+        testDocument.Close SaveChanges:=wdDoNotSaveChanges
+    End If
+    On Error GoTo 0
+    Err.Raise regressionErrorNumber, _
+        "VisualTeX Word chapter prepend numbering regression", _
+        regressionErrorDescription
+End Sub
+
+Public Sub VisualTeX_RunWordMixedNativeImageChapterAppendRegression()
+    Const fixtureFormulaId As String = _
+        "11111111-1111-4111-8111-111111111111"
+    Const nativeCount As Long = 4
+    Const latexBase64 As String = "eF8x"
+
+    Dim testDocument As Document
+    Dim formulaRange As Range
+    Dim formulaShape As InlineShape
+    Dim fixtureRoot As String
+    Dim nativeDocumentPath As String
+    Dim ommlBase64 As String
+    Dim formulaId As String
+    Dim firstImageId As String
+    Dim secondImageId As String
+    Dim resultPath As String
+    Dim resultText As String
+    Dim regressionStage As String
+    Dim regressionErrorNumber As Long
+    Dim regressionErrorDescription As String
+    Dim itemIndex As Long
+
+    On Error GoTo RegressionFailed
+    fixtureRoot = VTApplicationSupportRoot() & "/Tests"
+    nativeDocumentPath = _
+        VTApplicationSupportRoot() & "/NativeDocuments/" & _
+        fixtureFormulaId & ".docx"
+    ommlBase64 = VTReadText( _
+        fixtureRoot & "/word-native-regression-omml.txt", _
+        VT_WORD_OMML_CHUNK_SIZE * VT_WORD_OMML_MAX_CHUNKS)
+    resultPath = fixtureRoot & _
+        "/word-mixed-native-image-chapter-append-regression-result.txt"
+    If Not VTPathFileExists(nativeDocumentPath) Or Len(ommlBase64) = 0 Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The mixed native/image chapter regression fixture is missing."
+    End If
+
+    Set testDocument = Documents.Add(Visible:=True)
+    testDocument.ActiveWindow.View.Type = wdPrintView
+    testDocument.Activate
+    VTSetEquationNumberingFormat _
+        testDocument, VT_WORD_NUMBERING_MODE_CHAPTER, "-"
+
+    regressionStage = "create-four-native"
+    For itemIndex = 1 To nativeCount
+        formulaId = VTRegressionPerformanceFormulaId(920000000 + itemIndex)
+        Set formulaRange = VTRegressionCreateNumberedNative( _
+            testDocument, formulaId, latexBase64, ommlBase64, _
+            nativeDocumentPath)
+        VTVerifyNumberedFormulaIntegrity _
+            testDocument, formulaId, itemIndex
+    Next itemIndex
+
+    regressionStage = "append-first-image-after-native"
+    firstImageId = VTRegressionPerformanceFormulaId(920000101)
+    Set formulaShape = VTRegressionCreateNumberedImage( _
+        testDocument, firstImageId, latexBase64, 96!, 28!)
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, firstImageId, nativeCount + 1
+
+    regressionStage = "append-second-image"
+    secondImageId = VTRegressionPerformanceFormulaId(920000102)
+    Set formulaShape = VTRegressionCreateNumberedImage( _
+        testDocument, secondImageId, latexBase64, 96!, 28!)
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, secondImageId, nativeCount + 2
+
+    regressionStage = "verify-all-six"
+    For itemIndex = 1 To nativeCount
+        formulaId = VTRegressionPerformanceFormulaId(920000000 + itemIndex)
+        VTVerifyNumberedFormulaIntegrity _
+            testDocument, formulaId, itemIndex
+    Next itemIndex
+    If VTCountManagedEquationSequences(testDocument) <> nativeCount + 2 Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The mixed native/image chapter regression sequence inventory is incomplete."
+    End If
+
+    resultText = "PASS" & vbLf & _
+        "nativeOrdinals=1,2,3,4" & vbLf & _
+        "firstImageOrdinal=5" & vbLf & _
+        "secondImageOrdinal=6" & vbLf
+    VTWriteTextAtomic resultPath, resultText
+    testDocument.Saved = True
+    testDocument.Close SaveChanges:=wdDoNotSaveChanges
+    Set testDocument = Nothing
+    Exit Sub
+
+RegressionFailed:
+    regressionErrorNumber = Err.Number
+    regressionErrorDescription = Err.Description
+    On Error Resume Next
+    resultText = "FAIL" & vbLf & _
+        "stage=" & regressionStage & vbLf & _
+        "errorNumber=" & CStr(regressionErrorNumber) & vbLf & _
+        "errorDescription=" & _
+            Replace$(Replace$(regressionErrorDescription, vbCr, " "), _
+                vbLf, " ") & vbLf
+    VTWriteTextAtomic resultPath, resultText
+    If Not testDocument Is Nothing Then
+        testDocument.Saved = True
+        testDocument.Close SaveChanges:=wdDoNotSaveChanges
+    End If
+    On Error GoTo 0
+    Err.Raise regressionErrorNumber, _
+        "VisualTeX Word mixed native/image chapter append regression", _
+        regressionStage & ": " & regressionErrorDescription
+End Sub
+
 Private Function VTRegressionPerformanceFormulaId( _
     ByVal itemIndex As Long) As String
 
@@ -6928,8 +7189,13 @@ Private Sub VTDeleteEquationNumberScaffold( _
             captionBookmarkName).Range.Paragraphs(1).Range.Duplicate
     End If
 
-    VTReplaceDeletedEquationBodyReferences _
-        documentObject, sequenceBookmarkName
+    ' Remove the structural identity and helper before touching body REF fields.
+    ' Rollback runs this routine under On Error Resume Next; if a damaged body
+    ' reference raises first, VBA abandons the rest of this procedure and used
+    ' to leave VT_N_/VT_C_ plus the SEQ helper behind. That orphan then poisoned
+    ' the next numbering reconciliation. Make the formula-specific scaffold the
+    ' first cleanup responsibility so a later reference-repair failure cannot
+    ' strand another managed SEQ field.
     If documentObject.Bookmarks.Exists(numberBookmarkName) Then
         documentObject.Bookmarks(numberBookmarkName).Delete
     End If
@@ -6942,6 +7208,15 @@ Private Sub VTDeleteEquationNumberScaffold( _
     If documentObject.Bookmarks.Exists(nativeBookmarkName) Then
         documentObject.Bookmarks(nativeBookmarkName).Delete
     End If
+    If Not sequenceHelperParagraph Is Nothing Then
+        If VTHelperParagraphOwnsNativeEquationSequence( _
+           sequenceHelperParagraph) Then
+            sequenceHelperParagraph.Delete
+        End If
+    End If
+
+    VTReplaceDeletedEquationBodyReferences _
+        documentObject, sequenceBookmarkName
 
     If paragraphNumber And Not numberRange Is Nothing Then
         Set paragraphScaffold = numberRange.Duplicate
@@ -6968,12 +7243,6 @@ Private Sub VTDeleteEquationNumberScaffold( _
                 paragraphContent.Text = ""
                 VTNormalizePlainWordParagraph formulaParagraph
             End If
-        End If
-    End If
-    If Not sequenceHelperParagraph Is Nothing Then
-        If VTHelperParagraphOwnsNativeEquationSequence( _
-           sequenceHelperParagraph) Then
-            sequenceHelperParagraph.Delete
         End If
     End If
     If deleteTable And Not layoutTable Is Nothing Then layoutTable.Delete
@@ -12658,7 +12927,11 @@ Private Function VTUpdateEquationNumbersCore( _
     End If
     movedHelpers = VTRepairMixedNumberHelperOrder( _
         documentObject, referenceBindings)
-    VTReconcileEquationNumbers documentObject
+    ' Updating numbers is a deliberate full-document repair operation. Force
+    ' every managed SEQ to replay in document order, including chapter/section
+    ' numbering where a merely-positive cached result is not enough to prove
+    ' that an earlier insertion has been incorporated.
+    VTReconcileEquationNumbers documentObject, -1, True
     If movedHelpers > 0 Then
         VTRestoreBodyEquationReferenceBindings _
             documentObject, referenceBindings
@@ -24229,17 +24502,45 @@ Private Sub VTReconcileEquationNumbers( _
     Dim formulaId As String
     Dim numberingMode As String
     Dim nativeBookmarkCompatible As Boolean
+    Dim orphanFormulaIds As Collection
+    Dim orphanCleanupRetried As Boolean
 
     If documentObject Is Nothing Then Exit Sub
     VTMaterializeDocumentEquationNumberingFormat documentObject
     equationLabelName = VTNativeEquationLabelName()
+    Set orphanFormulaIds = New Collection
+
+CaptureSequenceSnapshot:
+    sequenceCount = 0
+    Erase sequenceAnchors
+    Erase sequenceBookmarkNames
 
     ' Phase 1a: capture stable anchors and VisualTeX identities without changing
     ' the Fields collection. Word for Mac can invalidate a For Each enumerator
     ' when SEQ/REF fields are updated or rebuilt during the same traversal,
     ' causing skipped numbers or runtime error 5941.
+    '
+    ' A failed create transaction can leave a VT_N_/VT_C_ helper after its
+    ' visible formula has already rolled back. Treat that exact managed shape as
+    ' garbage while we are already walking SEQ fields. Healthy documents pay no
+    ' extra scan; only when an orphan is actually found do we delete it and take
+    ' one fresh snapshot because the document positions have changed.
     For Each candidate In documentObject.Fields
         If VTIsNativeEquationSequenceField(candidate, equationLabelName) Then
+            sequenceBookmarkName = _
+                VTSequenceBookmarkNameForField(documentObject, candidate)
+            formulaId = VTFormulaIdFromSequenceBookmarkName( _
+                sequenceBookmarkName)
+            Set nativeFormulaRange = Nothing
+            If Len(formulaId) > 0 Then
+                Set nativeFormulaRange = VTNumberedFormulaRangeForId( _
+                    documentObject, formulaId)
+                If nativeFormulaRange Is Nothing Then
+                    VTCollectionAddUniqueText orphanFormulaIds, formulaId
+                    GoTo NextSequenceCandidate
+                End If
+            End If
+
             sequenceCount = sequenceCount + 1
             If sequenceCount = 1 Then
                 ReDim sequenceAnchors(1 To 1)
@@ -24250,24 +24551,27 @@ Private Sub VTReconcileEquationNumbers( _
             End If
             sequenceAnchors(sequenceCount) = _
                 VTEquationFieldStart(candidate)
-            sequenceBookmarkNames(sequenceCount) = _
-                VTSequenceBookmarkNameForField(documentObject, candidate)
-            sequenceBookmarkName = sequenceBookmarkNames(sequenceCount)
-            If Len(sequenceBookmarkName) > 0 Then
-                formulaId = VTFormulaIdFromBookmarkSuffix( _
-                    Mid$(sequenceBookmarkName, _
-                        Len(VT_WORD_SEQUENCE_NUMBER_BOOKMARK_PREFIX) + 1))
-                If Len(formulaId) > 0 Then
-                    Set nativeFormulaRange = VTNumberedFormulaRangeForId( _
-                        documentObject, formulaId)
-                    If Not nativeFormulaRange Is Nothing Then
-                        sequenceAnchors(sequenceCount) = _
-                            nativeFormulaRange.Start
-                    End If
-                End If
+            sequenceBookmarkNames(sequenceCount) = sequenceBookmarkName
+            If Not nativeFormulaRange Is Nothing Then
+                sequenceAnchors(sequenceCount) = nativeFormulaRange.Start
             End If
         End If
+NextSequenceCandidate:
     Next candidate
+
+    If orphanFormulaIds.Count > 0 Then
+        If orphanCleanupRetried Then
+            Err.Raise vbObjectError + 7549, "VisualTeX", _
+                "A stale VisualTeX Equation helper survived reconciliation cleanup."
+        End If
+        For itemIndex = 1 To orphanFormulaIds.Count
+            VTDeleteEquationNumberScaffold _
+                documentObject, CStr(orphanFormulaIds(itemIndex)), False
+        Next itemIndex
+        orphanCleanupRetried = True
+        Set orphanFormulaIds = New Collection
+        GoTo CaptureSequenceSnapshot
+    End If
 
     ' Word's Fields collection is not guaranteed to enumerate mixed image and
     ' OMML helper fields in document order. Sort the captured anchors together
@@ -24329,7 +24633,8 @@ Private Sub VTReconcileEquationNumbers( _
                 Else
                     VTRefreshEquationNumberMirror _
                         documentObject, candidate, sequenceBookmarkName, _
-                        sequenceOrdinal, sequenceHeadingPrefixes(itemIndex), True
+                        sequenceOrdinal, sequenceHeadingPrefixes(itemIndex), True, _
+                        forceFlowingSequenceReplay
                 End If
             Else
                 ' Ordinary Word Equation captions remain native content. They

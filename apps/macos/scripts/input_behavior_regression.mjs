@@ -803,7 +803,7 @@ async function main() {
     const shortcutOption = menu.options.find(({ title }) =>
       /常用数学快捷转义|Common math shortcuts/.test(title),
     );
-    assert.equal(shortcutOption?.checked, true);
+    assert.equal(shortcutOption?.checked, false);
     await evaluate(`document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))`);
 
     const loadSingleFormulaLine = async (latex) => {
