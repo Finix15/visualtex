@@ -1,6 +1,8 @@
 import { installBrowserCompatibility } from "./runtime/browserCompatibility";
+import { installFloatingLayerAutoAvoidance } from "./runtime/floatingLayerAutoAvoidance";
 
 installBrowserCompatibility();
+installFloatingLayerAutoAvoidance();
 
 function describeBootError(value: unknown): string {
   if (value instanceof Error) return value.stack || value.message;

@@ -268,6 +268,89 @@ function activeMathLiveEnvironmentName(field: MathfieldElement) {
   );
 }
 
+const collapsibleEmptyEnvironmentNames = new Set([
+  "align",
+  "align*",
+  "aligned",
+  "alignat",
+  "alignat*",
+  "alignedat",
+  "array",
+  "cases",
+  "gather",
+  "gather*",
+  "gathered",
+  "matrix",
+  "pmatrix",
+  "bmatrix",
+  "Bmatrix",
+  "vmatrix",
+  "Vmatrix",
+  "smallmatrix",
+  "multline",
+  "multline*",
+  "split",
+]);
+
+function stripLeadingEnvironmentArgument(source: string) {
+  const trimmed = source.trimStart();
+  if (!trimmed.startsWith("{")) return source;
+  let depth = 0;
+  for (let index = 0; index < trimmed.length; index += 1) {
+    if (trimmed[index] === "{") depth += 1;
+    else if (trimmed[index] === "}") {
+      depth -= 1;
+      if (depth === 0) return trimmed.slice(index + 1);
+    }
+  }
+  return source;
+}
+
+function isEmptyStructuralEnvironmentLatex(source: string) {
+  const normalized = normalizeChineseLatex(source).trim();
+  const match = normalized.match(
+    /^\\begin\{([A-Za-z]+\*?)\}([\s\S]*)\\end\{\1\}$/,
+  );
+  if (!match || !collapsibleEmptyEnvironmentNames.has(match[1])) return false;
+
+  let body = match[2];
+  if (
+    match[1] === "array" ||
+    match[1] === "alignat" ||
+    match[1] === "alignat*" ||
+    match[1] === "alignedat"
+  ) {
+    body = stripLeadingEnvironmentArgument(body);
+  }
+
+  const residue = body
+    .replace(/\\\\(?:\[[^\]]*\])?/g, "")
+    .replace(/\\(?:cr|newline)\b/g, "")
+    .replace(/&/g, "")
+    .replace(/\s+/g, "");
+  return residue.length === 0;
+}
+
+function collapseEmptyStructuralEnvironment(
+  field: MathfieldElement,
+  snapshotLatex = field.value,
+) {
+  if (!isEmptyStructuralEnvironmentLatex(snapshotLatex)) return false;
+  field.setValue("", {
+    mode: "math",
+    format: "latex",
+    insertionMode: "replaceAll",
+    selectionMode: "after",
+    silenceNotifications: true,
+  });
+  field.position = 0;
+  field.selection = {
+    ranges: [[0, 0]],
+    direction: "none",
+  };
+  return true;
+}
+
 function structuralBoundaryOffsetFromPoint(
   field: MathfieldElement,
   clientX: number,
@@ -4968,7 +5051,11 @@ function FormulaField(props: FormulaFieldProps) {
       const restoredPlaceholder = restoreDeletedVisualTexPlaceholder(field);
       settleVisualTexAccentPlaceholderDelete(field);
       settleVisualTexPlaceholderDelete(field);
-      if (restoredPlaceholder) {
+      const collapsedEmptyEnvironment = collapseEmptyStructuralEnvironment(
+        field,
+        postInputSnapshot.latex,
+      );
+      if (restoredPlaceholder || collapsedEmptyEnvironment) {
         postInputSnapshot = captureFieldSnapshot(field);
       }
     }
@@ -6148,6 +6235,9 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       Math.max(0, lines.findIndex((line) => line.id === activeLineId)),
     );
     const [fieldRenderEpoch, setFieldRenderEpoch] = useState(0);
+    const [fieldRepairEpochByLineId, setFieldRepairEpochByLineId] = useState<
+      Record<string, number>
+    >({});
     const [query, setQuery] = useState("");
     const [selectedIndex, setSelectedIndex] = useState(0);
     const [contextMenu, setContextMenu] = useState<{
@@ -6942,17 +7032,36 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       if (!currentLine) return;
       const beforeActiveLineId = state.activeLineId;
       const beforeLatex = currentLine.latex;
+      const collapsesEmptyEnvironment =
+        beforeLatex.trim().length > 0 &&
+        isEmptyStructuralEnvironmentLatex(edit.afterLatex);
+      const afterLatex = collapsesEmptyEnvironment ? "" : edit.afterLatex;
+      const afterSelection = collapsesEmptyEnvironment
+        ? ({
+            ranges: [[0, 0]],
+            direction: "none",
+          } satisfies MathSelectionSnapshot)
+        : edit.afterSelection;
 
-      state.replaceFormulaLine(edit.lineId, edit.afterLatex);
+      if (collapsesEmptyEnvironment) {
+        collapseEmptyStructuralEnvironment(field, edit.afterLatex);
+      }
+      state.replaceFormulaLine(edit.lineId, afterLatex);
       state.setActiveLineId(edit.lineId);
       linesRef.current = useEditorStore.getState().lines;
       setActiveLine(edit.lineId);
-      refreshSuggestionQuery(edit.lineId, field, edit.afterLatex);
+      refreshSuggestionQuery(edit.lineId, field, afterLatex);
+      if (collapsesEmptyEnvironment) {
+        setFieldRepairEpochByLineId((current) => ({
+          ...current,
+          [edit.lineId]: (current[edit.lineId] ?? 0) + 1,
+        }));
+      }
 
       if (
         historyManager.getState().isReplaying ||
         suppressedHistoryLineIdRef.current === edit.lineId ||
-        beforeLatex === edit.afterLatex
+        beforeLatex === afterLatex
       ) {
         return;
       }
@@ -6960,6 +7069,8 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
       historyManager.recordFormulaEdit({
         ...edit,
         beforeLatex,
+        afterLatex,
+        afterSelection,
         beforeActiveLineId,
         afterActiveLineId: edit.lineId,
       });
@@ -8296,7 +8407,20 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
           keepCaretAfterBareStructuredOperator(field, beforePosition);
         }
 
-        const after = captureFieldSnapshot(field);
+        let after = captureFieldSnapshot(field);
+        const collapsesEmptyEnvironment = isEmptyStructuralEnvironmentLatex(
+          after.latex,
+        );
+        if (collapsesEmptyEnvironment) {
+          collapseEmptyStructuralEnvironment(field, after.latex);
+          after = {
+            latex: "",
+            selection: {
+              ranges: [[0, 0]],
+              direction: "none",
+            },
+          };
+        }
         if (before.latex === after.latex) {
           field.focus();
           return;
@@ -8305,6 +8429,12 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
         state.replaceFormulaLine(lineId, after.latex);
         state.setActiveLineId(lineId);
         linesRef.current = useEditorStore.getState().lines;
+        if (collapsesEmptyEnvironment) {
+          setFieldRepairEpochByLineId((current) => ({
+            ...current,
+            [lineId]: (current[lineId] ?? 0) + 1,
+          }));
+        }
         field.resetUndo();
         historyManager.recordFormulaEdit({
           lineId,
@@ -9230,7 +9360,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
                 </span>
               ) : null}
               <FormulaField
-                key={`formula-field-${reuseLineSlots ? index : lineId}-${fieldRenderEpoch}`}
+                key={`formula-field-${reuseLineSlots ? index : lineId}-${fieldRenderEpoch}-${fieldRepairEpochByLineId[lineId] ?? 0}`}
                 lineId={lineId}
                 index={index}
                 latex={line.latex}

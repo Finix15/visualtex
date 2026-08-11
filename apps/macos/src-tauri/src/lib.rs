@@ -6,7 +6,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::path::BaseDirectory;
@@ -33,11 +33,17 @@ const OCR_RUNTIME_PROBE_CACHE_FILE: &str = "runtime-probe-cache.json";
 const ACTIVE_THEME_FILE: &str = "active-theme.txt";
 const THEME_CHANGED_EVENT: &str = "visualtex-theme-changed";
 const MAIN_WINDOW_SIZE_FILE: &str = "main-window-size.json";
+const MAIN_WINDOW_MODE_SIZES_FILE: &str = "main-window-mode-sizes-v1.json";
+const DEFAULT_NORMAL_WINDOW_WIDTH: f64 = 1240.0;
+const DEFAULT_NORMAL_WINDOW_HEIGHT: f64 = 820.0;
+const DEFAULT_KEYPAD_WINDOW_WIDTH: f64 = 642.0;
+const DEFAULT_KEYPAD_WINDOW_HEIGHT: f64 = 345.0;
 const MIN_MAIN_WINDOW_WIDTH: f64 = 500.0;
 const MIN_MAIN_WINDOW_HEIGHT: f64 = 300.0;
 const MAX_MAIN_WINDOW_WIDTH: f64 = 4000.0;
 const MAX_MAIN_WINDOW_HEIGHT: f64 = 3000.0;
 static MAIN_WINDOW_SIZE_WRITE_GENERATION: AtomicU64 = AtomicU64::new(0);
+static MAIN_WINDOW_KEYPAD_MODE: AtomicBool = AtomicBool::new(false);
 
 fn normalize_app_theme(theme: &str) -> &'static str {
     match theme.trim() {
@@ -98,9 +104,24 @@ struct AppWindowConfiguration {
     office_editor: Option<ConfigurationWindowSize>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MainWindowModeSizes {
+    normal: ConfigurationWindowSize,
+    keypad: ConfigurationWindowSize,
+}
+
 fn normalize_main_window_size(width: f64, height: f64) -> ConfigurationWindowSize {
-    let width = if width.is_finite() { width } else { 1240.0 };
-    let height = if height.is_finite() { height } else { 820.0 };
+    let width = if width.is_finite() {
+        width
+    } else {
+        DEFAULT_NORMAL_WINDOW_WIDTH
+    };
+    let height = if height.is_finite() {
+        height
+    } else {
+        DEFAULT_NORMAL_WINDOW_HEIGHT
+    };
     ConfigurationWindowSize {
         width: width.clamp(MIN_MAIN_WINDOW_WIDTH, MAX_MAIN_WINDOW_WIDTH),
         height: height.clamp(MIN_MAIN_WINDOW_HEIGHT, MAX_MAIN_WINDOW_HEIGHT),
@@ -113,6 +134,22 @@ fn main_window_size_path(app: &AppHandle) -> Result<PathBuf, String> {
         .app_data_dir()
         .map_err(|error| format!("Unable to resolve VisualTeX application data: {error}"))?;
     Ok(app_data_dir.join(MAIN_WINDOW_SIZE_FILE))
+}
+
+fn main_window_mode_sizes_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Unable to resolve VisualTeX application data: {error}"))?;
+    Ok(app_data_dir.join(MAIN_WINDOW_MODE_SIZES_FILE))
+}
+
+fn default_normal_window_size() -> ConfigurationWindowSize {
+    normalize_main_window_size(DEFAULT_NORMAL_WINDOW_WIDTH, DEFAULT_NORMAL_WINDOW_HEIGHT)
+}
+
+fn default_keypad_window_size() -> ConfigurationWindowSize {
+    normalize_main_window_size(DEFAULT_KEYPAD_WINDOW_WIDTH, DEFAULT_KEYPAD_WINDOW_HEIGHT)
 }
 
 fn read_main_window_size(app: &AppHandle) -> Option<ConfigurationWindowSize> {
@@ -132,6 +169,52 @@ fn current_main_window_size(app: &AppHandle) -> Option<ConfigurationWindowSize> 
     ))
 }
 
+fn read_main_window_mode_sizes(app: &AppHandle) -> MainWindowModeSizes {
+    if let Ok(path) = main_window_mode_sizes_path(app) {
+        if let Ok(bytes) = fs::read(path) {
+            if let Ok(stored) = serde_json::from_slice::<MainWindowModeSizes>(&bytes) {
+                return MainWindowModeSizes {
+                    normal: normalize_main_window_size(stored.normal.width, stored.normal.height),
+                    keypad: normalize_main_window_size(stored.keypad.width, stored.keypad.height),
+                };
+            }
+        }
+    }
+
+    MainWindowModeSizes {
+        normal: read_main_window_size(app).unwrap_or_else(default_normal_window_size),
+        keypad: default_keypad_window_size(),
+    }
+}
+
+fn write_main_window_mode_sizes(
+    app: &AppHandle,
+    sizes: MainWindowModeSizes,
+) -> Result<(), String> {
+    let path = main_window_mode_sizes_path(app)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let bytes = serde_json::to_vec_pretty(&sizes).map_err(|error| error.to_string())?;
+    fs::write(path, bytes).map_err(|error| error.to_string())
+}
+
+fn write_main_window_profile_size(
+    app: &AppHandle,
+    keypad: bool,
+    size: ConfigurationWindowSize,
+) -> Result<(), String> {
+    let normalized = normalize_main_window_size(size.width, size.height);
+    let mut profiles = read_main_window_mode_sizes(app);
+    if keypad {
+        profiles.keypad = normalized;
+    } else {
+        profiles.normal = normalized;
+        write_main_window_size(app, normalized)?;
+    }
+    write_main_window_mode_sizes(app, profiles)
+}
+
 fn write_main_window_size(app: &AppHandle, size: ConfigurationWindowSize) -> Result<(), String> {
     let path = main_window_size_path(app)?;
     if let Some(parent) = path.parent() {
@@ -145,14 +228,6 @@ fn schedule_persist_main_window_size(app: &AppHandle, physical_width: u32, physi
     if physical_width == 0 || physical_height == 0 {
         return;
     }
-    let Some(window) = app.get_webview_window("main") else {
-        return;
-    };
-    let scale_factor = window.scale_factor().unwrap_or(1.0).max(0.1);
-    let size = normalize_main_window_size(
-        physical_width as f64 / scale_factor,
-        physical_height as f64 / scale_factor,
-    );
     let generation = MAIN_WINDOW_SIZE_WRITE_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     let app = app.clone();
     std::thread::spawn(move || {
@@ -160,23 +235,63 @@ fn schedule_persist_main_window_size(app: &AppHandle, physical_width: u32, physi
         if MAIN_WINDOW_SIZE_WRITE_GENERATION.load(Ordering::SeqCst) != generation {
             return;
         }
-        if let Err(error) = write_main_window_size(&app, size) {
+        let Some(size) = current_main_window_size(&app) else {
+            return;
+        };
+        let keypad = MAIN_WINDOW_KEYPAD_MODE.load(Ordering::SeqCst);
+        if let Err(error) = write_main_window_profile_size(&app, keypad, size) {
             eprintln!("Unable to persist the VisualTeX main window size: {error}");
         }
     });
 }
 
 fn restore_main_window_size(app: &AppHandle) -> Result<(), String> {
-    let Some(size) = read_main_window_size(app) else {
-        return Ok(());
-    };
+    let profiles = read_main_window_mode_sizes(app);
+    write_main_window_mode_sizes(app, profiles)?;
+    write_main_window_size(app, profiles.normal)?;
+    MAIN_WINDOW_KEYPAD_MODE.store(false, Ordering::SeqCst);
     let Some(window) = app.get_webview_window("main") else {
         return Ok(());
     };
     window
-        .set_size(tauri::LogicalSize::new(size.width, size.height))
+        .set_size(tauri::LogicalSize::new(
+            profiles.normal.width,
+            profiles.normal.height,
+        ))
         .map_err(|error| error.to_string())?;
     window.center().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn switch_main_window_mode(
+    app: AppHandle,
+    keypad: bool,
+) -> Result<ConfigurationWindowSize, String> {
+    let outgoing_keypad = MAIN_WINDOW_KEYPAD_MODE.load(Ordering::SeqCst);
+    if let Some(current) = current_main_window_size(&app) {
+        write_main_window_profile_size(&app, outgoing_keypad, current)?;
+    }
+
+    let profiles = read_main_window_mode_sizes(&app);
+    let target = if keypad {
+        profiles.keypad
+    } else {
+        profiles.normal
+    };
+
+    MAIN_WINDOW_SIZE_WRITE_GENERATION.fetch_add(1, Ordering::SeqCst);
+    MAIN_WINDOW_KEYPAD_MODE.store(keypad, Ordering::SeqCst);
+
+    if let Some(window) = app.get_webview_window("main") {
+        if window.is_maximized().unwrap_or(false) {
+            window.unmaximize().map_err(|error| error.to_string())?;
+        }
+        window
+            .set_size(tauri::LogicalSize::new(target.width, target.height))
+            .map_err(|error| error.to_string())?;
+    }
+
+    Ok(target)
 }
 
 #[tauri::command]
@@ -187,8 +302,15 @@ fn get_app_window_configuration(app: AppHandle) -> Result<AppWindowConfiguration
     #[cfg(not(target_os = "macos"))]
     let office_editor = None;
 
+    let profiles = read_main_window_mode_sizes(&app);
+    let main = if MAIN_WINDOW_KEYPAD_MODE.load(Ordering::SeqCst) {
+        Some(profiles.normal)
+    } else {
+        current_main_window_size(&app).or(Some(profiles.normal))
+    };
+
     Ok(AppWindowConfiguration {
-        main: current_main_window_size(&app).or_else(|| read_main_window_size(&app)),
+        main,
         office_editor,
     })
 }
@@ -200,13 +322,15 @@ fn apply_app_window_configuration(
 ) -> Result<AppWindowConfiguration, String> {
     if let Some(requested) = configuration.main {
         let size = normalize_main_window_size(requested.width, requested.height);
-        if let Some(window) = app.get_webview_window("main") {
-            window
-                .set_size(tauri::LogicalSize::new(size.width, size.height))
-                .map_err(|error| error.to_string())?;
-            window.center().map_err(|error| error.to_string())?;
+        write_main_window_profile_size(&app, false, size)?;
+        if !MAIN_WINDOW_KEYPAD_MODE.load(Ordering::SeqCst) {
+            if let Some(window) = app.get_webview_window("main") {
+                window
+                    .set_size(tauri::LogicalSize::new(size.width, size.height))
+                    .map_err(|error| error.to_string())?;
+                window.center().map_err(|error| error.to_string())?;
+            }
         }
-        write_main_window_size(&app, size)?;
     }
 
     #[cfg(target_os = "macos")]
@@ -1781,6 +1905,7 @@ pub fn run() {
             set_app_theme,
             get_app_window_configuration,
             apply_app_window_configuration,
+            switch_main_window_mode,
             get_ocr_runtime_status,
             install_ocr_runtime,
             recognize_formula_image,

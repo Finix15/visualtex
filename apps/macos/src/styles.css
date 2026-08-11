@@ -2122,6 +2122,282 @@ kbd {
   animation: dialog-in 170ms ease-out;
 }
 
+.help-manual-backdrop {
+  z-index: 145;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+}
+
+.help-manual-dialog {
+  width: min(980px, calc(100vw - 36px));
+  height: min(760px, calc(100vh - 36px));
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 17px;
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  color: var(--text);
+  outline: none;
+  animation: dialog-in 170ms ease-out;
+}
+
+.help-manual-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 15px 17px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, var(--accent) 28%);
+  background: color-mix(in srgb, var(--surface) 96%, var(--accent-soft) 4%);
+}
+
+.help-manual-header > div {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.help-manual-header > div > svg {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.help-manual-header span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.help-manual-header strong {
+  color: color-mix(in srgb, var(--text) 78%, var(--accent) 22%);
+  font-size: 15px;
+}
+
+.help-manual-header small {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.help-manual-layout {
+  min-height: 0;
+  flex: 1;
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr);
+}
+
+.help-manual-toc {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 15px 12px;
+  border-right: 1px solid color-mix(in srgb, var(--border) 76%, var(--accent) 24%);
+  background: color-mix(in srgb, var(--bg-elevated) 94%, var(--accent-soft) 6%);
+}
+
+.help-manual-toc > strong {
+  padding: 0 7px;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--text-muted) 80%, var(--accent) 20%);
+}
+
+.help-manual-toc > div {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+}
+
+.help-manual-toc button {
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.42;
+  text-align: left;
+}
+
+.help-manual-toc button:hover {
+  background: color-mix(in srgb, var(--surface-hover) 76%, var(--accent-soft) 24%);
+  color: var(--text);
+}
+
+.help-manual-toc button[data-level="1"] {
+  margin-top: 4px;
+  color: color-mix(in srgb, var(--text) 84%, var(--accent) 16%);
+  font-weight: 700;
+}
+
+.help-manual-toc button[data-level="2"] {
+  padding-left: 14px;
+}
+
+.help-manual-toc button[data-level="3"] {
+  padding-left: 22px;
+  color: var(--text-muted);
+}
+
+.help-manual-content {
+  min-width: 0;
+  min-height: 0;
+  padding: 24px 30px 42px;
+  overflow: auto;
+  scroll-behavior: smooth;
+}
+
+.help-manual-content h1,
+.help-manual-content h2,
+.help-manual-content h3,
+.help-manual-content h4 {
+  scroll-margin-top: 18px;
+  line-height: 1.28;
+}
+
+.help-manual-content h1 {
+  margin: 0 0 9px;
+  color: color-mix(in srgb, var(--text) 70%, var(--accent) 30%);
+  font-size: 26px;
+}
+
+.help-manual-content h2 {
+  margin: 30px 0 11px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 66%, var(--accent) 34%);
+  color: color-mix(in srgb, var(--text) 80%, var(--accent) 20%);
+  font-size: 19px;
+}
+
+.help-manual-content h3 {
+  margin: 23px 0 9px;
+  color: color-mix(in srgb, var(--text) 86%, var(--accent) 14%);
+  font-size: 16px;
+}
+
+.help-manual-content h4 {
+  margin: 19px 0 8px;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.help-manual-content p,
+.help-manual-content li,
+.help-manual-content td,
+.help-manual-content th {
+  font-size: 12px;
+  line-height: 1.72;
+}
+
+.help-manual-content p {
+  margin: 8px 0;
+  color: color-mix(in srgb, var(--text-muted) 88%, var(--text) 12%);
+}
+
+.help-manual-content strong {
+  color: color-mix(in srgb, var(--text) 86%, var(--accent) 14%);
+  font-weight: 700;
+}
+
+.help-manual-content ul,
+.help-manual-content ol {
+  margin: 8px 0 12px;
+  padding-left: 22px;
+  color: var(--text-muted);
+}
+
+.help-manual-content li + li {
+  margin-top: 3px;
+}
+
+.help-manual-content code {
+  padding: 1px 5px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, var(--accent) 22%);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--bg-elevated) 88%, var(--accent-soft) 12%);
+  color: var(--text);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.95em;
+}
+
+.help-manual-content pre {
+  margin: 11px 0 15px;
+  padding: 13px 15px;
+  overflow-x: auto;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, var(--accent) 22%);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--bg-elevated) 92%, var(--accent-soft) 8%);
+}
+
+.help-manual-content pre code {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  white-space: pre;
+}
+
+.help-manual-content hr {
+  margin: 22px 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.help-manual-table-wrap {
+  max-width: 100%;
+  margin: 10px 0 14px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+
+.help-manual-content table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.help-manual-content th,
+.help-manual-content td {
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  text-align: left;
+  vertical-align: top;
+}
+
+.help-manual-content th {
+  background: color-mix(in srgb, var(--bg-elevated) 90%, var(--accent-soft) 10%);
+  color: color-mix(in srgb, var(--text) 84%, var(--accent) 16%);
+  font-weight: 700;
+}
+
+.help-manual-content tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+@media (max-width: 720px) {
+  .help-manual-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .help-manual-toc {
+    display: none;
+  }
+
+  .help-manual-content {
+    padding: 20px 18px 36px;
+  }
+}
+
 .dialog-header,
 .history-header {
   display: flex;

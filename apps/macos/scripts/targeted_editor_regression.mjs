@@ -4,9 +4,9 @@ import { rm, writeFile } from "node:fs/promises";
 import process from "node:process";
 
 const scenario = process.argv[2];
-if (!new Set(["wrapper", "wrapper-bm", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "native-structure-audit", "native-structure-input-over", "native-structure-input-under", "native-structure-input-multi", "native-structure-input-core", "native-space-selection", "candidate-query-reset", "limit-candidate", "raw-placeholder-visual", "placeholder-selection", "pointer-release-stability", "structural-placeholder", "structured-chinese-ime", "accent-placeholder", "caret-probe", "vertical-structure-probe", "vertical-structure-navigation", "scripts", "upright", "formula-formatting", "context-style", "suggestions", "navigation", "geometry", "source-layout", "source-preview-only", "toolbar-compact", "formula-tiles", "cursor-placement", "font-settings", "output-fonts", "configuration", "ocr-model-selection", "settings", "layout", "delete", "export"]).has(scenario)) {
+if (!new Set(["wrapper", "wrapper-bm", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "native-structure-audit", "native-structure-input-over", "native-structure-input-under", "native-structure-input-multi", "native-structure-input-core", "native-space-selection", "candidate-query-reset", "limit-candidate", "raw-placeholder-visual", "placeholder-selection", "pointer-release-stability", "structural-placeholder", "structured-chinese-ime", "accent-placeholder", "caret-probe", "vertical-structure-probe", "vertical-structure-navigation", "scripts", "upright", "formula-formatting", "context-style", "suggestions", "navigation", "geometry", "source-layout", "source-preview-only", "toolbar-compact", "formula-tiles", "cursor-placement", "font-settings", "output-fonts", "configuration", "ocr-model-selection", "ocr-empty-environment", "settings", "layout", "delete", "export"]).has(scenario)) {
   throw new Error(
-    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-bm|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|native-structure-audit|native-structure-input-over|native-structure-input-under|native-structure-input-multi|native-structure-input-core|native-space-selection|candidate-query-reset|limit-candidate|raw-placeholder-visual|placeholder-selection|pointer-release-stability|structural-placeholder|structured-chinese-ime|accent-placeholder|caret-probe|vertical-structure-probe|vertical-structure-navigation|scripts|upright|formula-formatting|context-style|suggestions|navigation|geometry|source-layout|source-preview-only|toolbar-compact|formula-tiles|cursor-placement|font-settings|output-fonts|configuration|ocr-model-selection|settings|layout|delete|export>",
+    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-bm|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|native-structure-audit|native-structure-input-over|native-structure-input-under|native-structure-input-multi|native-structure-input-core|native-space-selection|candidate-query-reset|limit-candidate|raw-placeholder-visual|placeholder-selection|pointer-release-stability|structural-placeholder|structured-chinese-ime|accent-placeholder|caret-probe|vertical-structure-probe|vertical-structure-navigation|scripts|upright|formula-formatting|context-style|suggestions|navigation|geometry|source-layout|source-preview-only|toolbar-compact|formula-tiles|cursor-placement|font-settings|output-fonts|configuration|ocr-model-selection|ocr-empty-environment|settings|layout|delete|export>",
   );
 }
 
@@ -318,6 +318,75 @@ async function main() {
       await sleep(100);
       await focusField();
     };
+
+    if (scenario === "ocr-empty-environment") {
+      await waitForEvaluation(`(() => ({
+        ready: Boolean(document.querySelector("math-field")),
+      }))()`, "OCR empty-environment formula field");
+      await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        if (!field) return false;
+        field.setValue(String.raw\`\\begin{align*}a&=b\\\\c&=d\\end{align*}\`, {
+          mode: "math",
+          format: "latex",
+          insertionMode: "replaceAll",
+          selectionMode: "after",
+          silenceNotifications: true,
+        });
+        field.dispatchEvent(new InputEvent("input", {
+          bubbles: true,
+          composed: true,
+          inputType: "insertFromPaste",
+        }));
+        field.focus();
+        field.selection = {
+          ranges: [[0, field.lastOffset]],
+          direction: "forward",
+        };
+        return true;
+      })()`);
+      await sleep(120);
+      const beforeDelete = await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        const persisted = JSON.parse(localStorage.getItem("visualtex-editor") || "{}");
+        return {
+          fieldValue: field?.value ?? null,
+          lastOffset: field?.lastOffset ?? null,
+          selection: field ? structuredClone(field.selection) : null,
+          storeLatex: persisted.state?.lines?.[0]?.latex ?? null,
+        };
+      })()`);
+      await key("Backspace", "Backspace", 8);
+      await sleep(180);
+      const afterDelete = await evaluate(`(() => {
+        const field = document.querySelector("math-field");
+        const persisted = JSON.parse(localStorage.getItem("visualtex-editor") || "{}");
+        return {
+          fieldValue: field?.value ?? null,
+          visibleValue: field?.getValue("latex-without-placeholders") ?? null,
+          lastOffset: field?.lastOffset ?? null,
+          selection: field ? structuredClone(field.selection) : null,
+          storeLatex: persisted.state?.lines?.[0]?.latex ?? null,
+        };
+      })()`);
+      assert.match(
+        beforeDelete.fieldValue ?? "",
+        /\\begin\{align\*\}/,
+        JSON.stringify(beforeDelete),
+      );
+      assert.equal(
+        afterDelete.fieldValue,
+        "",
+        `Deleting all OCR multiline content must remount a truly empty MathLive field: ${JSON.stringify(afterDelete)}`,
+      );
+      assert.equal(
+        afterDelete.storeLatex,
+        "",
+        `Deleting all OCR multiline content must clear the stored formula source: ${JSON.stringify(afterDelete)}`,
+      );
+      console.log("OCR multiline empty-environment regression passed");
+      return;
+    }
 
     if (scenario === "ocr-model-selection") {
       await waitForEvaluation(`(() => ({

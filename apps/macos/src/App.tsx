@@ -3,6 +3,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   AlertCircle,
+  BookOpenText,
   Braces,
   Check,
   ChevronDown,
@@ -42,6 +43,7 @@ import { LatexSourceEditor } from "./source-editor/LatexSourceEditor";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { FormulaHotkeyManagerDialog } from "./components/FormulaHotkeyManagerDialog";
 import { HistoryPanel } from "./components/HistoryPanel";
+import { HelpManualDialog } from "./components/HelpManualDialog";
 import { OcrDialog } from "./components/OcrDialog";
 import { ExportDialog } from "./components/ExportDialog";
 import { OnboardingTour } from "./components/OnboardingTour";
@@ -162,6 +164,7 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [formulaHotkeyManagerOpen, setFormulaHotkeyManagerOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [helpManualOpen, setHelpManualOpen] = useState(false);
   const [ocrOpen, setOcrOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 1040);
@@ -186,6 +189,7 @@ function App() {
   const [copyMenuOpen, setCopyMenuOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [keypadMode, setKeypadMode] = useState(false);
+  const keypadModeSwitchPendingRef = useRef(false);
   const [updateOpen, setUpdateOpen] = useState(false);
   const [updateChecking, setUpdateChecking] = useState(false);
   const [updateError, setUpdateError] = useState("");
@@ -321,6 +325,40 @@ function App() {
       window.requestAnimationFrame(() => restoreSnapshotFocus(after));
     }
     return true;
+  };
+
+  const handleKeypadModeToggle = () => {
+    if (keypadModeSwitchPendingRef.current) return;
+    setMenuOpen(false);
+    setCopyMenuOpen(false);
+
+    const nextKeypadMode = !keypadMode;
+    if (!isTauri()) {
+      setKeypadMode(nextKeypadMode);
+      window.requestAnimationFrame(() =>
+        editorRef.current?.focus({ target: "last", moveToEnd: false }),
+      );
+      return;
+    }
+
+    keypadModeSwitchPendingRef.current = true;
+    void invoke("switch_main_window_mode", { keypad: nextKeypadMode })
+      .then(() => {
+        setKeypadMode(nextKeypadMode);
+        window.requestAnimationFrame(() =>
+          editorRef.current?.focus({ target: "last", moveToEnd: false }),
+        );
+      })
+      .catch((error) => {
+        setToast(
+          isEn
+            ? `Unable to switch keypad window size: ${String(error)}`
+            : `小键盘窗口尺寸切换失败：${String(error)}`,
+        );
+      })
+      .finally(() => {
+        keypadModeSwitchPendingRef.current = false;
+      });
   };
 
   useEffect(() => {
@@ -1140,7 +1178,7 @@ function App() {
         return;
       }
 
-      if (settingsOpen || formulaHotkeyManagerOpen || ocrOpen || historyOpen || exportOpen || macOfficeFirstRunOpen || onboardingOpen || updateOpen) {
+      if (settingsOpen || formulaHotkeyManagerOpen || helpManualOpen || ocrOpen || historyOpen || exportOpen || macOfficeFirstRunOpen || onboardingOpen || updateOpen) {
         return;
       }
 
@@ -1190,7 +1228,7 @@ function App() {
 
     window.addEventListener("keydown", handleWindowKeyDown);
     return () => window.removeEventListener("keydown", handleWindowKeyDown);
-  }, [latex, title, isEn, zoom, keypadMode, keypadMinimizeOnCopy, latexCodeFormat, settingsOpen, formulaHotkeyManagerOpen, ocrOpen, historyOpen, exportOpen, macOfficeFirstRunOpen, onboardingOpen, updateOpen]);
+  }, [latex, title, isEn, zoom, keypadMode, keypadMinimizeOnCopy, latexCodeFormat, settingsOpen, formulaHotkeyManagerOpen, helpManualOpen, ocrOpen, historyOpen, exportOpen, macOfficeFirstRunOpen, onboardingOpen, updateOpen]);
 
   const codeFormatControl = (
       <div
@@ -1306,14 +1344,7 @@ function App() {
             ? "Enter keypad mode"
             : "进入小键盘模式"
       }
-      onClick={() => {
-        setMenuOpen(false);
-        setCopyMenuOpen(false);
-        setKeypadMode((enabled) => !enabled);
-        window.requestAnimationFrame(() =>
-          editorRef.current?.focus({ target: "last", moveToEnd: false }),
-        );
-      }}
+      onClick={() => void handleKeypadModeToggle()}
     >
       <Keyboard size={15} />
       <span>{isEn ? "Keypad" : "小键盘"}</span>
@@ -1471,6 +1502,14 @@ function App() {
               >
                 <CircleHelp size={16} />
                 <span>{isEn ? "Quick tour" : "新手教程"}</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runMenuAction(() => setHelpManualOpen(true))}
+              >
+                <BookOpenText size={16} />
+                <span>{isEn ? "Help manual" : "帮助手册"}</span>
               </button>
               <button
                 type="button"
@@ -1701,6 +1740,11 @@ function App() {
       <FormulaHotkeyManagerDialog
         open={formulaHotkeyManagerOpen}
         onClose={() => setFormulaHotkeyManagerOpen(false)}
+      />
+      <HelpManualDialog
+        open={helpManualOpen}
+        language={language}
+        onClose={() => setHelpManualOpen(false)}
       />
       <HistoryPanel
         open={historyOpen}

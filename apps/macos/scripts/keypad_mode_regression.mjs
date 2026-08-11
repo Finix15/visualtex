@@ -159,6 +159,13 @@ async function main() {
       const done = () => document.querySelector("math-field") ? resolve(true) : setTimeout(done, 30);
       done();
     })`);
+    await evaluate(`(() => {
+      const laterButton = [...document.querySelectorAll('.office-first-run-backdrop button')]
+        .find((button) => /Later|稍后处理/.test(button.textContent || ''));
+      if (laterButton instanceof HTMLElement) laterButton.click();
+      return true;
+    })()`);
+    await sleep(80);
 
     const normalProbe = await evaluate(`(() => {
       const header = document.querySelector('.editor-pane-header');
@@ -183,8 +190,137 @@ async function main() {
       `normal editor header overflows at the current compact window size: ${JSON.stringify(normalProbe)}`,
     );
 
+    const assertSharedFloatingLayer = async (
+      triggerSelector,
+      layerSelector,
+      label,
+    ) => {
+      await clickSelector(triggerSelector);
+      await sleep(220);
+      const state = await evaluate(`(() => {
+        const layer = document.querySelector(${JSON.stringify(layerSelector)});
+        if (!(layer instanceof HTMLElement)) return null;
+        const rect = layer.getBoundingClientRect();
+        return {
+          left: rect.left,
+          top: rect.top,
+          right: rect.right,
+          bottom: rect.bottom,
+          viewportWidth: innerWidth,
+          viewportHeight: innerHeight,
+          autoAvoided:
+            layer.dataset.visualtexAutoAvoidAdjusted === 'true',
+        };
+      })()`);
+      assert.ok(state, `${label} did not open`);
+      assert.equal(
+        state.autoAvoided,
+        true,
+        `${label} did not use the shared floating-layer auto-avoidance manager`,
+      );
+      assert.ok(
+        state.left >= 8 &&
+          state.top >= 8 &&
+          state.right <= state.viewportWidth - 8 &&
+          state.bottom <= state.viewportHeight - 8,
+        `${label} escaped the viewport after shared auto-avoidance: ${JSON.stringify(state)}`,
+      );
+      await evaluate(`document.querySelector(${JSON.stringify(triggerSelector)})?.click()`);
+      await sleep(80);
+      assert.equal(
+        await evaluate(`document.querySelector(${JSON.stringify(layerSelector)}) === null`),
+        true,
+        `${label} did not close cleanly after the bounds check`,
+      );
+    };
+
+    await assertSharedFloatingLayer(
+      '.menu-button',
+      '.app-menu-popover',
+      'main application menu',
+    );
+
+    await evaluate(`(() => {
+      const field = document.querySelector('math-field');
+      if (!field) return false;
+      field.focus();
+      field.shadowRoot?.querySelector('[part="keyboard-sink"]')?.focus({ preventScroll: true });
+      field.position = field.lastOffset;
+      return true;
+    })()`);
+    await client.send("Input.insertText", { text: "abc" });
+    await sleep(120);
+    assert.match(
+      await evaluate(`document.querySelector('math-field')?.value ?? ''`),
+      /abc/,
+      "unable to prepare a selected formula for color popover bounds regression",
+    );
+
+    const colorPopoverBounds = async (selector, kind) => {
+      await evaluate(`(() => {
+        const field = document.querySelector('math-field');
+        if (!field) return false;
+        field.focus();
+        field.selection = {
+          ranges: [[0, field.lastOffset]],
+          direction: 'forward',
+        };
+        return true;
+      })()`);
+      await sleep(30);
+      await clickSelector(selector);
+      await sleep(180);
+      const bounds = await evaluate(`(() => {
+        const popover = document.querySelector('[data-formula-color-popover="${kind}"]');
+        const editorPane = popover?.closest('.formula-workspace.editor-pane');
+        if (!(popover instanceof HTMLElement)) return null;
+        const rect = popover.getBoundingClientRect();
+        const editorRect = editorPane instanceof HTMLElement
+          ? editorPane.getBoundingClientRect()
+          : null;
+        return {
+          left: rect.left,
+          right: rect.right,
+          viewportWidth: innerWidth,
+          editorLeft: editorRect?.left ?? 0,
+          editorRight: editorRect?.right ?? innerWidth,
+          editorWidth: editorRect?.width ?? 0,
+          autoAvoided:
+            popover.dataset.visualtexAutoAvoidAdjusted === 'true',
+        };
+      })()`);
+      assert.ok(bounds, `${kind} color popover did not open`);
+      assert.equal(
+        bounds.autoAvoided,
+        true,
+        `${kind} color popover was not processed by the shared floating-layer auto-avoidance manager`,
+      );
+      const leftBoundary = bounds.editorWidth > 0
+        ? Math.max(8, bounds.editorLeft + 8)
+        : 8;
+      const rightBoundary = bounds.editorWidth > 0
+        ? Math.min(bounds.viewportWidth - 8, bounds.editorRight - 8)
+        : bounds.viewportWidth - 8;
+      assert.ok(
+        bounds.left >= leftBoundary && bounds.right <= rightBoundary,
+        `${kind} color popover escaped the visible application/editor bounds: ${JSON.stringify(bounds)}`,
+      );
+      await clickSelector(selector);
+      await sleep(40);
+      return bounds;
+    };
+
+    await colorPopoverBounds('[data-formula-selection-color]', 'color');
+    await colorPopoverBounds(
+      '[data-formula-selection-background]',
+      'backgroundColor',
+    );
+
+    // Browser regression covers keypad UI only. Native window-size memory and
+    // switching now live entirely in the Rust/Tauri backend and are verified
+    // against the real macOS window instead of localStorage/browser bounds.
     await evaluate(`document.querySelector('[data-keypad-mode-toggle]')?.click()`);
-    await sleep(100);
+    await sleep(120);
     const keypadProbe = await evaluate(`(() => ({
       shell: document.querySelector('.app-shell')?.classList.contains('is-keypad-mode') ?? false,
       workspace: document.querySelector('.workspace')?.classList.contains('is-keypad-mode') ?? false,
@@ -244,21 +380,65 @@ async function main() {
       assert.equal(value, true, `${name} must remain available in keypad mode`);
     }
 
+    const codeFormatTriggerHit = await evaluate(`(() => {
+      const button = document.querySelector('.editor-code-format-control .code-format-primary');
+      if (!(button instanceof HTMLElement)) return { hit: null, reason: 'missing-trigger' };
+      const box = button.getBoundingClientRect();
+      const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      return {
+        hit: hit?.closest('.code-format-primary') === button,
+        rect: { left: box.left, top: box.top, right: box.right, bottom: box.bottom },
+        hitTag: hit?.tagName ?? null,
+        hitClass: hit instanceof HTMLElement ? hit.className : null,
+      };
+    })()`);
+    assert.equal(
+      codeFormatTriggerHit.hit,
+      true,
+      `keypad LaTeX format trigger is blocked: ${JSON.stringify(codeFormatTriggerHit)}`,
+    );
     await clickSelector('.editor-code-format-control .code-format-primary');
     const visibleFormatHitTarget = await evaluate(`(() => {
       const item = document.querySelector('[data-format="raw"]');
-      if (!item) return null;
+      if (!item) return { format: null, reason: 'missing-item' };
       const box = item.getBoundingClientRect();
       const hit = document.elementFromPoint(
         box.left + box.width / 2,
         box.top + box.height / 2,
       );
-      return hit?.closest('[data-format="raw"]')?.getAttribute('data-format') ?? null;
+      const menu = item.closest('.code-format-menu');
+      const menuRect = menu?.getBoundingClientRect();
+      return {
+        format: hit?.closest('[data-format="raw"]')?.getAttribute('data-format') ?? null,
+        itemRect: { left: box.left, top: box.top, right: box.right, bottom: box.bottom },
+        menuRect: menuRect
+          ? { left: menuRect.left, top: menuRect.top, right: menuRect.right, bottom: menuRect.bottom }
+          : null,
+        viewport: { width: innerWidth, height: innerHeight },
+        autoAvoided:
+          menu instanceof HTMLElement &&
+          menu.dataset.visualtexAutoAvoidAdjusted === 'true',
+        hitTag: hit?.tagName ?? null,
+        hitClass: hit instanceof HTMLElement ? hit.className : null,
+      };
     })()`);
     assert.equal(
-      visibleFormatHitTarget,
+      visibleFormatHitTarget.format,
       "raw",
-      "the visible LaTeX format menu is blocked from real pointer input",
+      `the visible LaTeX format menu is blocked from real pointer input: ${JSON.stringify(visibleFormatHitTarget)}`,
+    );
+    assert.equal(
+      visibleFormatHitTarget.autoAvoided,
+      true,
+      `the LaTeX format menu did not use the shared floating-layer auto-avoidance manager: ${JSON.stringify(visibleFormatHitTarget)}`,
+    );
+    assert.ok(
+      visibleFormatHitTarget.menuRect &&
+        visibleFormatHitTarget.menuRect.left >= 8 &&
+        visibleFormatHitTarget.menuRect.top >= 8 &&
+        visibleFormatHitTarget.menuRect.right <= visibleFormatHitTarget.viewport.width - 8 &&
+        visibleFormatHitTarget.menuRect.bottom <= visibleFormatHitTarget.viewport.height - 8,
+      `the LaTeX format menu escaped the viewport after shared auto-avoidance: ${JSON.stringify(visibleFormatHitTarget)}`,
     );
     await clickSelector('[data-format="raw"]');
     assert.equal(
@@ -308,7 +488,7 @@ async function main() {
     assert.doesNotMatch(copied, /^\$\$/m, "keypad Ctrl+S fell back to a hard-coded double-dollar format");
 
     await evaluate(`document.querySelector('[data-keypad-mode-toggle]')?.click()`);
-    await sleep(50);
+    await sleep(120);
     assert.equal(
       await evaluate(`Boolean(document.querySelector('.app-header'))`),
       true,

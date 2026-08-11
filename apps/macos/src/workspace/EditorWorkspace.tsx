@@ -1087,6 +1087,7 @@ export function EditorWorkspace({
                     <div
                       className="formula-color-popover"
                       data-formula-color-popover={formulaColorMenu}
+                      data-visualtex-floating-layer
                       role="dialog"
                       aria-label={
                         formulaColorMenu === "color"
