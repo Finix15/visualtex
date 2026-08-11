@@ -1206,7 +1206,7 @@ internal sealed class WordFormulaService
                 ?? throw new InvalidOperationException("No active Word document.");
             EnsureWritable(document);
             undoRecord = BeginUndoRecord("VisualTeX Update Equation Numbers");
-            return WordEquationNumbering.Reconcile(document);
+            return WordEquationNumbering.UpdateEquationNumbers(document);
         }
         finally
         {

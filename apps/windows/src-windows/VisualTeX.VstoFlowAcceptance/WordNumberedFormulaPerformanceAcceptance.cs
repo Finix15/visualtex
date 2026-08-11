@@ -502,6 +502,15 @@ internal static partial class Program
                 Release(typingProbe);
             }
 
+            var updateWatch = Stopwatch.StartNew();
+            var updatedFormulaCount = service.UpdateEquationNumbers();
+            updateWatch.Stop();
+            Console.WriteLine(
+                $"    [perf] explicit equation-number refresh at {formulaIds.Length + 1} formulas: {updateWatch.ElapsedMilliseconds}ms");
+            if (updatedFormulaCount < formulaIds.Length)
+                throw new InvalidDataException(
+                    $"Explicit equation-number refresh lost formulas: expected at least {formulaIds.Length}, actual {updatedFormulaCount}.");
+
             var targetWatch = Stopwatch.StartNew();
             var targets = WordEquationNumbering.GetEquationReferenceTargets(document);
             targetWatch.Stop();
@@ -516,6 +525,32 @@ internal static partial class Program
                     formulaIds[Math.Min(79, formulaIds.Length - 1)],
                     StringComparison.OrdinalIgnoreCase))
                 ?? targets[Math.Min(79, targets.Count - 1)];
+
+            // First force a real number change while the target has only its own
+            // generated visible REF. The explicit refresh must stay fully local and
+            // must not pay for a document-wide Fields.Update in this common case.
+            CorruptNativeEquationNumberForAcceptance(document, target.FormulaId, 998);
+            RefreshEquationReferencesForAcceptance(document, target.FormulaId);
+            var localRepairWatch = Stopwatch.StartNew();
+            service.UpdateEquationNumbers();
+            localRepairWatch.Stop();
+            var locallyRepairedTarget = WordEquationNumbering.GetEquationReferenceTargets(document)
+                .First(item => string.Equals(
+                    item.FormulaId,
+                    target.FormulaId,
+                    StringComparison.OrdinalIgnoreCase));
+            AssertEqual(
+                target.NumberText,
+                locallyRepairedTarget.NumberText,
+                "Local explicit equation-number refresh did not repair the native SEQ result.");
+            AssertEquationReferencesForAcceptance(
+                document,
+                target.FormulaId,
+                target.NumberText,
+                minimumMatches: 1);
+            Console.WriteLine(
+                $"    [perf] changed equation-number repair without body REF at {targets.Count} formulas: {localRepairWatch.ElapsedMilliseconds}ms");
+
             application.Selection.EndKey(Word.WdUnits.wdStory);
             application.Selection.TypeParagraph();
             application.Selection.TypeText("See ");
@@ -528,6 +563,43 @@ internal static partial class Program
             referenceWatch.Stop();
             Console.WriteLine(
                 $"    [perf] equation reference insertion at {targets.Count} formulas: {referenceWatch.ElapsedMilliseconds}ms");
+
+            // Prove that the fast explicit update is not merely a no-op shortcut.
+            // Corrupt one healthy native SEQ result, refresh its visible/body REF
+            // fields to the bad value, then require UpdateEquationNumbers to repair
+            // the target and every generated reference without structural rebuild.
+            CorruptNativeEquationNumberForAcceptance(document, target.FormulaId, 999);
+            RefreshEquationReferencesForAcceptance(document, target.FormulaId);
+            var corruptedTarget = WordEquationNumbering.GetEquationReferenceTargets(document)
+                .First(item => string.Equals(
+                    item.FormulaId,
+                    target.FormulaId,
+                    StringComparison.OrdinalIgnoreCase));
+            if (string.Equals(
+                    corruptedTarget.NumberText,
+                    target.NumberText,
+                    StringComparison.Ordinal))
+                throw new InvalidDataException(
+                    "Equation-number corruption probe did not change the target number.");
+
+            var repairWatch = Stopwatch.StartNew();
+            service.UpdateEquationNumbers();
+            repairWatch.Stop();
+            var repairedTarget = WordEquationNumbering.GetEquationReferenceTargets(document)
+                .First(item => string.Equals(
+                    item.FormulaId,
+                    target.FormulaId,
+                    StringComparison.OrdinalIgnoreCase));
+            AssertEqual(
+                target.NumberText,
+                repairedTarget.NumberText,
+                "Explicit equation-number refresh did not repair a stale native SEQ result.");
+            AssertEquationReferencesForAcceptance(
+                document,
+                target.FormulaId,
+                target.NumberText);
+            Console.WriteLine(
+                $"    [perf] changed equation-number repair at {targets.Count} formulas: {repairWatch.ElapsedMilliseconds}ms");
 
             document.Save();
             Console.WriteLine("Word existing numbered daily-operation performance acceptance passed.");
@@ -1152,6 +1224,137 @@ internal static partial class Program
             throw new InvalidOperationException($"Numbered OLE formula {formulaId} was not found.");
         }
         finally { Release(shapes); }
+    }
+
+    private static void CorruptNativeEquationNumberForAcceptance(
+        Word.Document document,
+        string formulaId,
+        int forcedOrdinal)
+    {
+        Word.Bookmarks? bookmarks = null;
+        Word.Bookmark? captionBookmark = null;
+        Word.Range? captionRange = null;
+        Word.Fields? fields = null;
+        Word.Field? field = null;
+        Word.Range? code = null;
+        try
+        {
+            bookmarks = document.Bookmarks;
+            captionBookmark = bookmarks[WordEquationNumbering.NativeCaptionBookmarkName(formulaId)];
+            captionRange = captionBookmark.Range;
+            fields = captionRange.Fields;
+            for (var index = 1; index <= fields.Count; index++)
+            {
+                Release(field);
+                field = fields[index];
+                Release(code);
+                code = field.Code;
+                var codeText = code.Text ?? string.Empty;
+                if (codeText.IndexOf("SEQ ", StringComparison.OrdinalIgnoreCase) < 0)
+                    continue;
+                var replaced = System.Text.RegularExpressions.Regex.Replace(
+                    codeText,
+                    @"\\r\s+\d+",
+                    $@"\r {forcedOrdinal}",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase
+                    | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+                if (string.Equals(replaced, codeText, StringComparison.Ordinal))
+                    replaced = codeText + $@" \r {forcedOrdinal} ";
+                code.Text = replaced;
+                field.Update();
+                return;
+            }
+            throw new InvalidDataException(
+                $"Native equation caption for {formulaId} has no SEQ field to corrupt.");
+        }
+        finally
+        {
+            Release(code);
+            Release(field);
+            Release(fields);
+            Release(captionRange);
+            Release(captionBookmark);
+            Release(bookmarks);
+        }
+    }
+
+    private static void RefreshEquationReferencesForAcceptance(
+        Word.Document document,
+        string formulaId)
+    {
+        var targetBookmark = WordEquationNumbering.NativeNumberBookmarkName(formulaId);
+        Word.Fields? fields = null;
+        Word.Field? field = null;
+        Word.Range? code = null;
+        try
+        {
+            fields = document.Fields;
+            for (var index = 1; index <= fields.Count; index++)
+            {
+                Release(field);
+                field = fields[index];
+                Release(code);
+                code = field.Code;
+                var codeText = code.Text ?? string.Empty;
+                if (codeText.IndexOf("REF", StringComparison.OrdinalIgnoreCase) < 0
+                    || codeText.IndexOf(targetBookmark, StringComparison.OrdinalIgnoreCase) < 0)
+                    continue;
+                field.Update();
+            }
+        }
+        finally
+        {
+            Release(code);
+            Release(field);
+            Release(fields);
+        }
+    }
+
+    private static void AssertEquationReferencesForAcceptance(
+        Word.Document document,
+        string formulaId,
+        string expectedNumber,
+        int minimumMatches = 2)
+    {
+        var targetBookmark = WordEquationNumbering.NativeNumberBookmarkName(formulaId);
+        Word.Fields? fields = null;
+        Word.Field? field = null;
+        Word.Range? code = null;
+        Word.Range? result = null;
+        var matched = 0;
+        try
+        {
+            fields = document.Fields;
+            for (var index = 1; index <= fields.Count; index++)
+            {
+                Release(result);
+                result = null;
+                Release(field);
+                field = fields[index];
+                Release(code);
+                code = field.Code;
+                var codeText = code.Text ?? string.Empty;
+                if (codeText.IndexOf("REF", StringComparison.OrdinalIgnoreCase) < 0
+                    || codeText.IndexOf(targetBookmark, StringComparison.OrdinalIgnoreCase) < 0)
+                    continue;
+                result = field.Result;
+                AssertEqual(
+                    expectedNumber,
+                    (result.Text ?? string.Empty).Trim(),
+                    "Equation REF result remained stale after explicit number refresh.");
+                matched++;
+            }
+        }
+        finally
+        {
+            Release(result);
+            Release(code);
+            Release(field);
+            Release(fields);
+        }
+        if (matched < minimumMatches)
+            throw new InvalidDataException(
+                $"Expected at least {minimumMatches} REF fields for {formulaId}; found {matched}.");
     }
 
     private static void AssertNumberedFormulaArtifacts(
