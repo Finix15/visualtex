@@ -684,6 +684,8 @@ internal sealed class WordFormulaService
     public void NormalizeTypingCaretAfterInlineFormula(Selection selection)
     {
         if (selection is null) return;
+        if (WordEquationNumbering.ExpandCompactTrailingTypingParagraph(selection))
+            return;
         Range? caret = null;
         Paragraphs? paragraphs = null;
         Paragraph? paragraph = null;
@@ -1410,22 +1412,23 @@ internal sealed class WordFormulaService
             else
             {
                 TryReconcileShape(document, shape, metadata);
-                if (session.Numbered)
+                Range? shapeRange = null;
+                try
                 {
-                    MoveCaretToNormalTypingParagraphAfterNumberedDisplay(
-                        document,
-                        metadata.FormulaId);
-                }
-                else
-                {
-                    Range? shapeRange = null;
-                    try
+                    shapeRange = shape.Range;
+                    if (session.Numbered)
                     {
-                        shapeRange = shape.Range;
+                        WordEquationNumbering.CleanupNumberedDisplayInsertionSpacing(
+                            document,
+                            metadata.FormulaId);
+                        selection.SetRange(shapeRange.Start, shapeRange.End);
+                    }
+                    else
+                    {
                         MoveSelectionAfterDisplayFormula(selection, shapeRange);
                     }
-                    finally { Release(shapeRange); }
                 }
+                finally { Release(shapeRange); }
             }
             return Result(session, document);
         }
@@ -1530,22 +1533,23 @@ internal sealed class WordFormulaService
                     metadata,
                     reuseExistingNumberedTableFormatting: session.Numbered,
                     knownNumberedTable: numberedTable);
-                if (session.Numbered)
+                Range? shapeRange = null;
+                try
                 {
-                    MoveCaretToNormalTypingParagraphAfterNumberedDisplay(
-                        document,
-                        metadata.FormulaId);
-                }
-                else
-                {
-                    Range? shapeRange = null;
-                    try
+                    shapeRange = shape.Range;
+                    if (session.Numbered)
                     {
-                        shapeRange = shape.Range;
+                        WordEquationNumbering.CleanupNumberedDisplayInsertionSpacing(
+                            document,
+                            metadata.FormulaId);
+                        selection.SetRange(shapeRange.Start, shapeRange.End);
+                    }
+                    else
+                    {
                         MoveSelectionAfterDisplayFormula(selection, shapeRange);
                     }
-                    finally { Release(shapeRange); }
                 }
+                finally { Release(shapeRange); }
             }
             return Result(session, document);
         }
@@ -1687,9 +1691,10 @@ internal sealed class WordFormulaService
                     ref performanceCheckpoint);
                 if (session.Numbered)
                 {
-                    MoveCaretToNormalTypingParagraphAfterNumberedDisplay(
+                    WordEquationNumbering.CleanupNumberedDisplayInsertionSpacing(
                         document,
                         metadata.FormulaId);
+                    selection.SetRange(equationRange.Start, equationRange.End);
                 }
                 else
                 {
@@ -6163,28 +6168,6 @@ internal sealed class WordFormulaService
     {
         if (undoRecord is null) return;
         try { undoRecord.EndCustomRecord(); } catch { }
-    }
-
-    private void MoveCaretToNormalTypingParagraphAfterNumberedDisplay(
-        Document document,
-        string formulaId)
-    {
-        Range? caret = null;
-        Selection? selection = null;
-        try
-        {
-            caret = WordEquationNumbering
-                .EnsureNormalTypingParagraphAfterNumberedDisplay(document, formulaId);
-            if (caret is null) return;
-            selection = _application.Selection;
-            selection.SetRange(caret.Start, caret.End);
-            ResetSelectionTransientFormatting(selection);
-        }
-        finally
-        {
-            Release(selection);
-            Release(caret);
-        }
     }
 
     private static Range DuplicateOleRangeByFormulaId(

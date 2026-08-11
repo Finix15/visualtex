@@ -88,6 +88,9 @@ internal static class WordEquationNumbering
     private const string NativeNumberBookmarkPrefix = "VTEqNum_";
     private const string EquationNumberFormatVariableName = "VisualTeXEquationNumberFormat";
     private const string EquationNumberTailFormulaVariableName = "VisualTeXEquationNumberTailFormulaId";
+    private const string CompactTypingTailBookmarkName = "VTNumberedTypingTail";
+    private const float CompactTypingTailFontSizePoints = 1f;
+    private const float CompactTypingTailLineSpacingPoints = 1f;
     private const string UserPreferenceRegistryPath = @"Software\VisualTeX\Word";
     private const string DefaultNumberedPreferenceName = "DefaultDisplayEquationNumbered";
     private const string DefaultNumberFormatPreferenceName = "DefaultEquationNumberFormat";
@@ -142,6 +145,7 @@ internal static class WordEquationNumbering
         var watch = tracePerformance
             ? System.Diagnostics.Stopwatch.StartNew()
             : null;
+        RepairNumberedDisplaySpacing(document);
         var fastPath = TryRefreshHealthyEquationNumbersInPlace(document, out var updated);
         var result = fastPath ? updated : Reconcile(document);
         if (watch is not null)
@@ -1341,9 +1345,10 @@ internal static class WordEquationNumbering
         Paragraphs? captionParagraphs = null;
         Paragraph? captionParagraph = null;
         Range? captionParagraphRange = null;
+        Range? restoredCaptionBookmarkRange = null;
         Frames? captionFrames = null;
         Frame? captionFrame = null;
-        Paragraphs? documentParagraphs = null;
+        Paragraphs? typingParagraphs = null;
         Paragraph? typingParagraph = null;
         Range? typingRange = null;
         Frames? typingFrames = null;
@@ -1358,41 +1363,57 @@ internal static class WordEquationNumbering
             captionBookmark = bookmarks[captionName];
             captionRange = captionBookmark.Range;
             content = document.Content;
-            // Word normally leaves one ordinary empty paragraph immediately
-            // after the clipped native-caption paragraph. Reuse it instead of
-            // manufacturing another paragraph: the previous tail check treated
-            // this healthy trailing paragraph as proof that the caption was not
-            // at the document tail and left Selection inside the equation table.
-            documentParagraphs = document.Paragraphs;
-            if (documentParagraphs.Count > 0)
+            captionParagraphs = captionRange.Paragraphs;
+            captionParagraph = captionParagraphs[1];
+            captionParagraphRange = captionParagraph.Range;
+
+            // Reuse only the paragraph immediately after this formula's native
+            // caption. Never inspect document.Paragraphs[last]: doing so redirects
+            // a create anchor from an earlier numbered formula to the document
+            // tail whenever any later formula/body content exists.
+            var nextParagraphStart = captionParagraphRange.End;
+            if (nextParagraphStart < content.End)
             {
-                typingParagraph = documentParagraphs[documentParagraphs.Count];
-                typingRange = typingParagraph.Range.Duplicate;
-                var followsCaption = typingRange.Start >= captionRange.End;
+                typingRange = document.Range(
+                    nextParagraphStart,
+                    Math.Min(content.End, nextParagraphStart + 1));
                 var inTable = (bool)typingRange.get_Information(WdInformation.wdWithInTable);
                 typingFrames = typingRange.Frames;
-                if (followsCaption && !inTable && typingFrames.Count == 0)
+                if (!inTable && typingFrames.Count == 0)
                 {
-                    try
+                    typingParagraphs = typingRange.Paragraphs;
+                    if (typingParagraphs.Count > 0)
                     {
-                        object normalStyle = WdBuiltinStyle.wdStyleNormal;
-                        typingRange.set_Style(ref normalStyle);
+                        typingParagraph = typingParagraphs[1];
+                        Release(typingRange);
+                        typingRange = typingParagraph.Range.Duplicate;
+                        var paragraphText = typingRange.Text ?? string.Empty;
+                        var isEmptyTypingParagraph = paragraphText.All(character =>
+                            char.IsWhiteSpace(character) || character == '\a');
+                        if (isEmptyTypingParagraph)
+                        {
+                            try
+                            {
+                                object normalStyle = WdBuiltinStyle.wdStyleNormal;
+                                typingRange.set_Style(ref normalStyle);
+                            }
+                            catch { }
+                            font = typingRange.Font;
+                            font.Reset();
+                            font.Hidden = 0;
+                            font.Position = 0;
+                            font.Color = WdColor.wdColorAutomatic;
+                            format = typingRange.ParagraphFormat;
+                            format.Reset();
+                            format.LineSpacingRule = WdLineSpacing.wdLineSpaceSingle;
+                            format.SpaceBefore = 0f;
+                            format.SpaceAfter = 0f;
+                            typingRange.Collapse(WdCollapseDirection.wdCollapseStart);
+                            var existingResult = typingRange;
+                            typingRange = null;
+                            return existingResult;
+                        }
                     }
-                    catch { }
-                    font = typingRange.Font;
-                    font.Reset();
-                    font.Hidden = 0;
-                    font.Position = 0;
-                    font.Color = WdColor.wdColorAutomatic;
-                    format = typingRange.ParagraphFormat;
-                    format.Reset();
-                    format.LineSpacingRule = WdLineSpacing.wdLineSpaceSingle;
-                    format.SpaceBefore = 0f;
-                    format.SpaceAfter = 0f;
-                    typingRange.Collapse(WdCollapseDirection.wdCollapseStart);
-                    var existingResult = typingRange;
-                    typingRange = null;
-                    return existingResult;
                 }
                 Release(typingFrames);
                 typingFrames = null;
@@ -1400,19 +1421,18 @@ internal static class WordEquationNumbering
                 typingRange = null;
                 Release(typingParagraph);
                 typingParagraph = null;
-                Release(documentParagraphs);
-                documentParagraphs = null;
+                Release(typingParagraphs);
+                typingParagraphs = null;
             }
 
-            // If non-caption body content already follows this formula, it is not
-            // the trailing numbered display and this helper must not create a new
-            // paragraph in the middle of the document.
-            if (captionRange.End < Math.Max(content.Start, content.End - 1))
-                return null;
-
-            captionParagraphs = captionRange.Paragraphs;
-            captionParagraph = captionParagraphs[1];
-            captionParagraphRange = captionParagraph.Range;
+            // No reusable local typing paragraph exists. Create one immediately
+            // after this caption, even in the middle of the document. This keeps
+            // a new numbered formula local while pushing the following formula or
+            // body paragraph forward instead of nesting the new table in either.
+            // Capture the bookmark coordinates first: Word automatically expands
+            // a bookmark ending at this paragraph to include the new paragraph.
+            var originalCaptionStart = captionRange.Start;
+            var originalCaptionEnd = captionRange.End;
             captionParagraphRange.InsertParagraphAfter();
 
             // Word 2021 inherits a Frame when a paragraph is inserted after the
@@ -1431,6 +1451,21 @@ internal static class WordEquationNumbering
                 Release(captionFrames);
                 captionFrames = null;
             }
+
+            // InsertParagraphAfter expands VTEqCap_<id> across the inherited
+            // blank paragraph. If StyleNativeCaption sees that expanded bookmark,
+            // it frames the blank paragraph again and the returned insertion point
+            // collapses onto the following table boundary. Restore the exact old
+            // bookmark extent before rebuilding the clipped caption frame.
+            captionBookmark.Delete();
+            Release(captionBookmark);
+            captionBookmark = null;
+            restoredCaptionBookmarkRange = document.Range(
+                originalCaptionStart,
+                originalCaptionEnd);
+            captionBookmark = bookmarks.Add(
+                captionName,
+                restoredCaptionBookmarkRange);
 
             Release(captionParagraphRange);
             captionParagraphRange = null;
@@ -1502,9 +1537,10 @@ internal static class WordEquationNumbering
             Release(typingFrames);
             Release(typingRange);
             Release(typingParagraph);
-            Release(documentParagraphs);
+            Release(typingParagraphs);
             Release(captionFrame);
             Release(captionFrames);
+            Release(restoredCaptionBookmarkRange);
             Release(captionParagraphRange);
             Release(captionParagraph);
             Release(captionParagraphs);
@@ -1513,6 +1549,407 @@ internal static class WordEquationNumbering
             Release(captionRange);
             Release(captionBookmark);
             Release(bookmarks);
+        }
+    }
+
+    internal static void CleanupNumberedDisplayInsertionSpacing(
+        Document document,
+        string formulaId)
+    {
+        Bookmarks? bookmarks = null;
+        Bookmark? captionBookmark = null;
+        Range? captionRange = null;
+        Range? content = null;
+        Range? probe = null;
+        Paragraphs? paragraphs = null;
+        Paragraph? paragraph = null;
+        Range? paragraphRange = null;
+        Frames? frames = null;
+        try
+        {
+            bookmarks = document.Bookmarks;
+            var captionName = NativeCaptionBookmarkName(formulaId);
+            if (!bookmarks.Exists(captionName)) return;
+            captionBookmark = bookmarks[captionName];
+            captionRange = captionBookmark.Range;
+            content = document.Content;
+            if (captionRange.End >= content.End) return;
+
+            probe = document.Range(
+                captionRange.End,
+                Math.Min(content.End, captionRange.End + 1));
+            if ((bool)probe.get_Information(WdInformation.wdWithInTable)) return;
+            frames = probe.Frames;
+            if (frames.Count > 0) return;
+            paragraphs = probe.Paragraphs;
+            if (paragraphs.Count == 0) return;
+            paragraph = paragraphs[1];
+            paragraphRange = paragraph.Range.Duplicate;
+            if (paragraphRange.Start != captionRange.End
+                || !IsNumberingParagraphAdornment(paragraphRange.Text))
+                return;
+
+            // A temporary paragraph is needed while Word creates a numbered table
+            // between two existing structures. Once the new formula is stable, that
+            // paragraph is redundant and can be removed safely; the hidden native
+            // caption paragraph itself keeps the neighboring formula tables separate.
+            if (paragraphRange.End < content.End)
+            {
+                paragraphRange.Delete();
+                return;
+            }
+
+            // Word always recreates the final document paragraph when it is deleted.
+            // Keep that structural terminator, but collapse it to one point so it no
+            // longer appears as a full blank line below the last numbered formula.
+            CompactTrailingTypingParagraph(document, paragraphRange);
+        }
+        finally
+        {
+            Release(frames);
+            Release(paragraphRange);
+            Release(paragraph);
+            Release(paragraphs);
+            Release(probe);
+            Release(content);
+            Release(captionRange);
+            Release(captionBookmark);
+            Release(bookmarks);
+        }
+    }
+
+    internal static bool ExpandCompactTrailingTypingParagraph(Selection selection)
+    {
+        if (selection is null || selection.Start != selection.End) return false;
+        Document? document = null;
+        Bookmarks? bookmarks = null;
+        Bookmark? bookmark = null;
+        Range? bookmarkRange = null;
+        Paragraphs? paragraphs = null;
+        Paragraph? paragraph = null;
+        Range? paragraphRange = null;
+        Microsoft.Office.Interop.Word.Font? font = null;
+        ParagraphFormat? format = null;
+        Microsoft.Office.Interop.Word.Font? selectionFont = null;
+        try
+        {
+            document = selection.Document;
+            bookmarks = document.Bookmarks;
+            if (!bookmarks.Exists(CompactTypingTailBookmarkName)) return false;
+            bookmark = bookmarks[CompactTypingTailBookmarkName];
+            bookmarkRange = bookmark.Range;
+            if (selection.Start < bookmarkRange.Start
+                || selection.Start > bookmarkRange.End)
+                return false;
+            paragraphs = bookmarkRange.Paragraphs;
+            if (paragraphs.Count == 0) return false;
+            paragraph = paragraphs[1];
+            paragraphRange = paragraph.Range.Duplicate;
+            if (!IsNumberingParagraphAdornment(paragraphRange.Text)) return false;
+
+            bookmark.Delete();
+            try
+            {
+                object normalStyle = WdBuiltinStyle.wdStyleNormal;
+                paragraphRange.set_Style(ref normalStyle);
+            }
+            catch { }
+            font = paragraphRange.Font;
+            font.Reset();
+            font.Hidden = 0;
+            font.Position = 0;
+            font.Color = WdColor.wdColorAutomatic;
+            format = paragraphRange.ParagraphFormat;
+            format.Reset();
+            format.LineSpacingRule = WdLineSpacing.wdLineSpaceSingle;
+            format.SpaceBefore = 0f;
+            format.SpaceAfter = 0f;
+
+            selection.SetRange(paragraphRange.Start, paragraphRange.Start);
+            selectionFont = selection.Font;
+            selectionFont.Reset();
+            selectionFont.Hidden = 0;
+            selectionFont.Position = 0;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            Release(selectionFont);
+            Release(format);
+            Release(font);
+            Release(paragraphRange);
+            Release(paragraph);
+            Release(paragraphs);
+            Release(bookmarkRange);
+            Release(bookmark);
+            Release(bookmarks);
+            Release(document);
+        }
+    }
+
+    internal static void RepairNumberedDisplaySpacing(Document document)
+    {
+        // Do not probe every bookmark/table through COM here. On a 100-formula
+        // document that costs several seconds even when nothing is wrong. One
+        // WordOpenXML snapshot tells us which formulas can actually own legacy
+        // spacing damage; only those FormulaIds are touched through COM below.
+        var repairFormulaIds = ReadNumberedDisplaySpacingRepairPlan(document);
+        foreach (var formulaId in repairFormulaIds)
+        {
+            Table? table = null;
+            try
+            {
+                table = FindNumberedEquationTable(document, formulaId);
+                if (table is not null)
+                    RemoveEmptyTrailingNumberedTableRows(table);
+            }
+            finally { Release(table); }
+            CleanupNumberedDisplayInsertionSpacing(document, formulaId);
+        }
+    }
+
+    private static IReadOnlyList<string> ReadNumberedDisplaySpacingRepairPlan(
+        Document document)
+    {
+        Range? content = null;
+        try
+        {
+            content = document.Content;
+            var xml = content.WordOpenXML ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(xml)) return Array.Empty<string>();
+
+            var planned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var captionMatches = Regex.Matches(
+                xml,
+                @"<w:bookmarkStart\b(?=[^>]*\bw:name=""VTEqCap_(?<guid>[0-9A-F]{32})"")[^>]*/>",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (captionMatches.Count == 0) return Array.Empty<string>();
+
+            // The final Word paragraph cannot be deleted; probing just the final
+            // numbered formula lets CleanupNumberedDisplayInsertionSpacing compact
+            // that terminator to 1 pt when it directly follows the last caption.
+            if (Guid.TryParseExact(
+                    captionMatches[captionMatches.Count - 1].Groups["guid"].Value,
+                    "N",
+                    out var tailGuid))
+                planned.Add(tailGuid.ToString("D"));
+
+            // Legacy insertion builds could leave a second, completely empty row
+            // in an otherwise standard three-column equation table. Detect those
+            // candidates in the same WordOpenXML snapshot instead of reading
+            // document.Tables / Rows.Count through COM for every formula. The latter
+            // costs several seconds at 100+ formulas even when every table is healthy.
+            var visibleMatches = Regex.Matches(
+                xml,
+                @"<w:bookmarkStart\b(?=[^>]*\bw:name=""VTEq_(?<guid>[0-9A-F]{32})"")[^>]*/>",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            foreach (Match visibleMatch in visibleMatches)
+            {
+                if (!Guid.TryParseExact(
+                        visibleMatch.Groups["guid"].Value,
+                        "N",
+                        out var visibleGuid))
+                    continue;
+                var tableStart = xml.LastIndexOf(
+                    "<w:tbl",
+                    visibleMatch.Index,
+                    StringComparison.OrdinalIgnoreCase);
+                var tableEnd = xml.IndexOf(
+                    "</w:tbl>",
+                    visibleMatch.Index,
+                    StringComparison.OrdinalIgnoreCase);
+                if (tableStart < 0 || tableEnd <= visibleMatch.Index) continue;
+                tableEnd += "</w:tbl>".Length;
+                if (tableEnd - tableStart > 262144) continue;
+                var tableXml = xml.Substring(tableStart, tableEnd - tableStart);
+                var rowCount = Regex.Matches(
+                    tableXml,
+                    @"<w:tr\b",
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant).Count;
+                if (rowCount > 1)
+                    planned.Add(visibleGuid.ToString("D"));
+            }
+
+            // Old insertion builds could leave one ordinary empty paragraph
+            // immediately after VTEqCap_<id> and immediately before the next table.
+            // The paragraph is safe to delete, but only schedule it when the XML
+            // shows that exact VisualTeX structural adjacency; ordinary user blank
+            // paragraphs elsewhere are not touched.
+            foreach (Match captionMatch in captionMatches)
+            {
+                if (!Guid.TryParseExact(
+                        captionMatch.Groups["guid"].Value,
+                        "N",
+                        out var captionGuid))
+                    continue;
+                var captionParagraphEnd = xml.IndexOf(
+                    "</w:p>",
+                    captionMatch.Index,
+                    StringComparison.OrdinalIgnoreCase);
+                if (captionParagraphEnd < 0) continue;
+                captionParagraphEnd += "</w:p>".Length;
+                var probeLength = Math.Min(32768, xml.Length - captionParagraphEnd);
+                if (probeLength <= 0) continue;
+                var probe = xml.Substring(captionParagraphEnd, probeLength);
+                var spacerMatch = Regex.Match(
+                    probe,
+                    @"^\s*(?:<w:bookmarkEnd\b[^>]*/>\s*)*"
+                    + @"(?<paragraph><w:p\b[^>]*>.*?</w:p>)\s*<w:tbl\b",
+                    RegexOptions.IgnoreCase
+                    | RegexOptions.CultureInvariant
+                    | RegexOptions.Singleline,
+                    TimeSpan.FromSeconds(1));
+                if (!spacerMatch.Success) continue;
+                if (!IsStructurallyEmptyOpenXmlParagraph(
+                        spacerMatch.Groups["paragraph"].Value))
+                    continue;
+                planned.Add(captionGuid.ToString("D"));
+            }
+
+            // Process later formulas first because deleting an obsolete spacer or
+            // table row shifts story coordinates before earlier formulas.
+            return planned
+                .Select(formulaId => new
+                {
+                    FormulaId = formulaId,
+                    Position = FindOpenXmlCaptionPosition(xml, formulaId),
+                })
+                .OrderByDescending(item => item.Position)
+                .Select(item => item.FormulaId)
+                .ToArray();
+        }
+        catch
+        {
+            // Spacing cleanup is a compatibility repair layered on top of equation
+            // numbering. If Word refuses to expose/parse the snapshot, keep the
+            // existing numbering update path rather than turning a cosmetic repair
+            // into a hard failure.
+            return Array.Empty<string>();
+        }
+        finally { Release(content); }
+    }
+
+    private static int FindOpenXmlCaptionPosition(string xml, string formulaId)
+    {
+        if (!Guid.TryParse(formulaId, out var formulaGuid)) return -1;
+        return xml.IndexOf(
+            $"VTEqCap_{formulaGuid:N}",
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsStructurallyEmptyOpenXmlParagraph(string paragraphXml)
+    {
+        if (string.IsNullOrWhiteSpace(paragraphXml)) return false;
+        if (Regex.IsMatch(
+                paragraphXml,
+                @"<(?:w:t|w:instrText)\b[^>]*>\s*[^<\s]",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            return false;
+        return paragraphXml.IndexOf("<w:drawing", StringComparison.OrdinalIgnoreCase) < 0
+            && paragraphXml.IndexOf("<w:object", StringComparison.OrdinalIgnoreCase) < 0
+            && paragraphXml.IndexOf("<w:pict", StringComparison.OrdinalIgnoreCase) < 0
+            && paragraphXml.IndexOf("<w:fldChar", StringComparison.OrdinalIgnoreCase) < 0
+            && paragraphXml.IndexOf("<m:oMath", StringComparison.OrdinalIgnoreCase) < 0;
+    }
+
+    private static void CompactTrailingTypingParagraph(
+        Document document,
+        Range paragraphRange)
+    {
+        Bookmarks? bookmarks = null;
+        Bookmark? previousBookmark = null;
+        Microsoft.Office.Interop.Word.Font? font = null;
+        ParagraphFormat? format = null;
+        try
+        {
+            try
+            {
+                object normalStyle = WdBuiltinStyle.wdStyleNormal;
+                paragraphRange.set_Style(ref normalStyle);
+            }
+            catch { }
+            font = paragraphRange.Font;
+            font.Reset();
+            font.Size = CompactTypingTailFontSizePoints;
+            font.Hidden = 0;
+            font.Position = 0;
+            font.Color = WdColor.wdColorAutomatic;
+            format = paragraphRange.ParagraphFormat;
+            format.Reset();
+            format.LineSpacingRule = WdLineSpacing.wdLineSpaceExactly;
+            format.LineSpacing = CompactTypingTailLineSpacingPoints;
+            format.SpaceBefore = 0f;
+            format.SpaceAfter = 0f;
+
+            bookmarks = document.Bookmarks;
+            if (bookmarks.Exists(CompactTypingTailBookmarkName))
+            {
+                previousBookmark = bookmarks[CompactTypingTailBookmarkName];
+                previousBookmark.Delete();
+                Release(previousBookmark);
+                previousBookmark = null;
+            }
+            previousBookmark = bookmarks.Add(
+                CompactTypingTailBookmarkName,
+                paragraphRange);
+        }
+        finally
+        {
+            Release(previousBookmark);
+            Release(bookmarks);
+            Release(format);
+            Release(font);
+        }
+    }
+
+    private static void RemoveEmptyTrailingNumberedTableRows(Table table)
+    {
+        Rows? rows = null;
+        Row? row = null;
+        Range? rowRange = null;
+        InlineShapes? shapes = null;
+        OMaths? maths = null;
+        Fields? fields = null;
+        try
+        {
+            rows = table.Rows;
+            for (var index = rows.Count; index >= 2; index--)
+            {
+                Release(fields);
+                fields = null;
+                Release(maths);
+                maths = null;
+                Release(shapes);
+                shapes = null;
+                Release(rowRange);
+                rowRange = null;
+                Release(row);
+                row = null;
+                row = rows[index];
+                rowRange = row.Range;
+                shapes = rowRange.InlineShapes;
+                maths = rowRange.OMaths;
+                fields = rowRange.Fields;
+                if (shapes.Count > 0 || maths.Count > 0 || fields.Count > 0)
+                    continue;
+                var rowText = (rowRange.Text ?? string.Empty)
+                    .Replace("\a", string.Empty);
+                if (!IsNumberingParagraphAdornment(rowText)) continue;
+                row.Delete();
+            }
+        }
+        finally
+        {
+            Release(fields);
+            Release(maths);
+            Release(shapes);
+            Release(rowRange);
+            Release(row);
+            Release(rows);
         }
     }
 

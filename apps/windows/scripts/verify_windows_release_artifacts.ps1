@@ -319,6 +319,20 @@ foreach ($requiredMarker in @(
         throw "Custom NSIS template is missing verified release marker: $requiredMarker"
     }
 }
+$officePageMarker = 'Page custom VisualTeXOfficePageCreate VisualTeXOfficePageLeave'
+$maintenancePageMarker = 'Page custom PageReinstall PageLeaveReinstall'
+$directoryPageMarker = '!insertmacro MUI_PAGE_DIRECTORY'
+$ocrPageMarker = 'Page custom VisualTeXOcrPageCreate VisualTeXOcrPageLeave'
+$officePageIndex = $customNsisSource.IndexOf($officePageMarker, [System.StringComparison]::Ordinal)
+$maintenancePageIndex = $customNsisSource.IndexOf($maintenancePageMarker, [System.StringComparison]::Ordinal)
+$directoryPageIndex = $customNsisSource.IndexOf($directoryPageMarker, [System.StringComparison]::Ordinal)
+$ocrPageIndex = $customNsisSource.IndexOf($ocrPageMarker, [System.StringComparison]::Ordinal)
+if ($officePageIndex -lt 0 -or $maintenancePageIndex -lt 0 -or $officePageIndex -ge $maintenancePageIndex) {
+    throw "The Office integration/process-guard page must run before Tauri's reinstall/uninstall maintenance page."
+}
+if ($directoryPageIndex -lt 0 -or $ocrPageIndex -lt 0 -or $ocrPageIndex -le $directoryPageIndex) {
+    throw "The optional OCR page must remain in the normal install flow after the directory page."
+}
 $tauriConfig = Get-Content -LiteralPath (Join-Path $root "src-tauri\tauri.conf.json") -Raw -Encoding UTF8 | ConvertFrom-Json
 if ([string]$tauriConfig.bundle.windows.nsis.template -ne "./target/nsis-template/visualtex-installer.nsi") {
     throw "Tauri is not configured to bundle with the verified custom NSIS template."
