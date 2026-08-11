@@ -2792,4 +2792,231 @@
   }
 }
 
+/* In-app help manual */
+.help-dialog-backdrop {
+  z-index: 4200;
+  background: var(--bg-scrim, rgba(18, 24, 31, 0.42));
+  backdrop-filter: blur(3px);
+}
+
+.help-dialog {
+  width: min(1120px, calc(100vw - 28px));
+  height: min(820px, calc(100vh - 28px));
+  max-width: none;
+  max-height: none;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  isolation: isolate;
+  opacity: 1;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong, var(--border));
+  box-shadow: var(--shadow-lg, 0 22px 56px rgba(0, 0, 0, 0.24));
+  backdrop-filter: none;
+}
+
+.help-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+  opacity: 1;
+}
+
+.help-dialog-header > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.help-dialog-header strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text);
+  font-size: 15px;
+}
+
+.help-dialog-header span {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.help-dialog-body {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  background: var(--surface);
+  color: var(--text);
+  opacity: 1;
+}
+
+.help-dialog-toc {
+  min-width: 0;
+  overflow: auto;
+  padding: 10px 8px;
+  border-right: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+  opacity: 1;
+}
+
+.help-dialog-toc button {
+  width: 100%;
+  border: 0;
+  border-radius: 6px;
+  padding: 7px 9px;
+  background: transparent;
+  color: var(--text-muted);
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.help-dialog-toc button:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.help-dialog-content {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px 24px 40px;
+  background: var(--surface);
+  color: var(--text);
+  opacity: 1;
+  font-size: 13px;
+  line-height: 1.65;
+  scroll-behavior: smooth;
+}
+
+.help-dialog-content h1,
+.help-dialog-content h2,
+.help-dialog-content h3 {
+  color: var(--text);
+  line-height: 1.35;
+}
+
+.help-dialog-content h1 {
+  margin: 0 0 16px;
+  font-size: 22px;
+}
+
+.help-dialog-content h2 {
+  margin: 28px 0 10px;
+  padding-top: 4px;
+  font-size: 17px;
+  scroll-margin-top: 16px;
+}
+
+.help-dialog-content h3 {
+  margin: 20px 0 8px;
+  font-size: 14px;
+}
+
+.help-dialog-content p,
+.help-dialog-content ul,
+.help-dialog-content ol {
+  margin: 7px 0;
+}
+
+.help-dialog-content ul,
+.help-dialog-content ol {
+  padding-left: 22px;
+}
+
+.help-dialog-content li + li {
+  margin-top: 3px;
+}
+
+.help-dialog-content code {
+  border-radius: 4px;
+  padding: 1px 4px;
+  background: var(--bg-inset);
+  font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
+  font-size: 0.94em;
+}
+
+.help-dialog-content pre {
+  overflow: auto;
+  margin: 10px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--bg-inset);
+}
+
+.help-dialog-content pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.help-dialog-content hr {
+  margin: 20px 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.help-table-scroll {
+  max-width: 100%;
+  overflow: auto;
+  margin: 10px 0;
+}
+
+.help-dialog-content table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.help-dialog-content th,
+.help-dialog-content td {
+  border: 1px solid var(--border);
+  padding: 7px 9px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.help-dialog-content th {
+  background: var(--bg-elevated);
+  font-weight: 650;
+}
+
+@media (max-width: 720px), (max-height: 420px) {
+  .help-dialog {
+    width: calc(100vw - 12px);
+    height: calc(100vh - 12px);
+  }
+
+  .help-dialog-body {
+    grid-template-columns: 150px minmax(0, 1fr);
+  }
+
+  .help-dialog-toc {
+    padding: 6px 4px;
+  }
+
+  .help-dialog-toc button {
+    padding: 5px 6px;
+    font-size: 10px;
+  }
+
+  .help-dialog-content {
+    padding: 10px 14px 24px;
+    font-size: 11px;
+  }
+
+  .help-dialog-content h2 {
+    margin-top: 18px;
+  }
+}
+
 /* __VISUALTEX_SHARED_LATEST_APPEND__ */

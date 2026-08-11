@@ -2,6 +2,7 @@ import { ChangeEvent, useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   AlertCircle,
+  BookOpenText,
   Braces,
   Check,
   ChevronDown,
@@ -40,6 +41,7 @@ import { LatexSourceEditor } from "./source-editor/LatexSourceEditor";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { FormulaHotkeyManagerDialog } from "./components/FormulaHotkeyManagerDialog";
 import { HistoryPanel } from "./components/HistoryPanel";
+import { HelpDialog } from "./components/HelpDialog";
 import { OcrDialog } from "./components/OcrDialog";
 import { ExportDialog } from "./components/ExportDialog";
 import { UpdateDialog } from "./components/UpdateDialog";
@@ -135,6 +137,7 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [formulaHotkeyManagerOpen, setFormulaHotkeyManagerOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const [ocrOpen, setOcrOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 1040);
@@ -844,6 +847,29 @@ function App() {
     }
   };
 
+  const handleKeypadModeToggle = async () => {
+    const nextMode = !keypadMode;
+    setMenuOpen(false);
+    setCopyMenuOpen(false);
+    if (isTauriEnvironment()) {
+      try {
+        await invoke("set_main_window_keypad_mode", { enabled: nextMode });
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        setToast(
+          isEn
+            ? `Unable to switch keypad window size: ${message}`
+            : `切换小键盘窗口尺寸失败：${message}`,
+        );
+        return;
+      }
+    }
+    setKeypadMode(nextMode);
+    window.requestAnimationFrame(() =>
+      editorRef.current?.focus({ target: "last", moveToEnd: false }),
+    );
+  };
+
   const handleCopyPng = async () => {
     if (pngClipboardBusyRef.current) return;
     pngClipboardBusyRef.current = true;
@@ -1212,14 +1238,7 @@ function App() {
             ? "Enter keypad mode"
             : "进入小键盘模式"
       }
-      onClick={() => {
-        setMenuOpen(false);
-        setCopyMenuOpen(false);
-        setKeypadMode((enabled) => !enabled);
-        window.requestAnimationFrame(() =>
-          editorRef.current?.focus({ target: "last", moveToEnd: false }),
-        );
-      }}
+      onClick={() => void handleKeypadModeToggle()}
     >
       <Keyboard size={15} />
       <span>{isEn ? "Keypad" : "小键盘"}</span>
@@ -1369,6 +1388,14 @@ function App() {
               >
                 <Settings2 size={16} />
                 <span>{isEn ? "Settings" : "设置"}</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runMenuAction(() => setHelpOpen(true))}
+              >
+                <BookOpenText size={16} />
+                <span>{isEn ? "Help Manual" : "帮助手册"}</span>
               </button>
               <button
                 type="button"
@@ -1673,6 +1700,11 @@ function App() {
         language={language}
         onClose={() => setExportOpen(false)}
         onNotify={setToast}
+      />
+      <HelpDialog
+        open={helpOpen}
+        language={language}
+        onClose={() => setHelpOpen(false)}
       />
       <SettingsDialog
         open={settingsOpen}
