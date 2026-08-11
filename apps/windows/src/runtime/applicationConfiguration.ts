@@ -21,6 +21,7 @@ export interface VisualTexConfigurationWindowSize {
 
 export interface VisualTexConfigurationWindowState {
   main?: VisualTexConfigurationWindowSize | null;
+  keypad?: VisualTexConfigurationWindowSize | null;
   officeEditor?: VisualTexConfigurationWindowSize | null;
 }
 
@@ -169,9 +170,10 @@ function normalizeWindowSize(value: unknown): VisualTexConfigurationWindowSize |
 function normalizeWindowState(value: unknown): VisualTexConfigurationWindowState | undefined {
   if (!isRecord(value)) return undefined;
   const main = normalizeWindowSize(value.main);
+  const keypad = normalizeWindowSize(value.keypad);
   const officeEditor = normalizeWindowSize(value.officeEditor);
-  if (!main && !officeEditor) return undefined;
-  return { main, officeEditor };
+  if (!main && !keypad && !officeEditor) return undefined;
+  return { main, keypad, officeEditor };
 }
 
 function normalizeCapturedStorageKeys(value: unknown) {
