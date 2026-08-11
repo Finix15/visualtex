@@ -764,6 +764,7 @@ Private Function VTAppendRegressionParagraph( _
     ByVal documentObject As Document) As Range
 
     Dim insertionStart As Long
+    Dim paragraphRange As Range
 
     If documentObject Is Nothing Then
         Err.Raise vbObjectError + 7548, "VisualTeX", _
@@ -771,6 +772,9 @@ Private Function VTAppendRegressionParagraph( _
     End If
     documentObject.Content.InsertAfter vbCr
     insertionStart = documentObject.Content.End - 1
+    Set paragraphRange = documentObject.Range( _
+        Start:=insertionStart, End:=insertionStart).Paragraphs(1).Range.Duplicate
+    VTNormalizePlainWordParagraph paragraphRange
     Set VTAppendRegressionParagraph = documentObject.Range( _
         Start:=insertionStart, End:=insertionStart)
 End Function
@@ -2065,6 +2069,556 @@ RegressionFailed:
     Err.Raise regressionErrorNumber, _
         "VisualTeX Word mixed native/image chapter append regression", _
         regressionStage & ": " & regressionErrorDescription
+End Sub
+
+Private Function VTRegressionMiddleReferenceResultPath() As String
+    VTRegressionMiddleReferenceResultPath = VTApplicationSupportRoot() & _
+        "/Tests/word-middle-reference-production-regression-result.txt"
+End Function
+
+Private Sub VTRegressionAssertMiddleReferenceState( _
+    ByVal documentObject As Document, _
+    ByVal expectedBodyReferenceCount As Long)
+
+    Dim formulaIds As Variant
+    Dim expectedIds(1 To 5) As String
+    Dim candidateField As Field
+    Dim helperParagraph As Range
+    Dim sequenceBookmarkName As String
+    Dim targetBookmarkName As String
+    Dim expectedReferenceTarget As String
+    Dim expectedReferenceResult As String
+    Dim bodyReferenceCount As Long
+    Dim sequenceCount As Long
+    Dim itemIndex As Long
+    Dim assertionStage As String
+    Dim assertionErrorNumber As Long
+    Dim assertionErrorDescription As String
+
+    On Error GoTo AssertionFailed
+    assertionStage = "validate-document"
+    If documentObject Is Nothing Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The middle-reference regression document is missing."
+    End If
+    expectedIds(1) = VTRegressionPerformanceFormulaId(930000001)
+    expectedIds(2) = VTRegressionPerformanceFormulaId(930000099)
+    expectedIds(3) = VTRegressionPerformanceFormulaId(930000002)
+    expectedIds(4) = VTRegressionPerformanceFormulaId(930000003)
+    expectedIds(5) = VTRegressionPerformanceFormulaId(930000004)
+
+    assertionStage = "resolve-physical-formula-order"
+    formulaIds = VTValidNumberedFormulaIds(documentObject)
+    If VTVariantArrayCount(formulaIds) <> 5 Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The middle-reference regression lost a numbered formula" & _
+            " [live=" & CStr(VTVariantArrayCount(formulaIds)) & "]."
+    End If
+
+    assertionStage = "verify-formula-identities-and-ordinals"
+    For itemIndex = 1 To 5
+        If StrComp(CStr(formulaIds(itemIndex)), expectedIds(itemIndex), _
+           vbTextCompare) <> 0 Then
+            Err.Raise vbObjectError + 7598, "VisualTeX", _
+                "The middle-reference formula identity order changed" & _
+                " [index=" & CStr(itemIndex) & _
+                "; actual=" & CStr(formulaIds(itemIndex)) & _
+                "; expected=" & expectedIds(itemIndex) & "]."
+        End If
+        VTVerifyNumberedFormulaIntegrity _
+            documentObject, expectedIds(itemIndex), itemIndex
+    Next itemIndex
+
+    assertionStage = "verify-first-reference-target"
+    expectedReferenceTarget = _
+        VTEquationSequenceNumberBookmarkName(expectedIds(1))
+    If Not documentObject.Bookmarks.Exists(expectedReferenceTarget) Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The middle-reference first Equation lost its VT_N_ target."
+    End If
+    expectedReferenceResult = Trim$(documentObject.Bookmarks( _
+        expectedReferenceTarget).Range.Text)
+
+    assertionStage = "verify-seq-and-body-ref-inventory"
+    For Each candidateField In documentObject.Fields
+        If VTIsNativeEquationSequenceField( _
+           candidateField, VTNativeEquationLabelName()) Then
+            sequenceCount = sequenceCount + 1
+            sequenceBookmarkName = VTSequenceBookmarkNameForField( _
+                documentObject, candidateField)
+            If Len(sequenceBookmarkName) = 0 Then
+                Err.Raise vbObjectError + 7598, "VisualTeX", _
+                    "An unbookmarked Equation SEQ helper survived" & _
+                    " [range=" & CStr(candidateField.Result.Start) & _
+                    "-" & CStr(candidateField.Result.End) & "]."
+            End If
+            Set helperParagraph = _
+                candidateField.Result.Paragraphs(1).Range.Duplicate
+            If Not VTHelperParagraphOwnsNativeEquationSequence( _
+               helperParagraph) Then
+                Err.Raise vbObjectError + 7598, "VisualTeX", _
+                    "An Equation SEQ helper was polluted by another field" & _
+                    " [bookmark=" & sequenceBookmarkName & _
+                    "; fields=" & CStr(helperParagraph.Fields.Count) & "]."
+            End If
+        ElseIf candidateField.Type = wdFieldRef And _
+               Not candidateField.Result.Information(wdWithInTable) And _
+               candidateField.Result.OMaths.Count = 0 Then
+            bodyReferenceCount = bodyReferenceCount + 1
+            targetBookmarkName = VTReferenceTargetBookmarkName( _
+                candidateField.Code.Text)
+            If expectedBodyReferenceCount > 0 Then
+                If StrComp(targetBookmarkName, expectedReferenceTarget, _
+                   vbTextCompare) <> 0 Or _
+                   Trim$(candidateField.Result.Text) <> _
+                       expectedReferenceResult Then
+                    Err.Raise vbObjectError + 7598, "VisualTeX", _
+                        "The middle-reference body REF changed identity" & _
+                        " [target=" & targetBookmarkName & _
+                        "; result=" & candidateField.Result.Text & _
+                        "; expectedTarget=" & expectedReferenceTarget & _
+                        "; expectedResult=" & expectedReferenceResult & "]."
+                End If
+            End If
+        End If
+    Next candidateField
+
+    If sequenceCount <> 5 Or _
+       VTCountManagedEquationSequences(documentObject) <> 5 Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The middle-reference SEQ inventory is inconsistent" & _
+            " [all=" & CStr(sequenceCount) & _
+            "; managed=" & _
+                CStr(VTCountManagedEquationSequences(documentObject)) & "]."
+    End If
+    If bodyReferenceCount <> expectedBodyReferenceCount Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The middle-reference body REF count changed" & _
+            " [actual=" & CStr(bodyReferenceCount) & _
+            "; expected=" & CStr(expectedBodyReferenceCount) & "]."
+    End If
+    Exit Sub
+
+AssertionFailed:
+    assertionErrorNumber = Err.Number
+    assertionErrorDescription = Err.Description
+    If assertionErrorNumber = 0 Then
+        assertionErrorNumber = vbObjectError + 7598
+    End If
+    If Len(assertionErrorDescription) = 0 Then
+        assertionErrorDescription = _
+            "The regression assertion failed without a Word error description."
+    End If
+    Err.Raise assertionErrorNumber, _
+        "VisualTeX Word middle-reference state assertion", _
+        assertionStage & ": " & assertionErrorDescription
+End Sub
+
+Private Function VTWordMiddleReferenceRegressionDocument() As Document
+    Dim candidateDocument As Document
+    Dim matchedDocument As Document
+    Dim regressionMarker As String
+
+    For Each candidateDocument In Documents
+        regressionMarker = ""
+        If VTTryGetDocumentVariable( _
+           candidateDocument, "VT_MiddleReferenceProductionRegression", _
+           regressionMarker) Then
+            If regressionMarker = "v1" Then
+                If Not matchedDocument Is Nothing Then
+                    Err.Raise vbObjectError + 7598, "VisualTeX", _
+                        "More than one middle-reference regression document is open."
+                End If
+                Set matchedDocument = candidateDocument
+            End If
+        End If
+    Next candidateDocument
+    If matchedDocument Is Nothing Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The middle-reference regression document is not open."
+    End If
+    Set VTWordMiddleReferenceRegressionDocument = matchedDocument
+End Function
+
+Private Function VTWordMiddleReferenceRegressionTargetRange( _
+    ByVal documentObject As Document) As Range
+
+    Const targetBookmarkName As String = "VT_MR_Target"
+
+    If documentObject Is Nothing Or _
+       Not documentObject.Bookmarks.Exists(targetBookmarkName) Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The middle-reference regression insertion target is missing."
+    End If
+    Set VTWordMiddleReferenceRegressionTargetRange = _
+        documentObject.Bookmarks(targetBookmarkName).Range.Duplicate
+End Function
+
+Public Sub VisualTeX_DumpWordMiddleReferenceProductionRegressionOpenXml()
+    Dim documentObject As Document
+    Dim outputPath As String
+
+    Set documentObject = VTWordMiddleReferenceRegressionDocument()
+    documentObject.Activate
+    outputPath = VTApplicationSupportRoot() & _
+        "/Tests/word-middle-reference-production-openxml.xml"
+    VTWriteTextAtomic outputPath, documentObject.Content.WordOpenXML
+End Sub
+
+Public Sub VisualTeX_PrepareWordMiddleReferenceProductionRegression()
+    Const fixtureFormulaId As String = _
+        "11111111-1111-4111-8111-111111111111"
+    Const latexBase64 As String = "eF8x"
+
+    Dim testDocument As Document
+    Dim formulaShape As InlineShape
+    Dim formulaRange As Range
+    Dim insertionRange As Range
+    Dim fixtureRoot As String
+    Dim nativeDocumentPath As String
+    Dim ommlBase64 As String
+    Dim targetStart As Long
+    Dim regressionStage As String
+    Dim regressionErrorNumber As Long
+    Dim regressionErrorDescription As String
+
+    On Error GoTo RegressionFailed
+    fixtureRoot = VTApplicationSupportRoot() & "/Tests"
+    nativeDocumentPath = VTApplicationSupportRoot() & _
+        "/NativeDocuments/" & fixtureFormulaId & ".docx"
+    ommlBase64 = VTReadText( _
+        fixtureRoot & "/word-native-regression-omml.txt", _
+        VT_WORD_OMML_CHUNK_SIZE * VT_WORD_OMML_MAX_CHUNKS)
+    If Not VTPathFileExists(nativeDocumentPath) Or Len(ommlBase64) = 0 Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The middle-reference native regression fixture is missing."
+    End If
+
+    regressionStage = "create-document"
+    Set testDocument = Documents.Add(Visible:=True)
+    testDocument.ActiveWindow.View.Type = wdPrintView
+    testDocument.Activate
+    VTSetEquationNumberingFormat _
+        testDocument, VT_WORD_NUMBERING_MODE_CHAPTER, "-"
+
+    regressionStage = "create-leading-image"
+    Set formulaShape = VTRegressionCreateNumberedImage( _
+        testDocument, VTRegressionPerformanceFormulaId(930000001), _
+        latexBase64, 96!, 28!)
+
+    regressionStage = "create-three-native-formulas"
+    Set formulaRange = VTRegressionCreateNumberedNative( _
+        testDocument, VTRegressionPerformanceFormulaId(930000002), _
+        latexBase64, ommlBase64, nativeDocumentPath)
+    Set formulaRange = VTRegressionCreateNumberedNative( _
+        testDocument, VTRegressionPerformanceFormulaId(930000003), _
+        latexBase64, ommlBase64, nativeDocumentPath)
+    Set formulaRange = VTRegressionCreateNumberedNative( _
+        testDocument, VTRegressionPerformanceFormulaId(930000004), _
+        latexBase64, ommlBase64, nativeDocumentPath)
+
+    regressionStage = "insert-middle-image"
+    Set insertionRange = VTRegressionInsertBlankParagraphBeforeFormula( _
+        testDocument, VTRegressionPerformanceFormulaId(930000002))
+    Set formulaShape = VTRegressionCreateNumberedImageAtCaret( _
+        testDocument, insertionRange, _
+        VTRegressionPerformanceFormulaId(930000099), _
+        latexBase64, 96!, 28!)
+
+    regressionStage = "verify-middle-insertion"
+    VTRegressionAssertMiddleReferenceState testDocument, 0
+
+    regressionStage = "select-reference-target"
+    VTSetDocumentVariable _
+        testDocument, "VT_MiddleReferenceProductionRegression", "v1"
+    Set insertionRange = VTAppendRegressionParagraph(testDocument)
+    ' VTAppendRegressionParagraph can inherit the compact hidden-helper paragraph
+    ' formatting when the final numbered formula is native OMML. The regression
+    ' target is ordinary body text, so normalize that fresh paragraph explicitly
+    ' before measuring the insertion Bookmark. This keeps the fixture faithful to
+    ' the real Ribbon contract instead of manufacturing a false damaged helper.
+    VTNormalizePlainWordParagraph insertionRange.Paragraphs(1).Range
+    targetStart = insertionRange.Start
+    insertionRange.InsertAfter "VT_MIDDLE_REFERENCE_TARGET "
+    Set insertionRange = testDocument.Range( _
+        Start:=targetStart + Len("VT_MIDDLE_REFERENCE_TARGET "), _
+        End:=targetStart + Len("VT_MIDDLE_REFERENCE_TARGET "))
+    If testDocument.Bookmarks.Exists("VT_MR_Target") Then
+        testDocument.Bookmarks("VT_MR_Target").Delete
+    End If
+    testDocument.Bookmarks.Add _
+        name:="VT_MR_Target", Range:=insertionRange.Duplicate
+    testDocument.Activate
+    insertionRange.Select
+
+    VTWriteTextAtomic VTRegressionMiddleReferenceResultPath(), _
+        "PREPARED" & vbLf & _
+        "formulaOrder=1,2,3,4,5" & vbLf & _
+        "bodyReferences=0" & vbLf
+    Exit Sub
+
+RegressionFailed:
+    regressionErrorNumber = Err.Number
+    regressionErrorDescription = Err.Description
+    On Error Resume Next
+    VTWriteTextAtomic VTRegressionMiddleReferenceResultPath(), _
+        "FAIL" & vbLf & _
+        "stage=" & regressionStage & vbLf & _
+        "errorNumber=" & CStr(regressionErrorNumber) & vbLf & _
+        "errorDescription=" & Replace$(Replace$( _
+            regressionErrorDescription, vbCr, " "), vbLf, " ") & vbLf
+    If Not testDocument Is Nothing Then
+        testDocument.Saved = True
+        testDocument.Close SaveChanges:=wdDoNotSaveChanges
+    End If
+    On Error GoTo 0
+    Err.Raise regressionErrorNumber, _
+        "VisualTeX Word middle-reference production regression", _
+        regressionStage & ": " & regressionErrorDescription
+End Sub
+
+Public Sub VisualTeX_VerifyWordMiddleReferencePickerCancelRegression()
+    Dim documentObject As Document
+    Dim targetRange As Range
+    Dim targetParagraph As Range
+
+    On Error GoTo RegressionFailed
+    Set documentObject = VTWordMiddleReferenceRegressionDocument()
+    documentObject.Activate
+    VTRegressionAssertMiddleReferenceState documentObject, 0
+    Set targetRange = VTWordMiddleReferenceRegressionTargetRange(documentObject)
+    Set targetParagraph = targetRange.Paragraphs(1).Range.Duplicate
+    If VTParagraphHasNumberHelperGeometry(targetParagraph) Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The Equation picker target Bookmark moved into an internal helper."
+    End If
+    VTWriteTextAtomic VTRegressionMiddleReferenceResultPath(), _
+        "PICKER_CANCEL_PASS" & vbLf & _
+        "formulaOrder=1,2,3,4,5" & vbLf & _
+        "bodyReferences=0" & vbLf
+    Exit Sub
+RegressionFailed:
+    VTWriteTextAtomic VTRegressionMiddleReferenceResultPath(), _
+        "FAIL" & vbLf & _
+        "stage=picker-cancel-verify" & vbLf & _
+        "errorNumber=" & CStr(Err.Number) & vbLf & _
+        "errorDescription=" & Replace$(Replace$( _
+            Err.Description, vbCr, " "), vbLf, " ") & vbLf
+    Err.Raise Err.Number, _
+        "VisualTeX Word middle-reference picker cancel regression", _
+        Err.Description
+End Sub
+
+Private Sub VTSetWordMiddleReferenceRegressionSelection( _
+    ByVal selectionValue As String)
+
+    Dim documentObject As Document
+    Dim targetRange As Range
+
+    Set documentObject = VTWordMiddleReferenceRegressionDocument()
+    documentObject.Activate
+    Set targetRange = VTWordMiddleReferenceRegressionTargetRange(documentObject)
+    targetRange.Select
+    VTSetDocumentVariable _
+        documentObject, "VT_MiddleReferenceRegressionSelection", _
+        selectionValue
+End Sub
+
+Public Sub VisualTeX_SetWordMiddleReferenceRegressionSelection()
+    VTSetWordMiddleReferenceRegressionSelection "1"
+End Sub
+
+Public Sub VisualTeX_SetWordMiddleReferenceRegressionCancelSelection()
+    ' A single space is intentionally non-empty in the Document Variable so
+    ' VTTryGetDocumentVariable resolves the deterministic test hook. The public
+    ' production command then trims it to empty and follows the same cancel path
+    ' as a user dismissing InputBox, without depending on macOS Accessibility.
+    VTSetWordMiddleReferenceRegressionSelection " "
+End Sub
+
+Public Sub VisualTeX_VerifyWordMiddleReferenceInsertedRegression()
+    Dim documentObject As Document
+
+    On Error GoTo RegressionFailed
+    Set documentObject = VTWordMiddleReferenceRegressionDocument()
+    documentObject.Activate
+    VTRegressionAssertMiddleReferenceState documentObject, 1
+    VTWriteTextAtomic VTRegressionMiddleReferenceResultPath(), _
+        "REFERENCE_INSERT_PASS" & vbLf & _
+        "formulaOrder=1,2,3,4,5" & vbLf & _
+        "bodyReferences=1" & vbLf
+    Exit Sub
+RegressionFailed:
+    VTWriteTextAtomic VTRegressionMiddleReferenceResultPath(), _
+        "FAIL" & vbLf & _
+        "stage=reference-insert-verify" & vbLf & _
+        "errorNumber=" & CStr(Err.Number) & vbLf & _
+        "errorDescription=" & Replace$(Replace$( _
+            Err.Description, vbCr, " "), vbLf, " ") & vbLf
+    Err.Raise Err.Number, _
+        "VisualTeX Word middle-reference insertion regression", _
+        Err.Description
+End Sub
+
+Public Sub VisualTeX_RunWordMiddleReferenceInsertProductionRegression()
+    Dim documentObject As Document
+    Dim insertionRange As Range
+    Dim insertedRange As Range
+    Dim crossReferenceItems As Variant
+    Dim expectedReferenceText As String
+    Dim regressionStage As String
+    Dim regressionErrorNumber As Long
+    Dim regressionErrorDescription As String
+
+    On Error GoTo RegressionFailed
+
+    regressionStage = "prepare-middle-insertion"
+    VisualTeX_PrepareWordMiddleReferenceProductionRegression
+    Set documentObject = VTWordMiddleReferenceRegressionDocument()
+    Set insertionRange = VTWordMiddleReferenceRegressionTargetRange( _
+        documentObject)
+
+    regressionStage = "production-build-reference-list"
+    crossReferenceItems = VTEquationNumberCrossReferenceItems(documentObject)
+    If VTVariantArrayCount(crossReferenceItems) <> 5 Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The production Equation picker list does not contain five live formulas."
+    End If
+    VTRegressionAssertMiddleReferenceState documentObject, 0
+
+    regressionStage = "production-insert-reference"
+    expectedReferenceText = "(" & Trim$(documentObject.Bookmarks( _
+        VTEquationSequenceNumberBookmarkName( _
+            VTRegressionPerformanceFormulaId(930000001))).Range.Text) & ")"
+    Set insertedRange = VTInsertEquationNumberReferenceAtRange( _
+        insertionRange, 1, True)
+    If insertedRange Is Nothing Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The production Equation reference insertion returned no Range."
+    End If
+    If insertedRange.Text <> expectedReferenceText Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The production Equation reference insertion changed the live " & _
+            "VT_N_ number [actual=" & insertedRange.Text & _
+            "; expected=" & expectedReferenceText & "]."
+    End If
+
+    regressionStage = "capture-production-reference"
+    VTWriteTextAtomic _
+        VTApplicationSupportRoot() & _
+            "/Tests/word-middle-reference-after-public-insert.xml", _
+        documentObject.Content.WordOpenXML
+
+    regressionStage = "verify-production-reference"
+    VTRegressionAssertMiddleReferenceState documentObject, 1
+
+    VTWriteTextAtomic VTRegressionMiddleReferenceResultPath(), _
+        "PASS" & vbLf & _
+        "stage=production-reference" & vbLf & _
+        "formulaOrder=1,2,3,4,5" & vbLf & _
+        "bodyReferences=1" & vbLf & _
+        "sequenceInventory=5" & vbLf
+    Exit Sub
+
+RegressionFailed:
+    regressionErrorNumber = Err.Number
+    regressionErrorDescription = Err.Description
+    If regressionErrorNumber = 0 Then
+        regressionErrorNumber = vbObjectError + 7598
+    End If
+    If Len(regressionErrorDescription) = 0 Then
+        regressionErrorDescription = _
+            "The production reference regression failed without a Word error description."
+    End If
+    On Error Resume Next
+    VTWriteTextAtomic VTRegressionMiddleReferenceResultPath(), _
+        "FAIL" & vbLf & _
+        "stage=" & regressionStage & vbLf & _
+        "errorNumber=" & CStr(regressionErrorNumber) & vbLf & _
+        "errorDescription=" & Replace$(Replace$( _
+            regressionErrorDescription, vbCr, " "), vbLf, " ") & vbLf
+    If Not documentObject Is Nothing Then
+        documentObject.Saved = True
+        documentObject.Close SaveChanges:=wdDoNotSaveChanges
+    End If
+    On Error GoTo 0
+    Err.Raise regressionErrorNumber, _
+        "VisualTeX Word middle-reference production-path regression", _
+        regressionStage & ": " & regressionErrorDescription
+End Sub
+
+Public Sub VisualTeX_SelectWordMiddleReferenceInsertedFormula()
+    Dim documentObject As Document
+    Dim formulaRange As Range
+
+    On Error GoTo RegressionFailed
+    Set documentObject = VTWordMiddleReferenceRegressionDocument()
+    documentObject.Activate
+    Set formulaRange = VTNumberedFormulaRangeForId( _
+        documentObject, VTRegressionPerformanceFormulaId(930000099))
+    If formulaRange Is Nothing Or formulaRange.InlineShapes.Count <> 1 Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The inserted middle image formula is missing before edit."
+    End If
+    formulaRange.InlineShapes(1).Range.Select
+    Exit Sub
+RegressionFailed:
+    Err.Raise Err.Number, _
+        "VisualTeX Word middle-reference edit selection regression", _
+        Err.Description
+End Sub
+
+Public Sub VisualTeX_VerifyWordMiddleReferenceAfterEditRegression()
+    Dim documentObject As Document
+
+    On Error GoTo RegressionFailed
+    Set documentObject = VTWordMiddleReferenceRegressionDocument()
+    documentObject.Activate
+    VTRegressionAssertMiddleReferenceState documentObject, 1
+    VTWriteTextAtomic VTRegressionMiddleReferenceResultPath(), _
+        "EDIT_PASS" & vbLf & _
+        "formulaOrder=1,2,3,4,5" & vbLf & _
+        "bodyReferences=1" & vbLf
+    Exit Sub
+RegressionFailed:
+    VTWriteTextAtomic VTRegressionMiddleReferenceResultPath(), _
+        "FAIL" & vbLf & _
+        "stage=edit-verify" & vbLf & _
+        "errorNumber=" & CStr(Err.Number) & vbLf & _
+        "errorDescription=" & Replace$(Replace$( _
+            Err.Description, vbCr, " "), vbLf, " ") & vbLf
+    Err.Raise Err.Number, _
+        "VisualTeX Word middle-reference edit regression", _
+        Err.Description
+End Sub
+
+Public Sub VisualTeX_VerifyWordMiddleReferenceAfterUpdateRegression()
+    Dim documentObject As Document
+
+    On Error GoTo RegressionFailed
+    Set documentObject = VTWordMiddleReferenceRegressionDocument()
+    documentObject.Activate
+    VTRegressionAssertMiddleReferenceState documentObject, 1
+    VTWriteTextAtomic VTRegressionMiddleReferenceResultPath(), _
+        "PASS" & vbLf & _
+        "pickerCancel=PASS" & vbLf & _
+        "referenceInsert=PASS" & vbLf & _
+        "edit=PASS" & vbLf & _
+        "explicitUpdate=PASS" & vbLf & _
+        "formulaOrder=1,2,3,4,5" & vbLf & _
+        "bodyReferences=1" & vbLf & _
+        "sequenceInventory=5" & vbLf
+    Exit Sub
+RegressionFailed:
+    VTWriteTextAtomic VTRegressionMiddleReferenceResultPath(), _
+        "FAIL" & vbLf & _
+        "stage=explicit-update-verify" & vbLf & _
+        "errorNumber=" & CStr(Err.Number) & vbLf & _
+        "errorDescription=" & Replace$(Replace$( _
+            Err.Description, vbCr, " "), vbLf, " ") & vbLf
+    Err.Raise Err.Number, _
+        "VisualTeX Word middle-reference update regression", _
+        Err.Description
 End Sub
 
 Private Function VTRegressionPerformanceFormulaId( _
@@ -6816,13 +7370,20 @@ Private Function VTValidNumberedFormulaIds( _
     Dim numbered As Boolean
     Dim formulaIsLive As Boolean
     Dim ids() As String
+    Dim formulaAnchors() As Long
     Dim itemCount As Long
+    Dim sortIndex As Long
+    Dim previousIndex As Long
+    Dim anchorValue As Long
+    Dim formulaIdValue As String
 
     If documentObject Is Nothing Then Exit Function
 
-    ' Every true SEQ field remains in document order. Image formulas keep SEQ
-    ' in their visible paragraph; native OMath formulas keep SEQ in the compact
-    ' paragraph immediately after the formula and expose only a REF inside #().
+    ' Word's Fields collection is not guaranteed to enumerate mixed image and
+    ' native-OMML helpers in physical document order. Validate each VT_N_ owner
+    ' through its durable formula identity first, then sort the surviving ids by
+    ' the actual visible formula anchor before exposing them to picker/indexed
+    ' callers. This keeps list index, formula identity and document order equal.
     For Each candidateField In documentObject.Fields
         If VTIsNativeEquationSequenceField( _
            candidateField, VTNativeEquationLabelName()) Then
@@ -6915,12 +7476,37 @@ Private Function VTValidNumberedFormulaIds( _
                         " [formulaId=" & formulaId & "]."
                 End If
                 VTCollectionAddUniqueText seenIds, formulaId
+                Set formulaRange = VTNumberedFormulaRangeForId( _
+                    documentObject, formulaId)
+                If formulaRange Is Nothing Then
+                    Err.Raise vbObjectError + 7553, "VisualTeX", _
+                        "A validated numbered formula lost its physical anchor" & _
+                        " [formulaId=" & formulaId & "]."
+                End If
                 itemCount = itemCount + 1
                 ReDim Preserve ids(1 To itemCount)
+                ReDim Preserve formulaAnchors(1 To itemCount)
                 ids(itemCount) = formulaId
+                formulaAnchors(itemCount) = formulaRange.Start
             End If
         End If
     Next candidateField
+
+    For sortIndex = 2 To itemCount
+        anchorValue = formulaAnchors(sortIndex)
+        formulaIdValue = ids(sortIndex)
+        previousIndex = sortIndex - 1
+        Do While previousIndex >= 1
+            If formulaAnchors(previousIndex) <= anchorValue Then Exit Do
+            formulaAnchors(previousIndex + 1) = _
+                formulaAnchors(previousIndex)
+            ids(previousIndex + 1) = ids(previousIndex)
+            previousIndex = previousIndex - 1
+        Loop
+        formulaAnchors(previousIndex + 1) = anchorValue
+        ids(previousIndex + 1) = formulaIdValue
+    Next sortIndex
+
     If itemCount > 0 Then VTValidNumberedFormulaIds = ids
 End Function
 
@@ -6978,6 +7564,33 @@ Private Sub VTReplaceDeletedEquationBodyReferences( _
     Next fieldIndex
 End Sub
 
+Private Function VTParagraphHasNumberHelperGeometry( _
+    ByVal paragraphRange As Range) As Boolean
+
+    If paragraphRange Is Nothing Or _
+       paragraphRange.Information(wdWithInTable) Or _
+       paragraphRange.InlineShapes.Count <> 0 Or _
+       paragraphRange.OMaths.Count <> 0 Then Exit Function
+
+    ' VTFormatHiddenEquationParagraph is the only VisualTeX path that creates
+    ' this five-inch-left, one-point line box. Keep the geometry test separate
+    ' from the field-count test: a damaged helper can contain an accidental REF
+    ' in addition to its SEQ, and that exact corruption must still be recognized
+    ' as VisualTeX-owned rather than being mistaken for an ordinary Word caption.
+    With paragraphRange.ParagraphFormat
+        If .Alignment <> wdAlignParagraphLeft Or _
+           Abs(.LeftIndent + 360!) > 0.2 Or _
+           Abs(.RightIndent) > 0.2 Or _
+           Abs(.FirstLineIndent) > 0.2 Or _
+           Abs(.SpaceBefore) > 0.2 Or _
+           Abs(.SpaceAfter) > 0.2 Or _
+           .LineSpacingRule <> wdLineSpaceExactly Or _
+           Abs(.LineSpacing - 1!) > 0.2 Then Exit Function
+    End With
+
+    VTParagraphHasNumberHelperGeometry = True
+End Function
+
 Private Function VTHelperParagraphOwnsNativeEquationSequence( _
     ByVal paragraphRange As Range) As Boolean
 
@@ -6998,45 +7611,32 @@ Private Function VTIsDetachedVisualTeXNativeSequenceHelper( _
     ByVal paragraphRange As Range) As Boolean
 
     Dim candidateField As Field
-    Dim contentRange As Range
-    Dim paragraphText As String
-    Dim resultText As String
+    Dim sequenceField As Field
+    Dim sequenceCount As Long
 
     If paragraphRange Is Nothing Or _
-       Not VTHelperParagraphOwnsNativeEquationSequence( _
+       Not VTParagraphHasNumberHelperGeometry( _
            paragraphRange) Then Exit Function
-    Set candidateField = paragraphRange.Fields(1)
 
-    ' A live VisualTeX helper always owns a VT_N_ Bookmark. Once the user
-    ' deletes the numbered OMML formula, Word can remove the formula Bookmarks
-    ' while leaving this compact SEQ paragraph behind. Never classify a live
-    ' helper or an ordinary Word caption as detached.
+    ' A healthy helper contains one managed SEQ. A reference-selection drift can
+    ' append a body REF to that same compact paragraph, so Fields.Count can be 2
+    ' (or more) after corruption. Count the SEQ identity independently and allow
+    ' extra non-SEQ fields; the exact helper geometry above remains the ownership
+    ' signature and prevents ordinary Word captions from entering this cleanup.
+    For Each candidateField In paragraphRange.Fields
+        If VTIsNativeEquationSequenceField( _
+           candidateField, VTNativeEquationLabelName()) Then
+            sequenceCount = sequenceCount + 1
+            Set sequenceField = candidateField
+        End If
+    Next candidateField
+    If sequenceCount <> 1 Or sequenceField Is Nothing Then Exit Function
+
+    ' A live VisualTeX helper always owns a VT_N_ Bookmark. Once that durable
+    ' identity is gone, this paragraph is detached even when an accidental REF
+    ' has polluted it. Explicit orphan repair may then delete the whole helper.
     If Len(VTSequenceBookmarkNameForField( _
-       paragraphRange.Document, candidateField)) > 0 Then Exit Function
-
-    Set contentRange = paragraphRange.Duplicate
-    If contentRange.End > contentRange.Start Then
-        contentRange.End = contentRange.End - 1
-    End If
-    paragraphText = Trim$(Replace$(Replace$( _
-        contentRange.Text, vbTab, ""), ChrW(160), " "))
-    resultText = Trim$(Replace$(Replace$( _
-        candidateField.Result.Text, vbTab, ""), ChrW(160), " "))
-    If paragraphText <> resultText Then Exit Function
-
-    ' This exact layout signature is created only by
-    ' VTFormatHiddenEquationParagraph. It distinguishes a deleted VisualTeX
-    ' OMML helper from a user-created native Word Equation caption.
-    With paragraphRange.ParagraphFormat
-        If .Alignment <> wdAlignParagraphLeft Or _
-           Abs(.LeftIndent + 360!) > 0.2 Or _
-           Abs(.RightIndent) > 0.2 Or _
-           Abs(.FirstLineIndent) > 0.2 Or _
-           Abs(.SpaceBefore) > 0.2 Or _
-           Abs(.SpaceAfter) > 0.2 Or _
-           .LineSpacingRule <> wdLineSpaceExactly Or _
-           Abs(.LineSpacing - 1!) > 0.2 Then Exit Function
-    End With
+       paragraphRange.Document, sequenceField)) > 0 Then Exit Function
 
     VTIsDetachedVisualTeXNativeSequenceHelper = True
 End Function
@@ -13088,9 +13688,11 @@ Private Function VTEquationNumberCrossReferenceItems( _
     Dim items() As String
 
     If documentObject Is Nothing Then Exit Function
-    VTMaterializeDocumentEquationNumberingFormat documentObject
-    VTPruneOrphanedEquationNumberScaffolds documentObject
-    VTReconcileEquationNumbers documentObject
+
+    ' Opening the Equation picker is a read operation. It must never prune,
+    ' reorder, replay, or rebuild numbering scaffolds merely to populate labels.
+    ' In particular, mutating the document here can move Word's Selection from a
+    ' body paragraph into a compact VT_N_ helper before the user chooses an item.
     formulaIds = VTValidNumberedFormulaIds(documentObject)
     itemCount = VTVariantArrayCount(formulaIds)
     If itemCount <= 0 Then Exit Function
@@ -13111,6 +13713,63 @@ Private Function VTEquationNumberCrossReferenceItems( _
     VTEquationNumberCrossReferenceItems = items
 End Function
 
+Private Function VTResolveEquationReferenceInsertionRange( _
+    ByVal requestedRange As Range) As Range
+
+    Dim documentObject As Document
+    Dim targetParagraph As Range
+    Dim candidateField As Field
+    Dim sequenceBookmarkName As String
+    Dim formulaId As String
+    Dim formulaRange As Range
+    Dim recoveredRange As Range
+
+    If requestedRange Is Nothing Then Exit Function
+    Set documentObject = requestedRange.Document
+    Set targetParagraph = requestedRange.Paragraphs(1).Range.Duplicate
+
+    If Not VTParagraphHasNumberHelperGeometry(targetParagraph) Then
+        Set VTResolveEquationReferenceInsertionRange = requestedRange.Duplicate
+        Exit Function
+    End If
+
+    ' The compact helper paragraph is an internal implementation detail and is
+    ' not directly reachable through normal document editing. If Word leaves the
+    ' Selection there after a numbered display mutation, recover locally through
+    ' that helper's own VT_N_ identity and move to the formula's plain
+    ' continuation paragraph. This is O(1) with respect to healthy tail inserts
+    ' and does not prune/reconcile the document.
+    For Each candidateField In targetParagraph.Fields
+        If VTIsNativeEquationSequenceField( _
+           candidateField, VTNativeEquationLabelName()) Then
+            sequenceBookmarkName = VTSequenceBookmarkNameForField( _
+                documentObject, candidateField)
+            formulaId = VTFormulaIdFromSequenceBookmarkName( _
+                sequenceBookmarkName)
+            If Len(formulaId) > 0 Then Exit For
+        End If
+    Next candidateField
+
+    If Len(formulaId) = 0 Then
+        Err.Raise vbObjectError + 7547, "VisualTeX", _
+            "The Equation cross-reference insertion point is inside a damaged " & _
+            "numbering helper with no live formula identity. Run Update Numbers first."
+    End If
+
+    Set formulaRange = VTNumberedFormulaRangeForId(documentObject, formulaId)
+    If formulaRange Is Nothing Then
+        Err.Raise vbObjectError + 7547, "VisualTeX", _
+            "The Equation cross-reference insertion point lost its numbered formula."
+    End If
+    Set recoveredRange = VTContinuationRangeAfterDisplayFormula( _
+        formulaRange, formulaId)
+    If recoveredRange Is Nothing Then
+        Err.Raise vbObjectError + 7547, "VisualTeX", _
+            "Word could not recover a normal insertion point after the Equation."
+    End If
+    Set VTResolveEquationReferenceInsertionRange = recoveredRange.Duplicate
+End Function
+
 Private Function VTInsertEquationNumberReferenceAtRange( _
     ByVal targetRange As Range, _
     ByVal itemIndex As Long, _
@@ -13124,6 +13783,7 @@ Private Function VTInsertEquationNumberReferenceAtRange( _
     Dim referenceField As Field
     Dim insertedRange As Range
     Dim fieldRange As Range
+    Dim normalizedTargetRange As Range
     Dim insertionStart As Long
     Dim insertionEnd As Long
     Dim itemCount As Long
@@ -13133,11 +13793,19 @@ Private Function VTInsertEquationNumberReferenceAtRange( _
             "The Equation cross-reference insertion Range is missing."
     End If
     Set documentObject = targetRange.Document
-    VTMaterializeDocumentEquationNumberingFormat documentObject
-    If Not documentAlreadyReconciled Then
-        VTPruneOrphanedEquationNumberScaffolds documentObject
-        VTReconcileEquationNumbers documentObject
+
+    ' Reference insertion is intentionally non-repairing. Numbering repair is a
+    ' separate explicit operation; running prune/reconcile here can shift the
+    ' insertion Range and can turn a harmless picker action into a destructive
+    ' document rewrite. Recover only the local impossible helper Selection that
+    ' Word can leave behind after a numbered display mutation.
+    Set normalizedTargetRange = _
+        VTResolveEquationReferenceInsertionRange(targetRange)
+    If normalizedTargetRange Is Nothing Then
+        Err.Raise vbObjectError + 7547, "VisualTeX", _
+            "The Equation cross-reference insertion Range could not be resolved."
     End If
+    Set targetRange = normalizedTargetRange.Duplicate
     formulaIds = VTValidNumberedFormulaIds(documentObject)
     itemCount = VTVariantArrayCount(formulaIds)
     If itemIndex < 1 Or itemIndex > itemCount Then
@@ -13196,10 +13864,22 @@ Public Sub VisualTeX_OpenEquationCrossReference()
     Dim itemCount As Long
     Dim displayCount As Long
     Dim insertedRange As Range
+    Dim insertionRange As Range
 
     On Error GoTo Failed
     If Documents.Count = 0 Then
         Err.Raise vbObjectError + 7401, "VisualTeX", "Open a Word document first."
+    End If
+
+    ' Freeze and normalize the user's target before building the picker. Opening
+    ' the list remains read-only; the only recovery allowed here is the local
+    ' helper-to-continuation correction when Word itself left Selection inside a
+    ' VisualTeX numbering helper after the preceding formula mutation.
+    Set insertionRange = VTResolveEquationReferenceInsertionRange( _
+        Selection.Range.Duplicate)
+    If insertionRange Is Nothing Then
+        Err.Raise vbObjectError + 7547, "VisualTeX", _
+            "The Equation cross-reference insertion point could not be resolved."
     End If
     crossReferenceItems = _
         VTEquationNumberCrossReferenceItems(ActiveDocument)
@@ -13233,7 +13913,10 @@ Public Sub VisualTeX_OpenEquationCrossReference()
     selectedIndex = InputBox( _
         Prompt:=promptText, _
         Title:="VisualTeX Equation Reference")
-    If Len(Trim$(CStr(selectedIndex))) = 0 Then Exit Sub
+    If Len(Trim$(CStr(selectedIndex))) = 0 Then
+        insertionRange.Select
+        Exit Sub
+    End If
     If Not IsNumeric(selectedIndex) Then
         Err.Raise vbObjectError + 7547, "VisualTeX", _
             "Enter the numeric list index of a VisualTeX equation."
@@ -13246,7 +13929,7 @@ Public Sub VisualTeX_OpenEquationCrossReference()
     End If
 
     Set insertedRange = VTInsertEquationNumberReferenceAtRange( _
-        Selection.Range.Duplicate, itemIndex, True)
+        insertionRange, itemIndex, True)
     insertedRange.Collapse wdCollapseEnd
     insertedRange.Select
     Exit Sub
@@ -24539,6 +25222,15 @@ CaptureSequenceSnapshot:
                     VTCollectionAddUniqueText orphanFormulaIds, formulaId
                     GoTo NextSequenceCandidate
                 End If
+            Else
+                ' An unbookmarked SEQ in VisualTeX's exact compact-helper
+                ' geometry is not an ordinary Word caption. It is a detached
+                ' VisualTeX helper whose VT_N_ identity was lost. Never let it
+                ' consume a flowing ordinal; explicit orphan repair removes it.
+                Set bookmarkParagraph = _
+                    candidate.Result.Paragraphs(1).Range.Duplicate
+                If VTIsDetachedVisualTeXNativeSequenceHelper( _
+                   bookmarkParagraph) Then GoTo NextSequenceCandidate
             End If
 
             sequenceCount = sequenceCount + 1

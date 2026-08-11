@@ -777,8 +777,10 @@ expectIncludes(wordScript, "on ReadVisualTeXNumberingPreference(ignoredValue)", 
 expectIncludes(wordAdapter, "VTTryReadEquationNumberingPreference", "Documents without their own numbering format must inherit the persistent Word-level default");
 expectIncludes(wordAdapter, "Private Sub VTMaterializeDocumentEquationNumberingFormat", "An inherited numbering preference must be materialized into document Variables before live SEQ/REF Range mutation begins");
 expectIncludes(wordAdapter, "VT_WORD_NUMBERING_PREFERENCE_CACHE_LOADED", "Word must cache the persistent numbering preference after the first AppleScriptTask read in one host session");
-expectIncludes(wordAdapter, "If Not documentAlreadyReconciled Then", "A prepared Equation cross-reference insertion must be able to skip a redundant second full reconciliation");
-expectIncludes(wordAdapter, "Selection.Range.Duplicate, itemIndex, True", "The modal Equation picker must reuse its already-reconciled document state when the user confirms an item");
+expectIncludes(wordAdapter, "Opening the Equation picker is a read operation.", "Opening the Equation picker must not mutate numbering scaffolds just to build its item list");
+expectIncludes(wordAdapter, "Reference insertion is intentionally non-repairing.", "Inserting a body Equation REF must not prune or reconcile numbering as a side effect");
+expectIncludes(crossReferenceCommandSource, "Set insertionRange = VTResolveEquationReferenceInsertionRange", "The modal Equation picker must normalize and freeze the user's insertion Range before showing its item list");
+expectIncludes(crossReferenceCommandSource, "insertionRange, itemIndex, True", "The modal Equation picker must insert into the frozen body-text Range instead of a post-refresh Selection");
 expect(!wordAdapter.includes("VisualTeX_DiagnoseNumberingPerformance"), "Temporary numbering performance probes must never ship in the production Word add-in");
 expectIncludes(wordAdapter, "VTWriteEquationNumberingPreference numberingMode, separatorText", "Choosing an Equation numbering format must update the persistent default as well as the active document");
 expectIncludes(wordAdapter, '" \\s " & CStr(restartLevel)', "Chapter and section Equation sequences must use Word's native heading-level reset switch");
