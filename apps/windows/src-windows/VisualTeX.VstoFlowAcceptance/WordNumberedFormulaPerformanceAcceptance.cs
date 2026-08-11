@@ -485,22 +485,13 @@ internal static partial class Program
             Console.WriteLine(
                 $"    [perf] existing numbered OLE append at {formulaIds.Length + 1} formulas: {appendWatch.ElapsedMilliseconds}ms");
 
-            Word.Range? typingProbe = null;
-            Word.Frames? typingProbeFrames = null;
-            try
-            {
-                typingProbe = application.Selection.Range;
-                if ((bool)typingProbe.get_Information(Word.WdInformation.wdWithInTable))
-                    throw new InvalidOperationException("Existing numbered append left the caret inside its equation table.");
-                typingProbeFrames = typingProbe.Frames;
-                if (typingProbeFrames.Count > 0)
-                    throw new InvalidOperationException("Existing numbered append left the caret inside a caption frame.");
-            }
-            finally
-            {
-                Release(typingProbeFrames);
-                Release(typingProbe);
-            }
+            var selectedAfterAppend = service.ReadSelection();
+            if (!string.Equals(
+                    selectedAfterAppend.FormulaId,
+                    appendedFormulaId,
+                    StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    "Existing numbered append did not keep the newly inserted formula selected.");
 
             var updateWatch = Stopwatch.StartNew();
             var updatedFormulaCount = service.UpdateEquationNumbers();
