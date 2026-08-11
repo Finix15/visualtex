@@ -508,7 +508,7 @@ expectIncludes(wordAdapter, "Type:=wdFieldEmpty", "Numbered Word formulas must c
 expectIncludes(wordAdapter, "numberRange.Text <> \"(\" & expectedText & \")\"", "Single-paragraph verification must reject incomplete visible Equation parentheses");
 expectIncludes(wordAdapter, ".Font.Hidden = False", "The native Equation SEQ must remain non-hidden so Word for Mac produces a usable field result");
 expect(!wordAdapter.includes(".Font.Hidden = True"), "The native Equation numbering path must never hide the SEQ result with Word's Hidden font property");
-expectIncludes(wordAdapter, 'numberRange.Text <> "(" & expectedNumberText & ")" Or _', "Image single-paragraph numbering must retain complete ordinary parentheses around the complete formatted Equation number");
+expectIncludes(wordAdapter, 'numberRange.Text = "(" & expectedNumberText & ")"', "Image single-paragraph numbering must retain complete ordinary parentheses around the complete formatted Equation number");
 expectIncludes(wordAdapter, 'rightContent.Text = "()"', "Legacy right-cell formulas must retain ordinary parentheses around their native REF field");
 expectIncludes(wordAdapter, "VTRefreshEquationNumberMirror", "Numbering must refresh the native SEQ target and remove legacy mirror artifacts");
 expectIncludes(wordAdapter, "VTEquationSequenceFieldHasOrdinal", "Numbering must validate the native SEQ through its retained legal ordinal field code");
@@ -527,7 +527,7 @@ expectIncludes(wordAdapter, "Selection.InsertCrossReference _", "The reference p
 expectIncludes(wordAdapter, 'regressionStage = "image-cross-reference-refresh-cycle"', "The real-host regression must repeat field refresh before accepting a stable (1) Bookmark");
 expectIncludes(wordAdapter, 'regressionStage = "image-cross-reference-later-number"', "The real-host regression must prove a later numbered formula leaves an earlier native REF at (1)");
 expectIncludes(wordAdapter, "VTInsertEquationNumberReferenceAtRange", "Word Ribbon must insert a native Equation cross-reference");
-expectIncludes(wordAdapter, "VTReconcileEquationNumbers ActiveDocument", "Manual Equation number refresh must rebuild SEQ, visible REF and body REF fields together");
+expectIncludes(wordAdapter, "VTReconcileEquationNumbers documentObject", "The shared Equation number update core must rebuild SEQ, visible REF and body REF fields together");
 expectIncludes(wordAdapter, "Set sequenceField = VTEnsureNativeEquationSequenceHelper", "New image Equation numbers must retain a live external native SEQ helper field");
 expectIncludes(wordAdapter, "Type:=wdFieldRef", "Inserted body cross-references must remain dynamic REF fields");
 expectIncludes(wordAdapter, "VT_WORD_NUMBER_BOOKMARK_PREFIX", "Word must retain a formula-specific Bookmark around the complete visible (n) range");
@@ -640,7 +640,7 @@ expectIncludes(wordAdapter, "VTIsDetachedVisualTeXNativeSequenceHelper", "Delete
 expectIncludes(wordAdapter, "Abs(.LeftIndent + 360!) > 0.2", "Detached native helper cleanup must require VisualTeX's unique off-margin paragraph signature");
 expectIncludes(wordAdapter, "VTPruneDetachedVisualTeXNativeSequenceHelpers documentObject", "Refresh numbering must remove detached native SEQ helpers before recounting fields");
 expectIncludes(wordAdapter, "sequenceAnchors() As Long", "Equation reconciliation must snapshot stable SEQ anchors before updating fields");
-expectIncludes(wordAdapter, "sequenceAnchors(previousIndex) > anchorValue", "Mixed image and OMML Equation helpers must be sorted by document anchor before ordinal assignment");
+expectIncludes(wordAdapter, "If sequenceAnchors(previousIndex) <= anchorValue Then Exit Do", "Mixed image and OMML Equation helpers must be sorted by document anchor without reading index zero");
 expectIncludes(wordAdapter, "sequenceAnchors(sequenceCount) = _\n                            nativeFormulaRange.Start", "VisualTeX numbering must prefer the visible formula position over a potentially displaced helper-field position");
 expectIncludes(wordAdapter, "Private Function VTRepairMixedNumberHelperOrder", "Mixed image and OMML numbering must restore each native SEQ helper beside its visible formula before manual refresh");
 expectIncludes(wordAdapter, "helperParagraph.Start <> formulaParagraph.End", "A displaced Equation helper must be detected from the visible formula paragraph boundary");
@@ -982,6 +982,12 @@ expectIncludes(wordAdapter, "sourceXml = VTProbeRangeWordOpenXml(sourceParagraph
 expectIncludes(wordAdapter, "cellXml = VTProbeRangeWordOpenXml", "The batch display probe must inspect the center cell's real Word Open XML");
 expectIncludes(wordAdapter, 'VTProbeSubstringCount(cellXml, "<m:oMathPara")', "The batch display probe must detect a true m:oMathPara instead of trusting OMath.Type alone");
 expectIncludes(wordAdapter, "VTWriteTextAtomic resultPath, report", "The batch display probe must preserve progress after every strategy");
+expectIncludes(wordAdapter, "Public Sub VisualTeX_RunWordMiddleNativeInsertionRegression()", "The packaged Word add-in must expose the 20-plus-formula middle native insertion regression");
+expectIncludes(wordAdapter, 'Const insertBeforeOrdinal As Long = 21', "Middle native insertion regression must reproduce insertion at the user's 21st Equation position");
+expectIncludes(wordAdapter, '"crossReference=25"', "Middle native insertion regression must prove downstream cross-references flow after renumbering");
+expectIncludes(wordAdapter, "Private Function VTCanUseEquationTailFastPath", "Native numbering fast paths must use one strict tail gate");
+expectIncludes(wordAdapter, "VTHasManagedEquationNumberAfter", "The strict tail gate must reject a later managed VisualTeX number even when Word's live Field view is stale");
+expectIncludes(wordAdapter, "VTReconcileEquationNumbers documentObject", "Middle insertion must be able to replay the full flowing Equation sequence on Word for Mac");
 expectIncludes(wordAdapter, "Public Sub VisualTeX_RunWordSafeNativeInsertionRegression()", "The packaged Word add-in must expose the three-position safe native insertion regression");
 expectIncludes(wordAdapter, 'regressionStage = "body-paragraph-end"', "Safe insertion must cover a normal body paragraph end");
 expectIncludes(wordAdapter, 'regressionStage = "empty-line-between-body-and-formula"', "Safe insertion must cover an empty line between body text and an existing formula");
@@ -996,6 +1002,7 @@ expectIncludes(wordAdapter, 'ReferenceKind:=wdEntireCaption', "Safe insertion re
 expectIncludes(wordAdapter, '"externalSeq=PASS"', "Safe insertion PASS output must record that every true SEQ remained outside OMath");
 expectIncludes(wordAdapter, '"internalRef=PASS"', "Safe insertion PASS output must record that each visible number remained an internal REF");
 expectIncludes(wordAdapter, "Public Sub VisualTeX_RunWordSingleParagraphNumberRegression()", "The packaged Word add-in must expose a real-host blank-first-line single-paragraph numbering regression");
+expectIncludes(wordAdapter, "Public Sub VisualTeX_RunWordNumberingPerformanceRegression()", "The packaged Word add-in must retain the 30-plus Equation numbering performance regression");
 expectIncludes(wordAdapter, 'regressionStage = "blank-first-line-create"', "The real-host regression must create a numbered formula on the first line of a blank document");
 expectIncludes(wordAdapter, "testDocument.Tables.Count <> 0", "The blank-first-line regression must reject any new numbered table");
 expectIncludes(wordAdapter, "paragraphRange.Paragraphs.Count <> 1 Or tabCount <> 2", "The blank-first-line regression must require one paragraph with exactly two tabs");
