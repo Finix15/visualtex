@@ -814,28 +814,43 @@ internal static class WordOmmlConverter
             return mathMl;
         var document = XDocument.Parse(mathMl, LoadOptions.PreserveWhitespace);
         XNamespace presentationMath = "http://www.w3.org/1998/Math/MathML";
-        var supportedFences = new HashSet<string>(StringComparer.Ordinal)
+        var fallbackFenceCharacters = new HashSet<string>(StringComparer.Ordinal)
         {
             "(", ")", "[", "]", "{", "}", "|", "‖", "⌈", "⌉", "⌊", "⌋",
+            "⟨", "⟩", "/", "\\", "↑", "↓", "↕", "⇑", "⇓", "⇕",
         };
+
+        bool IsFenceOperator(XElement element, string expectedTexClass)
+        {
+            if (element.Name != presentationMath + "mo") return false;
+            var texClass = element.Attribute("data-mjx-texclass")?.Value;
+            if (string.Equals(texClass, expectedTexClass, StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (string.Equals(element.Attribute("fence")?.Value, "true", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(element.Attribute("stretchy")?.Value, "true", StringComparison.OrdinalIgnoreCase))
+                return true;
+            return fallbackFenceCharacters.Contains(element.Value);
+        }
 
         foreach (var row in document.Descendants(presentationMath + "mrow").ToList())
         {
             var children = row.Elements().ToArray();
             if (children.Length != 3
-                || children[0].Name != presentationMath + "mo"
                 || children[1].Name != presentationMath + "mtable"
-                || children[2].Name != presentationMath + "mo")
+                || !IsFenceOperator(children[0], "OPEN")
+                || !IsFenceOperator(children[2], "CLOSE"))
                 continue;
             var open = children[0].Value;
             var close = children[2].Value;
-            if (!supportedFences.Contains(open) || !supportedFences.Contains(close))
+            if (open.Length == 0 && close.Length == 0)
                 continue;
 
-            // MathJax serializes matrix environments as OPEN mo + mtable + CLOSE
-            // mo. Office's MML2OMML transform treats those bars/brackets as
-            // ordinary matrix cells. mfenced carries the actual delimiter
-            // semantics and is transformed into one native m:d containing m:m.
+            // MathJax serializes matrices and other fenced multi-line structures
+            // as OPEN mo + mtable + CLOSE mo. For one-sided delimiters (notably
+            // cases and \left...\right.) the invisible side is an empty stretchy
+            // mo. Office's MML2OMML transform treats the visible mo as an ordinary
+            // glyph unless the structure is normalized to mfenced first, which
+            // makes Word emit one native m:d whose delimiter grows with the table.
             row.ReplaceWith(
                 new XElement(
                     presentationMath + "mfenced",
@@ -852,10 +867,16 @@ internal static class WordOmmlConverter
         var parent = table.Parent;
         if (parent?.Name == presentationMath + "mfenced")
         {
-            var open = parent.Attribute("open")?.Value ?? "(";
-            var close = parent.Attribute("close")?.Value ?? ")";
-            return (open, close) is ("(", ")") or ("[", "]")
-                or ("|", "|") or ("‖", "‖");
+            var fencedRows = table.Elements(presentationMath + "mtr").ToArray();
+            if (fencedRows.Length == 0) return false;
+            var fencedColumns = fencedRows[0].Elements(presentationMath + "mtd").Count();
+            // Office may represent a one-column fenced stack as an equation
+            // array rather than m:m. The surrounding m:d is still correct and
+            // stretchable, so matrix-dimension validation is only meaningful
+            // for real multi-column tables.
+            return fencedColumns > 1
+                && fencedRows.All(row =>
+                    row.Elements(presentationMath + "mtd").Count() == fencedColumns);
         }
 
         // MathJax also uses mtable for aligned equations, cases and substack.

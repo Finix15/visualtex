@@ -43,8 +43,8 @@ internal static class WordOmmlNativeSource
             FontSizePt = fontSize,
             RenderFontSizePt = fontSize,
             NativeOmmlFingerprint = WordOmmlConverter.ComputeOmmlFingerprint(wordOpenXml),
-            CreatedWithVersion = "1.2.4",
-            UpdatedWithVersion = "1.2.4",
+            CreatedWithVersion = "1.2.5",
+            UpdatedWithVersion = "1.2.5",
             CreatedAt = now,
             UpdatedAt = now,
         };

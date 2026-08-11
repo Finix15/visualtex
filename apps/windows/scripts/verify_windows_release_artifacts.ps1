@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$ExpectedAppVersion = "1.2.4",
+    [string]$ExpectedAppVersion = "1.2.5",
     [string]$ExpectedOfficeMsiVersion = "1.0.41.0"
 )
 
@@ -309,7 +309,11 @@ foreach ($requiredMarker in @(
     "Same-version maintenance defaults to the second option",
     'StrCpy $ReinstallPageCheck 2',
     'Same version: always remove the installed payload before reinstalling',
-    '/VISUALTEXACCEPTANCE'
+    '/VISUALTEXACCEPTANCE',
+    'Page custom VisualTeXOfficePageCreate VisualTeXOfficePageLeave',
+    'Page custom VisualTeXOcrPageCreate VisualTeXOcrPageLeave',
+    'VisualTeXCreateBundledResourceDirectory',
+    'VisualTeXInstallBundledResource'
 )) {
     if (-not $customNsisSource.Contains($requiredMarker)) {
         throw "Custom NSIS template is missing verified release marker: $requiredMarker"
@@ -331,7 +335,15 @@ foreach ($requiredHookMarker in @(
     'Behavior:Win32/Persistence.A!ml',
     'Remove only known legacy application payloads.',
     '%APPDATA%\VisualTeX\ocr-storage.json',
-    'preserve %APPDATA%\com.visualtex.studio.'
+    'preserve %APPDATA%\com.visualtex.studio.',
+    'Function VisualTeXOcrPageCreate',
+    '${NSD_CreateCheckbox} 0 38u 100% 18u',
+    'Install offline OCR resources (recommended)',
+    'Function VisualTeXOcrPageLeave',
+    '/VISUALTEXOCR=',
+    '!macro VisualTeXCreateBundledResourceDirectory DESTINATION',
+    '!macro VisualTeXInstallBundledResource DESTINATION SOURCE',
+    'no ocr*, wheel or private-Python resources will be written'
 )) {
     if (-not $nsisHooksSource.Contains($requiredHookMarker)) {
         throw "NSIS hooks are missing a verified executable or persistent-data marker: $requiredHookMarker"

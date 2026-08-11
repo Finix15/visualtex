@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$InstallerPath,
-    [string]$ExpectedAppVersion = "1.2.4",
+    [string]$ExpectedAppVersion = "1.2.5",
     [switch]$VerifyOfficeRuntime,
     [switch]$VerifyOfficeReadonly,
     [switch]$ForceCloseOffice,
@@ -222,6 +222,7 @@ $report = [ordered]@{
     secondLaunchRecreatedMainWindow = $false
     desktopCloseExited = $false
     ocrWarmupScheduled = $false
+    ocrResourcesOmitted = $false
     officeEditorCreatedBeforeRequest = $false
     officeRuntimeVerified = $false
     officePayloadHashesVerified = $false
@@ -239,6 +240,7 @@ try {
         "/NS",
         "/VISUALTEXACCEPTANCE",
         "/VISUALTEXOFFICE=skip",
+        "/VISUALTEXOCR=none",
         "/D=$installRoot"
     )
     $installer = Start-Process -FilePath $InstallerPath -ArgumentList $arguments -PassThru
@@ -260,6 +262,17 @@ try {
         throw "The exact installed VisualTeX executable is missing below $installRoot"
     }
     $script:installedExe = (Resolve-Path -LiteralPath $installedExe).Path
+
+    foreach ($optionalOcrPath in @(
+        (Join-Path $installRoot "ocr-python"),
+        (Join-Path $installRoot "ocr-models"),
+        (Join-Path $installRoot "ocr")
+    )) {
+        if (Test-Path -LiteralPath $optionalOcrPath) {
+            throw "Installer /VISUALTEXOCR=none unexpectedly extracted optional OCR resources: $optionalOcrPath"
+        }
+    }
+    $report.ocrResourcesOmitted = $true
 
     # Acceptance mode intentionally skips machine-wide Office registration, but it
     # still extracts the exact Office payload embedded in this NSIS. Verify that

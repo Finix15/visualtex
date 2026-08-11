@@ -76,7 +76,7 @@ internal static class WordFormulaMetadataReader
             ?? throw new InvalidOperationException(
                 "Unable to clone VisualTeX formula metadata.");
         clone.FormulaId = formulaId;
-        clone.UpdatedWithVersion = "1.2.4";
+        clone.UpdatedWithVersion = "1.2.5";
         clone.UpdatedAt = DateTimeOffset.UtcNow.ToString("O");
         clone.Validate();
         return clone;

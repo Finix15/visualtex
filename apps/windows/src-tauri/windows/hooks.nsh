@@ -2,19 +2,20 @@
 ; The production path installs the per-user Ribbon COM add-ins and ATL OLE
 ; LocalServer. Legacy Office.js Trusted Catalog resources are not installed.
 
-!define VISUALTEX_INSTALLER_VERSION "1.2.4"
+!define VISUALTEX_INSTALLER_VERSION "1.2.5"
 
 Var VisualTeXOfficeChoice
 Var VisualTeXOfficeOnlyRadio
 Var VisualTeXOfficeNativeRadio
+Var VisualTeXOcrChoice
+Var VisualTeXOcrCheckbox
+Var VisualTeXOcrResourcePrefix
 Var VisualTeXAcceptanceMode
 
 ; The generated Tauri PageReinstall function is patched after bundling so the
 ; same-version maintenance page defaults to "Uninstall VisualTeX" directly at
 ; control creation time. Do not use a GUI timer here: it races the generated
 ; page and does not reliably change the checked radio button.
-
-Page custom VisualTeXOfficePageCreate VisualTeXOfficePageLeave
 
 Function VisualTeXRepairMainUninstallRegistration
   ; Older 1.2.3 builds could leave the remembered install directory while the
@@ -61,17 +62,18 @@ Function VisualTeXOfficePageCreate
     Abort
   ${EndIf}
 
-  ${NSD_CreateLabel} 0 0 100% 30u "请选择是否启用 Windows 原生 Office 集成 / Choose Windows native Office integration"
+  !insertmacro MUI_HEADER_TEXT "Office 集成" "选择是否安装 VisualTeX 的 Word / PowerPoint 原生集成"
+  ${NSD_CreateLabel} 0 0 100% 24u "请选择是否启用 Windows 原生 Office 集成 / Choose Windows native Office integration"
   Pop $0
 
-  ${NSD_CreateRadioButton} 0 38u 100% 16u "仅 VisualTeX（不安装 Office 插件） / VisualTeX only"
+  ${NSD_CreateRadioButton} 0 34u 100% 16u "仅 VisualTeX（不安装 Office 插件） / VisualTeX only"
   Pop $VisualTeXOfficeOnlyRadio
 
-  ${NSD_CreateRadioButton} 0 62u 100% 16u "VisualTeX + 原生 Office 集成（推荐）"
+  ${NSD_CreateRadioButton} 0 58u 100% 16u "VisualTeX + 原生 Office 集成（推荐）"
   Pop $VisualTeXOfficeNativeRadio
   ${NSD_Check} $VisualTeXOfficeNativeRadio
 
-  ${NSD_CreateLabel} 0 92u 100% 42u "原生模式统一使用 Word/PowerPoint Ribbon COM 加载项与 ATL OLE LocalServer。安装过程不会启动 Office，并会清理旧 Office.js Trusted Catalog 残留。"
+  ${NSD_CreateLabel} 0 88u 100% 44u "原生模式统一使用 Word/PowerPoint Ribbon COM 加载项与 ATL OLE LocalServer。安装过程不会启动 Office，并会清理旧 Office.js Trusted Catalog 残留。"
   Pop $0
 
   nsDialogs::Show
@@ -107,8 +109,69 @@ visualtex_office_process_check_done:
   StrCpy $VisualTeXOfficeChoice "none"
 FunctionEnd
 
+Function VisualTeXOcrPageCreate
+  nsDialogs::Create 1018
+  Pop $0
+  ${If} $0 == error
+    Abort
+  ${EndIf}
+
+  !insertmacro MUI_HEADER_TEXT "OCR 离线资源" "选择是否随 VisualTeX 安装本地 OCR 运行资源"
+  ${NSD_CreateLabel} 0 0 100% 28u "VisualTeX 的 OCR 为可选组件。默认安装后可在应用内配置 OCR 环境；如果暂时不需要 OCR，可以取消下面的勾选以节省磁盘空间。"
+  Pop $0
+
+  ${NSD_CreateCheckbox} 0 38u 100% 18u "安装 OCR 离线资源（推荐） / Install offline OCR resources (recommended)"
+  Pop $VisualTeXOcrCheckbox
+  ${If} $VisualTeXOcrChoice != "none"
+    ${NSD_Check} $VisualTeXOcrCheckbox
+  ${EndIf}
+
+  ${NSD_CreateLabel} 0 66u 100% 48u "包含 VisualTeX 私有 Python 3.12.10、离线 wheel 依赖、OCR worker 与模型目录索引。S/M/L OCR 模型仍按需单独下载。"
+  Pop $0
+
+  ${NSD_CreateLabel} 0 116u 100% 20u "取消勾选后这些 OCR 文件不会写入安装目录；以后可重新运行安装包并勾选此项补装。"
+  Pop $0
+
+  nsDialogs::Show
+FunctionEnd
+
+Function VisualTeXOcrPageLeave
+  ${NSD_GetState} $VisualTeXOcrCheckbox $0
+  ${If} $0 == ${BST_CHECKED}
+    StrCpy $VisualTeXOcrChoice "install"
+  ${Else}
+    StrCpy $VisualTeXOcrChoice "none"
+  ${EndIf}
+FunctionEnd
+
 ; OCR uses the bundled private Python 3.12.10 x64 runtime and a fixed local
 ; wheelhouse. The installer must never probe or depend on system Python.
+;
+; Tauri normally writes every configured resource unconditionally. The custom
+; NSIS template routes every resource directory/file through these macros so
+; the user's OCR choice is applied before extraction. OCR resources remain
+; embedded in the installer so the default checked mode stays fully offline,
+; but choosing "none" never writes ocr*, wheel or private-Python payloads into
+; the installation directory.
+!macro VisualTeXCreateBundledResourceDirectory DESTINATION
+  StrCpy $VisualTeXOcrResourcePrefix "${DESTINATION}" 3
+  ${If} $VisualTeXOcrChoice == "none"
+  ${AndIf} $VisualTeXOcrResourcePrefix == "ocr"
+    DetailPrint "Skipping optional OCR resource directory: ${DESTINATION}"
+  ${Else}
+    CreateDirectory "$INSTDIR\\${DESTINATION}"
+  ${EndIf}
+!macroend
+
+!macro VisualTeXInstallBundledResource DESTINATION SOURCE
+  StrCpy $VisualTeXOcrResourcePrefix "${DESTINATION}" 3
+  ${If} $VisualTeXOcrChoice == "none"
+  ${AndIf} $VisualTeXOcrResourcePrefix == "ocr"
+    DetailPrint "Skipping optional OCR resource: ${DESTINATION}"
+  ${Else}
+    File /a "/oname=${DESTINATION}" "${SOURCE}"
+  ${EndIf}
+!macroend
 
 !macro NSIS_HOOK_PREINSTALL
   ; Normalize the two legacy 1.2.3 install locations back to Tauri's canonical
@@ -143,11 +206,30 @@ FunctionEnd
     StrCpy $VisualTeXOfficeChoice "native"
   ${EndIf}
 
+  ClearErrors
+  ${GetOptions} $0 "/VISUALTEXOCR=" $1
+  ${IfNot} ${Errors}
+    ${If} $1 == "install"
+      StrCpy $VisualTeXOcrChoice "install"
+    ${ElseIf} $1 == "none"
+      StrCpy $VisualTeXOcrChoice "none"
+    ${Else}
+      Abort "Unsupported /VISUALTEXOCR value: $1"
+    ${EndIf}
+  ${EndIf}
+  ${If} $VisualTeXOcrChoice == ""
+    StrCpy $VisualTeXOcrChoice "install"
+  ${EndIf}
+
   ${If} $VisualTeXAcceptanceMode == "1"
     DetailPrint "Installed-release acceptance mode: preserving existing Office integration and skipping machine prerequisite prompts."
   ${EndIf}
 
-  DetailPrint "VisualTeX OCR uses the bundled private Python 3.12.10 x64 runtime and fixed offline wheelhouse; system Python is not required."
+  ${If} $VisualTeXOcrChoice == "install"
+    DetailPrint "Installing VisualTeX OCR offline resources: private Python 3.12.10 x64 runtime, fixed wheelhouse, worker and model catalog."
+  ${Else}
+    DetailPrint "OCR offline resources were disabled by the user; no ocr*, wheel or private-Python resources will be written to the installation directory."
+  ${EndIf}
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL

@@ -187,8 +187,8 @@ internal static partial class Program
             CodeFormat = "latex",
             DisplayMode = "inline",
             FontSizePt = 11,
-            CreatedWithVersion = "1.2.4",
-            UpdatedWithVersion = "1.2.4",
+            CreatedWithVersion = "1.2.5",
+            UpdatedWithVersion = "1.2.5",
             CreatedAt = DateTimeOffset.UtcNow.ToString("O"),
             UpdatedAt = DateTimeOffset.UtcNow.ToString("O"),
         };
