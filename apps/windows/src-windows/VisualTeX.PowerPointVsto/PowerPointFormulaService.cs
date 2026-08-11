@@ -869,7 +869,8 @@ public sealed class PowerPointFormulaService
             var newTop = top + (oldHeight - editedSize.Height) / 2f;
             redrawFreeze = FreezePowerPointWindowRedraw();
 
-            if (TryUpdateOle(oldShape, metadata, emfPath, pngPath))
+            if (!FormulaFontPreferencesChanged(originalMetadata, metadata)
+                && TryUpdateOle(oldShape, metadata, emfPath, pngPath))
             {
                 Configure(oldShape, metadata);
                 // Updating the embedded presentation may cause PowerPoint to
@@ -1355,6 +1356,24 @@ public sealed class PowerPointFormulaService
                 StringComparison.Ordinal);
     }
 
+    private static bool FormulaFontPreferencesChanged(
+        FormulaMetadata? original,
+        FormulaMetadata current)
+    {
+        static string Letter(string? value) =>
+            string.IsNullOrWhiteSpace(value) ? "katex" : value!.Trim();
+        static string Chinese(string? value) =>
+            string.IsNullOrWhiteSpace(value) ? "system" : value!.Trim();
+        return !string.Equals(
+                Letter(original?.FormulaLetterFont),
+                Letter(current.FormulaLetterFont),
+                StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(
+                Chinese(original?.FormulaChineseFont),
+                Chinese(current.FormulaChineseFont),
+                StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string NormalizeFormulaText(string? value) =>
         (value ?? string.Empty)
             .Replace("\r\n", "\n")
@@ -1600,10 +1619,11 @@ public sealed class PowerPointFormulaService
 
         if (deferUntilOleSettled && _postDelayedToOfficeUi is not null)
         {
-            // The last OLE geometry correction runs at 700 ms. Keep the actual
-            // PowerPoint window frozen slightly longer so no intermediate OLE
-            // cache/presentation frame can ever reach the screen.
-            _postDelayedToOfficeUi(RestoreRedraw, 850);
+            // Keep redraw suppressed only through the final short OLE geometry
+            // correction window. PowerPoint's late cache replay happens during
+            // the first few UI turns; a roughly 300 ms window masks it without
+            // making OLE conversion feel almost a second slower than SVG/OMML.
+            _postDelayedToOfficeUi(RestoreRedraw, 300);
             return;
         }
         if (deferUntilOleSettled && _postToOfficeUi is not null)
@@ -1682,9 +1702,9 @@ public sealed class PowerPointFormulaService
         });
         if (delayedPost is not null)
         {
-            delayedPost(Restore, 80);
-            delayedPost(Restore, 250);
-            delayedPost(Restore, 700);
+            delayedPost(Restore, 60);
+            delayedPost(Restore, 140);
+            delayedPost(Restore, 240);
         }
     }
 

@@ -42,6 +42,137 @@ static OFFICE_BATCH_CONVERSION_QUEUE: OnceLock<Mutex<VecDeque<Vec<String>>>> =
     OnceLock::new();
 #[cfg(target_os = "windows")]
 static OFFICE_EDITOR_ACTIVE_SESSION: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+#[cfg(target_os = "windows")]
+static OFFICE_EDITOR_SIZE_WRITE_GENERATION: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+#[cfg(target_os = "windows")]
+const OFFICE_EDITOR_WINDOW_SIZE_FILE: &str = "editor-window-size.json";
+#[cfg(target_os = "windows")]
+const DEFAULT_OFFICE_EDITOR_WIDTH: f64 = 852.0;
+#[cfg(target_os = "windows")]
+const DEFAULT_OFFICE_EDITOR_HEIGHT: f64 = 500.57142857142856;
+#[cfg(target_os = "windows")]
+const MIN_OFFICE_EDITOR_WIDTH: f64 = 640.0;
+#[cfg(target_os = "windows")]
+const MIN_OFFICE_EDITOR_HEIGHT: f64 = 480.0;
+#[cfg(target_os = "windows")]
+const MAX_OFFICE_EDITOR_WIDTH: f64 = 2560.0;
+#[cfg(target_os = "windows")]
+const MAX_OFFICE_EDITOR_HEIGHT: f64 = 1600.0;
+
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OfficeEditorWindowSizePreference {
+    width: f64,
+    height: f64,
+}
+
+#[cfg(target_os = "windows")]
+fn normalize_office_editor_window_size(width: f64, height: f64) -> (f64, f64) {
+    let width = if width.is_finite() {
+        width.clamp(MIN_OFFICE_EDITOR_WIDTH, MAX_OFFICE_EDITOR_WIDTH)
+    } else {
+        DEFAULT_OFFICE_EDITOR_WIDTH
+    };
+    let height = if height.is_finite() {
+        height.clamp(MIN_OFFICE_EDITOR_HEIGHT, MAX_OFFICE_EDITOR_HEIGHT)
+    } else {
+        DEFAULT_OFFICE_EDITOR_HEIGHT
+    };
+    (width, height)
+}
+
+#[cfg(target_os = "windows")]
+fn office_editor_window_size_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Unable to resolve VisualTeX app-data directory: {error}"))?;
+    Ok(app_data.join("office").join(OFFICE_EDITOR_WINDOW_SIZE_FILE))
+}
+
+#[cfg(target_os = "windows")]
+fn load_office_editor_window_size(app: &tauri::AppHandle) -> (f64, f64) {
+    let preference = office_editor_window_size_path(app)
+        .ok()
+        .and_then(|path| fs::read(path).ok())
+        .and_then(|bytes| serde_json::from_slice::<OfficeEditorWindowSizePreference>(&bytes).ok());
+    preference
+        .map(|value| normalize_office_editor_window_size(value.width, value.height))
+        .unwrap_or((DEFAULT_OFFICE_EDITOR_WIDTH, DEFAULT_OFFICE_EDITOR_HEIGHT))
+}
+
+#[cfg(target_os = "windows")]
+fn write_office_editor_window_size(
+    app: &tauri::AppHandle,
+    width: f64,
+    height: f64,
+) -> Result<(f64, f64), String> {
+    let (width, height) = normalize_office_editor_window_size(width, height);
+    let path = office_editor_window_size_path(app)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Unable to resolve the Office editor size directory.".to_string())?;
+    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let preference = OfficeEditorWindowSizePreference { width, height };
+    let bytes = serde_json::to_vec_pretty(&preference).map_err(|error| error.to_string())?;
+    fs::write(path, bytes).map_err(|error| error.to_string())?;
+    Ok((width, height))
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn configuration_office_editor_window_size(
+    app: &tauri::AppHandle,
+) -> Option<(f64, f64)> {
+    if let Some(window) = app.get_webview_window("office-session-editor") {
+        if let (Ok(physical), Ok(scale_factor)) = (window.inner_size(), window.scale_factor()) {
+            let scale_factor = scale_factor.max(0.1);
+            let size = normalize_office_editor_window_size(
+                f64::from(physical.width) / scale_factor,
+                f64::from(physical.height) / scale_factor,
+            );
+            return Some(size);
+        }
+    }
+    Some(load_office_editor_window_size(app))
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn apply_configuration_office_editor_window_size(
+    app: &tauri::AppHandle,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    let (width, height) = write_office_editor_window_size(app, width, height)?;
+    if let Some(window) = app.get_webview_window("office-session-editor") {
+        window
+            .set_size(tauri::LogicalSize::new(width, height))
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn schedule_persist_office_editor_window_size(
+    app: tauri::AppHandle,
+    width: f64,
+    height: f64,
+) {
+    use std::sync::atomic::Ordering;
+
+    let (width, height) = normalize_office_editor_window_size(width, height);
+    let generation = OFFICE_EDITOR_SIZE_WRITE_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(280)).await;
+        if OFFICE_EDITOR_SIZE_WRITE_GENERATION.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        if let Err(error) = write_office_editor_window_size(&app, width, height) {
+            eprintln!("Unable to persist the Office editor window size: {error}");
+        }
+    });
+}
 
 #[derive(Clone)]
 struct ServerContext {
@@ -69,6 +200,7 @@ struct ThemeResponse {
 #[serde(rename_all = "camelCase")]
 struct OfficePreferencesResponse {
     powerpoint_default_font_size_pt: f64,
+    editor_preferences: serde_json::Value,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -228,6 +360,7 @@ async fn api_preferences(
         powerpoint_default_font_size_pt: context
             .companion
             .powerpoint_default_font_size_pt(),
+        editor_preferences: context.companion.current_editor_preferences(),
     })
 }
 
@@ -575,6 +708,7 @@ fn open_desktop_session_window(app: tauri::AppHandle, session_id: String) -> Res
     crate::app_lifecycle::append_lifecycle_log(format!(
         "creating hidden Office editor WebView on demand for session={session_id}"
     ));
+    let (saved_editor_width, saved_editor_height) = load_office_editor_window_size(&app);
     if let Ok(mut current) = OFFICE_EDITOR_ACTIVE_SESSION
         .get_or_init(|| Mutex::new(None))
         .lock()
@@ -582,8 +716,8 @@ fn open_desktop_session_window(app: tauri::AppHandle, session_id: String) -> Res
         *current = Some(session_id.clone());
     }
     let build_result = WebviewWindowBuilder::new(&app, label, WebviewUrl::External(url))
-        .title("VisualTeX · Office 公式编辑器")
-        .inner_size(1240.0, 820.0)
+        .title("Office 公式编辑器")
+        .inner_size(saved_editor_width, saved_editor_height)
         .min_inner_size(640.0, 480.0)
         .resizable(true)
         .center()
@@ -1571,6 +1705,16 @@ fn metadata_from_session(session: &OfficeFormulaSession) -> VisualTeXFormulaMeta
             .as_ref()
             .map(|_| session.font_size_pt)
             .or_else(|| original.and_then(|value| value.render_font_size_pt)),
+        formula_letter_font: session
+            .export_result
+            .as_ref()
+            .and_then(|value| value.formula_letter_font.clone())
+            .or_else(|| original.and_then(|value| value.formula_letter_font.clone())),
+        formula_chinese_font: session
+            .export_result
+            .as_ref()
+            .and_then(|value| value.formula_chinese_font.clone())
+            .or_else(|| original.and_then(|value| value.formula_chinese_font.clone())),
         native_omml_fingerprint: original
             .and_then(|value| value.native_omml_fingerprint.clone()),
         created_with_version: original
@@ -2517,6 +2661,8 @@ mod tests {
                 width: 120.0,
                 height: 30.0,
                 baseline: Some(22.0),
+                formula_letter_font: Some("times".to_string()),
+                formula_chinese_font: Some("kaiti".to_string()),
             }),
             original_metadata: None,
             dirty,

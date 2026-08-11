@@ -38,10 +38,16 @@ internal static partial class Program
         Word.Application? application = null;
         Word.Document? document = null;
         Word.Document? reopened = null;
+        Word.Document? freshDocument = null;
         VisualTeX.WordVsto.ThisAddIn? addIn = null;
         Array custom = Array.Empty<object>();
+        var previousDefaultFormat = WordEquationNumbering.GetDefaultEquationNumberFormatId();
+        var previousDefaultNumbered = WordEquationNumbering.GetDefaultDisplayEquationNumbered();
         try
         {
+            WordEquationNumbering.SetDefaultEquationNumberFormatPreference(
+                EquationNumberFormat.ContinuousId);
+            WordEquationNumbering.SetDefaultDisplayEquationNumbered(false);
             application = CreateWordApplication(visible: false);
             document = application.Documents.Add();
             addIn = new VisualTeX.WordVsto.ThisAddIn();
@@ -156,6 +162,21 @@ internal static partial class Program
             AssertReferenceText(document, referenceBookmark, "(1-1)");
             AssertReferenceText(document, legacyReferenceBookmark, "(1-1)");
 
+            ApplyEquationNumberFormat(
+                addIn,
+                document,
+                EquationNumberFormat.Heading2DotId,
+                formulas,
+                new[] { "1.0.1", "1.0.2", "1.1.1", "2.0.1", "2.1.1", "2.1.2" });
+            ApplyEquationNumberFormat(
+                addIn,
+                document,
+                EquationNumberFormat.Heading1DashId,
+                formulas,
+                new[] { "1-1", "1-2", "1-3", "2-1", "2-2", "2-3" });
+            AssertReferenceText(document, referenceBookmark, "(1-1)");
+            AssertReferenceText(document, legacyReferenceBookmark, "(1-1)");
+
             document.SaveAs2(outputPath, Word.WdSaveFormat.wdFormatXMLDocument);
             document.Close(Word.WdSaveOptions.wdDoNotSaveChanges);
             Release(document);
@@ -173,9 +194,35 @@ internal static partial class Program
                 new[] { "1-1", "1-2", "1-3", "2-1", "2-2", "2-3" });
             AssertReferenceText(reopened, referenceBookmark, "(1-1)");
             AssertReferenceText(reopened, legacyReferenceBookmark, "(1-1)");
+            AssertEqual(
+                EquationNumberFormat.Heading1DashId,
+                WordEquationNumbering.GetDefaultEquationNumberFormatId(),
+                "The user-level equation-number format did not remember the last Ribbon selection.");
+
+            freshDocument = application.Documents.Add();
+            AssertTrue(
+                addIn.GetEquationNumberFormatPressed(
+                    new EquationNumberRibbonControl(EquationNumberFormat.Heading1DashId)),
+                "A fresh Word document did not inherit the remembered user-level number format.");
+            WordEquationNumbering.SetDefaultDisplayEquationNumbered(true);
+            AssertTrue(
+                WordEquationNumbering.GetDefaultDisplayEquationNumbered(),
+                "The remembered display-equation numbering checkbox did not persist true.");
+            AssertNewDisplaySessionNumberedPreference(
+                client,
+                addIn,
+                expectedNumbered: true);
+            WordEquationNumbering.SetDefaultDisplayEquationNumbered(false);
+            AssertTrue(
+                !WordEquationNumbering.GetDefaultDisplayEquationNumbered(),
+                "The remembered display-equation numbering checkbox did not persist false.");
+            AssertNewDisplaySessionNumberedPreference(
+                client,
+                addIn,
+                expectedNumbered: false);
 
             Console.WriteLine(
-                "Word equation-number format acceptance passed: Ribbon selection changed all existing OLE/OMML numbers immediately, native cross-references followed the selected format, the document setting survived save/reopen, and a later inserted formula inherited the saved format.");
+                "Word equation-number format acceptance passed: Ribbon selection changed all existing OLE/OMML numbers immediately, native cross-references followed the selected format, the document setting survived save/reopen, a fresh document inherited the user-level default, and the numbered-display preference round-tripped through persistent user storage.");
             Console.WriteLine($"Artifact: {outputPath}");
         }
         finally
@@ -190,12 +237,16 @@ internal static partial class Program
                 }
                 catch { }
             }
+            try { freshDocument?.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
             try { reopened?.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
             try { document?.Close(Word.WdSaveOptions.wdDoNotSaveChanges); } catch { }
             try { QuitWordApplicationIfOwned(application); } catch { }
+            Release(freshDocument);
             Release(reopened);
             Release(document);
             Release(application);
+            WordEquationNumbering.SetDefaultEquationNumberFormatPreference(previousDefaultFormat);
+            WordEquationNumbering.SetDefaultDisplayEquationNumbered(previousDefaultNumbered);
             ForceComCleanup();
         }
     }
@@ -227,6 +278,43 @@ internal static partial class Program
         {
             Release(headingRange);
             Release(selection);
+        }
+    }
+
+    private static void AssertNewDisplaySessionNumberedPreference(
+        VisualTeXSessionClient client,
+        VisualTeX.WordVsto.ThisAddIn addIn,
+        bool expectedNumbered)
+    {
+        var existing = SnapshotSessionIds();
+        addIn.OnInsertDisplay(new object());
+        var sessionId = WaitForNewSession(existing, "word", TimeSpan.FromSeconds(30));
+        try
+        {
+            var session = client.GetSessionAsync(sessionId, CancellationToken.None)
+                .GetAwaiter().GetResult();
+            AssertEqual("block", session.DisplayMode,
+                "The display-equation preference probe did not create a block session.");
+            AssertEqual(expectedNumbered, session.Numbered,
+                $"A new display editor session did not inherit numbered={expectedNumbered}.");
+            client.PatchAsync(
+                    sessionId,
+                    new { status = "cancelled", explicitCancel = true },
+                    CancellationToken.None)
+                .GetAwaiter().GetResult();
+            var final = WaitForTerminal(client, sessionId, TimeSpan.FromSeconds(30));
+            AssertEqual("cancelled", final.Status,
+                final.Error ?? "The display-equation preference probe did not cancel cleanly.");
+        }
+        finally
+        {
+            try
+            {
+                client.CloseEditorAsync(sessionId, CancellationToken.None)
+                    .GetAwaiter().GetResult();
+            }
+            catch { }
+            WaitForAddInIdle(addIn, TimeSpan.FromSeconds(10));
         }
     }
 
@@ -369,6 +457,7 @@ internal static partial class Program
         IReadOnlyList<string> expectedNumbers)
     {
         var control = new EquationNumberRibbonControl(formatId);
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         addIn.OnEquationNumberFormatChanged(control, pressed: true);
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
         Exception? lastError = null;
@@ -382,6 +471,9 @@ internal static partial class Program
                     formatId,
                     formulas,
                     expectedNumbers);
+                stopwatch.Stop();
+                Console.WriteLine(
+                    $"  Equation-number format {formatId}: {formulas.Count} formulas in {stopwatch.ElapsedMilliseconds} ms.");
                 return;
             }
             catch (Exception error)
@@ -480,7 +572,27 @@ internal static partial class Program
                 "The equation reference bookmark is missing.");
             bookmark = bookmarks[bookmarkName];
             range = bookmark.Range;
-            AssertEqual(expected, (range.Text ?? string.Empty).Trim(),
+            var actual = (range.Text ?? string.Empty).Trim();
+            if (!string.Equals(expected, actual, StringComparison.Ordinal)
+                && expected.StartsWith("(", StringComparison.Ordinal)
+                && actual.EndsWith(")", StringComparison.Ordinal)
+                && range.Start > document.Content.Start)
+            {
+                Word.Range? expanded = null;
+                try
+                {
+                    // Word can shrink a test-only bookmark around a REF field so
+                    // the literal opening parenthesis sits immediately outside
+                    // its start. Validate the rendered document text rather than
+                    // treating that bookmark-boundary movement as lost content.
+                    expanded = document.Range(range.Start - 1, range.End);
+                    var expandedText = (expanded.Text ?? string.Empty).Trim();
+                    if (expandedText.StartsWith("(", StringComparison.Ordinal))
+                        actual = expandedText;
+                }
+                finally { Release(expanded); }
+            }
+            AssertEqual(expected, actual,
                 "The native equation cross-reference did not follow the selected format.");
         }
         finally

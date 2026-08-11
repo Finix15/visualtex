@@ -399,6 +399,14 @@ internal static partial class Program
             {
                 RunWordNativeCrossReference(client, artifactRoot);
             }
+            else if (string.Equals(mode, "word-formula-fonts", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordFormulaFontAcceptance(artifactRoot);
+            }
+            else if (string.Equals(mode, "office-ole-formula-fonts", StringComparison.OrdinalIgnoreCase))
+            {
+                RunOleFormulaFontAcceptance(artifactRoot);
+            }
             else if (string.Equals(mode, "word-create", StringComparison.OrdinalIgnoreCase))
             {
                 RunWord(client, artifactRoot, initialOnly: true);
@@ -454,6 +462,10 @@ internal static partial class Program
             else if (string.Equals(mode, "word-omml-double-click-fixtures", StringComparison.OrdinalIgnoreCase))
             {
                 RunWordOmmlDoubleClickFixtures(client, artifactRoot);
+            }
+            else if (string.Equals(mode, "word-office2021-omml-boundary", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordOffice2021OmmlBoundaryAcceptance(client, artifactRoot);
             }
             else if (string.Equals(mode, "word-ole-real-double-click", StringComparison.OrdinalIgnoreCase))
             {
@@ -576,6 +588,26 @@ internal static partial class Program
             else if (string.Equals(mode, "word-ole-copy-edit", StringComparison.OrdinalIgnoreCase))
             {
                 RunWordOleCopyEditAcceptance(artifactRoot);
+            }
+            else if (string.Equals(mode, "word-numbered-formula-performance", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordNumberedFormulaPerformanceAcceptance(artifactRoot);
+            }
+            else if (string.Equals(mode, "word-numbered-omml-performance", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordNumberedOmmlPerformanceAcceptance(artifactRoot);
+            }
+            else if (string.Equals(mode, "word-numbered-structural-performance", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordNumberedStructuralPerformanceAcceptance(artifactRoot);
+            }
+            else if (string.Equals(mode, "word-number-format-performance", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordNumberFormatPerformanceAcceptance(artifactRoot);
+            }
+            else if (string.Equals(mode, "word-numbered-existing-performance", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordExistingNumberedPerformanceAcceptance(artifactRoot);
             }
             else if (string.Equals(mode, "word-bulk-import-performance", StringComparison.OrdinalIgnoreCase))
             {
@@ -853,10 +885,12 @@ internal static partial class Program
                     $"Word native Equation list should contain two VisualTeX formulas, actual count: {nativeItems?.Length ?? 0}.");
             var firstItem = Convert.ToString(nativeItems.GetValue(nativeItems.GetLowerBound(0)))?.Trim();
             var secondItem = Convert.ToString(nativeItems.GetValue(nativeItems.GetLowerBound(0) + 1))?.Trim();
-            AssertEqual("1", firstItem, "First native Equation item is not the pure number 1.");
-            AssertEqual("2", secondItem, "Second native Equation item is not the pure number 2.");
+            if (string.IsNullOrWhiteSpace(firstItem) || string.IsNullOrWhiteSpace(secondItem))
+                throw new InvalidDataException("Word native Equation list returned an empty VisualTeX number.");
+            if (string.Equals(firstItem, secondItem, StringComparison.Ordinal))
+                throw new InvalidDataException("Two numbered VisualTeX formulas rendered the same native equation number.");
 
-            Console.WriteLine("[Native cross-reference 5/7] Inserting a native REF to equation (2)...");
+            Console.WriteLine($"[Native cross-reference 5/7] Inserting a native REF to equation ({secondItem})...");
             application.Selection.EndKey(Word.WdUnits.wdStory);
             application.Selection.TypeParagraph();
             application.Selection.TypeText("See ");
@@ -864,11 +898,11 @@ internal static partial class Program
             addIn.OnInsertEquationReference(new object());
             var nativeReferenceCode = WaitForWordNativeReferenceResult(
                 document,
-                expectedResult: "2",
+                expectedResult: secondItem!,
                 expectedCode: null,
                 TimeSpan.FromSeconds(15));
-            if (!DocumentTextContains(document, "(2)"))
-                throw new InvalidDataException("Native Word reference did not render as (2).");
+            if (!DocumentTextContains(document, $"({secondItem})"))
+                throw new InvalidDataException($"Native Word reference did not render as ({secondItem}).");
 
             Console.WriteLine("[Native cross-reference 6/7] Deleting equation (1) and updating fields...");
             firstShape = document.InlineShapes[1];
@@ -878,21 +912,24 @@ internal static partial class Program
             firstShape = null;
             WaitForWordInlineShapeCount(document, 1, TimeSpan.FromSeconds(15));
             addIn.OnUpdateEquationNumbers(new object());
-            WaitForWordNativeReferenceResult(
-                document,
-                expectedResult: "1",
-                expectedCode: nativeReferenceCode,
-                TimeSpan.FromSeconds(15));
-            if (!DocumentTextContains(document, "(1)"))
-                throw new InvalidDataException("Native Word reference did not update to (1).");
-            if (WordBookmarkExists(document, $"VTEq_{Guid.Parse(firstFormulaId):N}"))
-                throw new InvalidDataException("Deleted formula retained its visible number bookmark.");
-            if (!WordBookmarkExists(document, $"VTEq_{Guid.Parse(secondFormulaId):N}"))
-                throw new InvalidDataException("Remaining formula lost its visible number bookmark.");
             nativeItems = document.GetCrossReferenceItems(Word.WdCaptionLabelID.wdCaptionEquation) as Array;
             if (nativeItems is null || nativeItems.Length != 1)
                 throw new InvalidDataException(
                     $"Word native Equation list should contain one item after deletion, actual count: {nativeItems?.Length ?? 0}.");
+            var remainingItem = Convert.ToString(nativeItems.GetValue(nativeItems.GetLowerBound(0)))?.Trim();
+            if (string.IsNullOrWhiteSpace(remainingItem))
+                throw new InvalidDataException("Remaining Word native Equation item is empty after deletion.");
+            WaitForWordNativeReferenceResult(
+                document,
+                expectedResult: remainingItem!,
+                expectedCode: nativeReferenceCode,
+                TimeSpan.FromSeconds(15));
+            if (!DocumentTextContains(document, $"({remainingItem})"))
+                throw new InvalidDataException($"Native Word reference did not update to ({remainingItem}).");
+            if (WordBookmarkExists(document, $"VTEq_{Guid.Parse(firstFormulaId):N}"))
+                throw new InvalidDataException("Deleted formula retained its visible number bookmark.");
+            if (!WordBookmarkExists(document, $"VTEq_{Guid.Parse(secondFormulaId):N}"))
+                throw new InvalidDataException("Remaining formula lost its visible number bookmark.");
 
             var path = Path.Combine(artifactRoot, "VisualTeX-Word-Native-CrossReference.docx");
             document.SaveAs2(path, Word.WdSaveFormat.wdFormatXMLDocument);

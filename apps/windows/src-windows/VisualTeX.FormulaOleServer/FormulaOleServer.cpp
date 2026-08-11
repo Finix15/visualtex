@@ -10,6 +10,30 @@
 
 namespace
 {
+void ConfigureProcessDpiAwareness() noexcept
+{
+    // The OLE LocalServer converts the PowerPoint-generated enhanced metafile
+    // to legacy CF_METAFILEPICT on demand. GetWinMetaFileBits derives that WMF
+    // resolution from this process's reference DC, so leaving the LocalServer
+    // DPI-unaware can turn a 125/150/175%-DPI PowerPoint preview into a small
+    // upper-left rendering inside an otherwise correctly sized OLE host box.
+    // Set the awareness before ATL/OLE/GDI+ touch any display DC. Resolve the
+    // newer API dynamically so the binary still has a safe legacy fallback.
+    using SetProcessDpiAwarenessContextFn = BOOL(WINAPI*)(HANDLE);
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    auto setContext = user32 == nullptr
+        ? nullptr
+        : reinterpret_cast<SetProcessDpiAwarenessContextFn>(
+            GetProcAddress(user32, "SetProcessDpiAwarenessContext"));
+    if (setContext != nullptr)
+    {
+        // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 is the pseudo-handle -4.
+        if (setContext(reinterpret_cast<HANDLE>(-4)))
+            return;
+    }
+    SetProcessDPIAware();
+}
+
 void TraceModule(const char* message) noexcept
 {
     wchar_t localApplicationData[32768] = {};
@@ -161,6 +185,7 @@ CVisualTeXFormulaOleServerModule _AtlModule;
 
 extern "C" int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int showCommand)
 {
+    ConfigureProcessDpiAwareness();
     TraceModule("wWinMain enter");
     const int result = _AtlModule.WinMain(showCommand);
     TraceModule("wWinMain exit");

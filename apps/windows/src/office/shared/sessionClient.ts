@@ -1,4 +1,10 @@
 import { readResponseErrorMessage } from "../../errors/readErrorMessage";
+import type { FormulaDocument } from "../../types/formula";
+import type {
+  FormulaChineseFont,
+  FormulaLetterFont,
+} from "../../editor/formulaFontPreferences";
+import type { CustomThemeState } from "../../themeCustomization";
 import type { VisualTeXFormulaMetadata } from "./formulaMetadata";
 
 export type OfficeSessionMode = "create" | "edit";
@@ -24,6 +30,8 @@ export interface OfficeExportResult {
   width: number;
   height: number;
   baseline?: number;
+  formulaLetterFont?: FormulaLetterFont;
+  formulaChineseFont?: FormulaChineseFont;
 }
 
 export interface NativePowerPointCommitSelection {
@@ -49,6 +57,10 @@ export interface OfficeThemeStatus {
 
 export interface OfficePreferences {
   powerpointDefaultFontSizePt: number;
+  editorPreferences?: {
+    settings?: Partial<FormulaDocument["settings"]>;
+    customTheme?: CustomThemeState;
+  };
 }
 
 export interface OfficeBatchConversion {

@@ -51,6 +51,12 @@ public sealed class FormulaMetadata
     [JsonPropertyName("renderFontSizePt")]
     public double? RenderFontSizePt { get; set; }
 
+    [JsonPropertyName("formulaLetterFont")]
+    public string? FormulaLetterFont { get; set; }
+
+    [JsonPropertyName("formulaChineseFont")]
+    public string? FormulaChineseFont { get; set; }
+
     [JsonPropertyName("wordInlineOleWidthPt")]
     public double? WordInlineOleWidthPt { get; set; }
 
@@ -102,6 +108,10 @@ public sealed class FormulaMetadata
         if (RenderFontSizePt.HasValue
             && FormulaFontSize.Normalize(RenderFontSizePt.Value) != RenderFontSizePt.Value)
             throw new InvalidOperationException("VisualTeX renderFontSizePt must use a supported half-point value.");
+        if (FormulaLetterFont is not null && !IsSupportedFormulaLetterFont(FormulaLetterFont))
+            throw new InvalidOperationException("VisualTeX formulaLetterFont is not supported.");
+        if (FormulaChineseFont is not null && !IsSupportedFormulaChineseFont(FormulaChineseFont))
+            throw new InvalidOperationException("VisualTeX formulaChineseFont is not supported.");
         if (WordInlineOleWidthPt.HasValue != WordInlineOleHeightPt.HasValue)
             throw new InvalidOperationException(
                 "VisualTeX Word inline OLE width and height must be stored together.");
@@ -118,6 +128,25 @@ public sealed class FormulaMetadata
                 || double.IsInfinity(WordInlineOleHeightPt.Value)))
             throw new InvalidOperationException(
                 "VisualTeX Word inline OLE dimensions must be positive finite values.");
+    }
+
+    private static bool IsSupportedFormulaLetterFont(string value)
+    {
+        return value == "katex"
+            || value == "times"
+            || value == "cambria"
+            || value == "stix"
+            || value == "palatino"
+            || value == "helvetica";
+    }
+
+    private static bool IsSupportedFormulaChineseFont(string value)
+    {
+        return value == "system"
+            || value == "pingfang"
+            || value == "songti"
+            || value == "kaiti"
+            || value == "heiti";
     }
 }
 

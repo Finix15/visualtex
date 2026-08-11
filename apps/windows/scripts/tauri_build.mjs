@@ -136,6 +136,61 @@ function preparePatchedNsisTemplate() {
   }
   template = template.replace(oldSameVersionLeave, newSameVersionLeave);
 
+  const oldInstallerPageSequence = [
+    "; 5. Choose install directory page",
+    "!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive",
+    "!insertmacro MUI_PAGE_DIRECTORY",
+    "",
+    "; 6. Start menu shortcut page",
+    "Var AppStartMenuFolder",
+  ].join("\n");
+  const newInstallerPageSequence = [
+    "; 5. Choose install directory page",
+    "!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive",
+    "!insertmacro MUI_PAGE_DIRECTORY",
+    "",
+    "; 6. VisualTeX native Office integration choice",
+    "Page custom VisualTeXOfficePageCreate VisualTeXOfficePageLeave",
+    "",
+    "; 7. VisualTeX optional offline OCR resources choice",
+    "Page custom VisualTeXOcrPageCreate VisualTeXOcrPageLeave",
+    "",
+    "; 8. Start menu shortcut page",
+    "Var AppStartMenuFolder",
+  ].join("\n");
+  if (!template.includes(oldInstallerPageSequence)) {
+    throw new Error(
+      "The Tauri NSIS installer page sequence changed unexpectedly; refusing a build where VisualTeX Office/OCR choices might be hidden",
+    );
+  }
+  template = template.replace(oldInstallerPageSequence, newInstallerPageSequence);
+
+  const oldResourceCopy = [
+    "  ; Copy resources",
+    "  {{#each resources_dirs}}",
+    '    CreateDirectory "$INSTDIR\\\\{{this}}"',
+    "  {{/each}}",
+    "  {{#each resources}}",
+    '    File /a "/oname={{this.[1]}}" "{{no-escape @key}}"',
+    "  {{/each}}",
+  ].join("\n");
+  const newResourceCopy = [
+    "  ; Copy resources through VisualTeX hooks so optional OCR payloads can be",
+    "  ; skipped before extraction while all non-OCR Tauri resources remain exact.",
+    "  {{#each resources_dirs}}",
+    '    !insertmacro VisualTeXCreateBundledResourceDirectory "{{this}}"',
+    "  {{/each}}",
+    "  {{#each resources}}",
+    '    !insertmacro VisualTeXInstallBundledResource "{{this.[1]}}" "{{no-escape @key}}"',
+    "  {{/each}}",
+  ].join("\n");
+  if (!template.includes(oldResourceCopy)) {
+    throw new Error(
+      "The Tauri NSIS resource copy block changed unexpectedly; refusing an installer where optional OCR extraction cannot be verified",
+    );
+  }
+  template = template.replace(oldResourceCopy, newResourceCopy);
+
   const output = resolve(
     "src-tauri",
     "target",
@@ -169,6 +224,13 @@ const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const tauri = process.platform === "win32" ? "tauri.cmd" : "tauri";
 const node = process.execPath;
 const powershell = process.platform === "win32" ? windowsPowerShellPath() : "powershell";
+if (process.argv.includes("--prepare-nsis-template-only")) {
+  if (process.platform !== "win32") {
+    throw new Error("VisualTeX NSIS template preparation is Windows-only");
+  }
+  preparePatchedNsisTemplate();
+  process.exit(0);
+}
 const forwarded = releaseArguments(process.argv.slice(2));
 
 if (process.platform !== "win32") {

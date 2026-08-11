@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createUuid } from "../../runtime/browserCompatibility";
 import {
   Braces,
   CheckCircle2,
@@ -309,7 +310,7 @@ export function DocumentImportApp() {
     if (!session || !preview.parsed || preview.error || busy) return;
     setBusy(true);
     try {
-      const lineId = session.lines[0]?.id || crypto.randomUUID();
+      const lineId = session.lines[0]?.id || createUuid();
       const serializedDocument = JSON.stringify(preview.parsed);
       if (serializedDocument.length > 5_000_000) {
         throw new Error("解析后的文档结构超过 5 MB，无法提交给 Word。请拆分后导入。");

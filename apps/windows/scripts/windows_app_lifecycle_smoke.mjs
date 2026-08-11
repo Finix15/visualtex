@@ -14,7 +14,6 @@ const [
   platformBundle,
   frontendVerifier,
   embeddedVerifier,
-  nsisPatch,
 ] = await Promise.all([
   read("src-tauri/tauri.conf.json"),
   read("src-tauri/src/app_lifecycle.rs"),
@@ -27,7 +26,6 @@ const [
   read("scripts/build_platform_bundle.mjs"),
   read("scripts/verify_frontend_dist.mjs"),
   read("scripts/verify_embedded_frontend_assets.mjs"),
-  read("scripts/patch_generated_nsis.ps1"),
 ]);
 
 const config = JSON.parse(tauriConfig);
@@ -87,11 +85,13 @@ assert(tauriBuild.includes("clean_windows_release_outputs.mjs"));
 assert.equal((tauriBuild.match(/build:desktop/g) ?? []).length, 2); // Windows and non-Windows branches, one each.
 assert(tauriBuild.includes('["build", "--no-bundle"'));
 assert(tauriBuild.includes("verify_embedded_frontend_assets.mjs"));
-assert(tauriBuild.includes("patch_generated_nsis.ps1"));
+assert(tauriBuild.includes("preparePatchedNsisTemplate"));
+assert(tauriBuild.includes("visualtex-installer.nsi"));
+assert(tauriBuild.includes('run(tauri, ["bundle", "--bundles", "nsis"'));
 assert(!platformBundle.includes('run(npm, ["run", "build:desktop"])'));
 assert(frontendVerifier.includes("dist/index.html references a missing asset"));
 assert(embeddedVerifier.includes("current dist/index.html references"));
-assert(nsisPatch.includes("Same-version maintenance defaults to the second option"));
-assert(nsisPatch.includes('StrCpy $ReinstallPageCheck 2'));
+assert(tauriBuild.includes("Same version: always remove the installed payload before reinstalling."));
+assert(tauriBuild.includes("Goto reinst_uninstall"));
 
 console.log("Windows app lifecycle, bootstrap and deterministic release build smoke passed.");

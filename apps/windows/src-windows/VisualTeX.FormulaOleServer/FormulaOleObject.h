@@ -197,6 +197,9 @@ private:
     std::vector<BYTE> pngBytes_;
     SIZEL extent_{};
     SIZEL naturalExtent_{};
+    SIZEL presentationExtent_{};
+    bool hostExtentExplicitlySet_ = false;
+    bool presentationExtentLocked_ = false;
     bool dirty_ = false;
     bool initialized_ = false;
 };

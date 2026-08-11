@@ -74,6 +74,17 @@ pub fn normalize_app_theme(theme: &str) -> &'static str {
         "dark" => "dark",
         "purple" => "purple",
         "green" => "green",
+        "codex" => "codex",
+        "notion" => "notion",
+        "one" => "one",
+        "proof" => "proof",
+        "raycast" => "raycast",
+        "rose-pine" => "rose-pine",
+        "solarized" => "solarized",
+        "vercel" => "vercel",
+        "vscode-plus" => "vscode-plus",
+        "xcode" => "xcode",
+        "custom" => "custom",
         _ => "light",
     }
 }
@@ -159,6 +170,7 @@ pub struct OfficeCompanionState {
     pub status: Arc<RwLock<OfficeCompanionStatus>>,
     pub app_theme: Arc<RwLock<String>>,
     pub app_editor_layout: Arc<RwLock<String>>,
+    pub app_editor_preferences: Arc<RwLock<serde_json::Value>>,
     pub powerpoint_default_font_size_pt: Arc<RwLock<f64>>,
     pub server_handle: Arc<Mutex<Option<Handle<SocketAddr>>>>,
     pub session_store: SessionStore,
@@ -195,6 +207,7 @@ impl OfficeCompanionState {
             status: Arc::new(RwLock::new(status)),
             app_theme: Arc::new(RwLock::new("light".to_string())),
             app_editor_layout: Arc::new(RwLock::new("classic".to_string())),
+            app_editor_preferences: Arc::new(RwLock::new(serde_json::json!({}))),
             powerpoint_default_font_size_pt: Arc::new(RwLock::new(
                 powerpoint_default_font_size_pt,
             )),
@@ -250,6 +263,28 @@ impl OfficeCompanionState {
     pub fn set_current_editor_layout(&self, layout: &str) -> String {
         let normalized = normalize_app_editor_layout(layout).to_string();
         if let Ok(mut current) = self.app_editor_layout.write() {
+            *current = normalized.clone();
+        }
+        normalized
+    }
+
+    pub fn current_editor_preferences(&self) -> serde_json::Value {
+        self.app_editor_preferences
+            .read()
+            .map(|preferences| preferences.clone())
+            .unwrap_or_else(|_| serde_json::json!({}))
+    }
+
+    pub fn set_current_editor_preferences(
+        &self,
+        preferences: serde_json::Value,
+    ) -> serde_json::Value {
+        let normalized = if preferences.is_object() {
+            preferences
+        } else {
+            serde_json::json!({})
+        };
+        if let Ok(mut current) = self.app_editor_preferences.write() {
             *current = normalized.clone();
         }
         normalized

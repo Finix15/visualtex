@@ -18,6 +18,9 @@ const POWERPOINT_VSTO_KEY: &str =
 const OLE_LOCAL_SERVER_KEY: &str =
     r"HKLM\Software\Classes\CLSID\{8FF7F5AA-0D60-48D5-ADBD-65A64B4C827B}\LocalServer32";
 const OFFICE_MODE_KEY: &str = r"HKCU\Software\VisualTeX\OfficeIntegration";
+const WORD_USER_PREFERENCES_KEY: &str = r"HKCU\Software\VisualTeX\Word";
+const WORD_DEFAULT_NUMBERED_VALUE: &str = "DefaultDisplayEquationNumbered";
+const WORD_DEFAULT_NUMBER_FORMAT_VALUE: &str = "DefaultEquationNumberFormat";
 const WORD_VSTO_CLSID_KEY: &str =
     r"HKLM\Software\Classes\CLSID\{F1B68342-F9C6-4E7D-A9C6-A2F64C3558A1}\InprocServer32";
 const POWERPOINT_VSTO_CLSID_KEY: &str =
@@ -432,6 +435,47 @@ fn native_ole_local_server_healthy(view: RegistryView) -> bool {
     };
     let executable = executable.trim().trim_matches('"');
     !executable.is_empty() && PathBuf::from(executable).is_file()
+}
+
+pub(crate) fn word_numbering_user_preferences() -> (bool, String) {
+    let numbered = registry_dword_equals(
+        WORD_USER_PREFERENCES_KEY,
+        WORD_DEFAULT_NUMBERED_VALUE,
+        1,
+    );
+    let format = registry_string_value(
+        WORD_USER_PREFERENCES_KEY,
+        WORD_DEFAULT_NUMBER_FORMAT_VALUE,
+    )
+    .map(|value| normalize_word_number_format(&value).to_string())
+    .unwrap_or_else(|| "continuous".to_string());
+    (numbered, format)
+}
+
+pub(crate) fn set_word_numbering_user_preferences(
+    numbered: bool,
+    format: &str,
+) -> Result<(), String> {
+    registry_set_dword(
+        WORD_USER_PREFERENCES_KEY,
+        WORD_DEFAULT_NUMBERED_VALUE,
+        u32::from(numbered),
+    )?;
+    registry_set_string(
+        WORD_USER_PREFERENCES_KEY,
+        WORD_DEFAULT_NUMBER_FORMAT_VALUE,
+        normalize_word_number_format(format),
+    )
+}
+
+fn normalize_word_number_format(value: &str) -> &'static str {
+    match value.trim() {
+        "heading1-dot" => "heading1-dot",
+        "heading1-dash" => "heading1-dash",
+        "heading2-dot" => "heading2-dot",
+        "heading2-dash" => "heading2-dash",
+        _ => "continuous",
+    }
 }
 
 fn write_mode_registry(mode: OfficeIntegrationMode) -> Result<(), String> {

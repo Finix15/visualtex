@@ -540,6 +540,30 @@ internal static class WordOmmlFormulaStore
         }
     }
 
+    internal static void SaveNew(Document document, FormulaMetadata metadata)
+    {
+        metadata.Validate();
+        object? parts = null;
+        object? added = null;
+        try
+        {
+            // InsertOmml always supplies a fresh FormulaId. Do not call FindPart
+            // here: hydrating the namespace for a brand-new id walks every prior
+            // VisualTeX CustomXMLPart and made the Nth OMML insertion O(N).
+            parts = ((dynamic)document).CustomXMLParts;
+            added = ((dynamic)parts).Add(BuildPartXml(metadata));
+            if (added is null)
+                throw new InvalidOperationException(
+                    "Word did not create the VisualTeX OMML metadata part.");
+            RememberPart(document, added, metadata);
+        }
+        finally
+        {
+            Release(added);
+            Release(parts);
+        }
+    }
+
     internal static void SaveNewBatch(
         Document document,
         IReadOnlyList<FormulaMetadata> metadataItems)

@@ -5,12 +5,12 @@ import {
   Braces,
   Check,
   ChevronDown,
-  CircleHelp,
   Code2,
   FileDown,
   FilePlus2,
   FolderOpen,
   History,
+  Keyboard,
   Languages,
   LoaderCircle,
   Menu,
@@ -42,11 +42,11 @@ import { FormulaHotkeyManagerDialog } from "./components/FormulaHotkeyManagerDia
 import { HistoryPanel } from "./components/HistoryPanel";
 import { OcrDialog } from "./components/OcrDialog";
 import { ExportDialog } from "./components/ExportDialog";
-import { OnboardingTour } from "./components/OnboardingTour";
 import { UpdateDialog } from "./components/UpdateDialog";
 import { VisualTeXLogo } from "./components/VisualTeXLogo";
 import { EditorWorkspace } from "./workspace/EditorWorkspace";
 import {
+  EDITOR_ZOOM_STEP,
   MAX_EDITOR_ZOOM,
   MIN_EDITOR_ZOOM,
   joinFormulaLines,
@@ -76,7 +76,12 @@ import {
 } from "./clipboard/LatexCopyService";
 import { normalizeChineseLatex } from "./editor/normalizeChineseLatex";
 import type { FormulaDocument, LatexCodeFormat } from "./types/formula";
-import { publishSynchronizedTheme } from "./themeSync";
+import { applyDocumentTheme, publishSynchronizedTheme } from "./themeSync";
+import {
+  CUSTOM_THEME_CHANGED_EVENT,
+  readCustomTheme,
+} from "./themeCustomization";
+import { copyFormulaDocumentPngToClipboard } from "./export/pngClipboard";
 import {
   DEFAULT_OCR_MODEL,
   OCR_MODELS,
@@ -86,7 +91,6 @@ import {
   isTauriEnvironment,
   listenOcrRecognitionProgress,
   recognizeFormulaImage,
-  resolveAvailableOcrModel,
   warmupOcrModel,
   type OcrModelName,
 } from "./ocr/ocrService";
@@ -96,11 +100,19 @@ import {
   PROJECT_URL,
   type UpdateCheckResult,
 } from "./update/updateService";
+import { readLocalStorage, writeLocalStorage } from "./runtime/safeStorage";
 import {
-  detectDesktopPlatform,
-  onboardingStorageKey,
-  shouldOpenOnboardingInitially,
-} from "./platform";
+  captureQuickOcrScreenshot,
+  configureSilentOcr,
+  isQuickOcrCaptureMode,
+  quickOcrCaptureToFile,
+  restoreQuickOcrWindow,
+  QUICK_OCR_CAPTURE_MODE_STORAGE_KEY,
+  SILENT_OCR_SHORTCUT,
+  SILENT_OCR_STORAGE_KEY,
+  waitForQuickOcrSystemScreenshot,
+  type QuickOcrCaptureMode,
+} from "./ocr/quickOcr";
 
 type InlineOcrStatus = "running" | "cancelling" | "success" | "error" | "cancelled";
 
@@ -112,11 +124,6 @@ interface InlineOcrState {
 }
 
 const OCR_MODEL_STORAGE_KEY = "visualtex.ocr.model";
-const DESKTOP_PLATFORM = detectDesktopPlatform();
-const ONBOARDING_STORAGE_KEY = onboardingStorageKey(
-  DESKTOP_PLATFORM,
-  isTauriEnvironment(),
-);
 
 function App() {
   const editorRef = useRef<MathEditorHandle>(null);
@@ -131,14 +138,9 @@ function App() {
   const [ocrOpen, setOcrOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 1040);
-  const [onboardingOpen, setOnboardingOpen] = useState(() =>
-    shouldOpenOnboardingInitially(
-      window.localStorage.getItem(ONBOARDING_STORAGE_KEY) === "true",
-      false,
-    ),
-  );
   const [copyMenuOpen, setCopyMenuOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [keypadMode, setKeypadMode] = useState(false);
   const [updateOpen, setUpdateOpen] = useState(false);
   const [updateChecking, setUpdateChecking] = useState(false);
   const [updateError, setUpdateError] = useState("");
@@ -148,11 +150,19 @@ function App() {
   const [savedPulse, setSavedPulse] = useState(false);
   const [editorHistoryBusy, setEditorHistoryBusy] = useState(false);
   const [ocrModel, setOcrModel] = useState<OcrModelName>(() => {
-    const stored = window.localStorage.getItem(OCR_MODEL_STORAGE_KEY);
+    const stored = readLocalStorage(OCR_MODEL_STORAGE_KEY);
     return OCR_MODELS.some((item) => item.id === stored)
       ? (stored as OcrModelName)
       : DEFAULT_OCR_MODEL;
   });
+  const [silentOcrEnabled, setSilentOcrEnabled] = useState(
+    () => readLocalStorage(SILENT_OCR_STORAGE_KEY) === "true",
+  );
+  const [quickOcrCaptureMode, setQuickOcrCaptureMode] = useState<QuickOcrCaptureMode>(() => {
+    const stored = readLocalStorage(QUICK_OCR_CAPTURE_MODE_STORAGE_KEY);
+    return isQuickOcrCaptureMode(stored) ? stored : "immediate";
+  });
+  const [quickOcrCaptureBusy, setQuickOcrCaptureBusy] = useState(false);
   const [inlineOcr, setInlineOcr] = useState<InlineOcrState | null>(null);
   const startupOcrModelRef = useRef(ocrModel);
   const inlineOcrBusyRef = useRef(false);
@@ -161,6 +171,7 @@ function App() {
   const inlineOcrClearTimerRef = useRef<number | null>(null);
   const automaticUpdateCheckRef = useRef(false);
   const initialEditorFocusDoneRef = useRef(false);
+  const pngClipboardBusyRef = useRef(false);
 
   const title = useEditorStore((state) => state.title);
   const setTitle = useEditorStore((state) => state.setTitle);
@@ -168,18 +179,23 @@ function App() {
   const activeLineId = useEditorStore((state) => state.activeLineId);
   const formulaAlignment = useEditorStore((state) => state.formulaAlignment);
   const theme = useEditorStore((state) => state.theme);
+  const synchronizedThemeRef = useRef(theme);
   const language = useEditorStore((state) => state.language);
   const setLanguage = useEditorStore((state) => state.setLanguage);
   const zoom = useEditorStore((state) => state.zoom);
   const setZoom = useEditorStore((state) => state.setZoom);
   const editorLayout = useEditorStore((state) => state.editorLayout);
-  const sourceOpen = useEditorStore((state) => state.sourceOpen);
-  const setSourceOpen = useEditorStore((state) => state.setSourceOpen);
+  const pngExportBackground = useEditorStore(
+    (state) => state.pngExportBackground,
+  );
+  const formulaLetterFont = useEditorStore((state) => state.formulaLetterFont);
+  const formulaChineseFont = useEditorStore((state) => state.formulaChineseFont);
   const latexCodeFormat = useEditorStore((state) => state.latexCodeFormat);
   const setLatexCodeFormat = useEditorStore(
     (state) => state.setLatexCodeFormat,
   );
   const addHistory = useEditorStore((state) => state.addHistory);
+  const keypadMinimizeOnCopy = useEditorStore((state) => state.keypadMinimizeOnCopy);
   const loadDocument = useEditorStore((state) => state.loadDocument);
   const toDocument = useEditorStore((state) => state.toDocument);
   const checkUpdatesOnStartup = useEditorStore(
@@ -262,7 +278,7 @@ function App() {
   };
 
   useEffect(() => {
-    if (onboardingOpen || initialEditorFocusDoneRef.current) return;
+    if (initialEditorFocusDoneRef.current) return;
     initialEditorFocusDoneRef.current = true;
     let repairTimer = 0;
     const frame = window.requestAnimationFrame(() => {
@@ -275,7 +291,7 @@ function App() {
       window.cancelAnimationFrame(frame);
       window.clearTimeout(repairTimer);
     };
-  }, [onboardingOpen]);
+  }, []);
 
   useEffect(() => {
     historyManager.configure({
@@ -285,7 +301,7 @@ function App() {
         const target = applyHistoryEntryToEditor(entry, direction);
         if (!target) return;
         // Yield once so React can mount any line restored by the history entry.
-        // Do not wait on requestAnimationFrame here: background macOS windows
+        // Do not wait on requestAnimationFrame here: background desktop windows
         // and headless release checks can throttle animation frames indefinitely,
         // leaving history replay active and the Redo action disabled.
         await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
@@ -316,7 +332,12 @@ function App() {
   }, []);
 
   useEffect(() => {
-    publishSynchronizedTheme(theme);
+    if (synchronizedThemeRef.current === theme) {
+      applyDocumentTheme(theme);
+    } else {
+      synchronizedThemeRef.current = theme;
+      publishSynchronizedTheme(theme);
+    }
     if (isTauriEnvironment()) {
       void invoke<string>("set_app_theme", { theme }).catch(() => undefined);
     }
@@ -328,6 +349,34 @@ function App() {
       () => undefined,
     );
   }, [editorLayout]);
+
+  useEffect(() => {
+    if (!isTauriEnvironment()) return;
+    let timer = 0;
+    let disposed = false;
+    const publishPreferences = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        if (disposed) return;
+        const settings = useEditorStore.getState().toDocument().settings;
+        void invoke("set_app_editor_preferences", {
+          preferences: {
+            settings,
+            customTheme: readCustomTheme(),
+          },
+        }).catch(() => undefined);
+      }, 24);
+    };
+    publishPreferences();
+    const unsubscribeStore = useEditorStore.subscribe(publishPreferences);
+    window.addEventListener(CUSTOM_THEME_CHANGED_EVENT, publishPreferences);
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+      unsubscribeStore();
+      window.removeEventListener(CUSTOM_THEME_CHANGED_EVENT, publishPreferences);
+    };
+  }, []);
 
   useEffect(() => {
     if (!isTauriEnvironment()) return;
@@ -368,6 +417,28 @@ function App() {
     }, 50);
     return () => window.clearTimeout(timer);
   }, []);
+
+  useEffect(() => {
+    if (!isTauriEnvironment()) return;
+    let cancelled = false;
+    void configureSilentOcr(silentOcrEnabled, ocrModel, latexCodeFormat).catch(
+      (error) => {
+        if (cancelled || !silentOcrEnabled) return;
+        setSilentOcrEnabled(false);
+        writeLocalStorage(SILENT_OCR_STORAGE_KEY, "false");
+        setToast(
+          error instanceof Error
+            ? error.message
+            : isEn
+              ? "Unable to enable silent OCR"
+              : "无法启用静默 OCR",
+        );
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [silentOcrEnabled, ocrModel, latexCodeFormat, isEn]);
 
   useEffect(() => {
     const menu = menuOpen ? appMenuRef.current : copyMenuOpen ? copyMenuRef.current : null;
@@ -446,7 +517,7 @@ function App() {
     if (inlineOcrBusyRef.current || nextModel === ocrModel) return;
     startupOcrModelRef.current = nextModel;
     setOcrModel(nextModel);
-    window.localStorage.setItem(OCR_MODEL_STORAGE_KEY, nextModel);
+    writeLocalStorage(OCR_MODEL_STORAGE_KEY, nextModel);
     void warmupOcrModel(nextModel).catch(() => undefined);
   };
 
@@ -473,6 +544,7 @@ function App() {
   const handleEditorImagePaste = async (
     file: File,
     target: MathEditorInsertionTarget,
+    source: "paste" | "quick" = "paste",
   ) => {
     if (inlineOcrBusyRef.current) {
       setToast(isEn ? "Another pasted image is being recognized" : "已有一张粘贴图片正在识别");
@@ -511,11 +583,15 @@ function App() {
         );
       }
 
-      const availableOcrModel = resolveAvailableOcrModel(runtime, ocrModel);
-      if (availableOcrModel !== ocrModel) {
-        setOcrModel(availableOcrModel);
-        window.localStorage.setItem(OCR_MODEL_STORAGE_KEY, availableOcrModel);
+      if (!runtime.installedModels.includes(ocrModel)) {
+        setOcrOpen(true);
+        throw new Error(
+          isEn
+            ? `Install ${selectedOcrModel.labelEn} before using it for OCR`
+            : `请先安装${selectedOcrModel.labelZh}模型，再使用该模型进行 OCR`,
+        );
       }
+      const availableOcrModel = ocrModel;
 
       unlisten = await listenOcrRecognitionProgress((progress) => {
         if (
@@ -574,7 +650,15 @@ function App() {
         seconds: current?.seconds ?? 0,
         model: ocrModel,
       }));
-      setToast(isEn ? "Pasted image converted to LaTeX" : "粘贴图片已转换为 LaTeX");
+      setToast(
+        source === "quick"
+          ? isEn
+            ? "Screenshot converted to LaTeX"
+            : "截图已转换为 LaTeX"
+          : isEn
+            ? "Pasted image converted to LaTeX"
+            : "粘贴图片已转换为 LaTeX",
+      );
       scheduleInlineOcrClear(1800);
     } catch (error) {
       const errorMessage =
@@ -610,10 +694,114 @@ function App() {
     }
   };
 
+  const handleQuickOcr = async () => {
+    if (inlineOcrBusyRef.current || quickOcrCaptureBusy) {
+      setToast(isEn ? "OCR is already running" : "另一个 OCR 任务正在进行");
+      return;
+    }
+    const target = editorRef.current?.captureInsertionTarget();
+    if (!target) {
+      setToast(
+        isEn
+          ? "Click a formula field before quick OCR"
+          : "请先点击一个公式框，再使用快捷 OCR",
+      );
+      return;
+    }
+
+    setQuickOcrCaptureBusy(true);
+    try {
+      const waitingForSystemScreenshot =
+        quickOcrCaptureMode === "system-screenshot";
+      setToast(
+        waitingForSystemScreenshot
+          ? isEn
+            ? "VisualTeX minimized. Switch to the target page and take a Windows screenshot within 60 seconds."
+            : "VisualTeX 已最小化，请切到目标页面，并在 60 秒内使用 Windows 系统截图快捷键截图"
+          : isEn
+            ? "Select a formula area in the Windows Snipping Tool"
+            : "请在 Windows 截图工具中框选要识别的公式区域",
+      );
+      let capture: Awaited<ReturnType<typeof captureQuickOcrScreenshot>> = null;
+      try {
+        capture = waitingForSystemScreenshot
+          ? await waitForQuickOcrSystemScreenshot()
+          : await captureQuickOcrScreenshot();
+      } finally {
+        // Quick OCR is an interactive main-app workflow: after the screenshot
+        // is committed, return to the editor before recognition/insertion so
+        // the user sees the progress and the recognized formula immediately.
+        await restoreQuickOcrWindow();
+      }
+      if (!capture) {
+        setToast(
+          waitingForSystemScreenshot
+            ? isEn
+              ? "No new Windows screenshot was detected within 60 seconds"
+              : "60 秒内未检测到新的 Windows 系统截图"
+            : isEn
+              ? "Screenshot cancelled"
+              : "已取消截图",
+        );
+        return;
+      }
+      await handleEditorImagePaste(
+        quickOcrCaptureToFile(capture),
+        target,
+        "quick",
+      );
+    } catch (error) {
+      setToast(
+        error instanceof Error
+          ? error.message
+          : isEn
+            ? "Quick OCR failed"
+            : "快捷 OCR 失败",
+      );
+    } finally {
+      setQuickOcrCaptureBusy(false);
+    }
+  };
+
+  const handleQuickOcrCaptureModeChange = (mode: QuickOcrCaptureMode) => {
+    setQuickOcrCaptureMode(mode);
+    writeLocalStorage(QUICK_OCR_CAPTURE_MODE_STORAGE_KEY, mode);
+    setToast(
+      mode === "system-screenshot"
+        ? isEn
+          ? "Quick OCR mode: wait for Windows screenshot"
+          : "快捷 OCR 已切换为：等待 Windows 系统截图"
+        : isEn
+          ? "Quick OCR mode: immediate selection"
+          : "快捷 OCR 已切换为：立即框选",
+    );
+  };
+
+  const handleSilentOcrEnabledChange = (enabled: boolean) => {
+    setSilentOcrEnabled(enabled);
+    writeLocalStorage(SILENT_OCR_STORAGE_KEY, String(enabled));
+    setToast(
+      enabled
+        ? isEn
+          ? `Silent OCR enabled · ${SILENT_OCR_SHORTCUT}`
+          : `静默 OCR 已开启 · ${SILENT_OCR_SHORTCUT}`
+        : isEn
+          ? "Silent OCR disabled"
+          : "静默 OCR 已关闭",
+    );
+  };
+
+  useEffect(() => {
+    const runQuick = () => void handleQuickOcr();
+    window.addEventListener("visualtex-quick-ocr", runQuick);
+    return () => {
+      window.removeEventListener("visualtex-quick-ocr", runQuick);
+    };
+  });
+
   const handleCodeFormatChange = (format: LatexCodeFormat) => {
     const definition = getLatexCodeFormatDefinition(format);
     setLatexCodeFormat(format);
-    setSourceOpen(true);
     setCopyMenuOpen(false);
     setToast(
       isEn
@@ -631,12 +819,53 @@ function App() {
           ? `Copied ${currentCodeFormat.titleEn}`
           : `已复制：${currentCodeFormat.titleZh}`,
       );
+      return true;
     } catch {
       setToast(
         isEn
           ? "Copy failed. Check clipboard permission."
           : "复制失败，请检查系统剪贴板权限",
       );
+      return false;
+    }
+  };
+
+  const handleKeypadCopy = async () => {
+    const copied = await handleCopy();
+    if (!copied || !keypadMinimizeOnCopy || !isTauriEnvironment()) return;
+    try {
+      await invoke("minimize_visualtex_main_window");
+    } catch {
+      setToast(
+        isEn
+          ? "LaTeX copied, but VisualTeX could not be minimized."
+          : "LaTeX 已复制，但 VisualTeX 最小化失败。",
+      );
+    }
+  };
+
+  const handleCopyPng = async () => {
+    if (pngClipboardBusyRef.current) return;
+    pngClipboardBusyRef.current = true;
+    try {
+      await copyFormulaDocumentPngToClipboard(
+        lines.map((line) => line.latex),
+        {
+          background: pngExportBackground,
+          formulaLetterFont,
+          formulaChineseFont,
+        },
+      );
+      setToast(isEn ? "PNG copied to Clipboard" : "PNG 已复制到剪贴板");
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setToast(
+        isEn
+          ? `Unable to copy PNG: ${message}`
+          : `复制 PNG 失败：${message}`,
+      );
+    } finally {
+      pngClipboardBusyRef.current = false;
     }
   };
 
@@ -718,14 +947,6 @@ function App() {
     action();
   };
 
-  const finishOnboarding = useCallback(() => {
-    window.localStorage.setItem(ONBOARDING_STORAGE_KEY, "true");
-    setOnboardingOpen(false);
-    window.requestAnimationFrame(() =>
-      editorRef.current?.focus({ target: "last", moveToEnd: true }),
-    );
-  }, []);
-
   const runUpdateCheck = useCallback(async (manual = true) => {
     if (manual) {
       setAutomaticUpdatePrompt(false);
@@ -762,7 +983,6 @@ function App() {
   useEffect(() => {
     if (
       !checkUpdatesOnStartup ||
-      onboardingOpen ||
       automaticUpdateCheckRef.current
     ) {
       return;
@@ -787,7 +1007,7 @@ function App() {
       window.clearTimeout(timer);
       window.removeEventListener("online", runWhenOnline);
     };
-  }, [checkUpdatesOnStartup, onboardingOpen, runUpdateCheck]);
+  }, [checkUpdatesOnStartup, runUpdateCheck]);
 
   useEffect(() => {
     const handleWindowKeyDown = (event: KeyboardEvent) => {
@@ -803,7 +1023,6 @@ function App() {
         ocrOpen ||
         historyOpen ||
         exportOpen ||
-        onboardingOpen ||
         updateOpen
       ) {
         return;
@@ -836,7 +1055,8 @@ function App() {
         fileInputRef.current?.click();
       } else if (key === "s") {
         event.preventDefault();
-        saveDocument();
+        if (keypadMode) void handleKeypadCopy();
+        else saveDocument();
       } else if (key === ",") {
         event.preventDefault();
         setSettingsOpen(true);
@@ -845,10 +1065,10 @@ function App() {
         setZoom(1);
       } else if (key === "=" || key === "+") {
         event.preventDefault();
-        setZoom(zoom + 0.1);
+        setZoom(zoom + EDITOR_ZOOM_STEP);
       } else if (key === "-") {
         event.preventDefault();
-        setZoom(zoom - 0.1);
+        setZoom(zoom - EDITOR_ZOOM_STEP);
       }
     };
 
@@ -859,17 +1079,162 @@ function App() {
     title,
     isEn,
     zoom,
+    keypadMode,
+    keypadMinimizeOnCopy,
+    latexCodeFormat,
     settingsOpen,
     formulaHotkeyManagerOpen,
     ocrOpen,
     historyOpen,
     exportOpen,
-    onboardingOpen,
     updateOpen,
   ]);
 
+  const codeFormatControl = (
+    <div
+      className={
+        "copy-control code-format-control" +
+        (keypadMode ? " editor-code-format-control" : "")
+      }
+    >
+      <button
+        type="button"
+        className="copy-primary code-format-primary"
+        aria-expanded={copyMenuOpen}
+        aria-haspopup="menu"
+        aria-controls="copy-format-menu"
+        title={
+          isEn
+            ? `Current: ${currentCodeFormat.titleEn}`
+            : `当前格式：${currentCodeFormat.titleZh}`
+        }
+        onClick={() => {
+          setMenuOpen(false);
+          setCopyMenuOpen((open) => !open);
+        }}
+      >
+        <Code2 size={15} />
+        <span>
+          {keypadMode
+            ? isEn
+              ? currentCodeFormat.titleEn
+              : currentCodeFormat.titleZh
+            : isEn
+              ? "LaTeX code format"
+              : "LaTeX 代码格式"}
+        </span>
+      </button>
+      <button
+        ref={copyMenuButtonRef}
+        type="button"
+        className="copy-chevron"
+        aria-label={isEn ? "Choose LaTeX code format" : "选择 LaTeX 代码格式"}
+        aria-expanded={copyMenuOpen}
+        aria-haspopup="menu"
+        aria-controls="copy-format-menu"
+        onClick={() => {
+          setMenuOpen(false);
+          setCopyMenuOpen((open) => !open);
+        }}
+      >
+        <ChevronDown size={14} />
+      </button>
+      {copyMenuOpen && (
+        <div
+          ref={copyMenuRef}
+          id="copy-format-menu"
+          className="copy-menu code-format-menu"
+          role="menu"
+          aria-label={isEn ? "LaTeX code format" : "LaTeX 代码格式"}
+        >
+          <div className="code-format-menu-header">
+            <span className="copy-menu-label">
+              {isEn ? "LaTeX code format" : "LaTeX 代码格式"}
+            </span>
+            <small>
+              {isEn
+                ? "Controls source rendering and keypad copy output"
+                : "控制源码显示与小键盘模式复制格式"}
+            </small>
+          </div>
+          {codeFormatGroups.map((group) => (
+            <div
+              className="code-format-group"
+              role="group"
+              aria-label={group.title}
+              key={group.id}
+            >
+              <div className="code-format-group-heading">
+                <strong>{group.title}</strong>
+                <small>{group.description}</small>
+              </div>
+              {group.formats.map((format) => {
+                const selected = format.id === latexCodeFormat;
+                return (
+                  <button
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={selected}
+                    aria-label={`${isEn ? format.titleEn : format.titleZh}: ${format.hint}`}
+                    data-format={format.id}
+                    className={selected ? "is-selected" : ""}
+                    key={format.id}
+                    onClick={() => handleCodeFormatChange(format.id)}
+                  >
+                    <span className="code-format-item-copy">
+                      <small className="code-format-hint">{format.hint}</small>
+                    </span>
+                    <span className="code-format-check" aria-hidden="true">
+                      {selected && <Check size={14} />}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  const keypadToggleControl = (
+    <button
+      type="button"
+      className={`keypad-mode-toggle${keypadMode ? " is-active" : ""}`}
+      aria-pressed={keypadMode}
+      data-keypad-mode-toggle
+      title={
+        keypadMode
+          ? isEn
+            ? "Exit keypad mode"
+            : "退出小键盘模式"
+          : isEn
+            ? "Enter keypad mode"
+            : "进入小键盘模式"
+      }
+      onClick={() => {
+        setMenuOpen(false);
+        setCopyMenuOpen(false);
+        setKeypadMode((enabled) => !enabled);
+        window.requestAnimationFrame(() =>
+          editorRef.current?.focus({ target: "last", moveToEnd: false }),
+        );
+      }}
+    >
+      <Keyboard size={15} />
+      <span>{isEn ? "Keypad" : "小键盘"}</span>
+    </button>
+  );
+
+  const desktopHeaderControls = (
+    <>
+      {keypadMode ? codeFormatControl : null}
+      {keypadToggleControl}
+    </>
+  );
+
   return (
-    <div className="app-shell">
+    <div className={`app-shell${keypadMode ? " is-keypad-mode" : ""}`}>
       <input
         ref={fileInputRef}
         type="file"
@@ -878,6 +1243,7 @@ function App() {
         onChange={openDocument}
       />
 
+      {!keypadMode && (
       <header
         className={
           "app-header" + (menuOpen || copyMenuOpen ? " has-open-menu" : "")
@@ -952,7 +1318,7 @@ function App() {
               <button type="button" role="menuitem" onClick={() => runMenuAction(newFormula)}>
                 <FilePlus2 size={16} />
                 <span>{isEn ? "New formula" : "新建公式"}</span>
-                <kbd>⌘N</kbd>
+                <kbd>Ctrl+N</kbd>
               </button>
               <button
                 type="button"
@@ -963,12 +1329,12 @@ function App() {
               >
                 <FolderOpen size={16} />
                 <span>{isEn ? "Open document" : "打开文档"}</span>
-                <kbd>⌘O</kbd>
+                <kbd>Ctrl+O</kbd>
               </button>
               <button type="button" role="menuitem" onClick={() => runMenuAction(saveDocument)}>
                 <Save size={16} />
                 <span>{isEn ? "Save document" : "保存文档"}</span>
-                <kbd>⌘S</kbd>
+                <kbd>Ctrl+S</kbd>
               </button>
               <button
                 type="button"
@@ -1003,14 +1369,6 @@ function App() {
               >
                 <Settings2 size={16} />
                 <span>{isEn ? "Settings" : "设置"}</span>
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => runMenuAction(() => setOnboardingOpen(true))}
-              >
-                <CircleHelp size={16} />
-                <span>{isEn ? "Quick tour" : "新手教程"}</span>
               </button>
               <button
                 type="button"
@@ -1069,13 +1427,13 @@ function App() {
 
         <div className="header-actions">
           <div className="action-group file-actions">
-            <button type="button" className="icon-button" onClick={newFormula} aria-label={isEn ? "New" : "新建"} title={isEn ? "New · ⌘N" : "新建 · ⌘N"}>
+            <button type="button" className="icon-button" onClick={newFormula} aria-label={isEn ? "New" : "新建"} title={isEn ? "New · Ctrl+N" : "新建 · Ctrl+N"}>
               <FilePlus2 size={17} />
             </button>
-            <button type="button" className="icon-button" onClick={() => fileInputRef.current?.click()} aria-label={isEn ? "Open" : "打开"} title={isEn ? "Open · ⌘O" : "打开 · ⌘O"}>
+            <button type="button" className="icon-button" onClick={() => fileInputRef.current?.click()} aria-label={isEn ? "Open" : "打开"} title={isEn ? "Open · Ctrl+O" : "打开 · Ctrl+O"}>
               <FolderOpen size={17} />
             </button>
-            <button type="button" className="icon-button" onClick={saveDocument} aria-label={isEn ? "Save" : "保存到本地"} title={isEn ? "Save · ⌘S" : "保存到本地 · ⌘S"}>
+            <button type="button" className="icon-button" onClick={saveDocument} aria-label={isEn ? "Save" : "保存到本地"} title={isEn ? "Save · Ctrl+S" : "保存到本地 · Ctrl+S"}>
               <Save size={17} />
             </button>
           </div>
@@ -1090,7 +1448,7 @@ function App() {
                 historyState.isReplaying
               }
               aria-label={isEn ? "Undo" : "撤销"}
-              title={isEn ? "Undo · ⌘/Ctrl+Z" : "撤销 · ⌘/Ctrl+Z"}
+              title={isEn ? "Undo · Ctrl+Z" : "撤销 · Ctrl+Z"}
             >
               <Undo2 size={17} />
             </button>
@@ -1104,7 +1462,7 @@ function App() {
                 historyState.isReplaying
               }
               aria-label={isEn ? "Redo" : "重做"}
-              title={isEn ? "Redo · ⇧⌘Z / Ctrl+Y" : "重做 · ⇧⌘Z / Ctrl+Y"}
+              title={isEn ? "Redo · Ctrl+Y / Ctrl+Shift+Z" : "重做 · Ctrl+Y / Ctrl+Shift+Z"}
             >
               <Redo2 size={17} />
             </button>
@@ -1115,7 +1473,7 @@ function App() {
           <button type="button" className="icon-button workspace-action" onClick={() => setOcrOpen(true)} aria-label={isEn ? "Recognize formula image" : "图片公式识别"} title={isEn ? "Recognize formula image" : "图片公式识别"}>
             <ScanLine size={17} />
           </button>
-          <button type="button" className="icon-button settings-toggle" onClick={() => setSettingsOpen(true)} aria-label={isEn ? "Settings" : "设置"} title={isEn ? "Settings · ⌘," : "设置 · ⌘,"}>
+          <button type="button" className="icon-button settings-toggle" onClick={() => setSettingsOpen(true)} aria-label={isEn ? "Settings" : "设置"} title={isEn ? "Settings · Ctrl+," : "设置 · Ctrl+,"}>
             <Settings2 size={17} />
           </button>
           <div className="copy-control code-format-control">
@@ -1211,8 +1569,9 @@ function App() {
           </div>
         </div>
       </header>
+      )}
 
-      {(menuOpen || copyMenuOpen) && (
+      {(menuOpen || (!keypadMode && copyMenuOpen)) && (
         <button
           type="button"
           className="menu-dismiss-layer"
@@ -1227,6 +1586,8 @@ function App() {
       <EditorWorkspace
         mode="desktop"
         showFileActions
+        desktopHeaderControls={desktopHeaderControls}
+        keypadMode={keypadMode}
         showUpdateActions
         showOfficeActions={false}
         showOcrActions
@@ -1236,14 +1597,22 @@ function App() {
         onSidebarOpenChange={setSidebarOpen}
         onHistoryBusyChange={setEditorHistoryBusy}
         onPasteImage={handleEditorImagePaste}
-        onCopy={handleCopy}
+        onCopyPng={handleCopyPng}
+        onCopy={async () => {
+          await handleCopy();
+        }}
         onReplaceDocument={replaceDocumentWithHistory}
         ocrModel={ocrModel}
         ocrModels={OCR_MODELS}
-        ocrBusy={inlineOcrIsBusy}
+        ocrBusy={inlineOcrIsBusy || quickOcrCaptureBusy}
         onOcrModelChange={(model) =>
           handleOcrModelChange(model as OcrModelName)
         }
+        onQuickOcr={() => void handleQuickOcr()}
+        quickOcrCaptureMode={quickOcrCaptureMode}
+        onQuickOcrCaptureModeChange={handleQuickOcrCaptureModeChange}
+        silentOcrEnabled={silentOcrEnabled}
+        onSilentOcrEnabledChange={handleSilentOcrEnabledChange}
         ocrOverlay={
           inlineOcr ? (
             <div
@@ -1359,12 +1728,6 @@ function App() {
         onInsert={(value) => editorRef.current?.insertLatex(value, "ocr")}
         onAppend={(value) => editorRef.current?.appendLatex(value, "ocr")}
         onNotify={setToast}
-      />
-      <OnboardingTour
-        open={onboardingOpen}
-        language={language}
-        platform={DESKTOP_PLATFORM}
-        onFinish={finishOnboarding}
       />
       <UpdateDialog
         open={updateOpen}

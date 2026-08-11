@@ -25,6 +25,10 @@ mod ocr_offline;
 #[cfg(windows)]
 mod ocr_python_bundle;
 mod office;
+#[cfg(windows)]
+mod windows_quick_ocr;
+#[cfg(windows)]
+mod windows_silent_ocr_hotkey;
 
 use ocr_install::{
     append_install_log, begin_install_log_session, cleanup_runtime_processes,
@@ -55,6 +59,87 @@ const OCR_WORKER_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const OCR_WORKER_WAIT_NOTICE_INTERVAL: Duration = Duration::from_secs(2);
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfigurationWindowSize {
+    width: f64,
+    height: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppWindowConfiguration {
+    main: Option<ConfigurationWindowSize>,
+    office_editor: Option<ConfigurationWindowSize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WordNumberingUserConfiguration {
+    default_display_equation_numbered: bool,
+    default_equation_number_format: String,
+}
+
+#[tauri::command]
+fn get_word_numbering_user_configuration() -> Result<WordNumberingUserConfiguration, String> {
+    let (default_display_equation_numbered, default_equation_number_format) =
+        office::windows_backend::word_numbering_user_preferences();
+    Ok(WordNumberingUserConfiguration {
+        default_display_equation_numbered,
+        default_equation_number_format,
+    })
+}
+
+#[tauri::command]
+fn apply_word_numbering_user_configuration(
+    configuration: WordNumberingUserConfiguration,
+) -> Result<WordNumberingUserConfiguration, String> {
+    office::windows_backend::set_word_numbering_user_preferences(
+        configuration.default_display_equation_numbered,
+        &configuration.default_equation_number_format,
+    )?;
+    get_word_numbering_user_configuration()
+}
+
+#[tauri::command]
+fn get_app_window_configuration(app: AppHandle) -> Result<AppWindowConfiguration, String> {
+    let main = app_lifecycle::configuration_main_window_size(&app)
+        .map(|(width, height)| ConfigurationWindowSize { width, height });
+    #[cfg(target_os = "windows")]
+    let office_editor = office::server::configuration_office_editor_window_size(&app)
+        .map(|(width, height)| ConfigurationWindowSize { width, height });
+    #[cfg(not(target_os = "windows"))]
+    let office_editor = None;
+
+    Ok(AppWindowConfiguration {
+        main,
+        office_editor,
+    })
+}
+
+#[tauri::command]
+fn apply_app_window_configuration(
+    app: AppHandle,
+    configuration: AppWindowConfiguration,
+) -> Result<AppWindowConfiguration, String> {
+    if let Some(requested) = configuration.main {
+        app_lifecycle::apply_configuration_main_window_size(
+            &app,
+            requested.width,
+            requested.height,
+        )?;
+    }
+    #[cfg(target_os = "windows")]
+    if let Some(requested) = configuration.office_editor {
+        office::server::apply_configuration_office_editor_window_size(
+            &app,
+            requested.width,
+            requested.height,
+        )?;
+    }
+    get_app_window_configuration(app)
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1600,7 +1685,7 @@ fn validate_formula_dependency_files(site_packages: &Path) -> Result<(), String>
     let tokenizers = required_dependency_version(site_packages, "tokenizers", "tokenizers")?;
     if cfg!(windows) && tokenizers != "0.19.1" {
         return Err(format!(
-            "OCR dependency tokenizers has version {tokenizers}; VisualTeX 1.2.4 requires the precompiled Windows wheel tokenizers 0.19.1."
+            "OCR dependency tokenizers has version {tokenizers}; VisualTeX 1.2.5 requires the precompiled Windows wheel tokenizers 0.19.1."
         ));
     }
     required_dependency_version(site_packages, "imagesize", "imagesize")?;
@@ -3660,6 +3745,17 @@ fn cancel_ocr_model_download(state: State<'_, OcrState>) -> bool {
     state.cancel_model_download()
 }
 
+#[cfg(windows)]
+#[tauri::command]
+fn configure_silent_ocr(
+    app: AppHandle,
+    enabled: bool,
+    model: String,
+    copy_format: String,
+) -> Result<(), String> {
+    windows_silent_ocr_hotkey::configure(&app, enabled, &model, &copy_format)
+}
+
 fn shutdown_runtime(app: &AppHandle, started: &AtomicBool, reason: &str) {
     if started.swap(true, Ordering::SeqCst) {
         return;
@@ -3760,6 +3856,14 @@ pub fn run() {
             app.manage(office_state.clone());
             office::start(office_state);
 
+            #[cfg(windows)]
+            windows_silent_ocr_hotkey::initialize(app.handle()).map_err(|error| {
+                app_lifecycle::append_lifecycle_log(format!(
+                    "Silent OCR hotkey initialization failed: {error}"
+                ));
+                std::io::Error::other(error)
+            })?;
+
             if run_mode.schedules_ocr_warmup() {
                 // Preserve OCR model prewarming. It is independent from the main
                 // embedded index.html and from the removed Office editor WebView prewarm.
@@ -3806,8 +3910,18 @@ pub fn run() {
             get_ocr_model_download_status,
             download_ocr_model,
             cancel_ocr_model_download,
+            configure_silent_ocr,
+            windows_silent_ocr_hotkey::get_silent_ocr_hud_status,
+            windows_quick_ocr::capture_windows_quick_ocr,
+            windows_quick_ocr::minimize_visualtex_main_window,
+            windows_quick_ocr::write_windows_ocr_clipboard_text,
+            get_app_window_configuration,
+            apply_app_window_configuration,
+            get_word_numbering_user_configuration,
+            apply_word_numbering_user_configuration,
             office::lifecycle::set_app_theme,
             office::lifecycle::set_app_editor_layout,
+            office::lifecycle::set_app_editor_preferences,
             office::lifecycle::set_powerpoint_default_font_size,
             office::lifecycle::get_powerpoint_default_font_size,
             office::lifecycle::get_office_companion_status,
@@ -3858,6 +3972,29 @@ pub fn run() {
     let shutdown_started = Arc::new(AtomicBool::new(false));
     let shutdown_for_events = shutdown_started.clone();
     app.run(move |app, event| match event {
+        #[cfg(target_os = "windows")]
+        tauri::RunEvent::WindowEvent {
+            label,
+            event: tauri::WindowEvent::Resized(size),
+            ..
+        } if label == "main" => {
+            app_lifecycle::schedule_persist_main_window_size(app, size.width, size.height);
+        }
+        #[cfg(target_os = "windows")]
+        tauri::RunEvent::WindowEvent {
+            label,
+            event: tauri::WindowEvent::Resized(size),
+            ..
+        } if label == "office-session-editor" => {
+            if let Some(window) = app.get_webview_window("office-session-editor") {
+                let scale_factor = window.scale_factor().unwrap_or(1.0).max(f64::EPSILON);
+                office::server::schedule_persist_office_editor_window_size(
+                    app.clone(),
+                    f64::from(size.width) / scale_factor,
+                    f64::from(size.height) / scale_factor,
+                );
+            }
+        }
         #[cfg(target_os = "windows")]
         tauri::RunEvent::WindowEvent {
             label,

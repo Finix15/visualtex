@@ -205,7 +205,7 @@ async function main() {
 
     const clickSelectorWithPointer = async (selector) => {
       const point = await waitForEvaluation(`(() => {
-        const element = document.querySelector(${JSON.stringify("__SELECTOR__")});
+        const element = document.querySelector(__SELECTOR__);
         if (!(element instanceof HTMLElement)) return { ready: false };
         const rect = element.getBoundingClientRect();
         return {
@@ -213,7 +213,7 @@ async function main() {
           x: rect.left + rect.width / 2,
           y: rect.top + rect.height / 2,
         };
-      })()`.replace("__SELECTOR__", selector), `pointer target ${selector}`);
+      })()`.replace("__SELECTOR__", JSON.stringify(selector)), `pointer target ${selector}`);
       await client.send("Input.dispatchMouseEvent", {
         type: "mousePressed",
         x: point.x,
@@ -377,49 +377,17 @@ async function main() {
       }))()`, "desktop formula formatting controls");
 
       const dispatchFormattingToggle = async (selector) => {
-        const encodedSelector = JSON.stringify(selector);
         await evaluate(`(() => {
           const field = document.querySelector('math-field');
-          const button = document.querySelector(${encodedSelector});
-          if (!field || !(button instanceof HTMLElement)) return false;
+          if (!field) return false;
           field.focus();
           field.selection = {
             ranges: [[0, field.lastOffset]],
             direction: 'forward',
           };
-          const pointerOptions = {
-            bubbles: true,
-            composed: true,
-            cancelable: true,
-            button: 0,
-            buttons: 1,
-            pointerId: 1,
-            pointerType: 'mouse',
-          };
-          button.dispatchEvent(new PointerEvent('pointerdown', pointerOptions));
-          button.dispatchEvent(new MouseEvent('mousedown', {
-            bubbles: true,
-            composed: true,
-            cancelable: true,
-            button: 0,
-            buttons: 1,
-          }));
-          button.dispatchEvent(new MouseEvent('mouseup', {
-            bubbles: true,
-            composed: true,
-            cancelable: true,
-            button: 0,
-            buttons: 0,
-          }));
-          button.dispatchEvent(new MouseEvent('click', {
-            bubbles: true,
-            composed: true,
-            cancelable: true,
-            button: 0,
-            buttons: 0,
-          }));
           return true;
         })()`);
+        await clickSelectorWithPointer(selector);
         await sleep(100);
       };
 
@@ -493,6 +461,64 @@ async function main() {
         boldRestored: boldUprightRestored,
       };
 
+      await setFormattingValue('abc');
+      await evaluate(`(() => {
+        const field = document.querySelector('math-field');
+        if (!field) return false;
+        field.focus();
+        field.selection = { ranges: [[0, field.lastOffset]], direction: 'forward' };
+        return true;
+      })()`);
+      await clickSelectorWithPointer('[data-formula-selection-color]');
+      const compactColorPopover = await waitForEvaluation(`(() => {
+        const popover = document.querySelector('[data-formula-color-popover="color"]');
+        const presets = popover?.querySelector('.formula-color-presets');
+        const custom = popover?.querySelector('.formula-custom-colors-panel');
+        if (!(popover instanceof HTMLElement) || !(presets instanceof HTMLElement) || !(custom instanceof HTMLElement)) {
+          return { ready: false };
+        }
+        const rect = popover.getBoundingClientRect();
+        const presetRect = presets.getBoundingClientRect();
+        const customRect = custom.getBoundingClientRect();
+        return {
+          ready: rect.width <= 200 && customRect.top >= presetRect.bottom - 1,
+          width: rect.width,
+          presetBottom: presetRect.bottom,
+          customTop: customRect.top,
+        };
+      })()`, 'compact formula color popover');
+      if (compactColorPopover.width > 200) {
+        throw new Error(`Formula color popover is still oversized: ${JSON.stringify(compactColorPopover)}`);
+      }
+      await clickSelectorWithPointer('[data-formula-color="#111827"]');
+      await sleep(100);
+      const textColorApplied = await readFormattingValue();
+      if (!textColorApplied.includes('111827') || !textColorApplied.includes('abc')) {
+        throw new Error(`Formula text color was not applied to the selected content: ${textColorApplied}`);
+      }
+
+      await setFormattingValue('xyz');
+      await evaluate(`(() => {
+        const field = document.querySelector('math-field');
+        if (!field) return false;
+        field.focus();
+        field.selection = { ranges: [[0, field.lastOffset]], direction: 'forward' };
+        return true;
+      })()`);
+      await clickSelectorWithPointer('[data-formula-selection-background]');
+      await clickSelectorWithPointer('[data-formula-color="#fef3c7"]');
+      await sleep(100);
+      const backgroundColorApplied = await readFormattingValue();
+      if (!backgroundColorApplied.toLowerCase().includes('fef3c7') || !backgroundColorApplied.includes('xyz')) {
+        throw new Error(`Formula background color was not applied to the selected content: ${backgroundColorApplied}`);
+      }
+
+      const selectionColors = {
+        text: textColorApplied,
+        background: backgroundColorApplied,
+        popover: compactColorPopover,
+      };
+
       const removedPersistentControls = await evaluate(`(() => ({
         typingBold: Boolean(document.querySelector('[data-formula-typing-bold]')),
         typingItalic: Boolean(document.querySelector('[data-formula-typing-italic]')),
@@ -504,6 +530,7 @@ async function main() {
       console.log(JSON.stringify({
         selectionBold,
         selectionItalic,
+        selectionColors,
         removedPersistentControls,
       }, null, 2));
       console.log("Targeted desktop formula formatting regression passed");
@@ -1047,9 +1074,11 @@ async function main() {
         const dock = document.querySelector(".classic-bottom-dock");
         const toolbar = document.querySelector(".classic-bottom-toolbar");
         const strip = toolbar?.querySelector(".template-strip");
+        const categorySection = toolbar?.querySelector(".toolbar-category-section");
         const rowCount = Number(toolbar?.dataset.toolbarRowCount || 0);
-        const computedRowCount = strip
-          ? getComputedStyle(strip).gridTemplateRows.split(/\\s+/).filter(Boolean).length
+        const rowGrid = categorySection ?? strip;
+        const computedRowCount = rowGrid
+          ? getComputedStyle(rowGrid).gridTemplateRows.split(/\\s+/).filter(Boolean).length
           : 0;
         return {
           ready:
@@ -1062,6 +1091,33 @@ async function main() {
           computedRowCount,
         };
       })()`, "classic resizable panels");
+
+      const tileTabGeometry = await waitForEvaluation(`(() => {
+        const panel = document.querySelector('.classic-tile-toolbar');
+        const custom = panel?.querySelector('[data-tile-category="custom"]');
+        const common = panel?.querySelector('[data-tile-category="common"]');
+        const collapse = panel?.querySelector('[data-formula-tile-collapse]');
+        if (!(custom instanceof HTMLElement)
+          || !(common instanceof HTMLElement)
+          || !(collapse instanceof HTMLElement)) return { ready: false };
+        const customRect = custom.getBoundingClientRect();
+        const commonRect = common.getBoundingClientRect();
+        const collapseRect = collapse.getBoundingClientRect();
+        const sameRow = Math.max(
+          Math.abs(customRect.top - commonRect.top),
+          Math.abs(commonRect.top - collapseRect.top),
+        ) <= 2;
+        return {
+          ready: sameRow && collapseRect.left >= commonRect.right - 1,
+          sameRow,
+          custom: { left: customRect.left, top: customRect.top, right: customRect.right },
+          common: { left: commonRect.left, top: commonRect.top, right: commonRect.right },
+          collapse: { left: collapseRect.left, top: collapseRect.top, right: collapseRect.right },
+        };
+      })()`, "classic tile collapse button to the right of Common");
+      if (!tileTabGeometry.sameRow) {
+        throw new Error(`Classic tile collapse button wrapped onto another row: ${JSON.stringify(tileTabGeometry)}`);
+      }
 
       const handleCenter = async (selector) =>
         evaluate(`(() => {
@@ -1182,11 +1238,12 @@ async function main() {
         const dock = document.querySelector(".classic-bottom-dock");
         const toolbar = document.querySelector(".classic-bottom-toolbar");
         const strip = toolbar?.querySelector(".template-strip");
+        const categorySection = toolbar?.querySelector(".toolbar-category-section");
         const stripRect = strip?.getBoundingClientRect();
         const height = dock?.getBoundingClientRect().height ?? 0;
         const rowCount = Number(toolbar?.dataset.toolbarRowCount || 0);
-        const computedRowCount = strip
-          ? getComputedStyle(strip).gridTemplateRows.split(/\\s+/).filter(Boolean).length
+        const computedRowCount = categorySection
+          ? getComputedStyle(categorySection).gridTemplateRows.split(/\\s+/).filter(Boolean).length
           : 0;
         const buttonsVerticallyInside = Boolean(stripRect) &&
           [...(toolbar?.querySelectorAll(".template-button") ?? [])].every((button) => {
@@ -1206,7 +1263,7 @@ async function main() {
           buttonsVerticallyInside,
           resizeMode: document.body.dataset.workspaceResize ?? "",
         };
-      })()`, "live dock growth and toolbar row expansion");
+      })()`, "live dock growth and category row expansion");
       await client.send("Input.dispatchMouseEvent", {
         type: "mouseReleased",
         x: growDockStart.x,
@@ -1245,11 +1302,13 @@ async function main() {
         const dock = document.querySelector(".classic-bottom-dock");
         const toolbar = document.querySelector(".classic-bottom-toolbar");
         const strip = toolbar?.querySelector(".template-strip");
+        const categorySection = toolbar?.querySelector(".toolbar-category-section");
         const stripRect = strip?.getBoundingClientRect();
         const height = dock?.getBoundingClientRect().height ?? 0;
         const rowCount = Number(toolbar?.dataset.toolbarRowCount || 0);
-        const computedRowCount = strip
-          ? getComputedStyle(strip).gridTemplateRows.split(/\\s+/).filter(Boolean).length
+        const rowGrid = categorySection ?? strip;
+        const computedRowCount = rowGrid
+          ? getComputedStyle(rowGrid).gridTemplateRows.split(/\\s+/).filter(Boolean).length
           : 0;
         const buttonsVerticallyInside = Boolean(stripRect) &&
           [...(toolbar?.querySelectorAll(".template-button") ?? [])].every((button) => {
@@ -1306,9 +1365,11 @@ async function main() {
       const dockRestoreTwoRows = await waitForEvaluation(`(() => {
         const toolbar = document.querySelector(".classic-bottom-toolbar");
         const strip = toolbar?.querySelector(".template-strip");
+        const categorySection = toolbar?.querySelector(".toolbar-category-section");
         const rowCount = Number(toolbar?.dataset.toolbarRowCount || 0);
-        const computedRowCount = strip
-          ? getComputedStyle(strip).gridTemplateRows.split(/\\s+/).filter(Boolean).length
+        const rowGrid = categorySection ?? strip;
+        const computedRowCount = rowGrid
+          ? getComputedStyle(rowGrid).gridTemplateRows.split(/\\s+/).filter(Boolean).length
           : 0;
         return {
           ready:
@@ -1336,9 +1397,16 @@ async function main() {
         const strip = toolbar?.querySelector(".template-strip");
         const builder = toolbar?.querySelector(".matrix-builder");
         const grid = toolbar?.querySelector(".matrix-size-grid");
+        const delimiterOptions = toolbar?.querySelector(".matrix-delimiter-options");
+        const delimiterButtons = [...(delimiterOptions?.querySelectorAll("button") ?? [])];
         const stripRect = strip?.getBoundingClientRect();
         const builderRect = builder?.getBoundingClientRect();
         const gridRect = grid?.getBoundingClientRect();
+        const delimiterRect = delimiterOptions?.getBoundingClientRect();
+        const maxDelimiterRight = delimiterButtons.reduce(
+          (right, button) => Math.max(right, button.getBoundingClientRect().right),
+          0,
+        );
         const rowCount = Number(toolbar?.dataset.toolbarRowCount || 0);
         return {
           ready:
@@ -1347,13 +1415,85 @@ async function main() {
             builderRect.top >= stripRect.top - 1 &&
             builderRect.bottom <= stripRect.bottom + 1 &&
             gridRect.top >= builderRect.top - 1 &&
-            gridRect.bottom <= builderRect.bottom + 1,
+            gridRect.bottom <= builderRect.bottom + 1 &&
+            delimiterButtons.length === 6 &&
+            Boolean(delimiterRect) &&
+            maxDelimiterRight <= gridRect.left - 1 &&
+            delimiterRect.right <= gridRect.left - 1,
           rowCount,
           stripHeight: stripRect?.height ?? 0,
           builderHeight: builderRect?.height ?? 0,
           gridHeight: gridRect?.height ?? 0,
+          delimiterCount: delimiterButtons.length,
+          delimiterRight: maxDelimiterRight,
+          gridLeft: gridRect?.left ?? 0,
         };
       })()`, "compact two-row matrix toolbar");
+
+      const growMatrixDockStart = await handleCenter(".classic-dock-resizer");
+      if (!growMatrixDockStart) throw new Error("Missing dock handle for matrix growth check");
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: growMatrixDockStart.x,
+        y: growMatrixDockStart.y,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: growMatrixDockStart.x,
+        y: growMatrixDockStart.y,
+        button: "left",
+        buttons: 1,
+        clickCount: 1,
+      });
+      for (let step = 1; step <= 4; step += 1) {
+        await client.send("Input.dispatchMouseEvent", {
+          type: "mouseMoved",
+          x: growMatrixDockStart.x,
+          y: growMatrixDockStart.y - step * 20,
+          button: "left",
+          buttons: 1,
+        });
+        await sleep(26);
+      }
+      const grownMatrixState = await waitForEvaluation(`(() => {
+        const toolbar = document.querySelector(".classic-bottom-toolbar");
+        const builder = toolbar?.querySelector(".matrix-builder");
+        const grid = toolbar?.querySelector(".matrix-size-grid");
+        const delimiterOptions = toolbar?.querySelector(".matrix-delimiter-options");
+        const delimiterButtons = [...(delimiterOptions?.querySelectorAll("button") ?? [])];
+        const builderRect = builder?.getBoundingClientRect();
+        const gridRect = grid?.getBoundingClientRect();
+        const maxDelimiterRight = delimiterButtons.reduce(
+          (right, button) => Math.max(right, button.getBoundingClientRect().right),
+          0,
+        );
+        const rowCount = Number(toolbar?.dataset.toolbarRowCount || 0);
+        return {
+          ready:
+            rowCount >= 3 &&
+            Boolean(builderRect && gridRect) &&
+            gridRect.height >= ${compactMatrixState.gridHeight + 24} &&
+            gridRect.height <= 153 &&
+            gridRect.top >= builderRect.top - 1 &&
+            gridRect.bottom <= builderRect.bottom + 1 &&
+            delimiterButtons.length === 6 &&
+            maxDelimiterRight <= gridRect.left - 1,
+          rowCount,
+          builderHeight: builderRect?.height ?? 0,
+          gridHeight: gridRect?.height ?? 0,
+          delimiterCount: delimiterButtons.length,
+          delimiterRight: maxDelimiterRight,
+          gridLeft: gridRect?.left ?? 0,
+        };
+      })()`, "matrix picker grows with toolbar height");
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: growMatrixDockStart.x,
+        y: growMatrixDockStart.y - 80,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+      });
 
       await evaluate(`document.querySelector('[data-classic-bottom-view="source"]')?.click()`);
       const sourceBefore = await waitForEvaluation(`(() => {
@@ -1437,6 +1577,7 @@ async function main() {
             dockShrinkDuringDrag,
             dockRestoreTwoRows,
             compactMatrixState,
+            grownMatrixState,
             sourceBefore,
             sourceDuringDrag,
             persistedState,
@@ -1490,6 +1631,79 @@ async function main() {
           document.querySelector(".classic-bottom-toolbar .template-strip"),
         ),
       }))()`, "classic horizontal formula toolbar");
+
+      const toolbarPreviewVisibilityState = await waitForEvaluation(`(() => {
+        const section = document.querySelector(
+          '.classic-bottom-toolbar .toolbar-category-section[data-toolbar-category-section="common"]',
+        );
+        const buttons = [...(section?.querySelectorAll('.template-button') ?? [])];
+        const sectionStyle = section ? getComputedStyle(section) : null;
+        const previews = buttons.map((button) => {
+          const host = button.querySelector('.math-preview');
+          const content = host?.querySelector('.math-preview-fit-content');
+          const latex = host?.querySelector('.ML__latex');
+          const hostStyle = host ? getComputedStyle(host) : null;
+          const contentStyle = content ? getComputedStyle(content) : null;
+          const latexStyle = latex ? getComputedStyle(latex) : null;
+          const buttonStyle = getComputedStyle(button);
+          const buttonBounds = button.getBoundingClientRect();
+          const hostBounds = host?.getBoundingClientRect();
+          const latexBounds = latex?.getBoundingClientRect();
+          const latexColor = latexStyle?.color ?? '';
+          return {
+            commandId: button.dataset.commandId ?? '',
+            visible: Boolean(
+              host && content && latex &&
+              hostBounds && hostBounds.width > 4 && hostBounds.height > 4 &&
+              latexBounds && latexBounds.width > 0 && latexBounds.height > 0 &&
+              hostStyle?.display !== 'none' &&
+              hostStyle?.visibility !== 'hidden' &&
+              contentStyle?.display !== 'none' &&
+              contentStyle?.visibility !== 'hidden' &&
+              latexStyle?.visibility !== 'hidden' &&
+              Number.parseFloat(hostStyle?.opacity || '1') > 0.1 &&
+              Number.parseFloat(contentStyle?.opacity || '1') > 0.1 &&
+              Number.parseFloat(latexStyle?.opacity || '1') > 0.1 &&
+              latexColor !== 'transparent' &&
+              latexColor !== 'rgba(0, 0, 0, 0)'
+            ),
+            button: {
+              width: buttonBounds.width,
+              height: buttonBounds.height,
+              display: buttonStyle.display,
+              alignItems: buttonStyle.alignItems,
+              justifyContent: buttonStyle.justifyContent,
+            },
+            host: hostBounds ? { width: hostBounds.width, height: hostBounds.height } : null,
+            latex: latexBounds ? { width: latexBounds.width, height: latexBounds.height } : null,
+            hostDisplay: hostStyle?.display ?? '',
+            hostWidth: hostStyle?.width ?? '',
+            hostHeight: hostStyle?.height ?? '',
+            hostFlex: hostStyle?.flex ?? '',
+            hostColor: hostStyle?.color ?? '',
+            latexColor,
+            hostContain: hostStyle?.contain ?? '',
+            contentTransform: contentStyle?.transform ?? '',
+          };
+        });
+        const invalid = previews.filter((preview) => !preview.visible);
+        const windowsSafeCompositing = previews.every(
+          (preview) => preview.hostContain === 'none',
+        ) && sectionStyle?.transform === 'none' && sectionStyle?.contain === 'none';
+        return {
+          ready:
+            buttons.length > 0 &&
+            invalid.length === 0 &&
+            windowsSafeCompositing,
+          buttonCount: buttons.length,
+          invalid: invalid.slice(0, 3),
+          invalidCount: invalid.length,
+          first: previews[0] ?? null,
+          sectionTransform: sectionStyle?.transform ?? '',
+          sectionContain: sectionStyle?.contain ?? '',
+          windowsSafeCompositing,
+        };
+      })()`, "visible classic formula tool previews");
 
       const setActiveField = async (latex) => {
         await waitForEvaluation(`(() => {
@@ -1644,6 +1858,7 @@ async function main() {
 
       console.log(JSON.stringify({
         startupFocusState,
+        toolbarPreviewVisibilityState,
         upperScriptState,
         scriptsState,
         lowerScriptState,
@@ -1707,18 +1922,17 @@ async function main() {
         return {
           ready:
             JSON.stringify(actualOrder) === JSON.stringify(expectedOrder) &&
-            gridColumnCount === 3 &&
-            rows.length === 3 &&
-            rows.every((row) => row.count === 3) &&
+            rows.length === 1 &&
+            rows[0]?.count === expectedOrder.length &&
             labelsFit &&
-            containerHeight <= 120,
+            containerHeight <= 48,
           actualOrder,
           gridColumnCount,
           rows,
           labelsFit,
           containerHeight,
         };
-      })()`, "three-by-three toolbar tabs");
+      })()`, "single-row scrolling toolbar tabs");
 
       const categories = [
         "common",
@@ -2276,6 +2490,143 @@ async function main() {
         '[data-tile-category="custom"]',
       ).click()`);
       await waitForEvaluation(`(() => ({
+        ready: Boolean(document.querySelector('[data-open-custom-symbol-designer]')),
+      }))()`, "custom symbol designer trigger");
+      await evaluate(`document.querySelector('[data-open-custom-symbol-designer]').click()`);
+      const customSymbolDesignerVisualState = await waitForEvaluation(`(() => {
+        const dialog = document.querySelector('[data-custom-symbol-designer]');
+        const stage = dialog?.querySelector('.custom-symbol-designer-stage');
+        const workspace = dialog?.querySelector('.custom-symbol-designer-workspace');
+        const paper = dialog?.querySelector('[data-custom-symbol-canvas-paper]');
+        const panelHeader = dialog?.querySelector('.custom-symbol-designer-panel > header');
+        const sidebars = [...(dialog?.querySelectorAll('.custom-symbol-designer-sidebar') ?? [])];
+        const rootStyle = getComputedStyle(document.documentElement);
+        const stageStyle = stage ? getComputedStyle(stage) : null;
+        const workspaceStyle = workspace ? getComputedStyle(workspace) : null;
+        const stageBounds = stage?.getBoundingClientRect();
+        const paperBounds = paper?.getBoundingClientRect();
+        const dialogBounds = dialog?.getBoundingClientRect();
+        const panelHeaderFontSize = Number.parseFloat(
+          panelHeader ? getComputedStyle(panelHeader).fontSize : '0',
+        );
+        const workspaceFill = workspaceStyle?.fill ?? '';
+        const sunken = rootStyle.getPropertyValue('--bg-sunken').trim();
+        return {
+          ready: Boolean(
+            dialog && stage && workspace && paper &&
+            sunken &&
+            workspaceFill &&
+            workspaceFill !== 'black' &&
+            workspaceFill !== 'rgb(0, 0, 0)' &&
+            stageBounds && stageBounds.width > 300 && stageBounds.height > 300 &&
+            paperBounds && paperBounds.width >= stageBounds.width * 0.45 &&
+            paperBounds.height >= stageBounds.height * 0.45 &&
+            dialogBounds && dialogBounds.left >= -1 && dialogBounds.top >= -1 &&
+            dialogBounds.right <= innerWidth + 1 && dialogBounds.bottom <= innerHeight + 1 &&
+            sidebars.length === 2 &&
+            sidebars.every((sidebar) => sidebar.scrollWidth <= sidebar.clientWidth + 1) &&
+            panelHeaderFontSize >= 10
+          ),
+          sunken,
+          workspaceFill,
+          stageBackground: stageStyle?.backgroundColor ?? '',
+          stage: stageBounds ? { width: stageBounds.width, height: stageBounds.height } : null,
+          paper: paperBounds ? { width: paperBounds.width, height: paperBounds.height } : null,
+          dialog: dialogBounds ? {
+            left: dialogBounds.left,
+            top: dialogBounds.top,
+            right: dialogBounds.right,
+            bottom: dialogBounds.bottom,
+          } : null,
+          panelHeaderFontSize,
+          sidebarOverflow: sidebars.map((sidebar) => ({
+            clientWidth: sidebar.clientWidth,
+            scrollWidth: sidebar.scrollWidth,
+            overflow: sidebar.scrollWidth - sidebar.clientWidth,
+          })),
+        };
+      })()`, "balanced custom symbol designer on Windows");
+      await evaluate(`document.querySelector('[data-add-custom-symbol-material]')?.click()`);
+      const designerLayerBeforeDelete = await waitForEvaluation(`(() => ({
+        ready: document.querySelectorAll('[data-custom-symbol-layer]').length > 0,
+        count: document.querySelectorAll('[data-custom-symbol-layer]').length,
+      }))()`, "custom-symbol designer layer before keyboard delete");
+      await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true }))`);
+      const designerLayerAfterDelete = await waitForEvaluation(`(() => ({
+        ready: document.querySelectorAll('[data-custom-symbol-layer]').length === 0,
+        count: document.querySelectorAll('[data-custom-symbol-layer]').length,
+      }))()`, "custom-symbol designer keyboard Delete");
+      if (designerLayerBeforeDelete.count <= designerLayerAfterDelete.count) {
+        throw new Error(`Delete key did not remove the selected custom-symbol layer: ${JSON.stringify({ designerLayerBeforeDelete, designerLayerAfterDelete })}`);
+      }
+      await evaluate(`document.querySelector(
+        '[data-custom-symbol-designer] button[aria-label="关闭"], [data-custom-symbol-designer] button[aria-label="Close"]',
+      )?.click()`);
+      await waitForEvaluation(`(() => ({
+        ready: !document.querySelector('[data-custom-symbol-designer]'),
+      }))()`, "closed custom symbol designer");
+
+      // Registered custom symbols must expose a real, visible delete control in
+      // the toolbar. The old top-right glyph could degrade into a '?' and there
+      // was no reliable deletion path from the toolbar itself.
+      await evaluate(`(() => {
+        const key = 'visualtex.custom-symbols.v1';
+        const value = {
+          version: 1,
+          symbols: [{
+            id: 'qa-custom-symbol-delete',
+            command: 'qaacustomglyph',
+            name: 'QA custom glyph',
+            role: 'ordinary',
+            limitsBehavior: 'auto',
+            metrics: { widthEm: 1, ascentEm: 1, descentEm: 0.1 },
+            artwork: {
+              shapes: [{
+                kind: 'line', x1: 80, y1: 500, x2: 920, y2: 500,
+                fill: false, strokeWidth: 80, lineCap: 'round',
+              }],
+            },
+            ommlFallback: null,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          }],
+        };
+        const oldValue = localStorage.getItem(key);
+        const newValue = JSON.stringify(value);
+        localStorage.setItem(key, newValue);
+        window.dispatchEvent(new StorageEvent('storage', { key, oldValue, newValue }));
+      })()`);
+      const registeredDeleteState = await waitForEvaluation(`(() => {
+        const item = document.querySelector('[data-registered-custom-symbol-toolbar-item="qa-custom-symbol-delete"]');
+        const button = document.querySelector('[data-delete-registered-custom-symbol-toolbar="qa-custom-symbol-delete"]');
+        const label = button?.textContent?.trim() ?? '';
+        return {
+          ready: Boolean(item && button && /删除|Delete/.test(label)),
+          label,
+          hasSvgIcon: Boolean(button?.querySelector('svg')),
+        };
+      })()`, "visible registered custom-symbol delete button");
+      if (!registeredDeleteState.hasSvgIcon) {
+        throw new Error(`Registered custom-symbol delete control has no SVG trash icon: ${JSON.stringify(registeredDeleteState)}`);
+      }
+      await evaluate(`document.querySelector('[data-delete-registered-custom-symbol-toolbar="qa-custom-symbol-delete"]')?.click()`);
+      const firstDeleteClick = await waitForEvaluation(`(() => ({
+        ready: document.querySelector('[data-delete-registered-custom-symbol-toolbar="qa-custom-symbol-delete"]')?.classList.contains('is-confirming') === true,
+        stillPresent: Boolean(document.querySelector('[data-registered-custom-symbol-toolbar-item="qa-custom-symbol-delete"]')),
+      }))()`, "custom-symbol delete confirmation");
+      if (!firstDeleteClick.stillPresent) {
+        throw new Error('Registered custom symbol was deleted without the required confirmation click');
+      }
+      await evaluate(`document.querySelector('[data-delete-registered-custom-symbol-toolbar="qa-custom-symbol-delete"]')?.click()`);
+      await waitForEvaluation(`(() => {
+        const stored = JSON.parse(localStorage.getItem('visualtex.custom-symbols.v1') || '{"symbols":[]}');
+        return {
+          ready: !document.querySelector('[data-registered-custom-symbol-toolbar-item="qa-custom-symbol-delete"]') &&
+            !stored.symbols?.some?.((symbol) => symbol.id === 'qa-custom-symbol-delete'),
+        };
+      })()`, "delete registered custom symbol from toolbar");
+
+      await waitForEvaluation(`(() => ({
         ready: Boolean(
           document.querySelector(".save-current-formula-tile:not(:disabled)"),
         ),
@@ -2372,6 +2723,7 @@ async function main() {
           {
             commonTilesState,
             insertedTileState,
+            customSymbolDesignerVisualState,
             customTileState,
             customTileContextState,
             deletedCustomTileState,
@@ -7333,6 +7685,162 @@ async function main() {
         input.dispatchEvent(new Event('input', { bubbles: true }));
         input.dispatchEvent(new Event('change', { bubbles: true }));
       })()`);
+      const themeChoiceState = await waitForEvaluation(`(() => {
+        const rootStyle = getComputedStyle(document.documentElement);
+        const swatches = [...document.querySelectorAll('.theme-choice-swatch')];
+        const widths = swatches.map((swatch) => swatch.getBoundingClientRect().width);
+        const rounded = widths.map((width) => Math.round(width * 10) / 10);
+        const distinctWidths = [...new Set(rounded)];
+        const surfaceSecondary = rootStyle.getPropertyValue('--surface-secondary').trim();
+        const sunken = rootStyle.getPropertyValue('--bg-sunken').trim();
+        const paper = rootStyle.getPropertyValue('--bg-paper').trim();
+        const canvas = rootStyle.getPropertyValue('--bg-canvas').trim();
+        return {
+          ready:
+            swatches.length >= 10 &&
+            distinctWidths.length === 1 &&
+            Math.abs((widths[0] ?? 0) - 46) <= 0.6 &&
+            Boolean(surfaceSecondary && sunken && paper && canvas),
+          count: swatches.length,
+          widths: rounded,
+          distinctWidths,
+          surfaceSecondary,
+          sunken,
+          paper,
+          canvas,
+        };
+      })()`, "uniform theme swatches and shared theme tokens");
+
+      await evaluate(`document.querySelector('[data-interface-customization-trigger]')?.click()`);
+      const interfaceCustomizationLayout = await waitForEvaluation(`(() => {
+        const dialog = document.querySelector('[data-interface-customization-dialog]');
+        const backdrop = dialog?.parentElement;
+        const rect = dialog?.getBoundingClientRect();
+        const visible = Boolean(
+          rect &&
+          rect.left >= -1 &&
+          rect.top >= -1 &&
+          rect.right <= window.innerWidth + 1 &&
+          rect.bottom <= window.innerHeight + 1,
+        );
+        return {
+          ready: Boolean(dialog && backdrop && visible && backdrop.parentElement === document.body),
+          visible,
+          portalToBody: backdrop?.parentElement === document.body,
+          rect: rect ? {
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+          } : null,
+          settingsOverflow: getComputedStyle(document.querySelector('.settings-dialog')).overflow,
+        };
+      })()`, "unclipped interface customization portal");
+      if (!interfaceCustomizationLayout.visible || !interfaceCustomizationLayout.portalToBody) {
+        throw new Error(`Interface customization is still clipped by Settings: ${JSON.stringify(interfaceCustomizationLayout)}`);
+      }
+
+      await evaluate(`(() => {
+        const input = document.querySelector('[data-formula-inset-left-setting]');
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+        setter.call(input, '72');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      })()`);
+      const insetAndPreviewState = await waitForEvaluation(`(() => {
+        const surface = document.querySelector('.editor-surface.multi-line-editor');
+        const row = document.querySelector('.formula-line');
+        const field = row?.querySelector('math-field');
+        const content = field?.shadowRoot?.querySelector('[part="content"]');
+        const surfaceRect = surface?.getBoundingClientRect();
+        const rowRect = row?.getBoundingClientRect();
+        const contentRect = content?.getBoundingClientRect();
+        const previewButtons = [...document.querySelectorAll(
+          '[data-formula-inset-preview] .formula-inset-preview-toolbar > span',
+        )];
+        const previewContained = previewButtons.every((button) => {
+          const buttonRect = button.getBoundingClientRect();
+          const preview = button.querySelector('.math-preview');
+          const previewRect = preview?.getBoundingClientRect();
+          const visual = preview?.querySelector('.ML__latex');
+          const visualRect = visual?.getBoundingClientRect();
+          return Boolean(
+            previewRect && visualRect &&
+            previewRect.left >= buttonRect.left - 1 &&
+            previewRect.right <= buttonRect.right + 1 &&
+            previewRect.top >= buttonRect.top - 1 &&
+            previewRect.bottom <= buttonRect.bottom + 1 &&
+            visualRect.left >= buttonRect.left - 1 &&
+            visualRect.right <= buttonRect.right + 1 &&
+            visualRect.top >= buttonRect.top - 1 &&
+            visualRect.bottom <= buttonRect.bottom + 1
+          );
+        });
+        const rowInset = rowRect && surfaceRect ? rowRect.left - surfaceRect.left : -1;
+        const contentInset = contentRect && rowRect ? contentRect.left - rowRect.left : -1;
+        return {
+          ready:
+            Boolean(surfaceRect && rowRect && contentRect) &&
+            Math.abs(rowInset - 72) <= 2 &&
+            contentInset >= -1 && contentInset <= 4 &&
+            previewButtons.length === 3 &&
+            previewContained,
+          rowInset,
+          contentInset,
+          previewCount: previewButtons.length,
+          previewContained,
+        };
+      })()`, "formula inset controls move MathLive content and preview stays contained");
+      if (!insetAndPreviewState.previewContained) {
+        throw new Error(`Settings live preview overflowed its toolbar tiles: ${JSON.stringify(insetAndPreviewState)}`);
+      }
+      await evaluate(`document.querySelector('[data-interface-customization-close]')?.click()`);
+      await waitForEvaluation(`(() => ({
+        ready: !document.querySelector('[data-interface-customization-dialog]'),
+      }))()`, "close interface customization portal");
+
+      await evaluate(`document.querySelector('[data-interface-customization-trigger]')?.click()`);
+      await waitForEvaluation(`(() => ({
+        ready: Boolean(document.querySelector('[data-interface-customization-dialog]')),
+      }))()`, "reopen interface customization for font preview");
+      await evaluate(`(() => {
+        const letter = document.querySelector('[data-formula-letter-font-setting]');
+        const chinese = document.querySelector('[data-formula-chinese-font-setting]');
+        letter.value = 'helvetica';
+        letter.dispatchEvent(new Event('change', { bubbles: true }));
+        chinese.value = 'kaiti';
+        chinese.dispatchEvent(new Event('change', { bubbles: true }));
+      })()`);
+      const formulaFontPreviewState = await waitForEvaluation(`(() => {
+        const preview = document.querySelector('[data-formula-font-preview]');
+        const mathLetter = preview?.querySelector('.ML__mathit, .ML__latin');
+        const chineseText = [...(preview?.querySelectorAll('.ML__text, .ML__textord') ?? [])]
+          .find((node) => (node.textContent ?? '').includes('中文'));
+        const letterFamily = mathLetter ? getComputedStyle(mathLetter).fontFamily : '';
+        const chineseFamily = chineseText ? getComputedStyle(chineseText).fontFamily : '';
+        const persisted = JSON.parse(localStorage.getItem('visualtex-editor') || '{}');
+        return {
+          ready:
+            Boolean(mathLetter && chineseText) &&
+            /Arial|Helvetica/i.test(letterFamily) &&
+            /KaiTi|Kaiti/i.test(chineseFamily) &&
+            persisted.state?.formulaLetterFont === 'helvetica' &&
+            persisted.state?.formulaChineseFont === 'kaiti',
+          letterFamily,
+          chineseFamily,
+          letterSetting: persisted.state?.formulaLetterFont ?? '',
+          chineseSetting: persisted.state?.formulaChineseFont ?? '',
+        };
+      })()`, "formula font live preview follows selected western and Chinese fonts");
+      if (!/Arial|Helvetica/i.test(formulaFontPreviewState.letterFamily)
+        || !/KaiTi|Kaiti/i.test(formulaFontPreviewState.chineseFamily)) {
+        throw new Error(`Formula font preview ignored selected fonts: ${JSON.stringify(formulaFontPreviewState)}`);
+      }
+      await evaluate(`document.querySelector('[data-interface-customization-close]')?.click()`);
+      await waitForEvaluation(`(() => ({
+        ready: !document.querySelector('[data-interface-customization-dialog]'),
+      }))()`, "close interface customization after font preview");
+
       const powerPointDefaultSaved = await waitForEvaluation(`(() => {
         const input = document.querySelector(
           '[data-powerpoint-default-font-size]',
@@ -7528,6 +8036,8 @@ async function main() {
 
       console.log(JSON.stringify({
         powerPointDefaultInitial,
+        themeChoiceState,
+        interfaceCustomizationLayout,
         powerPointDefaultSaved,
         powerPointDefaultReloaded,
         defaults,

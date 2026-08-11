@@ -3,18 +3,33 @@ import { createRoot } from "react-dom/client";
 import "mathlive/static.css";
 import "../../styles.css";
 import "../../styles-macos-main.css";
+import "../../styles-editor-parity.css";
+import "../../styles-latest-macos-ui.css";
+import "../../styles-windows-shared-latest.css";
+import "../../math/customSymbolRendering";
 import { configureOcrTransport } from "../../ocr/ocrService";
 import { officeOcrTransport } from "../api/ocrHttpTransport";
 import { OfficeDialogApp } from "./OfficeDialogApp";
 import { DocumentImportApp } from "../documentImport/DocumentImportApp";
-import { applyDocumentTheme, readSynchronizedTheme } from "../../themeSync";
+import {
+  applyDocumentTheme,
+  normalizeSynchronizedTheme,
+  readSynchronizedTheme,
+} from "../../themeSync";
 import {
   normalizeEditorLayout,
   useEditorStore,
 } from "../../stores/editorStore";
 
 configureOcrTransport(officeOcrTransport);
-applyDocumentTheme(readSynchronizedTheme());
+const injectedTheme = document
+  .querySelector<HTMLMetaElement>('meta[name="visualtex-theme"]')
+  ?.content;
+const initialTheme = injectedTheme
+  ? normalizeSynchronizedTheme(injectedTheme)
+  : readSynchronizedTheme();
+useEditorStore.getState().setTheme(initialTheme);
+applyDocumentTheme(initialTheme);
 useEditorStore.getState().setEditorLayout(
   normalizeEditorLayout(
     document

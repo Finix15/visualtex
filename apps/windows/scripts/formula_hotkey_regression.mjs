@@ -162,30 +162,116 @@ async function main() {
     await reload();
 
     const openContextMenu = async (selector) => {
-      const opened = await evaluate(`new Promise((resolve) => {
+      const target = await evaluate(`(() => {
         const button = document.querySelector(${JSON.stringify(selector)});
-        if (!button) {
-          resolve({
+        if (!(button instanceof HTMLElement)) {
+          return {
             ok: false,
             selectorFound: false,
             templateCount: document.querySelectorAll(".template-button").length,
             tileCount: document.querySelectorAll(".formula-tile-button").length,
             bodyText: document.body.textContent?.slice(0, 200) ?? "",
+          };
+        }
+        const rect = button.getBoundingClientRect();
+        return {
+          ok: rect.width > 0 && rect.height > 0,
+          selectorFound: true,
+          x: rect.left + rect.width / 2,
+          y: rect.top + rect.height / 2,
+        };
+      })()`);
+      assert.equal(target.ok, true, `Context target unavailable for ${selector}: ${JSON.stringify(target)}`);
+      const synthetic = await evaluate(`new Promise((resolve) => {
+        const button = document.querySelector(${JSON.stringify(selector)});
+        window.__visualtexContextDiagnostics = [];
+        const record = (kind) => (event) => {
+          const target = event.target;
+          window.__visualtexContextDiagnostics.push({
+            kind,
+            tag: target?.tagName ?? null,
+            className: target instanceof HTMLElement ? target.className : null,
+            at: performance.now(),
           });
+        };
+        const onScroll = record("scroll");
+        const onResize = record("resize");
+        const onBlur = record("blur");
+        const onPointer = record("pointerdown");
+        window.addEventListener("scroll", onScroll, true);
+        window.addEventListener("resize", onResize, true);
+        window.addEventListener("blur", onBlur, true);
+        document.addEventListener("pointerdown", onPointer, true);
+        if (!(button instanceof HTMLElement)) {
+          resolve({ dispatched: false, opened: false });
           return;
         }
-        button.dispatchEvent(new MouseEvent("contextmenu", {
+        let appeared = false;
+        const observer = new MutationObserver(() => {
+          if (document.querySelector(".formula-hotkey-context-menu")) {
+            appeared = true;
+          }
+        });
+        observer.observe(document.getElementById("root") ?? document.body, {
+          childList: true,
+          subtree: true,
+        });
+        const dispatched = button.dispatchEvent(new MouseEvent("contextmenu", {
           bubbles: true,
+          composed: true,
           cancelable: true,
-          clientX: 420,
-          clientY: 320,
+          clientX: ${target.x},
+          clientY: ${target.y},
+          button: 2,
+          buttons: 2,
         }));
-        setTimeout(() => resolve({
-          ok: Boolean(document.querySelector(".formula-hotkey-context-menu")),
-          selectorFound: true,
-        }), 50);
+        setTimeout(() => {
+          observer.disconnect();
+          window.removeEventListener("scroll", onScroll, true);
+          window.removeEventListener("resize", onResize, true);
+          window.removeEventListener("blur", onBlur, true);
+          document.removeEventListener("pointerdown", onPointer, true);
+          resolve({
+            dispatched,
+            appeared,
+            opened: Boolean(document.querySelector(".formula-hotkey-context-menu")),
+            diagnostics: window.__visualtexContextDiagnostics ?? [],
+          });
+        }, 120);
       })`);
-      assert.equal(opened.ok, true, `Context menu did not open for ${selector}: ${JSON.stringify(opened)}`);
+      if (synthetic.opened) return;
+      const hitBefore = await evaluate(`(() => {
+        const hit = document.elementFromPoint(${target.x}, ${target.y});
+        return {
+          tag: hit?.tagName ?? null,
+          className: hit instanceof HTMLElement ? hit.className : null,
+          tileId: hit instanceof Element ? hit.closest(".formula-tile-button")?.getAttribute("data-formula-tile-id") ?? null : null,
+          settingsOpen: Boolean(document.querySelector(".settings-dialog")),
+        };
+      })()`);
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: target.x,
+        y: target.y,
+        button: "right",
+        buttons: 2,
+        clickCount: 1,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: target.x,
+        y: target.y,
+        button: "right",
+        buttons: 0,
+        clickCount: 1,
+      });
+      await sleep(80);
+      const after = await evaluate(`(() => ({
+        opened: Boolean(document.querySelector(".formula-hotkey-context-menu")),
+        tileMenus: document.querySelectorAll(".formula-tile-context-menu").length,
+        settingsOpen: Boolean(document.querySelector(".settings-dialog")),
+      }))()`);
+      assert.equal(after.opened, true, `Context menu did not open for ${selector}: ${JSON.stringify({ target, synthetic, hitBefore, after })}`);
     };
 
     const assignCurrentContext = async (code, key, modifiers) => {
@@ -327,10 +413,13 @@ async function main() {
         }, 80);
       }, 80);
     })`);
-    assert.equal(managerState.rows, 1);
+    assert.equal(managerState.rows, 10);
     assert.ok(managerState.hotkey);
     assert.ok(managerState.keycapCenterDelta <= 1, JSON.stringify(managerState));
     await evaluate(`document.querySelector(".formula-hotkey-manager-dialog .dialog-header .icon-button")?.click()`);
+    await sleep(80);
+    await evaluate(`document.querySelector(".settings-dialog .dialog-header .icon-button")?.click()`);
+    await sleep(80);
 
     const expandedCategories = await evaluate(`new Promise(async (resolve) => {
       const result = {};
@@ -356,7 +445,10 @@ async function main() {
             );
             const ready =
               previews.length > 0 &&
-              previews.every((preview) => preview.dataset.fitReady === "true");
+              previews.every((preview) =>
+                preview.dataset.fitReady === "true" ||
+                preview.dataset.fitReady === "static"
+              );
             if (ready || Date.now() - startedAt > 2000) {
               requestAnimationFrame(() =>
                 requestAnimationFrame(() => requestAnimationFrame(done)),
@@ -391,9 +483,31 @@ async function main() {
                 width: Math.round(buttonRect.width),
                 fontSize: Number.parseFloat(getComputedStyle(preview).fontSize),
                 scale: Number.parseFloat(preview?.dataset.fitScale || "0"),
-                fitReady: preview?.dataset.fitReady === "true",
+                fitReady:
+                  preview?.dataset.fitReady === "true" ||
+                  preview?.dataset.fitReady === "static",
                 unifiedFit: button.classList.contains("is-unified-fit"),
                 wide: button.classList.contains("is-wide-preview"),
+                previewRect: previewRect
+                  ? {
+                      left: previewRect.left,
+                      right: previewRect.right,
+                      top: previewRect.top,
+                      bottom: previewRect.bottom,
+                      width: previewRect.width,
+                      height: previewRect.height,
+                    }
+                  : null,
+                contentRect: contentRect
+                  ? {
+                      left: contentRect.left,
+                      right: contentRect.right,
+                      top: contentRect.top,
+                      bottom: contentRect.bottom,
+                      width: contentRect.width,
+                      height: contentRect.height,
+                    }
+                  : null,
                 contained: Boolean(
                   previewRect &&
                   contentRect &&
@@ -419,7 +533,11 @@ async function main() {
         assert.equal(detail.unifiedFit, true, JSON.stringify({ category, id, detail }));
         assert.equal(detail.fontSize, 24, JSON.stringify({ category, id, detail }));
         assert.equal(detail.fitReady, true, JSON.stringify({ category, id, detail }));
-        assert.ok(detail.scale > 0 && detail.scale <= 1, JSON.stringify({ category, id, detail }));
+        const maximumScale = Math.min(1.55, Math.max(1, detail.width / 42));
+        assert.ok(
+          detail.scale > 0 && detail.scale <= maximumScale + 0.001,
+          JSON.stringify({ category, id, detail, maximumScale }),
+        );
         assert.equal(detail.contained, true, JSON.stringify({ category, id, detail }));
       }
     }

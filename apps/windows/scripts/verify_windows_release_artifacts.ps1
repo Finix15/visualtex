@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$ExpectedAppVersion = "1.2.4",
+    [string]$ExpectedAppVersion = "1.2.5",
     [string]$ExpectedOfficeMsiVersion = "1.0.41.0"
 )
 
@@ -309,7 +309,11 @@ foreach ($requiredMarker in @(
     "Same-version maintenance defaults to the second option",
     'StrCpy $ReinstallPageCheck 2',
     'Same version: always remove the installed payload before reinstalling',
-    '/VISUALTEXACCEPTANCE'
+    '/VISUALTEXACCEPTANCE',
+    'Page custom VisualTeXOfficePageCreate VisualTeXOfficePageLeave',
+    'Page custom VisualTeXOcrPageCreate VisualTeXOcrPageLeave',
+    'VisualTeXCreateBundledResourceDirectory',
+    'VisualTeXInstallBundledResource'
 )) {
     if (-not $customNsisSource.Contains($requiredMarker)) {
         throw "Custom NSIS template is missing verified release marker: $requiredMarker"
@@ -331,7 +335,15 @@ foreach ($requiredHookMarker in @(
     'Behavior:Win32/Persistence.A!ml',
     'Remove only known legacy application payloads.',
     '%APPDATA%\VisualTeX\ocr-storage.json',
-    'preserve %APPDATA%\com.visualtex.studio.'
+    'preserve %APPDATA%\com.visualtex.studio.',
+    'Function VisualTeXOcrPageCreate',
+    '${NSD_CreateCheckbox} 0 38u 100% 18u',
+    'Install offline OCR resources (recommended)',
+    'Function VisualTeXOcrPageLeave',
+    '/VISUALTEXOCR=',
+    '!macro VisualTeXCreateBundledResourceDirectory DESTINATION',
+    '!macro VisualTeXInstallBundledResource DESTINATION SOURCE',
+    'no ocr*, wheel or private-Python resources will be written'
 )) {
     if (-not $nsisHooksSource.Contains($requiredHookMarker)) {
         throw "NSIS hooks are missing a verified executable or persistent-data marker: $requiredHookMarker"
@@ -382,21 +394,28 @@ foreach ($forbiddenStorageMigrationMarker in @(
     }
 }
 
-$generatedNsisPath = Join-Path $root "src-tauri\target\release\nsis\x64\installer.nsi"
-if (-not (Test-Path -LiteralPath $generatedNsisPath -PathType Leaf)) {
-    throw "Generated release NSIS script is missing: $generatedNsisPath"
+# Tauri's rendered target/release/nsis/.../installer.nsi is an ephemeral
+# implementation detail and may be removed immediately after makensis exits.
+# Verify the persistent template that was actually configured for bundling
+# (checked above), and verify the Windows-only resource overlay that Tauri
+# merges into that template instead of requiring the transient rendered file.
+$windowsTauriConfigPath = Join-Path $root "src-tauri\tauri.windows.conf.json"
+if (-not (Test-Path -LiteralPath $windowsTauriConfigPath -PathType Leaf)) {
+    throw "Windows Tauri resource configuration is missing: $windowsTauriConfigPath"
 }
-$generatedNsisSource = Get-Content -LiteralPath $generatedNsisPath -Raw -Encoding UTF8
-foreach ($requiredGeneratedMarker in @(
-    '!define MAINBINARYNAME "visualtex"',
-    'src-tauri\windows\hooks.nsh"',
-    'File /a "/oname=windows-office\VisualTeX-WindowsOffice-VSTO-x64.msi"',
-    'File /a "/oname=windows-office\VisualTeX-WindowsOffice-VSTO-x86.msi"',
-    'File /a "/oname=windows-office\vstor_redist.exe"',
-    'Same version: always remove the installed payload before reinstalling'
+$windowsTauriConfig = Get-Content -LiteralPath $windowsTauriConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$windowsResources = @($windowsTauriConfig.bundle.resources.PSObject.Properties)
+foreach ($requiredResource in @(
+    @{ Source = "resources/windows-office/VisualTeX-WindowsOffice-VSTO-x64.msi"; Destination = "windows-office/VisualTeX-WindowsOffice-VSTO-x64.msi" },
+    @{ Source = "resources/windows-office/VisualTeX-WindowsOffice-VSTO-x64.sha256.json"; Destination = "windows-office/VisualTeX-WindowsOffice-VSTO-x64.sha256.json" },
+    @{ Source = "resources/windows-office/VisualTeX-WindowsOffice-VSTO-x86.msi"; Destination = "windows-office/VisualTeX-WindowsOffice-VSTO-x86.msi" },
+    @{ Source = "resources/windows-office/VisualTeX-WindowsOffice-VSTO-x86.sha256.json"; Destination = "windows-office/VisualTeX-WindowsOffice-VSTO-x86.sha256.json" },
+    @{ Source = "resources/windows-office/vstor_redist.exe"; Destination = "windows-office/vstor_redist.exe" },
+    @{ Source = "resources/windows-office/vstor_redist.sha256.json"; Destination = "windows-office/vstor_redist.sha256.json" }
 )) {
-    if (-not $generatedNsisSource.Contains($requiredGeneratedMarker)) {
-        throw "Generated NSIS installer is missing verified main/Office resource marker: $requiredGeneratedMarker"
+    $record = @($windowsResources | Where-Object { $_.Name -eq $requiredResource.Source })
+    if ($record.Count -ne 1 -or [string]$record[0].Value -ne [string]$requiredResource.Destination) {
+        throw "Windows Tauri resource mapping is missing or invalid: $($requiredResource.Source) -> $($requiredResource.Destination)"
     }
 }
 

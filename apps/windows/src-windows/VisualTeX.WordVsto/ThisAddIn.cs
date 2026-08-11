@@ -140,18 +140,22 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
           <button id="VisualTeX.WordVsto.InlineOmml" label="OMML 行内公式" size="large" screentip="插入 Word 原生公式" supertip="插入可由 Word 原生公式工具直接编辑、同时保留 VisualTeX LaTeX 元数据的 OMML 行内公式。" tag="ommlInline" getImage="GetRibbonImage" onAction="OnInsertInlineOmml" />
           <button id="VisualTeX.WordVsto.DisplayOmml" label="OMML 行间公式" size="large" screentip="插入 Word 原生公式" supertip="插入可由 Word 原生公式工具直接编辑、同时保留 VisualTeX LaTeX 元数据的 OMML 行间公式。" tag="ommlDisplay" getImage="GetRibbonImage" onAction="OnInsertDisplayOmml" />
           <button id="VisualTeX.WordVsto.Edit" label="编辑所选公式" size="large" tag="editSelected" getImage="GetRibbonImage" onAction="OnEditSelected" />
-          <button id="VisualTeX.WordVsto.ConvertSelected" label="转为原生 OLE" screentip="转为可嵌入编辑的原生 OLE" supertip="转换后对象随 Word 文档保存，并可通过 VisualTeX 双击重新编辑。" tag="convertToOle" getImage="GetRibbonImage" onAction="OnConvertSelected" />
-          <button id="VisualTeX.WordVsto.ConvertSelectedToOmml" label="转为 Word OMML" size="large" screentip="转为 Word 原生公式" supertip="将所选 VisualTeX 公式转换为 Word 原生 OMML；可在 Word 中直接编辑，也可继续用 VisualTeX 编辑。" tag="convertToOmml" getImage="GetRibbonImage" onAction="OnConvertSelectedToOmml" />
-          <button id="VisualTeX.WordVsto.UpdateNumbers" label="更新公式编号" tag="updateNumbers" getImage="GetRibbonImage" onAction="OnUpdateEquationNumbers" />
-          <menu id="VisualTeX.WordVsto.NumberFormat" label="编号格式" screentip="设置当前文档的公式编号格式" supertip="选择后立即更新当前文档已有的 VisualTeX 公式编号，并应用于后续新插入的带编号公式。">
-            <toggleButton id="VisualTeX.WordVsto.NumberFormatContinuous" label="全文连续编号（1）" tag="continuous" getPressed="GetEquationNumberFormatPressed" onAction="OnEquationNumberFormatChanged" />
-            <toggleButton id="VisualTeX.WordVsto.NumberFormatHeading1Dot" label="按章编号（1.1）" tag="heading1-dot" getPressed="GetEquationNumberFormatPressed" onAction="OnEquationNumberFormatChanged" />
-            <toggleButton id="VisualTeX.WordVsto.NumberFormatHeading1Dash" label="按章编号（1-1）" tag="heading1-dash" getPressed="GetEquationNumberFormatPressed" onAction="OnEquationNumberFormatChanged" />
-            <toggleButton id="VisualTeX.WordVsto.NumberFormatHeading2Dot" label="按节编号（1.1.1）" tag="heading2-dot" getPressed="GetEquationNumberFormatPressed" onAction="OnEquationNumberFormatChanged" />
-            <toggleButton id="VisualTeX.WordVsto.NumberFormatHeading2Dash" label="按节编号（1.1-1）" tag="heading2-dash" getPressed="GetEquationNumberFormatPressed" onAction="OnEquationNumberFormatChanged" />
-          </menu>
-          <button id="VisualTeX.WordVsto.InsertReference" label="插入公式引用" screentip="引用带编号公式" supertip="从当前文档的带编号公式中选择目标，并插入可自动更新的 Word REF 字段。" imageMso="HyperlinkInsert" onAction="OnInsertEquationReference" />
-          <button id="VisualTeX.WordVsto.ExportPicture" label="导出所选为图片" imageMso="PictureInsertFromFile" onAction="OnExportSelectedAsPicture" />
+          <box id="VisualTeX.WordVsto.ConversionBox" boxStyle="vertical">
+            <button id="VisualTeX.WordVsto.ConvertSelected" label="转为原生 OLE" screentip="转为可嵌入编辑的原生 OLE" supertip="转换后对象随 Word 文档保存，并可通过 VisualTeX 双击重新编辑。" tag="convertToOle" getImage="GetRibbonImage" onAction="OnConvertSelected" />
+            <button id="VisualTeX.WordVsto.ConvertSelectedToOmml" label="转为 Word OMML" screentip="转为 Word 原生公式" supertip="将所选 VisualTeX 公式转换为 Word 原生 OMML；可在 Word 中直接编辑，也可继续用 VisualTeX 编辑。" tag="convertToOmml" getImage="GetRibbonImage" onAction="OnConvertSelectedToOmml" />
+            <button id="VisualTeX.WordVsto.ExportPicture" label="导出所选为图片" imageMso="PictureInsertFromFile" onAction="OnExportSelectedAsPicture" />
+          </box>
+          <box id="VisualTeX.WordVsto.NumberingBox" boxStyle="vertical">
+            <button id="VisualTeX.WordVsto.UpdateNumbers" label="更新公式编号" tag="updateNumbers" getImage="GetRibbonImage" onAction="OnUpdateEquationNumbers" />
+            <menu id="VisualTeX.WordVsto.NumberFormat" label="编号格式" screentip="设置当前文档的公式编号格式" supertip="选择后立即更新当前文档已有的 VisualTeX 公式编号，并应用于后续新插入的带编号公式。">
+              <toggleButton id="VisualTeX.WordVsto.NumberFormatContinuous" label="全文连续编号（1）" tag="continuous" getPressed="GetEquationNumberFormatPressed" onAction="OnEquationNumberFormatChanged" />
+              <toggleButton id="VisualTeX.WordVsto.NumberFormatHeading1Dot" label="按章编号（1.1）" tag="heading1-dot" getPressed="GetEquationNumberFormatPressed" onAction="OnEquationNumberFormatChanged" />
+              <toggleButton id="VisualTeX.WordVsto.NumberFormatHeading1Dash" label="按章编号（1-1）" tag="heading1-dash" getPressed="GetEquationNumberFormatPressed" onAction="OnEquationNumberFormatChanged" />
+              <toggleButton id="VisualTeX.WordVsto.NumberFormatHeading2Dot" label="按节编号（1.1.1）" tag="heading2-dot" getPressed="GetEquationNumberFormatPressed" onAction="OnEquationNumberFormatChanged" />
+              <toggleButton id="VisualTeX.WordVsto.NumberFormatHeading2Dash" label="按节编号（1.1-1）" tag="heading2-dash" getPressed="GetEquationNumberFormatPressed" onAction="OnEquationNumberFormatChanged" />
+            </menu>
+            <button id="VisualTeX.WordVsto.InsertReference" label="插入公式引用" screentip="引用带编号公式" supertip="从当前文档的带编号公式中选择目标，并插入可自动更新的 Word REF 字段。" imageMso="HyperlinkInsert" onAction="OnInsertEquationReference" />
+          </box>
           <button id="VisualTeX.WordVsto.BulkImport" label="批量导入" size="large" screentip="批量导入 LaTeX / Markdown" supertip="将 Markdown 或 LaTeX 文档解析为 Word 原生文字，以及可单独编辑和调整字号的行内/行间公式。" tag="batchImport" getImage="GetRibbonImage" onAction="OnBulkImport" />
         </group>
         <group id="VisualTeX.WordVsto.RedrawGroup" label="LaTeX 重绘">
@@ -919,6 +923,8 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             var fontSizePt = metadata?.FontSizePt
                 ?? await dispatcher.InvokeAsync(service.ReadCurrentTypingFontSize)
                     .ConfigureAwait(false);
+            var effectiveDisplayMode =
+                requestedDisplayMode ?? metadata?.DisplayMode ?? "inline";
             var request = new CreateVstoSessionRequest
             {
                 Mode = mode,
@@ -935,10 +941,12 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 Lines = lines,
                 ActiveLineId = lines.FirstOrDefault()?.Id,
                 CodeFormat = metadata?.CodeFormat ?? "latex",
-                DisplayMode = requestedDisplayMode ?? metadata?.DisplayMode ?? "inline",
+                DisplayMode = effectiveDisplayMode,
                 ObjectMode = targetObjectMode,
-                Numbered = (requestedDisplayMode ?? metadata?.DisplayMode) == "block"
-                    && (metadata?.Numbered ?? false),
+                Numbered = effectiveDisplayMode == "block"
+                    && (mode == "create"
+                        ? WordEquationNumbering.GetDefaultDisplayEquationNumbered()
+                        : metadata?.Numbered ?? false),
                 FontSizePt = FormulaFontSize.Normalize(fontSizePt),
                 OriginalMetadata = metadata,
                 AutoCommitOnClose = true,
@@ -966,6 +974,8 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 session.Id,
                 TimeSpan.FromMinutes(30),
                 cancellationToken).ConfigureAwait(false);
+            if (session.Mode == "create" && session.DisplayMode == "block")
+                WordEquationNumbering.SetDefaultDisplayEquationNumbered(session.Numbered);
             if (session.Status == "cancelled" || session.ExplicitCancel)
             {
                 SetStatus("已取消，Word 文档未修改。");
@@ -2101,8 +2111,8 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             EquationTag = run.DisplayMode == "block" ? run.EquationTag : null,
             FontSizePt = FormulaFontSize.Normalize(fontSizePt),
             RenderFontSizePt = FormulaFontSize.Normalize(fontSizePt),
-            CreatedWithVersion = "1.2.4",
-            UpdatedWithVersion = "1.2.4",
+            CreatedWithVersion = "1.2.5",
+            UpdatedWithVersion = "1.2.5",
             CreatedAt = now,
             UpdatedAt = now,
         };
@@ -2215,6 +2225,10 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         var service = _formulaService;
         if (dispatcher is null || service is null) return;
         var format = EquationNumberFormat.Resolve(requestedFormatId);
+        // A format selection is also the user's default for future documents.
+        // Persist it even when the active document already uses the same format,
+        // because that document-level setting may have come from an older file.
+        WordEquationNumbering.SetDefaultEquationNumberFormatPreference(format.Id);
         try
         {
             var current = await dispatcher.InvokeAsync(service.GetEquationNumberFormatId)

@@ -90,7 +90,16 @@ const server = createServer(async (request, response) => {
       return;
     }
     if (url.pathname === "/api/v1/preferences") {
-      writeJson(response, 200, { powerpointDefaultFontSizePt: 28 });
+      writeJson(response, 200, {
+        powerpointDefaultFontSizePt: 28,
+        editorPreferences: {
+          settings: {
+            sourceOpen: false,
+            classicTileWidth: 520,
+            classicDockHeight: 420,
+          },
+        },
+      });
       return;
     }
     if (url.pathname === `/api/v1/sessions/${sessionId}`) {
@@ -279,6 +288,14 @@ async function clickSelectorWithPointer(client, selector) {
     })()`.replace("__SELECTOR__", selector),
     `pointer target ${selector}`,
   );
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: point.x,
+    y: point.y,
+    button: "none",
+    buttons: 0,
+  });
+  await sleep(30);
   await client.send("Input.dispatchMouseEvent", {
     type: "mousePressed",
     x: point.x,
@@ -598,6 +615,244 @@ async function main() {
       "Word autosave should include selected font size",
     );
 
+    const officeControlBarState = await waitForEvaluation(
+      client,
+      `(() => {
+        const bar = document.querySelector('.editor-pane-header.is-office-editor-header');
+        const tileTabs = document.querySelector('.classic-tile-toolbar .formula-tile-tabs');
+        const cancel = bar?.querySelector('.office-inline-cancel');
+        const primary = bar?.querySelector('.office-inline-primary');
+        const size = bar?.querySelector('[data-office-font-size]');
+        const display = bar?.querySelector('.office-display-mode-setting');
+        const canvasTools = bar?.querySelector('.canvas-tool-group');
+        const rects = [cancel, primary, size, display]
+          .filter((element) => element instanceof HTMLElement)
+          .map((element) => element.getBoundingClientRect());
+        const centers = rects.map((rect) => rect.top + rect.height / 2);
+        const sameRow = centers.length === 4 &&
+          Math.max(...centers) - Math.min(...centers) <= 8;
+        const barRect = bar?.getBoundingClientRect();
+        const tileRect = tileTabs?.getBoundingClientRect();
+        const aboveTiles = Boolean(
+          barRect && tileRect && barRect.bottom <= tileRect.top + 1,
+        );
+        const text = bar?.textContent ?? '';
+        const paneHeaderVisible = bar
+          ? getComputedStyle(bar).display !== 'none'
+          : false;
+        return {
+          ready: Boolean(
+            bar &&
+            tileTabs &&
+            cancel &&
+            primary &&
+            size &&
+            display &&
+            canvasTools &&
+            sameRow &&
+            aboveTiles &&
+            paneHeaderVisible &&
+            !text.includes('VisualTeX') &&
+            !text.includes('Microsoft Word') &&
+            !text.includes('新建 Office 公式') &&
+            !text.includes('编辑所选公式')
+          ),
+          sameRow,
+          aboveTiles,
+          paneHeaderVisible,
+          barHeight: barRect?.height ?? 0,
+          barBottom: barRect?.bottom ?? 0,
+          tileTop: tileRect?.top ?? 0,
+          text,
+        };
+      })()`,
+      "Office editor header above formula tile tabs",
+    );
+    assert.equal(officeControlBarState.sameRow, true);
+    assert.equal(officeControlBarState.aboveTiles, true);
+    assert.equal(officeControlBarState.paneHeaderVisible, true);
+
+    await client.evaluate(`(() => {
+      document.querySelector('[data-formula-tile-collapse]')?.click();
+      document.querySelector('[data-classic-bottom-collapse]')?.click();
+      return true;
+    })()`);
+    const collapsedPreferenceState = await waitForEvaluation(
+      client,
+      `(() => ({
+        ready:
+          localStorage.getItem('visualtex-office-editor-tiles-open') === 'false' &&
+          localStorage.getItem('visualtex-office-editor-toolbar-open') === 'false',
+        tiles: localStorage.getItem('visualtex-office-editor-tiles-open'),
+        toolbar: localStorage.getItem('visualtex-office-editor-toolbar-open'),
+      }))()`,
+      "persist collapsed Office editor panels",
+    );
+    assert.equal(collapsedPreferenceState.tiles, 'false');
+    assert.equal(collapsedPreferenceState.toolbar, 'false');
+    await client.evaluate(`location.reload()`);
+    const restoredCollapsedLayout = await waitForEvaluation(
+      client,
+      `(() => ({
+        ready: Boolean(
+          document.querySelector('.editor-pane-header.is-office-editor-header') &&
+          document.querySelector('.classic-tile-expand-button') &&
+          document.querySelector('.classic-bottom-dock.is-collapsed') &&
+          !document.querySelector('.classic-tile-toolbar')
+        ),
+        tileToolbarPresent: Boolean(document.querySelector('.classic-tile-toolbar')),
+        tileExpandPresent: Boolean(document.querySelector('.classic-tile-expand-button')),
+        bottomCollapsed: Boolean(document.querySelector('.classic-bottom-dock.is-collapsed')),
+      }))()`,
+      "restore collapsed Office editor panels after reload",
+    );
+    assert.equal(restoredCollapsedLayout.tileToolbarPresent, false);
+    assert.equal(restoredCollapsedLayout.tileExpandPresent, true);
+    assert.equal(restoredCollapsedLayout.bottomCollapsed, true);
+    await client.evaluate(`(() => {
+      document.querySelector('.classic-tile-expand-button')?.click();
+      document.querySelector('[data-classic-bottom-collapse]')?.click();
+      return true;
+    })()`);
+    await waitForEvaluation(
+      client,
+      `(() => ({
+        ready:
+          localStorage.getItem('visualtex-office-editor-tiles-open') === 'true' &&
+          localStorage.getItem('visualtex-office-editor-toolbar-open') === 'true' &&
+          Boolean(document.querySelector('.classic-tile-toolbar')) &&
+          !document.querySelector('.classic-bottom-dock.is-collapsed'),
+      }))()`,
+      "persist reopened Office editor panels",
+    );
+
+    await client.evaluate(`localStorage.removeItem('visualtex-office-editor-source-open')`);
+    await client.evaluate(`location.reload()`);
+    const defaultOfficeTools = await waitForEvaluation(
+      client,
+      `(() => ({
+        ready: Boolean(document.querySelector('[data-classic-bottom-view="tools"]')),
+        toolsSelected: document.querySelector('[data-classic-bottom-view="tools"]')?.getAttribute('aria-selected') === 'true',
+        sourceSelected: document.querySelector('[data-classic-bottom-view="source"]')?.getAttribute('aria-selected') === 'true',
+      }))()`,
+      "default Office editor to formula tools",
+    );
+    assert.equal(defaultOfficeTools.toolsSelected && !defaultOfficeTools.sourceSelected, true);
+
+    await clickSelectorWithPointer(client, '[data-classic-bottom-view=source]');
+    await sleep(900);
+    const stableSourceTab = await client.evaluate(`(() => {
+      const source = document.querySelector('[data-classic-bottom-view="source"]');
+      const tools = document.querySelector('[data-classic-bottom-view="tools"]');
+      const dock = document.querySelector('.classic-bottom-dock');
+      return {
+        sourceSelected: source?.getAttribute('aria-selected') === 'true',
+        toolsSelected: tools?.getAttribute('aria-selected') === 'true',
+        sourcePanel: dock?.classList.contains('is-source-panel') === true,
+        preference: localStorage.getItem('visualtex-office-editor-source-open'),
+      };
+    })()`);
+    assert.equal(
+      stableSourceTab.sourceSelected && !stableSourceTab.toolsSelected && stableSourceTab.sourcePanel,
+      true,
+      'Office Formula tools / LaTeX source tab must remain on the user-selected source view beyond the 500ms companion preference poll',
+    );
+    assert.equal(stableSourceTab.preference, 'true');
+    await client.evaluate(`location.reload()`);
+    const restoredOfficeSource = await waitForEvaluation(
+      client,
+      `(() => ({
+        ready: Boolean(document.querySelector('[data-classic-bottom-view="source"]')),
+        sourceSelected: document.querySelector('[data-classic-bottom-view="source"]')?.getAttribute('aria-selected') === 'true',
+      }))()`,
+      "restore Office source tab after reload",
+    );
+    assert.equal(restoredOfficeSource.sourceSelected, true);
+    await clickSelectorWithPointer(client, '[data-classic-bottom-view=tools]');
+    await sleep(120);
+    assert.equal(
+      await client.evaluate(`localStorage.getItem('visualtex-office-editor-source-open')`),
+      'false',
+    );
+    await client.evaluate(`location.reload()`);
+    const restoredOfficeTools = await waitForEvaluation(
+      client,
+      `(() => ({
+        ready: Boolean(document.querySelector('[data-classic-bottom-view="tools"]')),
+        toolsSelected: document.querySelector('[data-classic-bottom-view="tools"]')?.getAttribute('aria-selected') === 'true',
+      }))()`,
+      "restore Office formula-tools tab after reload",
+    );
+    assert.equal(restoredOfficeTools.toolsSelected, true);
+
+    const resizedLayoutPreference = await client.evaluate(`(() => {
+      const tile = document.querySelector('.classic-tile-resizer');
+      const dock = document.querySelector('.classic-dock-resizer');
+      if (!(tile instanceof HTMLElement) || !(dock instanceof HTMLElement)) return null;
+      const beforeTile = Number(tile.getAttribute('aria-valuenow'));
+      const beforeDock = Number(dock.getAttribute('aria-valuenow'));
+      tile.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'ArrowLeft', bubbles: true, cancelable: true,
+      }));
+      dock.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'ArrowUp', bubbles: true, cancelable: true,
+      }));
+      return { beforeTile, beforeDock };
+    })()`);
+    assert.ok(resizedLayoutPreference);
+    const persistedPanelSizes = await waitForEvaluation(
+      client,
+      `(() => {
+        const tile = Number(localStorage.getItem('visualtex-classic-tile-width'));
+        const dock = Number(localStorage.getItem('visualtex-classic-dock-height'));
+        return {
+          ready:
+            Number.isFinite(tile) &&
+            Number.isFinite(dock) &&
+            tile > ${resizedLayoutPreference.beforeTile} &&
+            dock > ${resizedLayoutPreference.beforeDock},
+          tile,
+          dock,
+        };
+      })()`,
+      "persist resized Office editor panels",
+    );
+    await sleep(900);
+    const stablePanelSizes = await client.evaluate(`(() => {
+      const tile = Number(document.querySelector('.classic-tile-resizer')?.getAttribute('aria-valuenow'));
+      const dock = Number(document.querySelector('.classic-dock-resizer')?.getAttribute('aria-valuenow'));
+      return { tile, dock };
+    })()`);
+    assert.ok(
+      Math.abs(stablePanelSizes.tile - persistedPanelSizes.tile) < 1 &&
+        Math.abs(stablePanelSizes.dock - persistedPanelSizes.dock) < 1,
+      `Office panel sizes were overwritten by companion polling: ${JSON.stringify({ persistedPanelSizes, stablePanelSizes })}`,
+    );
+    await client.evaluate(`location.reload()`);
+    const restoredPanelSizes = await waitForEvaluation(
+      client,
+      `(() => {
+        const workspace = document.querySelector('.workspace.is-classic-layout');
+        const body = document.querySelector('.classic-editor-pane-body');
+        const tile = Number.parseFloat(
+          workspace?.style.getPropertyValue('--classic-tile-width') || '0',
+        );
+        const dock = Number.parseFloat(
+          body?.style.getPropertyValue('--classic-dock-height') || '0',
+        );
+        return {
+          ready:
+            Math.abs(tile - ${persistedPanelSizes.tile}) < 1 &&
+            Math.abs(dock - ${persistedPanelSizes.dock}) < 1,
+          tile,
+          dock,
+        };
+      })()`,
+      "restore resized Office editor panels after reload",
+    );
+    assert.ok(Math.abs(restoredPanelSizes.tile - persistedPanelSizes.tile) < 1);
+    assert.ok(Math.abs(restoredPanelSizes.dock - persistedPanelSizes.dock) < 1);
+
     const commonBefore = await waitForEvaluation(
       client,
       `(() => {
@@ -610,8 +865,49 @@ async function main() {
           commonTab.click();
         }
         const buttons = [...document.querySelectorAll(
-          '.template-strip[data-active-category="common"] > [data-command-id]',
+          '[data-toolbar-category-section="common"] > [data-command-id]',
         )];
+        const visibility = buttons.map((button) => {
+          const host = button.querySelector('.math-preview');
+          const fit = button.querySelector('.math-preview-fit-content');
+          const latex = button.querySelector('.ML__latex');
+          const hostRect = host?.getBoundingClientRect();
+          const fitRect = fit?.getBoundingClientRect();
+          const latexRect = latex?.getBoundingClientRect();
+          const hostStyle = host ? getComputedStyle(host) : null;
+          const fitStyle = fit ? getComputedStyle(fit) : null;
+          const latexStyle = latex ? getComputedStyle(latex) : null;
+          return {
+            id: button.dataset.commandId ?? '',
+            hostWidth: hostRect?.width ?? 0,
+            hostHeight: hostRect?.height ?? 0,
+            fitWidth: fitRect?.width ?? 0,
+            fitHeight: fitRect?.height ?? 0,
+            latexWidth: latexRect?.width ?? 0,
+            latexHeight: latexRect?.height ?? 0,
+            hostDisplay: hostStyle?.display ?? '',
+            hostVisibility: hostStyle?.visibility ?? '',
+            hostOpacity: hostStyle?.opacity ?? '',
+            fitDisplay: fitStyle?.display ?? '',
+            latexDisplay: latexStyle?.display ?? '',
+            latexVisibility: latexStyle?.visibility ?? '',
+            latexOpacity: latexStyle?.opacity ?? '',
+            latexColor: latexStyle?.color ?? '',
+          };
+        });
+        const invalid = visibility.filter((item) =>
+          item.hostWidth <= 0 ||
+          item.hostHeight <= 0 ||
+          item.latexWidth <= 0 ||
+          item.latexHeight <= 0 ||
+          item.hostDisplay === 'none' ||
+          item.hostVisibility === 'hidden' ||
+          Number(item.hostOpacity) === 0 ||
+          item.latexDisplay === 'none' ||
+          item.latexVisibility === 'hidden' ||
+          Number(item.latexOpacity) === 0 ||
+          item.latexColor === 'rgba(0, 0, 0, 0)'
+        );
         return {
           ready:
             buttons.length === 45 &&
@@ -620,9 +916,12 @@ async function main() {
             buttons.some((button) => button.dataset.commandId === 'times') &&
             buttons.some((button) => button.dataset.commandId === 'div') &&
             !buttons.some((button) => button.dataset.commandId === 'notin') &&
-            !buttons.some((button) => button.dataset.commandId === 'leftarrow'),
+            !buttons.some((button) => button.dataset.commandId === 'leftarrow') &&
+            invalid.length === 0,
           count: buttons.length,
           ids: buttons.map((button) => button.dataset.commandId ?? ''),
+          invalid,
+          firstVisual: visibility[0] ?? null,
         };
       })()`,
       "fixed 45-item common toolbar",
@@ -634,6 +933,57 @@ async function main() {
     assert.ok(commonBefore.ids.includes("div"));
     assert.ok(!commonBefore.ids.includes("notin"));
     assert.ok(!commonBefore.ids.includes("leftarrow"));
+
+    const toolbarPreviewContainment = await waitForEvaluation(
+      client,
+      `(() => {
+        const buttons = [...document.querySelectorAll('.formula-toolbar .template-button[data-command-id]')]
+          .filter((button) => {
+            const rect = button.getBoundingClientRect();
+            const style = getComputedStyle(button);
+            return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+          });
+        const tolerance = 1.5;
+        const details = buttons.map((button) => {
+          const buttonRect = button.getBoundingClientRect();
+          const fit = button.querySelector('.math-preview-fit-content');
+          const latex = button.querySelector('.ML__latex');
+          const fitRect = fit?.getBoundingClientRect();
+          const latexRect = latex?.getBoundingClientRect();
+          const fits = Boolean(
+            fitRect &&
+            fitRect.left >= buttonRect.left - tolerance &&
+            fitRect.right <= buttonRect.right + tolerance &&
+            fitRect.top >= buttonRect.top - tolerance &&
+            fitRect.bottom <= buttonRect.bottom + tolerance,
+          );
+          const latexFits = Boolean(
+            latexRect &&
+            latexRect.left >= buttonRect.left - tolerance &&
+            latexRect.right <= buttonRect.right + tolerance &&
+            latexRect.top >= buttonRect.top - tolerance &&
+            latexRect.bottom <= buttonRect.bottom + tolerance,
+          );
+          return {
+            id: button.dataset.commandId ?? '',
+            fits,
+            latexFits,
+            button: { left: buttonRect.left, right: buttonRect.right, top: buttonRect.top, bottom: buttonRect.bottom },
+            fit: fitRect ? { left: fitRect.left, right: fitRect.right, top: fitRect.top, bottom: fitRect.bottom } : null,
+            latex: latexRect ? { left: latexRect.left, right: latexRect.right, top: latexRect.top, bottom: latexRect.bottom } : null,
+            scale: fit ? getComputedStyle(fit).transform : '',
+          };
+        });
+        const overflow = details.filter((item) => !item.fits || !item.latexFits);
+        return {
+          ready: buttons.length > 20 && overflow.length === 0,
+          count: buttons.length,
+          overflow,
+        };
+      })()`,
+      "Office formula toolbar previews contained by their tiles",
+    );
+    assert.equal(toolbarPreviewContainment.overflow.length, 0, JSON.stringify(toolbarPreviewContainment.overflow));
 
     const arithmeticOperatorState = await waitForEvaluation(
       client,
@@ -721,7 +1071,7 @@ async function main() {
       client,
       `(() => {
         const buttons = [...document.querySelectorAll(
-          '.template-strip[data-active-category="common"] > [data-command-id]',
+          '[data-toolbar-category-section="common"] > [data-command-id]',
         )];
         const stored = JSON.parse(
           localStorage.getItem('visualtex-common-toolbar-command-ids-v2') || '[]',
@@ -750,14 +1100,14 @@ async function main() {
     assert.equal(commonAfter.stored.length, 45);
     await client.evaluate(`(() => {
       document.querySelector(
-        '.template-strip[data-active-category="common"] [data-command-id="sqrt"]',
+        '[data-toolbar-category-section="common"] [data-command-id="sqrt"]',
       )?.click();
       return true;
     })()`);
     await sleep(100);
     const commonAfterUse = await client.evaluate(`(() => {
       const buttons = [...document.querySelectorAll(
-        '.template-strip[data-active-category="common"] > [data-command-id]',
+        '[data-toolbar-category-section="common"] > [data-command-id]',
       )];
       return {
         count: buttons.length,
@@ -780,39 +1130,108 @@ async function main() {
         const background = document.querySelector(
           '[data-formula-selection-background]',
         );
-        const titleGroup = document.querySelector('.pane-title-group');
-        const canvasTools = document.querySelector('.canvas-tool-group');
-        const titleBounds = titleGroup?.getBoundingClientRect();
-        const canvasBounds = canvasTools?.getBoundingClientRect();
-        const noOverlap = Boolean(
-          titleBounds &&
-          canvasBounds &&
-          titleBounds.right <= canvasBounds.left + 1,
+        const formattingMount = document.querySelector('.classic-bottom-formatting-slot');
+        const bottomTabs = document.querySelector('.classic-bottom-tab-group');
+        const formattingBounds = formattingMount?.getBoundingClientRect();
+        const bottomTabBounds = bottomTabs?.getBoundingClientRect();
+        const formattingAtFarLeft = Boolean(
+          formattingBounds &&
+          bottomTabBounds &&
+          formattingBounds.right <= bottomTabBounds.left + 2,
         );
-        const noHorizontalOverflow =
-          document.documentElement.scrollWidth <=
-          document.documentElement.clientWidth + 2;
         return {
           ready: Boolean(
             selectionBold &&
             selectionItalic &&
             color &&
             background &&
-            noOverlap &&
-            noHorizontalOverflow
+            formattingMount &&
+            bottomTabs &&
+            formattingAtFarLeft
           ),
           persistentControlsAbsent:
             !document.querySelector('[data-formula-typing-bold]') &&
             !document.querySelector('[data-formula-typing-italic]'),
-          noOverlap,
-          noHorizontalOverflow,
-          titleRight: titleBounds?.right ?? 0,
-          canvasLeft: canvasBounds?.left ?? 0,
+          formattingAtFarLeft,
+          formattingLeft: formattingBounds?.left ?? 0,
+          formattingRight: formattingBounds?.right ?? 0,
+          bottomTabsLeft: bottomTabBounds?.left ?? 0,
         };
       })()`,
-      "Office formula formatting controls",
+      "Office formatting controls at the left of Formula tools row",
     );
     assert.equal(formattingControls.persistentControlsAbsent, true);
+    assert.equal(formattingControls.formattingAtFarLeft, true);
+
+    await client.send('Emulation.setDeviceMetricsOverride', {
+      width: 500,
+      height: 760,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    await sleep(120);
+    await client.evaluate(`(() => {
+      const field = document.querySelector('math-field');
+      if (!field) return false;
+      field.setValue('abc', {
+        mode: 'math',
+        format: 'latex',
+        insertionMode: 'replaceAll',
+        selectionMode: 'after',
+      });
+      field.focus();
+      field.selection = { ranges: [[0, field.lastOffset]], direction: 'forward' };
+      return true;
+    })()`);
+    await clickSelectorWithPointer(client, '[data-formula-selection-color]');
+    const colorPopoverLayout = await waitForEvaluation(
+      client,
+      `(() => {
+        const popover = document.querySelector('[data-formula-color-popover="color"]');
+        if (!(popover instanceof HTMLElement)) return { ready: false };
+        const rect = popover.getBoundingClientRect();
+        const dock = document.querySelector('.classic-bottom-dock');
+        const body = document.querySelector('.classic-editor-pane-body');
+        const tabs = document.querySelector('.classic-bottom-tabs');
+        const visible =
+          rect.left >= -1 &&
+          rect.top >= -1 &&
+          rect.right <= window.innerWidth + 1 &&
+          rect.bottom <= window.innerHeight + 1;
+        return {
+          ready: visible,
+          visible,
+          rect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom },
+          dockOverflow: dock ? getComputedStyle(dock).overflow : '',
+          bodyOverflow: body ? getComputedStyle(body).overflow : '',
+          tabsOverflow: tabs ? getComputedStyle(tabs).overflow : '',
+        };
+      })()`,
+      "unclipped Office formula color popover",
+    );
+    assert.equal(colorPopoverLayout.visible, true);
+    assert.equal(colorPopoverLayout.dockOverflow, 'visible');
+    assert.equal(colorPopoverLayout.bodyOverflow, 'visible');
+    assert.equal(colorPopoverLayout.tabsOverflow, 'visible');
+    await client.evaluate(`(() => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      return true;
+    })()`);
+    await client.send('Emulation.clearDeviceMetricsOverride');
+    if (process.argv.includes('--layout-only')) {
+      console.log(JSON.stringify({
+        officeControlBarState,
+        restoredCollapsedLayout,
+        persistedPanelSizes,
+        restoredPanelSizes,
+        commonToolbarCount: commonBefore.count,
+        firstToolbarVisual: commonBefore.firstVisual,
+        formattingControls,
+        colorPopoverLayout,
+      }, null, 2));
+      console.log('Office editor layout, persistence, toolbar rendering and color-popover regression passed');
+      return;
+    }
     const noSelectionActions = await client.evaluate(`(() => {
       const field = document.querySelector('math-field');
       if (!field) return null;
@@ -1123,7 +1542,7 @@ async function main() {
     );
 
     const shortcutMetadata = await client.evaluate(`(() => {
-      const primary = document.querySelector('.office-workspace-actions .primary-button');
+      const primary = document.querySelector('.office-inline-primary');
       window.__visualtexLateSaveShortcutCount = 0;
       window.addEventListener('keydown', (event) => {
         if (event.ctrlKey && (event.code === 'KeyS' || event.key.toLowerCase() === 's')) {
@@ -1133,16 +1552,55 @@ async function main() {
       return {
         ariaKeyShortcuts: primary?.getAttribute('aria-keyshortcuts') ?? '',
         title: primary?.getAttribute('title') ?? '',
-        helperText: document.querySelector('.office-workspace-actions span')?.textContent ?? '',
+        legacyHelperVisible:
+          (document.querySelector('.editor-pane-header.is-office-editor-header')?.textContent ?? '')
+            .includes('点击完成、按 Ctrl+S') ||
+          (document.querySelector('.editor-pane-header.is-office-editor-header')?.textContent ?? '')
+            .includes('Finish, press Ctrl+S'),
       };
     })()`);
     assert.equal(shortcutMetadata.ariaKeyShortcuts, "Control+S");
     assert.ok(shortcutMetadata.title.includes("Ctrl+S"));
-    assert.ok(shortcutMetadata.helperText.includes("Ctrl+S"));
+    assert.equal(shortcutMetadata.legacyHelperVisible, false);
 
+    const committingBeforeShortcut = updates.filter(
+      (update) => update.status === "committing",
+    ).length;
     const shiftSave = await dispatchOfficeShortcut(client, { shiftKey: true });
-    assert.equal(shiftSave.defaultPrevented, false);
+    // Ctrl+Shift+S is now a shipped formula shortcut (sum). The Office apply
+    // filter must still ignore it, while MathEditor is allowed to consume it.
+    assert.equal(shiftSave.defaultPrevented, true);
+    assert.equal(shiftSave.dispatchResult, false);
     assert.equal(shiftSave.lateCaptureCount, 1);
+    await sleep(120);
+    assert.equal(
+      updates.filter((update) => update.status === "committing").length,
+      committingBeforeShortcut,
+      "Ctrl+Shift+S must not start an Office commit",
+    );
+    // Ctrl+Shift+S legitimately inserts the shipped sum template. Restore a
+    // complete formula before testing the independent Office Ctrl+S apply path;
+    // otherwise its structural placeholders must (correctly) block commit.
+    await client.evaluate(`(() => {
+      const field = document.querySelector('math-field');
+      if (!field) return false;
+      field.setValue('abcde', {
+        mode: 'math',
+        format: 'latex',
+        insertionMode: 'replaceAll',
+        selectionMode: 'after',
+      });
+      field.focus();
+      return true;
+    })()`);
+    await waitForEvaluation(
+      client,
+      `(() => ({
+        ready: document.querySelector('math-field')?.value === 'abcde',
+      }))()`,
+      "restore valid formula after Ctrl+Shift+S formula shortcut",
+    );
+    await sleep(160);
 
     const altSave = await dispatchOfficeShortcut(client, { altKey: true });
     assert.equal(altSave.defaultPrevented, false);
@@ -1164,8 +1622,9 @@ async function main() {
     assert.equal(repeatedSave.dispatchResult, false);
     assert.equal(repeatedSave.lateCaptureCount, 3);
     await sleep(150);
-    assert.ok(
-      !updates.some((update) => update.status === "committing"),
+    assert.equal(
+      updates.filter((update) => update.status === "committing").length,
+      committingBeforeShortcut,
       "Repeated Ctrl+S must be swallowed without starting a commit",
     );
 
@@ -1186,8 +1645,8 @@ async function main() {
     assert.equal(closeRequests, 1, "Ctrl+S should close the Office editor after applying");
     assert.equal(
       updates.filter((update) => update.status === "committing").length,
-      1,
-      "One Ctrl+S press must enqueue exactly one commit",
+      committingBeforeShortcut + 1,
+      "One Ctrl+S press must enqueue exactly one additional commit",
     );
 
     // Reproduce the hidden-converter race directly. The previous PowerPoint

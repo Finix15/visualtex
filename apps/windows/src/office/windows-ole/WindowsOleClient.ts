@@ -5,6 +5,7 @@ import {
   type OfficeBridgeRequest,
   type OfficeBridgeResponse,
 } from "../shared/protocol";
+import { createUuid } from "../../runtime/browserCompatibility";
 import { OfficeIntegrationError, withTimeout } from "../shared/errors";
 
 function installToken() {
@@ -24,7 +25,7 @@ export async function callWindowsOle<TResult>(
 ): Promise<TResult> {
   const request: OfficeBridgeRequest = {
     protocolVersion: OFFICE_BRIDGE_PROTOCOL_VERSION,
-    id: crypto.randomUUID(),
+    id: createUuid(),
     method,
     params,
   };

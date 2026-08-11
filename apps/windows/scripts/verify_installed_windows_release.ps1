@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$ExpectedAppVersion = "1.2.4",
+    [string]$ExpectedAppVersion = "1.2.5",
     [string]$ExpectedOfficeMsiVersion = "1.0.41.0"
 )
 

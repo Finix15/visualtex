@@ -216,6 +216,189 @@ public sealed class WordOmmlTests
     }
 
     [Fact]
+    public void CasesMathMlBecomesOneSidedNativeDelimiterThatGrowsWithItsTable()
+    {
+        const string mathMl =
+            "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">"
+            + "<mi>f</mi><mo stretchy=\"false\">(</mo><mi>x</mi><mo stretchy=\"false\">)</mo><mo>=</mo>"
+            + "<mrow data-mjx-texclass=\"INNER\"><mo data-mjx-texclass=\"OPEN\">{</mo>"
+            + "<mtable columnalign=\"left left\" columnspacing=\"1em\" rowspacing=\".2em\">"
+            + "<mtr><mtd><msup><mi>x</mi><mn>2</mn></msup><mo>,</mo></mtd>"
+            + "<mtd><mi>x</mi><mo>&gt;</mo><mn>0</mn></mtd></mtr>"
+            + "<mtr><mtd><mn>0</mn><mo>,</mo></mtd>"
+            + "<mtd><mi>x</mi><mo>=</mo><mn>0</mn></mtd></mtr>"
+            + "</mtable><mo data-mjx-texclass=\"CLOSE\" fence=\"true\" stretchy=\"true\" symmetric=\"true\"></mo>"
+            + "</mrow></math>";
+
+        var omml = WordOmmlConverter.TransformMathMlToOmml(mathMl);
+        var document = XDocument.Parse(omml);
+        XNamespace math = MathNamespace;
+        var delimiter = document.Descendants(math + "d").SingleOrDefault();
+
+        Assert.NotNull(delimiter);
+        Assert.Equal(
+            "{",
+            delimiter!.Element(math + "dPr")?
+                .Element(math + "begChr")?
+                .Attribute(math + "val")?
+                .Value);
+        Assert.Equal(
+            string.Empty,
+            delimiter.Element(math + "dPr")?
+                .Element(math + "endChr")?
+                .Attribute(math + "val")?
+                .Value ?? string.Empty);
+        Assert.NotEqual(
+            "0",
+            delimiter.Element(math + "dPr")?
+                .Element(math + "grow")?
+                .Attribute(math + "val")?
+                .Value);
+        var matrix = delimiter.Descendants(math + "m").SingleOrDefault();
+        Assert.NotNull(matrix);
+        Assert.Equal(2, matrix!.Elements(math + "mr").Count());
+        Assert.All(matrix.Elements(math + "mr"), row =>
+            Assert.Equal(2, row.Elements(math + "e").Count()));
+        var alignments = matrix
+            .Element(math + "mPr")?
+            .Element(math + "mcs")?
+            .Elements(math + "mc")
+            .Select(column => column
+                .Element(math + "mcPr")?
+                .Element(math + "mcJc")?
+                .Attribute(math + "val")?
+                .Value)
+            .ToArray();
+        Assert.Equal(new[] { "left", "left" }, alignments);
+    }
+
+    [Fact]
+    public void LeftOnlyBraceAroundOneColumnTableBecomesNativeGrowingDelimiter()
+    {
+        const string mathMl =
+            "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">"
+            + "<mrow data-mjx-texclass=\"INNER\"><mo data-mjx-texclass=\"OPEN\">{</mo>"
+            + "<mtable columnalign=\"left\"><mtr><mtd><mi>a</mi></mtd></mtr>"
+            + "<mtr><mtd><mi>b</mi></mtd></mtr></mtable>"
+            + "<mo data-mjx-texclass=\"CLOSE\" fence=\"true\" stretchy=\"true\" symmetric=\"true\"></mo>"
+            + "</mrow></math>";
+
+        var omml = WordOmmlConverter.TransformMathMlToOmml(mathMl);
+        var document = XDocument.Parse(omml);
+        XNamespace math = MathNamespace;
+        var delimiter = document.Descendants(math + "d").SingleOrDefault();
+
+        Assert.NotNull(delimiter);
+        Assert.Equal(
+            "{",
+            delimiter!.Element(math + "dPr")?
+                .Element(math + "begChr")?
+                .Attribute(math + "val")?
+                .Value);
+        var visibleText = string.Concat(
+            delimiter.Descendants(math + "t").Select(text => text.Value));
+        Assert.Contains("a", visibleText, StringComparison.Ordinal);
+        Assert.Contains("b", visibleText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RightOnlyBraceAroundTableBecomesNativeGrowingDelimiter()
+    {
+        const string mathMl =
+            "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">"
+            + "<mrow data-mjx-texclass=\"INNER\">"
+            + "<mo data-mjx-texclass=\"OPEN\" fence=\"true\" stretchy=\"true\" symmetric=\"true\"></mo>"
+            + "<mtable columnalign=\"left\"><mtr><mtd><mi>a</mi></mtd></mtr>"
+            + "<mtr><mtd><mi>b</mi></mtd></mtr></mtable>"
+            + "<mo data-mjx-texclass=\"CLOSE\">}</mo></mrow></math>";
+
+        var omml = WordOmmlConverter.TransformMathMlToOmml(mathMl);
+        var document = XDocument.Parse(omml);
+        XNamespace math = MathNamespace;
+        var delimiter = document.Descendants(math + "d").SingleOrDefault();
+
+        Assert.NotNull(delimiter);
+        Assert.Equal(
+            "}",
+            delimiter!.Element(math + "dPr")?
+                .Element(math + "endChr")?
+                .Attribute(math + "val")?
+                .Value);
+        var visibleText = string.Concat(
+            delimiter.Descendants(math + "t").Select(text => text.Value));
+        Assert.Contains("a", visibleText, StringComparison.Ordinal);
+        Assert.Contains("b", visibleText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AngleFencedTableBecomesNativeGrowingDelimiter()
+    {
+        const string mathMl =
+            "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">"
+            + "<mrow data-mjx-texclass=\"INNER\"><mo data-mjx-texclass=\"OPEN\">&#x27E8;</mo>"
+            + "<mtable columnalign=\"center center\"><mtr><mtd><mi>a</mi></mtd><mtd><mi>b</mi></mtd></mtr>"
+            + "<mtr><mtd><mi>c</mi></mtd><mtd><mi>d</mi></mtd></mtr></mtable>"
+            + "<mo data-mjx-texclass=\"CLOSE\">&#x27E9;</mo></mrow></math>";
+
+        var omml = WordOmmlConverter.TransformMathMlToOmml(mathMl);
+        var document = XDocument.Parse(omml);
+        XNamespace math = MathNamespace;
+        var delimiter = document.Descendants(math + "d").SingleOrDefault();
+
+        Assert.NotNull(delimiter);
+        Assert.Equal("⟨", delimiter!.Element(math + "dPr")?.Element(math + "begChr")?.Attribute(math + "val")?.Value);
+        Assert.Equal("⟩", delimiter.Element(math + "dPr")?.Element(math + "endChr")?.Attribute(math + "val")?.Value);
+        Assert.Equal(2, delimiter.Descendants(math + "m").Single().Elements(math + "mr").Count());
+    }
+
+    [Theory]
+    [InlineData("(", ")")]
+    [InlineData("[", "]")]
+    [InlineData("{", "}")]
+    [InlineData("|", "|")]
+    [InlineData("‖", "‖")]
+    [InlineData("⌈", "⌉")]
+    [InlineData("⌊", "⌋")]
+    [InlineData("⟨", "⟩")]
+    public void CommonFencedTablesUseNativeGrowingDelimiters(string open, string close)
+    {
+        var mathMl =
+            "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">"
+            + "<mrow data-mjx-texclass=\"INNER\"><mo data-mjx-texclass=\"OPEN\">"
+            + open + "</mo><mtable columnalign=\"center center\">"
+            + "<mtr><mtd><mi>a</mi></mtd><mtd><mi>b</mi></mtd></mtr>"
+            + "<mtr><mtd><mi>c</mi></mtd><mtd><mi>d</mi></mtd></mtr></mtable>"
+            + "<mo data-mjx-texclass=\"CLOSE\">" + close + "</mo></mrow></math>";
+
+        var omml = WordOmmlConverter.TransformMathMlToOmml(mathMl);
+        var document = XDocument.Parse(omml);
+        XNamespace math = MathNamespace;
+        var delimiter = document.Descendants(math + "d").SingleOrDefault();
+
+        Assert.NotNull(delimiter);
+        var actualOpen = delimiter!.Element(math + "dPr")?
+            .Element(math + "begChr")?
+            .Attribute(math + "val")?
+            .Value ?? "(";
+        var actualClose = delimiter.Element(math + "dPr")?
+            .Element(math + "endChr")?
+            .Attribute(math + "val")?
+            .Value ?? ")";
+        Assert.Equal(open, actualOpen);
+        Assert.Equal(close, actualClose);
+        Assert.NotEqual(
+            "0",
+            delimiter.Element(math + "dPr")?
+                .Element(math + "grow")?
+                .Attribute(math + "val")?
+                .Value);
+        var matrix = delimiter.Descendants(math + "m").SingleOrDefault();
+        Assert.NotNull(matrix);
+        Assert.Equal(2, matrix!.Elements(math + "mr").Count());
+        Assert.All(matrix.Elements(math + "mr"), row => Assert.Equal(2, row.Elements(math + "e").Count()));
+    }
+
+    [Fact]
     public void MatrixPlaceholderVisibilityIsForcedOnBeforeWordInsertion()
     {
         const string omml =

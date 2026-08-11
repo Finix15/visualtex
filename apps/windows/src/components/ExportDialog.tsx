@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import {
+  ClipboardCopy,
   FileCode2,
   FileImage,
   FileText,
@@ -10,8 +11,13 @@ import {
   X,
 } from "lucide-react";
 import { buildMarkdownDocument } from "../export/markdownExport";
-import { latexToSvg, svgToPng } from "../export/runtime";
+import { latexToSvg } from "../export/runtime";
+import {
+  copyFormulaDocumentPngToClipboard,
+  renderFormulaDocumentPng,
+} from "../export/pngClipboard";
 import { isTauriEnvironment } from "../ocr/ocrService";
+import { useEditorStore } from "../stores/editorStore";
 
 export type ExportFormat = "markdown" | "svg" | "png";
 
@@ -100,8 +106,14 @@ export function ExportDialog({
   const [format, setFormat] = useState<ExportFormat>("markdown");
   const [path, setPath] = useState("");
   const [busy, setBusy] = useState(false);
+  const [copyBusy, setCopyBusy] = useState(false);
   const [error, setError] = useState("");
   const isEn = language === "en";
+  const pngExportBackground = useEditorStore(
+    (state) => state.pngExportBackground,
+  );
+  const formulaLetterFont = useEditorStore((state) => state.formulaLetterFont);
+  const formulaChineseFont = useEditorStore((state) => state.formulaChineseFont);
   const definition = EXPORT_FORMATS[format];
   const suggestedFilename = `${safeFilename(title)}.${definition.extension}`;
   const nonEmptyFormulas = useMemo(
@@ -166,7 +178,6 @@ export function ExportDialog({
       targetPath = withExtension(targetPath, definition.extension);
       if (targetPath && targetPath !== path) setPath(targetPath);
 
-      const joinedLatex = nonEmptyFormulas.join("\n");
       let text: string | undefined;
       let base64: string | undefined;
       let browserPayload: string | Blob;
@@ -174,24 +185,25 @@ export function ExportDialog({
       if (format === "markdown") {
         text = buildMarkdownDocument(title, nonEmptyFormulas);
         browserPayload = text;
-      } else {
-        const svg = latexToSvg(joinedLatex, {
+      } else if (format === "svg") {
+        const svg = latexToSvg(nonEmptyFormulas.join("\n"), {
           displayMode: true,
           fontSizePt: 18,
           paddingPx: 18,
           background: "transparent",
+          formulaLetterFont,
+          formulaChineseFont,
         });
-        if (format === "svg") {
-          text = svg.svg;
-          browserPayload = text;
-        } else {
-          const png = await svgToPng(svg, {
-            scale: 3,
-            background: "transparent",
-          });
-          base64 = png.base64;
-          browserPayload = png.blob;
-        }
+        text = svg.svg;
+        browserPayload = text;
+      } else {
+        const png = await renderFormulaDocumentPng(nonEmptyFormulas, {
+          background: pngExportBackground,
+          formulaLetterFont,
+          formulaChineseFont,
+        });
+        base64 = png.base64;
+        browserPayload = png.blob;
       }
 
       if (isTauriEnvironment()) {
@@ -221,6 +233,29 @@ export function ExportDialog({
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const copyPng = async () => {
+    if (!nonEmptyFormulas.length || copyBusy) {
+      if (!nonEmptyFormulas.length) {
+        setError(isEn ? "There is no formula to export." : "没有可导出的公式。");
+      }
+      return;
+    }
+    setCopyBusy(true);
+    setError("");
+    try {
+      await copyFormulaDocumentPngToClipboard(nonEmptyFormulas, {
+        background: pngExportBackground,
+        formulaLetterFont,
+        formulaChineseFont,
+      });
+      onNotify(isEn ? "PNG copied to Clipboard" : "PNG 已复制到剪贴板");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setCopyBusy(false);
     }
   };
 
@@ -279,6 +314,31 @@ export function ExportDialog({
               </button>
             );
           })}
+        </div>
+
+        <div className="export-copy-png-row">
+          <button
+            type="button"
+            className="export-copy-png-button"
+            onClick={() => void copyPng()}
+            disabled={busy || copyBusy}
+            data-copy-png-from-export
+          >
+            {copyBusy ? (
+              <LoaderCircle size={15} className="spin" />
+            ) : (
+              <ClipboardCopy size={15} />
+            )}
+            <span>
+              {copyBusy
+                ? isEn
+                  ? "Copying PNG…"
+                  : "正在复制 PNG…"
+                : isEn
+                  ? "Copy PNG to Clipboard"
+                  : "复制 PNG 到剪贴板"}
+            </span>
+          </button>
         </div>
 
         <label className="export-path-field">

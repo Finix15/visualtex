@@ -1,18 +1,23 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import "mathlive/static.css";
-import "../styles.css";
-import "../styles-macos-main.css";
+import "../math/customSymbolRendering";
+import "../ocr/windowsQuickOcrRuntime";
 import { configureOcrTransport } from "../ocr/ocrService";
 import { desktopOcrTransport } from "../ocr/ocrTransport";
 import { DesktopApp } from "./DesktopApp";
 import { applyDocumentTheme, readSynchronizedTheme } from "../themeSync";
+import { VisualTexErrorBoundary } from "../runtime/VisualTexErrorBoundary";
 
 configureOcrTransport(desktopOcrTransport);
 applyDocumentTheme(readSynchronizedTheme());
 
-createRoot(document.getElementById("root")!).render(
+const root = document.getElementById("root");
+if (!root) throw new Error("Missing VisualTeX application root element.");
+
+createRoot(root).render(
   <StrictMode>
-    <DesktopApp />
+    <VisualTexErrorBoundary>
+      <DesktopApp />
+    </VisualTexErrorBoundary>
   </StrictMode>,
 );

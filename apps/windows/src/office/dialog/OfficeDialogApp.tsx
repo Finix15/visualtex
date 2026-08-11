@@ -1,7 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, Check, LoaderCircle, ScanLine, X } from "lucide-react";
+import { createUuid } from "../../runtime/browserCompatibility";
+import {
+  AlertCircle,
+  Check,
+  LoaderCircle,
+  Redo2,
+  ScanLine,
+  Undo2,
+  X,
+} from "lucide-react";
 import { OcrDialog } from "../../components/OcrDialog";
 import { EditorWorkspace } from "../../workspace/EditorWorkspace";
+import {
+  readWorkspacePanelOpen,
+  writeWorkspacePanelOpen,
+} from "../../workspace/workspacePanelPreferences";
 import {
   historyManager,
   useHistorySnapshot,
@@ -24,12 +37,23 @@ import {
   copyLatex,
   isLatexCodeFormat,
 } from "../../clipboard/LatexCopyService";
-import type { LatexCodeFormat } from "../../types/formula";
+import type {
+  InputBehaviorSettingKey,
+  LatexCodeFormat,
+} from "../../types/formula";
 import type {
   MathEditorHandle,
   MathEditorInsertionTarget,
 } from "../../editor/MathEditor";
 import { readErrorMessage } from "../../errors/readErrorMessage";
+import { normalizeChineseLatex } from "../../editor/normalizeChineseLatex";
+import {
+  DEFAULT_FORMULA_CHINESE_FONT,
+  DEFAULT_FORMULA_LETTER_FONT,
+  type FormulaChineseFont,
+  type FormulaLetterFont,
+} from "../../editor/formulaFontPreferences";
+import { readLocalStorage, writeLocalStorage } from "../../runtime/safeStorage";
 import { latexToMathMl, latexToSvg } from "../../export/latexToSvg";
 import { isIncompleteLatexDraft } from "../../math/latexCompatibility";
 import {
@@ -43,17 +67,25 @@ import {
   type OfficeExportResult,
   type OfficeFormulaSession,
   type OfficeHost,
+  type OfficePreferences,
 } from "../api/sessionClient";
 import { useOfficeSession } from "./useOfficeSession";
 import { attachFormulaEquationTag } from "../shared/formulaEquationTag";
+import {
+  normalizeFormulaEditorDocument,
+  serializeFormulaEditorRenderDocument,
+  type FormulaEditorLine,
+} from "../shared/formulaEditorDocument";
 import { messageOfficeParent } from "./dialogMessages";
 import { registerOfficeApplyShortcut } from "./officeApplyShortcut";
 import {
   applyDocumentTheme,
   normalizeSynchronizedTheme,
+  readPublishedSynchronizedTheme,
   readSynchronizedTheme,
   subscribeSynchronizedTheme,
 } from "../../themeSync";
+import { saveCustomTheme } from "../../themeCustomization";
 import {
   DEFAULT_OCR_MODEL,
   OCR_MODELS,
@@ -62,7 +94,6 @@ import {
   getOcrRuntimeStatus,
   listenOcrRecognitionProgress,
   recognizeFormulaImage,
-  resolveAvailableOcrModel,
   warmupOcrModel,
   type OcrModelName,
 } from "../../ocr/ocrService";
@@ -81,6 +112,8 @@ interface InlineOcrState {
   model: OcrModelName;
 }
 
+const OFFICE_EDITOR_ZOOM_60_MIGRATION_KEY =
+  "visualtex-office-editor-zoom-60-migration-v1";
 const OCR_MODEL_STORAGE_KEY = "visualtex.ocr.model";
 const USE_NATIVE_POWERPOINT_COMMIT =
   document
@@ -145,10 +178,105 @@ function normalizeOfficeCodeFormat(codeFormat: string): LatexCodeFormat {
   return "raw";
 }
 
+function normalizeOfficeFormulaDocument(
+  lines: FormulaEditorLine[],
+  codeFormat: unknown,
+) {
+  return normalizeFormulaEditorDocument(
+    lines,
+    typeof codeFormat === "string" ? normalizeOfficeCodeFormat(codeFormat) : codeFormat,
+  );
+}
+
+function serializeOfficeRenderLatex(
+  lines: FormulaEditorLine[],
+  codeFormat: unknown,
+  displayMode: "inline" | "block",
+  equationTag?: string | null,
+) {
+  const document = normalizeOfficeFormulaDocument(lines, codeFormat);
+  const tag = displayMode === "block" ? equationTag?.trim() : "";
+  if (!tag || document.lines.length === 0) {
+    return serializeFormulaEditorRenderDocument(document);
+  }
+  const taggedLines = document.lines.map((line, index) =>
+    index === document.lines.length - 1
+      ? { ...line, latex: attachFormulaEquationTag(line.latex, tag) }
+      : line,
+  );
+  return serializeFormulaEditorRenderDocument({ ...document, lines: taggedLines });
+}
+
 function normalizeOfficeFontSizePt(value: unknown, fallback: number) {
   const numeric = typeof value === "number" ? value : Number(value);
   const resolved = Number.isFinite(numeric) ? numeric : fallback;
   return Math.round(Math.min(200, Math.max(5, resolved)) * 2) / 2;
+}
+
+function applyOfficeEditorPreferences(
+  preferences: OfficePreferences,
+  applyTheme: (value: unknown) => void,
+  applyEditorLayout: (value: unknown) => void,
+) {
+  const payload = preferences.editorPreferences;
+  if (!payload) return;
+  if (payload.customTheme) saveCustomTheme(payload.customTheme);
+  const settings = payload.settings;
+  if (!settings) return;
+
+  const editor = useEditorStore.getState();
+  if (settings.theme !== undefined) applyTheme(settings.theme);
+  if (settings.editorLayout !== undefined) applyEditorLayout(settings.editorLayout);
+  if (settings.language === "cn" || settings.language === "en") {
+    editor.setLanguage(settings.language);
+  }
+  if (typeof settings.zoom === "number") editor.setZoom(settings.zoom);
+  if (settings.formulaAlignment) {
+    editor.setFormulaAlignment(settings.formulaAlignment);
+  }
+  if (typeof settings.autoPairDelimiters === "boolean") {
+    editor.setAutoPairDelimiters(settings.autoPairDelimiters);
+  }
+  if (typeof settings.showLineNumbers === "boolean") {
+    editor.setShowLineNumbers(settings.showLineNumbers);
+  }
+  if (typeof settings.highlightActiveLine === "boolean") {
+    editor.setHighlightActiveLine(settings.highlightActiveLine);
+  }
+  if (typeof settings.formulaInsetLeft === "number") {
+    editor.setFormulaInsetLeft(settings.formulaInsetLeft);
+  }
+  if (typeof settings.formulaInsetRight === "number") {
+    editor.setFormulaInsetRight(settings.formulaInsetRight);
+  }
+  if (typeof settings.formulaToolButtonSize === "number") {
+    editor.setFormulaToolButtonSize(settings.formulaToolButtonSize);
+  }
+  if (typeof settings.formulaToolButtonPadding === "number") {
+    editor.setFormulaToolButtonPadding(settings.formulaToolButtonPadding);
+  }
+  if (typeof settings.formulaRowVerticalInset === "number") {
+    editor.setFormulaRowVerticalInset(settings.formulaRowVerticalInset);
+  }
+  if (settings.pngExportBackground !== undefined) {
+    editor.setPngExportBackground(settings.pngExportBackground);
+  }
+  if (settings.formulaLetterFont !== undefined) {
+    editor.setFormulaLetterFont(settings.formulaLetterFont);
+  }
+  if (settings.formulaChineseFont !== undefined) {
+    editor.setFormulaChineseFont(settings.formulaChineseFont);
+  }
+  if (settings.inputBehavior) {
+    for (const [key, enabled] of Object.entries(settings.inputBehavior)) {
+      if (typeof enabled === "boolean") {
+        editor.setInputBehavior(key as InputBehaviorSettingKey, enabled);
+      }
+    }
+  }
+  if (typeof settings.keypadMinimizeOnCopy === "boolean") {
+    editor.setKeypadMinimizeOnCopy(settings.keypadMinimizeOnCopy);
+  }
 }
 
 function requireOfficeSessionFontSizePt(value: unknown, host: OfficeHost) {
@@ -217,14 +345,23 @@ function documentFingerprint(
   displayMode: "inline" | "block",
   numbered: boolean,
   fontSizePt: number,
+  formulaLetterFont: FormulaLetterFont,
+  formulaChineseFont: FormulaChineseFont,
 ) {
   return JSON.stringify({
     title,
-    lines: lines.map((line) => line.latex),
+    // Compare the same canonical LaTeX representation that MathEditor uses
+    // after mount (upright e/i/d, Chinese text normalization, etc.). Raw
+    // Session source can be semantically identical but serialize differently;
+    // comparing raw text here can otherwise leave initial autosave suppressed
+    // forever.
+    lines: lines.map((line) => normalizeChineseLatex(line.latex)),
     codeFormat,
     displayMode,
     numbered,
     fontSizePt: normalizeOfficeFontSizePt(fontSizePt, fontSizePt),
+    formulaLetterFont,
+    formulaChineseFont,
   });
 }
 
@@ -233,6 +370,7 @@ export function OfficeDialogApp() {
   const loadedSessionIdRef = useRef("");
   const skipAutosaveForSessionRef = useRef("");
   const originalFingerprintRef = useRef("");
+  const loadedUiFingerprintRef = useRef("");
   const lastSavedFingerprintRef = useRef("");
   const readyMessageSentRef = useRef(false);
   const finalizingRef = useRef(false);
@@ -246,7 +384,9 @@ export function OfficeDialogApp() {
     fingerprint: string;
     exportResult: OfficeExportResult;
   } | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 1040);
+  const [sidebarOpen, setSidebarOpen] = useState(() =>
+    readWorkspacePanelOpen("office-edit", "tiles", window.innerWidth >= 1040),
+  );
   const [historyBusy, setHistoryBusy] = useState(false);
   const [autoCommitOnClose, setAutoCommitOnClose] = useState(true);
   const [displayMode, setDisplayMode] = useState<"inline" | "block">("inline");
@@ -276,9 +416,17 @@ export function OfficeDialogApp() {
   const { sessionId, session, loading, error, reload, save } = useOfficeSession();
 
   useEffect(() => {
+    if (readLocalStorage(OFFICE_EDITOR_ZOOM_60_MIGRATION_KEY) !== "done") {
+      useEditorStore.getState().setZoom(0.6);
+      writeLocalStorage(OFFICE_EDITOR_ZOOM_60_MIGRATION_KEY, "done");
+    }
+  }, []);
+
+  useEffect(() => {
     loadedSessionIdRef.current = "";
     skipAutosaveForSessionRef.current = "";
     originalFingerprintRef.current = "";
+    loadedUiFingerprintRef.current = "";
     lastSavedFingerprintRef.current = "";
     readyMessageSentRef.current = false;
     finalizingRef.current = false;
@@ -296,6 +444,8 @@ export function OfficeDialogApp() {
   const setTheme = useEditorStore((state) => state.setTheme);
   const setEditorLayout = useEditorStore((state) => state.setEditorLayout);
   const latexCodeFormat = useEditorStore((state) => state.latexCodeFormat);
+  const formulaLetterFont = useEditorStore((state) => state.formulaLetterFont);
+  const formulaChineseFont = useEditorStore((state) => state.formulaChineseFont);
   const addHistory = useEditorStore((state) => state.addHistory);
   const historyState = useHistorySnapshot();
   const isEn = language === "en";
@@ -318,7 +468,10 @@ export function OfficeDialogApp() {
         if (!disposed) setPowerPointDefaultFontSizePt(20);
       })
       .finally(() => {
-        if (!disposed) setOfficePreferencesReady(true);
+        // Do not mark the full Office editor preferences as ready here. This
+        // request only seeds the PowerPoint default font size; the synchronized
+        // editor-preference request below is the one that actually applies
+        // formula fonts/theme/layout and owns officePreferencesReady.
       });
     return () => {
       disposed = true;
@@ -342,10 +495,30 @@ export function OfficeDialogApp() {
     };
     const syncFromCompanion = async () => {
       try {
-        const status = await getOfficeTheme();
+        const [status, preferences] = await Promise.all([
+          getOfficeTheme(),
+          getOfficePreferences(),
+        ]);
         if (!disposed) {
+          // Shared visual/editor preferences stay live, but Office-window view
+          // state (source tab and resizable panel dimensions) is deliberately
+          // excluded inside applyOfficeEditorPreferences. Those values persist
+          // in this Office WebView and must never be overwritten by the main
+          // app's 500ms companion snapshot.
+          applyOfficeEditorPreferences(
+            preferences,
+            applyTheme,
+            applyEditorLayout,
+          );
           applyTheme(status.theme);
           applyEditorLayout(status.editorLayout);
+          setPowerPointDefaultFontSizePt(
+            normalizeOfficeFontSizePt(
+              preferences.powerpointDefaultFontSizePt,
+              20,
+            ),
+          );
+          setOfficePreferencesReady(true);
         }
       } catch {
         // Keep the last applied appearance while the companion is restarting.
@@ -356,6 +529,13 @@ export function OfficeDialogApp() {
     const unsubscribeBrowser = subscribeSynchronizedTheme(applyTheme);
     void syncFromCompanion();
     const interval = window.setInterval(() => void syncFromCompanion(), 500);
+    // Browser/Vite parity and independent Office WebViews can miss a storage or
+    // BroadcastChannel notification during creation. Re-read the published
+    // active theme without the one-shot ?theme= bootstrap value so later main
+    // window theme changes always win.
+    const publishedThemeInterval = window.setInterval(() => {
+      applyTheme(readPublishedSynchronizedTheme());
+    }, 80);
     const handleFocus = () => void syncFromCompanion();
     const handleVisibility = () => {
       if (document.visibilityState === "visible") void syncFromCompanion();
@@ -367,6 +547,7 @@ export function OfficeDialogApp() {
       disposed = true;
       unsubscribeBrowser();
       window.clearInterval(interval);
+      window.clearInterval(publishedThemeInterval);
       window.removeEventListener("focus", handleFocus);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
@@ -375,6 +556,11 @@ export function OfficeDialogApp() {
   useEffect(() => {
     applyDocumentTheme(theme);
   }, [theme]);
+
+  const handleSidebarOpenChange = useCallback((open: boolean) => {
+    setSidebarOpen(open);
+    writeWorkspacePanelOpen("office-edit", "tiles", open);
+  }, []);
 
   const selectedOcrModel =
     OCR_MODELS.find((item) => item.id === ocrModel) ??
@@ -393,6 +579,8 @@ export function OfficeDialogApp() {
         displayMode,
         numbered,
         officeFontSizePt,
+        formulaLetterFont,
+        formulaChineseFont,
       ),
     [
       title,
@@ -401,6 +589,8 @@ export function OfficeDialogApp() {
       displayMode,
       numbered,
       officeFontSizePt,
+      formulaLetterFont,
+      formulaChineseFont,
     ],
   );
   const dirty =
@@ -410,20 +600,22 @@ export function OfficeDialogApp() {
 
   useEffect(() => {
     if (!session || loadedSessionIdRef.current === session.id) return;
-    if (
-      session.host === "powerpoint" &&
-      session.mode === "create" &&
-      session.status === "created" &&
-      !session.dirty &&
-      !officePreferencesReady
-    ) {
-      return;
-    }
+    // Font/layout preferences now participate in the immutable Office formula
+    // fingerprint and rendered OLE/OMML output. Do not establish the Session
+    // baseline before companion preferences have been applied, otherwise a
+    // later preference sync looks like a half-loaded render and autosave can
+    // suppress the required font redraw indefinitely.
+    if (!officePreferencesReady) return;
     loadedSessionIdRef.current = session.id;
     skipAutosaveForSessionRef.current = session.id;
-    const nextLines = session.lines.length
+    const sourceLines = session.lines.length
       ? session.lines
-      : [{ id: crypto.randomUUID(), latex: "" }];
+      : [{ id: createUuid(), latex: "" }];
+    const normalizedDocument = normalizeOfficeFormulaDocument(
+      sourceLines,
+      session.codeFormat,
+    );
+    const nextLines = normalizedDocument.lines;
     useEditorStore.getState().replaceDocumentState({
       title: session.title || (isEn ? "Office Formula" : "Office 公式"),
       lines: nextLines,
@@ -435,7 +627,7 @@ export function OfficeDialogApp() {
       formulaAlignment: useEditorStore.getState().formulaAlignment,
       selectionByLineId: {},
     });
-    const loadedCodeFormat = normalizeOfficeCodeFormat(session.codeFormat);
+    const loadedCodeFormat = normalizedDocument.codeFormat;
     useEditorStore.getState().setLatexCodeFormat(loadedCodeFormat);
     setAutoCommitOnClose(session.autoCommitOnClose);
     setDisplayMode(session.displayMode);
@@ -460,8 +652,21 @@ export function OfficeDialogApp() {
       session.displayMode,
       session.displayMode === "block" && Boolean(session.numbered),
       loadedFontSizePt,
+      session.originalMetadata?.formulaLetterFont ?? DEFAULT_FORMULA_LETTER_FONT,
+      session.originalMetadata?.formulaChineseFont ?? DEFAULT_FORMULA_CHINESE_FONT,
+    );
+    const loadedUiFingerprint = documentFingerprint(
+      session.title,
+      nextLines,
+      loadedCodeFormat,
+      session.displayMode,
+      session.displayMode === "block" && Boolean(session.numbered),
+      loadedFontSizePt,
+      formulaLetterFont,
+      formulaChineseFont,
     );
     originalFingerprintRef.current = loadedFingerprint;
+    loadedUiFingerprintRef.current = loadedUiFingerprint;
     lastSavedFingerprintRef.current = loadedFingerprint;
     latestCompleteExportRef.current = session.exportResult?.pngBase64
       ? { fingerprint: loadedFingerprint, exportResult: session.exportResult }
@@ -471,6 +676,8 @@ export function OfficeDialogApp() {
     isEn,
     officePreferencesReady,
     powerPointDefaultFontSizePt,
+    formulaLetterFont,
+    formulaChineseFont,
   ]);
 
   useEffect(() => {
@@ -584,36 +791,54 @@ export function OfficeDialogApp() {
     return () => historyManager.configure(null);
   }, [captureSnapshot]);
 
+  const currentRenderedLatex = useMemo(
+    () =>
+      serializeOfficeRenderLatex(
+        lines,
+        latexCodeFormat,
+        displayMode,
+        session?.originalMetadata?.equationTag,
+      ),
+    [
+      lines,
+      latexCodeFormat,
+      displayMode,
+      session?.originalMetadata?.equationTag,
+    ],
+  );
+
   const generateSvgExportResult = useCallback((
-    sourceLatex: string = latex,
+    sourceLatex: string = currentRenderedLatex,
     sourceDisplayMode: "inline" | "block" = displayMode,
     sourceFontSizePt: number = officeFontSizePt,
-    sourceEquationTag: string | null | undefined =
-      session?.originalMetadata?.equationTag,
+    sourceFormulaLetterFont: FormulaLetterFont = formulaLetterFont,
+    sourceFormulaChineseFont: FormulaChineseFont = formulaChineseFont,
   ): OfficeExportResult | null => {
     if (!sourceLatex.trim()) return null;
-    const renderedLatex = sourceDisplayMode === "block"
-      ? attachFormulaEquationTag(sourceLatex, sourceEquationTag)
-      : sourceLatex;
-    const svg = latexToSvg(renderedLatex, {
+    const svg = latexToSvg(sourceLatex, {
       displayMode: sourceDisplayMode === "block",
       fontSizePt: sourceFontSizePt,
       paddingPx: sourceDisplayMode === "inline" ? 1 : 10,
       background: "transparent",
+      formulaLetterFont: sourceFormulaLetterFont,
+      formulaChineseFont: sourceFormulaChineseFont,
     });
     return {
       svg: svg.svg,
       svgBase64: svg.base64,
-      mathMl: latexToMathMl(renderedLatex, sourceDisplayMode === "block"),
+      mathMl: latexToMathMl(sourceLatex, sourceDisplayMode === "block"),
       width: svg.width,
       height: svg.height,
       baseline: svg.baseline,
+      formulaLetterFont: sourceFormulaLetterFont,
+      formulaChineseFont: sourceFormulaChineseFont,
     };
   }, [
-    latex,
+    currentRenderedLatex,
     displayMode,
     officeFontSizePt,
-    session?.originalMetadata?.equationTag,
+    formulaLetterFont,
+    formulaChineseFont,
   ]);
 
   const rasterizeSvgExportResult = useCallback(async (
@@ -641,24 +866,20 @@ export function OfficeDialogApp() {
   }, []);
 
   const generateExportResult = useCallback(async (
-    sourceLatex: string = latex,
+    sourceLatex: string = currentRenderedLatex,
     sourceDisplayMode: "inline" | "block" = displayMode,
     sourceFontSizePt: number = officeFontSizePt,
-    sourceEquationTag: string | null | undefined =
-      session?.originalMetadata?.equationTag,
   ): Promise<OfficeExportResult | null> => {
     const base = generateSvgExportResult(
       sourceLatex,
       sourceDisplayMode,
       sourceFontSizePt,
-      sourceEquationTag,
     );
     return base ? rasterizeSvgExportResult(base) : null;
   }, [
-    latex,
+    currentRenderedLatex,
     displayMode,
     officeFontSizePt,
-    session?.originalMetadata?.equationTag,
     generateSvgExportResult,
     rasterizeSvgExportResult,
   ]);
@@ -666,23 +887,33 @@ export function OfficeDialogApp() {
   const generateSessionExportResult = useCallback(async (
     sourceSession: OfficeFormulaSession,
   ): Promise<OfficeExportResult> => {
-    const conversionLines = sourceSession.lines.length
+    const sourceLines = sourceSession.lines.length
       ? sourceSession.lines
-      : [{ id: crypto.randomUUID(), latex: "" }];
-    const conversionLatex = joinFormulaLines(conversionLines);
+      : [{ id: createUuid(), latex: "" }];
+    const conversionDocument = normalizeOfficeFormulaDocument(
+      sourceLines,
+      sourceSession.codeFormat,
+    );
+    const conversionLines = conversionDocument.lines;
+    const conversionLatex = serializeOfficeRenderLatex(
+      conversionLines,
+      conversionDocument.codeFormat,
+      sourceSession.displayMode,
+      sourceSession.originalMetadata?.equationTag,
+    );
     const conversionFontSizePt = requireOfficeSessionFontSizePt(
       sourceSession.fontSizePt ??
         sourceSession.originalMetadata?.fontSizePt ??
         sourceSession.originalMetadata?.renderFontSizePt,
       sourceSession.host,
     );
-    const sourceEquationTag = sourceSession.originalMetadata?.equationTag;
+    const sourceFormulaLetterFont =
+      sourceSession.originalMetadata?.formulaLetterFont ?? formulaLetterFont;
+    const sourceFormulaChineseFont =
+      sourceSession.originalMetadata?.formulaChineseFont ?? formulaChineseFont;
     if (sourceSession.objectMode === "wordOmml") {
-      const renderedLatex = sourceSession.displayMode === "block"
-        ? attachFormulaEquationTag(conversionLatex, sourceEquationTag)
-        : conversionLatex;
       const mathMl = latexToMathMl(
-        renderedLatex,
+        conversionLatex,
         sourceSession.displayMode === "block",
       );
       if (!mathMl?.trim()) {
@@ -701,13 +932,16 @@ export function OfficeDialogApp() {
         width,
         height,
         baseline: sourceSession.originalMetadata?.baseline ?? height * 0.75,
+        formulaLetterFont: sourceFormulaLetterFont,
+        formulaChineseFont: sourceFormulaChineseFont,
       };
     }
     const base = generateSvgExportResult(
       conversionLatex,
       sourceSession.displayMode,
       conversionFontSizePt,
-      sourceEquationTag,
+      sourceFormulaLetterFont,
+      sourceFormulaChineseFont,
     );
     if (!base?.mathMl) {
       throw new Error("Unable to generate MathML for Office conversion.");
@@ -717,7 +951,12 @@ export function OfficeDialogApp() {
       throw new Error("Unable to generate a complete Office formula preview.");
     }
     return complete;
-  }, [generateSvgExportResult, rasterizeSvgExportResult]);
+  }, [
+    generateSvgExportResult,
+    rasterizeSvgExportResult,
+    formulaLetterFont,
+    formulaChineseFont,
+  ]);
 
   useEffect(() => {
     if (
@@ -734,10 +973,14 @@ export function OfficeDialogApp() {
         // Use the immutable Session snapshot. The editor store is populated in
         // another React effect and can still contain a previous formula during
         // the first hidden conversion render.
-        const conversionLines = session.lines.length
+        const sourceLines = session.lines.length
           ? session.lines
-          : [{ id: crypto.randomUUID(), latex: "" }];
-        const conversionLatex = joinFormulaLines(conversionLines);
+          : [{ id: createUuid(), latex: "" }];
+        const conversionDocument = normalizeOfficeFormulaDocument(
+          sourceLines,
+          session.codeFormat,
+        );
+        const conversionLines = conversionDocument.lines;
         const conversionDisplayMode = session.displayMode;
         const conversionNumbered =
           conversionDisplayMode === "block" && Boolean(session.numbered);
@@ -761,7 +1004,7 @@ export function OfficeDialogApp() {
           title: session.title,
           lines: conversionLines,
           activeLineId: conversionActiveLineId,
-          codeFormat: normalizeOfficeCodeFormat(session.codeFormat),
+          codeFormat: conversionDocument.codeFormat,
           displayMode: conversionDisplayMode,
           numbered: conversionNumbered,
           fontSizePt: conversionFontSizePt,
@@ -817,9 +1060,14 @@ export function OfficeDialogApp() {
             let queuedSession: OfficeFormulaSession | null = null;
             try {
               queuedSession = await getOfficeSession(queuedSessionId);
-              const conversionLines = queuedSession.lines.length
+              const sourceLines = queuedSession.lines.length
                 ? queuedSession.lines
-                : [{ id: crypto.randomUUID(), latex: "" }];
+                : [{ id: createUuid(), latex: "" }];
+              const conversionDocument = normalizeOfficeFormulaDocument(
+                sourceLines,
+                queuedSession.codeFormat,
+              );
+              const conversionLines = conversionDocument.lines;
               const conversionFontSizePt = requireOfficeSessionFontSizePt(
                 queuedSession.fontSizePt ??
                   queuedSession.originalMetadata?.fontSizePt ??
@@ -835,7 +1083,7 @@ export function OfficeDialogApp() {
                   conversionLines.some((line) => line.id === queuedSession?.activeLineId)
                     ? queuedSession.activeLineId
                     : conversionLines[0]?.id ?? null,
-                codeFormat: normalizeOfficeCodeFormat(queuedSession.codeFormat),
+                codeFormat: conversionDocument.codeFormat,
                 displayMode: queuedSession.displayMode,
                 numbered:
                   queuedSession.displayMode === "block" && Boolean(queuedSession.numbered),
@@ -920,10 +1168,16 @@ export function OfficeDialogApp() {
       // autosave suppressed until every field matches the immutable Session
       // fingerprint; otherwise the half-loaded render is briefly persisted as
       // a false dirty edit.
-      if (currentFingerprint !== originalFingerprintRef.current) return;
+      if (currentFingerprint !== loadedUiFingerprintRef.current) return;
       skipAutosaveForSessionRef.current = "";
-      lastSavedFingerprintRef.current = currentFingerprint;
-      return;
+      if (currentFingerprint === originalFingerprintRef.current) {
+        lastSavedFingerprintRef.current = currentFingerprint;
+        return;
+      }
+      // The UI is fully loaded, but a persisted/global visual preference (for
+      // example formula fonts) differs from the formula's original metadata.
+      // Fall through so this stable difference is exported instead of being
+      // mistaken for a half-loaded Session.
     }
     if (
       lastSavedFingerprintRef.current === currentFingerprint &&
@@ -1355,11 +1609,15 @@ export function OfficeDialogApp() {
         );
       }
 
-      const availableOcrModel = resolveAvailableOcrModel(runtime, ocrModel);
-      if (availableOcrModel !== ocrModel) {
-        setOcrModel(availableOcrModel);
-        window.localStorage.setItem(OCR_MODEL_STORAGE_KEY, availableOcrModel);
+      if (!runtime.installedModels.includes(ocrModel)) {
+        setOcrOpen(true);
+        throw new Error(
+          isEn
+            ? `Install ${selectedOcrModel.labelEn} before using it for OCR`
+            : `请先安装${selectedOcrModel.labelZh}模型，再使用该模型进行 OCR`,
+        );
       }
+      const availableOcrModel = ocrModel;
 
       unlisten = await listenOcrRecognitionProgress((progress) => {
         if (
@@ -1656,155 +1914,168 @@ export function OfficeDialogApp() {
     );
   }
 
+  const officeHeaderLeadingControls = (
+    <>
+      {session.host === "word" ? (
+        <div
+          className="office-display-mode-setting"
+          role="group"
+          aria-label={isEn ? "Word formula layout" : "Word 公式排版"}
+        >
+          <button
+            type="button"
+            className={displayMode === "inline" ? "is-active" : ""}
+            onClick={() => {
+              setDisplayMode("inline");
+              setNumbered(false);
+            }}
+            disabled={session.mode === "edit"}
+          >
+            {isEn ? "Inline" : "行内"}
+          </button>
+          <button
+            type="button"
+            className={displayMode === "block" ? "is-active" : ""}
+            onClick={() => setDisplayMode("block")}
+            disabled={session.mode === "edit"}
+          >
+            {isEn ? "Display" : "行间"}
+          </button>
+        </div>
+      ) : null}
+      <label
+        className="office-font-size-setting"
+        title={
+          session.host === "word" && session.mode === "create"
+            ? isEn
+              ? "Starts from the current Word paragraph font size"
+              : "默认读取当前 Word 段落正文的字号"
+            : isEn
+              ? "Formula font size"
+              : "公式字号"
+        }
+      >
+        <span>{isEn ? "Size" : "字号"}</span>
+        <select
+          value={officeFontSizePt}
+          data-office-font-size
+          aria-label={isEn ? "Formula font size" : "公式字号"}
+          onChange={(event) =>
+            setOfficeFontSizePt(
+              normalizeOfficeFontSizePt(event.target.value, officeFontSizePt),
+            )
+          }
+        >
+          <optgroup label={isEn ? "Chinese sizes" : "中文字号"}>
+            {OFFICE_CHINESE_FONT_SIZE_OPTIONS.map((option) => (
+              <option key={option.name} value={option.fontSizePt}>
+                {isEn
+                  ? `${option.name} (${option.fontSizePt} pt)`
+                  : `${option.name}（${option.fontSizePt} 磅）`}
+              </option>
+            ))}
+          </optgroup>
+          <optgroup label={isEn ? "Point sizes" : "磅值"}>
+            {officePointFontSizeOptions(officeFontSizePt).map((fontSizePt) => (
+              <option key={fontSizePt} value={fontSizePt}>
+                {isEn ? `${fontSizePt} pt` : `${fontSizePt} 磅`}
+              </option>
+            ))}
+          </optgroup>
+        </select>
+      </label>
+      {session.host === "word" && displayMode === "block" ? (
+        <label className="office-auto-commit-setting">
+          <input
+            type="checkbox"
+            checked={numbered}
+            onChange={(event) => setNumbered(event.target.checked)}
+          />
+          <span>{isEn ? "Number" : "编号"}</span>
+        </label>
+      ) : null}
+    </>
+  );
+
+  const officeHeaderTrailingActions = (
+    <div
+      className="office-inline-history-actions"
+      aria-label={isEn ? "History actions" : "历史操作"}
+    >
+      <button
+        type="button"
+        className="secondary-button"
+        onClick={() => setOcrOpen(true)}
+        disabled={inlineOcrIsBusy}
+      >
+        <ScanLine size={15} />
+        <span>{isEn ? "OCR" : "OCR"}</span>
+      </button>
+      <button
+        type="button"
+        className="icon-button compact office-history-icon-button"
+        data-office-undo-action
+        aria-label={isEn ? "Undo" : "撤销"}
+        title={isEn ? "Undo" : "撤销"}
+        onClick={() => void historyManager.undo()}
+        disabled={historyBusy || !historyState.canUndo || historyState.isReplaying}
+      >
+        <Undo2 size={16} strokeWidth={2} />
+      </button>
+      <button
+        type="button"
+        className="icon-button compact office-history-icon-button"
+        data-office-redo-action
+        aria-label={isEn ? "Redo" : "重做"}
+        title={isEn ? "Redo" : "重做"}
+        onClick={() => void historyManager.redo()}
+        disabled={historyBusy || !historyState.canRedo || historyState.isReplaying}
+      >
+        <Redo2 size={16} strokeWidth={2} />
+      </button>
+      <span className="office-inline-action-divider" aria-hidden="true" />
+      <button
+        type="button"
+        className="secondary-button office-inline-cancel"
+        data-office-cancel-action
+        onClick={() => void handleCancel()}
+        aria-label={isEn ? "Cancel" : "取消"}
+      >
+        {isEn ? "Cancel" : "取消"}
+      </button>
+      <button
+        type="button"
+        className="primary-button office-inline-primary"
+        data-office-primary-action
+        onClick={() => void handleCommit()}
+        aria-keyshortcuts="Control+S"
+        title={isEn ? "Apply and close (Ctrl+S)" : "应用并关闭（Ctrl+S）"}
+      >
+        {session.mode === "edit"
+          ? isEn
+            ? "Update"
+            : "更新公式"
+          : isEn
+            ? "Finish and insert"
+            : "完成并插入"}
+      </button>
+    </div>
+  );
+
   return (
     <div className="app-shell office-dialog-shell">
-      <header className="office-dialog-header">
-        <div>
-          <strong>VisualTeX</strong>
-          <span>
-            {session.host === "word" ? "Microsoft Word" : "Microsoft PowerPoint"}
-          </span>
-        </div>
-        <div className="office-dialog-options">
-          {session.host === "word" ? (
-            <div
-              className="office-display-mode-setting"
-              role="group"
-              aria-label={isEn ? "Word formula layout" : "Word 公式排版"}
-            >
-              <button
-                type="button"
-                className={displayMode === "inline" ? "is-active" : ""}
-                onClick={() => {
-                  setDisplayMode("inline");
-                  setNumbered(false);
-                }}
-                disabled={session.mode === "edit"}
-              >
-                {isEn ? "Inline" : "行内"}
-              </button>
-              <button
-                type="button"
-                className={displayMode === "block" ? "is-active" : ""}
-                onClick={() => setDisplayMode("block")}
-                disabled={session.mode === "edit"}
-              >
-                {isEn ? "Display" : "行间"}
-              </button>
-            </div>
-          ) : null}
-          <label
-            className="office-font-size-setting"
-            title={
-              session.host === "word" && session.mode === "create"
-                ? isEn
-                  ? "Starts from the current Word paragraph font size"
-                  : "默认读取当前 Word 段落正文的字号"
-                : isEn
-                  ? "Formula font size"
-                  : "公式字号"
-            }
-          >
-            <span>{isEn ? "Size" : "字号"}</span>
-            <select
-              value={officeFontSizePt}
-              data-office-font-size
-              aria-label={isEn ? "Formula font size" : "公式字号"}
-              onChange={(event) =>
-                setOfficeFontSizePt(
-                  normalizeOfficeFontSizePt(event.target.value, officeFontSizePt),
-                )
-              }
-            >
-              <optgroup label={isEn ? "Chinese sizes" : "中文字号"}>
-                {OFFICE_CHINESE_FONT_SIZE_OPTIONS.map((option) => (
-                  <option key={option.name} value={option.fontSizePt}>
-                    {isEn
-                      ? `${option.name} (${option.fontSizePt} pt)`
-                      : `${option.name}（${option.fontSizePt} 磅）`}
-                  </option>
-                ))}
-              </optgroup>
-              <optgroup label={isEn ? "Point sizes" : "磅值"}>
-                {officePointFontSizeOptions(officeFontSizePt).map((fontSizePt) => (
-                  <option key={fontSizePt} value={fontSizePt}>
-                    {isEn ? `${fontSizePt} pt` : `${fontSizePt} 磅`}
-                  </option>
-                ))}
-              </optgroup>
-            </select>
-          </label>
-          {session.host === "word" && displayMode === "block" ? (
-            <label className="office-auto-commit-setting">
-              <input
-                type="checkbox"
-                checked={numbered}
-                onChange={(event) => setNumbered(event.target.checked)}
-              />
-              <span>{isEn ? "Add equation number" : "添加公式编号"}</span>
-            </label>
-          ) : null}
-          <label className="office-auto-commit-setting">
-            <input
-              type="checkbox"
-              checked={autoCommitOnClose}
-              onChange={(event) => setAutoCommitOnClose(event.target.checked)}
-            />
-            <span>
-              {isEn ? "Apply when the window closes" : "关闭窗口时自动应用"}
-            </span>
-          </label>
-        </div>
-        <div className="office-history-actions" aria-label={isEn ? "History actions" : "历史操作"}>
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() => setOcrOpen(true)}
-            disabled={inlineOcrIsBusy}
-          >
-            <ScanLine size={15} />
-            {isEn ? "Image OCR" : "图片 OCR"}
-          </button>
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() => void historyManager.undo()}
-            disabled={historyBusy || !historyState.canUndo || historyState.isReplaying}
-          >
-            {isEn ? "Undo" : "撤销"}
-          </button>
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() => void historyManager.redo()}
-            disabled={historyBusy || !historyState.canRedo || historyState.isReplaying}
-          >
-            {isEn ? "Redo" : "重做"}
-          </button>
-        </div>
-      </header>
-
       <EditorWorkspace
         mode={session.mode === "edit" ? "office-edit" : "office-create"}
         showFileActions={false}
         showUpdateActions={false}
-        showOfficeActions
+        showOfficeActions={false}
         showOcrActions={true}
-        primaryActionLabel={
-          session.mode === "edit"
-            ? isEn
-              ? "Update formula"
-              : "更新公式"
-            : isEn
-              ? "Finish and insert"
-              : "完成并插入"
-        }
-        onPrimaryAction={handleCommit}
-        onCancel={handleCancel}
+        officeHeaderLeadingControls={officeHeaderLeadingControls}
+        officeHeaderTrailingActions={officeHeaderTrailingActions}
         editorRef={editorRef}
         editorInstanceKey={session.id}
         sidebarOpen={sidebarOpen}
-        onSidebarOpenChange={setSidebarOpen}
+        onSidebarOpenChange={handleSidebarOpenChange}
         onHistoryBusyChange={setHistoryBusy}
         onPasteImage={handleEditorImagePaste}
         onCopy={handleCopy}

@@ -691,6 +691,8 @@ function metadataFromPowerPointSession(session: OfficeFormulaSession) {
     renderWidthPx: session.exportResult?.width ?? session.exportWidth,
     renderHeightPx: session.exportResult?.height ?? session.exportHeight,
     baseline: session.exportResult?.baseline,
+    formulaLetterFont: session.exportResult?.formulaLetterFont,
+    formulaChineseFont: session.exportResult?.formulaChineseFont,
     original: session.originalMetadata,
   });
 }

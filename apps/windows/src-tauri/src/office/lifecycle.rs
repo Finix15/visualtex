@@ -325,6 +325,14 @@ pub fn set_app_editor_layout(
 }
 
 #[tauri::command]
+pub fn set_app_editor_preferences(
+    preferences: serde_json::Value,
+    state: tauri::State<'_, OfficeCompanionState>,
+) -> serde_json::Value {
+    state.set_current_editor_preferences(preferences)
+}
+
+#[tauri::command]
 pub fn set_powerpoint_default_font_size(
     font_size_pt: f64,
     state: tauri::State<'_, OfficeCompanionState>,

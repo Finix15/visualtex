@@ -1,7 +1,7 @@
 {
   "name": "visualtex-windows",
   "private": true,
-  "version": "1.2.4",
+  "version": "1.2.5",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -34,6 +34,9 @@
     "test:update-notes": "node --experimental-strip-types scripts/update_notes_smoke.mjs",
     "test:svg-export": "node --experimental-strip-types scripts/svg_export_smoke.mjs",
     "test:office-metadata": "node --experimental-strip-types scripts/office_metadata_smoke.mjs",
+    "test:office-formula-document": "tsx scripts/office_formula_document_regression.mts",
+    "test:application-data": "tsx scripts/application_data_regression.mts",
+    "test:application-configuration": "tsx scripts/application_configuration_regression.mts",
     "test:office-font-size": "npm run build:office:windows-native && node scripts/office_font_size_regression.mjs",
     "test:office-apply-shortcut": "tsx scripts/office_apply_shortcut_regression.mts",
     "test:document-import-parser": "tsx scripts/document_import_parser_coverage.mts",
@@ -58,7 +61,9 @@
     "verify:windows-release": "node scripts/run_windows_powershell.mjs scripts/verify_windows_release_artifacts.ps1",
     "verify:frontend-dist": "node scripts/verify_frontend_dist.mjs",
     "verify:embedded-frontend": "node scripts/verify_embedded_frontend_assets.mjs",
-    "test:windows-app-lifecycle": "node scripts/windows_app_lifecycle_smoke.mjs"
+    "test:windows-app-lifecycle": "node scripts/windows_app_lifecycle_smoke.mjs",
+    "test:windows-ocr-editor-parity": "node scripts/windows_ocr_editor_parity_regression.mjs",
+    "test:windows-cases": "npm run build:desktop && node scripts/windows_cases_regression.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.8.1",

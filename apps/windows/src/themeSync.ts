@@ -1,29 +1,21 @@
 import type { Theme } from "./types/formula";
+import {
+  applyThemePalette,
+  isTheme,
+  subscribeCustomTheme,
+} from "./themeCustomization";
 
 const ACTIVE_THEME_STORAGE_KEY = "visualtex.active-theme";
 const EDITOR_STORAGE_KEY = "visualtex-editor";
 const THEME_CHANNEL_NAME = "visualtex-theme";
 
 export function normalizeSynchronizedTheme(value: unknown): Theme {
-  return value === "dark" ||
-    value === "beige" ||
-    value === "purple" ||
-    value === "green"
-    ? value
-    : "light";
+  return isTheme(value) ? value : "light";
 }
 
-function readInjectedTheme(): Theme | null {
-  const value = document
-    .querySelector<HTMLMetaElement>('meta[name="visualtex-theme"]')
-    ?.content.trim();
-  return value ? normalizeSynchronizedTheme(value) : null;
-}
-
-function readPersistedEditorTheme(): Theme | null {
+function parsePersistedEditorTheme(raw: string | null): Theme | null {
+  if (!raw) return null;
   try {
-    const raw = window.localStorage.getItem(EDITOR_STORAGE_KEY);
-    if (!raw) return null;
     const parsed = JSON.parse(raw) as { state?: { theme?: unknown } };
     return normalizeSynchronizedTheme(parsed.state?.theme);
   } catch {
@@ -31,13 +23,15 @@ function readPersistedEditorTheme(): Theme | null {
   }
 }
 
-export function readSynchronizedTheme(): Theme {
-  const urlTheme = new URLSearchParams(window.location.search).get("theme");
-  if (urlTheme) return normalizeSynchronizedTheme(urlTheme);
+function readPersistedEditorTheme(): Theme | null {
+  try {
+    return parsePersistedEditorTheme(window.localStorage.getItem(EDITOR_STORAGE_KEY));
+  } catch {
+    return null;
+  }
+}
 
-  const injectedTheme = readInjectedTheme();
-  if (injectedTheme) return injectedTheme;
-
+export function readPublishedSynchronizedTheme(): Theme {
   try {
     const activeTheme = window.localStorage.getItem(ACTIVE_THEME_STORAGE_KEY);
     if (activeTheme) return normalizeSynchronizedTheme(activeTheme);
@@ -47,8 +41,16 @@ export function readSynchronizedTheme(): Theme {
   return readPersistedEditorTheme() ?? "light";
 }
 
+export function readSynchronizedTheme(): Theme {
+  const urlTheme = new URLSearchParams(window.location.search).get("theme");
+  if (urlTheme) return normalizeSynchronizedTheme(urlTheme);
+  return readPublishedSynchronizedTheme();
+}
+
 export function applyDocumentTheme(theme: Theme) {
-  document.documentElement.dataset.theme = normalizeSynchronizedTheme(theme);
+  const normalized = normalizeSynchronizedTheme(theme);
+  document.documentElement.dataset.theme = normalized;
+  applyThemePalette(normalized);
 }
 
 export function publishSynchronizedTheme(theme: Theme) {
@@ -68,13 +70,15 @@ export function publishSynchronizedTheme(theme: Theme) {
 export function subscribeSynchronizedTheme(
   listener: (theme: Theme) => void,
 ): () => void {
+  const unsubscribeCustomization = subscribeCustomTheme();
   const handleStorage = (event: StorageEvent) => {
     if (event.key === ACTIVE_THEME_STORAGE_KEY && event.newValue) {
       listener(normalizeSynchronizedTheme(event.newValue));
       return;
     }
     if (event.key === EDITOR_STORAGE_KEY) {
-      listener(readSynchronizedTheme());
+      const nextTheme = parsePersistedEditorTheme(event.newValue);
+      if (nextTheme) listener(nextTheme);
     }
   };
   window.addEventListener("storage", handleStorage);
@@ -84,12 +88,12 @@ export function subscribeSynchronizedTheme(
       ? null
       : new BroadcastChannel(THEME_CHANNEL_NAME);
   if (channel) {
-    channel.onmessage = (event) =>
-      listener(normalizeSynchronizedTheme(event.data));
+    channel.onmessage = (event) => listener(normalizeSynchronizedTheme(event.data));
   }
 
   return () => {
     window.removeEventListener("storage", handleStorage);
     channel?.close();
+    unsubscribeCustomization();
   };
 }

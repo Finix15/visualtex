@@ -1,4 +1,5 @@
-import { splitFormulaEquationTag } from "../shared/formulaEquationTag";
+import { createUuid } from "../../runtime/browserCompatibility";
+import { splitFormulaEquationTag } from "../shared/formulaEquationTag.ts";
 
 export type DocumentSourceFormat = "auto" | "markdown" | "latex";
 export type ResolvedDocumentSourceFormat = Exclude<DocumentSourceFormat, "auto">;
@@ -49,8 +50,57 @@ export interface ParsedDocumentImport {
 
 const displayEnvironmentPattern = /\\begin\{(equation\*?|align\*?|gather\*?|multline\*?|displaymath)\}/gi;
 
+type TheoremBodyKind = "quote" | "normal";
+
+interface TheoremEnvironmentDefinition {
+  label: string;
+  numbered: boolean;
+  counterName: string;
+  bodyKind: TheoremBodyKind;
+}
+
+interface TheoremMarkerPayload extends TheoremEnvironmentDefinition {
+  note: string;
+}
+
+const theoremStartMarkerPrefix = "\uE410VT_THEOREM_START:";
+const theoremStartMarkerSuffix = "\uE411";
+const theoremEndMarker = "\uE412VT_THEOREM_END\uE413";
+
+function encodeTheoremMarker(payload: TheoremMarkerPayload) {
+  const encoded = encodeURIComponent(JSON.stringify(payload)).replace(/%/g, "§");
+  return `${theoremStartMarkerPrefix}${encoded}${theoremStartMarkerSuffix}`;
+}
+
+function decodeTheoremMarker(value: string): TheoremMarkerPayload | null {
+  if (!value.startsWith(theoremStartMarkerPrefix) || !value.endsWith(theoremStartMarkerSuffix)) {
+    return null;
+  }
+  try {
+    const payload = JSON.parse(
+      decodeURIComponent(
+        value
+          .slice(theoremStartMarkerPrefix.length, -theoremStartMarkerSuffix.length)
+          .replace(/§/g, "%"),
+      ),
+    ) as Partial<TheoremMarkerPayload>;
+    if (
+      typeof payload.label !== "string" ||
+      typeof payload.numbered !== "boolean" ||
+      typeof payload.counterName !== "string" ||
+      (payload.bodyKind !== "quote" && payload.bodyKind !== "normal") ||
+      typeof payload.note !== "string"
+    ) {
+      return null;
+    }
+    return payload as TheoremMarkerPayload;
+  } catch {
+    return null;
+  }
+}
+
 function id() {
-  return crypto.randomUUID();
+  return createUuid();
 }
 
 function isEscaped(text: string, index: number) {
@@ -1315,48 +1365,80 @@ function normalizeLatexExtensions(source: string, warnings: string[]) {
     .replace(/\\begin\{abstract\}/gi, "\\section*{摘要}")
     .replace(/\\end\{abstract\}/gi, "");
 
-  const theoremLabels: Record<string, string> = {
-    theorem: "定理",
-    lemma: "引理",
-    proposition: "命题",
-    corollary: "推论",
-    definition: "定义",
-    proof: "证明",
-    remark: "注记",
-    example: "例",
-    exercise: "练习",
-    assumption: "假设",
-    axiom: "公理",
-    claim: "断言",
-    conjecture: "猜想",
-    criterion: "判据",
-    fact: "事实",
-    notation: "记号",
-    observation: "观察",
-    problem: "问题",
-    question: "问题",
-    solution: "解",
-  };
+  const theoremDefinitions = new Map<string, TheoremEnvironmentDefinition>();
+  const builtInTheorems: Array<
+    [string, string, boolean, string, TheoremBodyKind]
+  > = [
+    ["theorem", "定理", true, "theorem", "quote"],
+    ["lemma", "引理", true, "lemma", "quote"],
+    ["proposition", "命题", true, "proposition", "quote"],
+    ["corollary", "推论", true, "corollary", "quote"],
+    ["definition", "定义", true, "definition", "quote"],
+    ["axiom", "公理", true, "axiom", "quote"],
+    ["assumption", "假设", true, "assumption", "quote"],
+    ["conjecture", "猜想", true, "conjecture", "quote"],
+    ["claim", "断言", true, "claim", "quote"],
+    ["criterion", "判据", true, "criterion", "quote"],
+    ["property", "性质", true, "property", "quote"],
+    ["fact", "事实", true, "fact", "quote"],
+    ["observation", "观察", true, "observation", "quote"],
+    ["example", "例", true, "example", "quote"],
+    ["exercise", "练习", true, "exercise", "quote"],
+    ["problem", "问题", true, "problem", "quote"],
+    ["question", "问题", true, "question", "quote"],
+    ["remark", "注", false, "remark", "quote"],
+    ["note", "注", false, "note", "quote"],
+    ["notation", "记号", false, "notation", "quote"],
+    ["case", "情形", false, "case", "quote"],
+    ["proof", "证明", false, "proof", "normal"],
+    ["solution", "解答", false, "solution", "normal"],
+  ];
+  for (const [environment, label, numbered, counterName, bodyKind] of builtInTheorems) {
+    const definition = { label, numbered, counterName, bodyKind };
+    theoremDefinitions.set(environment, definition);
+    theoremDefinitions.set(`${environment}*`, { ...definition, numbered: false });
+  }
+
   body = body.replace(
-    /\\newtheorem(\*?)\s*\{([A-Za-z@]+)\}(?:\s*\[[^\]]+\])?\s*\{((?:[^{}]|\{[^{}]*\})*)\}(?:\s*\[[^\]]+\])?/gi,
-    (_match, _star: string, environment: string, label: string) => {
-      theoremLabels[environment] = label.trim() || environment;
+    /\\newtheorem(\*)?\s*\{([^{}]+)\}\s*(?:\[([^\]]+)\]\s*)?\{([^{}]*)\}\s*(?:\[([^\]]+)\])?/gi,
+    (
+      _match,
+      starred: string | undefined,
+      rawEnvironment: string,
+      sharedCounter: string | undefined,
+      rawLabel: string,
+    ) => {
+      const environment = rawEnvironment.trim();
+      if (!environment) return "";
+      const existing = theoremDefinitions.get(environment);
+      theoremDefinitions.set(environment, {
+        label: rawLabel.trim() || environment,
+        numbered: !starred,
+        counterName: sharedCounter?.trim() || environment,
+        bodyKind: existing?.bodyKind ?? "quote",
+      });
       return "";
     },
   );
-  for (const [environment, label] of Object.entries(theoremLabels)) {
-    const escapedEnvironment = environment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const begin = new RegExp(
-      `\\\\begin\\{${escapedEnvironment}\\*?\\}(?:\\[([^\\]]*)\\])?`,
-      "gi",
-    );
-    const end = new RegExp(`\\\\end\\{${escapedEnvironment}\\*?\\}`, "gi");
-    body = body
-      .replace(begin, (_match, title: string | undefined) =>
-        `\\begin{quote}\n\\textbf{${label}${title?.trim() ? `（${title.trim()}）` : ""}：} `,
-      )
-      .replace(end, "\n\\end{quote}");
-  }
+
+  body = body.replace(
+    /\\begin\{([^{}]+)\}\s*(?:\[([^\]]*)\])?/g,
+    (match, rawEnvironment: string, note = "") => {
+      const definition = theoremDefinitions.get(rawEnvironment.trim());
+      if (!definition) return match;
+      return `\n${encodeTheoremMarker({
+        ...definition,
+        note: note.trim(),
+      })}\n`;
+    },
+  );
+  body = body.replace(
+    /\\end\{([^{}]+)\}/g,
+    (match, rawEnvironment: string) =>
+      theoremDefinitions.has(rawEnvironment.trim())
+        ? `\n${theoremEndMarker}\n`
+        : match,
+  );
   body = body
     .replace(/\\qedhere\b/g, " □")
     .replace(/\\qed\b/g, " □");
@@ -1536,7 +1618,9 @@ export function parseDocumentImport(
   const paragraph: string[] = [];
   const quote: string[] = [];
   const listModes: Array<"bullet" | "numbered"> = [];
-  let inLatexQuote = false;
+  const theoremBodyKinds: TheoremBodyKind[] = [];
+  const theoremCounters = new Map<string, number>();
+  let latexQuoteDepth = 0;
   let inCode = false;
   let codeEnd = "";
   let codeDescription = "";
@@ -1597,16 +1681,43 @@ export function parseDocumentImport(
     }
 
     if (format === "latex") {
+      const theoremStart = decodeTheoremMarker(trimmed);
+      if (theoremStart) {
+        flushParagraph();
+        flushQuote();
+        let theoremTitle = theoremStart.label;
+        if (theoremStart.numbered) {
+          const nextNumber = (theoremCounters.get(theoremStart.counterName) ?? 0) + 1;
+          theoremCounters.set(theoremStart.counterName, nextNumber);
+          theoremTitle += ` ${nextNumber}`;
+        }
+        if (theoremStart.note) theoremTitle += `（${theoremStart.note}）`;
+        blocks.push({
+          id: id(),
+          kind: "heading",
+          level: 4,
+          runs: parseInline(theoremTitle, format),
+        });
+        theoremBodyKinds.push(theoremStart.bodyKind);
+        continue;
+      }
+      if (trimmed === theoremEndMarker) {
+        flushParagraph();
+        flushQuote();
+        if (theoremBodyKinds.length) theoremBodyKinds.pop();
+        else warnings.push("忽略了没有对应开始标记的 LaTeX 定理环境结束标记。");
+        continue;
+      }
       if (/^\\begin\{(?:quote|quotation)\}\s*$/i.test(trimmed)) {
         flushParagraph();
         flushQuote();
-        inLatexQuote = true;
+        latexQuoteDepth += 1;
         continue;
       }
       if (/^\\end\{(?:quote|quotation)\}\s*$/i.test(trimmed)) {
         flushParagraph();
         flushQuote();
-        inLatexQuote = false;
+        latexQuoteDepth = Math.max(0, latexQuoteDepth - 1);
         continue;
       }
       const listStart = trimmed.match(/^\\begin\{(itemize|enumerate)\}\s*$/i);
@@ -1690,14 +1801,18 @@ export function parseDocumentImport(
       flushQuote();
       continue;
     }
-    if (inLatexQuote) quote.push(trimmed);
+    const theoremBodyKind = theoremBodyKinds.at(-1);
+    if (latexQuoteDepth > 0 || theoremBodyKind === "quote") quote.push(trimmed);
     else paragraph.push(trimmed);
   }
 
   if (inCode) finishCode(`${codeDescription}未闭合，预览已读取到文末。`);
   flushParagraph();
   flushQuote();
-  if (inLatexQuote) warnings.push("LaTeX quote/quotation 环境未闭合，预览已读取到文末。");
+  if (latexQuoteDepth > 0) warnings.push("LaTeX quote/quotation 环境未闭合，预览已读取到文末。");
+  if (theoremBodyKinds.length) {
+    warnings.push(`LaTeX 文档有 ${theoremBodyKinds.length} 个定理/证明环境未闭合。`);
+  }
   if (listModes.length) warnings.push(`LaTeX 文档有 ${listModes.length} 个列表环境未闭合。`);
   if (!blocks.length) throw new Error("没有找到可以插入 Word 的文字或公式。");
 
