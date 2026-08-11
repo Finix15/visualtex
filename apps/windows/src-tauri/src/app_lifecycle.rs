@@ -3,7 +3,7 @@ use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use tauri::webview::PageLoadEvent;
@@ -13,12 +13,17 @@ pub const OFFICE_BACKGROUND_ARGUMENT: &str = "--office-background";
 pub const OFFICE_BOOTSTRAP_ARGUMENT: &str = "--office-bootstrap";
 
 const MAIN_WINDOW_SIZE_FILE: &str = "main-window-size.json";
+const KEYPAD_WINDOW_SIZE_FILE: &str = "main-window-keypad-size.json";
 const DEFAULT_MAIN_WINDOW_WIDTH: f64 = 1182.2857142857142;
 const DEFAULT_MAIN_WINDOW_HEIGHT: f64 = 728.0;
+const DEFAULT_KEYPAD_WINDOW_WIDTH: f64 = 760.0;
+const DEFAULT_KEYPAD_WINDOW_HEIGHT: f64 = 260.0;
+const LEGACY_DEFAULT_KEYPAD_WINDOW_HEIGHT: f64 = 520.0;
 const MIN_MAIN_WINDOW_WIDTH: f64 = 640.0;
-const MIN_MAIN_WINDOW_HEIGHT: f64 = 480.0;
+const MIN_MAIN_WINDOW_HEIGHT: f64 = 240.0;
 const MAX_MAIN_WINDOW_WIDTH: f64 = 4000.0;
 const MAX_MAIN_WINDOW_HEIGHT: f64 = 3000.0;
+static MAIN_WINDOW_KEYPAD_MODE: AtomicBool = AtomicBool::new(false);
 static MAIN_WINDOW_SIZE_WRITE_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -28,32 +33,97 @@ struct MainWindowSizePreference {
     height: f64,
 }
 
-fn normalize_main_window_size(width: f64, height: f64) -> MainWindowSizePreference {
-    let width = if width.is_finite() { width } else { DEFAULT_MAIN_WINDOW_WIDTH };
-    let height = if height.is_finite() { height } else { DEFAULT_MAIN_WINDOW_HEIGHT };
+fn default_main_window_size(keypad_mode: bool) -> MainWindowSizePreference {
+    if keypad_mode {
+        MainWindowSizePreference {
+            width: DEFAULT_KEYPAD_WINDOW_WIDTH,
+            height: DEFAULT_KEYPAD_WINDOW_HEIGHT,
+        }
+    } else {
+        MainWindowSizePreference {
+            width: DEFAULT_MAIN_WINDOW_WIDTH,
+            height: DEFAULT_MAIN_WINDOW_HEIGHT,
+        }
+    }
+}
+
+fn normalize_main_window_size_for_mode(
+    width: f64,
+    height: f64,
+    keypad_mode: bool,
+) -> MainWindowSizePreference {
+    let defaults = default_main_window_size(keypad_mode);
+    let width = if width.is_finite() { width } else { defaults.width };
+    let height = if height.is_finite() { height } else { defaults.height };
     MainWindowSizePreference {
         width: width.clamp(MIN_MAIN_WINDOW_WIDTH, MAX_MAIN_WINDOW_WIDTH),
         height: height.clamp(MIN_MAIN_WINDOW_HEIGHT, MAX_MAIN_WINDOW_HEIGHT),
     }
 }
 
-fn main_window_size_path(app: &AppHandle) -> Result<PathBuf, String> {
+fn normalize_main_window_size(width: f64, height: f64) -> MainWindowSizePreference {
+    normalize_main_window_size_for_mode(width, height, false)
+}
+
+fn migrate_legacy_keypad_window_size(
+    size: MainWindowSizePreference,
+    keypad_mode: bool,
+) -> MainWindowSizePreference {
+    if keypad_mode
+        && (size.width - DEFAULT_KEYPAD_WINDOW_WIDTH).abs() < 0.5
+        && (size.height - LEGACY_DEFAULT_KEYPAD_WINDOW_HEIGHT).abs() < 0.5
+    {
+        return default_main_window_size(true);
+    }
+    size
+}
+
+fn main_window_size_path_for_mode(app: &AppHandle, keypad_mode: bool) -> Result<PathBuf, String> {
     let app_data = app
         .path()
         .app_data_dir()
         .map_err(|error| format!("Unable to resolve VisualTeX app-data directory: {error}"))?;
-    Ok(app_data.join(MAIN_WINDOW_SIZE_FILE))
+    Ok(app_data.join(if keypad_mode {
+        KEYPAD_WINDOW_SIZE_FILE
+    } else {
+        MAIN_WINDOW_SIZE_FILE
+    }))
+}
+
+fn read_main_window_size_for_mode(
+    app: &AppHandle,
+    keypad_mode: bool,
+) -> Option<MainWindowSizePreference> {
+    let path = main_window_size_path_for_mode(app, keypad_mode).ok()?;
+    let bytes = fs::read(&path).ok()?;
+    let size = serde_json::from_slice::<MainWindowSizePreference>(&bytes).ok()?;
+    let normalized = normalize_main_window_size_for_mode(size.width, size.height, keypad_mode);
+    let migrated = migrate_legacy_keypad_window_size(normalized, keypad_mode);
+    if keypad_mode
+        && (migrated.width - normalized.width).abs() >= 0.5
+        || keypad_mode && (migrated.height - normalized.height).abs() >= 0.5
+    {
+        if let Ok(bytes) = serde_json::to_vec_pretty(&migrated) {
+            let _ = fs::write(&path, bytes);
+        }
+        append_lifecycle_log(format!(
+            "migrated legacy keypad window size from {}x{} to {}x{}",
+            normalized.width, normalized.height, migrated.width, migrated.height
+        ));
+    }
+    Some(migrated)
 }
 
 fn read_main_window_size(app: &AppHandle) -> Option<MainWindowSizePreference> {
-    let path = main_window_size_path(app).ok()?;
-    let bytes = fs::read(path).ok()?;
-    let size = serde_json::from_slice::<MainWindowSizePreference>(&bytes).ok()?;
-    Some(normalize_main_window_size(size.width, size.height))
+    read_main_window_size_for_mode(app, false)
 }
 
-fn write_main_window_size(app: &AppHandle, size: MainWindowSizePreference) -> Result<(), String> {
-    let path = main_window_size_path(app)?;
+fn write_main_window_size_for_mode(
+    app: &AppHandle,
+    size: MainWindowSizePreference,
+    keypad_mode: bool,
+) -> Result<(), String> {
+    let path = main_window_size_path_for_mode(app, keypad_mode)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
@@ -61,18 +131,37 @@ fn write_main_window_size(app: &AppHandle, size: MainWindowSizePreference) -> Re
     fs::write(path, bytes).map_err(|error| error.to_string())
 }
 
+fn write_main_window_size(app: &AppHandle, size: MainWindowSizePreference) -> Result<(), String> {
+    write_main_window_size_for_mode(app, size, false)
+}
+
+fn current_main_window_size(app: &AppHandle, keypad_mode: bool) -> Option<MainWindowSizePreference> {
+    let window = app.get_webview_window("main")?;
+    let physical = window.inner_size().ok()?;
+    let scale_factor = window.scale_factor().ok()?.max(0.1);
+    Some(normalize_main_window_size_for_mode(
+        f64::from(physical.width) / scale_factor,
+        f64::from(physical.height) / scale_factor,
+        keypad_mode,
+    ))
+}
+
 pub(crate) fn configuration_main_window_size(app: &AppHandle) -> Option<(f64, f64)> {
-    if let Some(window) = app.get_webview_window("main") {
-        if let (Ok(physical), Ok(scale_factor)) = (window.inner_size(), window.scale_factor()) {
-            let scale_factor = scale_factor.max(0.1);
-            let size = normalize_main_window_size(
-                f64::from(physical.width) / scale_factor,
-                f64::from(physical.height) / scale_factor,
-            );
+    if !MAIN_WINDOW_KEYPAD_MODE.load(Ordering::SeqCst) {
+        if let Some(size) = current_main_window_size(app, false) {
             return Some((size.width, size.height));
         }
     }
     read_main_window_size(app).map(|size| (size.width, size.height))
+}
+
+pub(crate) fn configuration_keypad_window_size(app: &AppHandle) -> Option<(f64, f64)> {
+    if MAIN_WINDOW_KEYPAD_MODE.load(Ordering::SeqCst) {
+        if let Some(size) = current_main_window_size(app, true) {
+            return Some((size.width, size.height));
+        }
+    }
+    read_main_window_size_for_mode(app, true).map(|size| (size.width, size.height))
 }
 
 pub(crate) fn apply_configuration_main_window_size(
@@ -82,12 +171,68 @@ pub(crate) fn apply_configuration_main_window_size(
 ) -> Result<(), String> {
     let size = normalize_main_window_size(width, height);
     write_main_window_size(app, size)?;
-    if let Some(window) = app.get_webview_window("main") {
-        window
-            .set_size(tauri::LogicalSize::new(size.width, size.height))
-            .map_err(|error| error.to_string())?;
-        window.center().map_err(|error| error.to_string())?;
+    if !MAIN_WINDOW_KEYPAD_MODE.load(Ordering::SeqCst) {
+        if let Some(window) = app.get_webview_window("main") {
+            window
+                .set_size(tauri::LogicalSize::new(size.width, size.height))
+                .map_err(|error| error.to_string())?;
+            window.center().map_err(|error| error.to_string())?;
+        }
     }
+    Ok(())
+}
+
+pub(crate) fn apply_configuration_keypad_window_size(
+    app: &AppHandle,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    let size = normalize_main_window_size_for_mode(width, height, true);
+    write_main_window_size_for_mode(app, size, true)?;
+    if MAIN_WINDOW_KEYPAD_MODE.load(Ordering::SeqCst) {
+        if let Some(window) = app.get_webview_window("main") {
+            window
+                .set_size(tauri::LogicalSize::new(size.width, size.height))
+                .map_err(|error| error.to_string())?;
+            window.center().map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn set_main_window_keypad_mode(app: &AppHandle, enabled: bool) -> Result<(), String> {
+    let previous_mode = MAIN_WINDOW_KEYPAD_MODE.load(Ordering::SeqCst);
+    MAIN_WINDOW_SIZE_WRITE_GENERATION.fetch_add(1, Ordering::SeqCst);
+
+    if let Some(size) = current_main_window_size(app, previous_mode) {
+        write_main_window_size_for_mode(app, size, previous_mode)?;
+    }
+
+    MAIN_WINDOW_KEYPAD_MODE.store(enabled, Ordering::SeqCst);
+    let target_size = read_main_window_size_for_mode(app, enabled)
+        .unwrap_or_else(|| default_main_window_size(enabled));
+
+    if let Some(window) = app.get_webview_window("main") {
+        if window.is_maximized().unwrap_or(false) {
+            window.unmaximize().map_err(|error| error.to_string())?;
+        }
+        window
+            .set_min_size(Some(tauri::LogicalSize::new(
+                MIN_MAIN_WINDOW_WIDTH,
+                MIN_MAIN_WINDOW_HEIGHT,
+            )))
+            .map_err(|error| error.to_string())?;
+        window
+            .set_size(tauri::LogicalSize::new(target_size.width, target_size.height))
+            .map_err(|error| error.to_string())?;
+    }
+
+    append_lifecycle_log(format!(
+        "main window switched to {} mode at {}x{}",
+        if enabled { "keypad" } else { "normal" },
+        target_size.width,
+        target_size.height
+    ));
     Ok(())
 }
 
@@ -102,10 +247,12 @@ pub(crate) fn schedule_persist_main_window_size(
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
+    let keypad_mode = MAIN_WINDOW_KEYPAD_MODE.load(Ordering::SeqCst);
     let scale_factor = window.scale_factor().unwrap_or(1.0).max(0.1);
-    let size = normalize_main_window_size(
+    let size = normalize_main_window_size_for_mode(
         f64::from(physical_width) / scale_factor,
         f64::from(physical_height) / scale_factor,
+        keypad_mode,
     );
     let generation = MAIN_WINDOW_SIZE_WRITE_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     let app = app.clone();
@@ -114,8 +261,11 @@ pub(crate) fn schedule_persist_main_window_size(
         if MAIN_WINDOW_SIZE_WRITE_GENERATION.load(Ordering::SeqCst) != generation {
             return;
         }
-        if let Err(error) = write_main_window_size(&app, size) {
-            append_lifecycle_log(format!("Unable to persist main window size: {error}"));
+        if let Err(error) = write_main_window_size_for_mode(&app, size, keypad_mode) {
+            append_lifecycle_log(format!(
+                "Unable to persist {} main window size: {error}",
+                if keypad_mode { "keypad" } else { "normal" }
+            ));
         }
     });
 }
@@ -342,6 +492,12 @@ pub fn ensure_main_window(app: &AppHandle) -> Result<WebviewWindow, String> {
         return Ok(window);
     }
 
+    // Every newly created desktop window starts in normal mode. Keypad mode is
+    // an in-window compact workspace and restores its own geometry only after
+    // the user explicitly enters it.
+    MAIN_WINDOW_KEYPAD_MODE.store(false, Ordering::SeqCst);
+    MAIN_WINDOW_SIZE_WRITE_GENERATION.fetch_add(1, Ordering::SeqCst);
+
     validate_embedded_main_assets(app).map_err(|error| {
         append_lifecycle_log(format!("main window creation blocked by embedded asset failure: {error}"));
         error
@@ -403,6 +559,16 @@ pub fn destroy_main_window_for_background(app: &AppHandle) -> Result<(), String>
         append_lifecycle_log("main window close requested for background retention, but main no longer exists");
         return Ok(());
     };
+    let keypad_mode = MAIN_WINDOW_KEYPAD_MODE.load(Ordering::SeqCst);
+    MAIN_WINDOW_SIZE_WRITE_GENERATION.fetch_add(1, Ordering::SeqCst);
+    if let Some(size) = current_main_window_size(app, keypad_mode) {
+        if let Err(error) = write_main_window_size_for_mode(app, size, keypad_mode) {
+            append_lifecycle_log(format!(
+                "Unable to persist {} main window size before destroy: {error}",
+                if keypad_mode { "keypad" } else { "normal" }
+            ));
+        }
+    }
     window.destroy().map_err(|error| {
         let message = format!("Unable to destroy main window while retaining background companion: {error}");
         append_lifecycle_log(&message);
@@ -415,6 +581,48 @@ pub fn destroy_main_window_for_background(app: &AppHandle) -> Result<(), String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normal_and_keypad_window_defaults_are_independent() {
+        let normal = normalize_main_window_size_for_mode(f64::NAN, f64::NAN, false);
+        let keypad = normalize_main_window_size_for_mode(f64::NAN, f64::NAN, true);
+        assert_eq!(normal.width, DEFAULT_MAIN_WINDOW_WIDTH);
+        assert_eq!(normal.height, DEFAULT_MAIN_WINDOW_HEIGHT);
+        assert_eq!(keypad.width, DEFAULT_KEYPAD_WINDOW_WIDTH);
+        assert_eq!(keypad.height, DEFAULT_KEYPAD_WINDOW_HEIGHT);
+        assert!(keypad.width < normal.width);
+        assert!(keypad.height < normal.height);
+    }
+
+    #[test]
+    fn keypad_window_can_reach_main_window_minimum() {
+        let keypad = normalize_main_window_size_for_mode(1.0, 1.0, true);
+        assert_eq!(keypad.width, MIN_MAIN_WINDOW_WIDTH);
+        assert_eq!(keypad.height, MIN_MAIN_WINDOW_HEIGHT);
+    }
+
+    #[test]
+    fn legacy_keypad_default_migrates_to_compact_height() {
+        let migrated = migrate_legacy_keypad_window_size(
+            MainWindowSizePreference {
+                width: DEFAULT_KEYPAD_WINDOW_WIDTH,
+                height: LEGACY_DEFAULT_KEYPAD_WINDOW_HEIGHT,
+            },
+            true,
+        );
+        assert_eq!(migrated.width, DEFAULT_KEYPAD_WINDOW_WIDTH);
+        assert_eq!(migrated.height, DEFAULT_KEYPAD_WINDOW_HEIGHT);
+
+        let custom = migrate_legacy_keypad_window_size(
+            MainWindowSizePreference {
+                width: 900.0,
+                height: 520.0,
+            },
+            true,
+        );
+        assert_eq!(custom.width, 900.0);
+        assert_eq!(custom.height, 520.0);
+    }
 
     #[test]
     fn run_modes_are_distinct_and_bootstrap_has_priority() {

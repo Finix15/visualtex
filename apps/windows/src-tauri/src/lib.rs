@@ -71,6 +71,7 @@ struct ConfigurationWindowSize {
 #[serde(rename_all = "camelCase")]
 struct AppWindowConfiguration {
     main: Option<ConfigurationWindowSize>,
+    keypad: Option<ConfigurationWindowSize>,
     office_editor: Option<ConfigurationWindowSize>,
 }
 
@@ -106,6 +107,8 @@ fn apply_word_numbering_user_configuration(
 fn get_app_window_configuration(app: AppHandle) -> Result<AppWindowConfiguration, String> {
     let main = app_lifecycle::configuration_main_window_size(&app)
         .map(|(width, height)| ConfigurationWindowSize { width, height });
+    let keypad = app_lifecycle::configuration_keypad_window_size(&app)
+        .map(|(width, height)| ConfigurationWindowSize { width, height });
     #[cfg(target_os = "windows")]
     let office_editor = office::server::configuration_office_editor_window_size(&app)
         .map(|(width, height)| ConfigurationWindowSize { width, height });
@@ -114,6 +117,7 @@ fn get_app_window_configuration(app: AppHandle) -> Result<AppWindowConfiguration
 
     Ok(AppWindowConfiguration {
         main,
+        keypad,
         office_editor,
     })
 }
@@ -130,6 +134,13 @@ fn apply_app_window_configuration(
             requested.height,
         )?;
     }
+    if let Some(requested) = configuration.keypad {
+        app_lifecycle::apply_configuration_keypad_window_size(
+            &app,
+            requested.width,
+            requested.height,
+        )?;
+    }
     #[cfg(target_os = "windows")]
     if let Some(requested) = configuration.office_editor {
         office::server::apply_configuration_office_editor_window_size(
@@ -139,6 +150,11 @@ fn apply_app_window_configuration(
         )?;
     }
     get_app_window_configuration(app)
+}
+
+#[tauri::command]
+fn set_main_window_keypad_mode(app: AppHandle, enabled: bool) -> Result<(), String> {
+    app_lifecycle::set_main_window_keypad_mode(&app, enabled)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3917,6 +3933,7 @@ pub fn run() {
             windows_quick_ocr::write_windows_ocr_clipboard_text,
             get_app_window_configuration,
             apply_app_window_configuration,
+            set_main_window_keypad_mode,
             get_word_numbering_user_configuration,
             apply_word_numbering_user_configuration,
             office::lifecycle::set_app_theme,
