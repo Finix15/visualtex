@@ -293,11 +293,27 @@ function MathPreviewComponent({
     measure();
     scheduleMeasure();
     void document.fonts?.ready.then(scheduleMeasure);
-    const resizeObserver = new ResizeObserver(scheduleMeasure);
+    let observedHostWidth = host.clientWidth;
+    const resizeObserver = new ResizeObserver(() => {
+      if (fluidHeight) {
+        // A fluid tile writes its own measured height back to the host. Watching
+        // that height creates a feedback loop on fractional-DPI WebView2 setups:
+        // ResizeObserver -> temporarily unscale -> measure -> resize -> repeat,
+        // which makes the formula appear to breathe by a fraction of a pixel.
+        // Fluid previews only need a new fit calculation when their width changes;
+        // markup changes and font loading already schedule their own measurements.
+        const nextWidth = host.clientWidth;
+        if (nextWidth === observedHostWidth) return;
+        observedHostWidth = nextWidth;
+      }
+      scheduleMeasure();
+    });
     resizeObserver.observe(host);
-    resizeObserver.observe(content);
-    const observedVisualRoot = content.querySelector<HTMLElement>(".ML__latex");
-    if (observedVisualRoot) resizeObserver.observe(observedVisualRoot);
+    if (!fluidHeight) {
+      resizeObserver.observe(content);
+      const observedVisualRoot = content.querySelector<HTMLElement>(".ML__latex");
+      if (observedVisualRoot) resizeObserver.observe(observedVisualRoot);
+    }
 
     return () => {
       if (animationFrame) cancelAnimationFrame(animationFrame);

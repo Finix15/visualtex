@@ -67,6 +67,10 @@ for (const token of [
 ]) {
   assert.ok(silentNative.includes(token), `Native silent OCR is missing ${token}`);
 }
+assert.ok(silentNative.includes('"Ctrl+Alt+O"'));
+assert.ok(silentNative.includes('"Ctrl+Alt+Shift+O"'));
+assert.ok(silentNative.includes("SILENT_OCR_HOTKEY_CANDIDATES"));
+assert.ok(app.includes("silentOcrShortcut={silentOcrShortcut}"));
 assert.ok(!silentNative.includes("visualtex-silent-ocr-global"));
 assert.ok(!shortcutRuntime.includes("visualtex-silent-ocr"));
 assert.ok(tauriLib.includes("windows_silent_ocr_hotkey::configure"));

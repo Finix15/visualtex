@@ -111,6 +111,22 @@ internal static partial class Program
                 "The second edit reused the closed Session instead of opening a new one.");
             _ = WaitForVisibleOfficeEditorWindow(TimeSpan.FromSeconds(20));
 
+            // The native-close watcher for the first Session wakes after five
+            // seconds. Keep the second editor alive past that boundary so a
+            // stale cleanup can never hide it or clear its Session id.
+            Thread.Sleep(TimeSpan.FromSeconds(6));
+            AssertTrue(
+                FindVisibleOfficeEditorWindow() != IntPtr.Zero,
+                "A stale native-close watcher hid the newer Office editor Session.");
+            var secondStillReadable = client.GetSessionAsync(
+                    secondSessionId,
+                    CancellationToken.None)
+                .GetAwaiter().GetResult();
+            AssertEqual(
+                secondSessionId,
+                secondStillReadable.Id,
+                "The newer Office editor Session disappeared after the previous close watcher fired.");
+
             client.PatchAsync(
                     secondSessionId,
                     new
@@ -128,7 +144,8 @@ internal static partial class Program
 
             Console.WriteLine(
                 "Word native editor close acceptance passed: WM_CLOSE finalized the first Session, "
-                + "released the Word operation gate, hid the reusable editor, and a second edit opened normally.");
+                + "released the Word operation gate, and the reused editor kept the second Session alive "
+                + "after the first Session's delayed close watcher expired.");
         }
         finally
         {

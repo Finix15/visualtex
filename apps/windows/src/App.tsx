@@ -161,6 +161,7 @@ function App() {
   const [silentOcrEnabled, setSilentOcrEnabled] = useState(
     () => readLocalStorage(SILENT_OCR_STORAGE_KEY) === "true",
   );
+  const [silentOcrShortcut, setSilentOcrShortcut] = useState(SILENT_OCR_SHORTCUT);
   const [quickOcrCaptureMode, setQuickOcrCaptureMode] = useState<QuickOcrCaptureMode>(() => {
     const stored = readLocalStorage(QUICK_OCR_CAPTURE_MODE_STORAGE_KEY);
     return isQuickOcrCaptureMode(stored) ? stored : "immediate";
@@ -424,8 +425,12 @@ function App() {
   useEffect(() => {
     if (!isTauriEnvironment()) return;
     let cancelled = false;
-    void configureSilentOcr(silentOcrEnabled, ocrModel, latexCodeFormat).catch(
-      (error) => {
+    void configureSilentOcr(silentOcrEnabled, ocrModel, latexCodeFormat)
+      .then((shortcut) => {
+        if (cancelled || !silentOcrEnabled || !shortcut) return;
+        setSilentOcrShortcut(shortcut);
+      })
+      .catch((error) => {
         if (cancelled || !silentOcrEnabled) return;
         setSilentOcrEnabled(false);
         writeLocalStorage(SILENT_OCR_STORAGE_KEY, "false");
@@ -436,8 +441,7 @@ function App() {
               ? "Unable to enable silent OCR"
               : "无法启用静默 OCR",
         );
-      },
-    );
+      });
     return () => {
       cancelled = true;
     };
@@ -786,8 +790,8 @@ function App() {
     setToast(
       enabled
         ? isEn
-          ? `Silent OCR enabled · ${SILENT_OCR_SHORTCUT}`
-          : `静默 OCR 已开启 · ${SILENT_OCR_SHORTCUT}`
+          ? `Silent OCR enabled · ${silentOcrShortcut}`
+          : `静默 OCR 已开启 · ${silentOcrShortcut}`
         : isEn
           ? "Silent OCR disabled"
           : "静默 OCR 已关闭",
@@ -1639,6 +1643,7 @@ function App() {
         quickOcrCaptureMode={quickOcrCaptureMode}
         onQuickOcrCaptureModeChange={handleQuickOcrCaptureModeChange}
         silentOcrEnabled={silentOcrEnabled}
+        silentOcrShortcut={silentOcrShortcut}
         onSilentOcrEnabledChange={handleSilentOcrEnabledChange}
         ocrOverlay={
           inlineOcr ? (

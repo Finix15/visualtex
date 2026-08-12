@@ -63,6 +63,7 @@ export interface EditorWorkspaceProps {
   quickOcrCaptureMode?: QuickOcrCaptureMode;
   onQuickOcrCaptureModeChange?: (mode: QuickOcrCaptureMode) => void;
   silentOcrEnabled?: boolean;
+  silentOcrShortcut?: string;
   onSilentOcrEnabledChange?: (enabled: boolean) => void;
   ocrOverlay?: ReactNode;
 }

@@ -158,6 +158,7 @@ export function EditorWorkspace({
   quickOcrCaptureMode = "immediate",
   onQuickOcrCaptureModeChange,
   silentOcrEnabled = false,
+  silentOcrShortcut = "Ctrl+Alt+O",
   onSilentOcrEnabledChange,
   ocrOverlay,
 }: EditorWorkspaceProps) {
@@ -1288,8 +1289,8 @@ export function EditorWorkspace({
                       className={`silent-ocr-toggle${silentOcrEnabled ? " is-active" : ""}`}
                       title={
                         isEn
-                          ? "Press Ctrl+Alt+O anywhere to capture, recognize, and copy LaTeX in the background"
-                          : "开启后可在任意应用中按 Ctrl+Alt+O 框选截图，后台识别并按当前源码格式复制 LaTeX"
+                          ? `Press ${silentOcrShortcut} anywhere to capture, recognize, and copy LaTeX in the background`
+                          : `开启后可在任意应用中按 ${silentOcrShortcut} 框选截图，后台识别并按当前源码格式复制 LaTeX`
                       }
                     >
                       <input
@@ -1302,7 +1303,7 @@ export function EditorWorkspace({
                       />
                       <span className="silent-ocr-indicator" aria-hidden="true" />
                       <span>{isEn ? "Silent" : "静默"}</span>
-                      <kbd>Ctrl+Alt+O</kbd>
+                      <kbd>{silentOcrShortcut}</kbd>
                     </label>
                   )}
                 </div>

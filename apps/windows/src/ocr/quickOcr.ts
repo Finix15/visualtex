@@ -81,8 +81,8 @@ export async function configureSilentOcr(
   model: OcrModelName,
   copyFormat: LatexCodeFormat,
 ) {
-  if (!hasTauriRuntime()) return;
-  await invoke("configure_silent_ocr", { enabled, model, copyFormat });
+  if (!hasTauriRuntime()) return enabled ? SILENT_OCR_SHORTCUT : "";
+  return invoke<string>("configure_silent_ocr", { enabled, model, copyFormat });
 }
 
 export function quickOcrCaptureToFile(capture: QuickOcrCapture) {

@@ -3768,7 +3768,7 @@ fn configure_silent_ocr(
     enabled: bool,
     model: String,
     copy_format: String,
-) -> Result<(), String> {
+) -> Result<String, String> {
     windows_silent_ocr_hotkey::configure(&app, enabled, &model, &copy_format)
 }
 

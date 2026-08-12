@@ -16,8 +16,16 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 const HOTKEY_ID: i32 = 0x5654; // "VT", within RegisterHotKey's application ID range
 const MOD_ALT: u32 = 0x0001;
 const MOD_CONTROL: u32 = 0x0002;
+const MOD_SHIFT: u32 = 0x0004;
 const MOD_NOREPEAT: u32 = 0x4000;
 const VK_O: u32 = 0x4f;
+const SILENT_OCR_HOTKEY_CANDIDATES: &[(u32, &str)] = &[
+    (MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, "Ctrl+Alt+O"),
+    (
+        MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT,
+        "Ctrl+Alt+Shift+O",
+    ),
+];
 const WM_HOTKEY: u32 = 0x0312;
 const PM_REMOVE: u32 = 0x0001;
 const SILENT_OCR_CONFIG_FILE: &str = "silent-ocr.json";
@@ -121,7 +129,7 @@ impl Default for SilentOcrConfiguration {
 enum HotkeyCommand {
     SetRegistered {
         enabled: bool,
-        reply: Sender<Result<(), String>>,
+        reply: Sender<Result<String, String>>,
     },
 }
 
@@ -281,21 +289,29 @@ fn schedule_hud_hide(app: AppHandle, delay: Duration) {
     });
 }
 
-fn register_hotkey() -> Result<(), String> {
-    let result = unsafe {
-        RegisterHotKey(
-            std::ptr::null_mut(),
-            HOTKEY_ID,
-            MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
-            VK_O,
-        )
-    };
-    if result != 0 {
-        return Ok(());
+fn register_hotkey() -> Result<&'static str, String> {
+    let mut failures = Vec::new();
+    for (modifiers, shortcut) in SILENT_OCR_HOTKEY_CANDIDATES {
+        let result = unsafe {
+            RegisterHotKey(
+                std::ptr::null_mut(),
+                HOTKEY_ID,
+                *modifiers,
+                VK_O,
+            )
+        };
+        if result != 0 {
+            return Ok(*shortcut);
+        }
+        failures.push(format!("{shortcut}: {}", std::io::Error::last_os_error()));
     }
     Err(format!(
-        "Unable to register Ctrl+Alt+O for silent OCR: {}",
-        std::io::Error::last_os_error()
+        "无法注册静默 OCR 全局快捷键；Ctrl+Alt+O 可能被其他软件占用，备用快捷键也不可用。{}",
+        if failures.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", failures.join("; "))
+        }
     ))
 }
 
@@ -708,22 +724,28 @@ fn launch_silent_ocr(app: AppHandle) {
 }
 
 fn hotkey_thread(app: AppHandle, receiver: Receiver<HotkeyCommand>) {
-    let mut registered = false;
+    let mut registered_shortcut: Option<&'static str> = None;
     loop {
         match receiver.recv_timeout(Duration::from_millis(12)) {
             Ok(HotkeyCommand::SetRegistered { enabled, reply }) => {
-                let result = if enabled == registered {
-                    Ok(())
+                let result = if enabled == registered_shortcut.is_some() {
+                    Ok(registered_shortcut.unwrap_or_default().to_string())
                 } else if enabled {
-                    register_hotkey().inspect(|_| registered = true)
+                    register_hotkey().map(|shortcut| {
+                        registered_shortcut = Some(shortcut);
+                        shortcut.to_string()
+                    })
                 } else {
-                    unregister_hotkey().inspect(|_| registered = false)
+                    unregister_hotkey().map(|_| {
+                        registered_shortcut = None;
+                        String::new()
+                    })
                 };
                 let _ = reply.send(result);
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                if registered {
+                if registered_shortcut.is_some() {
                     let _ = unregister_hotkey();
                 }
                 return;
@@ -778,7 +800,7 @@ pub(crate) fn initialize(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn set_registered(enabled: bool) -> Result<(), String> {
+fn set_registered(enabled: bool) -> Result<String, String> {
     let sender = COMMAND_SENDER
         .get()
         .ok_or_else(|| "Silent OCR hotkey bridge is unavailable".to_string())?;
@@ -799,7 +821,7 @@ pub(crate) fn configure(
     enabled: bool,
     model: &str,
     copy_format: &str,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let normalized_model = model.trim();
     if !crate::ALLOWED_MODELS.contains(&normalized_model) {
         return Err("Unsupported silent OCR model".to_string());
@@ -809,7 +831,7 @@ pub(crate) fn configure(
         return Err("Unsupported silent OCR LaTeX copy format".to_string());
     }
 
-    set_registered(enabled)?;
+    let registered_shortcut = set_registered(enabled)?;
     let next = SilentOcrConfiguration {
         enabled,
         model: normalized_model.to_string(),
@@ -822,7 +844,7 @@ pub(crate) fn configure(
         *configuration = next.clone();
     }
     persist_configuration(app, &next);
-    Ok(())
+    Ok(registered_shortcut)
 }
 
 #[cfg(test)]
