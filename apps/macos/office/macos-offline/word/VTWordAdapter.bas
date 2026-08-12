@@ -1810,16 +1810,83 @@ Private Function VTRegressionCreateNumberedImageAtCaret( _
         formulaRange.InlineShapes(1)
 End Function
 
+Private Function VTRegressionAppendChapterHeading( _
+    ByVal documentObject As Document, _
+    ByVal headingText As String, _
+    ByVal useBuiltInHeadingStyle As Boolean) As Range
+
+    Dim insertionRange As Range
+    Dim headingRange As Range
+    Dim headingStart As Long
+
+    If documentObject Is Nothing Or Len(headingText) = 0 Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The chapter-numbering regression heading target is invalid."
+    End If
+    Set insertionRange = VTAppendRegressionParagraph(documentObject)
+    headingStart = insertionRange.Start
+    insertionRange.Text = headingText
+    Set headingRange = documentObject.Range( _
+        Start:=headingStart, End:=headingStart + Len(headingText))
+    Set headingRange = headingRange.Paragraphs(1).Range.Duplicate
+    If useBuiltInHeadingStyle Then
+        headingRange.Style = wdStyleHeading1
+    Else
+        headingRange.Style = wdStyleNormal
+        headingRange.ParagraphFormat.OutlineLevel = wdOutlineLevel1
+    End If
+    If headingRange.Paragraphs(1).OutlineLevel <> wdOutlineLevel1 Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The chapter-numbering regression heading did not retain level 1."
+    End If
+    Set VTRegressionAppendChapterHeading = headingRange.Duplicate
+End Function
+
+Private Function VTRegressionAppendSectionHeading( _
+    ByVal documentObject As Document, _
+    ByVal headingText As String, _
+    ByVal useBuiltInHeadingStyle As Boolean) As Range
+
+    Dim insertionRange As Range
+    Dim headingRange As Range
+    Dim headingStart As Long
+
+    If documentObject Is Nothing Or Len(headingText) = 0 Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The section-numbering regression heading target is invalid."
+    End If
+    Set insertionRange = VTAppendRegressionParagraph(documentObject)
+    headingStart = insertionRange.Start
+    insertionRange.Text = headingText
+    Set headingRange = documentObject.Range( _
+        Start:=headingStart, End:=headingStart + Len(headingText))
+    Set headingRange = headingRange.Paragraphs(1).Range.Duplicate
+    If useBuiltInHeadingStyle Then
+        headingRange.Style = wdStyleHeading2
+    Else
+        headingRange.Style = wdStyleNormal
+        headingRange.ParagraphFormat.OutlineLevel = wdOutlineLevel2
+    End If
+    If headingRange.Paragraphs(1).OutlineLevel <> wdOutlineLevel2 Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The section-numbering regression heading did not retain level 2."
+    End If
+    Set VTRegressionAppendSectionHeading = headingRange.Duplicate
+End Function
+
 Private Sub VTRegressionAssertChapterNumberOrdinal( _
     ByVal documentObject As Document, _
     ByVal formulaId As String, _
-    ByVal expectedOrdinal As Long)
+    ByVal expectedOrdinal As Long, _
+    Optional ByVal expectedPrefix As String = "")
 
     Dim sequenceBookmarkName As String
     Dim numberBookmarkName As String
     Dim sequenceField As Field
     Dim numberRange As Range
     Dim expectedSuffix As String
+    Dim expectedNumberText As String
+    Dim restartLevel As Long
 
     If documentObject Is Nothing Or Not VTIsCanonicalUuid(formulaId) Or _
        expectedOrdinal < 1 Then
@@ -1834,10 +1901,14 @@ Private Sub VTRegressionAssertChapterNumberOrdinal( _
         Err.Raise vbObjectError + 7598, "VisualTeX", _
             "The chapter-numbering regression lost its SEQ field."
     End If
-    If VTEquationSequenceResultText(sequenceField) <> CStr(expectedOrdinal) Then
+    restartLevel = VTEquationNumberingRestartLevel(documentObject)
+    If Not VTEquationSequenceFieldHasOrdinal( _
+       sequenceField, VTNativeEquationLabelName(), _
+       expectedOrdinal, restartLevel) Then
         Err.Raise vbObjectError + 7598, "VisualTeX", _
             "The chapter-numbering regression SEQ result is stale" & _
-            " [actual=" & VTEquationSequenceResultText(sequenceField) & _
+            " [code=" & sequenceField.Code.Text & _
+            "; actual=" & VTEquationSequenceResultText(sequenceField) & _
             "; expected=" & CStr(expectedOrdinal) & "]."
     End If
     If Not documentObject.Bookmarks.Exists(numberBookmarkName) Then
@@ -1846,94 +1917,277 @@ Private Sub VTRegressionAssertChapterNumberOrdinal( _
     End If
     Set numberRange = documentObject.Bookmarks( _
         numberBookmarkName).Range.Duplicate
-    expectedSuffix = CStr(expectedOrdinal) & ")"
-    If Len(numberRange.Text) < Len(expectedSuffix) Or _
-       Right$(numberRange.Text, Len(expectedSuffix)) <> expectedSuffix Then
-        Err.Raise vbObjectError + 7598, "VisualTeX", _
-            "The chapter-numbering regression visible number is stale" & _
-            " [actual=" & numberRange.Text & _
-            "; expectedSuffix=" & expectedSuffix & "]."
+    If Len(expectedPrefix) > 0 Then
+        expectedNumberText = "(" & expectedPrefix & _
+            VTEquationNumberingDisplaySeparator(documentObject) & _
+            CStr(expectedOrdinal) & ")"
+        If numberRange.Text <> expectedNumberText Then
+            Err.Raise vbObjectError + 7598, "VisualTeX", _
+                "The chapter-numbering regression visible number is stale" & _
+                " [actual=" & numberRange.Text & _
+                "; expected=" & expectedNumberText & "]."
+        End If
+    Else
+        expectedSuffix = CStr(expectedOrdinal) & ")"
+        If Len(numberRange.Text) < Len(expectedSuffix) Or _
+           Right$(numberRange.Text, Len(expectedSuffix)) <> expectedSuffix Then
+            Err.Raise vbObjectError + 7598, "VisualTeX", _
+                "The chapter-numbering regression visible number is stale" & _
+                " [actual=" & numberRange.Text & _
+                "; expectedSuffix=" & expectedSuffix & "]."
+        End If
     End If
 End Sub
 
 Public Sub VisualTeX_RunWordChapterPrependNumberingRegression()
-    Const formulaCount As Long = 4
     Const latexBase64 As String = "eF4yK3leMg"
 
     Dim testDocument As Document
     Dim formulaShape As InlineShape
+    Dim formulaRange As Range
     Dim insertionRange As Range
+    Dim insertedReference As Range
     Dim sequenceField As Field
+    Dim candidateField As Field
+    Dim capturedBindings As Collection
+    Dim bindingItem As Variant
     Dim resultPath As String
     Dim resultText As String
     Dim regressionStage As String
     Dim regressionErrorNumber As Long
     Dim regressionErrorDescription As String
-    Dim formulaId As String
-    Dim firstFormulaId As String
-    Dim prependFormulaId As String
-    Dim itemIndex As Long
+    Dim firstImageId As String
+    Dim firstNativeId As String
+    Dim secondImageId As String
+    Dim secondNativeId As String
+    Dim insertedImageId As String
+    Dim referenceTargetName As String
+    Dim referenceResult As String
+    Dim builtInTargetName As String
+    Dim builtInResult As String
+    Dim bodyFieldCountBefore As Long
+    Dim bodyFieldCountAfter As Long
+    Dim newestBodyFieldStart As Long
+    Dim candidateFieldStart As Long
+    Dim builtInBindingCaptured As Boolean
 
     On Error GoTo RegressionFailed
     resultPath = VTApplicationSupportRoot() & _
         "/Tests/word-chapter-prepend-numbering-regression-result.txt"
+
+    firstImageId = VTRegressionPerformanceFormulaId(910000001)
+    firstNativeId = VTRegressionPerformanceFormulaId(910000002)
+    secondImageId = VTRegressionPerformanceFormulaId(910000003)
+    secondNativeId = VTRegressionPerformanceFormulaId(910000004)
+    insertedImageId = VTRegressionPerformanceFormulaId(919999999)
+    referenceTargetName = _
+        VTEquationSequenceNumberBookmarkName(secondNativeId)
+
     Set testDocument = Documents.Add(Visible:=True)
     testDocument.ActiveWindow.View.Type = wdPrintView
     testDocument.Activate
     VTSetEquationNumberingFormat _
         testDocument, VT_WORD_NUMBERING_MODE_CHAPTER, "-"
 
-    regressionStage = "create-initial-four"
-    For itemIndex = 1 To formulaCount
-        formulaId = VTRegressionPerformanceFormulaId(910000000 + itemIndex)
-        Set formulaShape = VTRegressionCreateNumberedImage( _
-            testDocument, formulaId, latexBase64, 96!, 28!)
-        VTRegressionAssertChapterNumberOrdinal _
-            testDocument, formulaId, itemIndex
-    Next itemIndex
+    regressionStage = "chapter-1-standard-heading-1"
+    VTRegressionAppendChapterHeading testDocument, "Chapter One", True
+    Set formulaShape = VTRegressionCreateNumberedImage( _
+        testDocument, firstImageId, latexBase64, 96!, 28!)
+    Set formulaShape = VTRegressionCreateNumberedImage( _
+        testDocument, firstNativeId, latexBase64, 104!, 30!)
 
-    regressionStage = "prepend-before-first"
-    firstFormulaId = VTRegressionPerformanceFormulaId(910000001)
-    prependFormulaId = VTRegressionPerformanceFormulaId(919999999)
+    regressionStage = "chapter-2-custom-outline-level"
+    VTRegressionAppendChapterHeading testDocument, "Chapter Two", False
+    Set formulaShape = VTRegressionCreateNumberedImage( _
+        testDocument, secondImageId, latexBase64, 96!, 28!)
+    Set formulaShape = VTRegressionCreateNumberedImage( _
+        testDocument, secondNativeId, latexBase64, 104!, 30!)
+
+    regressionStage = "verify-two-real-chapters"
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, firstImageId, 1, "1"
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, firstNativeId, 2, "1"
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, secondImageId, 1, "2"
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, secondNativeId, 2, "2"
+
+    regressionStage = "create-body-cross-reference"
+    Set insertionRange = VTAppendRegressionParagraph(testDocument)
+    Set insertedReference = VTInsertEquationNumberReferenceAtRange( _
+        insertionRange, 4, True)
+    If insertedReference.Text <> "(" & _
+       VTEquationNumberTextForFormula(testDocument, secondNativeId) & ")" Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The chapter-numbering regression body REF was not inserted."
+    End If
+
+    regressionStage = "insert-inside-second-chapter"
     Set insertionRange = VTRegressionInsertBlankParagraphBeforeFormula( _
-        testDocument, firstFormulaId)
+        testDocument, secondNativeId)
     Set formulaShape = VTRegressionCreateNumberedImageAtCaret( _
-        testDocument, insertionRange, prependFormulaId, _
+        testDocument, insertionRange, insertedImageId, _
         latexBase64, 96!, 28!)
     VTRegressionAssertChapterNumberOrdinal _
-        testDocument, prependFormulaId, 1
-    For itemIndex = 1 To formulaCount
-        formulaId = VTRegressionPerformanceFormulaId(910000000 + itemIndex)
-        VTRegressionAssertChapterNumberOrdinal _
-            testDocument, formulaId, itemIndex + 1
-    Next itemIndex
+        testDocument, firstImageId, 1, "1"
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, firstNativeId, 2, "1"
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, secondImageId, 1, "2"
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, insertedImageId, 2, "2"
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, secondNativeId, 3, "2"
+    referenceResult = VTBodyReferenceResultForTarget( _
+        testDocument, referenceTargetName)
+    If referenceResult <> VTEquationNumberTextForFormula( _
+       testDocument, secondNativeId) Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The body REF lost its target after second-chapter insertion."
+    End If
 
-    regressionStage = "explicit-update-repairs-stale-seq"
-    formulaId = firstFormulaId
+    regressionStage = "create-word-built-in-cross-reference"
+    For Each candidateField In testDocument.Fields
+        If candidateField.Type = wdFieldRef And _
+           Not candidateField.Result.Information(wdWithInTable) Then
+            bodyFieldCountBefore = bodyFieldCountBefore + 1
+        End If
+    Next candidateField
+    Set insertionRange = VTAppendRegressionParagraph(testDocument)
+    insertionRange.Select
+    Selection.InsertCrossReference _
+        ReferenceType:=wdCaptionEquation, _
+        ReferenceKind:=wdOnlyLabelAndNumber, _
+        ReferenceItem:=4, _
+        InsertAsHyperlink:=True, _
+        IncludePosition:=False
+    For Each candidateField In testDocument.Fields
+        If candidateField.Type = wdFieldRef And _
+           Not candidateField.Result.Information(wdWithInTable) Then
+            bodyFieldCountAfter = bodyFieldCountAfter + 1
+            candidateFieldStart = VTEquationFieldStart(candidateField)
+            If candidateFieldStart > newestBodyFieldStart Then
+                newestBodyFieldStart = candidateFieldStart
+                builtInTargetName = VTReferenceTargetBookmarkName( _
+                    candidateField.Code.Text)
+            End If
+        End If
+    Next candidateField
+    If Len(builtInTargetName) = 0 Or _
+       bodyFieldCountAfter <> bodyFieldCountBefore + 1 Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "Word did not create the chapter regression built-in Equation REF."
+    End If
+    Set capturedBindings = _
+        VTCaptureBodyEquationReferenceBindings(testDocument)
+    builtInBindingCaptured = False
+    For Each bindingItem In capturedBindings
+        If InStr(1, CStr(bindingItem), _
+           builtInTargetName & vbTab & insertedImageId & vbTab, _
+           vbTextCompare) = 1 Then
+            builtInBindingCaptured = True
+            Exit For
+        End If
+    Next bindingItem
+    If Not builtInBindingCaptured Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "Word built-in _Ref was not bound to the inserted chapter formula."
+    End If
+
+    regressionStage = "delete-first-chapter-formula-and-update"
+    Set formulaRange = VTNumberedFormulaRangeForId( _
+        testDocument, firstImageId)
+    If formulaRange Is Nothing Or formulaRange.InlineShapes.Count <> 1 Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The first chapter image formula could not be deleted."
+    End If
+    formulaRange.InlineShapes(1).Delete
+    VTPruneOrphanedEquationNumberScaffolds testDocument
+    VTUpdateEquationNumbersCore testDocument, True
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, firstNativeId, 1, "1"
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, secondImageId, 1, "2"
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, insertedImageId, 2, "2"
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, secondNativeId, 3, "2"
+
+    regressionStage = "delete-second-chapter-formula-and-update"
+    Set formulaRange = VTNumberedFormulaRangeForId( _
+        testDocument, secondImageId)
+    If formulaRange Is Nothing Or formulaRange.InlineShapes.Count <> 1 Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The second chapter image formula could not be deleted."
+    End If
+    formulaRange.InlineShapes(1).Delete
+    VTPruneOrphanedEquationNumberScaffolds testDocument
+    VTUpdateEquationNumbersCore testDocument, True
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, insertedImageId, 1, "2"
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, secondNativeId, 2, "2"
+    referenceResult = VTBodyReferenceResultForTarget( _
+        testDocument, referenceTargetName)
+    If referenceResult <> VTEquationNumberTextForFormula( _
+       testDocument, secondNativeId) Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The body REF lost its target after chapter deletion/update."
+    End If
+    builtInResult = VTBodyReferenceResultForTarget( _
+        testDocument, builtInTargetName)
+    If VTComparableEquationNumberText(builtInResult) <> _
+       VTComparableEquationNumberText( _
+           VTEquationNumberTextForFormula( _
+               testDocument, insertedImageId)) Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "Word built-in _Ref did not follow 2-2 to 2-1 after reset" & _
+            " [result=" & builtInResult & "]."
+    End If
+    Set capturedBindings = _
+        VTCaptureBodyEquationReferenceBindings(testDocument)
+    builtInBindingCaptured = False
+    For Each bindingItem In capturedBindings
+        If InStr(1, CStr(bindingItem), _
+           builtInTargetName & vbTab & insertedImageId & vbTab, _
+           vbTextCompare) = 1 Then
+            builtInBindingCaptured = True
+            Exit For
+        End If
+    Next bindingItem
+    If Not builtInBindingCaptured Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "Word built-in _Ref changed target when SEQ gained a \\r 1 reset."
+    End If
+
+    regressionStage = "explicit-update-repairs-stale-local-seq"
     Set sequenceField = VTEquationSequenceFieldForBookmark( _
-        testDocument, VTEquationSequenceNumberBookmarkName(formulaId))
+        testDocument, referenceTargetName)
     If sequenceField Is Nothing Then
         Err.Raise vbObjectError + 7598, "VisualTeX", _
-            "The chapter-numbering regression could not poison the old SEQ result."
+            "The chapter-numbering regression could not poison the local SEQ."
     End If
-    sequenceField.Result.Text = "1"
-    Set sequenceField = VTEquationSequenceFieldForBookmark( _
-        testDocument, VTEquationSequenceNumberBookmarkName(formulaId))
-    If sequenceField Is Nothing Or _
-       VTEquationSequenceResultText(sequenceField) <> "1" Then
-        Err.Raise vbObjectError + 7598, "VisualTeX", _
-            "Word did not preserve the intentionally stale SEQ regression state."
-    End If
+    sequenceField.Result.Text = "99"
     VTUpdateEquationNumbersCore testDocument, True
-    VTRegressionAssertChapterNumberOrdinal testDocument, prependFormulaId, 1
-    For itemIndex = 1 To formulaCount
-        formulaId = VTRegressionPerformanceFormulaId(910000000 + itemIndex)
-        VTRegressionAssertChapterNumberOrdinal _
-            testDocument, formulaId, itemIndex + 1
-    Next itemIndex
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, secondNativeId, 2, "2"
+    referenceResult = VTBodyReferenceResultForTarget( _
+        testDocument, referenceTargetName)
+    If referenceResult <> VTEquationNumberTextForFormula( _
+       testDocument, secondNativeId) Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The body REF did not recover with the repaired local SEQ."
+    End If
 
     resultText = "PASS" & vbLf & _
-        "prepend=1,2,3,4,5" & vbLf & _
+        "initial=1-1,1-2,2-1,2-2" & vbLf & _
+        "standardHeading1=PASS" & vbLf & _
+        "customOutlineLevel1=PASS" & vbLf & _
+        "secondChapterInsertion=PASS" & vbLf & _
+        "deleteAndUpdate=PASS" & vbLf & _
+        "bodyCrossReference=PASS" & vbLf & _
+        "wordBuiltInPrivateRef=PASS" & vbLf & _
         "explicitUpdateRepair=PASS" & vbLf
     VTWriteTextAtomic resultPath, resultText
     testDocument.Saved = True
@@ -1962,10 +2216,221 @@ RegressionFailed:
         regressionErrorDescription
 End Sub
 
+Public Sub VisualTeX_RunWordChapterZeroScopeNumberingRegression()
+    Const latexBase64 As String = "eF4yK3leMg"
+
+    Dim testDocument As Document
+    Dim formulaShape As InlineShape
+    Dim resultPath As String
+    Dim resultText As String
+    Dim regressionStage As String
+    Dim regressionErrorNumber As Long
+    Dim regressionErrorDescription As String
+    Dim firstFormulaId As String
+    Dim secondFormulaId As String
+    Dim thirdFormulaId As String
+
+    On Error GoTo RegressionFailed
+    resultPath = VTApplicationSupportRoot() & _
+        "/Tests/word-chapter-zero-scope-numbering-regression-result.txt"
+    firstFormulaId = VTRegressionPerformanceFormulaId(911100001)
+    secondFormulaId = VTRegressionPerformanceFormulaId(911100002)
+    thirdFormulaId = VTRegressionPerformanceFormulaId(911100003)
+
+    Set testDocument = Documents.Add(Visible:=True)
+    testDocument.ActiveWindow.View.Type = wdPrintView
+    testDocument.Activate
+    VTSetEquationNumberingFormat _
+        testDocument, VT_WORD_NUMBERING_MODE_CHAPTER, "-"
+
+    regressionStage = "before-first-chapter"
+    Set formulaShape = VTRegressionCreateNumberedImage( _
+        testDocument, firstFormulaId, latexBase64, 96!, 28!)
+    Set formulaShape = VTRegressionCreateNumberedImage( _
+        testDocument, secondFormulaId, latexBase64, 96!, 28!)
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, firstFormulaId, 1, "0"
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, secondFormulaId, 2, "0"
+
+    regressionStage = "enter-first-chapter"
+    VTRegressionAppendChapterHeading testDocument, "Chapter One", True
+    Set formulaShape = VTRegressionCreateNumberedImage( _
+        testDocument, thirdFormulaId, latexBase64, 96!, 28!)
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, thirdFormulaId, 1, "1"
+
+    regressionStage = "explicit-update-retains-zero-chapter"
+    VTUpdateEquationNumbersCore testDocument, True
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, firstFormulaId, 1, "0"
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, secondFormulaId, 2, "0"
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, thirdFormulaId, 1, "1"
+
+    resultText = "PASS" & vbLf & _
+        "initial=0-1,0-2,1-1" & vbLf & _
+        "zeroChapterScope=PASS" & vbLf & _
+        "explicitUpdateRepair=PASS" & vbLf
+    VTWriteTextAtomic resultPath, resultText
+    testDocument.Saved = True
+    testDocument.Close SaveChanges:=wdDoNotSaveChanges
+    Set testDocument = Nothing
+    Exit Sub
+
+RegressionFailed:
+    regressionErrorNumber = Err.Number
+    regressionErrorDescription = Err.Description
+    On Error Resume Next
+    resultText = "FAIL" & vbLf & _
+        "stage=" & regressionStage & vbLf & _
+        "errorNumber=" & CStr(regressionErrorNumber) & vbLf & _
+        "errorDescription=" & _
+            Replace$(Replace$(regressionErrorDescription, vbCr, " "), _
+                vbLf, " ") & vbLf
+    VTWriteTextAtomic resultPath, resultText
+    If Not testDocument Is Nothing Then
+        testDocument.Saved = True
+        testDocument.Close SaveChanges:=wdDoNotSaveChanges
+    End If
+    On Error GoTo 0
+    Err.Raise regressionErrorNumber, _
+        "VisualTeX Word chapter zero-scope numbering regression", _
+        regressionStage & ": " & regressionErrorDescription
+End Sub
+
+Public Sub VisualTeX_RunWordSectionImplicitNumberingRegression()
+    Const latexBase64 As String = "eF4yK3leMg"
+
+    Dim testDocument As Document
+    Dim formulaShape As InlineShape
+    Dim resultPath As String
+    Dim resultText As String
+    Dim regressionStage As String
+    Dim regressionErrorNumber As Long
+    Dim regressionErrorDescription As String
+    Dim preChapterFormulaId As String
+    Dim chapterOneFirstId As String
+    Dim chapterOneSecondId As String
+    Dim chapterTwoFirstId As String
+    Dim chapterTwoSecondId As String
+    Dim sectionOneFirstId As String
+    Dim sectionOneSecondId As String
+
+    On Error GoTo RegressionFailed
+    resultPath = VTApplicationSupportRoot() & _
+        "/Tests/word-section-implicit-numbering-regression-result.txt"
+    preChapterFormulaId = VTRegressionPerformanceFormulaId(911000000)
+    chapterOneFirstId = VTRegressionPerformanceFormulaId(911000001)
+    chapterOneSecondId = VTRegressionPerformanceFormulaId(911000002)
+    chapterTwoFirstId = VTRegressionPerformanceFormulaId(911000003)
+    chapterTwoSecondId = VTRegressionPerformanceFormulaId(911000004)
+    sectionOneFirstId = VTRegressionPerformanceFormulaId(911000005)
+    sectionOneSecondId = VTRegressionPerformanceFormulaId(911000006)
+
+    Set testDocument = Documents.Add(Visible:=True)
+    testDocument.ActiveWindow.View.Type = wdPrintView
+    testDocument.Activate
+    VTSetEquationNumberingFormat _
+        testDocument, VT_WORD_NUMBERING_MODE_SECTION, "."
+
+    regressionStage = "before-any-chapter-or-section"
+    Set formulaShape = VTRegressionCreateNumberedImage( _
+        testDocument, preChapterFormulaId, latexBase64, 96!, 28!)
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, preChapterFormulaId, 1, "0.0"
+
+    regressionStage = "chapter-1-before-first-section"
+    VTRegressionAppendChapterHeading testDocument, "Chapter One", True
+    Set formulaShape = VTRegressionCreateNumberedImage( _
+        testDocument, chapterOneFirstId, latexBase64, 96!, 28!)
+    Set formulaShape = VTRegressionCreateNumberedImage( _
+        testDocument, chapterOneSecondId, latexBase64, 96!, 28!)
+
+    regressionStage = "chapter-2-before-first-section"
+    VTRegressionAppendChapterHeading testDocument, "Chapter Two", False
+    Set formulaShape = VTRegressionCreateNumberedImage( _
+        testDocument, chapterTwoFirstId, latexBase64, 96!, 28!)
+    Set formulaShape = VTRegressionCreateNumberedImage( _
+        testDocument, chapterTwoSecondId, latexBase64, 96!, 28!)
+
+    regressionStage = "chapter-2-first-real-section"
+    VTRegressionAppendSectionHeading testDocument, "Section One", True
+    Set formulaShape = VTRegressionCreateNumberedImage( _
+        testDocument, sectionOneFirstId, latexBase64, 96!, 28!)
+    Set formulaShape = VTRegressionCreateNumberedImage( _
+        testDocument, sectionOneSecondId, latexBase64, 96!, 28!)
+
+    regressionStage = "verify-zero-and-real-section-prefixes"
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, preChapterFormulaId, 1, "0.0"
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, chapterOneFirstId, 1, "1.0"
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, chapterOneSecondId, 2, "1.0"
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, chapterTwoFirstId, 1, "2.0"
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, chapterTwoSecondId, 2, "2.0"
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, sectionOneFirstId, 1, "2.1"
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, sectionOneSecondId, 2, "2.1"
+
+    regressionStage = "explicit-update-retains-zero-section-prefixes"
+    VTUpdateEquationNumbersCore testDocument, True
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, preChapterFormulaId, 1, "0.0"
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, chapterOneFirstId, 1, "1.0"
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, chapterOneSecondId, 2, "1.0"
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, chapterTwoFirstId, 1, "2.0"
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, chapterTwoSecondId, 2, "2.0"
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, sectionOneFirstId, 1, "2.1"
+    VTRegressionAssertChapterNumberOrdinal _
+        testDocument, sectionOneSecondId, 2, "2.1"
+
+    resultText = "PASS" & vbLf & _
+        "initial=0.0.1,1.0.1,1.0.2,2.0.1,2.0.2,2.1.1,2.1.2" & vbLf & _
+        "zeroSectionScope=PASS" & vbLf & _
+        "standardHeading1And2=PASS" & vbLf & _
+        "customOutlineLevel1=PASS" & vbLf & _
+        "explicitUpdateRepair=PASS" & vbLf
+    VTWriteTextAtomic resultPath, resultText
+    testDocument.Saved = True
+    testDocument.Close SaveChanges:=wdDoNotSaveChanges
+    Set testDocument = Nothing
+    Exit Sub
+
+RegressionFailed:
+    regressionErrorNumber = Err.Number
+    regressionErrorDescription = Err.Description
+    On Error Resume Next
+    resultText = "FAIL" & vbLf & _
+        "stage=" & regressionStage & vbLf & _
+        "errorNumber=" & CStr(regressionErrorNumber) & vbLf & _
+        "errorDescription=" & _
+            Replace$(Replace$(regressionErrorDescription, vbCr, " "), _
+                vbLf, " ") & vbLf
+    VTWriteTextAtomic resultPath, resultText
+    If Not testDocument Is Nothing Then
+        testDocument.Saved = True
+        testDocument.Close SaveChanges:=wdDoNotSaveChanges
+    End If
+    On Error GoTo 0
+    Err.Raise regressionErrorNumber, _
+        "VisualTeX Word zero-section numbering regression", _
+        regressionStage & ": " & regressionErrorDescription
+End Sub
+
 Public Sub VisualTeX_RunWordMixedNativeImageChapterAppendRegression()
     Const fixtureFormulaId As String = _
         "11111111-1111-4111-8111-111111111111"
-    Const nativeCount As Long = 4
     Const latexBase64 As String = "eF8x"
 
     Dim testDocument As Document
@@ -1982,7 +2447,6 @@ Public Sub VisualTeX_RunWordMixedNativeImageChapterAppendRegression()
     Dim regressionStage As String
     Dim regressionErrorNumber As Long
     Dim regressionErrorDescription As String
-    Dim itemIndex As Long
 
     On Error GoTo RegressionFailed
     fixtureRoot = VTApplicationSupportRoot() & "/Tests"
@@ -2005,45 +2469,52 @@ Public Sub VisualTeX_RunWordMixedNativeImageChapterAppendRegression()
     VTSetEquationNumberingFormat _
         testDocument, VT_WORD_NUMBERING_MODE_CHAPTER, "-"
 
-    regressionStage = "create-four-native"
-    For itemIndex = 1 To nativeCount
-        formulaId = VTRegressionPerformanceFormulaId(920000000 + itemIndex)
-        Set formulaRange = VTRegressionCreateNumberedNative( _
-            testDocument, formulaId, latexBase64, ommlBase64, _
-            nativeDocumentPath)
-        VTVerifyNumberedFormulaIntegrity _
-            testDocument, formulaId, itemIndex
-    Next itemIndex
-
-    regressionStage = "append-first-image-after-native"
+    regressionStage = "chapter-1-mixed-native-image"
+    VTRegressionAppendChapterHeading testDocument, "Chapter One", True
+    formulaId = VTRegressionPerformanceFormulaId(920000001)
+    Set formulaRange = VTRegressionCreateNumberedNative( _
+        testDocument, formulaId, latexBase64, ommlBase64, _
+        nativeDocumentPath)
+    VTVerifyNumberedFormulaIntegrity testDocument, formulaId, 1
+    If VTEquationNumberTextForFormula(testDocument, formulaId) <> _
+       "1" & VTEquationNumberingDisplaySeparator(testDocument) & "1" Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The chapter-1 native OMML number is not 1-1."
+    End If
     firstImageId = VTRegressionPerformanceFormulaId(920000101)
     Set formulaShape = VTRegressionCreateNumberedImage( _
         testDocument, firstImageId, latexBase64, 96!, 28!)
     VTRegressionAssertChapterNumberOrdinal _
-        testDocument, firstImageId, nativeCount + 1
+        testDocument, firstImageId, 2, "1"
 
-    regressionStage = "append-second-image"
+    regressionStage = "chapter-2-mixed-native-image"
+    VTRegressionAppendChapterHeading testDocument, "Chapter Two", False
+    formulaId = VTRegressionPerformanceFormulaId(920000002)
+    Set formulaRange = VTRegressionCreateNumberedNative( _
+        testDocument, formulaId, latexBase64, ommlBase64, _
+        nativeDocumentPath)
+    VTVerifyNumberedFormulaIntegrity testDocument, formulaId, 1
+    If VTEquationNumberTextForFormula(testDocument, formulaId) <> _
+       "2" & VTEquationNumberingDisplaySeparator(testDocument) & "1" Then
+        Err.Raise vbObjectError + 7598, "VisualTeX", _
+            "The chapter-2 native OMML number is not 2-1."
+    End If
     secondImageId = VTRegressionPerformanceFormulaId(920000102)
     Set formulaShape = VTRegressionCreateNumberedImage( _
         testDocument, secondImageId, latexBase64, 96!, 28!)
     VTRegressionAssertChapterNumberOrdinal _
-        testDocument, secondImageId, nativeCount + 2
+        testDocument, secondImageId, 2, "2"
 
-    regressionStage = "verify-all-six"
-    For itemIndex = 1 To nativeCount
-        formulaId = VTRegressionPerformanceFormulaId(920000000 + itemIndex)
-        VTVerifyNumberedFormulaIntegrity _
-            testDocument, formulaId, itemIndex
-    Next itemIndex
-    If VTCountManagedEquationSequences(testDocument) <> nativeCount + 2 Then
+    regressionStage = "verify-four-mixed-formulas"
+    If VTCountManagedEquationSequences(testDocument) <> 4 Then
         Err.Raise vbObjectError + 7598, "VisualTeX", _
             "The mixed native/image chapter regression sequence inventory is incomplete."
     End If
 
     resultText = "PASS" & vbLf & _
-        "nativeOrdinals=1,2,3,4" & vbLf & _
-        "firstImageOrdinal=5" & vbLf & _
-        "secondImageOrdinal=6" & vbLf
+        "chapter1=1-1(native),1-2(image)" & vbLf & _
+        "chapter2=2-1(native),2-2(image)" & vbLf & _
+        "customOutlineLevel1=PASS" & vbLf
     VTWriteTextAtomic resultPath, resultText
     testDocument.Saved = True
     testDocument.Close SaveChanges:=wdDoNotSaveChanges
@@ -6741,6 +7212,63 @@ Private Function VTFirstPositiveIntegerInText( _
     End If
 End Function
 
+Private Function VTLastIntegerInText( _
+    ByVal sourceText As String) As Long
+
+    Dim characterIndex As Long
+    Dim currentCharacter As String
+    Dim digitText As String
+    Dim lastValue As Long
+
+    For characterIndex = 1 To Len(sourceText)
+        currentCharacter = Mid$(sourceText, characterIndex, 1)
+        If currentCharacter >= "0" And currentCharacter <= "9" Then
+            digitText = digitText & currentCharacter
+        ElseIf Len(digitText) > 0 Then
+            lastValue = CLng(Val(digitText))
+            digitText = ""
+        End If
+    Next characterIndex
+    If Len(digitText) > 0 Then lastValue = CLng(Val(digitText))
+    VTLastIntegerInText = lastValue
+End Function
+
+Private Function VTReferenceResultMatchesEquationNumber( _
+    ByVal referenceResultText As String, _
+    ByVal equationNumberText As String) As Boolean
+
+    Dim comparableResult As String
+    Dim comparableNumber As String
+    Dim prefixText As String
+    Dim prefixCharacter As String
+
+    comparableResult = VTComparableEquationNumberText( _
+        Trim$(referenceResultText))
+    comparableNumber = VTComparableEquationNumberText( _
+        Trim$(equationNumberText))
+    If Len(comparableNumber) = 0 Then Exit Function
+    If comparableResult = comparableNumber Or _
+       comparableResult = "(" & comparableNumber & ")" Then
+        VTReferenceResultMatchesEquationNumber = True
+        Exit Function
+    End If
+    If Len(comparableResult) <= Len(comparableNumber) Then Exit Function
+    If Right$(comparableResult, Len(comparableNumber)) <> _
+       comparableNumber Then Exit Function
+
+    prefixText = Left$(comparableResult, _
+        Len(comparableResult) - Len(comparableNumber))
+    prefixText = RTrim$(prefixText)
+    If Len(prefixText) = 0 Then
+        VTReferenceResultMatchesEquationNumber = True
+        Exit Function
+    End If
+    prefixCharacter = Right$(prefixText, 1)
+    If InStr(1, "0123456789.-", prefixCharacter, vbBinaryCompare) = 0 Then
+        VTReferenceResultMatchesEquationNumber = True
+    End If
+End Function
+
 Private Function VTFormulaIdForReferenceTarget( _
     ByVal documentObject As Document, _
     ByVal targetBookmarkName As String, _
@@ -6757,6 +7285,9 @@ Private Function VTFormulaIdForReferenceTarget( _
     Dim candidateRange As Range
     Dim itemIndex As Long
     Dim referenceOrdinal As Long
+    Dim matchingFormulaId As String
+    Dim matchingFormulaCount As Long
+    Dim expectedNumberText As String
 
     targetKind = ""
     If documentObject Is Nothing Or Len(targetBookmarkName) = 0 Then
@@ -6816,15 +7347,39 @@ Private Function VTFormulaIdForReferenceTarget( _
     End If
 
     ' Word for Mac can create a private _Ref Bookmark whose Range is not
-    ' stably nested inside the native SEQ/caption Range. Before numbering is
-    ' mutated, the visible REF result still exposes its ordinal; use it as a
-    ' deterministic fallback to lock the reference to the matching formula id.
-    referenceOrdinal = VTFirstPositiveIntegerInText(referenceResultText)
-    If referenceOrdinal >= 1 And _
-       referenceOrdinal <= VTVariantArrayCount(formulaIds) Then
+    ' stably nested inside the native SEQ/caption Range. In chapter/section
+    ' modes the first integer in a visible result such as 2-2 is the heading
+    ' prefix, not the document-order Equation ordinal. Match the complete
+    ' formatted number first so a private _Ref remains bound to the same formula
+    ' when a local ordinal changes or that formula gains a native \\r 1 reset.
+    For itemIndex = LBound(formulaIds) To UBound(formulaIds)
+        formulaId = CStr(formulaIds(itemIndex))
+        expectedNumberText = VTEquationNumberTextForFormula( _
+            documentObject, formulaId)
+        If VTReferenceResultMatchesEquationNumber( _
+           referenceResultText, expectedNumberText) Then
+            matchingFormulaCount = matchingFormulaCount + 1
+            matchingFormulaId = formulaId
+        End If
+    Next itemIndex
+    If matchingFormulaCount = 1 Then
         targetKind = "N"
-        VTFormulaIdForReferenceTarget = _
-            CStr(formulaIds(LBound(formulaIds) + referenceOrdinal - 1))
+        VTFormulaIdForReferenceTarget = matchingFormulaId
+        Exit Function
+    End If
+
+    ' Plain sequential numbering has no chapter prefix, so the legacy ordinal
+    ' fallback remains deterministic when Word exposes neither an overlapping
+    ' private Bookmark Range nor a uniquely comparable result string.
+    If VTEquationNumberingMode(documentObject) = _
+       VT_WORD_NUMBERING_MODE_SEQUENCE Then
+        referenceOrdinal = VTFirstPositiveIntegerInText(referenceResultText)
+        If referenceOrdinal >= 1 And _
+           referenceOrdinal <= VTVariantArrayCount(formulaIds) Then
+            targetKind = "N"
+            VTFormulaIdForReferenceTarget = _
+                CStr(formulaIds(LBound(formulaIds) + referenceOrdinal - 1))
+        End If
     End If
 End Function
 
@@ -18625,17 +19180,22 @@ Private Function VTEquationSequenceFieldCodeForOrdinal( _
             "The Equation sequence ordinal must be positive."
     End If
 
-    ' Keep every caption as a normal flowing Word SEQ field. A forced \r
-    ' restart rewrites the field whenever an earlier formula is removed and
-    ' invalidates Word's native cross-reference target. The field code also
-    ' deliberately has no \* formatting switch so built-up OMath cannot
-    ' transform its asterisk into a mathematical operator.
+    ' Keep every caption as a real native Word SEQ field. Chapter/section
+    ' boundaries are resolved by VisualTeX from the same OutlineLevel/ListString
+    ' scan that produces the visible heading prefix. The first Equation in each
+    ' resolved scope explicitly restarts the native Equation sequence at 1;
+    ' later Equations remain ordinary flowing SEQ fields. This avoids relying on
+    ' Word's \s Heading-style lookup, which does not match custom outline-level
+    ' headings, while retaining Word's native caption/cross-reference machinery.
+    ' The field code deliberately has no \* formatting switch so built-up OMath
+    ' cannot transform its asterisk into a mathematical operator.
     VTEquationSequenceFieldCodeForOrdinal = _
         " SEQ " & VTEquationSequenceFieldText(equationLabelName)
     If restartLevel = 1 Or restartLevel = 2 Then
-        VTEquationSequenceFieldCodeForOrdinal = _
-            VTEquationSequenceFieldCodeForOrdinal & _
-            " \s " & CStr(restartLevel)
+        If sequenceOrdinal = 1 Then
+            VTEquationSequenceFieldCodeForOrdinal = _
+                VTEquationSequenceFieldCodeForOrdinal & " \r 1"
+        End If
     ElseIf restartLevel <> 0 Then
         Err.Raise vbObjectError + 7549, "VisualTeX", _
             "The Equation sequence restart level is invalid."
@@ -18674,18 +19234,8 @@ Private Function VTEquationSequenceFieldHasOrdinal( _
         VTEquationSequenceFieldCodeForOrdinal( _
             equationLabelName, sequenceOrdinal, restartLevel))
     VTEquationSequenceFieldHasOrdinal = _
-        StrComp(actualCode, expectedCode, vbTextCompare) = 0
-    If VTEquationSequenceFieldHasOrdinal Then
-        If restartLevel = 0 Then
-            VTEquationSequenceFieldHasOrdinal = _
-                VTEquationSequenceResultText(sequenceField) = _
-                    CStr(sequenceOrdinal)
-        Else
-            VTEquationSequenceFieldHasOrdinal = _
-                VTFirstPositiveIntegerInText( _
-                    VTEquationSequenceResultText(sequenceField)) > 0
-        End If
-    End If
+        StrComp(actualCode, expectedCode, vbTextCompare) = 0 And _
+        VTEquationSequenceResultText(sequenceField) = CStr(sequenceOrdinal)
 End Function
 
 Private Sub VTApplyEquationSequenceOrdinal( _
@@ -18703,8 +19253,10 @@ Private Sub VTApplyEquationSequenceOrdinal( _
     expectedCode = VTEquationSequenceFieldCodeForOrdinal( _
         equationLabelName, sequenceOrdinal, restartLevel)
 
-    ' Migrate the legacy restarted field once. After migration, renumbering
-    ' updates only the field result, so Word can keep its own _Ref target.
+    ' Never replace the Field object: changing only its code keeps the native
+    ' Equation caption identity in place. In chapter/section mode only formulas
+    ' that gain or lose first-in-scope status need a code change; all other
+    ' renumbering remains a normal flowing SEQ update.
     If StrComp(VTNormalizeEquationFieldCode(sequenceField.Code.Text), _
        VTNormalizeEquationFieldCode(expectedCode), vbTextCompare) <> 0 Then
         sequenceField.Code.Text = expectedCode
@@ -19473,11 +20025,7 @@ Private Sub VTRefreshEquationNumberMirror( _
         Err.Raise vbObjectError + 7549, "VisualTeX", _
             "The Equation native target cleanup lost its SEQ field."
     End If
-    If restartLevel = 0 Then
-        expectedText = CStr(sequenceOrdinal)
-    Else
-        expectedText = VTEquationSequenceResultText(sequenceField)
-    End If
+    expectedText = CStr(sequenceOrdinal)
     If VTEquationSequenceResultText(sequenceField) <> expectedText Or _
        Len(VTEquationNumberTextForFormula( _
            documentObject, formulaId)) = 0 Then
@@ -19704,7 +20252,7 @@ Private Function VTStaticImageEquationNumberRange( _
     If Len(visibleText) < 3 Or _
        Left$(visibleText, 1) <> "(" Or _
        Right$(visibleText, 1) <> ")" Or _
-       VTFirstPositiveIntegerInText(visibleText) < 1 Then Exit Function
+       VTLastIntegerInText(visibleText) < 1 Then Exit Function
     Set VTStaticImageEquationNumberRange = numberRange.Duplicate
 End Function
 
@@ -19737,7 +20285,7 @@ Private Function VTWriteStaticImageEquationNumber( _
             "The static image Equation number formula is ambiguous."
     End If
     normalizedNumber = Trim$(visibleNumber)
-    If VTFirstPositiveIntegerInText(normalizedNumber) < 1 Then
+    If VTLastIntegerInText(normalizedNumber) < 1 Then
         Err.Raise vbObjectError + 7560, "VisualTeX", _
             "The static image Equation number text is invalid."
     End If
@@ -20642,7 +21190,7 @@ Private Sub VTRefreshParagraphEquationBookmarks( _
         VTConfigureNumberedEquationParagraph formulaParagraph
         expectedNumber = VTEquationNumberTextForFormula( _
             documentObject, formulaId)
-        If VTFirstPositiveIntegerInText(expectedNumber) < 1 Then
+        If VTLastIntegerInText(expectedNumber) < 1 Then
             Err.Raise vbObjectError + 7560, "VisualTeX", _
                 "The image Equation SEQ result is invalid."
         End If
@@ -21006,6 +21554,7 @@ Private Sub VTFinalizeParagraphEquationNumber( _
     Dim sequenceBookmarkName As String
     Dim sequenceOrdinal As Long
     Dim restartLevel As Long
+    Dim numberingMode As String
     Dim fieldAnchor As Long
     Dim preserveFormattedSequence As Boolean
 
@@ -21056,6 +21605,7 @@ Private Sub VTFinalizeParagraphEquationNumber( _
         Err.Raise vbObjectError + 7560, "VisualTeX", _
             "The Equation has no usable sequence result."
     End If
+    numberingMode = VTEquationNumberingMode(documentObject)
     restartLevel = VTEquationNumberingRestartLevel(documentObject)
     If Not VTEquationSequenceFieldHasOrdinal( _
        sequenceField, equationLabelName, sequenceOrdinal, restartLevel) Then
@@ -21067,8 +21617,7 @@ Private Sub VTFinalizeParagraphEquationNumber( _
     preserveFormattedSequence = Not sequenceOrderChanged
     If Not preserveFormattedSequence Then
         preserveFormattedSequence = _
-            VTEquationNumberingMode(documentObject) = _
-                VT_WORD_NUMBERING_MODE_SEQUENCE
+            numberingMode = VT_WORD_NUMBERING_MODE_SEQUENCE
     End If
     VTRefreshParagraphEquationBookmarks _
         documentObject, sequenceField, formulaId, _
@@ -21092,15 +21641,15 @@ Private Sub VTFinalizeParagraphEquationNumber( _
         Exit Sub
     End If
 
-    ' Editing an existing numbered formula does not change sequence order. A new
-    ' formula appended after the last SEQ cannot affect any earlier number. Both
-    ' paths therefore finish with the local refresh above instead of rescanning
-    ' and reformatting the whole document. Prepending/inserting in the middle
-    ' still reconciles every following formula because their visible numbers do
-    ' change and must remain live.
+    ' Editing an existing numbered formula does not change sequence order and can
+    ' keep the local fast path. A true tail append is O(1) only in plain sequence
+    ' mode. Chapter/section appends must run the shared heading scan once so a new
+    ' outline boundary can reset the local ordinal even when Word's own Heading
+    ' styles do not reflect that OutlineLevel.
     If Not sequenceOrderChanged Or _
-       VTCanUseEquationTailFastPath( _
-           documentObject, sequenceField) Then
+       (numberingMode = VT_WORD_NUMBERING_MODE_SEQUENCE And _
+        VTCanUseEquationTailFastPath( _
+            documentObject, sequenceField)) Then
         Set formulaRange = VTNumberedFormulaRangeForId( _
             documentObject, formulaId)
         If formulaRange Is Nothing Then
@@ -21128,11 +21677,11 @@ Private Sub VTFinalizeParagraphEquationNumber( _
         Err.Raise vbObjectError + 7560, "VisualTeX", _
             "Word lost the Equation SEQ during reconciliation."
     End If
-    sequenceOrdinal = VTEquationSequenceOrdinal( _
-        documentObject, sequenceField, equationLabelName)
+    sequenceOrdinal = VTFirstPositiveIntegerInText( _
+        VTEquationSequenceResultText(sequenceField))
     If sequenceOrdinal < 1 Then
         Err.Raise vbObjectError + 7560, "VisualTeX", _
-            "The reconciled Equation SEQ has no ordinal."
+            "The reconciled Equation SEQ has no local ordinal."
     End If
     VTRefreshParagraphEquationBookmarks _
         documentObject, sequenceField, formulaId, True
@@ -25168,6 +25717,7 @@ Private Sub VTReconcileEquationNumbers( _
     Dim sequenceBookmarkNames() As String
     Dim sequenceAnchors() As Long
     Dim sequenceHeadingPrefixes() As String
+    Dim sequenceLocalOrdinals() As Long
     Dim sequenceCount As Long
     Dim sequenceOrdinal As Long
     Dim referenceBookmarkNames() As String
@@ -25289,13 +25839,17 @@ NextSequenceCandidate:
        numberingMode <> VT_WORD_NUMBERING_MODE_SEQUENCE Then
         VTBuildEquationHeadingPrefixes _
             documentObject, sequenceAnchors, sequenceCount, _
-            numberingMode, sequenceHeadingPrefixes
+            numberingMode, sequenceHeadingPrefixes, sequenceLocalOrdinals
     End If
 
     ' Phase 1b: re-resolve one field at a time from its durable VT_N_ Bookmark or
     ' captured local anchor. No live Fields enumerator survives a field update.
     For itemIndex = 1 To sequenceCount
-        sequenceOrdinal = itemIndex
+        If numberingMode = VT_WORD_NUMBERING_MODE_SEQUENCE Then
+            sequenceOrdinal = itemIndex
+        Else
+            sequenceOrdinal = sequenceLocalOrdinals(itemIndex)
+        End If
         sequenceBookmarkName = sequenceBookmarkNames(itemIndex)
         Set candidate = Nothing
         If Len(sequenceBookmarkName) > 0 Then
@@ -27901,7 +28455,7 @@ Private Function VTEquationHeadingPrefix( _
     Dim chapterCount As Long
     Dim sectionCount As Long
     Dim listText As String
-    Dim fallbackText As String
+    Dim currentChapterPrefix As String
 
     If formulaRange Is Nothing Then Exit Function
     numberingMode = LCase$(Trim$(numberingMode))
@@ -27920,29 +28474,57 @@ Private Function VTEquationHeadingPrefix( _
         If candidateLevel = 1 Then
             chapterCount = chapterCount + 1
             sectionCount = 0
-        ElseIf candidateLevel = 2 Then
-            sectionCount = sectionCount + 1
-        End If
-        If candidateLevel = targetLevel Then
             listText = VTNormalizeHeadingNumberText( _
                 candidateParagraph.Range.ListFormat.ListString)
             If Len(listText) > 0 Then
-                VTEquationHeadingPrefix = listText
-            ElseIf targetLevel = 1 Then
-                VTEquationHeadingPrefix = CStr(chapterCount)
+                currentChapterPrefix = listText
             Else
-                fallbackText = CStr(IIf(chapterCount > 0, chapterCount, 1)) & _
-                    "." & CStr(IIf(sectionCount > 0, sectionCount, 1))
-                VTEquationHeadingPrefix = fallbackText
+                currentChapterPrefix = CStr(chapterCount)
+            End If
+            If targetLevel = 1 Then
+                VTEquationHeadingPrefix = currentChapterPrefix
+            Else
+                ' A new chapter starts a fresh implicit section. Do not leak the
+                ' previous chapter's explicit section prefix into formulas that
+                ' appear before this chapter's first level-2 heading.
+                VTEquationHeadingPrefix = ""
+            End If
+        ElseIf candidateLevel = 2 Then
+            sectionCount = sectionCount + 1
+            If targetLevel = 2 Then
+                listText = VTNormalizeHeadingNumberText( _
+                    candidateParagraph.Range.ListFormat.ListString)
+                If Len(listText) > 0 Then
+                    VTEquationHeadingPrefix = listText
+                ElseIf Len(currentChapterPrefix) > 0 Then
+                    VTEquationHeadingPrefix = currentChapterPrefix & _
+                        "." & CStr(sectionCount)
+                Else
+                    VTEquationHeadingPrefix = _
+                        CStr(IIf(chapterCount > 0, chapterCount, 0)) & _
+                        "." & CStr(sectionCount)
+                End If
             End If
         End If
     Next candidateParagraph
 
     If Len(VTEquationHeadingPrefix) = 0 Then
         If targetLevel = 1 Then
-            VTEquationHeadingPrefix = "1"
+            If Len(currentChapterPrefix) > 0 Then
+                VTEquationHeadingPrefix = currentChapterPrefix
+            Else
+                ' Formulas before the first chapter belong to chapter 0. Never
+                ' pretend that an unentered heading scope is already chapter 1.
+                VTEquationHeadingPrefix = "0"
+            End If
+        ElseIf Len(currentChapterPrefix) > 0 Then
+            ' A formula after a chapter heading but before its first section is
+            ' explicitly in section 0. This keeps 2.0.1 distinct from the first
+            ' real section's 2.1.1 when a Heading 2 is inserted later.
+            VTEquationHeadingPrefix = currentChapterPrefix & ".0"
         Else
-            VTEquationHeadingPrefix = "1.1"
+            ' Before any chapter or section, use the explicit zero scope.
+            VTEquationHeadingPrefix = "0.0"
         End If
     End If
 End Function
@@ -27952,7 +28534,8 @@ Private Sub VTBuildEquationHeadingPrefixes( _
     ByRef sequenceAnchors() As Long, _
     ByVal sequenceCount As Long, _
     ByVal numberingMode As String, _
-    ByRef headingPrefixes() As String)
+    ByRef headingPrefixes() As String, _
+    ByRef localOrdinals() As Long)
 
     Dim candidateParagraph As Paragraph
     Dim candidateLevel As Long
@@ -27964,6 +28547,7 @@ Private Sub VTBuildEquationHeadingPrefixes( _
     Dim listText As String
     Dim currentPrefix As String
     Dim currentSectionPrefix As String
+    Dim currentLocalOrdinal As Long
 
     If documentObject Is Nothing Or sequenceCount <= 0 Then Exit Sub
     numberingMode = LCase$(Trim$(numberingMode))
@@ -27976,26 +28560,32 @@ Private Sub VTBuildEquationHeadingPrefixes( _
     End If
 
     ReDim headingPrefixes(1 To sequenceCount)
+    ReDim localOrdinals(1 To sequenceCount)
     itemIndex = 1
     For Each candidateParagraph In documentObject.Paragraphs
         paragraphStart = candidateParagraph.Range.Start
 
         ' Every formula whose anchor is before this paragraph sees the heading
         ' state accumulated so far. Because sequenceAnchors are already sorted,
-        ' one forward paragraph pass serves the entire numbering refresh.
+        ' one forward paragraph pass resolves both the displayed heading prefix
+        ' and the local ordinal used by the native SEQ field.
         Do While itemIndex <= sequenceCount
             If sequenceAnchors(itemIndex) > paragraphStart Then Exit Do
+            currentLocalOrdinal = currentLocalOrdinal + 1
+            localOrdinals(itemIndex) = currentLocalOrdinal
             If targetLevel = 1 Then
                 If Len(currentPrefix) > 0 Then
                     headingPrefixes(itemIndex) = currentPrefix
                 Else
-                    headingPrefixes(itemIndex) = "1"
+                    headingPrefixes(itemIndex) = "0"
                 End If
             Else
                 If Len(currentSectionPrefix) > 0 Then
                     headingPrefixes(itemIndex) = currentSectionPrefix
+                ElseIf Len(currentPrefix) > 0 Then
+                    headingPrefixes(itemIndex) = currentPrefix & ".0"
                 Else
-                    headingPrefixes(itemIndex) = "1.1"
+                    headingPrefixes(itemIndex) = "0.0"
                 End If
             End If
             itemIndex = itemIndex + 1
@@ -28014,32 +28604,43 @@ Private Sub VTBuildEquationHeadingPrefixes( _
                 currentPrefix = CStr(chapterCount)
             End If
             currentSectionPrefix = ""
+            ' A chapter boundary starts a new chapter scope. In section mode the
+            ' area before the next level-2 heading is explicit section 0.
+            currentLocalOrdinal = 0
         ElseIf candidateLevel = 2 Then
             sectionCount = sectionCount + 1
             listText = VTNormalizeHeadingNumberText( _
                 candidateParagraph.Range.ListFormat.ListString)
             If Len(listText) > 0 Then
                 currentSectionPrefix = listText
+            ElseIf Len(currentPrefix) > 0 Then
+                currentSectionPrefix = currentPrefix & _
+                    "." & CStr(IIf(sectionCount > 0, sectionCount, 1))
             Else
                 currentSectionPrefix = _
-                    CStr(IIf(chapterCount > 0, chapterCount, 1)) & _
-                    "." & CStr(IIf(sectionCount > 0, sectionCount, 1))
+                    CStr(IIf(chapterCount > 0, chapterCount, 0)) & _
+                    "." & CStr(sectionCount)
             End If
+            If targetLevel = 2 Then currentLocalOrdinal = 0
         End If
     Next candidateParagraph
 
     Do While itemIndex <= sequenceCount
+        currentLocalOrdinal = currentLocalOrdinal + 1
+        localOrdinals(itemIndex) = currentLocalOrdinal
         If targetLevel = 1 Then
             If Len(currentPrefix) > 0 Then
                 headingPrefixes(itemIndex) = currentPrefix
             Else
-                headingPrefixes(itemIndex) = "1"
+                headingPrefixes(itemIndex) = "0"
             End If
         Else
             If Len(currentSectionPrefix) > 0 Then
                 headingPrefixes(itemIndex) = currentSectionPrefix
+            ElseIf Len(currentPrefix) > 0 Then
+                headingPrefixes(itemIndex) = currentPrefix & ".0"
             Else
-                headingPrefixes(itemIndex) = "1.1"
+                headingPrefixes(itemIndex) = "0.0"
             End If
         End If
         itemIndex = itemIndex + 1

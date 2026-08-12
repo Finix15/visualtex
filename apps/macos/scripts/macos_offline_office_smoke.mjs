@@ -512,7 +512,7 @@ expectIncludes(wordAdapter, 'numberRange.Text = "(" & expectedNumberText & ")"',
 expectIncludes(wordAdapter, 'rightContent.Text = "()"', "Legacy right-cell formulas must retain ordinary parentheses around their native REF field");
 expectIncludes(wordAdapter, "VTRefreshEquationNumberMirror", "Numbering must refresh the native SEQ target and remove legacy mirror artifacts");
 expectIncludes(wordAdapter, "VTEquationSequenceFieldHasOrdinal", "Numbering must validate the native SEQ through its retained legal ordinal field code");
-expectIncludes(wordAdapter, "expectedText = CStr(sequenceOrdinal)", "The native SEQ result must equal the reconciled document-order ordinal");
+expectIncludes(wordAdapter, "expectedText = CStr(sequenceOrdinal)", "The native SEQ result must equal the reconciled expected ordinal, including a chapter/section-local ordinal");
 expect(!wordAdapter.includes("insertionRange.InsertAfter expectedText & vbCr"), "Numbering must not create a second plain-text number paragraph");
 expect(!wordAdapter.includes("sequenceParagraph.InsertParagraphAfter"), "Numbering must not create a mirror paragraph beside the native SEQ");
 expect(!wordAdapter.includes("sequenceField.Result.Text = expectedText"), "Numbering must not overwrite a Word field result Range");
@@ -783,7 +783,10 @@ expectIncludes(crossReferenceCommandSource, "Set insertionRange = VTResolveEquat
 expectIncludes(crossReferenceCommandSource, "insertionRange, itemIndex, True", "The modal Equation picker must insert into the frozen body-text Range instead of a post-refresh Selection");
 expect(!wordAdapter.includes("VisualTeX_DiagnoseNumberingPerformance"), "Temporary numbering performance probes must never ship in the production Word add-in");
 expectIncludes(wordAdapter, "VTWriteEquationNumberingPreference numberingMode, separatorText", "Choosing an Equation numbering format must update the persistent default as well as the active document");
-expectIncludes(wordAdapter, '" \\s " & CStr(restartLevel)', "Chapter and section Equation sequences must use Word's native heading-level reset switch");
+expectIncludes(wordAdapter, 'VTEquationSequenceFieldCodeForOrdinal & " \\r 1"', "Chapter and section Equation sequences must use an explicit native SEQ reset at each VisualTeX-resolved scope boundary");
+expect(!wordAdapter.includes('" \\s " & CStr(restartLevel)'), "Chapter and section Equation sequences must not delegate scope detection to Word's Heading-style-only SEQ \\s switch");
+expectIncludes(wordAdapter, "sequenceLocalOrdinals(itemIndex)", "Chapter and section numbering must feed the local ordinal from the same heading scan that resolves the visible prefix");
+expectIncludes(wordAdapter, "VTEquationSequenceResultText(sequenceField) = CStr(sequenceOrdinal)", "Chapter and section SEQ validation must reject a positive but wrong local ordinal");
 expectIncludes(wordAdapter, "VTRefreshFormattedSequenceBookmark", "Visible image, OMath and body references must share one complete formatted number Bookmark");
 expectIncludes(wordAdapter, "VTComparableEquationNumberText(expectedNumberText)", "Final native OMath acceptance must compare the visible REF with the complete formatted Equation number rather than the local ordinal only");
 expectIncludes(wordAdapter, "VTEquationNumberingDisplaySeparator = ChrW(8208)", "Hyphen-style Equation numbers must use U+2010 HYPHEN so OMML does not add binary-operator spacing around the chapter separator");
@@ -993,6 +996,10 @@ expectIncludes(wordAdapter, "VTReconcileEquationNumbers documentObject", "Middle
 expectIncludes(wordAdapter, "sequenceOrdinal, sequenceHeadingPrefixes(itemIndex), True, _\n                        forceFlowingSequenceReplay", "Chapter/section numbering must honor the same forced SEQ replay used by middle/prepend insertion");
 expectIncludes(wordAdapter, "VTReconcileEquationNumbers documentObject, -1, True", "Explicit Update Numbers and sequence-order changes must force a full managed SEQ replay");
 expectIncludes(wordAdapter, "Public Sub VisualTeX_RunWordChapterPrependNumberingRegression()", "The packaged Word add-in must expose the chapter-number prepend/update repair regression");
+expectIncludes(wordAdapter, "Public Sub VisualTeX_RunWordChapterZeroScopeNumberingRegression()", "The packaged Word add-in must expose the chapter-0 regression before the first Heading 1");
+expectIncludes(wordAdapter, '"initial=0-1,0-2,1-1"', "Chapter numbering regression must preserve chapter 0 until the first Heading 1");
+expectIncludes(wordAdapter, "Public Sub VisualTeX_RunWordSectionImplicitNumberingRegression()", "The packaged Word add-in must expose the section-0 regression before the first Heading 2");
+expectIncludes(wordAdapter, '"initial=0.0.1,1.0.1,1.0.2,2.0.1,2.0.2,2.1.1,2.1.2"', "Section numbering regression must distinguish section 0 from the first real section");
 expectIncludes(wordAdapter, '"explicitUpdateRepair=PASS"', "The chapter-number regression must prove explicit Update Numbers repairs a stale cached SEQ result");
 expectIncludes(wordAdapter, "Public Sub VisualTeX_RunWordSafeNativeInsertionRegression()", "The packaged Word add-in must expose the three-position safe native insertion regression");
 expectIncludes(wordAdapter, 'regressionStage = "body-paragraph-end"', "Safe insertion must cover a normal body paragraph end");
