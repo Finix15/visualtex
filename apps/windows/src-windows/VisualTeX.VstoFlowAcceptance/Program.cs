@@ -503,6 +503,10 @@ internal static partial class Program
             {
                 RunWordLatexRedrawOmmlOnly(client, artifactRoot);
             }
+            else if (string.Equals(mode, "word-latex-redraw-distinct-formulas", StringComparison.OrdinalIgnoreCase))
+            {
+                RunWordLatexRedrawDistinctFormulas(artifactRoot);
+            }
             else if (string.Equals(mode, "word-latex-redraw-source-context", StringComparison.OrdinalIgnoreCase))
             {
                 RunWordLatexRedrawSourceContextStress();

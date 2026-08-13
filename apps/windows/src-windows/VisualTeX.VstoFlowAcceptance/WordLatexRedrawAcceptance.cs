@@ -1217,6 +1217,156 @@ internal static partial class Program
             + $"{stopwatch.ElapsedMilliseconds} ms, inline=500, display=500.");
     }
 
+    private static void RunWordLatexRedrawDistinctFormulas(string artifactRoot)
+    {
+        RunWordLatexRedrawDistinctFormulaScenario(
+            artifactRoot,
+            FormulaOleContract.WordOmmlMode,
+            "VisualTeX-Word-Latex-Redraw-Distinct-OMML.docx");
+        RunWordLatexRedrawDistinctFormulaScenario(
+            artifactRoot,
+            FormulaOleContract.NativeOleMode,
+            "VisualTeX-Word-Latex-Redraw-Distinct-OLE.docx");
+    }
+
+    private static void RunWordLatexRedrawDistinctFormulaScenario(
+        string artifactRoot,
+        string objectMode,
+        string expectedFileName)
+    {
+        var modeName = objectMode == FormulaOleContract.NativeOleMode ? "OLE" : "OMML";
+        var logPath = Path.Combine(
+            artifactRoot,
+            $"word-latex-redraw-distinct-{modeName.ToLowerInvariant()}.log");
+        var documentPath = Path.Combine(artifactRoot, expectedFileName);
+        TryDeleteAcceptanceFile(logPath);
+        Environment.SetEnvironmentVariable("VISUALTEX_VSTO_REDRAW_ACCEPTANCE_LOG", logPath);
+        try
+        {
+            using var host = new WordPerformanceHost(documentPath: null);
+            PopulateDistinctLatexRedrawDocument(host);
+            Word.Range? content = null;
+            try
+            {
+                content = host.Document.Content;
+                host.Application.Selection.SetRange(content.Start, content.Start);
+                if (objectMode == FormulaOleContract.NativeOleMode)
+                    host.AddIn.OnRedrawDocumentToOle(new object());
+                else
+                    host.AddIn.OnRedrawDocumentToOmml(new object());
+            }
+            finally { Release(content); }
+
+            _ = WaitForLatexRedraw(logPath, TimeSpan.FromMinutes(4));
+            WaitForAddInIdle(host.AddIn, TimeSpan.FromSeconds(30));
+            AssertDistinctLatexRedrawDocument(host.Document, objectMode);
+            host.Save(documentPath);
+            Console.WriteLine(
+                $"[Word LaTeX redraw] Distinct {modeName} redraw passed: {documentPath}");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("VISUALTEX_VSTO_REDRAW_ACCEPTANCE_LOG", null);
+        }
+    }
+
+    private static void PopulateDistinctLatexRedrawDocument(WordPerformanceHost host)
+    {
+        var selection = host.Application.Selection;
+        selection.HomeKey(Word.WdUnits.wdStory);
+        selection.Font.Name = "宋体";
+        selection.Font.Size = 10.5f;
+        selection.TypeText("Inline A $E=mc^2$ and inline B $a^2+b^2=c^2$. ");
+        selection.TypeText(@"Inline C $\sin^2 x+\cos^2 x=1$.");
+        selection.TypeParagraph();
+        selection.TypeText(@"$$\frac{d}{dx}\left(\sin x\right)=\cos x$$");
+        selection.TypeParagraph();
+        selection.TypeText(@"$$\int_{-\infty}^{\infty} e^{-x^2}\,dx=\sqrt{\pi}$$");
+        selection.TypeParagraph();
+        selection.TypeText(@"$$\sum_{n=1}^{\infty}\frac{1}{n^2}=\frac{\pi^2}{6}$$");
+        selection.TypeParagraph();
+    }
+
+    private static void AssertDistinctLatexRedrawDocument(
+        Word.Document document,
+        string objectMode)
+    {
+        const int expectedFormulaCount = 6;
+        if (objectMode == FormulaOleContract.WordOmmlMode)
+        {
+            Word.OMaths? maths = null;
+            try
+            {
+                maths = document.OMaths;
+                AssertEqual(
+                    expectedFormulaCount,
+                    maths.Count,
+                    "Distinct-formula OMML redraw created the wrong equation count.");
+                var nativeLatex = new List<string>(expectedFormulaCount);
+                for (var index = 1; index <= maths.Count; index++)
+                {
+                    Word.OMath? math = null;
+                    Word.Range? range = null;
+                    try
+                    {
+                        math = maths[index];
+                        range = math.Range;
+                        var metadata = WordOmmlNativeSource.CreateForNative(document, range);
+                        nativeLatex.Add(metadata.Latex);
+                    }
+                    finally
+                    {
+                        Release(range);
+                        Release(math);
+                    }
+                }
+                Console.WriteLine(
+                    "[Word LaTeX redraw] Native OMML sources: "
+                    + string.Join(" || ", nativeLatex));
+                var distinct = nativeLatex
+                    .Select(value => Regex.Replace(value, @"\s+", string.Empty))
+                    .Distinct(StringComparer.Ordinal)
+                    .Count();
+                AssertEqual(
+                    expectedFormulaCount,
+                    distinct,
+                    "Distinct LaTeX formulas collapsed to duplicate native OMML equations.");
+            }
+            finally { Release(maths); }
+            return;
+        }
+
+        Word.InlineShapes? shapes = null;
+        try
+        {
+            shapes = document.InlineShapes;
+            var latex = new List<string>();
+            for (var index = 1; index <= shapes.Count; index++)
+            {
+                Word.InlineShape? shape = null;
+                try
+                {
+                    shape = shapes[index];
+                    var metadata = WordFormulaMetadataReader.TryRead(shape);
+                    if (metadata is not null && WordFormulaMetadataReader.IsNativeOle(shape))
+                        latex.Add(metadata.Latex);
+                }
+                finally { Release(shape); }
+            }
+            Console.WriteLine(
+                "[Word LaTeX redraw] OLE metadata sources: " + string.Join(" || ", latex));
+            AssertEqual(
+                expectedFormulaCount,
+                latex.Count,
+                "Distinct-formula OLE redraw created the wrong object count.");
+            AssertEqual(
+                expectedFormulaCount,
+                latex.Distinct(StringComparer.Ordinal).Count(),
+                "Distinct LaTeX formulas collapsed to duplicate OLE metadata.");
+        }
+        finally { Release(shapes); }
+    }
+
     private static void RunWordLatexRedrawScenario(
         string artifactRoot,
         string objectMode,
