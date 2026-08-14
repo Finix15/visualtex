@@ -12246,6 +12246,18 @@ body[data-workspace-resize="dock"] * {
     display: none;
   }
 
+  .office-dialog-shell
+    .workspace.is-office-workspace.is-classic-layout.has-sidebar
+    > .classic-tile-resizer {
+    display: block;
+    position: absolute;
+    top: 0;
+    right: min(var(--classic-tile-width, 300px), 82vw);
+    bottom: 0;
+    width: 7px;
+    z-index: 36;
+  }
+
   .workspace.is-classic-layout > .classic-tile-toolbar {
     position: absolute;
     inset: 0 0 0 auto;

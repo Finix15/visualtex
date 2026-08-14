@@ -90,6 +90,9 @@ const formulaBackgroundColorPresets = [
 type FormulaColorMenu = "color" | "backgroundColor";
 type ClassicResizeTarget = "tiles" | "dock";
 
+const compactOfficeTileBreakpoint = 760;
+const compactOfficeEditorReserve = 220;
+
 const customFormulaTextColorsStorageKey = "visualtex-custom-formula-text-colors";
 const customFormulaBackgroundColorsStorageKey =
   "visualtex-custom-formula-background-colors";
@@ -380,7 +383,11 @@ export function EditorWorkspace({
   const classicTileWidthLimit = () => {
     const workspaceWidth = workspaceRef.current?.getBoundingClientRect().width;
     if (!workspaceWidth) return MAX_CLASSIC_TILE_WIDTH;
-    return Math.max(MIN_CLASSIC_TILE_WIDTH, workspaceWidth - 360);
+    const editorReserve =
+      isOfficeWorkspace && window.innerWidth <= compactOfficeTileBreakpoint
+        ? compactOfficeEditorReserve
+        : 360;
+    return Math.max(MIN_CLASSIC_TILE_WIDTH, workspaceWidth - editorReserve);
   };
 
   const classicDockHeightLimit = () => {
@@ -518,9 +525,13 @@ export function EditorWorkspace({
       window.cancelAnimationFrame(frame);
       frame = window.requestAnimationFrame(() => {
         const workspaceWidth = workspace.getBoundingClientRect().width;
+        const editorReserve =
+          isOfficeWorkspace && window.innerWidth <= compactOfficeTileBreakpoint
+            ? compactOfficeEditorReserve
+            : 360;
         const tileMaximum = Math.max(
           MIN_CLASSIC_TILE_WIDTH,
-          workspaceWidth - 360,
+          workspaceWidth - editorReserve,
         );
         setClassicTileWidth((current) => {
           const next = clampPanelSize(
@@ -557,7 +568,7 @@ export function EditorWorkspace({
       window.cancelAnimationFrame(frame);
       observer.disconnect();
     };
-  }, [editorLayout]);
+  }, [editorLayout, isOfficeWorkspace]);
 
   const preserveFormulaFocus = (event: ReactPointerEvent<HTMLButtonElement>) => {
     event.preventDefault();
