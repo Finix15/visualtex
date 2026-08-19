@@ -11,6 +11,7 @@ import {
 } from "react";
 import {
   MathfieldElement,
+  type MacroDictionary,
   type Style,
 } from "mathlive";
 import { flushSync } from "react-dom";
@@ -71,15 +72,19 @@ import {
   convertVisualTexLatexToMarkup,
   installMathLiveContourIntegralShadowStyle,
 } from "./mathLiveIntegralCompatibility";
-import { applyCustomSymbolMacrosToMathfield } from "../math/customSymbolRegistry";
+import { composeCustomSymbolMacrosForMathfield } from "../math/customSymbolRegistry";
 import {
-  containsCustomSymbolCommand,
   installCustomSymbolGlobalStyle,
   installCustomSymbolShadowStyle,
   refreshCustomSymbolMathfield,
 } from "../math/customSymbolRendering";
 import { useCustomSymbolRevision } from "../math/customSymbolReact";
 import { ImeCompositionGuard } from "./imeCompositionGuard";
+import {
+  installMathLiveOptionMutationGuard,
+  readMathLiveOptionBeforeMount,
+  setMathLiveOptionsBeforeMount,
+} from "./mathLiveOptionCompatibility";
 import {
   nativeSuggestionPreviewHasVisibleInk,
   resolveNativeSuggestionPreview,
@@ -5947,28 +5952,29 @@ function FormulaField(props: FormulaFieldProps) {
         ?.focus({ preventScroll: true });
       propsRef.current.onFocus(propsRef.current.index, field);
     };
+    const deferredMacros =
+      readMathLiveOptionBeforeMount<MacroDictionary>(field, "macros") ?? {};
+    const deferredInlineShortcuts =
+      readMathLiveOptionBeforeMount<VisualTexInlineShortcutDefinitions>(
+        field,
+        "inlineShortcuts",
+      ) ?? {};
+    defaultInlineShortcutsRef.current = { ...deferredInlineShortcuts };
+    setMathLiveOptionsBeforeMount(field, {
+      macros: composeCustomSymbolMacrosForMathfield(field, deferredMacros, {
+        bm: {
+          def: "\\boldsymbol{#1}",
+          args: 1,
+          expand: false,
+        },
+      }),
+      inlineShortcuts: resolveVisualTexInlineShortcuts(
+        defaultInlineShortcutsRef.current,
+        propsRef.current.inputBehavior.autoEscapeShortcuts,
+      ),
+    });
     host.replaceChildren(field);
-    field.macros = {
-      ...field.macros,
-      bm: {
-        def: "\\boldsymbol{#1}",
-        args: 1,
-        expand: false,
-      },
-    };
-    applyCustomSymbolMacrosToMathfield(field);
-    if (
-      /\\bm(?:\s|\{|$)/.test(propsRef.current.latex) ||
-      containsCustomSymbolCommand(propsRef.current.latex)
-    ) {
-      field.setValue(propsRef.current.latex, {
-        mode: "math",
-        format: "latex",
-        insertionMode: "replaceAll",
-        selectionMode: "after",
-        silenceNotifications: true,
-      });
-    }
+    installMathLiveOptionMutationGuard(field);
     // VisualTeX owns formula editing interactions; disable MathLive's built-in
     // context menu completely instead of hiding it after it opens.
     field.menuItems = [];
@@ -5979,11 +5985,6 @@ function FormulaField(props: FormulaFieldProps) {
       field,
       propsRef.current.formulaLetterFont,
       propsRef.current.formulaChineseFont,
-    );
-    defaultInlineShortcutsRef.current = { ...field.inlineShortcuts };
-    field.inlineShortcuts = resolveVisualTexInlineShortcuts(
-      defaultInlineShortcutsRef.current,
-      propsRef.current.inputBehavior.autoEscapeShortcuts,
     );
     // MathLive mounts a pre-filled field with the whole formula selected.
     // Collapse that implicit selection so toolbar commands insert at the end

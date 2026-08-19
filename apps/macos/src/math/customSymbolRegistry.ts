@@ -808,14 +808,23 @@ export function getAppliedCustomSymbolCommandsForMathfield(
   return new Set(appliedMathfieldCommands.get(field) ?? []);
 }
 
-export function applyCustomSymbolMacrosToMathfield(field: MathfieldElement) {
-  const macros: MacroDictionary = { ...field.macros };
+export function composeCustomSymbolMacrosForMathfield(
+  field: MathfieldElement,
+  baseMacros: MacroDictionary,
+  additionalMacros: MacroDictionary = {},
+) {
+  const macros: MacroDictionary = { ...baseMacros };
   const previous = appliedMathfieldCommands.get(field);
   previous?.forEach((command) => delete macros[command]);
+  Object.assign(macros, additionalMacros);
   const customMacros = customSymbolMathLiveMacros();
   Object.assign(macros, customMacros);
-  field.macros = macros;
   appliedMathfieldCommands.set(field, new Set(Object.keys(customMacros)));
+  return macros;
+}
+
+export function applyCustomSymbolMacrosToMathfield(field: MathfieldElement) {
+  field.macros = composeCustomSymbolMacrosForMathfield(field, field.macros);
 }
 
 export function customSymbolSvgMacros() {

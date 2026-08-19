@@ -2245,7 +2245,9 @@ fn set_resident_editor_parked(window: &WebviewWindow, parked: bool) -> Result<()
             // Keep the resident WKWebView continuously alive, exactly as in
             // eb2fcf2a. orderOut()/hide() suspends WebKit and causes the observed
             // multi-second transparent wake-up before the editor can paint.
-            native_window.setAlphaValue(if parked { 0.01 } else { 1.0 });
+            // 1% native opacity is still visible on bright/high-contrast desktop
+            // backgrounds, so park at a much smaller non-zero alpha instead.
+            native_window.setAlphaValue(if parked { 0.001 } else { 1.0 });
             native_window.setIgnoresMouseEvents(parked);
             // A ready Office editor must remain visually above Word/PowerPoint
             // even when macOS refuses a cross-application activation request.

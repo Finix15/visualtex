@@ -1743,7 +1743,7 @@ expectIncludes(toolbarCommandOmmlRegression, "latexLinesToOmml", "Every newly ad
 expectIncludes(styles, "overflow-y: hidden", "The horizontal formula tool strip must never expose a vertical scrollbar");
 expect(!rustRuntime.includes("native_window.orderOut(None)"), "The resident Office editor must remain in AppKit ordering so WebKit is never suspended between formula edits");
 expect(!rustRuntime.includes("Unable to hide the resident Office editor"), "The macOS resident editor must not use Tauri hide as part of its idle lifecycle");
-expectIncludes(rustRuntime, "setAlphaValue(if parked { 0.01 } else { 1.0 })", "Parking must use the proven eb2fcf2a native alpha transition without removing the WebView from the window list");
+expectIncludes(rustRuntime, "setAlphaValue(if parked { 0.001 } else { 1.0 })", "Parking must keep a non-zero native alpha without leaving a visible resident Office window on the desktop");
 expectIncludes(rustRuntime, "native_window.setAlphaValue(1.0)", "Hydration must restore the resident editor to full native opacity immediately after an Office request");
 expectIncludes(rustRuntime, "native_window.setIgnoresMouseEvents(true)", "A parked or hydrating resident editor must never intercept user input");
 expectIncludes(rustRuntime, "present_resident_editor_window", "A hydrated resident editor must restore native mouse and focus state before accepting input");
