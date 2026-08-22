@@ -55,7 +55,7 @@ export interface ThemePaletteColors {
 export interface ThemeDefinition {
   id: Theme;
   labelEn: string;
-  labelZh: string;
+  labelVi: string;
   mode: ThemePaletteMode;
   swatches: readonly [string, string, string];
   colors?: ThemePaletteColors;
@@ -171,7 +171,7 @@ const EXTRA_THEME_DEFINITIONS: readonly ThemeDefinition[] = [
   {
     id: "codex",
     labelEn: "Codex",
-    labelZh: "Codex",
+    labelVi: "Codex",
     mode: "light",
     swatches: ["#FFFFFF", "#1A1C1F", "#339CFF"],
     colors: palette("light", {
@@ -222,7 +222,7 @@ const EXTRA_THEME_DEFINITIONS: readonly ThemeDefinition[] = [
   {
     id: "notion",
     labelEn: "Notion",
-    labelZh: "Notion",
+    labelVi: "Notion",
     mode: "light",
     swatches: ["#FFFFFF", "#37352F", "#4981D2"],
     colors: palette("light", {
@@ -273,7 +273,7 @@ const EXTRA_THEME_DEFINITIONS: readonly ThemeDefinition[] = [
   {
     id: "one",
     labelEn: "One",
-    labelZh: "One",
+    labelVi: "One",
     mode: "light",
     swatches: ["#FAFAFA", "#383A42", "#586EF6"],
     colors: palette("light", {
@@ -324,7 +324,7 @@ const EXTRA_THEME_DEFINITIONS: readonly ThemeDefinition[] = [
   {
     id: "proof",
     labelEn: "Proof",
-    labelZh: "Proof",
+    labelVi: "Proof",
     mode: "light",
     swatches: ["#F5F3EE", "#2D312E", "#4B745F"],
     colors: palette("light", {
@@ -375,7 +375,7 @@ const EXTRA_THEME_DEFINITIONS: readonly ThemeDefinition[] = [
   {
     id: "raycast",
     labelEn: "Raycast",
-    labelZh: "Raycast",
+    labelVi: "Raycast",
     mode: "light",
     swatches: ["#FFFFFF", "#1D1D1F", "#ED6E69"],
     colors: palette("light", {
@@ -426,7 +426,7 @@ const EXTRA_THEME_DEFINITIONS: readonly ThemeDefinition[] = [
   {
     id: "rose-pine",
     labelEn: "Rose Pine",
-    labelZh: "Rose Pine",
+    labelVi: "Rose Pine",
     mode: "light",
     swatches: ["#F9F4EE", "#575279", "#CB8681"],
     colors: palette("light", {
@@ -477,7 +477,7 @@ const EXTRA_THEME_DEFINITIONS: readonly ThemeDefinition[] = [
   {
     id: "solarized",
     labelEn: "Solarized",
-    labelZh: "Solarized",
+    labelVi: "Solarized",
     mode: "light",
     swatches: ["#FCF6E5", "#657B83", "#AE8B2D"],
     colors: palette("light", {
@@ -528,7 +528,7 @@ const EXTRA_THEME_DEFINITIONS: readonly ThemeDefinition[] = [
   {
     id: "vercel",
     labelEn: "Vercel",
-    labelZh: "Vercel",
+    labelVi: "Vercel",
     mode: "light",
     swatches: ["#FFFFFF", "#1A1A1A", "#2D69F6"],
     colors: palette("light", {
@@ -579,7 +579,7 @@ const EXTRA_THEME_DEFINITIONS: readonly ThemeDefinition[] = [
   {
     id: "vscode-plus",
     labelEn: "VS Code Plus",
-    labelZh: "VS Code Plus",
+    labelVi: "VS Code Plus",
     mode: "light",
     swatches: ["#FFFFFF", "#000000", "#3478C6"],
     colors: palette("light", {
@@ -630,7 +630,7 @@ const EXTRA_THEME_DEFINITIONS: readonly ThemeDefinition[] = [
   {
     id: "xcode",
     labelEn: "Xcode",
-    labelZh: "Xcode",
+    labelVi: "Xcode",
     mode: "light",
     swatches: ["#FFFFFF", "#262626", "#0F0EF5"],
     colors: palette("light", {
@@ -684,35 +684,35 @@ export const THEME_DEFINITIONS: readonly ThemeDefinition[] = [
   {
     id: "light",
     labelEn: "Light",
-    labelZh: "浅色",
+    labelVi: "Ánh sáng",
     mode: "light",
     swatches: ["#F2F4F6", "#1D232B", "#1F638E"],
   },
   {
     id: "beige",
     labelEn: "Warm beige",
-    labelZh: "暖米色",
+    labelVi: "Màu be ấm áp",
     mode: "light",
     swatches: ["#E4D5BF", "#352C24", "#785536"],
   },
   {
     id: "dark",
     labelEn: "Dark",
-    labelZh: "深色",
+    labelVi: "Tối",
     mode: "dark",
     swatches: ["#16181B", "#F2F4F6", "#72B7DD"],
   },
   {
     id: "purple",
     labelEn: "Deep purple",
-    labelZh: "深紫色",
+    labelVi: "Tím đậm",
     mode: "dark",
     swatches: ["#120E16", "#F5F0F8", "#BFA4EF"],
   },
   {
     id: "green",
     labelEn: "Deep green",
-    labelZh: "深绿色",
+    labelVi: "Xanh đậm",
     mode: "dark",
     swatches: ["#0D120F", "#EEF5F0", "#87CDAA"],
   },
@@ -720,7 +720,7 @@ export const THEME_DEFINITIONS: readonly ThemeDefinition[] = [
   {
     id: "custom",
     labelEn: "Custom",
-    labelZh: "自定义",
+    labelVi: "Tùy chỉnh",
     mode: "light",
     swatches: ["#FFFFFF", "#1A1C1F", "#339CFF"],
   },

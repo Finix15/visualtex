@@ -213,24 +213,30 @@ function App() {
   );
   const historyState = useHistorySnapshot();
   const isEn = language === "en";
+
+  useEffect(() => {
+    void invoke("write_office_ui_language", { language }).catch((error) => {
+      console.warn("Unable to synchronize the Office UI language", error);
+    });
+  }, [language]);
   const latex = joinFormulaLines(lines);
   const sourceLatex = formatLatex(latex, latexCodeFormat);
   const currentCodeFormat = getLatexCodeFormatDefinition(latexCodeFormat);
   const codeFormatGroups = [
     {
       id: "single" as const,
-      title: isEn ? "Independent formula formats" : "单公式独立环境",
+      title: isEn ? "Independent formula formats" : "Định dạng công thức độc lập",
       description: isEn
         ? "Each non-empty formula field gets its own wrapper"
-        : "每个非空公式框分别生成一个完整环境",
+        : "Mỗi trường công thức không trống sẽ có trình bao bọc riêng",
       formats: latexCodeFormats.filter((format) => format.group === "single"),
     },
     {
       id: "multi" as const,
-      title: isEn ? "Combined multi-line environments" : "多公式合并环境",
+      title: isEn ? "Combined multi-line environments" : "Môi trường đa dòng kết hợp",
       description: isEn
         ? "All non-empty formula fields become rows in one environment"
-        : "所有非空公式框合并成一个多行公式环境",
+        : "Tất cả các trường công thức không trống sẽ trở thành hàng trong một môi trường",
       formats: latexCodeFormats.filter((format) => format.group === "multi"),
     },
   ];
@@ -390,7 +396,7 @@ function App() {
   }, [powerPointDefaultFontSizePt]);
 
   useEffect(() => {
-    document.documentElement.lang = isEn ? "en" : "zh-CN";
+    document.documentElement.lang = isEn ? "en" : "vi-VN";
   }, [isEn]);
 
   useEffect(() => {
@@ -439,7 +445,7 @@ function App() {
             ? error.message
             : isEn
               ? "Unable to enable silent OCR"
-              : "无法启用静默 OCR",
+              : "Không thể bật OCR im lặng",
         );
       });
     return () => {
@@ -536,7 +542,7 @@ function App() {
         ? {
             ...current,
             status: "cancelling",
-            message: isEn ? "Cancelling OCR…" : "正在取消 OCR…",
+            message: isEn ? "Cancelling OCR…" : "Đang hủy OCR…",
           }
         : current,
     );
@@ -554,11 +560,11 @@ function App() {
     source: "paste" | "quick" = "paste",
   ) => {
     if (inlineOcrBusyRef.current) {
-      setToast(isEn ? "Another pasted image is being recognized" : "已有一张粘贴图片正在识别");
+      setToast(isEn ? "Another pasted image is being recognized" : "Một hình ảnh được dán khác đang được nhận dạng");
       return;
     }
     if (!isTauriEnvironment()) {
-      setToast(isEn ? "Image OCR is available in the desktop app" : "图片 OCR 只能在桌面应用中使用");
+      setToast(isEn ? "Image OCR is available in the desktop app" : "OCR hình ảnh có sẵn trong ứng dụng máy tính để bàn");
       return;
     }
 
@@ -572,7 +578,7 @@ function App() {
     inlineOcrCancelRequestedRef.current = false;
     setInlineOcr({
       status: "running",
-      message: isEn ? "Checking the local OCR runtime…" : "正在检查本地 OCR 环境…",
+      message: isEn ? "Checking the local OCR runtime…" : "Đang kiểm tra thời gian chạy OCR cục bộ…",
       seconds: 0,
       model: ocrModel,
     });
@@ -586,7 +592,7 @@ function App() {
         throw new Error(
           isEn
             ? "Install the OCR runtime before pasting an image"
-            : "请先安装 OCR 运行环境，再在公式框中粘贴图片",
+            : "Cài đặt thời gian chạy OCR trước khi dán hình ảnh",
         );
       }
 
@@ -595,7 +601,7 @@ function App() {
         throw new Error(
           isEn
             ? `Install ${selectedOcrModel.labelEn} before using it for OCR`
-            : `请先安装${selectedOcrModel.labelZh}模型，再使用该模型进行 OCR`,
+            : `Cài đặt ${selectedOcrModel.labelEn} trước khi sử dụng cho OCR`,
         );
       }
       const availableOcrModel = ocrModel;
@@ -632,7 +638,7 @@ function App() {
         .filter(Boolean)
         .join("\n");
       if (!recognizedLatex) {
-        throw new Error(isEn ? "OCR returned an empty formula" : "OCR 没有返回可用公式");
+        throw new Error(isEn ? "OCR returned an empty formula" : "OCR trả về công thức trống");
       }
 
       const inserted =
@@ -641,7 +647,7 @@ function App() {
         throw new Error(
           isEn
             ? "The original formula line no longer exists; the OCR result was not inserted"
-            : "原来的公式行已被删除，OCR 结果没有插入到其他位置",
+            : "Dòng công thức gốc không còn tồn tại; kết quả OCR không được chèn",
         );
       }
 
@@ -650,10 +656,10 @@ function App() {
         message: result.backgroundInverted
           ? isEn
             ? "Recognized and inserted · dark background inverted"
-            : "识别完成并已插入 · 已自动反色"
+            : "Đã nhận dạng và chèn · đảo ngược nền tối"
           : isEn
             ? "Recognized and inserted at the saved cursor"
-            : "识别完成，已插入原光标位置",
+            : "Nhận dạng và chèn vào con trỏ đã lưu",
         seconds: current?.seconds ?? 0,
         model: ocrModel,
       }));
@@ -661,10 +667,10 @@ function App() {
         source === "quick"
           ? isEn
             ? "Screenshot converted to LaTeX"
-            : "截图已转换为 LaTeX"
+            : "Ảnh chụp màn hình được chuyển đổi sang LaTeX"
           : isEn
             ? "Pasted image converted to LaTeX"
-            : "粘贴图片已转换为 LaTeX",
+            : "Hình ảnh đã dán được chuyển đổi sang LaTeX",
       );
       scheduleInlineOcrClear(1800);
     } catch (error) {
@@ -675,14 +681,14 @@ function App() {
       if (cancelled) {
         setInlineOcr((current) => ({
           status: "cancelled",
-          message: isEn ? "OCR cancelled" : "OCR 已取消",
+          message: isEn ? "OCR cancelled" : "OCR đã bị hủy",
           seconds: current?.seconds ?? 0,
           model: ocrModel,
         }));
         scheduleInlineOcrClear(1200);
       } else {
         const message =
-          errorMessage || (isEn ? "Image OCR failed" : "图片 OCR 失败");
+          errorMessage || (isEn ? "Image OCR failed" : "OCR hình ảnh không thành công");
         setInlineOcr((current) => ({
           status: "error",
           message,
@@ -703,7 +709,7 @@ function App() {
 
   const handleQuickOcr = async () => {
     if (inlineOcrBusyRef.current || quickOcrCaptureBusy) {
-      setToast(isEn ? "OCR is already running" : "另一个 OCR 任务正在进行");
+      setToast(isEn ? "OCR is already running" : "OCR đang chạy");
       return;
     }
     const target = editorRef.current?.captureInsertionTarget();
@@ -711,7 +717,7 @@ function App() {
       setToast(
         isEn
           ? "Click a formula field before quick OCR"
-          : "请先点击一个公式框，再使用快捷 OCR",
+          : "Nhấp vào trường công thức trước OCR nhanh",
       );
       return;
     }
@@ -724,10 +730,10 @@ function App() {
         waitingForSystemScreenshot
           ? isEn
             ? "VisualTeX minimized. Switch to the target page and take a Windows screenshot within 60 seconds."
-            : "VisualTeX 已最小化，请切到目标页面，并在 60 秒内使用 Windows 系统截图快捷键截图"
+            : "VisualTeX được thu nhỏ. Chuyển sang trang đích và chụp ảnh màn hình Windows trong vòng 60 giây."
           : isEn
             ? "Select a formula area in the Windows Snipping Tool"
-            : "请在 Windows 截图工具中框选要识别的公式区域",
+            : "Chọn vùng công thức trong Windows Snipping Tool",
       );
       let capture: Awaited<ReturnType<typeof captureQuickOcrScreenshot>> = null;
       try {
@@ -745,10 +751,10 @@ function App() {
           waitingForSystemScreenshot
             ? isEn
               ? "No new Windows screenshot was detected within 60 seconds"
-              : "60 秒内未检测到新的 Windows 系统截图"
+              : "Không phát hiện thấy ảnh chụp màn hình Windows mới trong vòng 60 giây"
             : isEn
               ? "Screenshot cancelled"
-              : "已取消截图",
+              : "Ảnh chụp màn hình bị hủy",
         );
         return;
       }
@@ -763,7 +769,7 @@ function App() {
           ? error.message
           : isEn
             ? "Quick OCR failed"
-            : "快捷 OCR 失败",
+            : "OCR nhanh không thành công",
       );
     } finally {
       setQuickOcrCaptureBusy(false);
@@ -777,10 +783,10 @@ function App() {
       mode === "system-screenshot"
         ? isEn
           ? "Quick OCR mode: wait for Windows screenshot"
-          : "快捷 OCR 已切换为：等待 Windows 系统截图"
+          : "Chế độ OCR nhanh: chờ ảnh chụp màn hình Windows"
         : isEn
           ? "Quick OCR mode: immediate selection"
-          : "快捷 OCR 已切换为：立即框选",
+          : "Chế độ OCR nhanh: chọn ngay lập tức",
     );
   };
 
@@ -791,10 +797,10 @@ function App() {
       enabled
         ? isEn
           ? `Silent OCR enabled · ${silentOcrShortcut}`
-          : `静默 OCR 已开启 · ${silentOcrShortcut}`
+          : `Đã bật OCR im lặng · ${silentOcrShortcut}`
         : isEn
           ? "Silent OCR disabled"
-          : "静默 OCR 已关闭",
+          : "OCR im lặng bị tắt",
     );
   };
 
@@ -813,7 +819,7 @@ function App() {
     setToast(
       isEn
         ? `LaTeX code format: ${definition.titleEn}`
-        : `LaTeX 代码格式已切换为：${definition.titleZh}`,
+        : `Định dạng mã LaTeX: ${definition.titleEn}`,
     );
   };
 
@@ -824,14 +830,14 @@ function App() {
       setToast(
         isEn
           ? `Copied ${currentCodeFormat.titleEn}`
-          : `已复制：${currentCodeFormat.titleZh}`,
+          : `Sao chép ${currentCodeFormat.titleEn}`,
       );
       return true;
     } catch {
       setToast(
         isEn
           ? "Copy failed. Check clipboard permission."
-          : "复制失败，请检查系统剪贴板权限",
+          : "Sao chép không thành công. Kiểm tra quyền của clipboard.",
       );
       return false;
     }
@@ -846,7 +852,7 @@ function App() {
       setToast(
         isEn
           ? "LaTeX copied, but VisualTeX could not be minimized."
-          : "LaTeX 已复制，但 VisualTeX 最小化失败。",
+          : "LaTeX đã sao chép nhưng không thể thu nhỏ VisualTeX.",
       );
     }
   };
@@ -863,7 +869,7 @@ function App() {
         setToast(
           isEn
             ? `Unable to switch keypad window size: ${message}`
-            : `切换小键盘窗口尺寸失败：${message}`,
+            : `Không thể chuyển đổi kích thước cửa sổ bàn phím: ${message}`,
         );
         return;
       }
@@ -886,13 +892,13 @@ function App() {
           formulaChineseFont,
         },
       );
-      setToast(isEn ? "PNG copied to Clipboard" : "PNG 已复制到剪贴板");
+      setToast(isEn ? "PNG copied to Clipboard" : "PNG được sao chép vào Clipboard");
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       setToast(
         isEn
           ? `Unable to copy PNG: ${message}`
-          : `复制 PNG 失败：${message}`,
+          : `Không thể sao chép PNG: ${message}`,
       );
     } finally {
       pngClipboardBusyRef.current = false;
@@ -910,13 +916,13 @@ function App() {
     const link = window.document.createElement("a");
     const safeTitle =
       title.trim().replace(/[\\/:*?"<>|]/g, "-") ||
-      (isEn ? "Untitled Formula" : "未命名公式");
+      (isEn ? "Untitled Formula" : "Công thức không có tiêu đề");
     link.href = url;
     link.download = safeTitle + ".visualtex.json";
     link.click();
     URL.revokeObjectURL(url);
     setSavedPulse(true);
-    setToast(isEn ? "Formula document saved" : "公式文档已保存");
+    setToast(isEn ? "Formula document saved" : "Đã lưu tài liệu công thức");
     window.setTimeout(() => setSavedPulse(false), 900);
   };
 
@@ -942,12 +948,12 @@ function App() {
         });
         window.requestAnimationFrame(() => restoreSnapshotFocus(after));
       }
-      setToast(isEn ? "Formula document opened" : "公式文档已打开");
+      setToast(isEn ? "Formula document opened" : "Đã mở tài liệu công thức");
     } catch {
       setToast(
         isEn
           ? "Unable to open: invalid file format"
-          : "无法打开：文件格式不正确",
+          : "Không mở được: định dạng file không hợp lệ",
       );
     } finally {
       event.target.value = "";
@@ -957,10 +963,10 @@ function App() {
   const newFormula = () => {
     addHistory(latex);
     const after = createBlankDocumentSnapshot(
-      isEn ? "Untitled Formula" : "未命名公式",
+      isEn ? "Untitled Formula" : "Công thức không có tiêu đề",
     );
     replaceDocumentWithHistory(after, "new-document");
-    setToast(isEn ? "Created a blank formula" : "已新建空白公式");
+    setToast(isEn ? "Created a blank formula" : "Tạo công thức trống");
   };
 
   const handleTitleChange = (nextTitle: string) => {
@@ -999,7 +1005,7 @@ function App() {
             ? error.message
             : isEn
               ? "Unable to connect to the update server"
-              : "无法连接更新服务器",
+              : "Không thể kết nối với máy chủ cập nhật",
         );
         setUpdateOpen(true);
       } else {
@@ -1136,7 +1142,7 @@ function App() {
         title={
           isEn
             ? `Current: ${currentCodeFormat.titleEn}`
-            : `当前格式：${currentCodeFormat.titleZh}`
+            : `Hiện tại: ${currentCodeFormat.titleEn}`
         }
         onClick={() => {
           setMenuOpen(false);
@@ -1148,17 +1154,17 @@ function App() {
           {keypadMode
             ? isEn
               ? currentCodeFormat.titleEn
-              : currentCodeFormat.titleZh
+              : currentCodeFormat.titleVi
             : isEn
               ? "LaTeX code format"
-              : "LaTeX 代码格式"}
+              : "Định dạng mã LaTeX"}
         </span>
       </button>
       <button
         ref={copyMenuButtonRef}
         type="button"
         className="copy-chevron"
-        aria-label={isEn ? "Choose LaTeX code format" : "选择 LaTeX 代码格式"}
+        aria-label={isEn ? "Choose LaTeX code format" : "Chọn định dạng mã LaTeX"}
         aria-expanded={copyMenuOpen}
         aria-haspopup="menu"
         aria-controls="copy-format-menu"
@@ -1175,16 +1181,16 @@ function App() {
           id="copy-format-menu"
           className="copy-menu code-format-menu"
           role="menu"
-          aria-label={isEn ? "LaTeX code format" : "LaTeX 代码格式"}
+          aria-label={isEn ? "LaTeX code format" : "Định dạng mã LaTeX"}
         >
           <div className="code-format-menu-header">
             <span className="copy-menu-label">
-              {isEn ? "LaTeX code format" : "LaTeX 代码格式"}
+              {isEn ? "LaTeX code format" : "Định dạng mã LaTeX"}
             </span>
             <small>
               {isEn
                 ? "Controls source rendering and keypad copy output"
-                : "控制源码显示与小键盘模式复制格式"}
+                : "Kiểm soát kết xuất nguồn và đầu ra sao chép bàn phím"}
             </small>
           </div>
           {codeFormatGroups.map((group) => (
@@ -1205,7 +1211,7 @@ function App() {
                     type="button"
                     role="menuitemradio"
                     aria-checked={selected}
-                    aria-label={`${isEn ? format.titleEn : format.titleZh}: ${format.hint}`}
+                    aria-label={`${isEn ? format.titleEn : format.titleVi}: ${format.hint}`}
                     data-format={format.id}
                     className={selected ? "is-selected" : ""}
                     key={format.id}
@@ -1237,15 +1243,15 @@ function App() {
         keypadMode
           ? isEn
             ? "Exit keypad mode"
-            : "退出小键盘模式"
+            : "Thoát khỏi chế độ bàn phím"
           : isEn
             ? "Enter keypad mode"
-            : "进入小键盘模式"
+            : "Vào chế độ bàn phím"
       }
       onClick={() => void handleKeypadModeToggle()}
     >
       <Keyboard size={15} />
-      <span>{isEn ? "Keypad" : "小键盘"}</span>
+      <span>{isEn ? "Keypad" : "Bàn phím"}</span>
     </button>
   );
 
@@ -1277,7 +1283,7 @@ function App() {
             ref={menuButtonRef}
             type="button"
             className={"menu-button " + (menuOpen ? "is-active" : "")}
-            aria-label={isEn ? "Main menu" : "主菜单"}
+            aria-label={isEn ? "Main menu" : "Menu chính"}
             aria-expanded={menuOpen}
             aria-haspopup="menu"
             aria-controls="app-main-menu"
@@ -1296,17 +1302,17 @@ function App() {
                 ? sidebarOpen
                   ? isEn
                     ? "Hide formula tiles"
-                    : "隐藏公式磁贴"
+                    : "Ẩn ô công thức"
                   : isEn
                     ? "Show formula tiles"
-                    : "显示公式磁贴"
+                    : "Hiển thị ô công thức"
                 : sidebarOpen
                   ? isEn
                     ? "Hide formula tools"
-                    : "隐藏公式工具"
+                    : "Ẩn công cụ công thức"
                   : isEn
                     ? "Show formula tools"
-                    : "显示公式工具"
+                    : "Hiện công cụ công thức"
             }
             aria-pressed={sidebarOpen}
             onClick={() => setSidebarOpen((open) => !open)}
@@ -1332,15 +1338,15 @@ function App() {
               id="app-main-menu"
               className="app-menu-popover"
               role="menu"
-              aria-label={isEn ? "VisualTeX menu" : "VisualTeX 菜单"}
+              aria-label={isEn ? "VisualTeX menu" : "Trình đơn VisualTeX"}
             >
               <div className="app-menu-heading">
                 <strong>VisualTeX</strong>
-                <span>{isEn ? "Formula workspace" : "公式工作区"}</span>
+                <span>{isEn ? "Formula workspace" : "Không gian làm việc công thức"}</span>
               </div>
               <button type="button" role="menuitem" onClick={() => runMenuAction(newFormula)}>
                 <FilePlus2 size={16} />
-                <span>{isEn ? "New formula" : "新建公式"}</span>
+                <span>{isEn ? "New formula" : "Công thức mới"}</span>
                 <kbd>Ctrl+N</kbd>
               </button>
               <button
@@ -1351,12 +1357,12 @@ function App() {
                 }
               >
                 <FolderOpen size={16} />
-                <span>{isEn ? "Open document" : "打开文档"}</span>
+                <span>{isEn ? "Open document" : "Mở tài liệu"}</span>
                 <kbd>Ctrl+O</kbd>
               </button>
               <button type="button" role="menuitem" onClick={() => runMenuAction(saveDocument)}>
                 <Save size={16} />
-                <span>{isEn ? "Save document" : "保存文档"}</span>
+                <span>{isEn ? "Save document" : "Lưu tài liệu"}</span>
                 <kbd>Ctrl+S</kbd>
               </button>
               <button
@@ -1365,7 +1371,7 @@ function App() {
                 onClick={() => runMenuAction(() => setExportOpen(true))}
               >
                 <FileDown size={16} />
-                <span>{isEn ? "Export…" : "导出…"}</span>
+                <span>{isEn ? "Export…" : "Xuất…"}</span>
                 <kbd>MD/SVG/PNG</kbd>
               </button>
               <div className="app-menu-divider" />
@@ -1375,7 +1381,7 @@ function App() {
                 onClick={() => runMenuAction(() => setHistoryOpen(true))}
               >
                 <History size={16} />
-                <span>{isEn ? "Formula history" : "公式历史"}</span>
+                <span>{isEn ? "Formula history" : "Lịch sử công thức"}</span>
               </button>
               <button
                 type="button"
@@ -1383,7 +1389,7 @@ function App() {
                 onClick={() => runMenuAction(() => setOcrOpen(true))}
               >
                 <ScanLine size={16} />
-                <span>{isEn ? "Formula image OCR" : "图片公式识别"}</span>
+                <span>{isEn ? "Formula image OCR" : "Hình ảnh công thức OCR"}</span>
               </button>
               <button
                 type="button"
@@ -1391,7 +1397,7 @@ function App() {
                 onClick={() => runMenuAction(() => setSettingsOpen(true))}
               >
                 <Settings2 size={16} />
-                <span>{isEn ? "Settings" : "设置"}</span>
+                <span>{isEn ? "Settings" : "Cài đặt"}</span>
               </button>
               <button
                 type="button"
@@ -1399,7 +1405,7 @@ function App() {
                 onClick={() => runMenuAction(() => setHelpOpen(true))}
               >
                 <BookOpenText size={16} />
-                <span>{isEn ? "Help Manual" : "帮助手册"}</span>
+                <span>{isEn ? "Help Manual" : "Hướng dẫn trợ giúp"}</span>
               </button>
               <button
                 type="button"
@@ -1407,21 +1413,21 @@ function App() {
                 onClick={() => runMenuAction(() => void runUpdateCheck(true))}
               >
                 <RefreshCw size={16} />
-                <span>{isEn ? "Check for updates" : "检查更新"}</span>
+                <span>{isEn ? "Check for updates" : "Kiểm tra cập nhật"}</span>
               </button>
               <div className="app-menu-divider" />
               <div className="app-menu-language">
                 <span>
                   <Languages size={15} />
-                  {isEn ? "Language" : "语言"}
+                  {isEn ? "Language" : "Ngôn ngữ"}
                 </span>
                 <div>
                   <button
                     type="button"
                     role="menuitemradio"
-                    aria-checked={language === "cn"}
-                    className={language === "cn" ? "is-active" : ""}
-                    onClick={() => setLanguage("cn")}
+                    aria-checked={language === "vi"}
+                    className={language === "vi" ? "is-active" : ""}
+                    onClick={() => setLanguage("vi")}
                   >
                     CN
                   </button>
@@ -1445,12 +1451,12 @@ function App() {
             value={title}
             onChange={(event) => handleTitleChange(event.target.value)}
             onBlur={() => historyManager.commitPendingTransaction()}
-            aria-label={isEn ? "Formula document title" : "公式文档标题"}
+            aria-label={isEn ? "Formula document title" : "Tiêu đề tài liệu công thức"}
           />
           <span
             className={"save-state " + (savedPulse ? "is-saved" : "")}
-            aria-label={isEn ? "Saved" : "已保存"}
-            title={isEn ? "Saved" : "已保存"}
+            aria-label={isEn ? "Saved" : "Đã lưu"}
+            title={isEn ? "Saved" : "Đã lưu"}
           >
             <Check size={13} />
           </span>
@@ -1458,13 +1464,13 @@ function App() {
 
         <div className="header-actions">
           <div className="action-group file-actions">
-            <button type="button" className="icon-button" onClick={newFormula} aria-label={isEn ? "New" : "新建"} title={isEn ? "New · Ctrl+N" : "新建 · Ctrl+N"}>
+            <button type="button" className="icon-button" onClick={newFormula} aria-label={isEn ? "New" : "Mới"} title={isEn ? "New · Ctrl+N" : "Mới · Ctrl+N"}>
               <FilePlus2 size={17} />
             </button>
-            <button type="button" className="icon-button" onClick={() => fileInputRef.current?.click()} aria-label={isEn ? "Open" : "打开"} title={isEn ? "Open · Ctrl+O" : "打开 · Ctrl+O"}>
+            <button type="button" className="icon-button" onClick={() => fileInputRef.current?.click()} aria-label={isEn ? "Open" : "Mở"} title={isEn ? "Open · Ctrl+O" : "Mở · Ctrl+O"}>
               <FolderOpen size={17} />
             </button>
-            <button type="button" className="icon-button" onClick={saveDocument} aria-label={isEn ? "Save" : "保存到本地"} title={isEn ? "Save · Ctrl+S" : "保存到本地 · Ctrl+S"}>
+            <button type="button" className="icon-button" onClick={saveDocument} aria-label={isEn ? "Save" : "Lưu"} title={isEn ? "Save · Ctrl+S" : "Lưu · Ctrl+S"}>
               <Save size={17} />
             </button>
           </div>
@@ -1478,8 +1484,8 @@ function App() {
                 !historyState.canUndo ||
                 historyState.isReplaying
               }
-              aria-label={isEn ? "Undo" : "撤销"}
-              title={isEn ? "Undo · Ctrl+Z" : "撤销 · Ctrl+Z"}
+              aria-label={isEn ? "Undo" : "Hoàn tác"}
+              title={isEn ? "Undo · Ctrl+Z" : "Hoàn tác · Ctrl+Z"}
             >
               <Undo2 size={17} />
             </button>
@@ -1492,19 +1498,19 @@ function App() {
                 !historyState.canRedo ||
                 historyState.isReplaying
               }
-              aria-label={isEn ? "Redo" : "重做"}
-              title={isEn ? "Redo · Ctrl+Y / Ctrl+Shift+Z" : "重做 · Ctrl+Y / Ctrl+Shift+Z"}
+              aria-label={isEn ? "Redo" : "Làm lại"}
+              title={isEn ? "Redo · Ctrl+Y / Ctrl+Shift+Z" : "Làm lại · Ctrl+Y / Ctrl+Shift+Z"}
             >
               <Redo2 size={17} />
             </button>
           </div>
-          <button type="button" className="icon-button workspace-action" onClick={() => setHistoryOpen(true)} aria-label={isEn ? "Formula history" : "公式历史"} title={isEn ? "Formula history" : "公式历史"}>
+          <button type="button" className="icon-button workspace-action" onClick={() => setHistoryOpen(true)} aria-label={isEn ? "Formula history" : "Lịch sử công thức"} title={isEn ? "Formula history" : "Lịch sử công thức"}>
             <History size={17} />
           </button>
-          <button type="button" className="icon-button workspace-action" onClick={() => setOcrOpen(true)} aria-label={isEn ? "Recognize formula image" : "图片公式识别"} title={isEn ? "Recognize formula image" : "图片公式识别"}>
+          <button type="button" className="icon-button workspace-action" onClick={() => setOcrOpen(true)} aria-label={isEn ? "Recognize formula image" : "Nhận dạng hình ảnh công thức"} title={isEn ? "Recognize formula image" : "Nhận dạng hình ảnh công thức"}>
             <ScanLine size={17} />
           </button>
-          <button type="button" className="icon-button settings-toggle" onClick={() => setSettingsOpen(true)} aria-label={isEn ? "Settings" : "设置"} title={isEn ? "Settings · Ctrl+," : "设置 · Ctrl+,"}>
+          <button type="button" className="icon-button settings-toggle" onClick={() => setSettingsOpen(true)} aria-label={isEn ? "Settings" : "Cài đặt"} title={isEn ? "Settings · Ctrl+," : "Cài đặt · Ctrl+,"}>
             <Settings2 size={17} />
           </button>
           <div className="copy-control code-format-control">
@@ -1517,7 +1523,7 @@ function App() {
               title={
                 isEn
                   ? `Current: ${currentCodeFormat.titleEn}`
-                  : `当前格式：${currentCodeFormat.titleZh}`
+                  : `Hiện tại: ${currentCodeFormat.titleEn}`
               }
               onClick={() => {
                 setMenuOpen(false);
@@ -1525,13 +1531,13 @@ function App() {
               }}
             >
               <Code2 size={16} />
-              <span>{isEn ? "LaTeX code format" : "LaTeX 代码格式"}</span>
+              <span>{isEn ? "LaTeX code format" : "Định dạng mã LaTeX"}</span>
             </button>
             <button
               ref={copyMenuButtonRef}
               type="button"
               className="copy-chevron"
-              aria-label={isEn ? "Choose LaTeX code format" : "选择 LaTeX 代码格式"}
+              aria-label={isEn ? "Choose LaTeX code format" : "Chọn định dạng mã LaTeX"}
               aria-expanded={copyMenuOpen}
               aria-haspopup="menu"
               aria-controls="copy-format-menu"
@@ -1548,16 +1554,16 @@ function App() {
                 id="copy-format-menu"
                 className="copy-menu code-format-menu"
                 role="menu"
-                aria-label={isEn ? "LaTeX code format" : "LaTeX 代码格式"}
+                aria-label={isEn ? "LaTeX code format" : "Định dạng mã LaTeX"}
               >
                 <div className="code-format-menu-header">
                   <span className="copy-menu-label">
-                    {isEn ? "LaTeX code format" : "LaTeX 代码格式"}
+                    {isEn ? "LaTeX code format" : "Định dạng mã LaTeX"}
                   </span>
                   <small>
                     {isEn
                       ? "Changes the source panel and copy output"
-                      : "同时改变下方源码区与复制结果"}
+                      : "Thay đổi bảng nguồn và đầu ra sao chép"}
                   </small>
                 </div>
                 {codeFormatGroups.map((group) => (
@@ -1578,7 +1584,7 @@ function App() {
                           type="button"
                           role="menuitemradio"
                           aria-checked={selected}
-                          aria-label={`${isEn ? format.titleEn : format.titleZh}: ${format.hint}`}
+                          aria-label={`${isEn ? format.titleEn : format.titleVi}: ${format.hint}`}
                           data-format={format.id}
                           className={selected ? "is-selected" : ""}
                           key={format.id}
@@ -1606,7 +1612,7 @@ function App() {
         <button
           type="button"
           className="menu-dismiss-layer"
-          aria-label={isEn ? "Close menu" : "关闭菜单"}
+          aria-label={isEn ? "Close menu" : "Đóng menu"}
           onClick={() => {
             setMenuOpen(false);
             setCopyMenuOpen(false);
@@ -1667,10 +1673,10 @@ function App() {
               <div>
                 <strong>{inlineOcr.message}</strong>
                 <span>
-                  {isEn ? inlineOcrModel.labelEn : inlineOcrModel.labelZh}
+                  {isEn ? inlineOcrModel.labelEn : inlineOcrModel.labelVi}
                   {" · "}
                   {inlineOcr.seconds}
-                  {isEn ? "s" : " 秒"}
+                  {isEn ? "s" : "s"}
                 </span>
               </div>
               {inlineOcrIsBusy ? (
@@ -1681,14 +1687,14 @@ function App() {
                   disabled={inlineOcr.status === "cancelling"}
                 >
                   <X size={13} />
-                  {isEn ? "Cancel" : "取消"}
+                  {isEn ? "Cancel" : "Hủy bỏ"}
                 </button>
               ) : (
                 <button
                   type="button"
                   className="inline-ocr-dismiss"
                   onClick={() => setInlineOcr(null)}
-                  aria-label={isEn ? "Dismiss OCR status" : "关闭 OCR 状态"}
+                  aria-label={isEn ? "Dismiss OCR status" : "Loại bỏ trạng thái OCR"}
                 >
                   <X size={13} />
                 </button>
@@ -1753,7 +1759,7 @@ function App() {
             "history-restore",
           );
           setHistoryOpen(false);
-          setToast(isEn ? "Formula restored" : "已恢复历史公式");
+          setToast(isEn ? "Formula restored" : "Đã khôi phục công thức");
         }}
       />
       <OcrDialog
@@ -1784,7 +1790,7 @@ function App() {
                 ? error.message
                 : isEn
                   ? "Unable to open the download page"
-                  : "无法打开下载页面",
+                  : "Không mở được trang tải xuống",
             );
           });
         }}
@@ -1795,7 +1801,7 @@ function App() {
                 ? error.message
                 : isEn
                   ? "Unable to open the project page"
-                  : "无法打开项目页面",
+                  : "Không thể mở trang dự án",
             );
           });
         }}

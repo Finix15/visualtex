@@ -63,7 +63,7 @@ export const VISUALTEX_FORMULA_SCHEMA = "visualtex-formula" as const;
 export const VISUALTEX_FORMULA_SCHEMA_VERSION = 1 as const;
 export const VISUALTEX_FORMULA_XML_NAMESPACE = "urn:visualtex:formula:1";
 export const VISUALTEX_METADATA_PREFIX = "visualtex:v1:deflate:";
-export const CURRENT_VISUALTEX_VERSION = "1.2.5";
+export const CURRENT_VISUALTEX_VERSION = "1.2.6";
 
 function bytesToBase64Url(bytes: Uint8Array) {
   let binary = "";
@@ -210,9 +210,6 @@ export function createFormulaMetadata({
   const resolvedFormulaLetterFont = normalizeFormulaLetterFont(
     formulaLetterFont ?? original?.formulaLetterFont,
   );
-  const resolvedFormulaChineseFont = normalizeFormulaChineseFont(
-    formulaChineseFont ?? original?.formulaChineseFont,
-  );
   const resolvedReferenceWidth =
     referenceWidthPt && Number.isFinite(referenceWidthPt) && referenceWidthPt > 0
       ? referenceWidthPt
@@ -244,7 +241,9 @@ export function createFormulaMetadata({
     ...(resolvedRenderHeight ? { renderHeightPx: resolvedRenderHeight } : {}),
     ...(resolvedFontSize ? { fontSizePt: resolvedFontSize } : {}),
     formulaLetterFont: resolvedFormulaLetterFont,
-    formulaChineseFont: resolvedFormulaChineseFont,
+    ...(original?.formulaChineseFont
+      ? { formulaChineseFont: original.formulaChineseFont }
+      : {}),
     ...(resolvedReferenceWidth ? { referenceWidthPt: resolvedReferenceWidth } : {}),
     ...(resolvedReferenceHeight ? { referenceHeightPt: resolvedReferenceHeight } : {}),
     ...(resolvedReferenceBaseline !== undefined

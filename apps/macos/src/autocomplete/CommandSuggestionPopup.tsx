@@ -55,11 +55,11 @@ const SuggestionItem = memo(function SuggestionItem({
       <span className="suggestion-copy">
         <span className="suggestion-command">{command.command}</span>
         <span className="suggestion-label">
-          {isEn ? command.labelEn : command.labelZh}
+          {isEn ? command.labelEn : command.labelVi}
         </span>
       </span>
       <span className="suggestion-pin-slot" aria-hidden={!pinned}>
-        {pinned ? <Pin size={13} aria-label={isEn ? "Pinned" : "已固定"} /> : null}
+        {pinned ? <Pin size={13} aria-label={isEn ? "Pinned" : "Đã ghim"} /> : null}
       </span>
       <CornerDownLeft
         size={15}
@@ -93,12 +93,12 @@ export function CommandSuggestionPopup({
       className="suggestion-popup"
       style={{ left: position.left, top: position.top }}
       role="listbox"
-      aria-label={isEn ? "LaTeX command suggestions" : "LaTeX 命令候选"}
+      aria-label={isEn ? "LaTeX command suggestions" : "Gợi ý lệnh LaTeX"}
     >
       <div className="suggestion-header">
-        <span>{isEn ? "Command suggestions" : "命令候选"}</span>
+        <span>{isEn ? "Command suggestions" : "Gợi ý lệnh"}</span>
         <span className="suggestion-key-hint">
-          {isEn ? "↑↓ Select · ↵ Insert" : "↑↓ 选择 · ↵ 插入"}
+          {isEn ? "↑↓ Select · ↵ Insert" : "↑↓ Chọn · ↵ Chèn"}
         </span>
       </div>
       <div className="suggestion-list">
@@ -119,7 +119,7 @@ export function CommandSuggestionPopup({
       <div className="suggestion-footer">
         {isEn
           ? "Click to select · Double-click to insert"
-          : "单击选择 · 双击插入"}
+          : "Bấm để chọn · Bấm đúp để chèn"}
       </div>
     </div>,
     document.body,

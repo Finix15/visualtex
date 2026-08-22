@@ -52,8 +52,8 @@ internal static partial class Program
                 Baseline = ExportBaseline,
                 FontSizePt = 11,
                 RenderFontSizePt = 11,
-                CreatedWithVersion = "1.2.5",
-                UpdatedWithVersion = "1.2.5",
+                CreatedWithVersion = "1.2.6",
+                UpdatedWithVersion = "1.2.6",
                 CreatedAt = DateTimeOffset.UtcNow.ToString("O"),
                 UpdatedAt = DateTimeOffset.UtcNow.ToString("O"),
                 Lines = new List<FormulaLine>

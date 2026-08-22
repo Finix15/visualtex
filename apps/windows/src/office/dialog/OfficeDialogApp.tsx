@@ -159,14 +159,14 @@ async function waitForOfficeCommitResult(
     const current = await getOfficeSession(sessionId);
     if (current.status === "completed") return;
     if (current.status === "failed") {
-      throw new Error(current.error || `${hostLabel} 公式写入失败。`);
+      throw new Error(current.error || `${hostLabel}Formula writing failed.`);
     }
     if (current.status === "cancelled" || current.explicitCancel) {
-      throw new Error(`${hostLabel} 公式写入已取消。`);
+      throw new Error(`${hostLabel}Formula writing canceled.`);
     }
     await delay(100);
   }
-  throw new Error(`等待 ${hostLabel} 确认写入超时，请重试。`);
+  throw new Error(`Wait${hostLabel}Confirm write timeout, please try again.`);
 }
 
 function normalizeOfficeCodeFormat(codeFormat: string): LatexCodeFormat {
@@ -227,7 +227,7 @@ function applyOfficeEditorPreferences(
   const editor = useEditorStore.getState();
   if (settings.theme !== undefined) applyTheme(settings.theme);
   if (settings.editorLayout !== undefined) applyEditorLayout(settings.editorLayout);
-  if (settings.language === "cn" || settings.language === "en") {
+  if (settings.language === "vi" || settings.language === "en") {
     editor.setLanguage(settings.language);
   }
   if (typeof settings.zoom === "number") editor.setZoom(settings.zoom);
@@ -284,35 +284,12 @@ function requireOfficeSessionFontSizePt(value: unknown, host: OfficeHost) {
   if (!Number.isFinite(numeric) || numeric < 5 || numeric > 200) {
     throw new Error(
       host === "word"
-        ? "Word 公式 Session 缺少当前正文位置的有效字号。"
-        : "PowerPoint 公式 Session 缺少有效字号。",
+        ? "Word Formula Session is missing a valid font size for the current text position."
+        : "PowerPoint Equations Session is missing a valid font size.",
     );
   }
   return Math.round(numeric * 2) / 2;
 }
-
-const OFFICE_CHINESE_FONT_SIZE_OPTIONS = [
-  { name: "初号", fontSizePt: 42 },
-  { name: "小初", fontSizePt: 36 },
-  { name: "一号", fontSizePt: 26 },
-  { name: "小一", fontSizePt: 24 },
-  { name: "二号", fontSizePt: 22 },
-  { name: "小二", fontSizePt: 18 },
-  { name: "三号", fontSizePt: 16 },
-  { name: "小三", fontSizePt: 15 },
-  { name: "四号", fontSizePt: 14 },
-  { name: "小四", fontSizePt: 12 },
-  { name: "五号", fontSizePt: 10.5 },
-  { name: "小五", fontSizePt: 9 },
-  { name: "六号", fontSizePt: 7.5 },
-  { name: "小六", fontSizePt: 6.5 },
-  { name: "七号", fontSizePt: 5.5 },
-  { name: "八号", fontSizePt: 5 },
-] as const;
-
-const OFFICE_CHINESE_FONT_SIZE_POINTS = new Set<number>(
-  OFFICE_CHINESE_FONT_SIZE_OPTIONS.map((option) => option.fontSizePt),
-);
 
 const OFFICE_FONT_SIZE_OPTIONS = [
   ...Array.from({ length: 63 }, (_, index) => 5 + index * 0.5),
@@ -326,13 +303,10 @@ const OFFICE_FONT_SIZE_OPTIONS = [
   160,
   180,
   200,
-].filter((fontSizePt) => !OFFICE_CHINESE_FONT_SIZE_POINTS.has(fontSizePt));
+];
 
 function officePointFontSizeOptions(currentFontSizePt: number) {
   const current = normalizeOfficeFontSizePt(currentFontSizePt, currentFontSizePt);
-  if (OFFICE_CHINESE_FONT_SIZE_POINTS.has(current)) {
-    return OFFICE_FONT_SIZE_OPTIONS;
-  }
   return OFFICE_FONT_SIZE_OPTIONS.includes(current)
     ? OFFICE_FONT_SIZE_OPTIONS
     : [...OFFICE_FONT_SIZE_OPTIONS, current].sort((left, right) => left - right);
@@ -617,7 +591,7 @@ export function OfficeDialogApp() {
     );
     const nextLines = normalizedDocument.lines;
     useEditorStore.getState().replaceDocumentState({
-      title: session.title || (isEn ? "Office Formula" : "Office 公式"),
+      title: session.title || (isEn ? "Office Formula" : "Công thức văn phòng"),
       lines: nextLines,
       activeLineId:
         session.activeLineId &&
@@ -1019,7 +993,7 @@ export function OfficeDialogApp() {
       } catch (reason) {
         const detail = readErrorMessage(
           reason,
-          isEn ? "Formula format conversion failed" : "公式格式转换失败",
+          isEn ? "Formula format conversion failed" : "Chuyển đổi định dạng công thức không thành công",
         );
         const sourceFormula = joinFormulaLines(session.lines).trim();
         const formulaPreview = sourceFormula.length <= 500
@@ -1027,7 +1001,7 @@ export function OfficeDialogApp() {
           : `${sourceFormula.slice(0, 500)}…`;
         const message = isEn
           ? `Formula rendering failed: ${detail}\nFormula: ${formulaPreview}`
-          : `公式渲染失败：${detail}\n公式：${formulaPreview}`;
+          : `Kết xuất công thức không thành công: ${detail}\nCông thức: ${formulaPreview}`;
         try {
           await save({ status: "failed", error: message });
         } catch {
@@ -1214,7 +1188,7 @@ export function OfficeDialogApp() {
           setToast(
             readErrorMessage(
               reason,
-              isEn ? "Unable to save the Office formula" : "无法保存 Office 公式",
+              isEn ? "Unable to save the Office formula" : "Không lưu được công thức Office",
             ),
           );
         });
@@ -1256,7 +1230,7 @@ export function OfficeDialogApp() {
               ? reason.message
               : isEn
                 ? "Unable to save the Office formula"
-                : "无法保存 Office 公式";
+                : "Không lưu được công thức Office";
           setToast(message);
         });
       // Windows OLE inserts a PNG file. Keep rasterization off the critical
@@ -1307,7 +1281,7 @@ export function OfficeDialogApp() {
           ? reason.message
           : isEn
             ? "Unable to export the Office formula"
-            : "无法导出 Office 公式";
+            : "Không xuất được công thức Office";
       setToast(message);
     }
   }, [
@@ -1555,7 +1529,7 @@ export function OfficeDialogApp() {
         ? {
             ...current,
             status: "cancelling",
-            message: isEn ? "Cancelling OCR…" : "正在取消 OCR…",
+            message: isEn ? "Cancelling OCR…" : "Đang hủy OCR…",
           }
         : current,
     );
@@ -1574,7 +1548,7 @@ export function OfficeDialogApp() {
       setToast(
         isEn
           ? "Another pasted image is being recognized"
-          : "已有一张粘贴图片正在识别",
+          : "Một hình ảnh được dán khác đang được nhận dạng",
       );
       return;
     }
@@ -1591,7 +1565,7 @@ export function OfficeDialogApp() {
       status: "running",
       message: isEn
         ? "Checking the local OCR runtime…"
-        : "正在检查本地 OCR 环境…",
+        : "Đang kiểm tra thời gian chạy OCR cục bộ…",
       seconds: 0,
       model: ocrModel,
     });
@@ -1605,7 +1579,7 @@ export function OfficeDialogApp() {
         throw new Error(
           isEn
             ? "Install the OCR runtime before pasting an image"
-            : "请先安装 OCR 运行环境，再在公式框中粘贴图片",
+            : "Cài đặt thời gian chạy OCR trước khi dán hình ảnh",
         );
       }
 
@@ -1614,7 +1588,7 @@ export function OfficeDialogApp() {
         throw new Error(
           isEn
             ? `Install ${selectedOcrModel.labelEn} before using it for OCR`
-            : `请先安装${selectedOcrModel.labelZh}模型，再使用该模型进行 OCR`,
+            : `Cài đặt ${selectedOcrModel.labelEn} trước khi sử dụng cho OCR`,
         );
       }
       const availableOcrModel = ocrModel;
@@ -1647,7 +1621,7 @@ export function OfficeDialogApp() {
         .join("\n");
       if (!recognizedLatex) {
         throw new Error(
-          isEn ? "OCR returned an empty formula" : "OCR 没有返回可用公式",
+          isEn ? "OCR returned an empty formula" : "OCR trả về công thức trống",
         );
       }
 
@@ -1657,7 +1631,7 @@ export function OfficeDialogApp() {
         throw new Error(
           isEn
             ? "The original formula line no longer exists; the OCR result was not inserted"
-            : "原来的公式行已被删除，OCR 结果没有插入到其他位置",
+            : "Dòng công thức gốc không còn tồn tại; kết quả OCR không được chèn",
         );
       }
 
@@ -1666,15 +1640,15 @@ export function OfficeDialogApp() {
         message: result.backgroundInverted
           ? isEn
             ? "Recognized and inserted · dark background inverted"
-            : "识别完成并已插入 · 已自动反色"
+            : "Đã nhận dạng và chèn · đảo ngược nền tối"
           : isEn
             ? "Recognized and inserted at the saved cursor"
-            : "识别完成，已插入原光标位置",
+            : "Nhận dạng và chèn vào con trỏ đã lưu",
         seconds: current?.seconds ?? 0,
         model: ocrModel,
       }));
       setToast(
-        isEn ? "Pasted image converted to LaTeX" : "粘贴图片已转换为 LaTeX",
+        isEn ? "Pasted image converted to LaTeX" : "Hình ảnh đã dán được chuyển đổi sang LaTeX",
       );
       scheduleInlineOcrClear(1800);
     } catch (reason) {
@@ -1689,14 +1663,14 @@ export function OfficeDialogApp() {
       if (cancelled) {
         setInlineOcr((current) => ({
           status: "cancelled",
-          message: isEn ? "OCR cancelled" : "OCR 已取消",
+          message: isEn ? "OCR cancelled" : "OCR đã bị hủy",
           seconds: current?.seconds ?? 0,
           model: ocrModel,
         }));
         scheduleInlineOcrClear(1200);
       } else {
         const visibleMessage =
-          message || (isEn ? "Image OCR failed" : "图片 OCR 失败");
+          message || (isEn ? "Image OCR failed" : "OCR hình ảnh không thành công");
         setInlineOcr((current) => ({
           status: "error",
           message: visibleMessage,
@@ -1717,7 +1691,7 @@ export function OfficeDialogApp() {
 
   const saveCurrentSession = useCallback(
     async (status: "editing" | "committing" | "cancelled") => {
-      if (!session) throw new Error("Office Session 尚未加载。");
+      if (!session) throw new Error("Office Session has not been loaded.");
       const exportResult =
         status === "cancelled"
           ? session.exportResult
@@ -1726,7 +1700,7 @@ export function OfficeDialogApp() {
             ? generateSvgExportResult()
             : await generateExportResult();
       if (status === "committing" && !exportResult) {
-        throw new Error(isEn ? "Formula export is empty" : "公式导出结果为空");
+        throw new Error(isEn ? "Formula export is empty" : "Xuất công thức trống");
       }
       const next = await save({
         title,
@@ -1773,7 +1747,7 @@ export function OfficeDialogApp() {
     if (finalizingRef.current) return;
     historyManager.commitPendingTransaction();
     if (!latex.trim()) {
-      setToast(isEn ? "Enter a formula before inserting" : "请输入公式后再插入");
+      setToast(isEn ? "Enter a formula before inserting" : "Nhập công thức trước khi chèn");
       return;
     }
     finalizingRef.current = true;
@@ -1795,7 +1769,7 @@ export function OfficeDialogApp() {
       finalizingRef.current = false;
       setToast(readErrorMessage(
         error,
-        isEn ? "Unable to insert the Office formula" : "无法插入 Office 公式",
+        isEn ? "Unable to insert the Office formula" : "Không chèn được công thức Office",
       ));
     }
   };
@@ -1854,7 +1828,7 @@ export function OfficeDialogApp() {
       void handleCancel().catch((reason) => {
         setToast(readErrorMessage(
           reason,
-          isEn ? "Unable to close the Office editor" : "无法关闭 Office 编辑器",
+          isEn ? "Unable to close the Office editor" : "Không đóng được trình soạn thảo Office",
         ));
       });
       return;
@@ -1882,7 +1856,7 @@ export function OfficeDialogApp() {
   const handleCopy = async () => {
     await copyLatex(latex, latexCodeFormat);
     addHistory(latex);
-    setToast(isEn ? "LaTeX copied" : "LaTeX 已复制");
+    setToast(isEn ? "LaTeX copied" : "Sao chép LaTeX");
   };
 
   if (
@@ -1896,7 +1870,7 @@ export function OfficeDialogApp() {
     return (
       <div className="office-dialog-state">
         <LoaderCircle className="is-spinning" size={28} />
-        <strong>{isEn ? "Loading Office Session…" : "正在加载 Office Session…"}</strong>
+        <strong>{isEn ? "Loading Office Session…" : "Đang tải phiên làm việc văn phòng…"}</strong>
       </div>
     );
   }
@@ -1905,10 +1879,10 @@ export function OfficeDialogApp() {
     return (
       <div className="office-dialog-state is-error">
         <X size={28} />
-        <strong>{isEn ? "Unable to open VisualTeX" : "无法打开 VisualTeX"}</strong>
-        <p>{error || (isEn ? "Session not found" : "Session 不存在")}</p>
+        <strong>{isEn ? "Unable to open VisualTeX" : "Không mở được VisualTeX"}</strong>
+        <p>{error || (isEn ? "Session not found" : "Không tìm thấy phiên")}</p>
         <button type="button" onClick={() => void reload()}>
-          {isEn ? "Retry" : "重新加载"}
+          {isEn ? "Retry" : "Thử lại"}
         </button>
       </div>
     );
@@ -1920,7 +1894,7 @@ export function OfficeDialogApp() {
         <div
           className="office-display-mode-setting"
           role="group"
-          aria-label={isEn ? "Word formula layout" : "Word 公式排版"}
+          aria-label={isEn ? "Word formula layout" : "Bố cục công thức chữ"}
         >
           <button
             type="button"
@@ -1931,7 +1905,7 @@ export function OfficeDialogApp() {
             }}
             disabled={session.mode === "edit"}
           >
-            {isEn ? "Inline" : "行内"}
+            {isEn ? "Inline" : "Nội tuyến"}
           </button>
           <button
             type="button"
@@ -1939,7 +1913,7 @@ export function OfficeDialogApp() {
             onClick={() => setDisplayMode("block")}
             disabled={session.mode === "edit"}
           >
-            {isEn ? "Display" : "行间"}
+            {isEn ? "Display" : "Hiển thị"}
           </button>
         </div>
       ) : null}
@@ -1949,36 +1923,27 @@ export function OfficeDialogApp() {
           session.host === "word" && session.mode === "create"
             ? isEn
               ? "Starts from the current Word paragraph font size"
-              : "默认读取当前 Word 段落正文的字号"
+              : "Bắt đầu từ cỡ chữ của đoạn văn Word hiện tại"
             : isEn
               ? "Formula font size"
-              : "公式字号"
+              : "Cỡ chữ công thức"
         }
       >
-        <span>{isEn ? "Size" : "字号"}</span>
+        <span>{isEn ? "Size" : "Kích thước"}</span>
         <select
           value={officeFontSizePt}
           data-office-font-size
-          aria-label={isEn ? "Formula font size" : "公式字号"}
+          aria-label={isEn ? "Formula font size" : "Cỡ chữ công thức"}
           onChange={(event) =>
             setOfficeFontSizePt(
               normalizeOfficeFontSizePt(event.target.value, officeFontSizePt),
             )
           }
         >
-          <optgroup label={isEn ? "Chinese sizes" : "中文字号"}>
-            {OFFICE_CHINESE_FONT_SIZE_OPTIONS.map((option) => (
-              <option key={option.name} value={option.fontSizePt}>
-                {isEn
-                  ? `${option.name} (${option.fontSizePt} pt)`
-                  : `${option.name}（${option.fontSizePt} 磅）`}
-              </option>
-            ))}
-          </optgroup>
-          <optgroup label={isEn ? "Point sizes" : "磅值"}>
+          <optgroup label={isEn ? "Point sizes" : "Kích thước điểm"}>
             {officePointFontSizeOptions(officeFontSizePt).map((fontSizePt) => (
               <option key={fontSizePt} value={fontSizePt}>
-                {isEn ? `${fontSizePt} pt` : `${fontSizePt} 磅`}
+                {isEn ? `${fontSizePt} pt` : `${fontSizePt} điểm`}
               </option>
             ))}
           </optgroup>
@@ -1991,7 +1956,7 @@ export function OfficeDialogApp() {
             checked={numbered}
             onChange={(event) => setNumbered(event.target.checked)}
           />
-          <span>{isEn ? "Number" : "编号"}</span>
+          <span>{isEn ? "Number" : "Số"}</span>
         </label>
       ) : null}
     </>
@@ -2000,7 +1965,7 @@ export function OfficeDialogApp() {
   const officeHeaderTrailingActions = (
     <div
       className="office-inline-history-actions"
-      aria-label={isEn ? "History actions" : "历史操作"}
+      aria-label={isEn ? "History actions" : "Lịch sử hành động"}
     >
       <button
         type="button"
@@ -2015,8 +1980,8 @@ export function OfficeDialogApp() {
         type="button"
         className="icon-button compact office-history-icon-button"
         data-office-undo-action
-        aria-label={isEn ? "Undo" : "撤销"}
-        title={isEn ? "Undo" : "撤销"}
+        aria-label={isEn ? "Undo" : "Hoàn tác"}
+        title={isEn ? "Undo" : "Hoàn tác"}
         onClick={() => void historyManager.undo()}
         disabled={historyBusy || !historyState.canUndo || historyState.isReplaying}
       >
@@ -2026,8 +1991,8 @@ export function OfficeDialogApp() {
         type="button"
         className="icon-button compact office-history-icon-button"
         data-office-redo-action
-        aria-label={isEn ? "Redo" : "重做"}
-        title={isEn ? "Redo" : "重做"}
+        aria-label={isEn ? "Redo" : "Làm lại"}
+        title={isEn ? "Redo" : "Làm lại"}
         onClick={() => void historyManager.redo()}
         disabled={historyBusy || !historyState.canRedo || historyState.isReplaying}
       >
@@ -2039,9 +2004,9 @@ export function OfficeDialogApp() {
         className="secondary-button office-inline-cancel"
         data-office-cancel-action
         onClick={() => void handleCancel()}
-        aria-label={isEn ? "Cancel" : "取消"}
+        aria-label={isEn ? "Cancel" : "Hủy bỏ"}
       >
-        {isEn ? "Cancel" : "取消"}
+        {isEn ? "Cancel" : "Hủy bỏ"}
       </button>
       <button
         type="button"
@@ -2049,15 +2014,15 @@ export function OfficeDialogApp() {
         data-office-primary-action
         onClick={() => void handleCommit()}
         aria-keyshortcuts="Control+S"
-        title={isEn ? "Apply and close (Ctrl+S)" : "应用并关闭（Ctrl+S）"}
+        title={isEn ? "Apply and close (Ctrl+S)" : "Áp dụng và đóng (Ctrl+S)"}
       >
         {session.mode === "edit"
           ? isEn
             ? "Update"
-            : "更新公式"
+            : "Cập nhật"
           : isEn
             ? "Finish and insert"
-            : "完成并插入"}
+            : "Hoàn tất và chèn"}
       </button>
     </div>
   );
@@ -2108,10 +2073,10 @@ export function OfficeDialogApp() {
               <div>
                 <strong>{inlineOcr.message}</strong>
                 <span>
-                  {isEn ? inlineOcrModel.labelEn : inlineOcrModel.labelZh}
+                  {isEn ? inlineOcrModel.labelEn : inlineOcrModel.labelVi}
                   {" · "}
                   {inlineOcr.seconds}
-                  {isEn ? "s" : " 秒"}
+                  {isEn ? "s" : "s"}
                 </span>
               </div>
               {inlineOcrIsBusy ? (
@@ -2122,14 +2087,14 @@ export function OfficeDialogApp() {
                   disabled={inlineOcr.status === "cancelling"}
                 >
                   <X size={13} />
-                  {isEn ? "Cancel" : "取消"}
+                  {isEn ? "Cancel" : "Hủy bỏ"}
                 </button>
               ) : (
                 <button
                   type="button"
                   className="inline-ocr-dismiss"
                   onClick={() => setInlineOcr(null)}
-                  aria-label={isEn ? "Dismiss OCR status" : "关闭 OCR 状态"}
+                  aria-label={isEn ? "Dismiss OCR status" : "Loại bỏ trạng thái OCR"}
                 >
                   <X size={13} />
                 </button>

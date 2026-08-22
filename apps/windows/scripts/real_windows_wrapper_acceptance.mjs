@@ -167,7 +167,7 @@ async function main() {
           title: "Real wrapper acceptance",
           lines,
           activeLineId: lines[0].id,
-          language: "cn",
+          language: "vi",
           inputBehavior: {
             autoExitSuperscript: ${autoExitSuperscript},
             autoExitSubscript: ${autoExitSubscript},

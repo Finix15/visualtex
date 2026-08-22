@@ -779,7 +779,7 @@ export function EditorWorkspace({
           aria-label={
             isEn
               ? "Incomplete LaTeX source preview"
-              : "未完成 LaTeX 源码预览"
+              : "Bản xem trước nguồn LaTeX chưa hoàn chỉnh"
           }
         >
           <div className="source-draft-fallback-heading">
@@ -787,7 +787,7 @@ export function EditorWorkspace({
             <span>
               {isEn
                 ? "The formula wrapper is incomplete. Complete it to resume the formula preview."
-                : "公式环境包裹尚未完成，补全后恢复公式预览。"}
+                : "Trình bao bọc công thức chưa đầy đủ. Hãy hoàn thành nó để tiếp tục xem trước công thức."}
             </span>
           </div>
           <pre className="source-draft-fallback-code">
@@ -859,8 +859,8 @@ export function EditorWorkspace({
             type="button"
             className="classic-tile-expand-button"
             data-formula-tile-expand
-            aria-label={isEn ? "Expand formula tiles" : "展开公式磁贴"}
-            title={isEn ? "Expand formula tiles" : "展开公式磁贴"}
+            aria-label={isEn ? "Expand formula tiles" : "Mở rộng ô công thức"}
+            title={isEn ? "Expand formula tiles" : "Mở rộng ô công thức"}
             onClick={() => onSidebarOpenChange(true)}
           >
             <PanelRightOpen size={16} />
@@ -893,13 +893,13 @@ export function EditorWorkspace({
                   <div
                     className="formula-alignment-controls"
                 role="toolbar"
-                aria-label={isEn ? "Formula alignment" : "公式对齐方式"}
+                aria-label={isEn ? "Formula alignment" : "Căn chỉnh công thức"}
               >
                 {(
                   [
-                    ["left", AlignLeft, isEn ? "Align left" : "左对齐"],
-                    ["center", AlignCenter, isEn ? "Centre" : "居中"],
-                    ["right", AlignRight, isEn ? "Align right" : "右对齐"],
+                    ["left", AlignLeft, isEn ? "Align left" : "Căn trái"],
+                    ["center", AlignCenter, isEn ? "Centre" : "Trung Tâm"],
+                    ["right", AlignRight, isEn ? "Align right" : "Căn phải"],
                   ] as const
                 ).map(([alignment, Icon, label]) => (
                   <button
@@ -924,7 +924,7 @@ export function EditorWorkspace({
                       ref={formulaColorMenuRef}
                       className="formula-formatting-controls"
                       role="group"
-                      aria-label={isEn ? "Formula formatting" : "公式格式"}
+                      aria-label={isEn ? "Formula formatting" : "Định dạng công thức"}
                     >
                       <button
                         type="button"
@@ -932,12 +932,12 @@ export function EditorWorkspace({
                         aria-label={
                           isEn
                             ? "Toggle bold for selected content"
-                            : "切换选中内容的粗体状态"
+                            : "Chuyển đổi in đậm cho nội dung đã chọn"
                         }
                         title={
                           isEn
                             ? "Toggle \\mathbf bold for the selection only"
-                            : "切换粗体 · 使用 \\mathbf · 仅作用于选中内容"
+                            : "Chỉ chuyển đổi \\mathbf in đậm cho vùng chọn"
                         }
                         data-formula-selection-bold
                         onPointerEnter={rememberFormulaSelection}
@@ -956,12 +956,12 @@ export function EditorWorkspace({
                         aria-label={
                           isEn
                             ? "Toggle italic or upright for selected content"
-                            : "切换选中内容的斜体或正体状态"
+                            : "Chuyển đổi chữ nghiêng hoặc thẳng cho nội dung đã chọn"
                         }
                         title={
                           isEn
                             ? "Toggle default math italic and \\mathrm upright"
-                            : "切换默认数学斜体与 \\mathrm 正体 · 仅作用于选中内容"
+                            : "Chuyển đổi chữ in nghiêng toán học mặc định và \\mathrm thẳng đứng"
                         }
                         data-formula-selection-italic
                         onPointerEnter={rememberFormulaSelection}
@@ -985,11 +985,11 @@ export function EditorWorkspace({
                             "--formula-format-color": formulaTextColor,
                           } as CSSProperties
                         }
-                        aria-label={isEn ? "Selected text color" : "选中内容字体颜色"}
+                        aria-label={isEn ? "Selected text color" : "Màu văn bản đã chọn"}
                         title={
                           isEn
                             ? "Apply a font color to the selection only"
-                            : "字体颜色 · 仅应用于选中内容"
+                            : "Chỉ áp dụng màu phông chữ cho vùng chọn"
                         }
                         aria-pressed={formulaColorMenu === "color"}
                         data-formula-selection-color
@@ -1016,12 +1016,12 @@ export function EditorWorkspace({
                         aria-label={
                           isEn
                             ? "Selected text background color"
-                            : "选中内容字体背景颜色"
+                            : "Màu nền văn bản đã chọn"
                         }
                         title={
                           isEn
                             ? "Apply a background color to the selection only"
-                            : "字体背景颜色 · 仅应用于选中内容"
+                            : "Chỉ áp dụng màu nền cho vùng chọn"
                         }
                         aria-pressed={formulaColorMenu === "backgroundColor"}
                         data-formula-selection-background
@@ -1042,25 +1042,25 @@ export function EditorWorkspace({
                             formulaColorMenu === "color"
                               ? isEn
                                 ? "Formula text color"
-                                : "公式字体颜色"
+                                : "Màu văn bản công thức"
                               : isEn
                                 ? "Formula background color"
-                                : "公式背景颜色"
+                                : "Màu nền công thức"
                           }
                         >
                           <strong>
                             {formulaColorMenu === "color"
                               ? isEn
                                 ? "Text color"
-                                : "字体颜色"
+                                : "Màu văn bản"
                               : isEn
                                 ? "Background color"
-                                : "背景颜色"}
+                                : "Màu nền"}
                           </strong>
                           <div className="formula-color-content">
                             <section className="formula-color-presets">
                               <span className="formula-color-section-label">
-                                {isEn ? "Preset" : "固定颜色"}
+                                {isEn ? "Preset" : "Đặt trước"}
                               </span>
                               <div className="formula-color-swatches" role="group">
                                 {(formulaColorMenu === "color"
@@ -1072,7 +1072,7 @@ export function EditorWorkspace({
                                     type="button"
                                     className="formula-color-swatch"
                                     style={{ backgroundColor: color }}
-                                    aria-label={`${isEn ? "Use" : "使用"} ${color}`}
+                                    aria-label={`${isEn ? "Use" : "Sử dụng"} ${color}`}
                                     title={color}
                                     data-formula-color={color}
                                     onMouseDown={(event) => event.preventDefault()}
@@ -1083,7 +1083,7 @@ export function EditorWorkspace({
                                 ))}
                                 <label
                                   className="formula-custom-color"
-                                  title={isEn ? "Add custom color" : "添加自定义颜色"}
+                                  title={isEn ? "Add custom color" : "Thêm màu tùy chỉnh"}
                                 >
                                   <input
                                     type="color"
@@ -1093,7 +1093,7 @@ export function EditorWorkspace({
                                         : formulaBackgroundColorPickerValue
                                     }
                                     aria-label={
-                                      isEn ? "Add custom color" : "添加自定义颜色"
+                                      isEn ? "Add custom color" : "Thêm màu tùy chỉnh"
                                     }
                                     onPointerDown={(event) => {
                                       event.stopPropagation();
@@ -1118,7 +1118,7 @@ export function EditorWorkspace({
                             </section>
                             <section className="formula-custom-colors-panel">
                               <div className="formula-custom-colors-heading">
-                                <span>{isEn ? "Custom" : "自定义颜色"}</span>
+                                <span>{isEn ? "Custom" : "Tùy chỉnh"}</span>
                                 <small>
                                   {(formulaColorMenu === "color"
                                     ? customFormulaTextColors
@@ -1145,7 +1145,7 @@ export function EditorWorkspace({
                                         type="button"
                                         className="formula-color-swatch"
                                         style={{ backgroundColor: color }}
-                                        aria-label={`${isEn ? "Use custom" : "使用自定义颜色"} ${color}`}
+                                        aria-label={`${isEn ? "Use custom" : "Sử dụng tùy chỉnh"} ${color}`}
                                         title={color}
                                         onMouseDown={(event) => event.preventDefault()}
                                         onClick={() =>
@@ -1158,8 +1158,8 @@ export function EditorWorkspace({
                                       <button
                                         type="button"
                                         className="formula-custom-color-delete"
-                                        aria-label={`${isEn ? "Delete custom" : "删除自定义颜色"} ${color}`}
-                                        title={isEn ? "Delete" : "删除"}
+                                        aria-label={`${isEn ? "Delete custom" : "Xóa tùy chỉnh"} ${color}`}
+                                        title={isEn ? "Delete" : "Xóa"}
                                         data-delete-formula-custom-color={color}
                                         onPointerDown={(event) => {
                                           event.preventDefault();
@@ -1182,7 +1182,7 @@ export function EditorWorkspace({
                                 <span className="formula-custom-colors-empty">
                                   {isEn
                                     ? "Pick + to save a color, then click its swatch to apply."
-                                    : "点击 + 保存颜色，再点击色块应用。"}
+                                    : "Chọn + để lưu màu, sau đó nhấp vào mẫu màu đó để áp dụng."}
                                 </span>
                               )}
                             </section>
@@ -1205,11 +1205,11 @@ export function EditorWorkspace({
                   type="button"
                   className="export-trigger-button workspace-export-trigger"
                   onClick={onOpenExport}
-                  aria-label={isEn ? "Export" : "导出"}
-                  title={isEn ? "Export Markdown, SVG or PNG" : "导出 Markdown、SVG 或 PNG"}
+                  aria-label={isEn ? "Export" : "Xuất khẩu"}
+                  title={isEn ? "Export Markdown, SVG or PNG" : "Xuất Markdown, SVG hoặc PNG"}
                 >
                   <FileDown size={16} />
-                  <span>{isEn ? "Export" : "导出"}</span>
+                  <span>{isEn ? "Export" : "Xuất khẩu"}</span>
                 </button>
               )}
               <InputBehaviorMenu />
@@ -1229,14 +1229,14 @@ export function EditorWorkspace({
                         quickOcrCaptureMode === "system-screenshot"
                           ? isEn
                             ? "Minimize VisualTeX and wait for your next Windows screenshot"
-                            : "最小化 VisualTeX，等待你下一次使用 Windows 系统截图键截图"
+                            : "Thu nhỏ VisualTeX và đợi ảnh chụp màn hình Windows tiếp theo của bạn"
                           : isEn
                             ? "Open the Windows region selector immediately"
-                            : "立即打开 Windows 区域截图选择器"
+                            : "Mở ngay bộ chọn vùng Windows"
                       }
                     >
                       <Camera size={15} />
-                      <span>{isEn ? "Quick OCR" : "快捷 OCR"}</span>
+                      <span>{isEn ? "Quick OCR" : "OCR nhanh"}</span>
                     </button>
                     {onQuickOcrCaptureModeChange && (
                       <button
@@ -1244,7 +1244,7 @@ export function EditorWorkspace({
                         className={`quick-ocr-mode-trigger${quickOcrModeMenuOpen ? " is-open" : ""}${quickOcrCaptureMode === "system-screenshot" ? " is-system-screenshot" : ""}`}
                         onClick={() => setQuickOcrModeMenuOpen((open) => !open)}
                         disabled={ocrBusy}
-                        aria-label={isEn ? "Choose Quick OCR capture mode" : "选择快捷 OCR 截图模式"}
+                        aria-label={isEn ? "Choose Quick OCR capture mode" : "Chọn chế độ chụp OCR nhanh"}
                         aria-expanded={quickOcrModeMenuOpen}
                         data-quick-ocr-mode-trigger
                       >
@@ -1264,8 +1264,8 @@ export function EditorWorkspace({
                           aria-checked={quickOcrCaptureMode === "immediate"}
                           data-quick-ocr-mode-option="immediate"
                         >
-                          <strong>{isEn ? "Immediate selection" : "立即框选"}</strong>
-                          <span>{isEn ? "Open the Windows Snipping Tool region selector right away" : "点击后立即进入 Windows 区域截图"}</span>
+                          <strong>{isEn ? "Immediate selection" : "Lựa chọn ngay"}</strong>
+                          <span>{isEn ? "Open the Windows Snipping Tool region selector right away" : "Mở ngay bộ chọn vùng của Windows Snipping Tool"}</span>
                         </button>
                         <button
                           type="button"
@@ -1278,8 +1278,8 @@ export function EditorWorkspace({
                           aria-checked={quickOcrCaptureMode === "system-screenshot"}
                           data-quick-ocr-mode-option="system-screenshot"
                         >
-                          <strong>{isEn ? "Wait for system screenshot" : "等待系统截图"}</strong>
-                          <span>{isEn ? "Switch pages first, then use your Windows screenshot shortcut" : "先切到目标页面，再使用 Windows 系统截图快捷键"}</span>
+                          <strong>{isEn ? "Wait for system screenshot" : "Đợi ảnh chụp màn hình hệ thống"}</strong>
+                          <span>{isEn ? "Switch pages first, then use your Windows screenshot shortcut" : "Chuyển trang trước, sau đó sử dụng phím tắt chụp màn hình Windows của bạn"}</span>
                         </button>
                       </div>
                     )}
@@ -1290,7 +1290,7 @@ export function EditorWorkspace({
                       title={
                         isEn
                           ? `Press ${silentOcrShortcut} anywhere to capture, recognize, and copy LaTeX in the background`
-                          : `开启后可在任意应用中按 ${silentOcrShortcut} 框选截图，后台识别并按当前源码格式复制 LaTeX`
+                          : `Nhấn ${silentOcrShortcut} ở bất cứ đâu để chụp, nhận dạng và sao chép LaTeX ở chế độ nền`
                       }
                     >
                       <input
@@ -1302,7 +1302,7 @@ export function EditorWorkspace({
                         data-silent-ocr-toggle
                       />
                       <span className="silent-ocr-indicator" aria-hidden="true" />
-                      <span>{isEn ? "Silent" : "静默"}</span>
+                      <span>{isEn ? "Silent" : "Im lặng"}</span>
                       <kbd>{silentOcrShortcut}</kbd>
                     </label>
                   )}
@@ -1314,7 +1314,7 @@ export function EditorWorkspace({
                   title={
                     isEn
                       ? "Model used when an image is pasted into a formula field"
-                      : "在公式输入框中粘贴图片时使用的 OCR 模型"
+                      : "Model được sử dụng khi dán hình ảnh vào trường công thức"
                   }
                 >
                   <ScanLine size={14} />
@@ -1324,11 +1324,11 @@ export function EditorWorkspace({
                     onChange={(event) =>
                       onOcrModelChange?.(event.target.value)
                     }
-                    aria-label={isEn ? "OCR recognition model" : "OCR 识别模型"}
+                    aria-label={isEn ? "OCR recognition model" : "Mô hình nhận dạng OCR"}
                   >
                     {ocrModels.map((item) => (
                       <option key={item.id} value={item.id}>
-                        {isEn ? item.labelEn : item.labelZh}
+                        {isEn ? item.labelEn : item.labelVi}
                       </option>
                     ))}
                   </select>
@@ -1340,12 +1340,12 @@ export function EditorWorkspace({
                   className="icon-button compact"
                   onClick={() => setZoom(zoom - EDITOR_ZOOM_STEP)}
                   disabled={zoom <= MIN_EDITOR_ZOOM + 0.0001}
-                  aria-label={isEn ? "Zoom out" : "缩小公式"}
+                  aria-label={isEn ? "Zoom out" : "Thu nhỏ"}
                   title={
                     zoom <= MIN_EDITOR_ZOOM + 0.0001
                       ? isEn
                         ? "Minimum zoom: 20%"
-                        : "最小缩放：20%"
+                        : "Thu phóng tối thiểu: 20%"
                       : undefined
                   }
                 >
@@ -1359,12 +1359,12 @@ export function EditorWorkspace({
                   className="icon-button compact"
                   onClick={() => setZoom(zoom + EDITOR_ZOOM_STEP)}
                   disabled={zoom >= MAX_EDITOR_ZOOM - 0.0001}
-                  aria-label={isEn ? "Zoom in" : "放大公式"}
+                  aria-label={isEn ? "Zoom in" : "Phóng to"}
                   title={
                     zoom >= MAX_EDITOR_ZOOM - 0.0001
                       ? isEn
                         ? "Maximum zoom: 160%"
-                        : "最大缩放：160%"
+                        : "Thu phóng tối đa: 160%"
                       : undefined
                   }
                 >
@@ -1414,12 +1414,12 @@ export function EditorWorkspace({
                   aria-label={
                     isEn
                       ? "Resize formula tools and source panel"
-                      : "调整公式工具与源码区高度"
+                      : "Thay đổi kích thước công cụ công thức và bảng nguồn"
                   }
                   title={
                     isEn
                       ? "Drag to resize · Double-click to reset"
-                      : "拖动调整高度 · 双击恢复默认"
+                      : "Kéo để thay đổi kích thước · Nhấp đúp để đặt lại"
                   }
                   onPointerDown={(event) => startClassicResize("dock", event)}
                   onDoubleClick={() => resetClassicPanelSize("dock")}
@@ -1456,12 +1456,12 @@ export function EditorWorkspace({
                   (sourceOpen ? " is-source-panel" : " is-tools-panel")
                 }
                 aria-label={
-                  isEn ? "Formula tools and LaTeX source" : "公式工具与 LaTeX 源码"
+                  isEn ? "Formula tools and LaTeX source" : "Công cụ công thức và nguồn LaTeX"
                 }
               >
                 <nav
                   className="classic-bottom-tabs"
-                  aria-label={isEn ? "Bottom editor panel" : "底部编辑面板"}
+                  aria-label={isEn ? "Bottom editor panel" : "Bảng soạn thảo phía dưới"}
                 >
                   {isOfficeWorkspace ? (
                     <div
@@ -1470,7 +1470,7 @@ export function EditorWorkspace({
                       aria-label={
                         isEn
                           ? "Formula alignment and formatting"
-                          : "公式对齐与格式"
+                          : "Căn chỉnh và định dạng công thức"
                       }
                     />
                   ) : (
@@ -1479,7 +1479,7 @@ export function EditorWorkspace({
                   <div
                     className="classic-bottom-tab-group"
                     role="tablist"
-                    aria-label={isEn ? "Bottom editor panel" : "底部编辑面板"}
+                    aria-label={isEn ? "Bottom editor panel" : "Bảng soạn thảo phía dưới"}
                   >
                     <button
                       type="button"
@@ -1494,7 +1494,7 @@ export function EditorWorkspace({
                     >
                       <Braces size={16} />
                       <span className="classic-bottom-tab-label">
-                        {isEn ? "Formula tools" : "公式工具"}
+                        {isEn ? "Formula tools" : "Công cụ công thức"}
                       </span>
                     </button>
                     <button
@@ -1510,7 +1510,7 @@ export function EditorWorkspace({
                     >
                       <Code2 size={16} />
                       <span className="classic-bottom-tab-label">
-                        {isEn ? "LaTeX source" : "LaTeX 源码"}
+                        {isEn ? "LaTeX source" : "Nguồn LaTeX"}
                       </span>
                     </button>
                   </div>
@@ -1521,8 +1521,8 @@ export function EditorWorkspace({
                         className="icon-button compact classic-bottom-copy"
                         data-classic-bottom-copy
                         onClick={() => void onCopy()}
-                        aria-label={isEn ? "Copy LaTeX source" : "复制 LaTeX 源码"}
-                        title={isEn ? "Copy LaTeX source" : "复制 LaTeX 源码"}
+                        aria-label={isEn ? "Copy LaTeX source" : "Sao chép nguồn LaTeX"}
+                        title={isEn ? "Copy LaTeX source" : "Sao chép nguồn LaTeX"}
                       >
                         <Copy size={14} />
                       </button>
@@ -1536,19 +1536,19 @@ export function EditorWorkspace({
                         classicDockOpen
                           ? isEn
                             ? "Collapse formula tools and source"
-                            : "收起公式工具与源码"
+                            : "Thu gọn công cụ và nguồn công thức"
                           : isEn
                             ? "Expand formula tools and source"
-                            : "展开公式工具与源码"
+                            : "Mở rộng công cụ và nguồn công thức"
                       }
                       title={
                         classicDockOpen
                           ? isEn
                             ? "Collapse bottom panel"
-                            : "收起底部面板"
+                            : "Thu gọn bảng điều khiển phía dưới"
                           : isEn
                             ? "Expand bottom panel"
-                            : "展开底部面板"
+                            : "Mở rộng bảng phía dưới"
                       }
                       onClick={() => setClassicDockOpen((open) => !open)}
                     >
@@ -1601,8 +1601,8 @@ export function EditorWorkspace({
                     type="button"
                     className="source-toggle"
                     onClick={() => setSourceOpen(true)}
-                    aria-label={isEn ? "Show LaTeX source" : "展开 LaTeX 源码"}
-                    title={isEn ? "Show LaTeX source" : "展开 LaTeX 源码"}
+                    aria-label={isEn ? "Show LaTeX source" : "Hiển thị nguồn LaTeX"}
+                    title={isEn ? "Show LaTeX source" : "Hiển thị nguồn LaTeX"}
                   >
                     <PanelBottomOpen size={15} />
                   </button>
@@ -1622,11 +1622,11 @@ export function EditorWorkspace({
               aria-valuemin={MIN_CLASSIC_TILE_WIDTH}
               aria-valuemax={Math.round(classicTileWidthLimit())}
               aria-valuenow={Math.round(classicTileWidth)}
-              aria-label={isEn ? "Resize formula tiles" : "调整公式磁贴区宽度"}
+              aria-label={isEn ? "Resize formula tiles" : "Thay đổi kích thước ô công thức"}
               title={
                 isEn
                   ? "Drag to resize · Double-click to reset"
-                  : "拖动调整宽度 · 双击恢复默认"
+                  : "Kéo để thay đổi kích thước · Nhấp đúp để đặt lại"
               }
               onPointerDown={(event) => startClassicResize("tiles", event)}
               onDoubleClick={() => resetClassicPanelSize("tiles")}
@@ -1668,14 +1668,14 @@ export function EditorWorkspace({
       <footer className="status-bar">
         <div>
           <span className="status-live-dot" />
-          {isEn ? "Ready" : "就绪"}
+          {isEn ? "Ready" : "Sẵn sàng"}
         </div>
         <div>
           <span>
-            {lines.length} {isEn ? "lines" : "行"}
+            {lines.length} {isEn ? "lines" : "dòng"}
           </span>
           <span>
-            · {latex.length} {isEn ? "characters" : "字符"}
+            · {latex.length} {isEn ? "characters" : "ký tự"}
           </span>
         </div>
       </footer>

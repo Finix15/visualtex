@@ -27,7 +27,7 @@ function renderBootError(value: unknown) {
     "background:#f5f6f8;color:#9f1239;font:14px/1.6 -apple-system,BlinkMacSystemFont,sans-serif;" +
     "white-space:pre-wrap;overflow:auto";
   const heading = document.createElement("strong");
-  heading.textContent = "VisualTeX 前端启动失败";
+  heading.textContent = "VisualTeX front end failed to start";
   const message = document.createElement("code");
   message.textContent = detail;
   panel.append(heading, message);

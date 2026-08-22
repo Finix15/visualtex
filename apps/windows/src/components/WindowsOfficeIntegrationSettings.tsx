@@ -107,7 +107,7 @@ export function WindowsOfficeIntegrationSettings() {
           error,
           isEn
             ? "Unable to read Windows Office integration status."
-            : "无法读取 Windows Office 集成状态。",
+            : "Không thể đọc trạng thái tích hợp Windows Office.",
         ),
       );
     } finally {
@@ -137,7 +137,7 @@ export function WindowsOfficeIntegrationSettings() {
         setMessage(
           errorMessage(
             error,
-            isEn ? "Windows Office operation failed." : "Windows Office 操作失败。",
+            isEn ? "Windows Office operation failed." : "Thao tác Windows Office không thành công.",
           ),
         );
         return false;
@@ -186,28 +186,28 @@ export function WindowsOfficeIntegrationSettings() {
   const statusCopy = useMemo(() => {
     if (!status) {
       return {
-        title: isEn ? "Checking Office integration…" : "正在检查 Office 集成…",
+        title: isEn ? "Checking Office integration…" : "Đang kiểm tra tích hợp Office…",
         description: isEn
           ? "VisualTeX is reading the Word and PowerPoint add-in status."
-          : "VisualTeX 正在读取 Word 和 PowerPoint 加载项状态。",
+          : "VisualTeX đang đọc trạng thái bổ trợ Word và PowerPoint.",
       };
     }
     if (integrationReady) {
       return {
-        title: isEn ? "Office integration is ready" : "Office 集成可正常使用",
+        title: isEn ? "Office integration is ready" : "Tích hợp Office đã sẵn sàng",
         description: isEn
           ? "Word and PowerPoint can create and edit VisualTeX formulas."
-          : "Word 和 PowerPoint 已可创建、插入和编辑 VisualTeX 公式。",
+          : "Word và PowerPoint có thể tạo và chỉnh sửa công thức VisualTeX.",
       };
     }
     if (verificationPending) {
       return {
         title: isEn
           ? "Office integration is installed"
-          : "Office 集成已安装，等待连接验证",
+          : "Đã cài đặt tích hợp Office",
         description: isEn
           ? "Start Word and PowerPoint once to verify that both add-ins connect successfully."
-          : "启动一次 Word 和 PowerPoint 验证加载项连接后，即可完成全部检查。",
+          : "Khởi động Word và PowerPoint một lần để xác minh rằng cả hai phần bổ trợ đều kết nối thành công.",
       };
     }
     if (hasInstalledComponents) {
@@ -215,24 +215,24 @@ export function WindowsOfficeIntegrationSettings() {
         title: installationNeedsRepair
           ? isEn
             ? "Office integration needs repair"
-            : "Office 集成需要修复"
+            : "Tích hợp văn phòng cần sửa chữa"
           : isEn
             ? "Office connection verification needs attention"
-            : "Office 连接验证未通过",
+            : "Việc xác minh kết nối văn phòng cần được chú ý",
         description: installationNeedsRepair
           ? isEn
             ? "Some installation components are incomplete. Repair the integration and try again."
-            : "部分安装组件不完整，请修复 Office 集成后重试。"
+            : "Một số thành phần cài đặt chưa đầy đủ. Sửa chữa tích hợp và thử lại."
           : isEn
             ? "Close Office and run the connection verification again."
-            : "请关闭所有 Office 应用后重新验证连接，必要时可选择强制关闭。",
+            : "Đóng Office và chạy lại xác minh kết nối.",
       };
     }
     return {
-      title: isEn ? "Office integration is not installed" : "尚未安装 Office 集成",
+      title: isEn ? "Office integration is not installed" : "Chưa cài đặt tích hợp Office",
       description: isEn
         ? "Install once to add VisualTeX tools to Word and PowerPoint."
-        : "安装后即可在 Word 和 PowerPoint 中直接使用 VisualTeX。",
+        : "Cài đặt một lần để thêm công cụ VisualTeX vào Word và PowerPoint.",
     };
   }, [
     hasInstalledComponents,
@@ -278,11 +278,11 @@ export function WindowsOfficeIntegrationSettings() {
     <section className="settings-section office-integration-section">
       <div className="office-settings-heading office-settings-heading-simple">
         <div>
-          <h3>{isEn ? "Office integration" : "Office 集成"}</h3>
+          <h3>{isEn ? "Office integration" : "Tích hợp văn phòng"}</h3>
           <p>
             {isEn
               ? "Use VisualTeX directly in Microsoft Word and PowerPoint."
-              : "在 Microsoft Word 和 PowerPoint 中直接插入和编辑公式。"}
+              : "Sử dụng VisualTeX trực tiếp trong Microsoft Word và PowerPoint."}
           </p>
         </div>
         <button
@@ -290,8 +290,8 @@ export function WindowsOfficeIntegrationSettings() {
           className="icon-button compact"
           onClick={() => void refresh()}
           disabled={busy !== null}
-          aria-label={isEn ? "Refresh Office status" : "刷新 Office 状态"}
-          title={isEn ? "Refresh status" : "刷新状态"}
+          aria-label={isEn ? "Refresh Office status" : "Làm mới trạng thái Office"}
+          title={isEn ? "Refresh status" : "Trạng thái làm mới"}
         >
           <RefreshCw
             size={15}
@@ -349,10 +349,10 @@ export function WindowsOfficeIntegrationSettings() {
             {busy === "install-ole"
               ? isEn
                 ? "Installing…"
-                : "正在安装…"
+                : "Đang cài đặt…"
               : isEn
                 ? "Install Office integration"
-                : "安装 Office 集成"}
+                : "Cài đặt tích hợp Office"}
           </button>
         )}
         {installationNeedsRepair && (
@@ -368,10 +368,10 @@ export function WindowsOfficeIntegrationSettings() {
             {busy === "repair"
               ? isEn
                 ? "Repairing…"
-                : "正在修复…"
+                : "Sửa chữa…"
               : isEn
                 ? "Repair integration"
-                : "修复 Office 集成"}
+                : "Tích hợp sửa chữa"}
           </button>
         )}
         {hasInstalledComponents && installHealthy && !integrationReady && (
@@ -385,14 +385,14 @@ export function WindowsOfficeIntegrationSettings() {
             {busy === "runtime-test"
               ? isEn
                 ? "Verifying…"
-                : "正在验证…"
+                : "Đang xác minh…"
               : status?.connectionVerificationAttempted
                 ? isEn
                   ? "Verify Office connection again"
-                  : "重新验证 Office 连接"
+                  : "Xác minh lại kết nối Office"
                 : isEn
                   ? "Verify Office connection"
-                  : "验证 Office 连接"}
+                  : "Xác minh kết nối Office"}
           </button>
         )}
         <button
@@ -402,7 +402,7 @@ export function WindowsOfficeIntegrationSettings() {
           onClick={() => void run("word", "open_word")}
         >
           <ExternalLink size={15} />
-          {isEn ? "Open Word" : "打开 Word"}
+          {isEn ? "Open Word" : "Lời mở"}
         </button>
         <button
           type="button"
@@ -411,7 +411,7 @@ export function WindowsOfficeIntegrationSettings() {
           onClick={() => void run("powerpoint", "open_powerpoint")}
         >
           <ExternalLink size={15} />
-          {isEn ? "Open PowerPoint" : "打开 PowerPoint"}
+          {isEn ? "Open PowerPoint" : "Mở PowerPoint"}
         </button>
       </div>
 
@@ -419,7 +419,7 @@ export function WindowsOfficeIntegrationSettings() {
         <summary>
           <span>
             <Settings2 size={15} />
-            {isEn ? "Advanced diagnostics" : "高级诊断与维护"}
+            {isEn ? "Advanced diagnostics" : "Chẩn đoán nâng cao"}
           </span>
           <ChevronDown size={15} className="office-details-chevron" />
         </summary>
@@ -428,87 +428,87 @@ export function WindowsOfficeIntegrationSettings() {
           <div className="office-status-grid office-status-grid-compact">
             <article className="office-status-card">
               <header>
-                <strong>{isEn ? "Installation" : "安装状态"}</strong>
+                <strong>{isEn ? "Installation" : "Cài đặt"}</strong>
                 <StatusLine ok={installHealthy}>
                   {installHealthy
                     ? isEn
                       ? "Complete"
-                      : "完整"
+                      : "Hoàn thành"
                     : isEn
                       ? "Incomplete"
-                      : "不完整"}
+                      : "Chưa hoàn thành"}
                 </StatusLine>
               </header>
               <StatusLine ok={Boolean(status?.wordFilesPresent)}>
-                {isEn ? "Word add-in files" : "Word 加载项文件"}
+                {isEn ? "Word add-in files" : "Tệp bổ trợ Word"}
               </StatusLine>
               <StatusLine ok={Boolean(status?.wordRegistryComplete)}>
-                {isEn ? "Word registration" : "Word 注册信息"}
+                {isEn ? "Word registration" : "Đăng ký từ"}
               </StatusLine>
               <StatusLine ok={Boolean(status?.wordLoadEnabled)}>
-                {isEn ? "Word add-in enabled" : "Word 加载项已启用"}
+                {isEn ? "Word add-in enabled" : "Đã bật phần bổ trợ Word"}
               </StatusLine>
               <StatusLine ok={Boolean(status?.powerpointFilesPresent)}>
-                {isEn ? "PowerPoint add-in files" : "PowerPoint 加载项文件"}
+                {isEn ? "PowerPoint add-in files" : "Tệp bổ trợ PowerPoint"}
               </StatusLine>
               <StatusLine ok={Boolean(status?.powerpointRegistryComplete)}>
-                {isEn ? "PowerPoint registration" : "PowerPoint 注册信息"}
+                {isEn ? "PowerPoint registration" : "Đăng ký PowerPoint"}
               </StatusLine>
               <StatusLine ok={Boolean(status?.powerpointLoadEnabled)}>
-                {isEn ? "PowerPoint add-in enabled" : "PowerPoint 加载项已启用"}
+                {isEn ? "PowerPoint add-in enabled" : "Đã bật bổ trợ PowerPoint"}
               </StatusLine>
               <StatusLine ok={Boolean(status?.oleLocalServerHealthy)}>
-                {isEn ? "Formula OLE service" : "公式 OLE 服务"}
+                {isEn ? "Formula OLE service" : "Dịch vụ công thức OLE"}
               </StatusLine>
             </article>
 
             <article className="office-status-card">
               <header>
-                <strong>{isEn ? "Runtime" : "运行状态"}</strong>
+                <strong>{isEn ? "Runtime" : "Thời gian chạy"}</strong>
                 <StatusLine ok={runtimeHealthy}>
                   {runtimeHealthy
                     ? isEn
                       ? "Available"
-                      : "可用"
+                      : "Có sẵn"
                     : isEn
                       ? "Unavailable"
-                      : "不可用"}
+                      : "Không có"}
                 </StatusLine>
               </header>
               <StatusLine ok={Boolean(status?.companionProcessRunning)}>
-                {isEn ? "Companion process" : "伴侣进程"}
+                {isEn ? "Companion process" : "Quá trình đồng hành"}
               </StatusLine>
               <StatusLine ok={Boolean(status?.companionPortListening)}>
-                {isEn ? "Local port" : "本地端口"}
+                {isEn ? "Local port" : "Cảng địa phương"}
               </StatusLine>
               <StatusLine ok={Boolean(status?.companionHttpsHealthy)}>
-                {isEn ? "Local HTTPS connection" : "本地 HTTPS 连接"}
+                {isEn ? "Local HTTPS connection" : "Kết nối HTTPS cục bộ"}
               </StatusLine>
               <StatusLine ok={Boolean(status?.companionCertificateMatches)}>
-                {isEn ? "Certificate" : "证书"}
+                {isEn ? "Certificate" : "Giấy chứng nhận"}
               </StatusLine>
               <StatusLine ok={Boolean(status?.companionProtocolMatches)}>
-                {isEn ? "Protocol version" : "协议版本"}
+                {isEn ? "Protocol version" : "Phiên bản giao thức"}
               </StatusLine>
               <StatusLine ok={Boolean(status?.wordConnected)}>
-                {isEn ? "Word connection" : "Word 连接"}
+                {isEn ? "Word connection" : "Kết nối từ"}
               </StatusLine>
               <StatusLine ok={Boolean(status?.powerpointConnected)}>
-                {isEn ? "PowerPoint connection" : "PowerPoint 连接"}
+                {isEn ? "PowerPoint connection" : "Kết nối PowerPoint"}
               </StatusLine>
             </article>
           </div>
 
           <div className="office-diagnostic-meta">
             <span>
-              {isEn ? "Backend" : "后端"}: {status?.activeBackend ?? "—"}
+              {isEn ? "Backend" : "Phần cuối"}: {status?.activeBackend ?? "—"}
             </span>
             <span>
-              {isEn ? "Companion" : "伴侣服务"}: {companion?.running
+              {isEn ? "Companion" : "Người bạn đồng hành"}: {companion?.running
                 ? `${companion.bindAddress}:${companion.port}`
                 : isEn
                   ? "Stopped"
-                  : "已停止"}
+                  : "Đã dừng"}
             </span>
           </div>
 
@@ -520,7 +520,7 @@ export function WindowsOfficeIntegrationSettings() {
               onClick={openRuntimeVerification}
             >
               <CheckCircle2 size={15} />
-              {isEn ? "Verify Office connection" : "验证 Office 连接"}
+              {isEn ? "Verify Office connection" : "Xác minh kết nối Office"}
             </button>
             <button
               type="button"
@@ -531,7 +531,7 @@ export function WindowsOfficeIntegrationSettings() {
               }
             >
               <Wrench size={15} />
-              {isEn ? "Repair integration" : "修复 Office 集成"}
+              {isEn ? "Repair integration" : "Tích hợp sửa chữa"}
             </button>
             <button
               type="button"
@@ -540,7 +540,7 @@ export function WindowsOfficeIntegrationSettings() {
               onClick={() => void run("open-logs", "open_windows_office_logs")}
             >
               <FolderOpen size={15} />
-              {isEn ? "Open logs" : "打开诊断日志"}
+              {isEn ? "Open logs" : "Nhật ký mở"}
             </button>
             <button
               type="button"
@@ -560,10 +560,10 @@ export function WindowsOfficeIntegrationSettings() {
               {status?.backgroundStartEnabled
                 ? isEn
                   ? "Disable startup"
-                  : "关闭开机启动"
+                  : "Tắt khởi động"
                 : isEn
                   ? "Enable startup"
-                  : "启用开机启动"}
+                  : "Kích hoạt tính năng khởi động"}
             </button>
             <button
               type="button"
@@ -572,7 +572,7 @@ export function WindowsOfficeIntegrationSettings() {
               onClick={() => void run("start", "start_office_companion")}
             >
               <Play size={15} />
-              {isEn ? "Start service" : "启动服务"}
+              {isEn ? "Start service" : "Bắt đầu dịch vụ"}
             </button>
             <button
               type="button"
@@ -581,7 +581,7 @@ export function WindowsOfficeIntegrationSettings() {
               onClick={() => void run("stop", "stop_office_companion")}
             >
               <Square size={14} />
-              {isEn ? "Stop service" : "停止服务"}
+              {isEn ? "Stop service" : "Dừng dịch vụ"}
             </button>
             <button
               type="button"
@@ -590,7 +590,7 @@ export function WindowsOfficeIntegrationSettings() {
               onClick={() => setConfirmUninstall(true)}
             >
               <Trash2 size={15} />
-              {isEn ? "Uninstall integration" : "卸载 Office 集成"}
+              {isEn ? "Uninstall integration" : "Gỡ cài đặt tích hợp"}
             </button>
           </div>
         </div>
@@ -623,12 +623,12 @@ export function WindowsOfficeIntegrationSettings() {
               </span>
               <div>
                 <strong id="office-runtime-test-title">
-                  {isEn ? "Verify Office connection" : "验证 Office 连接"}
+                  {isEn ? "Verify Office connection" : "Xác minh kết nối Office"}
                 </strong>
                 <p id="office-runtime-test-description">
                   {isEn
                     ? "VisualTeX will start Word and PowerPoint briefly to verify that both add-ins connect. Save your documents and close every Office application before continuing."
-                    : "VisualTeX 将临时启动 Word 和 PowerPoint，检查两个加载项是否真正连接。继续前请保存文档，并关闭所有正在运行的 Office 应用。"}
+                    : "VisualTeX sẽ khởi động nhanh Word và PowerPoint để xác minh rằng cả hai phần bổ trợ đều kết nối. Lưu tài liệu của bạn và đóng mọi ứng dụng Office trước khi tiếp tục."}
                 </p>
               </div>
               <button
@@ -639,7 +639,7 @@ export function WindowsOfficeIntegrationSettings() {
                   setConfirmRuntimeTest(false);
                   setForceCloseOffice(false);
                 }}
-                aria-label={isEn ? "Cancel verification" : "取消验证"}
+                aria-label={isEn ? "Cancel verification" : "Hủy xác minh"}
               >
                 <X size={16} />
               </button>
@@ -656,12 +656,12 @@ export function WindowsOfficeIntegrationSettings() {
                 <strong>
                   {isEn
                     ? "Force-close running Word and PowerPoint"
-                    : "强制关闭正在运行的 Word 和 PowerPoint"}
+                    : "Buộc đóng Word và PowerPoint đang chạy"}
                 </strong>
                 <small>
                   {isEn
                     ? "Use only after saving. Unsaved Office changes may be lost."
-                    : "仅在保存文档后使用；未保存的 Office 内容可能丢失。"}
+                    : "Chỉ sử dụng sau khi lưu. Những thay đổi Office chưa được lưu có thể bị mất."}
                 </small>
               </span>
             </label>
@@ -683,7 +683,7 @@ export function WindowsOfficeIntegrationSettings() {
                   setForceCloseOffice(false);
                 }}
               >
-                {isEn ? "Cancel" : "取消"}
+                {isEn ? "Cancel" : "Hủy bỏ"}
               </button>
               <button
                 type="button"
@@ -695,14 +695,14 @@ export function WindowsOfficeIntegrationSettings() {
                 {busy === "runtime-test"
                   ? isEn
                     ? "Verifying…"
-                    : "正在验证…"
+                    : "Đang xác minh…"
                   : forceCloseOffice
                     ? isEn
                       ? "Force close and verify"
-                      : "强制关闭并验证"
+                      : "Buộc đóng và xác minh"
                     : isEn
                       ? "I have closed Office; verify"
-                      : "我已关闭 Office，开始验证"}
+                      : "Tôi đã đóng Office; xác minh"}
               </button>
             </footer>
           </section>
@@ -729,12 +729,12 @@ export function WindowsOfficeIntegrationSettings() {
               </span>
               <div>
                 <strong id="office-uninstall-title">
-                  {isEn ? "Uninstall Office integration?" : "确定卸载 Office 集成？"}
+                  {isEn ? "Uninstall Office integration?" : "Gỡ cài đặt tích hợp Office?"}
                 </strong>
                 <p id="office-uninstall-description">
                   {isEn
                     ? "This removes the VisualTeX add-ins and OLE registration from Word and PowerPoint. Your formulas and VisualTeX documents will not be deleted."
-                    : "这会从 Word 和 PowerPoint 中移除 VisualTeX 加载项及 OLE 注册，但不会删除已有公式或 VisualTeX 文档。"}
+                    : "Thao tác này sẽ xóa phần bổ trợ VisualTeX và đăng ký OLE khỏi Word và PowerPoint. Công thức và tài liệu VisualTeX của bạn sẽ không bị xóa."}
                 </p>
               </div>
               <button
@@ -742,7 +742,7 @@ export function WindowsOfficeIntegrationSettings() {
                 className="icon-button compact"
                 disabled={busy !== null}
                 onClick={() => setConfirmUninstall(false)}
-                aria-label={isEn ? "Cancel uninstall" : "取消卸载"}
+                aria-label={isEn ? "Cancel uninstall" : "Hủy gỡ cài đặt"}
               >
                 <X size={16} />
               </button>
@@ -754,7 +754,7 @@ export function WindowsOfficeIntegrationSettings() {
                 disabled={busy !== null}
                 onClick={() => setConfirmUninstall(false)}
               >
-                {isEn ? "Cancel" : "取消"}
+                {isEn ? "Cancel" : "Hủy bỏ"}
               </button>
               <button
                 type="button"
@@ -766,10 +766,10 @@ export function WindowsOfficeIntegrationSettings() {
                 {busy === "uninstall-ole"
                   ? isEn
                     ? "Uninstalling…"
-                    : "正在卸载…"
+                    : "Đang gỡ cài đặt…"
                   : isEn
                     ? "Uninstall"
-                    : "确认卸载"}
+                    : "Gỡ cài đặt"}
               </button>
             </footer>
           </section>

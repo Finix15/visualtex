@@ -39,10 +39,11 @@ import {
   type ParsedDocumentImport,
 } from "./documentImportParser";
 import "./documentImport.css";
+import { useEditorStore } from "../../stores/editorStore";
 
 function sessionIdFromLocation() {
   const match = window.location.pathname.match(/\/dialog\/([0-9a-f-]{36})/i);
-  if (!match) throw new Error("批量导入窗口缺少有效的 Session id。");
+  if (!match) throw new Error("The bulk import window is missing a valid Session id.");
   return match[1].toLowerCase();
 }
 
@@ -67,7 +68,7 @@ function FormulaPreview({ latex, display }: { latex: string; display: boolean })
     } catch (error) {
       return {
         svg: "",
-        error: readErrorMessage(error, "公式预览失败。"),
+        error: readErrorMessage(error, "Formula preview failed."),
       };
     }
   }, [display, latex]);
@@ -177,9 +178,8 @@ function PreviewPane({ parsed }: { parsed: ParsedDocumentImport }) {
       <div className="doc-import-preview-caption" aria-hidden="true">
         <span>
           <Eye size={14} />
-          Word 页面预览
-        </span>
-        <span>A4 · 实时结构</span>
+          "Word page preview"</span>
+        <span>A4 · Real-time structure</span>
       </div>
       <div className="doc-import-preview-document" role="document">
         <div className="doc-import-paper-content">
@@ -190,13 +190,13 @@ function PreviewPane({ parsed }: { parsed: ParsedDocumentImport }) {
           ) : (
             <div className="doc-import-paper-empty">
               <FileText size={28} />
-              <strong>等待文档内容</strong>
-              <span>在左侧输入或粘贴 LaTeX、Markdown 后，这里会实时生成 Word 结构预览。</span>
+              <strong>Waiting for document content</strong>
+              <span>After entering or pasting LaTeX or Markdown on the left, a preview of the Word structure will be generated in real time.</span>
             </div>
           )}
         </div>
         <div className="doc-import-page-footer" aria-hidden="true">
-          <span>VisualTeX 文档预览</span>
+          <span>VisualTeX document preview</span>
           <span>1</span>
         </div>
       </div>
@@ -215,6 +215,8 @@ function formatFileSize(size: number) {
 }
 
 export function DocumentImportApp() {
+  const language = useEditorStore((state) => state.language);
+  const isEn = language === "en";
   const sessionId = useMemo(sessionIdFromLocation, []);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const finalizedRef = useRef(false);
@@ -263,7 +265,7 @@ export function DocumentImportApp() {
       })
       .catch((error) => {
         if (disposed) return;
-        setLoadError(readErrorMessage(error, "无法读取批量导入 Session。"));
+        setLoadError(readErrorMessage(error, (isEn ? "Unable to read bulk import Session." : "Không thể đọc Phiên nhập hàng loạt.")));
         setLoading(false);
       });
     return () => {
@@ -275,7 +277,7 @@ export function DocumentImportApp() {
     try {
       return { parsed: parseDocumentImport(source, format), error: "" };
     } catch (error) {
-      return { parsed: null, error: readErrorMessage(error, "无法解析当前文档。") };
+      return { parsed: null, error: readErrorMessage(error, (isEn ? "The current document cannot be parsed." : "Không thể phân tích cú pháp tài liệu hiện tại.")) };
     }
   }, [format, source]);
 
@@ -313,10 +315,10 @@ export function DocumentImportApp() {
       const lineId = session.lines[0]?.id || createUuid();
       const serializedDocument = JSON.stringify(preview.parsed);
       if (serializedDocument.length > 5_000_000) {
-        throw new Error("解析后的文档结构超过 5 MB，无法提交给 Word。请拆分后导入。");
+        throw new Error((isEn ? "The parsed document structure exceeds 5 MB and cannot be submitted to Word. Please split and import." : "Cấu trúc tài liệu được phân tích cú pháp vượt quá 5 MB và không thể gửi tới Word. Vui lòng chia nhỏ và nhập khẩu."));
       }
       await updateOfficeSession(sessionId, {
-        title: "Word 文档批量导入",
+        title: (isEn ? "Word document batch import" : "Nhập hàng loạt tài liệu Word"),
         lines: [{ id: lineId, latex: serializedDocument }],
         activeLineId: lineId,
         codeFormat: "visualtex-document-json",
@@ -331,7 +333,7 @@ export function DocumentImportApp() {
       finalizedRef.current = true;
       await closeOfficeSessionWindow(sessionId).catch(() => undefined);
     } catch (error) {
-      setLoadError(readErrorMessage(error, "无法把文档提交给 Word。"));
+      setLoadError(readErrorMessage(error, (isEn ? "Unable to submit document to Word." : "Không thể gửi tài liệu tới Word.")));
       setBusy(false);
     }
   };
@@ -351,7 +353,7 @@ export function DocumentImportApp() {
         modified: false,
       });
     } catch (error) {
-      setLoadError(readErrorMessage(error, "无法读取所选文件。"));
+      setLoadError(readErrorMessage(error, (isEn ? "The selected file cannot be read." : "Không thể đọc được tập tin đã chọn.")));
     } finally {
       setFileBusy(false);
     }
@@ -361,7 +363,7 @@ export function DocumentImportApp() {
     return (
       <main className="doc-import-loading">
         <LoaderCircle className="spin" />
-        <span>正在打开 Word 文档导入器…</span>
+        <span>{isEn ? "Opening Word document importer…" : "Đang mở trình nhập tài liệu Word…"}</span>
       </main>
     );
   }
@@ -369,7 +371,7 @@ export function DocumentImportApp() {
     return (
       <main className="doc-import-loading error">
         <TriangleAlert />
-        <span>{loadError || "无法读取批量导入 Session。"}</span>
+        <span>{loadError || (isEn ? "Unable to read bulk import Session." : "Không thể đọc Phiên nhập hàng loạt.")}</span>
       </main>
     );
   }
@@ -380,23 +382,23 @@ export function DocumentImportApp() {
         <div className="doc-import-title-block">
           <FileText size={20} />
           <div>
-            <strong>Word 文档批量导入</strong>
-            <span>左侧编辑源码，右侧实时查看 Word 导入结构</span>
+            <strong>{isEn ? "Word document batch import" : "Nhập hàng loạt tài liệu Word"}</strong>
+            <span>{isEn ? "Edit the source code on the left and view the Word import structure in real time on the right" : "Chỉnh sửa mã nguồn ở bên trái và xem cấu trúc nhập Word theo thời gian thực ở bên phải"}</span>
           </div>
         </div>
         <div className="doc-import-options">
           <label>
-            <span>源格式</span>
+            <span>{isEn ? "Source format" : "Định dạng nguồn"}</span>
             <select value={format} onChange={(event) => setFormat(event.target.value as DocumentSourceFormat)}>
-              <option value="auto">自动识别</option>
+              <option value="auto">{isEn ? "Automatic identification" : "Nhận dạng tự động"}</option>
               <option value="latex">LaTeX</option>
               <option value="markdown">Markdown</option>
             </select>
           </label>
           <label>
-            <span>公式格式</span>
+            <span>{isEn ? "Formula format" : "Định dạng công thức"}</span>
             <select value={objectMode} onChange={(event) => setObjectMode(event.target.value as DocumentObjectMode)}>
-              <option value="wordOmml">Word 原生 OMML</option>
+              <option value="wordOmml">{isEn ? "Word native OMML" : "Từ OMML gốc"}</option>
               <option value="nativeOle">VisualTeX OLE</option>
             </select>
           </label>
@@ -404,16 +406,16 @@ export function DocumentImportApp() {
             className="doc-import-secondary doc-import-file-button"
             onClick={() => fileInputRef.current?.click()}
             disabled={busy || fileBusy}
-            title="导入单个 LaTeX 或 Markdown 文件"
+            title={isEn ? "Import a single LaTeX or Markdown file" : "Nhập một tệp LaTeX hoặc Markdown"}
           >
             {fileBusy ? <LoaderCircle size={16} className="spin" /> : <FolderOpen size={16} />}
-            {fileBusy ? "正在读取…" : "导入 .tex / .md"}
+            {fileBusy ? (isEn ? "Reading..." : "Đang đọc...") : (isEn ? "Import .tex / .md" : "Nhập .tex / .md")}
           </button>
           <input
             ref={fileInputRef}
             type="file"
             accept=".tex,.md,.markdown,text/x-tex,text/markdown"
-            aria-label="导入 LaTeX 或 Markdown 文件"
+            aria-label={isEn ? "Import LaTeX or Markdown files" : "Nhập tệp LaTeX hoặc Markdown"}
             hidden
             onChange={(event) => {
               const file = event.target.files?.[0];
@@ -432,8 +434,8 @@ export function DocumentImportApp() {
                 <Braces size={16} />
               </span>
               <div>
-                <strong>LaTeX / Markdown 源码</strong>
-                <small>支持正文、标题、列表、引用、代码块和混合公式</small>
+                <strong>{isEn ? "LaTeX/Markdown source code" : "Mã nguồn LaTeX/Markdown"}</strong>
+                <small>{isEn ? "supports body text, titles, lists, quotes, code blocks and mixed formulas" : "hỗ trợ nội dung văn bản, tiêu đề, danh sách, dấu ngoặc kép, khối mã và công thức hỗn hợp"}</small>
               </div>
             </div>
             <div className="doc-import-source-meta">
@@ -444,26 +446,18 @@ export function DocumentImportApp() {
                 >
                   <FileText size={12} />
                   <span>{importedFile.name}</span>
-                  <small>{importedFile.encoding}{importedFile.modified ? " · 已编辑" : ""}</small>
+                  <small>{importedFile.encoding}{importedFile.modified ? (isEn ? "· Edited" : "· Đã chỉnh sửa") : ""}</small>
                 </span>
               ) : null}
               <span className="doc-import-pane-stat">
-                {source.length.toLocaleString()} 字符
-              </span>
+                {source.length.toLocaleString()} {isEn ? "character" : "ký tự"}</span>
             </div>
           </div>
           <textarea
             value={source}
-            placeholder={String.raw`在这里粘贴 LaTeX 或 Markdown，例如：
-
-正文中的行内公式 $E=mc^2$。
-
-正文后直接接行间公式： \[\frac{1}{2\pi\tau}\]
-
-\begin{itemize}
-\item 第一项
-\item 第二项
-\end{itemize}`}
+            placeholder={isEn
+              ? "Paste LaTeX or Markdown here, for example: Inline formula $E=mc^2$."
+              : "Dán LaTeX hoặc Markdown vào đây, ví dụ: công thức cùng dòng $E=mc^2$."}
             onChange={(event) => {
               setSource(event.target.value);
               setImportedFile((current) =>
@@ -473,7 +467,7 @@ export function DocumentImportApp() {
             spellCheck={false}
             autoCapitalize="off"
             autoCorrect="off"
-            aria-label="文档源码"
+            aria-label={isEn ? "Document source code" : "Mã nguồn tài liệu"}
           />
         </article>
 
@@ -484,18 +478,18 @@ export function DocumentImportApp() {
                 <Eye size={16} />
               </span>
               <div>
-                <strong>Word 结构预览</strong>
-                <small>按最终导入层级模拟正文、公式与段落间距</small>
+                <strong>{isEn ? "Word structure preview" : "Xem trước cấu trúc từ"}</strong>
+                <small>{isEn ? "Simulate text, formula and paragraph spacing according to the final import level" : "Mô phỏng khoảng cách văn bản, công thức và đoạn văn theo cấp độ nhập cuối cùng"}</small>
               </div>
             </div>
             {preview.parsed ? (
-              <div className="doc-import-preview-counts" aria-label="预览统计">
-                <span>{preview.parsed.blocks.length} 块</span>
-                <span>{preview.parsed.inlineFormulaCount} 行内</span>
-                <span>{preview.parsed.displayFormulaCount} 行间</span>
+              <div className="doc-import-preview-counts" aria-label={isEn ? "Preview statistics" : "Thống kê xem trước"}>
+                <span>{preview.parsed.blocks.length} {isEn ? "block" : ""}</span>
+                <span>{preview.parsed.inlineFormulaCount} {isEn ? "inline" : "nội tuyến"}</span>
+                <span>{preview.parsed.displayFormulaCount} {isEn ? "between lines" : "giữa các dòng"}</span>
               </div>
             ) : (
-              <span className="doc-import-pane-stat">等待有效内容</span>
+              <span className="doc-import-pane-stat">{isEn ? "Wait for valid content" : "Đợi nội dung hợp lệ"}</span>
             )}
           </div>
           <div className="doc-import-preview-scroll">
@@ -518,17 +512,15 @@ export function DocumentImportApp() {
           {!loadError && preview.parsed && preview.parsed.warnings.length === 0 ? (
             <span className="ok">
               <CheckCircle2 size={15} />
-              预览解析正常；Word 将按当前结构化预览结果插入。
-            </span>
+              {isEn ? "The preview parsing is normal; Word will insert according to the current structured preview results." : "Việc phân tích cú pháp xem trước là bình thường; Word sẽ chèn theo kết quả xem trước có cấu trúc hiện tại."}</span>
           ) : null}
         </div>
         <div className="doc-import-actions">
           <button className="doc-import-secondary" onClick={() => void cancel()} disabled={busy}>
-            <X size={16} />取消
-          </button>
+            <X size={16} />{isEn ? "Cancel" : "Hủy bỏ"}</button>
           <button className="doc-import-primary" onClick={() => void commit()} disabled={busy || !preview.parsed || Boolean(preview.error)}>
             {busy ? <LoaderCircle size={16} className="spin" /> : <FileText size={16} />}
-            {busy ? "正在提交…" : "导入到 Word"}
+            {busy ? (isEn ? "Submitting…" : "Đang gửi…") : (isEn ? "Import into Word" : "Nhập vào Word")}
           </button>
         </div>
       </footer>

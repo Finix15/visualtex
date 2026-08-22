@@ -27,7 +27,7 @@ function textMatchScore(query: string, command: LatexCommand): number {
   if (!query) return command.defaultPriority / 3;
   const commandName = normalize(command.command);
   const aliases = command.aliases.map(normalize);
-  const labels = [command.labelZh, command.labelEn, ...command.keywords].map(normalize);
+  const labels = [command.labelVi, command.labelEn, ...command.keywords].map(normalize);
   const candidates = [commandName, ...aliases, ...labels];
 
   let score = -Infinity;

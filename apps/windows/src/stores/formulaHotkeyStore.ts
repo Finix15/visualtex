@@ -37,7 +37,7 @@ function normalizeCommand(value: unknown): LatexCommand | null {
     typeof command.command !== "string" ||
     typeof command.insertTemplate !== "string" ||
     typeof command.previewLatex !== "string" ||
-    typeof command.labelZh !== "string" ||
+    typeof command.labelVi !== "string" ||
     typeof command.labelEn !== "string" ||
     !Array.isArray(command.aliases) ||
     !Array.isArray(command.keywords) ||

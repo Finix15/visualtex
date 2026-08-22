@@ -14,7 +14,7 @@ export interface LatexCommand {
   command: string;
   insertTemplate: string;
   previewLatex: string;
-  labelZh: string;
+  labelVi: string;
   labelEn: string;
   aliases: string[];
   keywords: string[];

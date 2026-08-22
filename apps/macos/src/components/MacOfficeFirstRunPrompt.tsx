@@ -86,7 +86,7 @@ export function MacOfficeFirstRunPrompt({
             reason,
             isEn
               ? "Unable to inspect the native Office add-ins on this Mac."
-              : "无法检测这台 Mac 上的原生 Office 加载项。",
+              : "Không thể kiểm tra các phần bổ trợ Office gốc trên máy Mac này.",
           ),
         );
       })
@@ -144,7 +144,7 @@ export function MacOfficeFirstRunPrompt({
           reason,
           isEn
             ? "VisualTeX could not install the native Word and PowerPoint add-ins."
-            : "VisualTeX 无法安装 Word 和 PowerPoint 原生加载项。",
+            : "VisualTeX không thể cài đặt các phần bổ trợ Word và PowerPoint gốc.",
         ),
       );
     } finally {
@@ -178,7 +178,7 @@ export function MacOfficeFirstRunPrompt({
       throw new Error(
         isEn
           ? "Timed out waiting for Word and PowerPoint to quit. Finish any Save prompts, then try again."
-          : "等待 Word 和 PowerPoint 退出超时。请先处理 Office 的保存提示，然后重试。",
+          : "Đã hết thời gian chờ Word và PowerPoint thoát. Hãy hoàn tất mọi lời nhắc Lưu rồi thử lại.",
       );
     } catch (reason) {
       setError(
@@ -186,7 +186,7 @@ export function MacOfficeFirstRunPrompt({
           reason,
           isEn
             ? "VisualTeX could not finish the Office add-in update."
-            : "VisualTeX 无法完成 Office 插件更新。",
+            : "VisualTeX không thể hoàn tất quá trình cập nhật phần bổ trợ Office.",
         ),
       );
     } finally {
@@ -206,7 +206,7 @@ export function MacOfficeFirstRunPrompt({
       setError(
         messageFrom(
           reason,
-          isEn ? "The requested Office action failed." : "Office 操作执行失败。",
+          isEn ? "The requested Office action failed." : "Hành động Office được yêu cầu không thành công.",
         ),
       );
     } finally {
@@ -230,27 +230,27 @@ export function MacOfficeFirstRunPrompt({
               {mode === "update"
                 ? isEn
                   ? "Update the VisualTeX Office add-ins"
-                  : "更新 VisualTeX Office 插件"
+                  : "Cập nhật phần bổ trợ VisualTeX Office"
                 : mode === "repair"
                   ? isEn
                     ? "Repair the VisualTeX Office add-ins"
-                    : "修复 VisualTeX Office 插件"
+                    : "Sửa chữa phần bổ trợ VisualTeX Office"
                   : isEn
                     ? "Set up VisualTeX for Word and PowerPoint"
-                    : "配置 Word 与 PowerPoint 的 VisualTeX 插件"}
+                    : "Thiết lập VisualTeX cho Word và PowerPoint"}
             </strong>
             <p>
               {mode === "update"
                 ? isEn
                   ? "The installed DOTM or PPAM belongs to an older VisualTeX build. You do not need to delete it manually; VisualTeX will replace the old add-ins with the versions bundled in this app."
-                  : "检测到已安装的 DOTM 或 PPAM 属于旧版 VisualTeX。无需手动删除旧文件，VisualTeX 会直接用当前应用内置版本覆盖更新。"
+                  : "DOTM hoặc PPAM được cài đặt thuộc về bản dựng VisualTeX cũ hơn. Bạn không cần phải xóa nó theo cách thủ công; VisualTeX sẽ thay thế các phần bổ trợ cũ bằng các phiên bản đi kèm trong ứng dụng này."
                 : mode === "repair"
                   ? isEn
                     ? "VisualTeX detected a missing or incomplete Office add-in installation. It will restore the required DOTM/PPAM files without asking you to re-register an already configured PowerPoint add-in."
-                    : "检测到 Office 插件文件缺失或安装不完整。VisualTeX 会恢复所需 DOTM/PPAM；已经配置过的 PowerPoint 加载项不会因此要求重新登记。"
+                    : "VisualTeX đã phát hiện thấy bản cài đặt phần bổ trợ Office bị thiếu hoặc chưa hoàn chỉnh. Nó sẽ khôi phục các tệp DOTM/PPAM cần thiết mà không yêu cầu bạn đăng ký lại phần bổ trợ PowerPoint đã được định cấu hình."
                   : isEn
                     ? "VisualTeX installs a Word DOTM template and a PowerPoint PPAM add-in. Both run locally and open the desktop formula editor when needed."
-                    : "VisualTeX 会安装 Word DOTM 模板和 PowerPoint PPAM 加载项；两者都在本机运行，并在需要时打开桌面公式编辑器。"}
+                    : "VisualTeX cài đặt mẫu Word DOTM và phần bổ trợ PowerPoint PPAM. Cả hai đều chạy cục bộ và mở trình chỉnh sửa công thức trên máy tính để bàn khi cần."}
             </p>
           </div>
         </header>
@@ -262,14 +262,14 @@ export function MacOfficeFirstRunPrompt({
               <strong>Microsoft Word · DOTM</strong>
               <small>
                 {!status?.word.applicationInstalled
-                  ? isEn ? "Word not detected" : "未检测到 Word"
+                  ? isEn ? "Word not detected" : "Không phát hiện được từ"
                   : status.word.filesInstalled && status.word.loaded
-                    ? isEn ? "Installed and loaded" : "已安装并加载"
+                    ? isEn ? "Installed and loaded" : "Đã cài đặt và tải"
                     : status.word.filesInstalled
-                      ? isEn ? "Installed; restart Word" : "已安装，请重启 Word"
+                      ? isEn ? "Installed; restart Word" : "Đã cài đặt; khởi động lại Word"
                       : status.word.filesPresent
-                        ? isEn ? "Older add-in detected; update required" : "检测到旧插件，需要更新"
-                        : isEn ? "Not installed" : "尚未安装"}
+                        ? isEn ? "Older add-in detected; update required" : "Đã phát hiện thấy phần bổ trợ cũ hơn; yêu cầu cập nhật"
+                        : isEn ? "Not installed" : "Chưa cài đặt"}
               </small>
             </div>
             {status?.word.filesInstalled && status.word.loaded ? <CheckCircle2 size={17} /> : status?.word.filesInstalled ? <ShieldAlert size={17} /> : null}
@@ -280,16 +280,16 @@ export function MacOfficeFirstRunPrompt({
               <strong>Microsoft PowerPoint · PPAM</strong>
               <small>
                 {!status?.powerpoint.applicationInstalled
-                  ? isEn ? "PowerPoint not detected" : "未检测到 PowerPoint"
+                  ? isEn ? "PowerPoint not detected" : "Không tìm thấy PowerPoint"
                   : status.powerpoint.filesInstalled && status.powerpoint.loaded
-                    ? isEn ? "Installed and loaded" : "已安装并加载"
+                    ? isEn ? "Installed and loaded" : "Đã cài đặt và tải"
                     : status.powerpoint.filesInstalled
                       ? powerpointRegistrationRequired
-                        ? isEn ? "Installed; register once" : "已安装，需要登记一次"
-                        : isEn ? "Installed; registration is preserved" : "已安装，原有登记保持不变"
+                        ? isEn ? "Installed; register once" : "Đã cài đặt; đăng ký một lần"
+                        : isEn ? "Installed; registration is preserved" : "Đã cài đặt; đăng ký được bảo tồn"
                       : status.powerpoint.filesPresent
-                        ? isEn ? "Older add-in detected; update required" : "检测到旧插件，需要更新"
-                        : isEn ? "Not installed" : "尚未安装"}
+                        ? isEn ? "Older add-in detected; update required" : "Đã phát hiện thấy phần bổ trợ cũ hơn; yêu cầu cập nhật"
+                        : isEn ? "Not installed" : "Chưa cài đặt"}
               </small>
             </div>
             {status?.powerpoint.filesInstalled && status.powerpoint.loaded ? <CheckCircle2 size={17} /> : status?.powerpoint.filesInstalled ? <ShieldAlert size={17} /> : null}
@@ -302,7 +302,7 @@ export function MacOfficeFirstRunPrompt({
               <p>
                 {isEn
                   ? "The PPAM file is ready, but PowerPoint has not registered it. Not seeing VisualTeX in the Add-ins list yet is expected. Click + first, then choose the PPAM file."
-                  : "PPAM 文件已经准备好，但 PowerPoint 尚未登记它。此时在加载项列表里看不到 VisualTeX 是正常的；必须先点击左下角＋，再选择 PPAM 文件。"}
+                  : "File PPAM đã sẵn sàng nhưng PowerPoint chưa đăng ký. Dự kiến ​​sẽ không thấy VisualTeX trong danh sách Bổ trợ. Trước tiên hãy nhấp vào +, sau đó chọn tệp PPAM."}
               </p>
             </div>
             <PowerPointAddinGuide language={language} compact loaded={false} />
@@ -314,7 +314,7 @@ export function MacOfficeFirstRunPrompt({
                 onClick={() => void runAction("reveal", "reveal_macos_powerpoint_addin")}
               >
                 <ExternalLink size={15} />
-                {isEn ? "Show PPAM in Finder" : "在 Finder 中显示 PPAM"}
+                {isEn ? "Show PPAM in Finder" : "Hiển thị PPAM trong Finder"}
               </button>
               <button
                 type="button"
@@ -323,7 +323,7 @@ export function MacOfficeFirstRunPrompt({
                 onClick={() => void runAction("powerpoint", "open_powerpoint")}
               >
                 <Presentation size={15} />
-                {isEn ? "Open PowerPoint" : "打开 PowerPoint"}
+                {isEn ? "Open PowerPoint" : "Mở PowerPoint"}
               </button>
               <button
                 type="button"
@@ -335,7 +335,7 @@ export function MacOfficeFirstRunPrompt({
                 }}
               >
                 <RefreshCw size={15} className={busy === "refresh" ? "is-spinning" : ""} />
-                {isEn ? "Refresh status" : "刷新状态"}
+                {isEn ? "Refresh status" : "Trạng thái làm mới"}
               </button>
             </div>
           </div>
@@ -345,31 +345,31 @@ export function MacOfficeFirstRunPrompt({
               {mode === "update"
                 ? isEn
                   ? "VisualTeX updates the existing DOTM and PPAM in place. PowerPoint keeps the same registered PPAM path, so an update does not require registering the add-in again."
-                  : "VisualTeX 会在原路径直接覆盖旧 DOTM 和 PPAM。PowerPoint 会继续使用原先登记的 PPAM 路径，版本更新不需要重新登记加载项。"
+                  : "VisualTeX cập nhật DOTM và PPAM hiện có. PowerPoint giữ nguyên đường dẫn PPAM đã đăng ký, do đó, bản cập nhật không yêu cầu đăng ký lại phần bổ trợ."
                 : mode === "repair"
                   ? isEn
                     ? "VisualTeX will restore the missing Office files. Any PowerPoint PPAM that was already registered keeps the same path and does not need to be registered again."
-                    : "VisualTeX 会恢复缺失的 Office 插件文件。已经登记过的 PowerPoint PPAM 路径保持不变，不需要重新登记。"
+                    : "VisualTeX sẽ khôi phục các tệp Office bị thiếu. Bất kỳ PPAM PowerPoint nào đã được đăng ký đều giữ nguyên đường dẫn và không cần phải đăng ký lại."
                   : powerpointRegistrationRequired
                     ? isEn
                       ? "Word loads VisualTeX automatically from its Startup folder after Word restarts. PowerPoint needs one manual registration through Tools → PowerPoint Add-ins; later updates keep the same PPAM path."
-                      : "Word 重启后会从 Startup 目录自动加载 VisualTeX。PowerPoint 首次安装需要在“工具 → PowerPoint 加载项”中登记一次；后续更新不会要求重新登记。"
+                      : "Word tự động tải VisualTeX từ thư mục Khởi động sau khi Word khởi động lại. PowerPoint cần một lần đăng ký thủ công thông qua Công cụ → Phần bổ trợ PowerPoint; các bản cập nhật sau này giữ nguyên đường dẫn PPAM."
                     : isEn
                       ? "VisualTeX will install the required Office files. Existing PowerPoint registration is preserved."
-                      : "VisualTeX 会安装所需 Office 插件文件；已有的 PowerPoint 登记状态会保留。"}
+                      : "VisualTeX sẽ cài đặt các tệp Office cần thiết. Đăng ký PowerPoint hiện tại được giữ nguyên."}
             </p>
             {mode !== "setup" && updateRequired && officeHostsRunning && (
               <p className="is-warning">
                 {isEn
                   ? "Save your Office documents first. VisualTeX must let Word and PowerPoint quit normally before replacing loaded VBA add-ins. Click the update button below; any unsaved Office document will still receive its normal Save prompt."
-                  : "请先保存 Office 文档。已加载的 VBA 插件必须在 Word 和 PowerPoint 正常退出后才能替换。点击下方更新按钮即可；如有未保存文档，Office 仍会正常弹出保存提示。"}
+                  : "Lưu tài liệu Office của bạn trước. VisualTeX phải để Word và PowerPoint thoát bình thường trước khi thay thế các phần bổ trợ VBA đã tải. Nhấp vào nút cập nhật bên dưới; mọi tài liệu Office chưa được lưu sẽ vẫn nhận được lời nhắc Lưu thông thường."}
               </p>
             )}
             {!officeDetected && status && (
               <p className="is-warning">
                 {isEn
                   ? "Word or PowerPoint was not found. Open the Office application once, then return to Settings to install the native add-ins."
-                  : "未检测到 Word 或 PowerPoint。请先打开一次对应 Office 应用，再回到设置中安装原生加载项。"}
+                  : "Không tìm thấy Word hoặc PowerPoint. Mở ứng dụng Office một lần, sau đó quay lại Cài đặt để cài đặt các phần bổ trợ gốc."}
               </p>
             )}
             {nativeFilesReady && (
@@ -377,10 +377,10 @@ export function MacOfficeFirstRunPrompt({
                 {powerpointRegistrationRequired
                   ? isEn
                     ? "The files are installed. Restart Word, then register the PowerPoint PPAM once to finish first-time setup."
-                    : "插件文件已安装。请重新打开 Word，并完成一次 PowerPoint PPAM 登记以结束首次配置。"
+                    : "Các tập tin đã được cài đặt. Khởi động lại Word, sau đó đăng ký PPAM PowerPoint một lần để hoàn tất quá trình thiết lập lần đầu."
                   : isEn
                     ? "The current add-in files are ready. Reopen Word or PowerPoint so Office loads the repaired/updated files."
-                    : "当前插件文件已就绪。重新打开 Word 或 PowerPoint 后，Office 会加载修复/更新后的插件。"}
+                    : "Các tập tin bổ trợ hiện tại đã sẵn sàng. Mở lại Word hoặc PowerPoint để Office tải các tệp đã sửa chữa/cập nhật."}
               </p>
             )}
             {error && <p className="is-warning" role="alert">{error}</p>}
@@ -401,7 +401,7 @@ export function MacOfficeFirstRunPrompt({
             disabled={busy !== null}
             onClick={() => onComplete(false)}
           >
-            {isEn ? "Later" : "稍后处理"}
+            {isEn ? "Later" : "Sau đó"}
           </button>
           <button
             type="button"
@@ -426,17 +426,17 @@ export function MacOfficeFirstRunPrompt({
             )}
             {nativeFilesReady
               ? mode === "setup"
-                ? isEn ? "Continue" : "继续"
-                : isEn ? "Done" : "完成"
+                ? isEn ? "Continue" : "Tiếp tục"
+                : isEn ? "Done" : "Xong"
               : mode === "update"
                 ? officeHostsRunning
-                  ? isEn ? "Quit Office and update add-ins" : "退出 Office 并更新插件"
-                  : isEn ? "Update DOTM and PPAM" : "更新 DOTM 和 PPAM"
+                  ? isEn ? "Quit Office and update add-ins" : "Thoát khỏi Office và cập nhật phần bổ trợ"
+                  : isEn ? "Update DOTM and PPAM" : "Cập nhật DOTM và PPAM"
                 : mode === "repair"
                   ? officeHostsRunning
-                    ? isEn ? "Quit Office and repair add-ins" : "退出 Office 并修复插件"
-                    : isEn ? "Repair DOTM and PPAM" : "修复 DOTM 和 PPAM"
-                  : isEn ? "Install DOTM and PPAM" : "安装 DOTM 和 PPAM"}
+                    ? isEn ? "Quit Office and repair add-ins" : "Thoát khỏi Office và sửa chữa các phần bổ trợ"
+                    : isEn ? "Repair DOTM and PPAM" : "Sửa chữa DOTM và PPAM"
+                  : isEn ? "Install DOTM and PPAM" : "Cài đặt DOTM và PPAM"}
           </button>
         </footer>
       </section>

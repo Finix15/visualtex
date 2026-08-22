@@ -115,7 +115,7 @@ function wordDesktopApiSupported(version: string) {
 function requireWordApi() {
   if (!wordApiSupported("1.1")) {
     throw new Error(
-      "当前 Word 版本不支持 VisualTeX 所需的 WordApi 1.1。请更新 Microsoft Word。",
+      "The current Word version does not support WordApi 1.1, which is required by VisualTeX. Please update Microsoft Word.",
     );
   }
 }
@@ -562,7 +562,7 @@ async function insertDisplayWordFormula(
   imageBase64: string,
 ) {
   if (!wordApiSupported("1.2")) {
-    throw new Error("当前 Word 版本不支持创建独立的居中行间公式段落。");
+    throw new Error("The current version of Word does not support creating independent, centered inline formula paragraphs.");
   }
   const selection = context.document.getSelection();
   const selectedParagraph = selection.paragraphs.getFirst();
@@ -571,7 +571,7 @@ async function insertDisplayWordFormula(
   const paragraphIsEmpty = selectedParagraph.text.trim().length === 0;
   if (metadata.numbered) {
     if (!wordApiSupported("1.3")) {
-      throw new Error("当前 Word 版本不支持 VisualTeX 行间公式编号排版。");
+      throw new Error("The current version of Word does not support VisualTeX inline formula numbering.");
     }
     await insertNumberedDisplayWordFormula(
       context,
@@ -620,7 +620,7 @@ async function replaceWordFormula(
     const original = await findFormulaPicture(context, metadata.formulaId);
     if (!original) {
       throw new Error(
-        "找不到原 VisualTeX 公式图片。请重新选择该公式后再执行编辑。",
+        "The original VisualTeX formula picture cannot be found. Please reselect the formula before editing.",
       );
     }
 
@@ -904,7 +904,7 @@ async function reconcileWordEquationNumbers(
 export async function refreshWordEquationNumbers() {
   requireWordApi();
   if (!wordApiSupported("1.3")) {
-    throw new Error("当前 Word 版本不支持 VisualTeX 公式编号重排。");
+    throw new Error("The current version of Word does not support VisualTeX equation numbering reordering.");
   }
   const first = await Word.run((context) =>
     reconcileWordEquationNumbers(context, true),
@@ -997,7 +997,7 @@ export class WordAdapter implements OfficeHostAdapter {
         : await readSelectedWordFormula();
     if (!selected) {
       throw new Error(
-        "当前选中的对象不是 VisualTeX 公式。请先选择由 VisualTeX 插入的公式。",
+        "The currently selected object is not a VisualTeX formula. Please select the formula inserted by VisualTeX first.",
       );
     }
     const objectMetadata = selected.encodedMetadata
@@ -1013,7 +1013,7 @@ export class WordAdapter implements OfficeHostAdapter {
     const metadata = objectMetadata ?? documentMetadata ?? cachedMetadata;
     if (!metadata || metadata.formulaId !== selected.formulaId) {
       throw new Error(
-        "所选 VisualTeX 公式的原始 LaTeX metadata 已损坏或缺失，无法安全编辑。",
+        "The original LaTeX metadata for the selected VisualTeX formula is damaged or missing and cannot be safely edited.",
       );
     }
 

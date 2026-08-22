@@ -112,14 +112,14 @@ export function FormulaHotkeyRecorderDialog({ target, onClose }: Props) {
           <div>
             <span className="eyebrow">HOT KEY</span>
             <h2 id="formula-hotkey-recorder-title">
-              {isEn ? "Set formula hotkey" : "设置公式快捷键"}
+              {isEn ? "Set formula hotkey" : "Đặt phím nóng công thức"}
             </h2>
           </div>
           <button
             type="button"
             className="icon-button"
             onClick={onClose}
-            aria-label={isEn ? "Close" : "关闭"}
+            aria-label={isEn ? "Close" : "Đóng"}
           >
             <X size={18} />
           </button>
@@ -143,13 +143,13 @@ export function FormulaHotkeyRecorderDialog({ target, onClose }: Props) {
               <kbd>{formatFormulaHotkeyChord(capturedChord)}</kbd>
             ) : (
               <strong>
-                {isEn ? "Press a shortcut now" : "现在按下需要绑定的快捷键"}
+                {isEn ? "Press a shortcut now" : "Nhấn phím tắt ngay"}
               </strong>
             )}
             <span>
               {isEn
                 ? "Include Ctrl, Option/Alt or Command. Press Esc to cancel."
-                : "请加入 Ctrl、Option/Alt 或 Command；按 Esc 取消。"}
+                : "Bao gồm Ctrl, Option/Alt hoặc Command. Nhấn Esc để hủy."}
             </span>
           </div>
 
@@ -159,7 +159,7 @@ export function FormulaHotkeyRecorderDialog({ target, onClose }: Props) {
               <span>
                 {isEn
                   ? "This would interfere with normal formula input. Add Ctrl, Option/Alt or Command; Shift can be used in addition."
-                  : "该组合会影响正常公式输入，请加入 Ctrl、Option/Alt 或 Command；Shift 可作为附加修饰键。"}
+                  : "Điều này sẽ ảnh hưởng đến việc nhập công thức thông thường. Thêm Ctrl, Tùy chọn/Alt hoặc Lệnh; Shift có thể được sử dụng ngoài ra."}
               </span>
             </div>
           )}
@@ -170,7 +170,7 @@ export function FormulaHotkeyRecorderDialog({ target, onClose }: Props) {
               <span>
                 {isEn
                   ? `This shortcut is reserved for ${protectedAction} and cannot be overridden.`
-                  : `该快捷键已保留用于“${protectedAction}”，不能被公式快捷键覆盖。`}
+                  : `Phím tắt này được dành riêng cho ${protectedAction} và không thể ghi đè.`}
               </span>
             </div>
           )}
@@ -181,7 +181,7 @@ export function FormulaHotkeyRecorderDialog({ target, onClose }: Props) {
               <span>
                 {isEn
                   ? `Currently assigned to “${formulaHotkeyTargetLabel(conflict.target, language)}”. Saving will replace that assignment.`
-                  : `当前已分配给“${formulaHotkeyTargetLabel(conflict.target, language)}”，保存后将替换原绑定。`}
+                  : `Hiện được gán cho “${formulaHotkeyTargetLabel(conflict.target, language)}”. Việc lưu sẽ thay thế nhiệm vụ đó.`}
               </span>
             </div>
           )}
@@ -192,7 +192,7 @@ export function FormulaHotkeyRecorderDialog({ target, onClose }: Props) {
               <span>
                 {isEn
                   ? "Available in the visual formula editor."
-                  : "该快捷键可在可视化公式编辑区使用。"}
+                  : "Có sẵn trong trình chỉnh sửa công thức trực quan."}
               </span>
             </div>
           )}
@@ -203,14 +203,14 @@ export function FormulaHotkeyRecorderDialog({ target, onClose }: Props) {
             {existingBinding
               ? isEn
                 ? `Current: ${formatFormulaHotkeyChord(existingBinding.chord)}`
-                : `当前：${formatFormulaHotkeyChord(existingBinding.chord)}`
+                : `Hiện tại: ${formatFormulaHotkeyChord(existingBinding.chord)}`
               : isEn
                 ? "No hotkey assigned"
-                : "尚未设置快捷键"}
+                : "Không có phím nóng nào được chỉ định"}
           </span>
           <div>
             <button type="button" className="secondary-button" onClick={onClose}>
-              {isEn ? "Cancel" : "取消"}
+              {isEn ? "Cancel" : "Hủy bỏ"}
             </button>
             <button
               type="button"
@@ -221,10 +221,10 @@ export function FormulaHotkeyRecorderDialog({ target, onClose }: Props) {
               {conflict
                 ? isEn
                   ? "Replace and assign"
-                  : "替换并绑定"
+                  : "Thay thế và gán"
                 : isEn
                   ? "Assign hotkey"
-                  : "绑定快捷键"}
+                  : "Gán phím nóng"}
             </button>
           </div>
         </footer>

@@ -105,7 +105,7 @@ function supportsImageCoercion(version: string) {
 function requirePowerPointEditingApi() {
   if (!supportsPowerPointApi("1.5")) {
     throw new Error(
-      "当前 PowerPoint 版本可以新建 VisualTeX 公式，但不支持重新编辑所选公式。重新编辑需要 PowerPointApi 1.5 或更高版本。",
+      "The current version of PowerPoint can create new VisualTeX formulas, but does not support re-editing selected formulas. Re-editing requires PowerPointApi 1.5 or higher.",
     );
   }
 }
@@ -149,7 +149,7 @@ function officeAsync<T>(
       finish(() =>
         reject(
           new Error(
-            "PowerPoint 写入公式图片超时。请确认演示文稿仍处于可编辑状态后重试。",
+            "PowerPoint timed out when writing formula pictures. Please make sure the presentation is still editable and try again.",
           ),
         ),
       );
@@ -165,7 +165,7 @@ function officeAsync<T>(
               new Error(
                 officeErrorMessage(
                   result.error,
-                  "PowerPoint 无法把公式图片写入当前幻灯片。",
+                  "PowerPoint cannot write the formula picture to the current slide.",
                 ),
               ),
             ),
@@ -178,7 +178,7 @@ function officeAsync<T>(
           new Error(
             officeErrorMessage(
               error,
-              "PowerPoint 无法启动公式图片写入操作。",
+              "PowerPoint cannot start the formula picture writing operation.",
             ),
           ),
         ),
@@ -270,7 +270,7 @@ async function insertImageWithFallback(
       return "png" as const;
     } catch (error) {
       failures.push(
-        `PNG: ${officeErrorMessage(error, "PowerPoint 拒绝了 PNG 图片")}`,
+        `PNG: ${officeErrorMessage(error, "PowerPoint rejected PNG image")}`,
       );
     }
   }
@@ -289,15 +289,15 @@ async function insertImageWithFallback(
       return "svg" as const;
     } catch (error) {
       failures.push(
-        `SVG: ${officeErrorMessage(error, "PowerPoint 拒绝了 SVG 图片")}`,
+        `SVG: ${officeErrorMessage(error, "PowerPoint rejected SVG image")}`,
       );
     }
   }
 
   throw new Error(
     failures.length
-      ? `PowerPoint 无法插入公式图片。${failures.join("；")}`
-      : "VisualTeX 没有可供 PowerPoint 插入的公式图片。",
+      ? `PowerPoint cannot insert formula pictures.${failures.join("；")}`
+      : "VisualTeX does not have formula pictures for PowerPoint to insert.",
   );
 }
 
@@ -325,7 +325,7 @@ async function captureSlideSnapshot(preferredSlideId?: string) {
       selectedSlides.load("items/id");
       await context.sync();
       if (selectedSlides.items.length < 1) {
-        throw new Error("PowerPoint 没有返回当前幻灯片。");
+        throw new Error("PowerPoint did not return the current slide.");
       }
       slide = selectedSlides.items[0];
     }
@@ -458,9 +458,9 @@ async function readSelectedPowerPointShape(): Promise<PowerPointShapeSnapshot | 
   } catch (error) {
     if (!formulaId) {
       throw new Error(
-        `PowerPoint 无法读取所选对象的 VisualTeX 标记：${officeErrorMessage(
+        `PowerPoint cannot read the VisualTeX markup of the selected object:${officeErrorMessage(
           error,
-          "未知 Office 错误",
+          "Unknown Office error",
         )}`,
       );
     }
@@ -539,7 +539,7 @@ async function selectOriginalShape(
     await context.sync();
     if (shape.isNullObject) {
       throw new Error(
-        "找不到原 VisualTeX Shape。请重新选择该公式后再执行编辑。",
+        "The original VisualTeX Shape cannot be found. Please reselect the formula before editing.",
       );
     }
     slide.setSelectedShapes([shape.id]);
@@ -567,7 +567,7 @@ async function applyInsertedShapeCore(
     shape.load("id,isNullObject");
     await context.sync();
     if (shape.isNullObject) {
-      throw new Error("PowerPoint 中找不到刚刚插入的公式图片。");
+      throw new Error("The formula picture just inserted cannot be found in PowerPoint.");
     }
 
     shape.name = powerpointShapeName(metadata.formulaId);
@@ -840,7 +840,7 @@ async function selectedNativeCommitShape(
     await new Promise((resolve) => window.setTimeout(resolve, 60));
   }
   throw new Error(
-    "PowerPoint 已粘贴公式，但无法按返回的 Shape 名称、幻灯片和几何位置重新定位对象。未写入可编辑标记。",
+    "PowerPoint has pasted the formula, but cannot reposition the object by the returned Shape name, slide, and geometry. No editable tag was written.",
   );
 }
 
@@ -901,7 +901,7 @@ async function finalizeSelectedNativePowerPointShape(
     await new Promise((resolve) => window.setTimeout(resolve, 120));
   }
   throw new Error(
-    "PowerPoint 未能持久保存 VisualTeX 公式标记；为避免生成无法再次编辑的图片，本次更新未确认完成。",
+    "PowerPoint failed to persist VisualTeX formula markup; to avoid generating images that cannot be edited again, this update is not confirmed to be complete.",
   );
 }
 
@@ -971,12 +971,12 @@ export class PowerPointAdapter implements OfficeHostAdapter {
     if (!selected && nativeSelectionError) {
       if (officeSelectionError) {
         throw new Error(
-          `PowerPoint 无法读取所选公式：${officeErrorMessage(
+          `PowerPoint cannot read the selected formula:${officeErrorMessage(
             officeSelectionError,
-            "Office.js 选择读取失败",
+            "Office.js select read failed",
           )}；${officeErrorMessage(
             nativeSelectionError,
-            "macOS 原生选择读取失败",
+            "macOS native selection read failed",
           )}`,
         );
       }
@@ -984,7 +984,7 @@ export class PowerPointAdapter implements OfficeHostAdapter {
     }
     if (!selected) {
       throw new Error(
-        "当前选中的对象没有 VisualTeX 标记。请先选择由 VisualTeX 1.0.10 或更高版本插入的公式。",
+        "The currently selected object has no VisualTeX markup. Please first select the formula inserted by VisualTeX 1.0.10 or later.",
       );
     }
     const objectMetadata = selected.encodedMetadata
@@ -996,7 +996,7 @@ export class PowerPointAdapter implements OfficeHostAdapter {
     const metadata = objectMetadata ?? cachedMetadata;
     if (!metadata || metadata.formulaId !== selected.formulaId) {
       throw new Error(
-        "所选 VisualTeX Shape 的原始 LaTeX metadata 已损坏或缺失，无法安全编辑。",
+        "The original LaTeX metadata for the selected VisualTeX Shape is corrupted or missing and cannot be safely edited.",
       );
     }
 
@@ -1051,7 +1051,7 @@ export class PowerPointAdapter implements OfficeHostAdapter {
         ? decodePowerPointObjectReference(session.sourceObjectId)
         : null;
     if (session.mode === "edit" && !originalReference) {
-      throw new Error("PowerPoint Session 缺少原 Shape 标识，无法安全替换。");
+      throw new Error("The PowerPoint Session is missing the original Shape ID and cannot be safely replaced.");
     }
     if (
       session.mode === "edit" &&
@@ -1124,9 +1124,9 @@ export class PowerPointAdapter implements OfficeHostAdapter {
           }
         } else {
           throw new Error(
-            `PowerPoint 已插入新公式，但无法安全替换原公式：${officeErrorMessage(
+            `PowerPoint has inserted a new formula, but the original formula cannot be safely replaced:${officeErrorMessage(
               error,
-              "macOS 原生替换失败",
+              "macOS native replacement failed",
             )}`,
           );
         }
@@ -1135,7 +1135,7 @@ export class PowerPointAdapter implements OfficeHostAdapter {
 
     if (originalReference?.native) {
       if (!nativeMarked) {
-        throw new Error("PowerPoint 无法标记并替换新公式对象。");
+        throw new Error("PowerPoint cannot mark and replace new formula objects.");
       }
       return;
     }

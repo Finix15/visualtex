@@ -39,6 +39,19 @@ function inspectAddin(name, vbaEntry, requiredMarkers) {
   if (typeof expectedHash !== "string" || expectedHash.toLowerCase() !== sha256(path)) {
     throw new Error(`${name} does not match office/macos-offline/resources/addins.json`);
   }
+  const ribbonXml = execFileSync("/usr/bin/unzip", [
+    "-p",
+    path,
+    "customUI/customUI14.xml",
+  ], { encoding: "utf8" });
+  if (ribbonXml.includes("getSizeString=")) {
+    throw new Error(
+      `${name} uses unsupported getSizeString Ribbon XML; use the static sizeString attribute instead.`,
+    );
+  }
+  if (!ribbonXml.includes('sizeString="200 pt"')) {
+    throw new Error(`${name} is missing the reviewed point-size Ribbon width hint.`);
+  }
 }
 
 if (manifest.pluginVersion !== packageVersion) {

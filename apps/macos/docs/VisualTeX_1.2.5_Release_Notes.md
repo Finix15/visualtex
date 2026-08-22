@@ -1,4 +1,4 @@
-# VisualTeX 1.2.5
+# VisualTeX 1.2.6
 
 ## 中文
 

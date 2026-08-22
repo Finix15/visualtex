@@ -83,7 +83,7 @@ export function useOfficeSession() {
       loadRunIdRef.current += 1;
       setSession(null);
       setError(
-        "VisualTeX Office Session 加载超过 15 秒。请点击重新加载；若仍失败，请重启 VisualTeX。",
+        "VisualTeX Office Session takes more than 15 seconds to load. Please click Reload; if it still fails, please restart VisualTeX.",
       );
       setLoading(false);
     }, 15_000);

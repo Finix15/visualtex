@@ -988,7 +988,6 @@ fn close_word_picture_format_task_pane_once() -> Result<bool, String> {
     if (text(element, "role") !== "AXButton") return false;
     const name = text(element, "name").trim().toLowerCase();
     return (
-      (name.startsWith("关闭 ") && name.includes("格式")) ||
       (name.startsWith("close ") && name.includes("format"))
     );
   };

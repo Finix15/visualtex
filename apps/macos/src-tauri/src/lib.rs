@@ -34,6 +34,7 @@ const ACTIVE_THEME_FILE: &str = "active-theme.txt";
 const THEME_CHANGED_EVENT: &str = "visualtex-theme-changed";
 const MAIN_WINDOW_SIZE_FILE: &str = "main-window-size.json";
 const MAIN_WINDOW_MODE_SIZES_FILE: &str = "main-window-mode-sizes-v1.json";
+const OFFICE_UI_LANGUAGE_FILE: &str = "ui-language.json";
 const DEFAULT_NORMAL_WINDOW_WIDTH: f64 = 1240.0;
 const DEFAULT_NORMAL_WINDOW_HEIGHT: f64 = 820.0;
 const DEFAULT_KEYPAD_WINDOW_WIDTH: f64 = 642.0;
@@ -44,6 +45,43 @@ const MAX_MAIN_WINDOW_WIDTH: f64 = 4000.0;
 const MAX_MAIN_WINDOW_HEIGHT: f64 = 3000.0;
 static MAIN_WINDOW_SIZE_WRITE_GENERATION: AtomicU64 = AtomicU64::new(0);
 static MAIN_WINDOW_KEYPAD_MODE: AtomicBool = AtomicBool::new(false);
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OfficeUiLanguagePreference<'a> {
+    schema_version: u8,
+    language: &'a str,
+    updated_at: u128,
+}
+
+#[tauri::command]
+fn write_office_ui_language(app: AppHandle, language: String) -> Result<(), String> {
+    let language = if language == "vi" { "vi" } else { "en" };
+    let updated_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_millis();
+    let payload = serde_json::to_vec(&OfficeUiLanguagePreference {
+        schema_version: 1,
+        language,
+        updated_at,
+    })
+    .map_err(|error| error.to_string())?;
+    let home = app.path().home_dir().map_err(|error| error.to_string())?;
+    for bundle_id in ["com.microsoft.Word", "com.microsoft.Powerpoint"] {
+        let directory = home
+            .join("Library")
+            .join("Application Scripts")
+            .join(bundle_id)
+            .join("VisualTeXRuntime");
+        fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+        let destination = directory.join(OFFICE_UI_LANGUAGE_FILE);
+        let temporary = directory.join(format!(".{OFFICE_UI_LANGUAGE_FILE}.tmp-{updated_at}"));
+        fs::write(&temporary, &payload).map_err(|error| error.to_string())?;
+        fs::rename(&temporary, &destination).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
 
 fn normalize_app_theme(theme: &str) -> &'static str {
     match theme.trim() {
@@ -1163,7 +1201,7 @@ fn install_runtime_inner(
         emit_progress(app, stage, percent, message, detail);
     })?;
 
-    emit_progress(app, "verify", 97, "正在验证离线 PP-FormulaNet 接口", None);
+    emit_progress(app, "verify", 97, "Verifying the offline PP-FormulaNet interface", None);
     let status = get_runtime_status_inner(app, true)?;
     if !status.installed {
         return Err(status.message);
@@ -1179,8 +1217,8 @@ fn install_runtime_inner(
         app,
         "complete",
         100,
-        "OCR 离线运行环境安装完成",
-        Some("Python、PaddleOCR 与默认 M 模型均已内置，无需联网".to_string()),
+        "Offline OCR runtime installed",
+        Some("Python, PaddleOCR, and the default M model are bundled; no network connection is required".to_string()),
     );
     Ok(status)
 }
@@ -1897,6 +1935,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            write_office_ui_language,
             write_export_file,
             copy_png_to_clipboard,
             quick_ocr::capture_quick_ocr_screenshot,
@@ -2070,7 +2109,7 @@ mod protocol_tests {
 
         assert_eq!(
             value.get("message").and_then(Value::as_str),
-            Some("正在加载")
+            Some("Loading")
         );
     }
 

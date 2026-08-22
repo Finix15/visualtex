@@ -6,11 +6,12 @@ import {
   type ReactNode,
 } from "react";
 import { BookOpenText, X } from "lucide-react";
-import manualMarkdown from "../../docs/help/VisualTeX_帮助手册.md?raw";
+import manualEnglish from "../../docs/help/VisualTeX_Help_English.md?raw";
+import manualVietnamese from "../../docs/help/VisualTeX_Help_Vietnamese.md?raw";
 
 interface Props {
   open: boolean;
-  language: "cn" | "en";
+  language: "vi" | "en";
   onClose: () => void;
 }
 
@@ -256,7 +257,10 @@ function ManualBlock({ block }: { block: MarkdownBlock }) {
 export function HelpManualDialog({ open, language, onClose }: Props) {
   const dialogRef = useRef<HTMLElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
-  const blocks = useMemo(() => parseManual(manualMarkdown), []);
+  const blocks = useMemo(
+    () => parseManual(language === "vi" ? manualVietnamese : manualEnglish),
+    [language],
+  );
   const toc = useMemo<TocEntry[]>(
     () =>
       blocks
@@ -300,21 +304,21 @@ export function HelpManualDialog({ open, language, onClose }: Props) {
         className="help-manual-dialog"
         role="dialog"
         aria-modal="true"
-        aria-label={isEn ? "VisualTeX Help Manual" : "VisualTeX 帮助手册"}
+        aria-label={isEn ? "VisualTeX Help Manual" : "Hướng dẫn trợ giúp VisualTeX"}
         tabIndex={-1}
       >
         <header className="help-manual-header">
           <div>
             <BookOpenText size={18} />
             <span>
-              <strong>{isEn ? "Help Manual" : "帮助手册"}</strong>
-              <small>VisualTeX 1.2.5 · macOS</small>
+              <strong>{isEn ? "Help Manual" : "Hướng dẫn trợ giúp"}</strong>
+              <small>VisualTeX 1.2.6 · macOS</small>
             </span>
           </div>
           <button
             type="button"
             className="icon-button"
-            aria-label={isEn ? "Close help manual" : "关闭帮助手册"}
+            aria-label={isEn ? "Close help manual" : "Đóng hướng dẫn trợ giúp"}
             onClick={onClose}
           >
             <X size={17} />
@@ -322,8 +326,8 @@ export function HelpManualDialog({ open, language, onClose }: Props) {
         </header>
 
         <div className="help-manual-layout">
-          <nav className="help-manual-toc" aria-label={isEn ? "Contents" : "目录"}>
-            <strong>{isEn ? "Contents" : "目录"}</strong>
+          <nav className="help-manual-toc" aria-label={isEn ? "Contents" : "Nội dung"}>
+            <strong>{isEn ? "Contents" : "Nội dung"}</strong>
             <div>
               {toc.map((entry) => (
                 <button

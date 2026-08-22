@@ -457,7 +457,7 @@ pub(crate) fn handle_ocr_progress(app: &AppHandle, response: &Value) {
     let message = response
         .get("message")
         .and_then(Value::as_str)
-        .unwrap_or("正在识别公式…");
+        .unwrap_or("Recognizing formula…");
     let progress = match stage {
         "preprocess" => 38,
         "model" => 58,
@@ -788,7 +788,7 @@ async fn run_silent_ocr(app: AppHandle) {
         return;
     }
     if state.silent_busy.swap(true, Ordering::SeqCst) {
-        emit_hud(&app, "running", "已有一项 OCR 正在进行", 45);
+        emit_hud(&app, "running", "Another OCR task is already running", 45);
         return;
     }
 
@@ -800,7 +800,7 @@ async fn run_silent_ocr(app: AppHandle) {
             return Ok::<Option<()>, String>(None);
         };
 
-        emit_hud(&app, "running", "正在检查 OCR 环境…", 22);
+        emit_hud(&app, "running", "Checking the OCR environment…", 22);
         let ocr = app
             .try_state::<OcrState>()
             .ok_or_else(|| "OCR runtime is unavailable".to_string())?
@@ -808,7 +808,7 @@ async fn run_silent_ocr(app: AppHandle) {
             .clone();
         let runtime = ocr.runtime_status(app.clone(), false).await?;
         if !runtime.installed {
-            return Err("请先在 VisualTeX 中安装 OCR 运行环境".to_string());
+            return Err("Install the OCR runtime in VisualTeX first".to_string());
         }
 
         let requested = current_model(&state);
@@ -825,10 +825,10 @@ async fn run_silent_ocr(app: AppHandle) {
                 .installed_models
                 .first()
                 .cloned()
-                .ok_or_else(|| "没有可用的 OCR 模型".to_string())?
+                .ok_or_else(|| "No OCR model is available".to_string())?
         };
 
-        emit_hud(&app, "running", "正在识别公式…", 32);
+        emit_hud(&app, "running", "Recognizing formula…", 32);
         let recognition = ocr
             .recognize(
                 app.clone(),
@@ -846,16 +846,16 @@ async fn run_silent_ocr(app: AppHandle) {
             .filter(|latex| !latex.is_empty())
             .collect::<Vec<_>>();
         if latex_lines.is_empty() {
-            return Err("OCR 没有返回可用公式".to_string());
+            return Err("OCR did not return a usable formula".to_string());
         }
         let formatted_latex = format_silent_ocr_latex(&latex_lines, &current_copy_format(&state));
         if formatted_latex.is_empty() {
-            return Err("OCR 源码格式化结果为空".to_string());
+            return Err("The formatted OCR source is empty".to_string());
         }
 
-        emit_hud(&app, "running", "正在按当前源码格式复制 LaTeX…", 92);
+        emit_hud(&app, "running", "Copying LaTeX with the current source format…", 92);
         write_text_clipboard(&formatted_latex)?;
-        emit_hud(&app, "success", "识别完成，LaTeX 已复制到剪贴板", 100);
+        emit_hud(&app, "success", "Recognition complete; LaTeX was copied to the clipboard", 100);
         Ok(Some(()))
     }
     .await;

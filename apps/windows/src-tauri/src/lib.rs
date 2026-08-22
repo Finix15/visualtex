@@ -43,6 +43,7 @@ const PADDLEOCR_VERSION: &str = "3.7.0";
 const DEFAULT_OCR_MODEL: &str = "PP-FormulaNet_plus-M";
 pub(crate) const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
 const OCR_CANCELLED: &str = "OCR_CANCELLED";
+const OFFICE_UI_LANGUAGE_FILE: &str = "ui-language.json";
 const ALLOWED_MODELS: &[&str] = &[
     "PP-FormulaNet_plus-S",
     "PP-FormulaNet_plus-M",
@@ -50,6 +51,39 @@ const ALLOWED_MODELS: &[&str] = &[
     "PP-FormulaNet-S",
     "PP-FormulaNet-L",
 ];
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OfficeUiLanguagePreference<'a> {
+    schema_version: u8,
+    language: &'a str,
+    updated_at: u128,
+}
+
+#[tauri::command]
+fn write_office_ui_language(language: String) -> Result<(), String> {
+    let language = if language == "vi" { "vi" } else { "en" };
+    let updated_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_millis();
+    let payload = serde_json::to_vec(&OfficeUiLanguagePreference {
+        schema_version: 1,
+        language,
+        updated_at,
+    })
+    .map_err(|error| error.to_string())?;
+    let local_app_data = env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .ok_or_else(|| "LOCALAPPDATA is unavailable".to_string())?;
+    let directory = local_app_data.join("VisualTeX");
+    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    let destination = directory.join(OFFICE_UI_LANGUAGE_FILE);
+    let temporary = directory.join(format!(".{OFFICE_UI_LANGUAGE_FILE}.tmp-{updated_at}"));
+    fs::write(&temporary, &payload).map_err(|error| error.to_string())?;
+    fs::rename(&temporary, &destination).map_err(|error| error.to_string())?;
+    Ok(())
+}
 const MAX_OCR_EVENTS: usize = 256;
 const OCR_RUNTIME_STATUS_SCHEMA: u32 = 1;
 const OCR_RUNTIME_STATUS_FILE: &str = "runtime-status.json";
@@ -1618,7 +1652,7 @@ fn explain_paddle_import_failure(paths: &RuntimePaths, error: &str) -> String {
     let normalized = error.to_ascii_lowercase();
     if normalized.contains("0xc0000005")
         || normalized.contains("initialization routine failed")
-        || error.contains("初始化例程失败")
+        || error.contains("\u{521d}\u{59cb}\u{5316}\u{4f8b}\u{7a0b}\u{5931}\u{8d25}")
     {
         return format!(
             "PaddlePaddle's native Windows DLL initialization failed after VisualTeX verified AVX support and the app-local Microsoft OpenMP runtime {}. This is not a wheel download failure, and retrying will reuse the installed dependency closure instead of reinstalling all packages. Security software, virtualization settings or another injected native runtime may be blocking libpaddle.pyd.\nOriginal PaddlePaddle error:\n{error}",
@@ -1626,7 +1660,7 @@ fn explain_paddle_import_failure(paths: &RuntimePaths, error: &str) -> String {
         );
     }
     if normalized.contains("specified module could not be found")
-        || error.contains("找不到指定的模块")
+        || error.contains("\u{627e}\u{4e0d}\u{5230}\u{6307}\u{5b9a}\u{7684}\u{6a21}\u{5757}")
         || normalized.contains("dll load failed")
     {
         return format!(
@@ -1701,7 +1735,7 @@ fn validate_formula_dependency_files(site_packages: &Path) -> Result<(), String>
     let tokenizers = required_dependency_version(site_packages, "tokenizers", "tokenizers")?;
     if cfg!(windows) && tokenizers != "0.19.1" {
         return Err(format!(
-            "OCR dependency tokenizers has version {tokenizers}; VisualTeX 1.2.5 requires the precompiled Windows wheel tokenizers 0.19.1."
+            "OCR dependency tokenizers has version {tokenizers}; VisualTeX 1.2.6 requires the precompiled Windows wheel tokenizers 0.19.1."
         ));
     }
     required_dependency_version(site_packages, "imagesize", "imagesize")?;
@@ -2961,7 +2995,7 @@ fn install_windows_runtime_inner(
                 step.as_deref(),
                 failed_percent,
                 if cancelled {
-                    "OCR 安装已取消"
+                    "OCR installation was cancelled"
                 } else if verification {
                     "OCR 运行时验证失败"
                 } else {
@@ -3426,10 +3460,10 @@ fn run_recognition(
                     let now = Instant::now();
                     if now >= next_wait_notice {
                         let message = if request.model == "PP-FormulaNet_plus-L" {
-                            "正在等待高精度 L 模型后台准备；首次使用可能需要下载约 731.5 MB 并完成模型初始化，准备完成后会自动继续识别".to_string()
+                            "Waiting for the high-accuracy L model; first use may download about 731.5 MB and initialize the model. Recognition will continue automatically when ready.".to_string()
                         } else {
                             format!(
-                                "正在等待 {} 模型后台准备，完成后会自动继续识别",
+                                "Waiting for the {} model to become ready; recognition will continue automatically",
                                 request.model
                             )
                         };
@@ -3907,6 +3941,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            write_office_ui_language,
             write_export_file,
             get_ocr_runtime_status,
             configure_ocr_storage_location,

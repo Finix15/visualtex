@@ -24,7 +24,7 @@ interface ExportDialogProps {
   open: boolean;
   title: string;
   formulas: readonly string[];
-  language: "cn" | "en";
+  language: "vi" | "en";
   onClose: () => void;
   onNotify: (message: string) => void;
 }
@@ -32,7 +32,7 @@ interface ExportDialogProps {
 interface ExportFormatDefinition {
   extension: "md" | "svg" | "png";
   mime: string;
-  labelZh: string;
+  labelVi: string;
   labelEn: string;
 }
 
@@ -40,19 +40,19 @@ const EXPORT_FORMATS: Record<ExportFormat, ExportFormatDefinition> = {
   markdown: {
     extension: "md",
     mime: "text/markdown;charset=utf-8",
-    labelZh: "Markdown",
+    labelVi: "Markdown",
     labelEn: "Markdown",
   },
   svg: {
     extension: "svg",
     mime: "image/svg+xml;charset=utf-8",
-    labelZh: "SVG",
+    labelVi: "SVG",
     labelEn: "SVG",
   },
   png: {
     extension: "png",
     mime: "image/png",
-    labelZh: "PNG",
+    labelVi: "PNG",
     labelEn: "PNG",
   },
 };
@@ -142,7 +142,7 @@ export function ExportDialog({
     if (!nativeTauri) return path;
     try {
       const selected = await save({
-        title: isEn ? "Choose export path" : "选择导出路径",
+        title: isEn ? "Choose export path" : "Chọn đường dẫn xuất",
         defaultPath: path.trim() || suggestedFilename,
         filters: [
           {
@@ -164,7 +164,7 @@ export function ExportDialog({
   const writeExport = async () => {
     if (!nonEmptyFormulas.length || busy) {
       if (!nonEmptyFormulas.length) {
-        setError(isEn ? "There is no formula to export." : "没有可导出的公式。");
+        setError(isEn ? "There is no formula to export." : "Không có công thức để xuất.");
       }
       return;
     }
@@ -225,7 +225,7 @@ export function ExportDialog({
       onNotify(
         isEn
           ? `${definition.labelEn} exported successfully`
-          : `${definition.labelZh} 已成功导出`,
+          : `${definition.labelEn} đã xuất thành công`,
       );
       onClose();
     } catch (cause) {
@@ -238,7 +238,7 @@ export function ExportDialog({
   const copyPng = async () => {
     if (!nonEmptyFormulas.length || copyBusy) {
       if (!nonEmptyFormulas.length) {
-        setError(isEn ? "There is no formula to export." : "没有可导出的公式。");
+        setError(isEn ? "There is no formula to export." : "Không có công thức để xuất.");
       }
       return;
     }
@@ -250,7 +250,7 @@ export function ExportDialog({
         formulaLetterFont,
         formulaChineseFont,
       });
-      onNotify(isEn ? "PNG copied to Clipboard" : "PNG 已复制到剪贴板");
+      onNotify(isEn ? "PNG copied to Clipboard" : "PNG được sao chép vào Clipboard");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -268,20 +268,20 @@ export function ExportDialog({
       >
         <header>
           <div>
-            <strong id="export-dialog-title">{isEn ? "Export formula" : "导出公式"}</strong>
+            <strong id="export-dialog-title">{isEn ? "Export formula" : "Xuất công thức"}</strong>
           </div>
           <button
             type="button"
             className="icon-button compact"
             onClick={onClose}
             disabled={busy}
-            aria-label={isEn ? "Close export dialog" : "关闭导出窗口"}
+            aria-label={isEn ? "Close export dialog" : "Đóng hộp thoại xuất"}
           >
             <X size={17} />
           </button>
         </header>
 
-        <div className="export-format-grid" role="radiogroup" aria-label={isEn ? "Export format" : "导出格式"}>
+        <div className="export-format-grid" role="radiogroup" aria-label={isEn ? "Export format" : "Định dạng xuất"}>
           {(
             [
               ["markdown", FileText],
@@ -302,7 +302,7 @@ export function ExportDialog({
               >
                 <Icon size={22} />
                 <span>
-                  <strong>{isEn ? item.labelEn : item.labelZh}</strong>
+                  <strong>{isEn ? item.labelEn : item.labelVi}</strong>
                 </span>
               </button>
             );
@@ -326,16 +326,16 @@ export function ExportDialog({
               {copyBusy
                 ? isEn
                   ? "Copying PNG…"
-                  : "正在复制 PNG…"
+                  : "Đang sao chép PNG…"
                 : isEn
                   ? "Copy PNG to Clipboard"
-                  : "复制 PNG 到剪贴板"}
+                  : "Sao chép PNG vào Clipboard"}
             </span>
           </button>
         </div>
 
         <label className="export-path-field">
-          <span>{isEn ? "Export path" : "导出路径"}</span>
+          <span>{isEn ? "Export path" : "Đường dẫn xuất"}</span>
           <div>
             <input
               value={path}
@@ -352,7 +352,7 @@ export function ExportDialog({
               disabled={busy || !nativeTauri}
             >
               <FolderOpen size={15} />
-              {isEn ? "Browse" : "浏览"}
+              {isEn ? "Browse" : "Duyệt qua"}
             </button>
           </div>
         </label>
@@ -366,7 +366,7 @@ export function ExportDialog({
             onClick={onClose}
             disabled={busy}
           >
-            {isEn ? "Cancel" : "取消"}
+            {isEn ? "Cancel" : "Hủy bỏ"}
           </button>
           <button
             type="button"
@@ -378,10 +378,10 @@ export function ExportDialog({
             {busy
               ? isEn
                 ? "Exporting…"
-                : "正在导出…"
+                : "Đang xuất…"
               : isEn
                 ? `Export ${definition.labelEn}`
-                : `导出 ${definition.labelZh}`}
+                : `Xuất ${definition.labelEn}`}
           </button>
         </footer>
       </section>

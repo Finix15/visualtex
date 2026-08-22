@@ -40,10 +40,9 @@ export class VisualTexErrorBoundary extends Component<Props, State> {
             "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
         }}
       >
-        <strong style={{ fontSize: 18 }}>VisualTeX 界面加载失败</strong>
+        <strong style={{ fontSize: 18 }}>VisualTeX interface failed to load</strong>
         <p style={{ margin: 0, maxWidth: 760, color: "#4b5563" }}>
-          应用已经启动，但当前 WebView 在加载界面时遇到了异常。重新打开后若仍出现此页面，请把下面的错误信息发送给开发者。
-        </p>
+          "The application has been started, but the current WebView encountered an exception while loading the interface. If this page still appears after reopening, please send the following error message to the developer."</p>
         <pre
           style={{
             boxSizing: "border-box",
@@ -79,8 +78,7 @@ export class VisualTexErrorBoundary extends Component<Props, State> {
             cursor: "pointer",
           }}
         >
-          重新加载
-        </button>
+          "Reload"</button>
       </main>
     );
   }

@@ -156,7 +156,16 @@ def clean_python_tree(python_root: Path) -> None:
             newline = data.find(b"\n")
             if newline < 0:
                 continue
-            normalized = b"#!/usr/bin/env python3\n" + data[newline + 1 :]
+            body = data[newline + 1 :]
+            # pip/distlib may emit a shell/Python polyglot launcher when the
+            # build interpreter path contains spaces. That launcher embeds the
+            # absolute staging path on its second line, so strip it and keep a
+            # regular relocatable Python entry point.
+            if body.startswith(b"'''exec' "):
+                launcher_end = body.find(b"' '''\n")
+                if launcher_end >= 0:
+                    body = body[launcher_end + len(b"' '''\n") :]
+            normalized = b"#!/usr/bin/env python3\n" + body
             if normalized != data:
                 mode = script.stat().st_mode
                 script.write_bytes(normalized)

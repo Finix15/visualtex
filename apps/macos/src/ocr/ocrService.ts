@@ -42,9 +42,9 @@ function listen<T>(
 export const OCR_MODELS = [
   {
     id: "PP-FormulaNet_plus-S",
-    labelZh: "高速版 S",
+    labelVi: "Nhanh S",
     labelEn: "Fast S",
-    hintZh: "可选离线模型包，安装后约 248 MB；速度最快，主要适合英文公式",
+    hintVi: "Gói mô hình ngoại tuyến tùy chọn, cài đặt khoảng 248 MB; nhanh nhất cho công thức tiếng Anh",
     hintEn: "Optional offline model pack, about 248 MB installed; fastest for English formulas",
     downloadMb: 259.6,
     storageMb: 248,
@@ -52,19 +52,19 @@ export const OCR_MODELS = [
   },
   {
     id: "PP-FormulaNet_plus-M",
-    labelZh: "均衡版 M（推荐）",
+    labelVi: "Cân bằng M (khuyên dùng)",
     labelEn: "Balanced M (recommended)",
-    hintZh: "随 VisualTeX 离线资源内置；兼顾中文、复杂公式与速度",
-    hintEn: "Included in the VisualTeX offline bundle; balanced for Chinese and complex formulas",
+    hintVi: "Được bao gồm trong gói ngoại tuyến VisualTeX; cân bằng cho các công thức phức tạp",
+    hintEn: "Included in the VisualTeX offline bundle; balanced for complex formulas",
     downloadMb: 620.5,
     storageMb: 592,
     cpuBenchmarkMs: 1615.8,
   },
   {
     id: "PP-FormulaNet_plus-L",
-    labelZh: "高精度版 L",
+    labelVi: "Độ chính xác cao L",
     labelEn: "High accuracy L",
-    hintZh: "可选离线模型包，安装后约 698 MB；首次加载较久，并会占用数 GB 内存",
+    hintVi: "Gói mô hình ngoại tuyến tùy chọn, cài đặt khoảng 698 MB; lần tải đầu tiên chậm và có thể sử dụng vài GB bộ nhớ",
     hintEn: "Optional offline model pack, about 698 MB installed; first load is slow and may use several GB of memory",
     downloadMb: 731.5,
     storageMb: 698,
@@ -181,14 +181,14 @@ export function getImageExtension(file: File): string {
   };
   const fromMime = mimeMap[file.type];
   if (fromMime) return fromMime;
-  throw new Error("不支持该图片格式，请使用 PNG、JPEG、WebP、BMP 或 TIFF");
+  throw new Error("This image format is not supported, please use PNG, JPEG, WebP, BMP or TIFF");
 }
 
 export function validateOcrImage(file: File) {
   getImageExtension(file);
-  if (file.size <= 0) throw new Error("图片文件为空");
+  if (file.size <= 0) throw new Error("The picture file is empty");
   if (file.size > 20 * 1024 * 1024) {
-    throw new Error("图片不能超过 20 MB");
+    throw new Error("Image cannot exceed 20 MB");
   }
 }
 
@@ -208,14 +208,14 @@ export async function fileToOcrRequest(
 function requireOcrEnvironment() {
   if (!isTauriEnvironment() && !isOfficeCompanionEnvironment()) {
     throw new Error(
-      "OCR 只在 VisualTeX 桌面应用或本地 Office 编辑器中可用。",
+      "OCR is only available in the VisualTeX desktop app or the local Office editor.",
     );
   }
 }
 
 function requireDesktopOcrEnvironment() {
   if (!isTauriEnvironment()) {
-    throw new Error("可选 OCR 模型包只能在 VisualTeX 桌面应用中管理。");
+    throw new Error("The optional OCR model package can only be managed in the VisualTeX desktop app.");
   }
 }
 

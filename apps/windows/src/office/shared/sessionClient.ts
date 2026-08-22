@@ -170,7 +170,7 @@ async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> 
   } catch (reason) {
     if (timeoutController.signal.aborted && !init.signal?.aborted) {
       throw new Error(
-        "VisualTeX Office Session 请求超时。请重试；若仍失败，请重启 VisualTeX。",
+        "VisualTeX Office Session request timed out. Please try again; if it still fails, please restart VisualTeX.",
       );
     }
     throw reason;

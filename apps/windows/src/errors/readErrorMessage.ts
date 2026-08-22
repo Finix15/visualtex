@@ -6,7 +6,7 @@ function usefulString(value: unknown) {
   return normalized && normalized !== GENERIC_OBJECT_TEXT ? normalized : "";
 }
 
-export function readErrorMessage(error: unknown, fallback = "发生未知错误。"): string {
+export function readErrorMessage(error: unknown, fallback = "An unknown error occurred."): string {
   if (error instanceof Error) {
     const message = usefulString(error.message);
     if (message) return message;
@@ -57,7 +57,7 @@ export function readErrorMessage(error: unknown, fallback = "发生未知错误�
 
 export async function readResponseErrorMessage(
   response: Response,
-  fallback = "VisualTeX 服务请求失败。",
+  fallback = "VisualTeX service request failed.",
 ): Promise<string> {
   const text = await response.text().catch(() => "");
   if (text.trim()) {

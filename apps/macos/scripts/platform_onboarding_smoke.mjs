@@ -20,7 +20,7 @@ assert.equal(shouldOpenOnboardingInitially(false, true), false);
 assert.equal(shouldOpenOnboardingInitially(false, false), true);
 assert.equal(shouldOpenOnboardingInitially(true, false), false);
 
-const macSteps = tutorialSteps("cn", "macos");
+const macSteps = tutorialSteps("vi", "macos");
 const macIds = macSteps.map((step) => step.id);
 assert(macIds.includes("hotkeys-tiles"));
 assert(macIds.includes("layouts-themes"));

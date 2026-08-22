@@ -40,7 +40,7 @@ import {
   type FormulaLetterFont,
 } from "../editor/formulaFontPreferences";
 
-export type Language = "cn" | "en";
+export type Language = "vi" | "en";
 export type EditorLayout = "standard" | "classic";
 export const DEFAULT_EDITOR_LAYOUT: EditorLayout = "classic";
 export const DEFAULT_THEME: Theme = "light";
@@ -329,6 +329,7 @@ interface EditorState {
   pngExportBackground: PngExportBackground;
   formulaLetterFont: FormulaLetterFont;
   formulaChineseFont: FormulaChineseFont;
+  legacyDocumentFormulaChineseFont: FormulaChineseFont | null;
   classicTileWidth: number;
   classicDockHeight: number;
   keypadMinimizeOnCopy: boolean;
@@ -388,13 +389,13 @@ const initialLines = [createFormulaLine(initialLatex)];
 export const useEditorStore = create<EditorState>()(
   persist(
     (set, get) => ({
-      title: "未命名公式",
+      title: "Untitled formula",
       lines: initialLines,
       activeLineId: initialLines[0].id,
       formulaAlignment: "left",
       editorLayout: DEFAULT_EDITOR_LAYOUT,
       theme: DEFAULT_THEME,
-      language: "cn",
+      language: "en",
       zoom: 0.6,
       sourceOpen: false,
       latexCodeFormat: DEFAULT_LATEX_CODE_FORMAT,
@@ -409,6 +410,7 @@ export const useEditorStore = create<EditorState>()(
       pngExportBackground: DEFAULT_PNG_EXPORT_BACKGROUND,
       formulaLetterFont: DEFAULT_FORMULA_LETTER_FONT,
       formulaChineseFont: DEFAULT_FORMULA_CHINESE_FONT,
+      legacyDocumentFormulaChineseFont: null,
       classicTileWidth: legacyClassicPanelSize(
         legacyClassicTileWidthStorageKey,
         DEFAULT_CLASSIC_TILE_WIDTH,
@@ -655,8 +657,8 @@ export const useEditorStore = create<EditorState>()(
             language:
               settings.language === "en"
                 ? "en"
-                : settings.language === "cn"
-                  ? "cn"
+                : settings.language === "vi"
+                  ? "vi"
                   : state.language,
             zoom:
               settings.zoom === undefined
@@ -711,6 +713,10 @@ export const useEditorStore = create<EditorState>()(
                 : normalizePngExportBackground(settings.pngExportBackground),
             formulaLetterFont,
             formulaChineseFont,
+            legacyDocumentFormulaChineseFont:
+              settings.formulaChineseFont === undefined
+                ? null
+                : normalizeFormulaChineseFont(settings.formulaChineseFont),
             inputBehavior:
               settings.inputBehavior === undefined
                 ? state.inputBehavior
@@ -786,7 +792,9 @@ export const useEditorStore = create<EditorState>()(
             formulaRowVerticalInset: state.formulaRowVerticalInset,
             pngExportBackground: state.pngExportBackground,
             formulaLetterFont: state.formulaLetterFont,
-            formulaChineseFont: state.formulaChineseFont,
+            ...(state.legacyDocumentFormulaChineseFont
+              ? { formulaChineseFont: state.legacyDocumentFormulaChineseFont }
+              : {}),
             inputBehavior: { ...state.inputBehavior },
             personalize: state.personalize,
             suggestionCount: state.suggestionCount,
@@ -855,6 +863,7 @@ export const useEditorStore = create<EditorState>()(
           ),
           editorLayout: normalizeEditorLayout(persisted.editorLayout),
           theme: normalizeTheme(persisted.theme),
+          language: persisted.language === "vi" ? "vi" : "en",
           zoom: normalizeEditorZoom(persisted.zoom),
           latexCodeFormat: isLatexCodeFormat(persisted.latexCodeFormat)
             ? persisted.latexCodeFormat

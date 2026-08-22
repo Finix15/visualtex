@@ -168,7 +168,7 @@ async function main() {
           title: "Placeholder preview regression",
           lines: [{ id: "preview-editor-line", latex: "" }],
           activeLineId: "preview-editor-line",
-          language: "cn",
+          language: "vi",
           zoom: 1,
         },
         version: 0,

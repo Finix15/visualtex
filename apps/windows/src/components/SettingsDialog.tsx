@@ -68,57 +68,57 @@ import {
 import { publishSynchronizedTheme } from "../themeSync";
 
 const THEME_CORE_COLOR_FIELDS: readonly [keyof ThemePaletteColors, string, string][] = [
-  ["accent", "Accent", "强调色"],
-  ["accentHover", "Accent hover", "强调色悬停"],
-  ["accentSoft", "Accent soft", "强调浅色"],
-  ["background", "App background", "应用背景"],
-  ["elevated", "Raised background", "抬升背景"],
-  ["surface", "Panel surface", "面板背景"],
-  ["sunken", "Sunken surface", "凹陷背景"],
-  ["hover", "Hover surface", "悬停背景"],
-  ["active", "Selected surface", "选中背景"],
-  ["foreground", "Primary text", "主要前景"],
-  ["textMuted", "Secondary text", "次要前景"],
-  ["textFaint", "Muted text", "弱化前景"],
-  ["border", "Border", "边框"],
-  ["borderStrong", "Strong border", "强调边框"],
-  ["focusRing", "Focus ring", "焦点描边"],
-  ["info", "Info", "信息状态"],
-  ["success", "Success", "成功状态"],
-  ["warning", "Warning", "警告状态"],
-  ["danger", "Danger", "危险状态"],
+  ["accent", "Accent", "Giọng"],
+  ["accentHover", "Accent hover", "Di chuột có dấu"],
+  ["accentSoft", "Accent soft", "Giọng nhẹ nhàng"],
+  ["background", "App background", "Nền ứng dụng"],
+  ["elevated", "Raised background", "Nền nâng"],
+  ["surface", "Panel surface", "Bề mặt tấm"],
+  ["sunken", "Sunken surface", "Bề mặt trũng"],
+  ["hover", "Hover surface", "Bề mặt di chuột"],
+  ["active", "Selected surface", "Bề mặt được chọn"],
+  ["foreground", "Primary text", "Văn bản chính"],
+  ["textMuted", "Secondary text", "Văn bản phụ"],
+  ["textFaint", "Muted text", "Văn bản bị tắt tiếng"],
+  ["border", "Border", "Viền"],
+  ["borderStrong", "Strong border", "Viền chắc chắn"],
+  ["focusRing", "Focus ring", "Vòng lấy nét"],
+  ["info", "Info", "Thông tin"],
+  ["success", "Success", "Thành công"],
+  ["warning", "Warning", "Cảnh báo"],
+  ["danger", "Danger", "Nguy hiểm"],
 ];
 
 const THEME_FORMULA_COLOR_FIELDS: readonly [keyof ThemePaletteColors, string, string][] = [
-  ["formulaSurface", "Formula canvas", "公式画布"],
-  ["formulaPlaceholder", "Placeholder", "公式占位符"],
-  ["formulaPlaceholderSelected", "Selected placeholder", "选中占位符"],
-  ["formulaCaret", "Formula caret", "公式光标"],
+  ["formulaSurface", "Formula canvas", "Canvas công thức"],
+  ["formulaPlaceholder", "Placeholder", "Phần giữ chỗ"],
+  ["formulaPlaceholderSelected", "Selected placeholder", "Phần giữ chỗ đã chọn"],
+  ["formulaCaret", "Formula caret", "Dấu mũ công thức"],
 ];
 
 const THEME_SYNTAX_COLOR_FIELDS: readonly [keyof ThemePaletteColors, string, string][] = [
-  ["syntaxCommand", "Command", "命令"],
-  ["syntaxKeyword", "Keyword", "关键字"],
-  ["syntaxOperator", "Operator", "运算符"],
-  ["syntaxNumber", "Number", "数字"],
-  ["syntaxBracket", "Bracket", "括号"],
-  ["syntaxString", "String", "字符串"],
-  ["syntaxComment", "Comment", "注释"],
-  ["syntaxVariable", "Variable", "变量"],
-  ["syntaxFunction", "Function", "函数"],
-  ["syntaxError", "Error", "错误"],
+  ["syntaxCommand", "Command", "Lệnh"],
+  ["syntaxKeyword", "Keyword", "Từ khóa"],
+  ["syntaxOperator", "Operator", "Người vận hành"],
+  ["syntaxNumber", "Number", "Số"],
+  ["syntaxBracket", "Bracket", "Giá đỡ"],
+  ["syntaxString", "String", "Chuỗi"],
+  ["syntaxComment", "Comment", "Bình luận"],
+  ["syntaxVariable", "Variable", "Biến"],
+  ["syntaxFunction", "Function", "Chức năng"],
+  ["syntaxError", "Error", "Lỗi"],
 ];
 
 const THEME_TOOLBAR_COLOR_FIELDS: readonly [keyof ThemePaletteColors, string, string][] = [
-  ["toolbarCommon", "Common", "常用"],
-  ["toolbarStructure", "Structure", "结构"],
-  ["toolbarCalculus", "Calculus", "微积分"],
-  ["toolbarMatrix", "Matrix", "矩阵"],
-  ["toolbarRelation", "Relation", "关系"],
-  ["toolbarGreek", "Greek", "希腊字母"],
-  ["toolbarArrow", "Arrow", "箭头"],
-  ["toolbarPhysics", "Physics", "物理"],
-  ["toolbarSet", "Set", "集合"],
+  ["toolbarCommon", "Common", "Chung"],
+  ["toolbarStructure", "Structure", "Cấu trúc"],
+  ["toolbarCalculus", "Calculus", "Giải tích"],
+  ["toolbarMatrix", "Matrix", "Ma trận"],
+  ["toolbarRelation", "Relation", "Quan hệ"],
+  ["toolbarGreek", "Greek", "Tiếng Hy Lạp"],
+  ["toolbarArrow", "Arrow", "Mũi tên"],
+  ["toolbarPhysics", "Physics", "Vật Lý"],
+  ["toolbarSet", "Set", "Bộ"],
 ];
 
 interface Props {
@@ -372,16 +372,16 @@ export function SettingsDialog({
     fields: readonly [keyof ThemePaletteColors, string, string][],
   ) => (
     <div className="theme-color-grid">
-      {fields.map(([key, labelEn, labelZh]) => {
+      {fields.map(([key, labelEn, labelVi]) => {
         const color = customTheme.colors[key];
         return (
           <label className="theme-color-row" key={key}>
-            <strong>{isEn ? labelEn : labelZh}</strong>
+            <strong>{isEn ? labelEn : labelVi}</strong>
             <span className="theme-color-control">
               <input
                 type="color"
                 value={color}
-                aria-label={isEn ? `${labelEn} color` : `${labelZh}颜色`}
+                aria-label={isEn ? `${labelEn} color` : `${labelEn} màu`}
                 data-theme-color-setting={key}
                 onChange={(event) =>
                   updateThemeColor(key, event.currentTarget.value)
@@ -392,7 +392,7 @@ export function SettingsDialog({
                 type="text"
                 defaultValue={color}
                 spellCheck={false}
-                aria-label={isEn ? `${labelEn} hex value` : `${labelZh}十六进制值`}
+                aria-label={isEn ? `${labelEn} hex value` : `${labelEn} giá trị thập lục phân`}
                 onBlur={(event) => {
                   const value = event.currentTarget.value.trim();
                   if (/^#[0-9a-f]{6}$/i.test(value)) {
@@ -444,7 +444,7 @@ export function SettingsDialog({
         downloadConfigurationInBrowser(contents, filename);
       }
       setConfigurationStatus(
-        isEn ? "Configuration saved." : "配置文件已保存。",
+        isEn ? "Configuration saved." : "Đã lưu cấu hình.",
       );
     } catch (reason) {
       const message =
@@ -457,7 +457,7 @@ export function SettingsDialog({
         message ||
           (isEn
             ? "Unable to save the configuration."
-            : "无法保存配置文件。"),
+            : "Không thể lưu cấu hình."),
       );
     } finally {
       setConfigurationBusy(false);
@@ -478,7 +478,7 @@ export function SettingsDialog({
       setConfigurationStatus(
         isEn
           ? "Configuration imported. Reloading VisualTeX…"
-          : "配置已导入，正在重新载入 VisualTeX…",
+          : "Đã nhập cấu hình. Đang tải lại VisualTeX…",
       );
       window.setTimeout(() => window.location.reload(), 450);
     } catch (reason) {
@@ -487,7 +487,7 @@ export function SettingsDialog({
           ? reason.message
           : isEn
             ? "Unable to import the configuration."
-            : "无法导入配置文件。",
+            : "Không thể nhập cấu hình.",
       );
       setConfigurationBusy(false);
     }
@@ -508,13 +508,13 @@ export function SettingsDialog({
         <header className="dialog-header">
           <div>
             <span className="eyebrow">PREFERENCES</span>
-            <h2 id="settings-title">{isEn ? "Settings" : "设置"}</h2>
+            <h2 id="settings-title">{isEn ? "Settings" : "Cài đặt"}</h2>
           </div>
           <button
             type="button"
             className="icon-button"
             onClick={onClose}
-            aria-label={isEn ? "Close settings" : "关闭设置"}
+            aria-label={isEn ? "Close settings" : "Đóng cài đặt"}
           >
             <X size={18} />
           </button>
@@ -525,12 +525,12 @@ export function SettingsDialog({
             <div className="settings-section-title">
               <BrainCircuit size={18} />
               <div>
-                <h3>{isEn ? "Personalized commands" : "个性化命令推荐"}</h3>
+                <h3>{isEn ? "Personalized commands" : "Lệnh được cá nhân hóa"}</h3>
               </div>
             </div>
             <label className="switch-row">
               <span>
-                <strong>{isEn ? "Enable personalized ranking" : "启用个性化排序"}</strong>
+                <strong>{isEn ? "Enable personalized ranking" : "Kích hoạt tính năng xếp hạng được cá nhân hóa"}</strong>
               </span>
               <input
                 type="checkbox"
@@ -541,9 +541,9 @@ export function SettingsDialog({
             </label>
             <label className="range-setting">
               <span>
-                <strong>{isEn ? "Suggestion count" : "候选项数量"}</strong>
+                <strong>{isEn ? "Suggestion count" : "Số lượng đề xuất"}</strong>
                 <small>
-                  {suggestionCount} {isEn ? "items" : "项"}
+                  {suggestionCount} {isEn ? "items" : "mục"}
                 </small>
               </span>
               <input
@@ -560,7 +560,7 @@ export function SettingsDialog({
               onClick={resetUsage}
             >
               <RotateCcw size={15} />
-              {isEn ? "Reset recommendation history" : "重置推荐记录"}
+              {isEn ? "Reset recommendation history" : "Đặt lại lịch sử đề xuất"}
             </button>
           </div>
 
@@ -568,7 +568,7 @@ export function SettingsDialog({
             <div className="settings-section-title">
               <Keyboard size={18} />
               <div>
-                <h3>{isEn ? "Formula hotkeys" : "公式快捷键"}</h3>
+                <h3>{isEn ? "Formula hotkeys" : "Phím nóng công thức"}</h3>
               </div>
             </div>
             <button
@@ -577,7 +577,7 @@ export function SettingsDialog({
               onClick={onOpenFormulaHotkeys}
             >
               <Keyboard size={15} />
-              {isEn ? "Manage formula hotkeys" : "管理公式快捷键"}
+              {isEn ? "Manage formula hotkeys" : "Quản lý phím nóng công thức"}
             </button>
           </div>
 
@@ -585,17 +585,17 @@ export function SettingsDialog({
             <div className="settings-section-title">
               <SlidersHorizontal size={18} />
               <div>
-                <h3>{isEn ? "Appearance & editor" : "外观与编辑"}</h3>
+                <h3>{isEn ? "Appearance & editor" : "Giao diện & biên tập"}</h3>
               </div>
             </div>
             <div className="editor-layout-setting">
               <span>
-                <strong>{isEn ? "Editor layout" : "编辑器布局"}</strong>
+                <strong>{isEn ? "Editor layout" : "Bố cục soạn thảo"}</strong>
               </span>
               <div
                 className="theme-segment editor-layout-segment"
                 role="group"
-                aria-label={isEn ? "Editor layout" : "编辑器布局"}
+                aria-label={isEn ? "Editor layout" : "Bố cục soạn thảo"}
               >
                 <button
                   type="button"
@@ -604,7 +604,7 @@ export function SettingsDialog({
                   data-editor-layout-choice="standard"
                   onClick={() => setEditorLayout("standard")}
                 >
-                  {isEn ? "Standard" : "标准布局"}
+                  {isEn ? "Standard" : "Tiêu chuẩn"}
                 </button>
                 <button
                   type="button"
@@ -613,18 +613,18 @@ export function SettingsDialog({
                   data-editor-layout-choice="classic"
                   onClick={() => setEditorLayout("classic")}
                 >
-                  {isEn ? "Classic" : "经典布局"}
+                  {isEn ? "Classic" : "Cổ điển"}
                 </button>
               </div>
             </div>
             <div className="theme-choice-setting">
               <span>
-                <strong>{isEn ? "Colour theme" : "界面配色"}</strong>
+                <strong>{isEn ? "Colour theme" : "Chủ đề màu sắc"}</strong>
               </span>
               <div
                 className="theme-segment theme-choice-segment"
                 role="group"
-                aria-label={isEn ? "Colour theme" : "界面配色"}
+                aria-label={isEn ? "Colour theme" : "Chủ đề màu sắc"}
               >
                 {THEME_DEFINITIONS.map((definition) => {
                   const swatches =
@@ -649,7 +649,7 @@ export function SettingsDialog({
                           <i key={color} style={{ background: color }} />
                         ))}
                       </span>
-                      <span>{isEn ? definition.labelEn : definition.labelZh}</span>
+                      <span>{isEn ? definition.labelEn : definition.labelVi}</span>
                     </button>
                   );
                 })}
@@ -658,7 +658,7 @@ export function SettingsDialog({
             <label className="switch-row">
               <span>
                 <strong>
-                  {isEn ? "Auto-pair delimiters" : "自动补全成对符号"}
+                  {isEn ? "Auto-pair delimiters" : "Dấu phân cách tự động ghép nối"}
                 </strong>
               </span>
               <input
@@ -672,7 +672,7 @@ export function SettingsDialog({
             </label>
             <label className="range-setting">
               <span>
-                <strong>{isEn ? "Formula zoom" : "公式显示缩放"}</strong>
+                <strong>{isEn ? "Formula zoom" : "Công thức thu phóng"}</strong>
                 <small>{Math.round(zoom * 100)}%</small>
               </span>
               <input
@@ -695,7 +695,7 @@ export function SettingsDialog({
             >
               <Eye size={18} />
               <span>
-                <strong>{isEn ? "Interface customization" : "界面自定义"}</strong>
+                <strong>{isEn ? "Interface customization" : "Tùy chỉnh giao diện"}</strong>
               </span>
               <ChevronRight size={18} aria-hidden="true" />
             </button>
@@ -705,7 +705,7 @@ export function SettingsDialog({
             <div className="settings-section-title">
               <Download size={18} />
               <div>
-                <h3>{isEn ? "Configuration backup" : "配置备份与迁移"}</h3>
+                <h3>{isEn ? "Configuration backup" : "Sao lưu cấu hình"}</h3>
               </div>
             </div>
             <div className="configuration-transfer-actions">
@@ -717,7 +717,7 @@ export function SettingsDialog({
                 onClick={() => void saveConfiguration()}
               >
                 <Download size={15} />
-                {isEn ? "Save current configuration" : "保存目前配置"}
+                {isEn ? "Save current configuration" : "Lưu cấu hình hiện tại"}
               </button>
               <button
                 type="button"
@@ -727,7 +727,7 @@ export function SettingsDialog({
                 onClick={() => configurationInputRef.current?.click()}
               >
                 <Upload size={15} />
-                {isEn ? "Import configuration" : "导入配置"}
+                {isEn ? "Import configuration" : "Nhập cấu hình"}
               </button>
               <input
                 ref={configurationInputRef}
@@ -749,17 +749,17 @@ export function SettingsDialog({
             <div className="settings-section-title">
               <Languages size={18} />
               <div>
-                <h3>{isEn ? "Interface language" : "界面语言"}</h3>
+                <h3>{isEn ? "Interface language" : "Ngôn ngữ giao diện"}</h3>
               </div>
             </div>
             <div className="theme-segment">
               <button
                 type="button"
-                className={language === "cn" ? "is-active" : ""}
-                aria-pressed={language === "cn"}
-                onClick={() => setLanguage("cn")}
+                className={language === "vi" ? "is-active" : ""}
+                aria-pressed={language === "vi"}
+                onClick={() => setLanguage("vi")}
               >
-                中文
+                Tiếng Việt
               </button>
               <button
                 type="button"
@@ -779,17 +779,17 @@ export function SettingsDialog({
                 <h3>
                   {isEn
                     ? "PowerPoint formula defaults"
-                    : "PowerPoint 公式默认值"}
+                    : "Mặc định công thức PowerPoint"}
                 </h3>
               </div>
             </div>
             <label className="number-setting office-default-font-size-setting">
               <span>
                 <strong>
-                  {isEn ? "Default formula font size" : "默认公式字号"}
+                  {isEn ? "Default formula font size" : "Cỡ chữ công thức mặc định"}
                 </strong>
                 <small>
-                  {powerPointDefaultFontSizePt} {isEn ? "pt" : "磅"}
+                  {powerPointDefaultFontSizePt} {isEn ? "pt" : "điểm"}
                 </small>
               </span>
               <input
@@ -813,7 +813,7 @@ export function SettingsDialog({
               aria-label={
                 isEn
                   ? "PowerPoint formula size presets"
-                  : "PowerPoint 公式字号预设"
+                  : "Cài đặt trước kích thước công thức PowerPoint"
               }
             >
               {[14, 16, 18, 20, 24, 28, 32, 36].map((fontSizePt) => (
@@ -840,12 +840,12 @@ export function SettingsDialog({
             <div className="settings-section-title">
               <RefreshCw size={18} />
               <div>
-                <h3>{isEn ? "Application updates" : "应用更新"}</h3>
+                <h3>{isEn ? "Application updates" : "Cập nhật ứng dụng"}</h3>
               </div>
             </div>
             <label className="switch-row">
               <span>
-                <strong>{isEn ? "Automatic update notifications" : "自动更新提醒"}</strong>
+                <strong>{isEn ? "Automatic update notifications" : "Thông báo cập nhật tự động"}</strong>
               </span>
               <input
                 type="checkbox"
@@ -862,15 +862,15 @@ export function SettingsDialog({
               onClick={onCheckForUpdates}
             >
               <RefreshCw size={15} />
-              {isEn ? "Check now" : "立即检查"}
+              {isEn ? "Check now" : "Kiểm tra ngay"}
             </button>
           </div>
         </div>
 
         <footer className="dialog-footer">
-          <span>{isEn ? "Settings saved automatically" : "设置已自动保存"}</span>
+          <span>{isEn ? "Settings saved automatically" : "Cài đặt được lưu tự động"}</span>
           <button type="button" className="primary-button" onClick={onClose}>
-            {isEn ? "Done" : "完成"}
+            {isEn ? "Done" : "Xong"}
           </button>
         </footer>
 
@@ -897,7 +897,7 @@ export function SettingsDialog({
                 <div>
                   <span className="eyebrow">INTERFACE</span>
                   <h2 id="interface-customization-title">
-                    {isEn ? "Interface customization" : "界面自定义"}
+                    {isEn ? "Interface customization" : "Tùy chỉnh giao diện"}
                   </h2>
                 </div>
                 <button
@@ -908,7 +908,7 @@ export function SettingsDialog({
                   aria-label={
                     isEn
                       ? "Close interface customization"
-                      : "关闭界面自定义"
+                      : "Đóng tùy chỉnh giao diện"
                   }
                 >
                   <X size={18} />
@@ -924,7 +924,7 @@ export function SettingsDialog({
                   <header className="theme-studio-header">
                     <div>
                       <strong id="theme-studio-title">
-                        {isEn ? "Theme studio" : "界面配色工作室"}
+                        {isEn ? "Theme studio" : "Studio chủ đề"}
                       </strong>
                     </div>
                     <div className="theme-studio-actions">
@@ -934,7 +934,7 @@ export function SettingsDialog({
                         data-theme-reset-preset
                         onClick={resetThemePalette}
                       >
-                        {isEn ? "Reset custom" : "重置自定义"}
+                        {isEn ? "Reset custom" : "Đặt lại tùy chỉnh"}
                       </button>
                       <button
                         type="button"
@@ -942,13 +942,13 @@ export function SettingsDialog({
                         data-theme-use-custom
                         onClick={() => selectTheme("custom")}
                       >
-                        {isEn ? "Use Custom" : "使用自定义"}
+                        {isEn ? "Use Custom" : "Sử dụng tùy chỉnh"}
                       </button>
                     </div>
                   </header>
 
                   <div className="theme-preset-section">
-                    <strong>{isEn ? "Ready-made palettes" : "现成配色方案"}</strong>
+                    <strong>{isEn ? "Ready-made palettes" : "Bảng màu làm sẵn"}</strong>
                     <div className="theme-preset-grid" role="group">
                       {THEME_DEFINITIONS.filter((preset) => preset.id !== "custom").map(
                         (preset) => (
@@ -972,7 +972,7 @@ export function SettingsDialog({
                               Aa
                             </span>
                             <span className="theme-preset-name">
-                              {isEn ? preset.labelEn : preset.labelZh}
+                              {isEn ? preset.labelEn : preset.labelVi}
                             </span>
                             <span className="theme-preset-swatches" aria-hidden="true">
                               {preset.swatches.map((color) => (
@@ -986,7 +986,7 @@ export function SettingsDialog({
                   </div>
 
                   <div className="theme-mode-row">
-                    <strong>{isEn ? "Control appearance" : "控件明暗模式"}</strong>
+                    <strong>{isEn ? "Control appearance" : "Ngoại hình điều khiển"}</strong>
                     <div className="theme-segment theme-mode-segment" role="group">
                       <button
                         type="button"
@@ -999,7 +999,7 @@ export function SettingsDialog({
                           }))
                         }
                       >
-                        {isEn ? "Light" : "浅色"}
+                        {isEn ? "Light" : "Ánh sáng"}
                       </button>
                       <button
                         type="button"
@@ -1012,28 +1012,28 @@ export function SettingsDialog({
                           }))
                         }
                       >
-                        {isEn ? "Dark" : "深色"}
+                        {isEn ? "Dark" : "Tối"}
                       </button>
                     </div>
                   </div>
 
                   <details className="theme-color-details" open>
-                    <summary>{isEn ? "Interface colors" : "界面颜色"}</summary>
+                    <summary>{isEn ? "Interface colors" : "Màu giao diện"}</summary>
                     {renderThemeColorFields(THEME_CORE_COLOR_FIELDS)}
                   </details>
 
                   <details className="theme-color-details" open>
-                    <summary>{isEn ? "Formula colors" : "公式区域颜色"}</summary>
+                    <summary>{isEn ? "Formula colors" : "Công thức màu sắc"}</summary>
                     {renderThemeColorFields(THEME_FORMULA_COLOR_FIELDS)}
                   </details>
 
                   <details className="theme-color-details">
-                    <summary>{isEn ? "Source editor colors" : "源码编辑器颜色"}</summary>
+                    <summary>{isEn ? "Source editor colors" : "Màu của trình soạn thảo nguồn"}</summary>
                     {renderThemeColorFields(THEME_SYNTAX_COLOR_FIELDS)}
                   </details>
 
                   <details className="theme-color-details">
-                    <summary>{isEn ? "Toolbar category colors" : "工具栏分类颜色"}</summary>
+                    <summary>{isEn ? "Toolbar category colors" : "Màu sắc danh mục trên Thanh công cụ"}</summary>
                     {renderThemeColorFields(THEME_TOOLBAR_COLOR_FIELDS)}
                   </details>
 
@@ -1070,15 +1070,15 @@ export function SettingsDialog({
                         <i />
                         <i />
                       </span>
-                      <strong>{isEn ? "Custom" : "自定义"}</strong>
+                      <strong>{isEn ? "Custom" : "Tùy chỉnh"}</strong>
                       <span className="theme-preview-status">
                         {theme === "custom"
                           ? isEn
                             ? "Active"
-                            : "当前主题"
+                            : "Đang hoạt động"
                           : isEn
                             ? "Preview"
-                            : "预览"}
+                            : "Xem trước"}
                       </span>
                     </div>
                     <div className="theme-preview-body">
@@ -1102,7 +1102,7 @@ export function SettingsDialog({
                           </div>
                           <div className="theme-preview-controls">
                             <button type="button" tabIndex={-1}>
-                              {isEn ? "Primary" : "主要操作"}
+                              {isEn ? "Primary" : "Tiểu học"}
                             </button>
                             <span className="success" />
                             <span className="warning" />
@@ -1119,7 +1119,7 @@ export function SettingsDialog({
                     <strong>
                       {isEn
                         ? "Highlight formula rows"
-                        : "高亮当前公式行"}
+                        : "Đánh dấu các hàng công thức"}
                     </strong>
                   </span>
                   <input
@@ -1138,7 +1138,7 @@ export function SettingsDialog({
                     <strong>
                       {isEn
                         ? "Show formula row numbers"
-                        : "显示公式行序号"}
+                        : "Hiển thị số hàng công thức"}
                     </strong>
                   </span>
                   <input
@@ -1157,12 +1157,12 @@ export function SettingsDialog({
                     <strong>
                       {isEn
                         ? "Minimize after keypad copy"
-                        : "小键盘复制后最小化主应用"}
+                        : "Thu nhỏ sau khi sao chép bàn phím"}
                     </strong>
                     <small>
                       {isEn
                         ? "In keypad mode, Ctrl+S copies the current LaTeX format and then minimizes VisualTeX."
-                        : "小键盘模式下，Ctrl+S 会按当前 LaTeX 代码格式复制；开启后复制完成再最小化 VisualTeX。"}
+                        : "Ở chế độ bàn phím, Ctrl+S sao chép định dạng LaTeX hiện tại rồi thu nhỏ VisualTeX."}
                     </small>
                   </span>
                   <input
@@ -1185,7 +1185,7 @@ export function SettingsDialog({
                       <strong id="formula-toolbar-customization-title">
                         {isEn
                           ? "Formula toolbar buttons"
-                          : "公式工具栏按钮"}
+                          : "Các nút trên thanh công cụ công thức"}
                       </strong>
                     </div>
                     <button
@@ -1201,14 +1201,14 @@ export function SettingsDialog({
                         );
                       }}
                     >
-                      {isEn ? "Reset" : "恢复默认"}
+                      {isEn ? "Reset" : "Đặt lại"}
                     </button>
                   </header>
 
                   <div className="formula-inset-range-grid">
                     <label className="range-setting formula-inset-range">
                       <span>
-                        <strong>{isEn ? "Button size" : "按钮尺寸"}</strong>
+                        <strong>{isEn ? "Button size" : "Kích thước nút"}</strong>
                         <small>{formulaToolButtonSize}px</small>
                       </span>
                       <input
@@ -1226,7 +1226,7 @@ export function SettingsDialog({
                     <label className="range-setting formula-inset-range">
                       <span>
                         <strong>
-                          {isEn ? "Content inset" : "字符边距"}
+                          {isEn ? "Content inset" : "Chèn nội dung"}
                         </strong>
                         <small>{formulaToolButtonPadding}px</small>
                       </span>
@@ -1256,7 +1256,7 @@ export function SettingsDialog({
                       <strong id="formula-inset-customization-title">
                         {isEn
                           ? "Formula area spacing"
-                          : "公式区间距"}
+                          : "Khoảng cách vùng công thức"}
                       </strong>
                     </div>
                     <button
@@ -1271,14 +1271,14 @@ export function SettingsDialog({
                         );
                       }}
                     >
-                      {isEn ? "Reset" : "恢复默认"}
+                      {isEn ? "Reset" : "Đặt lại"}
                     </button>
                   </header>
 
                   <div className="formula-inset-range-grid">
                     <label className="range-setting formula-inset-range">
                       <span>
-                        <strong>{isEn ? "Left spacing" : "左侧距离"}</strong>
+                        <strong>{isEn ? "Left spacing" : "Khoảng cách trái"}</strong>
                         <small>{formulaInsetLeft}px</small>
                       </span>
                       <input
@@ -1295,7 +1295,7 @@ export function SettingsDialog({
                     </label>
                     <label className="range-setting formula-inset-range">
                       <span>
-                        <strong>{isEn ? "Right spacing" : "右侧距离"}</strong>
+                        <strong>{isEn ? "Right spacing" : "Khoảng cách phải"}</strong>
                         <small>{formulaInsetRight}px</small>
                       </span>
                       <input
@@ -1313,7 +1313,7 @@ export function SettingsDialog({
                     <label className="range-setting formula-inset-range">
                       <span>
                         <strong>
-                          {isEn ? "Formula row vertical spacing" : "公式行上下距离"}
+                          {isEn ? "Formula row vertical spacing" : "Khoảng cách dọc hàng công thức"}
                         </strong>
                         <small>{formulaRowVerticalInset}px</small>
                       </span>
@@ -1348,7 +1348,7 @@ export function SettingsDialog({
                       <i />
                       <i />
                       <i />
-                      <span>{isEn ? "Live preview" : "实时预览"}</span>
+                      <span>{isEn ? "Live preview" : "Xem trước trực tiếp"}</span>
                     </div>
                     <div className="formula-inset-preview-toolbar">
                       <span>
@@ -1396,7 +1396,7 @@ export function SettingsDialog({
                   <header className="formula-inset-customization-header">
                     <div>
                       <strong id="formula-font-customization-title">
-                        {isEn ? "Formula fonts" : "可视化公式字体"}
+                        {isEn ? "Formula fonts" : "Phông chữ công thức"}
                       </strong>
                     </div>
                     <button
@@ -1408,14 +1408,14 @@ export function SettingsDialog({
                         setFormulaChineseFont(DEFAULT_FORMULA_CHINESE_FONT);
                       }}
                     >
-                      {isEn ? "Reset" : "恢复默认"}
+                      {isEn ? "Reset" : "Đặt lại"}
                     </button>
                   </header>
 
                   <div className="formula-font-select-grid">
                     <label className="formula-font-setting">
                       <span>
-                        <strong>{isEn ? "Math letter font" : "数学字母字体"}</strong>
+                        <strong>{isEn ? "Math letter font" : "Phông chữ toán học"}</strong>
                       </span>
                       <select
                         value={formulaLetterFont}
@@ -1433,27 +1433,6 @@ export function SettingsDialog({
                         ))}
                       </select>
                     </label>
-
-                    <label className="formula-font-setting">
-                      <span>
-                        <strong>{isEn ? "Chinese font" : "中文字体"}</strong>
-                      </span>
-                      <select
-                        value={formulaChineseFont}
-                        data-formula-chinese-font-setting
-                        onChange={(event) =>
-                          setFormulaChineseFont(
-                            event.currentTarget.value as FormulaChineseFont,
-                          )
-                        }
-                      >
-                        {FORMULA_CHINESE_FONT_OPTIONS.map((item) => (
-                          <option key={item.id} value={item.id}>
-                            {isEn ? item.labelEn : item.labelZh}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
                   </div>
 
                   <div
@@ -1465,14 +1444,12 @@ export function SettingsDialog({
                           formulaLetterFamilies.upright,
                         "--visualtex-formula-italic-font-family":
                           formulaLetterFamilies.italic,
-                        "--visualtex-formula-chinese-font-family":
-                          formulaChineseFamily,
                       } as CSSProperties
                     }
                   >
-                    <span>{isEn ? "Live preview" : "实时预览"}</span>
+                    <span>{isEn ? "Live preview" : "Xem trước trực tiếp"}</span>
                     <MathPreview
-                      latex={String.raw`E=mc^2,\quad \alpha+\beta=\gamma,\quad \text{中文公式}`}
+                      latex={String.raw`E=mc^2,\quad \alpha+\beta=\gamma`}
                       staticLayout
                     />
                   </div>
@@ -1485,7 +1462,7 @@ export function SettingsDialog({
                   <header className="formula-inset-customization-header">
                     <div>
                       <strong id="png-background-customization-title">
-                        {isEn ? "PNG background" : "PNG 背景颜色"}
+                        {isEn ? "PNG background" : "PNG nền"}
                       </strong>
                     </div>
                   </header>
@@ -1499,7 +1476,7 @@ export function SettingsDialog({
                     >
                       <span className="png-transparent-swatch" aria-hidden="true" />
                       <span>
-                        <strong>{isEn ? "Transparent" : "透明"}</strong>
+                        <strong>{isEn ? "Transparent" : "Trong suốt"}</strong>
                       </span>
                     </button>
                     <label
@@ -1514,7 +1491,7 @@ export function SettingsDialog({
                         }
                       />
                       <span>
-                        <strong>{isEn ? "Custom colour" : "自定义颜色"}</strong>
+                        <strong>{isEn ? "Custom colour" : "Màu tùy chỉnh"}</strong>
                       </span>
                     </label>
                   </div>
@@ -1525,14 +1502,14 @@ export function SettingsDialog({
                 <span>
                   {isEn
                     ? "Changes apply immediately"
-                    : "修改会立即生效"}
+                    : "Thay đổi được áp dụng ngay lập tức"}
                 </span>
                 <button
                   type="button"
                   className="primary-button"
                   onClick={closeInterfaceCustomization}
                 >
-                  {isEn ? "Done" : "完成"}
+                  {isEn ? "Done" : "Xong"}
                 </button>
               </footer>
             </section>

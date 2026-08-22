@@ -145,7 +145,7 @@ async function main() {
           activeLineId: "alignment-line-1",
           formulaAlignment: "left",
           editorLayout: "classic",
-          language: "cn",
+          language: "vi",
           zoom: 1,
         },
         version: 0,

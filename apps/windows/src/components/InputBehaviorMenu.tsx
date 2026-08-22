@@ -26,18 +26,18 @@ import {
 
 interface InputBehaviorOption {
   key: InputBehaviorSettingKey;
-  titleZh: string;
+  titleVi: string;
   titleEn: string;
-  descriptionZh: string;
+  descriptionVi: string;
   descriptionEn: string;
 }
 
 const AUTO_ESCAPE_OPTIONS: InputBehaviorOption[] = [
   {
     key: "autoEscapeShortcuts",
-    titleZh: "常用数学快捷转义",
+    titleVi: "Các phím tắt toán học thông dụng",
     titleEn: "Common math shortcuts",
-    descriptionZh: "控制 alpha、>=、hat 等快捷映射；微分元、函数名等正体自动检测独立运行，不受此开关影响",
+    descriptionVi: "Điều khiển các phím tắt như alpha, >= và hat; phát hiện thẳng đứng cho sự khác biệt và tên hàm vẫn độc lập",
     descriptionEn: "Controls shortcuts such as alpha, >= and hat; upright detection for differentials and function names remains independent",
   },
 ];
@@ -45,30 +45,30 @@ const AUTO_ESCAPE_OPTIONS: InputBehaviorOption[] = [
 const CARET_BEHAVIOR_OPTIONS: InputBehaviorOption[] = [
   {
     key: "autoExitSuperscript",
-    titleZh: "上标输入后跳出",
+    titleVi: "Thoát chỉ số trên sau khi nhập",
     titleEn: "Exit superscript after input",
-    descriptionZh: "输入一个字符或一个工具栏符号后返回主公式区域",
+    descriptionVi: "Trở về công thức chính sau một ký tự hoặc ký hiệu trên thanh công cụ",
     descriptionEn: "Return to the main formula after one character or toolbar symbol",
   },
   {
     key: "autoExitSubscript",
-    titleZh: "下标输入后跳出",
+    titleVi: "Thoát chỉ số sau khi nhập",
     titleEn: "Exit subscript after input",
-    descriptionZh: "输入一个字符或一个工具栏符号后返回主公式区域",
+    descriptionVi: "Trở về công thức chính sau một ký tự hoặc ký hiệu trên thanh công cụ",
     descriptionEn: "Return to the main formula after one character or toolbar symbol",
   },
   {
     key: "autoExitAccent",
-    titleZh: "重音内容输入后跳出",
+    titleVi: "Thoát dấu sau khi nhập",
     titleEn: "Exit accent after input",
-    descriptionZh: "适用于 hat、bar、vec、tilde、dot 等包裹结构",
+    descriptionVi: "Áp dụng cho các dấu hat, bar, vec, dấu ngã, dấu chấm và các dấu tương tự",
     descriptionEn: "Applies to hat, bar, vec, tilde, dot and similar accents",
   },
   {
     key: "autoExitWrapperCommand",
-    titleZh: "字体命令输入后跳出",
+    titleVi: "Thoát lệnh phông chữ sau khi nhập",
     titleEn: "Exit font command after input",
-    descriptionZh: "开启时输入一个字符后自动结束；关闭后可连续输入，并按 Enter 确认 mathbb、mathbf、mathcal 等字体作用域",
+    descriptionVi: "Khi được bật, thoát sau một ký tự; khi bị tắt, hãy tiếp tục gõ và nhấn Enter để xác nhận phạm vi phông chữ mathbb, mathbf, mathcal và các phông chữ tương tự",
     descriptionEn: "When enabled, exit after one character; when disabled, keep typing and press Enter to confirm mathbb, mathbf, mathcal and similar font scopes",
   },
 ];
@@ -76,16 +76,16 @@ const CARET_BEHAVIOR_OPTIONS: InputBehaviorOption[] = [
 const COMMAND_SUGGESTION_OPTIONS: InputBehaviorOption[] = [
   {
     key: "showStructuredCommandSuggestions",
-    titleZh: "求和、积分等结构候选框",
+    titleVi: "Gợi ý lệnh có cấu trúc",
     titleEn: "Structured command suggestions",
-    descriptionZh: "控制 VisualTeX 的大型候选框，默认开启；不影响 MathLive 原生命令提示框",
+    descriptionVi: "Điều khiển bảng VisualTeX lớn để tính tổng, tích phân và các cấu trúc tương tự; không ảnh hưởng đến bảng lệnh gốc của MathLive",
     descriptionEn: "Controls the large VisualTeX panel for sums, integrals and similar structures; does not affect MathLive's native command panel",
   },
   {
     key: "showOtherCommandSuggestions",
-    titleZh: "其他命令候选框",
+    titleVi: "Gợi ý lệnh khác",
     titleEn: "Other command suggestions",
-    descriptionZh: "控制除求和、积分等结构外的 VisualTeX 大型候选框，默认关闭",
+    descriptionVi: "Điều khiển bảng VisualTeX lớn cho các lệnh không phải là tổng, tích phân và các cấu trúc tương tự; tắt theo mặc định",
     descriptionEn: "Controls the large VisualTeX panel for commands other than sums, integrals and similar structures; off by default",
   },
 ];
@@ -181,7 +181,7 @@ export function InputBehaviorMenu() {
     if (mathLiveEntries.length > 0) {
       groups.push({
         id: "mathlive",
-        titleZh: "MathLive 内置",
+        titleVi: "Tích hợp sẵn MathLive",
         titleEn: "MathLive built-ins",
         shortcuts: {},
         entries: mathLiveEntries,
@@ -342,10 +342,10 @@ export function InputBehaviorMenu() {
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        title={isEn ? "Input behavior" : "操作逻辑"}
+        title={isEn ? "Input behavior" : "Hành vi nhập liệu"}
       >
         <MousePointerClick size={14} />
-        <span>{isEn ? "Input behavior" : "操作逻辑"}</span>
+        <span>{isEn ? "Input behavior" : "Hành vi nhập liệu"}</span>
         <ChevronDown size={13} aria-hidden="true" />
       </button>
 
@@ -364,10 +364,10 @@ export function InputBehaviorMenu() {
             page === "mappings"
               ? isEn
                 ? "Automatic conversion mappings"
-                : "自动转义映射"
+                : "Ánh xạ chuyển đổi tự động"
               : isEn
                 ? "Input behavior settings"
-                : "操作逻辑设置"
+                : "Cài đặt hành vi nhập liệu"
           }
         >
           {page === "mappings" ? (
@@ -376,7 +376,7 @@ export function InputBehaviorMenu() {
                 <button
                   type="button"
                   className="auto-escape-map-back"
-                  aria-label={isEn ? "Back to input behavior" : "返回操作逻辑"}
+                  aria-label={isEn ? "Back to input behavior" : "Quay lại thao tác nhập liệu"}
                   onClick={() => {
                     setPage("settings");
                     setMappingQuery("");
@@ -385,7 +385,7 @@ export function InputBehaviorMenu() {
                   <ArrowLeft size={15} />
                 </button>
                 <div>
-                  <strong>{isEn ? "Conversion mappings" : "自动转义映射"}</strong>
+                  <strong>{isEn ? "Conversion mappings" : "Ánh xạ chuyển đổi"}</strong>
                   <span>{mappingCount}</span>
                 </div>
               </div>
@@ -395,8 +395,8 @@ export function InputBehaviorMenu() {
                 <input
                   value={mappingQuery}
                   onChange={(event) => setMappingQuery(event.target.value)}
-                  placeholder={isEn ? "Search input or LaTeX" : "搜索输入或 LaTeX"}
-                  aria-label={isEn ? "Search conversion mappings" : "搜索自动转义映射"}
+                  placeholder={isEn ? "Search input or LaTeX" : "Đầu vào tìm kiếm hoặc LaTeX"}
+                  aria-label={isEn ? "Search conversion mappings" : "Ánh xạ chuyển đổi tìm kiếm"}
                   autoFocus
                 />
               </label>
@@ -405,16 +405,16 @@ export function InputBehaviorMenu() {
                 {filteredShortcutGroups.map((group) => (
                   <section className="auto-escape-map-group" key={group.id}>
                     <div className="auto-escape-map-group-heading">
-                      <strong>{isEn ? group.titleEn : group.titleZh}</strong>
+                      <strong>{isEn ? group.titleEn : group.titleVi}</strong>
                       {group.entries.some(([, definition]) => shortcutAfter(definition)) ? (
                         <span
                           title={
                             isEn
                               ? "These entries apply only after the allowed preceding structures defined in code"
-                              : "这些条目只在代码规定的前置结构后触发"
+                              : "Các mục này chỉ áp dụng sau các cấu trúc được phép trước đó được xác định trong mã"
                           }
                         >
-                          {isEn ? "context" : "有前置条件"}
+                          {isEn ? "context" : "bối cảnh"}
                         </span>
                       ) : null}
                     </div>
@@ -437,7 +437,7 @@ export function InputBehaviorMenu() {
                             {shortcutAfter(definition) ? (
                               <span
                                 className="auto-escape-condition-mark"
-                                aria-label={isEn ? "Has context condition" : "有前置条件"}
+                                aria-label={isEn ? "Has context condition" : "Có điều kiện ngữ cảnh"}
                               />
                             ) : null}
                           </span>
@@ -452,7 +452,7 @@ export function InputBehaviorMenu() {
                 ))}
                 {filteredShortcutGroups.length === 0 ? (
                   <div className="auto-escape-map-empty">
-                    {isEn ? "No matching mapping" : "没有匹配的映射"}
+                    {isEn ? "No matching mapping" : "Không có ánh xạ phù hợp"}
                   </div>
                 ) : null}
               </div>
@@ -460,14 +460,14 @@ export function InputBehaviorMenu() {
           ) : (
             <>
               <div className="input-behavior-heading">
-                <strong>{isEn ? "Automatic conversion" : "输入自动转义"}</strong>
+                <strong>{isEn ? "Automatic conversion" : "Chuyển đổi tự động"}</strong>
               </div>
 
               <div className="input-behavior-options">
                 {AUTO_ESCAPE_OPTIONS.map((option) => (
                   <div className="input-behavior-option has-secondary-action" key={option.key}>
                     <span>
-                      <strong>{isEn ? option.titleEn : option.titleZh}</strong>
+                      <strong>{isEn ? option.titleEn : option.titleVi}</strong>
                       <button
                         type="button"
                         className="input-behavior-map-button"
@@ -477,13 +477,13 @@ export function InputBehaviorMenu() {
                           setPage("mappings");
                         }}
                       >
-                        {isEn ? "View mappings" : "查看映射"}
+                        {isEn ? "View mappings" : "Xem bản đồ"}
                         <ArrowRight size={13} aria-hidden="true" />
                       </button>
                     </span>
                     <label
                       className="input-behavior-toggle"
-                      aria-label={isEn ? option.titleEn : option.titleZh}
+                      aria-label={isEn ? option.titleEn : option.titleVi}
                     >
                       <input
                         type="checkbox"
@@ -499,14 +499,14 @@ export function InputBehaviorMenu() {
               </div>
 
               <div className="input-behavior-heading input-behavior-section-heading">
-                <strong>{isEn ? "Caret auto-exit" : "光标自动跳出"}</strong>
+                <strong>{isEn ? "Caret auto-exit" : "Tự động thoát dấu mũ"}</strong>
               </div>
 
               <div className="input-behavior-options">
                 {CARET_BEHAVIOR_OPTIONS.map((option) => (
                   <label className="input-behavior-option" key={option.key}>
                     <span>
-                      <strong>{isEn ? option.titleEn : option.titleZh}</strong>
+                      <strong>{isEn ? option.titleEn : option.titleVi}</strong>
                     </span>
                     <input
                       type="checkbox"
@@ -519,14 +519,14 @@ export function InputBehaviorMenu() {
               </div>
 
               <div className="input-behavior-heading input-behavior-section-heading">
-                <strong>{isEn ? "Command suggestion panels" : "命令候选框"}</strong>
+                <strong>{isEn ? "Command suggestion panels" : "Bảng gợi ý lệnh"}</strong>
               </div>
 
               <div className="input-behavior-options">
                 {COMMAND_SUGGESTION_OPTIONS.map((option) => (
                   <label className="input-behavior-option" key={option.key}>
                     <span>
-                      <strong>{isEn ? option.titleEn : option.titleZh}</strong>
+                      <strong>{isEn ? option.titleEn : option.titleVi}</strong>
                     </span>
                     <input
                       type="checkbox"

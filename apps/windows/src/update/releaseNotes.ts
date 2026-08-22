@@ -1,4 +1,4 @@
-export type UpdateLanguage = "cn" | "en";
+export type UpdateLanguage = "vi" | "en";
 
 export interface LocalizedReleaseNotes {
   features: string[];
@@ -7,12 +7,15 @@ export interface LocalizedReleaseNotes {
 }
 
 const languageHeadingPattern =
-  /^#{1,6}\s*(中文|简体中文|chinese|english|英文)\s*$/i;
+  new RegExp(
+    String.raw`^#{1,6}\s*(vietnamese|tiếng việt|english|\u4e2d\u6587|\u7b80\u4f53\u4e2d\u6587|chinese|\u82f1\u6587)\s*$`,
+    "iu",
+  );
 
 function headingLanguage(line: string): UpdateLanguage | null {
   const match = line.trim().match(languageHeadingPattern);
   if (!match) return null;
-  return /english|英文/i.test(match[1]) ? "en" : "cn";
+  return /vietnamese|tiếng việt/i.test(match[1]) ? "vi" : "en";
 }
 
 function extractLanguageBlock(
@@ -57,20 +60,20 @@ function releaseNotesSection(
 ): keyof LocalizedReleaseNotes | null {
   const normalized = stripMarkdown(heading).toLocaleLowerCase();
   if (
-    /^(new features?|features?|added|highlights?|新增功能|新功能|功能新增|主要更新)$/.test(
+    /^(new features?|features?|added|highlights?|tính năng mới|điểm nổi bật)$/.test(
       normalized,
     )
   ) {
     return "features";
   }
   if (
-    /^(bug fixes?|fixes?|fixed|问题修复|错误修复|修复内容|修复)$/.test(
+    /^(bug fixes?|fixes?|fixed|sửa lỗi|các lỗi đã sửa)$/.test(
       normalized,
     )
   ) {
     return "fixes";
   }
-  if (/^(other|notes?|其他|其他说明|说明)$/.test(normalized)) {
+  if (/^(other|notes?|khác|ghi chú)$/.test(normalized)) {
     return "other";
   }
   return null;
@@ -101,7 +104,7 @@ export function localizeReleaseNotes(
     const text = stripMarkdown(line);
     if (
       !text ||
-      /^(downloads?|下载|macos packaging note|windows packaging note):?$/i.test(
+      /^(downloads?|tải xuống|macos packaging note|windows packaging note):?$/i.test(
         text,
       )
     ) {

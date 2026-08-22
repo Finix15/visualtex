@@ -68,14 +68,14 @@ export function FormulaHotkeyManagerDialog({ open, onClose }: Props) {
             <div>
               <span className="eyebrow">HOT KEYS</span>
               <h2 id="formula-hotkey-manager-title">
-                {isEn ? "Formula hotkeys" : "公式快捷键"}
+                {isEn ? "Formula hotkeys" : "Phím nóng công thức"}
               </h2>
             </div>
             <button
               type="button"
               className="icon-button"
               onClick={onClose}
-              aria-label={isEn ? "Close hotkey settings" : "关闭快捷键设置"}
+              aria-label={isEn ? "Close hotkey settings" : "Đóng cài đặt phím nóng"}
             >
               <X size={18} />
             </button>
@@ -86,12 +86,12 @@ export function FormulaHotkeyManagerDialog({ open, onClose }: Props) {
               <Keyboard size={18} />
               <span>
                 <strong>
-                  {sortedBindings.length} {isEn ? "assigned" : "项已设置"}
+                  {sortedBindings.length} {isEn ? "assigned" : "được chỉ định"}
                 </strong>
                 <small>
                   {isEn
                     ? "Right-click a formula tool or tile to add another hotkey."
-                    : "右键公式工具或磁贴，可以继续添加快捷键。"}
+                    : "Nhấp chuột phải vào công cụ công thức hoặc ô để thêm phím nóng khác."}
                 </small>
               </span>
             </div>
@@ -101,11 +101,11 @@ export function FormulaHotkeyManagerDialog({ open, onClose }: Props) {
             {sortedBindings.length === 0 ? (
               <div className="formula-hotkey-empty-state">
                 <Keyboard size={28} />
-                <strong>{isEn ? "No formula hotkeys yet" : "还没有设置公式快捷键"}</strong>
+                <strong>{isEn ? "No formula hotkeys yet" : "Chưa có phím nóng công thức"}</strong>
                 <span>
                   {isEn
                     ? "Close this window, then right-click any formula tool, common tile or custom tile."
-                    : "关闭此窗口后，右键任意公式工具、常用磁贴或自定义磁贴即可设置。"}
+                    : "Đóng cửa sổ này, sau đó nhấp chuột phải vào bất kỳ công cụ công thức, ô thông thường hoặc ô tùy chỉnh nào."}
                 </span>
               </div>
             ) : (
@@ -134,9 +134,9 @@ export function FormulaHotkeyManagerDialog({ open, onClose }: Props) {
                         aria-label={
                           isEn
                             ? `Change hotkey for ${formulaHotkeyTargetLabel(binding.target, language)}`
-                            : `修改${formulaHotkeyTargetLabel(binding.target, language)}的快捷键`
+                            : `Thay đổi phím nóng cho ${formulaHotkeyTargetLabel(binding.target, language)}`
                         }
-                        title={isEn ? "Change hotkey" : "修改快捷键"}
+                        title={isEn ? "Change hotkey" : "Thay đổi phím nóng"}
                       >
                         <Pencil size={14} />
                       </button>
@@ -147,9 +147,9 @@ export function FormulaHotkeyManagerDialog({ open, onClose }: Props) {
                         aria-label={
                           isEn
                             ? `Remove hotkey for ${formulaHotkeyTargetLabel(binding.target, language)}`
-                            : `删除${formulaHotkeyTargetLabel(binding.target, language)}的快捷键`
+                            : `Xóa phím nóng cho ${formulaHotkeyTargetLabel(binding.target, language)}`
                         }
-                        title={isEn ? "Remove hotkey" : "删除快捷键"}
+                        title={isEn ? "Remove hotkey" : "Xóa phím nóng"}
                       >
                         <Trash2 size={14} />
                       </button>
@@ -164,10 +164,10 @@ export function FormulaHotkeyManagerDialog({ open, onClose }: Props) {
             <span>
               {isEn
                 ? "Hotkeys only take priority inside the visual formula editor."
-                : "快捷键仅在可视化公式编辑区优先生效。"}
+                : "Phím nóng chỉ được ưu tiên bên trong trình chỉnh sửa công thức trực quan."}
             </span>
             <button type="button" className="primary-button" onClick={onClose}>
-              {isEn ? "Done" : "完成"}
+              {isEn ? "Done" : "Xong"}
             </button>
           </footer>
         </section>

@@ -42,7 +42,7 @@ function defaultHotkeyCommand(
   command: string,
   insertTemplate: string,
   previewLatex: string,
-  labelZh: string,
+  labelVi: string,
   labelEn: string,
 ): LatexCommand {
   return {
@@ -50,7 +50,7 @@ function defaultHotkeyCommand(
     command,
     insertTemplate,
     previewLatex,
-    labelZh,
+    labelVi,
     labelEn,
     aliases: [],
     keywords: [],
@@ -87,7 +87,7 @@ const partialSymbolCommand = defaultHotkeyCommand(
   "\\partial",
   "\\partial",
   "\\partial",
-  "偏微分符号",
+  "Ký hiệu vi phân từng phần",
   "Partial differential symbol",
 );
 
@@ -96,7 +96,7 @@ const boundedIntegralTemplateCommand = defaultHotkeyCommand(
   "\\int",
   "\\int_{\\placeholder{}}^{\\placeholder{}} \\placeholder{}",
   "\\int_a^b f(x)",
-  "定积分模板",
+  "Mẫu tích phân xác định",
   "Definite integral template",
 );
 
@@ -105,7 +105,7 @@ const underlinedXCommand = defaultHotkeyCommand(
   "\\underline{X}",
   "\\underline{X}",
   "\\underline{X}",
-  "下划线 X",
+  "Gạch chân X",
   "Underlined X",
 );
 
@@ -114,7 +114,7 @@ const underlinedYCommand = defaultHotkeyCommand(
   "\\underline{Y}",
   "\\underline{Y}",
   "\\underline{Y}",
-  "下划线 Y",
+  "Gạch chân chữ Y",
   "Underlined Y",
 );
 
@@ -254,16 +254,16 @@ export function resolveFormulaHotkeyCommand(target: FormulaHotkeyTarget) {
 
 export function formulaHotkeyTargetLabel(
   target: FormulaHotkeyTarget,
-  language: "cn" | "en",
+  language: "vi" | "en",
 ) {
   return language === "en"
     ? target.command.labelEn
-    : target.command.labelZh;
+    : target.command.labelVi;
 }
 
 export function formulaHotkeyTargetKindLabel(
   target: FormulaHotkeyTarget,
-  language: "cn" | "en",
+  language: "vi" | "en",
 ) {
   const labels = language === "en"
     ? {
@@ -273,10 +273,10 @@ export function formulaHotkeyTargetKindLabel(
         matrix: "Custom matrix",
       }
     : {
-        command: "公式工具",
-        "common-tile": "常用磁贴",
-        "custom-tile": "自定义磁贴",
-        matrix: "自定义矩阵",
+        command: "Formula Tool",
+        "common-tile": "Commonly used tiles",
+        "custom-tile": "Custom tile",
+        matrix: "Custom matrix",
       };
   return labels[target.kind];
 }
@@ -352,7 +352,7 @@ function normalizedChordKey(chord: FormulaHotkeyChord) {
 
 export function protectedFormulaHotkeyAction(
   chord: FormulaHotkeyChord,
-  language: "cn" | "en" = "cn",
+  language: "vi" | "en" = "vi",
 ): string | null {
   const primaryModifier =
     (chord.metaKey || chord.ctrlKey) && !chord.altKey;
@@ -376,19 +376,19 @@ export function protectedFormulaHotkeyAction(
         zoomOut: "Zoom out",
       }
     : {
-        copy: "复制",
-        cut: "剪切",
-        paste: "粘贴",
-        undo: "撤销",
-        redo: "重做",
-        new: "新建",
-        open: "打开",
-        save: "保存",
-        greekMode: "希腊字母输入",
-        settings: "设置",
-        resetZoom: "恢复缩放",
-        zoomIn: "放大",
-        zoomOut: "缩小",
+        copy: "Copy",
+        cut: "Cut",
+        paste: "Paste",
+        undo: "Cancel",
+        redo: "Redo",
+        new: "New",
+        open: "Open",
+        save: "Save",
+        greekMode: "Greek letter input",
+        settings: "Settings",
+        resetZoom: "Resume scaling",
+        zoomIn: "Zoom in",
+        zoomOut: "Zoom out",
       };
 
   if (!chord.shiftKey && key === "c") return labels.copy;

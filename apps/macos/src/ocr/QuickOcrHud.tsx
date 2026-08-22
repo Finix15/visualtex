@@ -10,7 +10,7 @@ interface QuickOcrHudPayload {
 
 const INITIAL_STATE: QuickOcrHudPayload = {
   status: "running",
-  message: "正在准备 OCR…",
+  message: "Preparing OCR…",
   progress: 8,
 };
 

@@ -2617,7 +2617,7 @@ fn open_document_import_window(app: &AppHandle, session_id: &str) -> Result<(), 
         "index.html?view=office-document-import&sessionId={session_id}&transport=tauri&theme={theme}"
     );
     let window = WebviewWindowBuilder::new(app, label, WebviewUrl::App(path.into()))
-        .title("VisualTeX Word 文档批量导入")
+        .title("VisualTeX Word Document Import")
         .inner_size(1260.0, 840.0)
         .min_inner_size(860.0, 620.0)
         .center()
@@ -6972,8 +6972,8 @@ mod tests {
             reference_width_pt: None,
             reference_height_pt: None,
             reference_baseline_pt: None,
-            created_with_version: "1.2.5".to_string(),
-            updated_with_version: "1.2.5".to_string(),
+            created_with_version: "1.2.6".to_string(),
+            updated_with_version: "1.2.6".to_string(),
             created_at: "unix-ms:1".to_string(),
             updated_at: "unix-ms:1".to_string(),
         }

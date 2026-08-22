@@ -76,7 +76,7 @@ interface Props {
 interface FormulaTileDefinition {
   id: string;
   latex: string;
-  labelZh: string;
+  labelVi: string;
   labelEn: string;
   sectionId?: string;
   color?: string | null;
@@ -119,7 +119,7 @@ const customFormulaTilesStorageKey = "visualtex-custom-formula-tiles";
 const commonToolbarCommandsStorageKey = "visualtex-common-toolbar-command-ids-v1";
 const commonToolbarCommandLimit = 45;
 const defaultCustomSectionId = "default";
-const defaultCustomSectionName = "未命名分区";
+const defaultCustomSectionName = "Unnamed partition";
 const maxCustomFormulaTiles = 30;
 const maxCustomFormulaSections = 12;
 const customTileColorPresets = [
@@ -357,61 +357,61 @@ const commonFormulaTiles: FormulaTileDefinition[] = [
   {
     id: "quadratic-formula",
     latex: "x=\\frac{-b\\pm\\sqrt{b^2-4ac}}{2a}",
-    labelZh: "一元二次方程求根公式",
+    labelVi: "Công thức bậc hai",
     labelEn: "Quadratic formula",
   },
   {
     id: "euler-identity",
     latex: "e^{i\\pi}+1=0",
-    labelZh: "欧拉恒等式",
+    labelVi: "Đẳng thức Euler",
     labelEn: "Euler identity",
   },
   {
     id: "pythagorean-theorem",
     latex: "a^2+b^2=c^2",
-    labelZh: "勾股定理",
+    labelVi: "định lý Pythagore",
     labelEn: "Pythagorean theorem",
   },
   {
     id: "binomial-theorem",
     latex: "(a+b)^n=\\sum_{k=0}^{n}\\binom{n}{k}a^{n-k}b^k",
-    labelZh: "二项式定理",
+    labelVi: "Định lý nhị thức",
     labelEn: "Binomial theorem",
   },
   {
     id: "gaussian-integral",
     latex: "\\int_{-\\infty}^{\\infty}e^{-x^2}\\,\\mathrm{d}x=\\sqrt{\\pi}",
-    labelZh: "高斯积分",
+    labelVi: "Tích phân Gauss",
     labelEn: "Gaussian integral",
   },
   {
     id: "taylor-series",
     latex: "f(x)=\\sum_{n=0}^{\\infty}\\frac{f^{(n)}(a)}{n!}(x-a)^n",
-    labelZh: "泰勒展开",
+    labelVi: "Dòng Taylor",
     labelEn: "Taylor series",
   },
   {
     id: "mass-energy",
     latex: "E=mc^2",
-    labelZh: "质能方程",
+    labelVi: "Tương đương khối lượng-năng lượng",
     labelEn: "Mass-energy equivalence",
   },
   {
     id: "schrodinger-equation",
     latex: "i\\hbar\\frac{\\partial}{\\partial t}\\Psi=\\hat{H}\\Psi",
-    labelZh: "含时薛定谔方程",
+    labelVi: "Phương trình Schrödinger phụ thuộc thời gian",
     labelEn: "Time-dependent Schrödinger equation",
   },
   {
     id: "gauss-law",
     latex: "\\nabla\\cdot\\mathbf{E}=\\frac{\\rho}{\\varepsilon_0}",
-    labelZh: "高斯定律",
+    labelVi: "định luật Gauss",
     labelEn: "Gauss's law",
   },
   {
     id: "characteristic-equation",
     latex: "\\det(A-\\lambda I)=0",
-    labelZh: "矩阵特征方程",
+    labelVi: "Phương trình đặc tính ma trận",
     labelEn: "Matrix characteristic equation",
   },
 ];
@@ -605,43 +605,43 @@ const matrixGridCells = Array.from({ length: 100 }, (_, index) => ({
 const matrixDelimiterOptions: Array<{
   id: MatrixDelimiter;
   preview: string;
-  labelZh: string;
+  labelVi: string;
   labelEn: string;
 }> = [
   {
     id: "matrix",
     preview: "\\begin{matrix}a\\end{matrix}",
-    labelZh: "无边界",
+    labelVi: "Trơn",
     labelEn: "Plain",
   },
   {
     id: "pmatrix",
     preview: "\\begin{pmatrix}a\\end{pmatrix}",
-    labelZh: "圆括号",
+    labelVi: "Dấu ngoặc đơn",
     labelEn: "Parentheses",
   },
   {
     id: "bmatrix",
     preview: "\\begin{bmatrix}a\\end{bmatrix}",
-    labelZh: "方括号",
+    labelVi: "Chân đế",
     labelEn: "Brackets",
   },
   {
     id: "Bmatrix",
     preview: "\\begin{Bmatrix}a\\end{Bmatrix}",
-    labelZh: "花括号",
+    labelVi: "Niềng răng",
     labelEn: "Braces",
   },
   {
     id: "vmatrix",
     preview: "\\begin{vmatrix}a\\end{vmatrix}",
-    labelZh: "单竖线",
+    labelVi: "Thanh",
     labelEn: "Bars",
   },
   {
     id: "Vmatrix",
     preview: "\\begin{Vmatrix}a\\end{Vmatrix}",
-    labelZh: "双竖线",
+    labelVi: "Thanh đôi",
     labelEn: "Double bars",
   },
 ];
@@ -736,10 +736,10 @@ function createTileCommand(tile: FormulaTileDefinition): LatexCommand {
     command: tile.latex,
     insertTemplate: tile.latex,
     previewLatex: tile.latex,
-    labelZh: tile.labelZh,
+    labelVi: tile.labelVi,
     labelEn: tile.labelEn,
     aliases: ["tile", "formula"],
-    keywords: ["磁贴", "公式"],
+    keywords: ["tile", "formula"],
     category: "structure",
     defaultPriority: 120,
     supportedInMathMode: true,
@@ -763,10 +763,10 @@ function createMatrixCommand(
     command: `\\begin{${delimiter}}`,
     insertTemplate: `\\begin{${delimiter}}${matrixBody}\\end{${delimiter}}`,
     previewLatex: delimiterCopy.preview,
-    labelZh: `${rows}×${columns} ${delimiterCopy.labelZh}矩阵`,
+    labelVi: `${rows}×${columns} ${delimiterCopy.labelEn.toLowerCase()} ma trận`,
     labelEn: `${rows}×${columns} ${delimiterCopy.labelEn.toLowerCase()} matrix`,
     aliases: ["matrix", delimiter],
-    keywords: ["矩阵", "自定义矩阵", `${rows}x${columns}`],
+    keywords: ["matrix", "Custom matrix", `${rows}x${columns}`],
     category: "matrix",
     defaultPriority: 120,
     supportedInMathMode: true,
@@ -1343,7 +1343,7 @@ export function FormulaToolbar({
       customTileLibrary.tiles.map((tile, index) => ({
         id: tile.id,
         latex: tile.latex,
-        labelZh: `自定义公式 ${index + 1}`,
+        labelVi: `Công thức tùy chỉnh ${index + 1}`,
         labelEn: `Custom formula ${index + 1}`,
         sectionId: tile.sectionId,
         color: tile.color,
@@ -1570,11 +1570,11 @@ export function FormulaToolbar({
   ) => (
     <section
       className="matrix-builder"
-      aria-label={isEn ? "Custom matrix" : "自定义矩阵"}
+      aria-label={isEn ? "Custom matrix" : "Ma trận tùy chỉnh"}
     >
       <div className="matrix-options-column">
         <div className="matrix-builder-heading">
-          <strong>{isEn ? "Custom matrix" : "自定义矩阵"}</strong>
+          <strong>{isEn ? "Custom matrix" : "Ma trận tùy chỉnh"}</strong>
           <span className="matrix-size-badge" aria-live="polite">
             {previewRows} × {previewColumns}
           </span>
@@ -1582,12 +1582,12 @@ export function FormulaToolbar({
 
         <div className="matrix-delimiter-picker">
           <span className="matrix-control-label">
-            {isEn ? "Delimiter" : "边界样式"}
+            {isEn ? "Delimiter" : "Dấu phân cách"}
           </span>
           <div
             className="matrix-delimiter-options"
             role="group"
-            aria-label={isEn ? "Matrix delimiter" : "矩阵边界"}
+            aria-label={isEn ? "Matrix delimiter" : "Dấu phân cách ma trận"}
           >
             {matrixDelimiterOptions.map((option) => (
               <button
@@ -1596,8 +1596,8 @@ export function FormulaToolbar({
                 className={matrixDelimiter === option.id ? "is-active" : ""}
                 aria-pressed={matrixDelimiter === option.id}
                 onClick={() => setMatrixDelimiter(option.id)}
-                title={isEn ? option.labelEn : option.labelZh}
-                aria-label={isEn ? option.labelEn : option.labelZh}
+                title={isEn ? option.labelEn : option.labelVi}
+                aria-label={isEn ? option.labelEn : option.labelVi}
               >
                 <MathPreview
                   latex={option.preview}
@@ -1625,18 +1625,18 @@ export function FormulaToolbar({
           title={
             isEn
               ? "Insert the selected matrix · Right-click to set a hotkey"
-              : "插入当前矩阵 · 右键设置快捷键"
+              : "Chèn ma trận đã chọn · Nhấp chuột phải để đặt phím nóng"
           }
         >
           {isEn
             ? `Insert ${matrixRows} × ${matrixColumns}`
-            : `插入 ${matrixRows} × ${matrixColumns}`}
+            : `Chèn ${matrixRows} × ${matrixColumns}`}
         </button>
       </div>
 
       <div className="matrix-size-picker">
         <span className="matrix-control-label">
-          {isEn ? "Size" : "矩阵尺寸"}
+          {isEn ? "Size" : "Kích thước"}
         </span>
         <div
           className="matrix-size-grid"
@@ -1644,7 +1644,7 @@ export function FormulaToolbar({
           aria-label={
             isEn
               ? "Select matrix rows and columns"
-              : "选择矩阵行数和列数"
+              : "Chọn hàng và cột ma trận"
           }
           aria-rowcount={10}
           aria-colcount={10}
@@ -1675,7 +1675,7 @@ export function FormulaToolbar({
                 aria-label={
                   isEn
                     ? `${row} rows by ${column} columns`
-                    : `${row} 行 ${column} 列`
+                    : `${row} hàng theo ${column} cột`
                 }
                 aria-selected={selectedCorner}
                 data-matrix-rows={row}
@@ -1722,14 +1722,14 @@ export function FormulaToolbar({
         onContextMenu={(event) =>
           openFormulaContextMenu(event, commandHotkeyTarget(command))
         }
-        aria-label={isEn ? command.labelEn : command.labelZh}
+        aria-label={isEn ? command.labelEn : command.labelVi}
         title={
-          (isEn ? command.labelEn : command.labelZh) +
+          (isEn ? command.labelEn : command.labelVi) +
           " · " +
           command.command +
           (isEn
             ? " · Right-click to set a hotkey"
-            : " · 右键设置快捷键")
+            : "· Nhấp chuột phải để đặt phím nóng")
         }
       >
         <MathPreview
@@ -1775,13 +1775,13 @@ export function FormulaToolbar({
       data-toolbar-row-count={
         layout === "horizontal" ? horizontalRowCount : undefined
       }
-      aria-label={isEn ? "Formula toolbar" : "公式工具栏"}
+      aria-label={isEn ? "Formula toolbar" : "Thanh công thức"}
     >
       {!fixedView && <header className="formula-toolbar-header">
         <div
           className="formula-toolbar-view-tabs"
           role="tablist"
-          aria-label={isEn ? "Sidebar view" : "侧栏视图"}
+          aria-label={isEn ? "Sidebar view" : "Chế độ xem thanh bên"}
         >
           <button
             type="button"
@@ -1794,7 +1794,7 @@ export function FormulaToolbar({
               setInternalActiveView("tools");
             }}
           >
-            {isEn ? "Formula tools" : "公式工具"}
+            {isEn ? "Formula tools" : "Công cụ công thức"}
           </button>
           <button
             type="button"
@@ -1807,14 +1807,14 @@ export function FormulaToolbar({
               setInternalActiveView("tiles");
             }}
           >
-            {isEn ? "Tiles" : "磁贴"}
+            {isEn ? "Tiles" : "Gạch lát"}
           </button>
         </div>
       </header>}
 
       {activeView === "tools" ? (
         <>
-      <nav className="toolbar-tabs" aria-label={isEn ? "Formula categories" : "公式分类"}>
+      <nav className="toolbar-tabs" aria-label={isEn ? "Formula categories" : "Loại công thức"}>
         {categories.map((category) => (
           <button
             key={category}
@@ -1844,7 +1844,7 @@ export function FormulaToolbar({
           (layout === "horizontal" ? " is-continuous-categories" : "")
         }
         data-active-category={activeCategory}
-        aria-label={isEn ? "Formula templates" : "公式模板"}
+        aria-label={isEn ? "Formula templates" : "Mẫu công thức"}
       >
         {layout === "horizontal" ? (
           categories.map((category) => {
@@ -1877,11 +1877,11 @@ export function FormulaToolbar({
       ) : (
         <section
           className="formula-tiles-panel"
-          aria-label={isEn ? "Formula tiles" : "公式磁贴"}
+          aria-label={isEn ? "Formula tiles" : "Gạch công thức"}
         >
           <nav
             className="formula-tile-tabs"
-            aria-label={isEn ? "Tile categories" : "磁贴分类"}
+            aria-label={isEn ? "Tile categories" : "Các loại gạch lát"}
           >
             <button
               type="button"
@@ -1893,7 +1893,7 @@ export function FormulaToolbar({
                 setActiveTileCategory("custom");
               }}
             >
-              {isEn ? "Custom" : "自定义"}
+              {isEn ? "Custom" : "Tùy chỉnh"}
             </button>
             <button
               type="button"
@@ -1905,15 +1905,15 @@ export function FormulaToolbar({
                 setActiveTileCategory("common");
               }}
             >
-              {isEn ? "Common" : "常用"}
+              {isEn ? "Common" : "Chung"}
             </button>
             {onCollapseTiles && (
               <button
                 type="button"
                 className="formula-tile-collapse-button"
                 data-formula-tile-collapse
-                aria-label={isEn ? "Collapse formula tiles" : "收起公式磁贴"}
-                title={isEn ? "Collapse formula tiles" : "收起公式磁贴"}
+                aria-label={isEn ? "Collapse formula tiles" : "Thu gọn các ô công thức"}
+                title={isEn ? "Collapse formula tiles" : "Thu gọn các ô công thức"}
                 onClick={() => {
                   setContextMenu(null);
                   onCollapseTiles();
@@ -1937,10 +1937,10 @@ export function FormulaToolbar({
                   {activeCustomSection
                     ? isEn
                       ? `Save to “${activeCustomSection.name}”`
-                      : `保存到「${activeCustomSection.name}」`
+                      : `Lưu vào “${activeCustomSection.name}”`
                     : isEn
                       ? "Create a section first"
-                      : "请先新建分区"}
+                      : "Trước tiên hãy tạo một phần"}
                 </button>
                 <button
                   type="button"
@@ -1949,10 +1949,10 @@ export function FormulaToolbar({
                     customTileLibrary.sections.length >= maxCustomFormulaSections
                   }
                   onClick={beginCreateSection}
-                  title={isEn ? "Create section" : "新建分区"}
+                  title={isEn ? "Create section" : "Tạo chuyên mục"}
                 >
                   <FolderPlus size={14} />
-                  {isEn ? "Section" : "分区"}
+                  {isEn ? "Section" : "Mục"}
                 </button>
                 <button
                   type="button"
@@ -1963,24 +1963,24 @@ export function FormulaToolbar({
                     setCustomSymbolDesignerActivated(true);
                     setCustomSymbolDesignerOpen(true);
                   }}
-                  title={isEn ? "Open custom symbol designer" : "打开自定义字符设计器"}
+                  title={isEn ? "Open custom symbol designer" : "Mở trình thiết kế biểu tượng tùy chỉnh"}
                 >
                   <Pencil size={14} />
-                  {isEn ? "Symbol designer" : "字符设计器"}
+                  {isEn ? "Symbol designer" : "Nhà thiết kế biểu tượng"}
                 </button>
               </div>
               <span>
                 {!activeCustomSection
                   ? isEn
                     ? "Create a section before saving formula tiles."
-                    : "请先新建一个分区，再保存公式磁贴。"
+                    : "Tạo một phần trước khi lưu các ô công thức."
                   : activeLineLatex
                     ? isEn
                       ? "The selected formula line will be saved in the active section."
-                      : "当前公式行将保存到选中的分区。"
+                      : "Dòng công thức đã chọn sẽ được lưu vào phần hoạt động."
                     : isEn
                       ? "Select a non-empty formula line first."
-                      : "请先选择一个非空公式行。"}
+                      : "Trước tiên hãy chọn một dòng công thức không trống."}
               </span>
               {sectionEditor && (
                 <div className="custom-formula-section-editor">
@@ -1989,7 +1989,7 @@ export function FormulaToolbar({
                     type="text"
                     maxLength={24}
                     value={sectionEditor.value}
-                    placeholder={isEn ? "Section name" : "分区名称"}
+                    placeholder={isEn ? "Section name" : "Tên chuyên mục"}
                     onChange={(event) =>
                       setSectionEditor({
                         ...sectionEditor,
@@ -2006,7 +2006,7 @@ export function FormulaToolbar({
                     className="icon-button compact"
                     disabled={!sectionEditor.value.trim()}
                     onClick={commitSectionEditor}
-                    aria-label={isEn ? "Confirm section" : "确认分区"}
+                    aria-label={isEn ? "Confirm section" : "Phần xác nhận"}
                   >
                     <Check size={14} />
                   </button>
@@ -2014,7 +2014,7 @@ export function FormulaToolbar({
                     type="button"
                     className="icon-button compact"
                     onClick={() => setSectionEditor(null)}
-                    aria-label={isEn ? "Cancel" : "取消"}
+                    aria-label={isEn ? "Cancel" : "Hủy bỏ"}
                   >
                     <X size={14} />
                   </button>
@@ -2039,11 +2039,11 @@ export function FormulaToolbar({
                       tileHotkeyTarget(tile, "common-tile"),
                     )
                   }
-                  aria-label={isEn ? tile.labelEn : tile.labelZh}
+                  aria-label={isEn ? tile.labelEn : tile.labelVi}
                   title={
                     isEn
                       ? `${tile.labelEn} · Right-click for hotkey settings`
-                      : `${tile.labelZh} · 右键设置快捷键`
+                      : `${tile.labelEn} · Nhấp chuột phải để cài đặt phím nóng`
                   }
                 >
                   <MathPreview
@@ -2063,7 +2063,7 @@ export function FormulaToolbar({
                   data-registered-custom-symbol-toolbar-section
                 >
                   <header>
-                    <strong>{isEn ? "Registered symbols" : "已注册字符"}</strong>
+                    <strong>{isEn ? "Registered symbols" : "Ký hiệu đã đăng ký"}</strong>
                     <span>{registeredCustomSymbols.length}</span>
                   </header>
                   <div className="registered-custom-symbol-toolbar-grid">
@@ -2103,16 +2103,16 @@ export function FormulaToolbar({
                             aria-label={
                               isEn
                                 ? `Delete ${latex}`
-                                : `删除已注册字符 ${latex}`
+                                : `Xóa ${latex}`
                             }
-                            title={isEn ? "Delete registered symbol" : "删除已注册字符"}
+                            title={isEn ? "Delete registered symbol" : "Xóa biểu tượng đã đăng ký"}
                             onClick={(event) => {
                               event.preventDefault();
                               event.stopPropagation();
                               const confirmed = window.confirm(
                                 isEn
                                   ? `Delete ${latex}? Existing formulas will keep the source command but it will no longer render as this custom symbol.`
-                                  : `确定删除 ${latex} 吗？已有公式会保留源码，但该命令将不再渲染为这个自定义字符。`,
+                                  : `Xóa ${latex}? Các công thức hiện tại sẽ giữ lệnh nguồn nhưng nó sẽ không còn hiển thị dưới dạng biểu tượng tùy chỉnh này nữa.`,
                               );
                               if (confirmed) deleteCustomSymbol(symbol.id);
                             }}
@@ -2128,11 +2128,11 @@ export function FormulaToolbar({
               {customTileDefinitions.length === 0 &&
                 customTileLibrary.sections.length === 0 && (
                   <div className="formula-tile-empty">
-                    <strong>{isEn ? "No custom tiles yet" : "还没有自定义磁贴"}</strong>
+                    <strong>{isEn ? "No custom tiles yet" : "Chưa có ô tùy chỉnh nào"}</strong>
                     <span>
                       {isEn
                         ? "Select a formula line, then save it to a section."
-                        : "选中一个公式行，然后保存到分区中。"}
+                        : "Chọn một dòng công thức rồi lưu vào một phần."}
                     </span>
                   </div>
                 )}
@@ -2184,14 +2184,14 @@ export function FormulaToolbar({
                                 <span className="custom-formula-section-delete-copy">
                                   {isEn
                                     ? `Delete ${sectionTiles.length} tile${sectionTiles.length === 1 ? "" : "s"}?`
-                                    : `确认删除分区和其中 ${sectionTiles.length} 个磁贴？`}
+                                    : `Xóa ô ${sectionTiles.length}${sectionTiles.length === 1 ? "" : "s"}?`}
                                 </span>
                                 <button
                                   type="button"
                                   className="icon-button compact is-danger"
                                   onClick={() => deleteCustomSection(storedSection.id)}
-                                  aria-label={isEn ? "Confirm delete" : "确认删除"}
-                                  title={isEn ? "Confirm delete" : "确认删除"}
+                                  aria-label={isEn ? "Confirm delete" : "Xác nhận xóa"}
+                                  title={isEn ? "Confirm delete" : "Xác nhận xóa"}
                                 >
                                   <Check size={13} />
                                 </button>
@@ -2199,8 +2199,8 @@ export function FormulaToolbar({
                                   type="button"
                                   className="icon-button compact"
                                   onClick={() => setPendingSectionDeleteId(null)}
-                                  aria-label={isEn ? "Cancel delete" : "取消删除"}
-                                  title={isEn ? "Cancel" : "取消"}
+                                  aria-label={isEn ? "Cancel delete" : "Hủy xóa"}
+                                  title={isEn ? "Cancel" : "Hủy bỏ"}
                                 >
                                   <X size={13} />
                                 </button>
@@ -2214,9 +2214,9 @@ export function FormulaToolbar({
                                   aria-label={
                                     isEn
                                       ? `Rename ${storedSection.name}`
-                                      : `重命名${storedSection.name}`
+                                      : `Đổi tên ${storedSection.name}`
                                   }
-                                  title={isEn ? "Rename section" : "重命名分区"}
+                                  title={isEn ? "Rename section" : "Đổi tên phần"}
                                 >
                                   <Pencil size={13} />
                                 </button>
@@ -2230,12 +2230,12 @@ export function FormulaToolbar({
                                   aria-label={
                                     isEn
                                       ? `Delete ${storedSection.name}`
-                                      : `删除${storedSection.name}`
+                                      : `Xóa ${storedSection.name}`
                                   }
                                   title={
                                     isEn
                                       ? "Delete this section and all of its tiles"
-                                      : "删除整个分区及其中所有磁贴"
+                                      : "Xóa phần này và tất cả các ô của nó"
                                   }
                                 >
                                   <Trash2 size={13} />
@@ -2257,7 +2257,7 @@ export function FormulaToolbar({
                           >
                             {isEn
                               ? "Select this section, then save a formula here"
-                              : "选择此分区后，可将公式保存到这里"}
+                              : "Chọn mục này rồi lưu công thức vào đây"}
                           </button>
                         )}
                         {sectionRows.map((row) => (
@@ -2301,11 +2301,11 @@ export function FormulaToolbar({
                                       tile.id,
                                     )
                                   }
-                                  aria-label={isEn ? tile.labelEn : tile.labelZh}
+                                  aria-label={isEn ? tile.labelEn : tile.labelVi}
                                   title={
                                     isEn
                                       ? `${tile.labelEn} · Right-click for hotkey, color and section`
-                                      : `${tile.labelZh} · 右键设置快捷键、颜色和分区`
+                                      : `${tile.labelEn} · Nhấp chuột phải vào phím nóng, màu sắc và phần`
                                   }
                                 >
                                   <MathPreview
@@ -2342,7 +2342,7 @@ export function FormulaToolbar({
         <div
           className="formula-tile-context-menu formula-hotkey-context-menu"
           role="menu"
-          aria-label={isEn ? "Formula item actions" : "公式项目操作"}
+          aria-label={isEn ? "Formula item actions" : "Hành động của mục công thức"}
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
           <div className="formula-hotkey-context-heading">
@@ -2354,7 +2354,7 @@ export function FormulaToolbar({
                 ? formatFormulaHotkeyChord(contextBinding.chord)
                 : isEn
                   ? "No hotkey"
-                  : "未设置快捷键"}
+                  : "Không có phím nóng"}
             </span>
           </div>
           {contextMenu.target.kind === "command" &&
@@ -2369,7 +2369,7 @@ export function FormulaToolbar({
                 }
               >
                 <Star size={14} />
-                {isEn ? "Add to Common" : "设为常用"}
+                {isEn ? "Add to Common" : "Thêm vào chung"}
               </button>
             )}
           <button
@@ -2385,10 +2385,10 @@ export function FormulaToolbar({
             {contextBinding
               ? isEn
                 ? "Change hotkey…"
-                : "修改快捷键…"
+                : "Thay đổi phím nóng…"
               : isEn
                 ? "Set hotkey…"
-                : "设置快捷键…"}
+                : "Đặt phím nóng…"}
           </button>
           {contextBinding && (
             <button
@@ -2400,7 +2400,7 @@ export function FormulaToolbar({
                 setContextMenu(null);
               }}
             >
-              {isEn ? "Clear hotkey" : "清除快捷键"}
+              {isEn ? "Clear hotkey" : "Xóa phím nóng"}
             </button>
           )}
           {contextCustomTile && (
@@ -2409,12 +2409,12 @@ export function FormulaToolbar({
               <div className="custom-tile-context-options">
                 <div className="custom-tile-context-label">
                   <Palette size={14} />
-                  <span>{isEn ? "Tile color" : "磁贴颜色"}</span>
+                  <span>{isEn ? "Tile color" : "Màu ngói"}</span>
                 </div>
                 <div
                   className="custom-tile-color-palette"
                   role="group"
-                  aria-label={isEn ? "Tile color" : "磁贴颜色"}
+                  aria-label={isEn ? "Tile color" : "Màu ngói"}
                 >
                   <button
                     type="button"
@@ -2426,8 +2426,8 @@ export function FormulaToolbar({
                     onClick={() =>
                       updateCustomTile(contextCustomTile.id, { color: null })
                     }
-                    aria-label={isEn ? "Automatic color" : "自动颜色"}
-                    title={isEn ? "Automatic color" : "自动颜色"}
+                    aria-label={isEn ? "Automatic color" : "Màu tự động"}
+                    title={isEn ? "Automatic color" : "Màu tự động"}
                   />
                   {customTileColorPresets.map((color) => (
                     <button
@@ -2442,13 +2442,13 @@ export function FormulaToolbar({
                       onClick={() =>
                         updateCustomTile(contextCustomTile.id, { color })
                       }
-                      aria-label={`${isEn ? "Use color" : "使用颜色"} ${color}`}
+                      aria-label={`${isEn ? "Use color" : "Sử dụng màu sắc"} ${color}`}
                       title={color}
                     />
                   ))}
                   <label
                     className="custom-tile-color-picker"
-                    title={isEn ? "Choose any color" : "选择任意颜色"}
+                    title={isEn ? "Choose any color" : "Chọn màu bất kỳ"}
                   >
                     <input
                       type="color"
@@ -2458,14 +2458,14 @@ export function FormulaToolbar({
                           color: validCustomTileColor(event.currentTarget.value),
                         })
                       }
-                      aria-label={isEn ? "Choose any color" : "选择任意颜色"}
+                      aria-label={isEn ? "Choose any color" : "Chọn màu bất kỳ"}
                     />
                     <Plus size={12} />
                   </label>
                 </div>
 
                 <label className="custom-tile-section-picker">
-                  <span>{isEn ? "Section" : "所属分区"}</span>
+                  <span>{isEn ? "Section" : "Mục"}</span>
                   <select
                     value={contextCustomTile.sectionId}
                     onChange={(event) => {
@@ -2496,7 +2496,7 @@ export function FormulaToolbar({
                 }
               >
                 <Trash2 size={14} />
-                {isEn ? "Delete tile" : "删除磁贴"}
+                {isEn ? "Delete tile" : "Xóa ô"}
               </button>
             </>
           )}

@@ -496,7 +496,7 @@ pub fn install_bundle(
     mut progress: impl FnMut(&str, u8, &str, Option<String>),
 ) -> Result<OfflineBundleManifest, String> {
     let bundle = locate_bundle(app)?;
-    progress("offline-verify", 8, "正在校验离线 OCR 安装包", None);
+    progress("offline-verify", 8, "Verifying the offline OCR package", None);
     let runtime_archive = verify_record(&bundle.root, &bundle.manifest.archives.runtime)?;
     let model_archive = verify_record(&bundle.root, &bundle.manifest.archives.default_model)?;
 
@@ -515,14 +515,14 @@ pub fn install_bundle(
         progress(
             "offline-runtime",
             20,
-            "正在解压内置 Python 与 OCR 依赖",
+            "Extracting the bundled Python and OCR dependencies",
             None,
         );
         extract_archive(&runtime_archive, &staging)?;
         progress(
             "offline-model",
             65,
-            "正在安装内置 PP-FormulaNet M 模型",
+            "Installing the bundled PP-FormulaNet M model",
             None,
         );
         extract_archive(&model_archive, &staging.join("cache"))?;
@@ -543,7 +543,7 @@ pub fn install_bundle(
         )
         .map_err(|error| format!("Unable to write installed OCR manifest: {error}"))?;
 
-        progress("offline-activate", 88, "正在启用离线 OCR 运行环境", None);
+        progress("offline-activate", 88, "Activating the offline OCR runtime", None);
         if destination_root.exists() {
             fs::rename(destination_root, &backup)
                 .map_err(|error| format!("Unable to back up the existing OCR runtime: {error}"))?;
@@ -570,7 +570,7 @@ pub fn install_bundle(
     progress(
         "offline-complete",
         96,
-        "离线 OCR 文件安装完成，正在验证",
+        "Offline OCR files installed; verifying",
         None,
     );
     Ok(bundle.manifest)

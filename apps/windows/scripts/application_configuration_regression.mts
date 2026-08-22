@@ -195,7 +195,7 @@ assert.deepEqual(built.windows, { main: { width: 1333, height: 777 } });
 assert.equal(built.editorSettings.theme, "raycast");
 assert.equal(built.editorSettings.zoom, 1.25);
 assert.equal(built.editorSettings.formulaLetterFont, "palatino");
-assert.equal(built.editorSettings.formulaChineseFont, "songti");
+assert.equal(built.editorSettings.formulaChineseFont, undefined);
 assert.equal(built.editorSettings.classicTileWidth, 486);
 assert.equal(built.editorSettings.classicDockHeight, 372);
 assert.equal(built.editorSettings.keypadMinimizeOnCopy, false);
@@ -231,11 +231,12 @@ const withNativeWindows = {
 const parsed = parseVisualTexConfiguration(JSON.stringify(withNativeWindows));
 assert.deepEqual(parsed.windows, {
   main: { width: 1440, height: 900 },
+  keypad: null,
   officeEditor: { width: 1180, height: 760 },
 });
 
 editor.setTheme("light");
-editor.setLanguage("cn");
+editor.setLanguage("vi");
 editor.setEditorLayout("standard");
 editor.setZoom(0.6);
 editor.setFormulaLetterFont("katex");
@@ -254,7 +255,7 @@ assert.equal(restored.language, "en");
 assert.equal(restored.editorLayout, "classic");
 assert.equal(restored.zoom, 1.25);
 assert.equal(restored.formulaLetterFont, "palatino");
-assert.equal(restored.formulaChineseFont, "songti");
+assert.equal(restored.formulaChineseFont, "system");
 assert.equal(restored.classicTileWidth, 486);
 assert.equal(restored.classicDockHeight, 372);
 assert.equal(restored.keypadMinimizeOnCopy, false);
@@ -306,6 +307,7 @@ assert.deepEqual(sanitized.storage, {
 });
 assert.deepEqual(sanitized.windows, {
   main: null,
+  keypad: null,
   officeEditor: { width: 1200, height: 800 },
 });
 

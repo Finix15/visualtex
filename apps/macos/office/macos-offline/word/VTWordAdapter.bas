@@ -180,7 +180,7 @@ Public Sub VisualTeX_ProbeImageFormulaFontSize()
     Else
         VTShowInformation _
             "This Mac Word build does not reliably persist image Range.Font.Size. " & _
-            "Use the VisualTeX 图片公式字号 drop-down as the supported fallback."
+            "Use the VisualTeX picture formula size drop-down as the supported fallback."
     End If
 End Sub
 
@@ -30540,3 +30540,537 @@ Private Sub VTWriteWordHealth()
         "}"
     VTWriteTextAtomic statusPath, payload
 End Sub
+
+' VISUALTEX_LOCALIZED_RIBBON_BEGIN
+Public Sub VTWordRibbonGetLabel(ByVal control As IRibbonControl, ByRef returnedValue)
+    returnedValue = VTWordRibbonLocalizedText(control.Id & "|label")
+End Sub
+
+Public Sub VTWordRibbonGetScreentip(ByVal control As IRibbonControl, ByRef returnedValue)
+    returnedValue = VTWordRibbonLocalizedText(control.Id & "|screentip")
+End Sub
+
+Public Sub VTWordRibbonGetSupertip(ByVal control As IRibbonControl, ByRef returnedValue)
+    returnedValue = VTWordRibbonLocalizedText(control.Id & "|supertip")
+End Sub
+
+Public Sub VTWordRibbonGetSizeString(ByVal control As IRibbonControl, ByRef returnedValue)
+    returnedValue = VTWordRibbonLocalizedText(control.Id & "|sizeString")
+End Sub
+
+Private Function VTWordRibbonLocalizedText(ByVal key As String) As String
+    Dim useVietnamese As Boolean
+    useVietnamese = (VTOfficeUiLanguage() = "vi")
+    Select Case key
+        Case "VisualTeX.Mac.Word.Inline|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0063|00F9|006E|0067|0020|0064|00F2|006E|0067|0020|0062|1EB1|006E|0067|0020|0068|00EC|006E|" & _
+                    "0068|0020|1EA3|006E|0068")
+            Else
+                VTWordRibbonLocalizedText = "Picture inline formula"
+            End If
+        Case "VisualTeX.Mac.Word.Display|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0072|0069|00EA|006E|0067|0020|0064|00F2|006E|0067")
+            Else
+                VTWordRibbonLocalizedText = "Picture line formula"
+            End If
+        Case "VisualTeX.Mac.Word.NativeInline|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0063|00F9|006E|0067|0020|0064|00F2|006E|0067|0020|004F|004D|004D|004C")
+            Else
+                VTWordRibbonLocalizedText = "OMML inline formula"
+            End If
+        Case "VisualTeX.Mac.Word.NativeInline|screentip"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0043|0068|00E8|006E|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0063|00F9|006E|0067|0020|0064|00F2|006E|0067|0020|0067|1ED1|0063|" & _
+                    "0020|0074|0072|006F|006E|0067|0020|0057|006F|0072|0064")
+            Else
+                VTWordRibbonLocalizedText = "Insert Word native inline formulas"
+            End If
+        Case "VisualTeX.Mac.Word.NativeInline|supertip"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0043|0068|00E8|006E|0020|0063|00E1|0063|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0063|00F9|006E|0067|0020|0064|00F2|006E|0067|" & _
+                    "0020|004F|004D|004D|004C|0020|0063|00F3|0020|0074|0068|1EC3|0020|0111|01B0|1EE3|0063|0020|0063|0068|1EC9|006E|0068|0020|0073|1EED|0061|0020|" & _
+                    "0074|0072|1EF1|0063|0020|0074|0069|1EBF|0070|0020|0062|1EB1|006E|0067|0020|0063|00E1|0063|0020|0063|00F4|006E|0067|0020|0063|1EE5|0020|0063|" & _
+                    "00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0067|1ED1|0063|0020|0063|1EE7|0061|0020|0057|006F|0072|0064|0020|0074|0072|006F|006E|0067|0020|" & _
+                    "006B|0068|0069|0020|0076|1EAB|006E|0020|0067|0069|1EEF|0020|006E|0067|0075|0079|00EA|006E|0020|0073|0069|00EA|0075|0020|0064|1EEF|0020|006C|" & _
+                    "0069|1EC7|0075|0020|0056|0069|0073|0075|0061|006C|0054|0065|0058|0020|004C|0061|0054|0065|0058|002E")
+            Else
+                VTWordRibbonLocalizedText = "Inserts OMML inline formulas that can be edited directly by Word's native formula tools while preserving VisualTeX LaTeX metadata."
+            End If
+        Case "VisualTeX.Mac.Word.NativeDisplay|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0072|0069|00EA|006E|0067|0020|0064|00F2|006E|0067|0020|004F|004D|004D|004C")
+            Else
+                VTWordRibbonLocalizedText = "OMML interline formula"
+            End If
+        Case "VisualTeX.Mac.Word.NativeDisplay|screentip"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0043|0068|00E8|006E|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0063|00F9|006E|0067|0020|0064|00F2|006E|0067|0020|0067|1ED1|0063|" & _
+                    "0020|0074|0072|006F|006E|0067|0020|0057|006F|0072|0064")
+            Else
+                VTWordRibbonLocalizedText = "Insert Word native inline formulas"
+            End If
+        Case "VisualTeX.Mac.Word.NativeDisplay|supertip"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0043|0068|00E8|006E|0020|0063|00E1|0063|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0063|00F9|006E|0067|0020|0064|00F2|006E|0067|" & _
+                    "0020|004F|004D|004D|004C|0020|0063|00F3|0020|0074|0068|1EC3|0020|0063|0068|1EC9|006E|0068|0020|0073|1EED|0061|0020|0074|0072|1EF1|0063|0020|" & _
+                    "0074|0069|1EBF|0070|0020|0062|1EB1|006E|0067|0020|0063|00E1|0063|0020|0063|00F4|006E|0067|0020|0063|1EE5|0020|0063|00F4|006E|0067|0020|0074|" & _
+                    "0068|1EE9|0063|0020|0067|1ED1|0063|0020|0063|1EE7|0061|0020|0057|006F|0072|0064|0020|0074|0072|006F|006E|0067|0020|006B|0068|0069|0020|0076|" & _
+                    "1EAB|006E|0020|0067|0069|1EEF|0020|006E|0067|0075|0079|00EA|006E|0020|0073|0069|00EA|0075|0020|0064|1EEF|0020|006C|0069|1EC7|0075|0020|0056|" & _
+                    "0069|0073|0075|0061|006C|0054|0065|0058|0020|004C|0061|0054|0065|0058|002E")
+            Else
+                VTWordRibbonLocalizedText = "Inserts OMML inline formulas that are directly editable by Word's native formula tools while preserving VisualTeX LaTeX metadata."
+            End If
+        Case "VisualTeX.Mac.Word.Edit|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0043|0068|1EC9|006E|0068|0020|0073|1EED|0061|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0111|00E3|0020|0063|0068|1ECD|006E")
+            Else
+                VTWordRibbonLocalizedText = "Edit selected formula"
+            End If
+        Case "VisualTeX.Mac.Word.ConvertNative|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0043|0068|0075|0079|1EC3|006E|0020|0073|0061|006E|0067|0020|0057|006F|0072|0064|0020|004F|004D|004D|004C")
+            Else
+                VTWordRibbonLocalizedText = "Convert to Word OMML"
+            End If
+        Case "VisualTeX.Mac.Word.ConvertNative|screentip"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0043|0068|0075|0079|1EC3|006E|0020|0073|0061|006E|0067|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0067|1ED1|0063|0020|0057|006F|" & _
+                    "0072|0064")
+            Else
+                VTWordRibbonLocalizedText = "Convert to Word native formula"
+            End If
+        Case "VisualTeX.Mac.Word.ConvertNative|supertip"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0043|0068|0075|0079|1EC3|006E|0020|0111|1ED5|0069|0020|0074|0072|1EF1|0063|0020|0074|0069|1EBF|0070|0020|0063|00E1|0063|0020|0063|00F4|006E|" & _
+                    "0067|0020|0074|0068|1EE9|0063|0020|0068|00EC|006E|0068|0020|1EA3|006E|0068|0020|0056|0069|0073|0075|0061|006C|0054|0065|0058|0020|0111|00E3|" & _
+                    "0020|0063|0068|1ECD|006E|0020|0073|0061|006E|0067|0020|004F|004D|004D|004C|0020|0067|1ED1|0063|0020|0063|1EE7|0061|0020|0057|006F|0072|0064|" & _
+                    "002C|0020|0062|1EA3|006F|0020|0074|006F|00E0|006E|0020|0073|0069|00EA|0075|0020|0064|1EEF|0020|006C|0069|1EC7|0075|0020|0056|0069|0073|0075|" & _
+                    "0061|006C|0054|0065|0058|002E")
+            Else
+                VTWordRibbonLocalizedText = "Converts selected VisualTeX picture formulas directly to Word native OMML, preserving VisualTeX metadata."
+            End If
+        Case "VisualTeX.Mac.Word.ConvertImage|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0043|0068|0075|0079|1EC3|006E|0020|0073|0061|006E|0067|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0068|00EC|006E|0068|0020|1EA3|" & _
+                    "006E|0068")
+            Else
+                VTWordRibbonLocalizedText = "Convert to picture formula"
+            End If
+        Case "VisualTeX.Mac.Word.ConvertImage|screentip"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0043|0068|0075|0079|1EC3|006E|0020|0074|0072|1EF1|0063|0020|0074|0069|1EBF|0070|0020|0073|0061|006E|0067|0020|0063|00F4|006E|0067|0020|0074|" & _
+                    "0068|1EE9|0063|0020|0068|00EC|006E|0068|0020|1EA3|006E|0068|0020|0056|0069|0073|0075|0061|006C|0054|0065|0058")
+            Else
+                VTWordRibbonLocalizedText = "Convert directly to VisualTeX picture formula"
+            End If
+        Case "VisualTeX.Mac.Word.ConvertImage|supertip"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0043|0068|0075|0079|1EC3|006E|0020|0111|1ED5|0069|0020|0074|0072|1EF1|0063|0020|0074|0069|1EBF|0070|0020|0063|00F4|006E|0067|0020|0074|0068|" & _
+                    "1EE9|0063|0020|0057|006F|0072|0064|0020|004F|004D|004D|004C|0020|0111|00E3|0020|0063|0068|1ECD|006E|0020|0074|0068|00E0|006E|0068|0020|0063|" & _
+                    "00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0068|00EC|006E|0068|0020|1EA3|006E|0068|0020|0056|0069|0073|0075|0061|006C|0054|0065|0058|0020|" & _
+                    "1EDF|0020|0063|0068|1EBF|0020|0111|1ED9|0020|006E|1EC1|006E|0020|006D|00E0|0020|006B|0068|00F4|006E|0067|0020|0063|1EA7|006E|0020|006D|1EDF|" & _
+                    "0020|0063|1EED|0061|0020|0073|1ED5|0020|0063|0068|1EC9|006E|0068|0020|0073|1EED|0061|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|002E")
+            Else
+                VTWordRibbonLocalizedText = "Convert the selected Word OMML formula directly into a VisualTeX picture formula in the background without opening the formula editing windo" & _
+                    "w."
+            End If
+        Case "VisualTeX.Mac.Word.Numbering|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0043|1EAD|0070|0020|006E|0068|1EAD|0074|0020|0111|00E1|006E|0068|0020|0073|1ED1|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063")
+            Else
+                VTWordRibbonLocalizedText = "Update formula number"
+            End If
+        Case "VisualTeX.Mac.Word.NumberingFormat|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0110|1ECB|006E|0068|0020|0064|1EA1|006E|0067|0020|0073|1ED1")
+            Else
+                VTWordRibbonLocalizedText = "Number format"
+            End If
+        Case "VisualTeX.Mac.Word.NumberingFormat|screentip"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0043|0068|1ECD|006E|0020|0111|1ECB|006E|0068|0020|0064|1EA1|006E|0067|0020|0111|00E1|006E|0068|0020|0073|1ED1|0020|0063|00F4|006E|0067|0020|" & _
+                    "0074|0068|1EE9|0063")
+            Else
+                VTWordRibbonLocalizedText = "Select formula number format"
+            End If
+        Case "VisualTeX.Mac.Word.NumberingFormat|supertip"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0043|0068|1ECD|006E|0020|0111|1ECB|006E|0068|0020|0064|1EA1|006E|0067|0020|0111|00E1|006E|0068|0020|0073|1ED1|0020|0111|1EA7|0079|0020|0111|" & _
+                    "1EE7|0020|0074|0072|1EF1|0063|0020|0074|0069|1EBF|0070|0020|0074|1EEB|0020|006D|0065|006E|0075|0020|0074|0068|1EA3|0020|0078|0075|1ED1|006E|" & _
+                    "0067|002E|0020|004E|00F3|0020|0111|01B0|1EE3|0063|0020|00E1|0070|0020|0064|1EE5|006E|0067|0020|0063|0068|006F|0020|0074|00E0|0069|0020|006C|" & _
+                    "0069|1EC7|0075|0020|0068|0069|1EC7|006E|0020|0074|1EA1|0069|0020|006E|0067|0061|0079|0020|0073|0061|0075|0020|006B|0068|0069|0020|0063|0068|" & _
+                    "1ECD|006E|0020|0076|00E0|0020|0111|01B0|1EE3|0063|0020|0067|0068|0069|0020|006C|1EA1|0069|0020|006C|00E0|006D|0020|0111|1ECB|006E|0068|0020|" & _
+                    "0064|1EA1|006E|0067|0020|006D|1EB7|0063|0020|0111|1ECB|006E|0068|0020|0063|0068|006F|0020|0063|00E1|0063|0020|0074|00E0|0069|0020|006C|0069|" & _
+                    "1EC7|0075|0020|006D|1EDB|0069|0020|0074|0069|1EBF|0070|0020|0074|0068|0065|006F|002E")
+            Else
+                VTWordRibbonLocalizedText = "Select the full numbering format directly from the drop-down menu. It is applied to the current document immediately after selection and is " & _
+                    "recorded as the default format for subsequent new documents."
+            End If
+        Case "VisualTeX.Mac.Word.NumberingFormat.Sequence|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0053|1ED1|0020|0074|0068|1EE9|0020|0074|1EF1|0020|0028|0031|0029")
+            Else
+                VTWordRibbonLocalizedText = "Sequence number (1)"
+            End If
+        Case "VisualTeX.Mac.Word.NumberingFormat.ChapterDot|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0054|0068|0065|006F|0020|0073|1ED1|0020|0063|0068|01B0|01A1|006E|0067|0020|0028|0032|002E|0031|0029")
+            Else
+                VTWordRibbonLocalizedText = "By chapter number (2.1)"
+            End If
+        Case "VisualTeX.Mac.Word.NumberingFormat.ChapterDash|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0053|1ED1|0020|0063|0068|01B0|01A1|006E|0067|0020|0028|0032|002D|0031|0029")
+            Else
+                VTWordRibbonLocalizedText = "Chapter number (2-1)"
+            End If
+        Case "VisualTeX.Mac.Word.NumberingFormat.SectionDot|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0074|0068|0065|006F|0020|0073|1ED1|0020|006D|1EE5|0063|0020|0028|0032|002E|0033|002E|0031|0029")
+            Else
+                VTWordRibbonLocalizedText = "by section number (2.3.1)"
+            End If
+        Case "VisualTeX.Mac.Word.NumberingFormat.SectionDash|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0054|0068|0065|006F|0020|0073|1ED1|0020|006D|1EE5|0063|0020|0028|0032|002E|0033|002D|0031|0029")
+            Else
+                VTWordRibbonLocalizedText = "By section number (2.3‐1)"
+            End If
+        Case "VisualTeX.Mac.Word.CrossReference|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0043|0068|00E8|006E|0020|0074|0068|0061|006D|0020|0063|0068|0069|1EBF|0075|0020|0063|0068|00E9|006F")
+            Else
+                VTWordRibbonLocalizedText = "Insert formula reference"
+            End If
+        Case "VisualTeX.Mac.Word.CrossReference|screentip"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0111|1EC1|0020|0063|1EAD|0070|0020|0111|1EBF|006E|0020|006D|1ED9|0074|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0111|01B0|1EE3|" & _
+                    "0063|0020|0111|00E1|006E|0068|0020|0073|1ED1")
+            Else
+                VTWordRibbonLocalizedText = "refers to a numbered formula"
+            End If
+        Case "VisualTeX.Mac.Word.CrossReference|supertip"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0043|0068|1ECD|006E|0020|006D|1EE5|0063|0020|0074|0069|00EA|0075|0020|0074|1EEB|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0111|" & _
+                    "01B0|1EE3|0063|0020|0111|00E1|006E|0068|0020|0073|1ED1|0020|0074|0072|006F|006E|0067|0020|0074|00E0|0069|0020|006C|0069|1EC7|0075|0020|0068|" & _
+                    "0069|1EC7|006E|0020|0074|1EA1|0069|0020|0076|00E0|0020|0063|0068|00E8|006E|0020|0074|0072|01B0|1EDD|006E|0067|0020|0057|006F|0072|0064|0020|" & _
+                    "0052|0045|0046|0020|0063|00F3|0020|0074|0068|1EC3|0020|0063|1EAD|0070|0020|006E|0068|1EAD|0074|0020|0074|1EF1|0020|0111|1ED9|006E|0067|002E")
+            Else
+                VTWordRibbonLocalizedText = "Selects a target from a numbered formula in the current document and inserts an automatically updatable Word REF field."
+            End If
+        Case "VisualTeX.Mac.Word.Open|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "004D|1EDF|0020|0056|0069|0073|0075|0061|006C|0054|0065|0058")
+            Else
+                VTWordRibbonLocalizedText = "Open VisualTeX"
+            End If
+        Case "VisualTeX.Mac.Word.DocumentImport|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "004E|0068|1EAD|0070|0020|0068|00E0|006E|0067|0020|006C|006F|1EA1|0074")
+            Else
+                VTWordRibbonLocalizedText = "Batch import"
+            End If
+        Case "VisualTeX.Mac.Word.DocumentImport|screentip"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "004E|0068|1EAD|0070|0020|0068|00E0|006E|0067|0020|006C|006F|1EA1|0074|0020|004C|0061|0054|0065|0058|002F|004D|0061|0072|006B|0064|006F|0077|" & _
+                    "006E")
+            Else
+                VTWordRibbonLocalizedText = "Batch import LaTeX/Markdown"
+            End If
+        Case "VisualTeX.Mac.Word.DocumentImport|supertip"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0050|0068|00E2|006E|0020|0074|00ED|0063|0068|0020|0063|00FA|0020|0070|0068|00E1|0070|0020|0074|00E0|0069|0020|006C|0069|1EC7|0075|0020|004D|" & _
+                    "0061|0072|006B|0064|006F|0077|006E|0020|0068|006F|1EB7|0063|0020|004C|0061|0054|0065|0058|0020|0074|0068|00E0|006E|0068|0020|0076|0103|006E|" & _
+                    "0020|0062|1EA3|006E|0020|0067|1ED1|0063|0020|0057|006F|0072|0064|002C|0020|0063|0169|006E|0067|0020|006E|0068|01B0|0020|0063|00E1|0063|0020|" & _
+                    "0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|006E|1ED9|0069|0020|0064|00F2|006E|0067|0020|0076|00E0|0020|0072|0069|00EA|006E|0067|0020|" & _
+                    "0064|00F2|006E|0067|0020|0063|00F3|0020|0074|0068|1EC3|0020|0111|01B0|1EE3|0063|0020|0063|0068|1EC9|006E|0068|0020|0073|1EED|0061|0020|0076|" & _
+                    "00E0|0020|0111|0069|1EC1|0075|0020|0063|0068|1EC9|006E|0068|0020|0072|0069|00EA|006E|0067|0020|006C|1EBB|0020|0074|0068|0065|006F|0020|006B|" & _
+                    "00ED|0063|0068|0020|0074|0068|01B0|1EDB|0063|0020|0070|0068|00F4|006E|0067|0020|0063|0068|1EEF|002E")
+            Else
+                VTWordRibbonLocalizedText = "Parses Markdown or LaTeX documents into Word native text, as well as inline and interline formulas that can be individually edited and adjus" & _
+                    "ted in font size."
+            End If
+        Case "VisualTeX.Mac.Word.RedrawGroup|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0076|1EBD|0020|006C|1EA1|0069|0020|004C|0061|0054|0065|0058")
+            Else
+                VTWordRibbonLocalizedText = "LaTeX redraw"
+            End If
+        Case "VisualTeX.Mac.Word.RedrawSelection|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0110|00E3|0020|0063|0068|1ECD|006E|0020|0076|1EBD|0020|006C|1EA1|0069")
+            Else
+                VTWordRibbonLocalizedText = "Redraw selected"
+            End If
+        Case "VisualTeX.Mac.Word.RedrawSelection|screentip"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0076|1EBD|0020|006C|1EA1|0069|0020|006D|00E3|0020|004C|0061|0054|0065|0058|0020|0111|00E3|0020|0063|0068|1ECD|006E")
+            Else
+                VTWordRibbonLocalizedText = "Redraw selected LaTeX code"
+            End If
+        Case "VisualTeX.Mac.Word.RedrawSelection|supertip"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "004E|0068|1EAD|006E|0020|0064|1EA1|006E|0067|0020|0024|002E|002E|002E|0024|002C|0020|0024|0024|002E|002E|002E|0024|0024|002C|0020|005C|0028|" & _
+                    "002E|002E|002E|005C|0029|002C|0020|005C|005B|002E|002E|002E|005C|005D|0020|0076|00E0|0020|0063|00E1|0063|0020|006D|00F4|0069|0020|0074|0072|" & _
+                    "01B0|1EDD|006E|0067|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0070|0068|1ED5|0020|0062|0069|1EBF|006E|0020|0074|0072|006F|006E|" & _
+                    "0067|0020|0076|0103|006E|0020|0062|1EA3|006E|0020|0111|00E3|0020|0063|0068|1ECD|006E|0020|0076|00E0|0020|0074|0068|0061|0079|0020|0074|0068|" & _
+                    "1EBF|0020|0063|0068|00FA|006E|0067|0020|0062|1EB1|006E|0067|0020|0063|00E1|0063|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0063|" & _
+                    "00F3|0020|0074|0068|1EC3|0020|0063|0068|1EC9|006E|0068|0020|0073|1EED|0061|0020|0074|1EA1|0069|0020|0063|0068|1ED7|002E")
+            Else
+                VTWordRibbonLocalizedText = "Recognizes $...$, $$...$$, \(...\), \[...\] and common formula environments in selected text and replaces them with editable formulas in pla" & _
+                    "ce."
+            End If
+        Case "VisualTeX.Mac.Word.RedrawSelectionOmml|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0076|1EBD|0020|006C|1EA1|0069|0020|0073|0061|006E|0067|0020|0057|006F|0072|0064|0020|004F|004D|004D|004C")
+            Else
+                VTWordRibbonLocalizedText = "Redraw to Word OMML"
+            End If
+        Case "VisualTeX.Mac.Word.RedrawSelectionImage|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0076|1EBD|0020|006C|1EA1|0069|0020|0064|01B0|1EDB|0069|0020|0064|1EA1|006E|0067|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0068|" & _
+                    "00EC|006E|0068|0020|1EA3|006E|0068|0020|0056|0069|0073|0075|0061|006C|0054|0065|0058")
+            Else
+                VTWordRibbonLocalizedText = "Redraw as VisualTeX picture formula"
+            End If
+        Case "VisualTeX.Mac.Word.RestoreSelectionOmmlToLatex|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0043|0068|0075|0079|1EC3|006E|0020|0111|1ED5|0069|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|004F|004D|004D|004C|0020|0073|0061|" & _
+                    "006E|0067|0020|004C|0061|0054|0065|0058")
+            Else
+                VTWordRibbonLocalizedText = "Convert OMML formulas to LaTeX"
+            End If
+        Case "VisualTeX.Mac.Word.RestoreSelectionOmmlToLatex|screentip"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "004B|0068|00F4|0069|0020|0070|0068|1EE5|0063|0020|0063|00E1|0063|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0067|1ED1|0063|0020|" & _
+                    "0063|1EE7|0061|0020|0057|006F|0072|0064|0020|0111|00E3|0020|0063|0068|1ECD|006E")
+            Else
+                VTWordRibbonLocalizedText = "Restore selected Word native formulas"
+            End If
+        Case "VisualTeX.Mac.Word.RestoreSelectionOmmlToLatex|supertip"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0110|1ECD|0063|0020|0063|1EA5|0075|0020|0074|0072|00FA|0063|0020|0057|006F|0072|0064|0020|004F|004D|004D|004C|0020|0068|0069|1EC7|006E|0020|" & _
+                    "0074|1EA1|0069|0020|0063|1EE7|0061|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0111|00E3|0020|0063|0068|1ECD|006E|0020|0076|00E0|" & _
+                    "0020|006B|0068|00F4|0069|0020|0070|0068|1EE5|0063|0020|006E|00F3|0020|0076|1EC1|0020|004C|0061|0054|0065|0058|0020|0074|1EA1|0069|0020|0063|" & _
+                    "0068|1ED7|003B|0020|0068|1ED7|0020|0074|0072|1EE3|0020|0063|1EA3|0020|0074|0072|00EC|006E|0068|0020|0073|006F|1EA1|006E|0020|0074|0068|1EA3|" & _
+                    "006F|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0067|1ED1|0063|0020|0063|1EE7|0061|0020|0057|006F|0072|0064|0020|0076|00E0|0020|" & _
+                    "004F|004D|004D|004C|0020|0111|01B0|1EE3|0063|0020|0074|1EA1|006F|0020|0062|1EDF|0069|0020|0056|0069|0073|0075|0061|006C|0054|0065|0058|002E")
+            Else
+                VTWordRibbonLocalizedText = "Reads the current Word OMML structure of the selected formula and restores it to LaTeX in place; supports both Word native formula editor an" & _
+                    "d OMML created by VisualTeX."
+            End If
+        Case "VisualTeX.Mac.Word.RestoreSelectionImageToLatex|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0043|0068|0075|0079|1EC3|006E|0020|0111|1ED5|0069|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0068|00EC|006E|0068|0020|1EA3|006E|" & _
+                    "0068|0020|0073|0061|006E|0067|0020|004C|0061|0054|0065|0058")
+            Else
+                VTWordRibbonLocalizedText = "Convert image formulas to LaTeX"
+            End If
+        Case "VisualTeX.Mac.Word.RestoreSelectionImageToLatex|screentip"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "004B|0068|00F4|0069|0020|0070|0068|1EE5|0063|0020|0063|00E1|0063|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0068|00EC|006E|0068|" & _
+                    "0020|1EA3|006E|0068|0020|0056|0069|0073|0075|0061|006C|0054|0065|0058|0020|0111|00E3|0020|0063|0068|1ECD|006E")
+            Else
+                VTWordRibbonLocalizedText = "Restore selected VisualTeX picture formulas"
+            End If
+        Case "VisualTeX.Mac.Word.RestoreSelectionImageToLatex|supertip"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0110|1ECD|0063|0020|0073|0069|00EA|0075|0020|0064|1EEF|0020|006C|0069|1EC7|0075|0020|0063|00F3|0020|0074|0068|1EC3|0020|0070|0068|1EE5|0063|" & _
+                    "0020|0068|1ED3|0069|0020|0063|1EE7|0061|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0068|00EC|006E|0068|0020|1EA3|006E|0068|0020|" & _
+                    "0056|0069|0073|0075|0061|006C|0054|0065|0058|0020|0111|00E3|0020|0063|0068|1ECD|006E|0020|0076|00E0|0020|006B|0068|00F4|0069|0020|0070|0068|" & _
+                    "1EE5|0063|0020|006E|00F3|0020|0076|1EC1|0020|004C|0061|0054|0065|0058|0020|0074|1EA1|0069|0020|0063|0068|1ED7|002E")
+            Else
+                VTWordRibbonLocalizedText = "Reads the recoverable metadata of the selected VisualTeX picture formula and restores it to LaTeX in place."
+            End If
+        Case "VisualTeX.Mac.Word.RedrawDocument|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0076|1EBD|0020|006C|1EA1|0069|0020|0074|006F|00E0|006E|0020|0076|0103|006E")
+            Else
+                VTWordRibbonLocalizedText = "Redraw the full text"
+            End If
+        Case "VisualTeX.Mac.Word.RedrawDocument|screentip"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0076|1EBD|0020|006C|1EA1|0069|0020|006D|00E3|0020|004C|0061|0054|0065|0058|0020|0074|0072|006F|006E|0067|0020|0074|006F|00E0|006E|0020|0062|" & _
+                    "1ED9|0020|0074|00E0|0069|0020|006C|0069|1EC7|0075")
+            Else
+                VTWordRibbonLocalizedText = "Redraw LaTeX code throughout the document"
+            End If
+        Case "VisualTeX.Mac.Word.RedrawDocument|supertip"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0053|0061|0075|0020|006B|0068|0069|0020|0063|0068|1ECD|006E|0020|0111|1ECB|006E|0068|0020|0064|1EA1|006E|0067|0020|0111|1EA7|0075|0020|0072|" & _
+                    "0061|002C|0020|0071|0075|00E9|0074|0020|0076|0103|006E|0020|0062|1EA3|006E|0020|0057|006F|0072|0064|0020|0068|0069|1EC7|006E|0020|0074|1EA1|" & _
+                    "0069|0020|0076|00E0|0020|0074|0068|0061|0079|0020|0074|0068|1EBF|0020|0074|1EA5|0074|0020|0063|1EA3|0020|0063|00E1|0063|0020|0063|00F4|006E|" & _
+                    "0067|0020|0074|0068|1EE9|0063|0020|004C|0061|0054|0065|0058|0020|0074|1EA1|0069|0020|0063|0068|1ED7|002E")
+            Else
+                VTWordRibbonLocalizedText = "After selecting the output format, scan the current Word text and replace all LaTeX formulas in place."
+            End If
+        Case "VisualTeX.Mac.Word.RedrawDocumentOmml|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0054|006F|00E0|006E|0020|0076|0103|006E|0020|0111|01B0|1EE3|0063|0020|0076|1EBD|0020|006C|1EA1|0069|0020|0074|0068|00E0|006E|0068|0020|0057|" & _
+                    "006F|0072|0064|0020|004F|004D|004D|004C")
+            Else
+                VTWordRibbonLocalizedText = "Full text redrawn into Word OMML"
+            End If
+        Case "VisualTeX.Mac.Word.RedrawDocumentImage|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0054|006F|00E0|006E|0020|0076|0103|006E|0020|0111|01B0|1EE3|0063|0020|0076|1EBD|0020|006C|1EA1|0069|0020|0064|01B0|1EDB|0069|0020|0064|1EA1|" & _
+                    "006E|0067|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0068|00EC|006E|0068|0020|1EA3|006E|0068|0020|0056|0069|0073|0075|0061|006C|" & _
+                    "0054|0065|0058")
+            Else
+                VTWordRibbonLocalizedText = "Full text redrawn as VisualTeX picture formula"
+            End If
+        Case "VisualTeX.Mac.Word.RestoreDocumentOmmlToLatex|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0043|0068|0075|0079|1EC3|006E|0020|0111|1ED5|0069|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|004F|004D|004D|004C|0020|0074|006F|" & _
+                    "00E0|006E|0020|0076|0103|006E|0020|0062|1EA3|006E|0020|0073|0061|006E|0067|0020|004C|0061|0054|0065|0058")
+            Else
+                VTWordRibbonLocalizedText = "Convert full-text OMML formulas to LaTeX"
+            End If
+        Case "VisualTeX.Mac.Word.RestoreDocumentOmmlToLatex|screentip"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "004B|0068|00F4|0069|0020|0070|0068|1EE5|0063|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0067|1ED1|0063|0020|0074|006F|00E0|006E|" & _
+                    "0020|0076|0103|006E|0020|0063|1EE7|0061|0020|0057|006F|0072|0064")
+            Else
+                VTWordRibbonLocalizedText = "Restore full-text Word native formulas"
+            End If
+        Case "VisualTeX.Mac.Word.RestoreDocumentOmmlToLatex|supertip"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0051|0075|00E9|0074|0020|0074|1EA5|0074|0020|0063|1EA3|0020|0063|00E1|0063|0020|0070|0068|01B0|01A1|006E|0067|0020|0074|0072|00EC|006E|0068|" & _
+                    "0020|004F|004D|004D|004C|0020|0063|1EE7|0061|0020|0057|006F|0072|0064|0020|0074|0072|006F|006E|0067|0020|0074|006F|00E0|006E|0020|0076|0103|" & _
+                    "006E|0020|0076|00E0|0020|006B|0068|00F4|0069|0020|0070|0068|1EE5|0063|0020|0063|0068|00FA|006E|0067|0020|0076|1EC1|0020|004C|0061|0054|0065|" & _
+                    "0058|0020|0074|1EA1|0069|0020|0063|0068|1ED7|003B|0020|006E|00F3|0020|0063|0169|006E|0067|0020|0068|1ED7|0020|0074|0072|1EE3|0020|0074|0072|" & _
+                    "00EC|006E|0068|0020|0073|006F|1EA1|006E|0020|0074|0068|1EA3|006F|0020|0070|0068|01B0|01A1|006E|0067|0020|0074|0072|00EC|006E|0068|0020|0067|" & _
+                    "1ED1|0063|0020|0063|1EE7|0061|0020|0057|006F|0072|0064|0020|0076|00E0|0020|004F|004D|004D|004C|0020|0111|01B0|1EE3|0063|0020|0074|1EA1|006F|" & _
+                    "0020|0062|1EDF|0069|0020|0056|0069|0073|0075|0061|006C|0054|0065|0058|002E")
+            Else
+                VTWordRibbonLocalizedText = "Scans all Word OMML equations in the full text and restores them to LaTeX in place; it also supports Word's native equation editor and OMML " & _
+                    "created by VisualTeX."
+            End If
+        Case "VisualTeX.Mac.Word.RestoreDocumentImageToLatex|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0043|0068|0075|0079|1EC3|006E|0020|0111|1ED5|0069|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0068|00EC|006E|0068|0020|1EA3|006E|" & _
+                    "0068|0020|0074|006F|00E0|006E|0020|0076|0103|006E|0020|0073|0061|006E|0067|0020|004C|0061|0054|0065|0058")
+            Else
+                VTWordRibbonLocalizedText = "Convert full-text image formulas to LaTeX"
+            End If
+        Case "VisualTeX.Mac.Word.RestoreDocumentImageToLatex|screentip"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "004B|0068|00F4|0069|0020|0070|0068|1EE5|0063|0020|0074|006F|00E0|006E|0020|0076|0103|006E|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|" & _
+                    "0020|0068|00EC|006E|0068|0020|1EA3|006E|0068|0020|0056|0069|0073|0075|0061|006C|0054|0065|0058")
+            Else
+                VTWordRibbonLocalizedText = "Restore full text VisualTeX picture formula"
+            End If
+        Case "VisualTeX.Mac.Word.RestoreDocumentImageToLatex|supertip"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0051|0075|00E9|0074|0020|0063|00E1|0063|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0068|00EC|006E|0068|0020|1EA3|006E|0068|0020|" & _
+                    "0056|0069|0073|0075|0061|006C|0054|0065|0058|0020|0063|00F3|0020|0074|0068|1EC3|0020|0070|0068|1EE5|0063|0020|0068|1ED3|0069|0020|0074|006F|" & _
+                    "00E0|006E|0020|0076|0103|006E|0020|0062|1EA3|006E|0020|0076|00E0|0020|006B|0068|00F4|0069|0020|0070|0068|1EE5|0063|0020|006C|1EA1|0069|0020|" & _
+                    "004C|0061|0054|0065|0058|0020|0074|1EA1|0069|0020|0063|0068|1ED7|002E|0020|0048|00EC|006E|0068|0020|1EA3|006E|0068|0020|0074|0068|00F4|006E|" & _
+                    "0067|0020|0074|0068|01B0|1EDD|006E|0067|0020|0073|1EBD|0020|006B|0068|00F4|006E|0067|0020|0111|01B0|1EE3|0063|0020|0078|1EED|0020|006C|00FD|" & _
+                    "002E")
+            Else
+                VTWordRibbonLocalizedText = "Scan full-text recoverable VisualTeX image formulas and restore to LaTeX in place. Ordinary images will not be processed."
+            End If
+        Case "VisualTeX.Mac.Word.FontSizeGroup|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0063|1EE1|0020|0063|0068|1EEF|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063")
+            Else
+                VTWordRibbonLocalizedText = "formula font size"
+            End If
+        Case "VisualTeX.Mac.Word.ImageFontSize|label"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0043|1EE1|0020|0063|0068|1EEF")
+            Else
+                VTWordRibbonLocalizedText = "Font size"
+            End If
+        Case "VisualTeX.Mac.Word.ImageFontSize|screentip"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0043|0068|1ECD|006E|0020|0063|1EE1|0020|0063|0068|1EEF|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0068|00EC|006E|0068|0020|1EA3|" & _
+                    "006E|0068")
+            Else
+                VTWordRibbonLocalizedText = "Select image formula font size"
+            End If
+        Case "VisualTeX.Mac.Word.ImageFontSize|supertip"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0043|0068|1ECD|006E|0020|006D|1ED9|0074|0020|0068|006F|1EB7|0063|0020|006E|0068|0069|1EC1|0075|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|" & _
+                    "0063|0020|0068|00EC|006E|0068|0020|1EA3|006E|0068|0020|0056|0069|0073|0075|0061|006C|0054|0065|0058|002C|0020|0073|0061|0075|0020|0111|00F3|" & _
+                    "0020|0063|0068|1ECD|006E|0020|0074|1EEB|0020|0064|0061|006E|0068|0020|0073|00E1|0063|0068|0020|0063|1EE1|0020|0063|0068|1EEF|0020|0076|00E0|" & _
+                    "0020|0063|1EE1|0020|0063|0068|1EEF|0020|0074|0069|1EBF|006E|0067|0020|0054|0072|0075|006E|0067|003B|0020|00E1|0070|0020|0064|1EE5|006E|0067|" & _
+                    "0020|0063|0068|00FA|006E|0067|0020|006E|0067|0061|0079|0020|0073|0061|0075|0020|006B|0068|0069|0020|006C|1EF1|0061|0020|0063|0068|1ECD|006E|" & _
+                    "002E")
+            Else
+                VTWordRibbonLocalizedText = "Select one or more VisualTeX picture formulas, then choose a point size; the change is applied immediately after selection."
+            End If
+        Case "VisualTeX.Mac.Word.ImageFontSize|sizeString"
+            If useVietnamese Then
+                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0054|00F9|0079|0020|0063|0068|1EC9|006E|0068|0020|0028|0035|0031|0032|0020|0111|0069|1EC3|006D|0029")
+            Else
+                VTWordRibbonLocalizedText = "Custom (512 pt)"
+            End If
+        Case Else
+            VTWordRibbonLocalizedText = vbNullString
+    End Select
+End Function
+' VISUALTEX_LOCALIZED_RIBBON_END

@@ -42,14 +42,14 @@ export async function callWindowsOle<TResult>(
       body: JSON.stringify(request),
     }),
     timeoutMs,
-    `Windows Office Bridge 请求超时：${method}`,
+    `Windows Office Bridge request timed out:${method}`,
   );
   const payload = (await response.json().catch(() => null)) as
     | OfficeBridgeResponse<TResult>
     | null;
   if (!response.ok || !payload?.ok) {
     throw new OfficeIntegrationError(
-      payload?.error?.message ?? `Windows Office Bridge 调用失败：${method}`,
+      payload?.error?.message ?? `Windows Office Bridge call failed:${method}`,
       payload?.error?.code ?? "windows_bridge_failed",
       payload?.error?.retryable ?? false,
     );

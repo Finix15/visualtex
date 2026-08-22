@@ -62,7 +62,8 @@ export interface FormulaDocument {
     formulaAlignment?: FormulaAlignment;
     latexCodeFormat?: LatexCodeFormat;
     editorLayout?: "standard" | "classic";
-    language?: "cn" | "en";
+    /** `cn` is accepted only when opening legacy documents. New documents write en/vi. */
+    language?: "en" | "vi" | "cn";
     sourceOpen?: boolean;
     autoPairDelimiters?: boolean;
     showLineNumbers?: boolean;

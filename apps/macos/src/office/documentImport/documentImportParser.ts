@@ -115,28 +115,28 @@ const structuredLatexEnvironmentNames = new Set([
   "description",
 ]);
 const builtInTheoremDefinitions: TheoremEnvironmentDefinition[] = [
-  ["theorem", "定理", true, "theorem", "quote"],
-  ["lemma", "引理", true, "lemma", "quote"],
-  ["proposition", "命题", true, "proposition", "quote"],
-  ["corollary", "推论", true, "corollary", "quote"],
-  ["definition", "定义", true, "definition", "quote"],
-  ["axiom", "公理", true, "axiom", "quote"],
-  ["conjecture", "猜想", true, "conjecture", "quote"],
-  ["claim", "断言", true, "claim", "quote"],
-  ["criterion", "判据", true, "criterion", "quote"],
-  ["property", "性质", true, "property", "quote"],
-  ["fact", "事实", true, "fact", "quote"],
-  ["observation", "观察", true, "observation", "quote"],
-  ["example", "例", true, "example", "quote"],
-  ["exercise", "练习", true, "exercise", "quote"],
-  ["problem", "问题", true, "problem", "quote"],
-  ["question", "问题", true, "question", "quote"],
-  ["remark", "注", false, "remark", "quote"],
-  ["note", "注", false, "note", "quote"],
-  ["notation", "记号", false, "notation", "quote"],
-  ["case", "情形", false, "case", "quote"],
-  ["proof", "证明", false, "proof", "normal"],
-  ["solution", "解答", false, "solution", "normal"],
+  ["theorem", "Theorem", true, "theorem", "quote"],
+  ["lemma", "bổ đề", true, "lemma", "quote"],
+  ["proposition", "đề xuất", true, "proposition", "quote"],
+  ["corollary", "hệ quả tất yếu", true, "corollary", "quote"],
+  ["definition", "định nghĩa", true, "definition", "quote"],
+  ["axiom", "tiên đề", true, "axiom", "quote"],
+  ["conjecture", "phỏng đoán", true, "conjecture", "quote"],
+  ["claim", "yêu cầu bồi thường", true, "claim", "quote"],
+  ["criterion", "tiêu chí", true, "criterion", "quote"],
+  ["property", "tài sản", true, "property", "quote"],
+  ["fact", "sự thật", true, "fact", "quote"],
+  ["observation", "quan sát", true, "observation", "quote"],
+  ["example", "ví dụ", true, "example", "quote"],
+  ["exercise", "bài tập", true, "exercise", "quote"],
+  ["problem", "vấn đề", true, "problem", "quote"],
+  ["question", "câu hỏi", true, "question", "quote"],
+  ["remark", "nhận xét", false, "remark", "quote"],
+  ["note", "ghi chú", false, "note", "quote"],
+  ["notation", "ký hiệu", false, "notation", "quote"],
+  ["case", "trường hợp", false, "case", "quote"],
+  ["proof", "bằng chứng", false, "proof", "normal"],
+  ["solution", "Answer", false, "solution", "normal"],
 ].map(([environment, label, numbered, counterName, bodyStyle]) => ({
   environment: environment as string,
   label: label as string,
@@ -575,12 +575,12 @@ function stripLatexComments(
 function unwrapSimpleLatexCommands(source: string) {
   let value = source;
   value = value
-    .replace(/\\footnote\s*\{([^{}]*)\}/g, "（注：$1）")
+    .replace(/\\footnote\s*\{([^{}]*)\}/g, "(Note: $1)")
     .replace(/\\url\s*\{([^{}]*)\}/g, "$1")
-    .replace(/\\(?:eqref|ref|pageref)\s*\{([^{}]*)\}/g, "〔引用：$1〕")
+    .replace(/\\(?:eqref|ref|pageref)\s*\{([^{}]*)\}/g, "[Quote: $1]")
     .replace(
       /\\cite(?:\[[^\]]*\])?\s*\{([^{}]*)\}/g,
-      "〔引用：$1〕",
+      "[Quote: $1]",
     )
     .replace(/\\colorbox\s*\{[^{}]*\}\s*\{([^{}]*)\}/g, "$1")
     .replace(/\\fcolorbox\s*\{[^{}]*\}\s*\{[^{}]*\}\s*\{([^{}]*)\}/g, "$1")
@@ -729,7 +729,7 @@ function normalizeMarkdownStructure(source: string) {
         return target ? `[${label}](${target})` : match;
       },
     );
-    next = next.replace(/\[\^([^\]]+)\]/g, (_match, key: string) => `〔注 ${key}〕`);
+    next = next.replace(/\[\^([^\]]+)\]/g, (_match, key: string) => `〔Note${key}〕`);
     next = next.replace(
       /\[(?!\^)([^\]]+)\](?![\[(])/g,
       (match, label: string, offset: number, whole: string) => {
@@ -748,7 +748,7 @@ function normalizeMarkdownStructure(source: string) {
       .slice(1)
       .findIndex((line) => /^(?:---|\.\.\.)\s*$/.test(line.trim()));
     if (end >= 0) {
-      output.push("**文档元数据**", "```yaml", ...retained.slice(1, end + 1), "```", "");
+      output.push("```yaml", "```yaml", ...retained.slice(1, end + 1), "```", "");
       start = end + 2;
     }
   }
@@ -846,7 +846,7 @@ function normalizeMarkdownStructure(source: string) {
   if (footnotes.size) {
     output.push("");
     for (const [key, value] of footnotes) {
-      output.push(`**注 ${key}：** ${replaceReferences(value)}`, "");
+      output.push(`**Note${key}：** ${replaceReferences(value)}`, "");
     }
   }
   return output.join("\n").replace(/<!--[\s\S]*?-->/g, "");
@@ -873,7 +873,7 @@ function cleanInlineMarkup(raw: string, sourceKind: DocumentImportSourceKind) {
       .replace(
         /!\[([^\]]*)\]\(([^)]*)\)/g,
         (_match, alt: string, target: string) =>
-          `图片：${alt || "未命名"}${target ? `（${target}）` : ""}`,
+          `Picture:${alt || "Unnamed"}${target ? `（${target}）` : ""}`,
       )
       .replace(
         /\[([^\]]+)\]\(([^)]*)\)/g,
@@ -1335,7 +1335,7 @@ function normalizeLatexExtensionsFlat(source: string) {
     .replace(/\\end\s*\{minipage\}/gi, "")
     .replace(
       /\\begin\s*\{thebibliography\}\s*\{[^{}]*\}/gi,
-      "\\section*{参考文献}\n\\begin{itemize}\n",
+      "\\section*{reference}\n\\begin{itemize}",
     )
     .replace(/\\end\s*\{thebibliography\}/gi, "\n\\end{itemize}")
     .replace(
@@ -1349,15 +1349,15 @@ function normalizeLatexExtensionsFlat(source: string) {
     .replace(/\\centering\b/gi, "")
     .replace(
       /\\includegraphics(?:\[[^\]]*\])?\{([^{}]+)\}/gi,
-      "【图片：$1】",
+      "[Picture: $1]",
     )
     .replace(
       /\\caption\s*\{((?:[^{}]|\{[^{}]*\})*)\}/gi,
-      "\\textbf{图注：} $1",
+      "\\textbf{Caption:} $1",
     )
-    .replace(/\\input\s*\{([^{}]+)\}/gi, "【外部文件：$1】")
-    .replace(/\\include\s*\{([^{}]+)\}/gi, "【外部文件：$1】")
-    .replace(/\\bibliography\s*\{([^{}]+)\}/gi, "【参考文献库：$1】");
+    .replace(/\\input\s*\{([^{}]+)\}/gi, "[External file: $1]")
+    .replace(/\\include\s*\{([^{}]+)\}/gi, "[External file: $1]")
+    .replace(/\\bibliography\s*\{([^{}]+)\}/gi, "[Reference Library: $1]");
 
   body = replaceLatexTableEnvironmentFlat(body);
   return body.replace(

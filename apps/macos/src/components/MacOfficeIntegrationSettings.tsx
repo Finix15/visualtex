@@ -48,16 +48,16 @@ function officeErrorSummary(raw: string, isEn: boolean) {
   if (/OfficePluginStatus|health file|invalid JSON|sourceRevision/i.test(raw)) {
     return isEn
       ? "An old add-in status record was ignored. Refresh the page; repair only if the Office buttons do not work."
-      : "已忽略旧的插件状态记录。请先刷新；仅在 Office 按钮不可用时修复插件。";
+      : "Bản ghi trạng thái bổ trợ cũ đã bị bỏ qua. Làm mới trang; chỉ sửa chữa nếu các nút Office không hoạt động.";
   }
   if (/Fully quit|Command-Q/i.test(raw)) {
     return isEn
       ? "Quit Word and PowerPoint with Command-Q before installing or repairing."
-      : "安装或修复前，请先使用 ⌘Q 完全退出 Word 和 PowerPoint。";
+      : "Thoát khỏi Word và PowerPoint bằng Command-Q trước khi cài đặt hoặc sửa chữa.";
   }
   return isEn
     ? "The Office add-in operation failed. Refresh the status, then repair if needed."
-    : "Office 插件操作失败。请先刷新状态，仍有问题时再点击修复。";
+    : "Thao tác bổ trợ Office không thành công. Làm mới trạng thái, sau đó sửa chữa nếu cần.";
 }
 
 function StatusLine({
@@ -104,7 +104,7 @@ export function MacOfficeIntegrationSettings() {
           error,
           isEn
             ? "Unable to read the native Office add-in status."
-            : "无法读取原生 Office 加载项状态。",
+            : "Không thể đọc trạng thái bổ trợ Office gốc.",
         ),
       );
     } finally {
@@ -129,7 +129,7 @@ export function MacOfficeIntegrationSettings() {
         setMessage(
           errorMessage(
             error,
-            isEn ? "The native Office operation failed." : "原生 Office 操作执行失败。",
+            isEn ? "The native Office operation failed." : "Thao tác Office gốc không thành công.",
           ),
         );
       } finally {
@@ -151,14 +151,14 @@ export function MacOfficeIntegrationSettings() {
     <section className="settings-section office-integration-section">
       <div className="settings-section-heading office-settings-heading">
         <div>
-          <strong>{isEn ? "Word and PowerPoint native add-ins" : "Word 与 PowerPoint 原生加载项"}</strong>
+          <strong>{isEn ? "Word and PowerPoint native add-ins" : "Phần bổ trợ gốc của Word và PowerPoint"}</strong>
         </div>
         <button
           type="button"
           className="icon-button compact"
           onClick={() => void refresh()}
           disabled={busy !== null}
-          title={isEn ? "Refresh" : "刷新"}
+          title={isEn ? "Refresh" : "Làm mới"}
         >
           <RefreshCw size={15} className={busy === "refresh" ? "is-spinning" : ""} />
         </button>
@@ -167,7 +167,7 @@ export function MacOfficeIntegrationSettings() {
       {!status ? (
         <div className="office-settings-loading">
           <RefreshCw size={16} className="is-spinning" />
-          <span>{isEn ? "Reading native add-in status…" : "正在读取原生加载项状态…"}</span>
+          <span>{isEn ? "Reading native add-in status…" : "Đang đọc trạng thái bổ trợ gốc…"}</span>
         </div>
       ) : (
         <div className="office-status-grid native-office-status-grid">
@@ -178,28 +178,28 @@ export function MacOfficeIntegrationSettings() {
             </header>
             <StatusLine ok={status.word.applicationInstalled}>
               {status.word.applicationInstalled
-                ? isEn ? "Word is installed" : "Word 已安装"
-                : isEn ? "Word was not found" : "未找到 Word"}
+                ? isEn ? "Word is installed" : "Word đã được cài đặt"
+                : isEn ? "Word was not found" : "Không tìm thấy từ"}
             </StatusLine>
             <StatusLine ok={status.word.filesInstalled}>
               {status.word.filesInstalled
-                ? isEn ? "VisualTeX files match this app version" : "VisualTeX 插件文件为当前版本"
-                : isEn ? "VisualTeX is not installed" : "VisualTeX 插件未安装"}
+                ? isEn ? "VisualTeX files match this app version" : "Tệp VisualTeX phù hợp với phiên bản ứng dụng này"
+                : isEn ? "VisualTeX is not installed" : "VisualTeX chưa được cài đặt"}
             </StatusLine>
             <StatusLine
               ok={status.word.loaded}
               pending={status.word.filesInstalled && !status.word.applicationRunning}
             >
               {status.word.loaded
-                ? isEn ? "VisualTeX is loaded" : "VisualTeX 已加载"
+                ? isEn ? "VisualTeX is loaded" : "VisualTeX đã được tải"
                 : !status.word.filesInstalled
-                  ? isEn ? "Install the add-in first" : "请先安装插件"
+                  ? isEn ? "Install the add-in first" : "Cài đặt add-in trước"
                   : !status.word.applicationRunning
-                    ? isEn ? "Open Word to check loading" : "打开 Word 后自动检查加载状态"
-                    : isEn ? "Not confirmed; repair only if the buttons do not work" : "尚未确认；仅在按钮不可用时点击修复"}
+                    ? isEn ? "Open Word to check loading" : "Mở Word để kiểm tra tải"
+                    : isEn ? "Not confirmed; repair only if the buttons do not work" : "Chưa xác nhận; chỉ sửa chữa nếu các nút không hoạt động"}
             </StatusLine>
             <details className="office-install-paths">
-              <summary>{isEn ? "Install location" : "安装位置"}</summary>
+              <summary>{isEn ? "Install location" : "Vị trí cài đặt"}</summary>
               <code>{status.word.installPaths[0] ?? "—"}</code>
             </details>
           </article>
@@ -211,28 +211,28 @@ export function MacOfficeIntegrationSettings() {
             </header>
             <StatusLine ok={status.powerpoint.applicationInstalled}>
               {status.powerpoint.applicationInstalled
-                ? isEn ? "PowerPoint is installed" : "PowerPoint 已安装"
-                : isEn ? "PowerPoint was not found" : "未找到 PowerPoint"}
+                ? isEn ? "PowerPoint is installed" : "PowerPoint đã được cài đặt"
+                : isEn ? "PowerPoint was not found" : "Không tìm thấy PowerPoint"}
             </StatusLine>
             <StatusLine ok={status.powerpoint.filesInstalled}>
               {status.powerpoint.filesInstalled
-                ? isEn ? "VisualTeX files match this app version" : "VisualTeX 插件文件为当前版本"
-                : isEn ? "VisualTeX is not installed" : "VisualTeX 插件未安装"}
+                ? isEn ? "VisualTeX files match this app version" : "Tệp VisualTeX phù hợp với phiên bản ứng dụng này"
+                : isEn ? "VisualTeX is not installed" : "VisualTeX chưa được cài đặt"}
             </StatusLine>
             <StatusLine
               ok={status.powerpoint.loaded}
               pending={status.powerpoint.filesInstalled && !status.powerpoint.applicationRunning}
             >
               {status.powerpoint.loaded
-                ? isEn ? "VisualTeX is loaded" : "VisualTeX 已加载"
+                ? isEn ? "VisualTeX is loaded" : "VisualTeX đã được tải"
                 : !status.powerpoint.filesInstalled
-                  ? isEn ? "Install the add-in first" : "请先安装插件"
+                  ? isEn ? "Install the add-in first" : "Cài đặt add-in trước"
                   : !status.powerpoint.applicationRunning
-                    ? isEn ? "Open PowerPoint to check loading" : "打开 PowerPoint 后自动检查加载状态"
-                    : isEn ? "Not confirmed; register the PPAM only if the ribbon is missing" : "尚未确认；仅在功能区缺失时重新登记 PPAM"}
+                    ? isEn ? "Open PowerPoint to check loading" : "Mở PowerPoint để kiểm tra tải"
+                    : isEn ? "Not confirmed; register the PPAM only if the ribbon is missing" : "Chưa xác nhận; chỉ đăng ký PPAM nếu thiếu dải băng"}
             </StatusLine>
             <details className="office-install-paths">
-              <summary>{isEn ? "Install location" : "安装位置"}</summary>
+              <summary>{isEn ? "Install location" : "Vị trí cài đặt"}</summary>
               <code>{status.powerpointAddinPath}</code>
             </details>
           </article>
@@ -240,8 +240,8 @@ export function MacOfficeIntegrationSettings() {
           <div className="office-package-status">
             <StatusLine ok={status.compiledArtifactsAvailable}>
               {status.compiledArtifactsAvailable
-                ? isEn ? "Installer resources are complete" : "安装包资源完整"
-                : isEn ? "Installer resources are missing" : "安装包缺少插件资源"}
+                ? isEn ? "Installer resources are complete" : "Tài nguyên trình cài đặt đã hoàn tất"
+                : isEn ? "Installer resources are missing" : "Thiếu tài nguyên trình cài đặt"}
             </StatusLine>
           </div>
         </div>
@@ -255,7 +255,7 @@ export function MacOfficeIntegrationSettings() {
           onClick={() => void run("install", "install_macos_offline_office_addins")}
         >
           <Download size={15} />
-          {isEn ? "Install or update add-ins" : "安装或更新插件"}
+          {isEn ? "Install or update add-ins" : "Cài đặt hoặc cập nhật phần bổ trợ"}
         </button>
         <button
           type="button"
@@ -264,7 +264,7 @@ export function MacOfficeIntegrationSettings() {
           onClick={() => void run("repair", "repair_macos_offline_office_addins")}
         >
           <Wrench size={15} />
-          {isEn ? "Repair add-ins" : "修复插件"}
+          {isEn ? "Repair add-ins" : "Sửa chữa phần bổ trợ"}
         </button>
         <button
           type="button"
@@ -273,7 +273,7 @@ export function MacOfficeIntegrationSettings() {
           onClick={() => void run("word", "open_word")}
         >
           <FileText size={15} />
-          {isEn ? "Open Word" : "打开 Word"}
+          {isEn ? "Open Word" : "Lời mở"}
         </button>
         <button
           type="button"
@@ -282,7 +282,7 @@ export function MacOfficeIntegrationSettings() {
           onClick={() => void run("powerpoint", "open_powerpoint")}
         >
           <Presentation size={15} />
-          {isEn ? "Open PowerPoint" : "打开 PowerPoint"}
+          {isEn ? "Open PowerPoint" : "Mở PowerPoint"}
         </button>
         <button
           type="button"
@@ -291,7 +291,7 @@ export function MacOfficeIntegrationSettings() {
           onClick={() => void run("uninstall", "uninstall_macos_offline_office_addins")}
         >
           <Trash2 size={15} />
-          {isEn ? "Uninstall add-ins" : "卸载插件"}
+          {isEn ? "Uninstall add-ins" : "Gỡ cài đặt bổ trợ"}
         </button>
       </div>
 
@@ -299,7 +299,7 @@ export function MacOfficeIntegrationSettings() {
         <div className={`native-powerpoint-settings-guide${powerpointNeedsVerification ? " is-required" : ""}`}>
           <div className="settings-section-heading">
             <div>
-              <strong>{isEn ? "Load VisualTeX in PowerPoint" : "在 PowerPoint 中加载 VisualTeX"}</strong>
+              <strong>{isEn ? "Load VisualTeX in PowerPoint" : "Tải VisualTeX vào PowerPoint"}</strong>
             </div>
           </div>
           <PowerPointAddinGuide language={language} loaded={status.powerpoint.loaded} />
@@ -311,7 +311,7 @@ export function MacOfficeIntegrationSettings() {
               onClick={() => void run("reveal", "reveal_macos_powerpoint_addin")}
             >
               <ExternalLink size={15} />
-              {isEn ? "Show VisualTeX.ppam in Finder" : "在 Finder 中显示 VisualTeX.ppam"}
+              {isEn ? "Show VisualTeX.ppam in Finder" : "Hiển thị VisualTeX.ppam trong Finder"}
             </button>
             <button
               type="button"
@@ -320,7 +320,7 @@ export function MacOfficeIntegrationSettings() {
               onClick={() => void refresh()}
             >
               <RefreshCw size={15} />
-              {isEn ? "Check whether PowerPoint loaded it" : "检查 PowerPoint 是否已加载"}
+              {isEn ? "Check whether PowerPoint loaded it" : "Kiểm tra xem PowerPoint đã tải chưa"}
             </button>
           </div>
         </div>
@@ -332,7 +332,7 @@ export function MacOfficeIntegrationSettings() {
           <span>
             <strong>{officeErrorSummary(detailedError, isEn)}</strong>
             <details>
-              <summary>{isEn ? "Technical details" : "技术详情"}</summary>
+              <summary>{isEn ? "Technical details" : "Chi tiết kỹ thuật"}</summary>
               <code>{detailedError}</code>
             </details>
           </span>

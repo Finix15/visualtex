@@ -55,7 +55,7 @@ function createTexInput(macros: Record<string, VisualTexMathJaxMacro>) {
     packages: AllPackages,
     macros,
     formatError: (_jax: unknown, error: unknown) => {
-      const message = readErrorMessage(error, "MathJax 无法解析当前 LaTeX 公式。");
+      const message = readErrorMessage(error, "MathJax cannot parse the current LaTeX formula.");
       if (error instanceof Error && error.message.trim() === message) throw error;
       throw new Error(message, { cause: error });
     },

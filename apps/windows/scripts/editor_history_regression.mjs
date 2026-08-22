@@ -210,7 +210,7 @@ async function main() {
           activeLineId: ${JSON.stringify(activeLineId)},
           sourceOpen: ${JSON.stringify(sourceOpen)},
           latexCodeFormat: ${JSON.stringify(latexCodeFormat)},
-          language: "cn",
+          language: "vi",
           history: ${JSON.stringify(history)},
         };
         delete persisted.state.latex;

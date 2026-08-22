@@ -4,8 +4,6 @@ import {
   normalizeExtendedIntegralLatexCommands,
 } from "../math/extendedIntegralCompatibility.ts";
 
-const chineseChar = /[\u3400-\u9fff\uf900-\ufaff，。；：！？、（）【】《》“”‘’]/;
-
 const protectedTypographyCommands = new Set([
   "text",
   "textnormal",
@@ -343,7 +341,7 @@ export const COMMON_COMMAND_INLINE_SHORTCUTS: VisualTexInlineShortcutDefinitions
 
 export interface VisualTexAutoEscapeShortcutGroup {
   id: string;
-  titleZh: string;
+  titleVi: string;
   titleEn: string;
   shortcuts: VisualTexInlineShortcutDefinitions;
 }
@@ -351,43 +349,43 @@ export interface VisualTexAutoEscapeShortcutGroup {
 export const visualTexAutoEscapeShortcutGroups: readonly VisualTexAutoEscapeShortcutGroup[] = [
   {
     id: "greek",
-    titleZh: "希腊字母",
+    titleVi: "chữ cái Hy Lạp",
     titleEn: "Greek letters",
     shortcuts: GREEK_INLINE_SHORTCUTS,
   },
   {
     id: "operators",
-    titleZh: "基本运算",
+    titleVi: "Toán tử cơ bản",
     titleEn: "Basic operators",
     shortcuts: BASIC_OPERATOR_INLINE_SHORTCUTS,
   },
   {
     id: "relations",
-    titleZh: "关系与集合",
+    titleVi: "Quan hệ và tập hợp",
     titleEn: "Relations and sets",
     shortcuts: RELATION_INLINE_SHORTCUTS,
   },
   {
     id: "arrows",
-    titleZh: "箭头",
+    titleVi: "Mũi tên",
     titleEn: "Arrows",
     shortcuts: ARROW_INLINE_SHORTCUTS,
   },
   {
     id: "accents",
-    titleZh: "重音结构",
+    titleVi: "Dấu",
     titleEn: "Accents",
     shortcuts: ACCENT_INLINE_SHORTCUTS,
   },
   {
     id: "commands",
-    titleZh: "常用命令",
+    titleVi: "Các lệnh thông dụng",
     titleEn: "Common commands",
     shortcuts: COMMON_COMMAND_INLINE_SHORTCUTS,
   },
   {
     id: "differentials",
-    titleZh: "微分变量",
+    titleVi: "Vi sai",
     titleEn: "Differentials",
     shortcuts: visualTexUprightInlineShortcuts,
   },
@@ -1119,62 +1117,24 @@ export function normalizeContextualDifferentialOperators(source: string): string
   );
 }
 
+/** @deprecated Compatibility name retained for callers and legacy tests. */
 function readBracedCommand(source: string, start: number): number {
   const openingBrace = source.indexOf("{", start);
   if (openingBrace < 0) return start;
   let depth = 0;
   for (let index = openingBrace; index < source.length; index += 1) {
     if (source[index] === "{") depth += 1;
-    if (source[index] === "}") {
-      depth -= 1;
-      if (depth === 0) return index + 1;
-    }
+    if (source[index] === "}" && --depth === 0) return index + 1;
   }
   return source.length;
 }
 
 export function normalizeChineseLatex(source: string): string {
-  const normalizedTextCommands = normalizeContextualUprightSymbols(
+  return normalizeContextualUprightSymbols(
     normalizeMathLiveCanonicalUprightCommands(
       normalizeExtendedIntegralLatexCommands(source),
     ),
-  ).replace(
-    /\\(?:mathrm|textrm)\{([\u3400-\u9fff\uf900-\ufaff，。；：！？、（）【】《》“”‘’\s]+)\}/g,
-    "\\text{$1}",
   );
-
-  let result = "";
-  let index = 0;
-
-  while (index < normalizedTextCommands.length) {
-    if (normalizedTextCommands.startsWith("\\text{", index)) {
-      const end = readBracedCommand(normalizedTextCommands, index);
-      result += normalizedTextCommands.slice(index, end);
-      index = end;
-      continue;
-    }
-
-    if (chineseChar.test(normalizedTextCommands[index])) {
-      let end = index + 1;
-      while (
-        end < normalizedTextCommands.length &&
-        (chineseChar.test(normalizedTextCommands[end]) ||
-          (normalizedTextCommands[end] === " " &&
-            end + 1 < normalizedTextCommands.length &&
-            chineseChar.test(normalizedTextCommands[end + 1])))
-      ) {
-        end += 1;
-      }
-      result += "\\text{" + normalizedTextCommands.slice(index, end) + "}";
-      index = end;
-      continue;
-    }
-
-    result += normalizedTextCommands[index];
-    index += 1;
-  }
-
-  return result;
 }
 
 export function normalizeMultilineLatex(source: string): string {

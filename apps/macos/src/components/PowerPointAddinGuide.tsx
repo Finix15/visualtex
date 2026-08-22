@@ -23,24 +23,24 @@ export function PowerPointAddinGuide({ language, compact = false, loaded = false
         </div>
         <div className="powerpoint-native-menubar">
           <span>PowerPoint</span>
-          <span>{isEn ? "File" : "文件"}</span>
-          <span>{isEn ? "Edit" : "编辑"}</span>
-          <span>{isEn ? "View" : "视图"}</span>
-          <span>{isEn ? "Insert" : "插入"}</span>
-          <span className="is-active">{isEn ? "Tools" : "工具"}</span>
+          <span>{isEn ? "File" : "Tập tin"}</span>
+          <span>{isEn ? "Edit" : "Chỉnh sửa"}</span>
+          <span>{isEn ? "View" : "Xem"}</span>
+          <span>{isEn ? "Insert" : "Chèn"}</span>
+          <span className="is-active">{isEn ? "Tools" : "Dụng cụ"}</span>
         </div>
         <div className="powerpoint-native-tools-menu">
-          <span>{isEn ? "Spelling…" : "拼写…"}</span>
-          <span>{isEn ? "Language…" : "语言…"}</span>
+          <span>{isEn ? "Spelling…" : "Chính tả…"}</span>
+          <span>{isEn ? "Language…" : "Ngôn ngữ…"}</span>
           <span className="is-highlighted">
-            {isEn ? "PowerPoint Add-ins…" : "PowerPoint 加载项…"}
+            {isEn ? "PowerPoint Add-ins…" : "Phần bổ trợ PowerPoint…"}
           </span>
         </div>
       </div>
 
       <div className="powerpoint-addins-dialog-mock">
         <header>
-          <strong>{isEn ? "PowerPoint Add-ins" : "PowerPoint 加载项"}</strong>
+          <strong>{isEn ? "PowerPoint Add-ins" : "Phần bổ trợ PowerPoint"}</strong>
         </header>
         <div className={`powerpoint-addins-list${loaded ? " is-loaded" : " is-empty"}`}>
           {loaded ? (
@@ -50,7 +50,7 @@ export function PowerPointAddinGuide({ language, compact = false, loaded = false
             </span>
           ) : (
             <span className="powerpoint-addins-empty-copy">
-              <strong>{isEn ? "VisualTeX is not listed yet" : "此时列表中没有 VisualTeX 是正常的"}</strong>
+              <strong>{isEn ? "VisualTeX is not listed yet" : "VisualTeX chưa được liệt kê"}</strong>
             </span>
           )}
         </div>
@@ -62,9 +62,9 @@ export function PowerPointAddinGuide({ language, compact = false, loaded = false
       </div>
 
       <div className="powerpoint-guide-steps">
-        <span><b>1</b>{isEn ? "Open Tools → PowerPoint Add-ins" : "打开“工具 → PowerPoint 加载项”"}</span>
-        <span><b>2</b><Plus size={13} />{isEn ? "Click +. VisualTeX will not be in the list before this step" : "点击＋；执行这一步前，列表里不会出现 VisualTeX"}</span>
-        <span><b>3</b><Check size={13} />{isEn ? "Keep VisualTeX checked, then restart PowerPoint" : "保持 VisualTeX 勾选，然后重启 PowerPoint"}</span>
+        <span><b>1</b>{isEn ? "Open Tools → PowerPoint Add-ins" : "Mở Công cụ → Bổ trợ PowerPoint"}</span>
+        <span><b>2</b><Plus size={13} />{isEn ? "Click +. VisualTeX will not be in the list before this step" : "Bấm +. VisualTeX sẽ không có trong danh sách trước bước này"}</span>
+        <span><b>3</b><Check size={13} />{isEn ? "Keep VisualTeX checked, then restart PowerPoint" : "Luôn kiểm tra VisualTeX, sau đó khởi động lại PowerPoint"}</span>
         <span className="powerpoint-guide-path"><FolderOpen size={13} />~/Library/Group Containers/UBF8T346G9.Office/VisualTeX/OfficeAddins/VisualTeX.ppam</span>
       </div>
     </div>

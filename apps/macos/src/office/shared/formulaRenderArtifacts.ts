@@ -83,7 +83,7 @@ export function renderOfficeFormulaArtifacts({
     });
   } catch (reason) {
     throw new Error(
-      `SVG 渲染失败：${errorMessage(reason, "未知 SVG 渲染错误。")}`,
+      `SVG rendering failed:${errorMessage(reason, "Unknown SVG rendering error.")}`,
       { cause: reason },
     );
   }
@@ -98,7 +98,7 @@ export function renderOfficeFormulaArtifacts({
       );
     } catch (reason) {
       throw new Error(
-        `Word OMML 转换失败：${errorMessage(reason, "未知 OMML 转换错误。")}`,
+        `Word OMML conversion failed:${errorMessage(reason, "Unknown OMML conversion error.")}`,
         { cause: reason },
       );
     }

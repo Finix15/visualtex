@@ -61,7 +61,7 @@ import type {
 
 interface Props {
   open: boolean;
-  language: "cn" | "en";
+  language: "vi" | "en";
   onClose: () => void;
 }
 
@@ -321,14 +321,14 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
           eraser: "Eraser",
         }
       : {
-          line: "线段",
-          circle: "圆",
-          ellipse: "椭圆",
-          rect: "矩形",
-          triangle: "三角形",
-          arrow: "箭头",
-          arc: "圆弧",
-          eraser: "橡皮擦",
+          line: "line segment",
+          circle: "circle",
+          ellipse: "Ellipse",
+          rect: "rectangle",
+          triangle: "triangle",
+          arrow: "Arrow",
+          arc: "Arc",
+          eraser: "Eraser",
         };
     return labels[preset];
   };
@@ -349,7 +349,7 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
 
   const addEraserStroke = (points: Array<{ x: number; y: number }>) => {
     const layer = createCustomSymbolEraserLayer(points, eraserSize, {
-      name: isEn ? "Eraser stroke" : "橡皮擦轨迹",
+      name: isEn ? "Eraser stroke" : "Nét tẩy",
     });
     if (!layer) return;
     setDocumentState((current) => ({
@@ -457,13 +457,13 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
           punctuation: "Punctuation",
         }
       : {
-          ordinary: "普通字符",
-          binary: "二元运算符",
-          relation: "关系符号",
-          operator: "大型算子",
-          open: "左定界符",
-          close: "右定界符",
-          punctuation: "标点",
+          ordinary: "Ordinary characters",
+          binary: "Binary operator",
+          relation: "relationship symbol",
+          operator: "Large operator",
+          open: "left delimiter",
+          close: "right delimiter",
+          punctuation: "Punctuation",
         };
     return labels[role];
   };
@@ -477,10 +477,10 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
           : "Limits beside";
     }
     return behavior === "auto"
-      ? "自动"
+      ? "Automatic"
       : behavior === "limits"
-        ? "上下放置上下限"
-        : "侧边放置上下限";
+        ? "Place upper and lower limits"
+        : "Upper and lower limits for side placement";
   };
 
   const saveRegisteredSymbol = () => {
@@ -488,16 +488,16 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
       const name = documentState.name.trim();
       const command = documentState.command.trim().replace(/^\\/, "");
       if (!name) {
-        throw new Error(isEn ? "Enter a symbol name." : "请输入字符名称。");
+        throw new Error(isEn ? "Enter a symbol name." : "Nhập tên biểu tượng.");
       }
       if (!command) {
-        throw new Error(isEn ? "Enter a LaTeX command name." : "请输入 LaTeX 命令名。");
+        throw new Error(isEn ? "Enter a LaTeX command name." : "Nhập tên lệnh LaTeX.");
       }
       if (shapeCount === 0) {
         throw new Error(
           isEn
             ? "The symbol must contain at least one visible vector shape."
-            : "字符至少需要一个可见的矢量单元。",
+            : "Biểu tượng phải chứa ít nhất một hình dạng vectơ nhìn thấy được.",
         );
       }
       const fallback = documentState.ommlFallback?.trim() ?? "";
@@ -506,7 +506,7 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
           throw new Error(
             isEn
               ? "Word fallback cannot depend on another VisualTeX custom symbol."
-              : "Word fallback 不能依赖其他 VisualTeX 自定义字符。",
+              : "Dự phòng từ không thể phụ thuộc vào biểu tượng tùy chỉnh VisualTeX khác.",
           );
         }
         latexToMathMl(fallback, false);
@@ -537,7 +537,7 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
         throw new Error(
           isEn
             ? "VisualTeX could not read the registered symbol back."
-            : "VisualTeX 无法重新读取刚注册的字符。",
+            : "VisualTeX không thể đọc lại biểu tượng đã đăng ký.",
         );
       }
       const savedDocument: CustomSymbolDesignerDocument = {
@@ -558,10 +558,10 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
         message: existing
           ? isEn
             ? `Updated \\${saved.command}`
-            : `已更新 \\${saved.command}`
+            : `Đã cập nhật \\${saved.command}`
           : isEn
             ? `Registered \\${saved.command}`
-            : `已注册 \\${saved.command}`,
+            : `Đã đăng ký \\${saved.command}`,
       });
     } catch (error) {
       setRegistrationState({
@@ -587,7 +587,7 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
     if (!source) return;
     const duplicate = cloneLayer(source);
     duplicate.id = createUuid();
-    duplicate.name += isEn ? " copy" : " 副本";
+    duplicate.name += isEn ? " copy" : "sao chép";
     duplicate.transform = {
       ...duplicate.transform,
       translateX: (duplicate.transform.translateX ?? 0) + 45,
@@ -633,7 +633,7 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
     const duplicate: CustomSymbolDesignerDocument = {
       ...restored.document,
       symbolId: null,
-      name: `${symbol.name}${isEn ? " copy" : " 副本"}`,
+      name: `${symbol.name}${isEn ? " copy" : "sao chép"}`,
       command,
     };
     setDocumentState(duplicate);
@@ -653,7 +653,7 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
         kind: "idle",
         message: isEn
           ? `Confirm deletion of \\${symbol.command} below.`
-          : `请在下方确认删除 \\${symbol.command}。`,
+          : `Xác nhận xóa \\${symbol.command} bên dưới.`,
       });
       return;
     }
@@ -669,7 +669,7 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
       kind: "success",
       message: isEn
         ? `Deleted \\${symbol.command}`
-        : `已删除 \\${symbol.command}`,
+        : `Đã xóa \\${symbol.command}`,
     });
   };
 
@@ -704,24 +704,24 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
         className="custom-symbol-designer-dialog"
         role="dialog"
         aria-modal="true"
-        aria-label={isEn ? "Custom symbol designer" : "自定义字符设计器"}
+        aria-label={isEn ? "Custom symbol designer" : "Nhà thiết kế biểu tượng tùy chỉnh"}
         data-custom-symbol-designer
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="custom-symbol-designer-header">
           <div>
-            <strong>{isEn ? "Custom Symbol Designer" : "自定义字符设计器"}</strong>
+            <strong>{isEn ? "Custom Symbol Designer" : "Nhà thiết kế biểu tượng tùy chỉnh"}</strong>
             <span>
               {isEn
                 ? "Compose editable LaTeX vector glyphs on a mathematical baseline."
-                : "在数学基线上重新组合可编辑的 LaTeX 矢量字形。"}
+                : "Soạn các hình tượng vector LaTeX có thể chỉnh sửa trên đường cơ sở toán học."}
             </span>
           </div>
           <div>
-            <button className="icon-button compact" type="button" data-reset-custom-symbol-designer onClick={reset} aria-label={isEn ? "Reset" : "重置"}>
+            <button className="icon-button compact" type="button" data-reset-custom-symbol-designer onClick={reset} aria-label={isEn ? "Reset" : "Đặt lại"}>
               <RotateCcw size={15} />
             </button>
-            <button className="icon-button compact" type="button" onClick={onClose} aria-label={isEn ? "Close" : "关闭"}>
+            <button className="icon-button compact" type="button" onClick={onClose} aria-label={isEn ? "Close" : "Đóng"}>
               <X size={16} />
             </button>
           </div>
@@ -731,7 +731,7 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
           <aside className="custom-symbol-designer-sidebar is-materials">
             <section className="custom-symbol-designer-panel is-registered-symbols">
               <header>
-                <strong>{isEn ? "Registered symbols" : "已注册字符"}</strong>
+                <strong>{isEn ? "Registered symbols" : "Ký hiệu đã đăng ký"}</strong>
                 <span>{registeredSymbols.length}</span>
               </header>
               <div className="custom-symbol-registered-list" data-custom-symbol-registered-list>
@@ -764,7 +764,7 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
                           type="button"
                           data-duplicate-registered-custom-symbol
                           onClick={() => duplicateRegisteredSymbol(symbol)}
-                          title={isEn ? "Duplicate as draft" : "复制为新草稿"}
+                          title={isEn ? "Duplicate as draft" : "Trùng lặp dưới dạng bản nháp"}
                         >
                           <Copy size={12} />
                         </button>
@@ -777,10 +777,10 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
                             pendingDelete
                               ? isEn
                                 ? "Click again below to confirm"
-                                : "请在下方再次确认"
+                                : "Bấm lại vào bên dưới để xác nhận"
                               : isEn
                                 ? "Delete registered symbol"
-                                : "删除已注册字符"
+                                : "Xóa biểu tượng đã đăng ký"
                           }
                         >
                           <Trash2 size={12} />
@@ -791,7 +791,7 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
                           <span>
                             {isEn
                               ? `Deleting \\${symbol.command} makes existing formulas using it unresolved.`
-                              : `删除 \\${symbol.command} 后，已有公式中的这个命令会变成未解析状态。`}
+                              : `Việc xóa \\${symbol.command} sẽ khiến các công thức hiện có đang sử dụng nó không được giải quyết.`}
                           </span>
                           <div>
                             <button
@@ -799,14 +799,14 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
                               data-confirm-delete-registered-custom-symbol
                               onClick={() => requestDeleteRegisteredSymbol(symbol)}
                             >
-                              {isEn ? "Delete" : "确认删除"}
+                              {isEn ? "Delete" : "Xóa"}
                             </button>
                             <button
                               type="button"
                               data-cancel-delete-registered-custom-symbol
                               onClick={() => setPendingDeleteSymbolId(null)}
                             >
-                              {isEn ? "Cancel" : "取消"}
+                              {isEn ? "Cancel" : "Hủy bỏ"}
                             </button>
                           </div>
                         </div>
@@ -818,14 +818,14 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
                   <div className="custom-symbol-registered-empty">
                     {isEn
                       ? "Registered symbols will appear here for reuse and editing."
-                      : "注册后的字符会出现在这里，可再次编辑或复用。"}
+                      : "Các biểu tượng đã đăng ký sẽ xuất hiện ở đây để tái sử dụng và chỉnh sửa."}
                   </div>
                 ) : null}
               </div>
             </section>
 
             <section className="custom-symbol-designer-panel">
-              <header><FileCode2 size={15} /><strong>{isEn ? "LaTeX material" : "LaTeX 素材"}</strong></header>
+              <header><FileCode2 size={15} /><strong>{isEn ? "LaTeX material" : "Tài liệu LaTeX"}</strong></header>
               <div className="custom-symbol-material-input-row">
                 <input
                   value={materialLatex}
@@ -835,7 +835,7 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
                   onKeyDown={(event) => event.key === "Enter" && addMaterial()}
                 />
                 <button type="button" data-add-custom-symbol-material onClick={() => addMaterial()} disabled={!materialLatex.trim()}>
-                  <Plus size={14} />{isEn ? "Add" : "加入"}
+                  <Plus size={14} />{isEn ? "Add" : "Thêm"}
                 </button>
               </div>
               <div className="custom-symbol-quick-materials">
@@ -846,7 +846,7 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
                 ))}
               </div>
               <div className="custom-symbol-geometry-heading">
-                {isEn ? "Geometry" : "几何图形"}
+                {isEn ? "Geometry" : "Hình học"}
               </div>
               <div className="custom-symbol-geometry-materials">
                 {CUSTOM_SYMBOL_GEOMETRY_PRESETS.map((preset) => (
@@ -865,7 +865,7 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
             </section>
 
             <section className="custom-symbol-designer-panel is-layers">
-              <header><Grip size={15} /><strong>{isEn ? "Layers" : "图层"}</strong><span>{documentState.layers.length}</span></header>
+              <header><Grip size={15} /><strong>{isEn ? "Layers" : "Lớp"}</strong><span>{documentState.layers.length}</span></header>
               <div className="custom-symbol-layer-list" data-custom-symbol-layer-list>
                 {[...documentState.layers].reverse().map((layer) => {
                   const index = documentState.layers.findIndex((item) => item.id === layer.id);
@@ -904,7 +904,7 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
                     </div>
                   );
                 })}
-                {!documentState.layers.length ? <div className="custom-symbol-layer-empty">{isEn ? "Add a LaTeX material to begin." : "先加入一个 LaTeX 素材。"}</div> : null}
+                {!documentState.layers.length ? <div className="custom-symbol-layer-empty">{isEn ? "Add a LaTeX material to begin." : "Thêm tài liệu LaTeX để bắt đầu."}</div> : null}
               </div>
             </section>
           </aside>
@@ -912,12 +912,12 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
           <main className="custom-symbol-designer-stage-column">
             <div className="custom-symbol-designer-stage-toolbar">
               <span>
-                {isEn ? "Output box" : "输出范围"} · {widthEm.toFixed(3)}em × {heightEm.toFixed(3)}em
+                {isEn ? "Output box" : "Hộp đầu ra"} · {widthEm.toFixed(3)}em × {heightEm.toFixed(3)}em
               </span>
               <div className="custom-symbol-designer-stage-toolbar-actions">
-                <span>{isEn ? "Dashed line = baseline" : "虚线 = 数学基线"}</span>
+                <span>{isEn ? "Dashed line = baseline" : "Đường đứt nét = đường cơ sở"}</span>
                 <label className="custom-symbol-reference-selector">
-                  <span>{isEn ? "Reference" : "参考"}</span>
+                  <span>{isEn ? "Reference" : "Tham khảo"}</span>
                   <select
                     value={referenceLatex}
                     data-custom-symbol-reference-select
@@ -954,11 +954,11 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
                   title={
                     isEn
                       ? "Show or hide the selected mathematical reference on the same baseline"
-                      : "显示或隐藏与当前字符共用数学基线的参考符号"
+                      : "Hiển thị hoặc ẩn tham chiếu toán học đã chọn trên cùng một đường cơ sở"
                   }
                 >
                   {showReference ? <Eye size={12} /> : <EyeOff size={12} />}
-                  {showReference ? referencePreset.label : isEn ? "Reference" : "参考"}
+                  {showReference ? referencePreset.label : isEn ? "Reference" : "Tham khảo"}
                 </button>
                 <button
                   type="button"
@@ -969,15 +969,15 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
                   title={
                     isEn
                       ? "Erase unwanted portions with a true transparent vector cutout"
-                      : "用真正的透明矢量擦除去掉不需要的部分"
+                      : "Xóa các phần không mong muốn bằng hình cắt vector trong suốt thực sự"
                   }
                 >
                   <Eraser size={12} />
-                  {isEn ? "Eraser" : "橡皮擦"}
+                  {isEn ? "Eraser" : "Cục tẩy"}
                 </button>
                 {eraserMode ? (
                   <label className="custom-symbol-eraser-size">
-                    <span>{isEn ? "Size" : "粗细"}</span>
+                    <span>{isEn ? "Size" : "Kích thước"}</span>
                     <input
                       type="range"
                       min="4"
@@ -994,7 +994,7 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
                       step="2"
                       value={eraserSize}
                       data-custom-symbol-eraser-size-number
-                      aria-label={isEn ? "Precise eraser size" : "精确橡皮擦粗细"}
+                      aria-label={isEn ? "Precise eraser size" : "Kích thước tẩy chính xác"}
                       onChange={(event) => {
                         const value = Number(event.currentTarget.value);
                         if (Number.isFinite(value)) setEraserSize(Math.max(4, Math.min(600, value)));
@@ -1038,51 +1038,51 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
               <div className="custom-symbol-designer-legacy-warning" data-custom-symbol-legacy-warning>
                 {isEn
                   ? "This older symbol has no editable source archive. VisualTeX restored its compiled vector shapes, but the original LaTeX materials and non-destructive slice relationships cannot be recovered. Saving an update will create a new editable source archive from this flattened state."
-                  : "这个旧字符没有可编辑源档。VisualTeX 已恢复其编译后的矢量图形，但原始 LaTeX 素材和非破坏分片关系无法恢复。再次保存后，会从当前扁平状态建立新的可编辑源档。"}
+                  : "Biểu tượng cũ hơn này không có kho lưu trữ nguồn có thể chỉnh sửa. VisualTeX đã khôi phục các hình dạng vectơ đã biên dịch của nó, nhưng không thể khôi phục các vật liệu LaTeX ban đầu và các mối quan hệ lát cắt không phá hủy. Việc lưu bản cập nhật sẽ tạo một kho lưu trữ nguồn mới có thể chỉnh sửa từ trạng thái làm phẳng này."}
               </div>
             ) : null}
             <section className="custom-symbol-designer-panel">
-              <header><strong>{isEn ? "Canvas metrics" : "画布指标"}</strong></header>
+              <header><strong>{isEn ? "Canvas metrics" : "Số liệu canvas"}</strong></header>
               <div className="custom-symbol-designer-number-grid">
-                <NumericField label={isEn ? "Width em" : "宽度 em"} field="canvas-width" value={widthEm} step={0.05} min={0.02} max={12} onChange={(value) => setDocumentState((current) => ({ ...current, metrics: { ...current.metrics, widthEm: Math.max(0.02, value) } }))} />
-                <NumericField label={isEn ? "Ascent em" : "基线上方 em"} field="canvas-ascent" value={documentState.metrics.ascentEm} step={0.05} min={0.02} max={12} onChange={(value) => setDocumentState((current) => ({ ...current, metrics: { ...current.metrics, ascentEm: Math.max(0.02, value) } }))} />
-                <NumericField label={isEn ? "Descent em" : "基线下方 em"} field="canvas-descent" value={documentState.metrics.descentEm} step={0.05} min={0} max={12} onChange={(value) => setDocumentState((current) => ({ ...current, metrics: { ...current.metrics, descentEm: Math.max(0, value) } }))} />
+                <NumericField label={isEn ? "Width em" : "Chiều rộng em"} field="canvas-width" value={widthEm} step={0.05} min={0.02} max={12} onChange={(value) => setDocumentState((current) => ({ ...current, metrics: { ...current.metrics, widthEm: Math.max(0.02, value) } }))} />
+                <NumericField label={isEn ? "Ascent em" : "Đi lên đi em"} field="canvas-ascent" value={documentState.metrics.ascentEm} step={0.05} min={0.02} max={12} onChange={(value) => setDocumentState((current) => ({ ...current, metrics: { ...current.metrics, ascentEm: Math.max(0.02, value) } }))} />
+                <NumericField label={isEn ? "Descent em" : "Xuống em"} field="canvas-descent" value={documentState.metrics.descentEm} step={0.05} min={0} max={12} onChange={(value) => setDocumentState((current) => ({ ...current, metrics: { ...current.metrics, descentEm: Math.max(0, value) } }))} />
               </div>
               <div className="custom-symbol-metric-presets" data-custom-symbol-metric-presets>
                 <button type="button" data-metric-preset="standard" onClick={() => applyMetricPreset("standard")}>
-                  {isEn ? "Standard" : "标准"}
+                  {isEn ? "Standard" : "Tiêu chuẩn"}
                 </button>
                 <button type="button" data-metric-preset="reference" onClick={() => applyMetricPreset("reference")} disabled={!referenceAsset}>
-                  {isEn ? `Match ${referencePreset.label}` : `匹配 ${referencePreset.label}`}
+                  {isEn ? `Match ${referencePreset.label}` : `Trận đấu ${referencePreset.label}`}
                 </button>
                 <button type="button" data-metric-preset="large" onClick={() => applyMetricPreset("large")}>
-                  {isEn ? "Large operator" : "大型算子"}
+                  {isEn ? "Large operator" : "Toán tử lớn"}
                 </button>
                 <button type="button" data-metric-preset="extra" onClick={() => applyMetricPreset("extra")}>
-                  {isEn ? "Extra large" : "超大型"}
+                  {isEn ? "Extra large" : "Cực lớn"}
                 </button>
               </div>
               <div className="custom-symbol-metric-hint">
                 {isEn
                   ? "The large workspace is only for editing. This output box controls the final TeX size and clipping bounds."
-                  : "大工作区只用于设计；这里的输出范围才决定最终 TeX 字符尺寸与裁剪边界。"}
+                  : "Không gian làm việc rộng lớn chỉ dành cho việc soạn thảo. Hộp đầu ra này kiểm soát kích thước TeX cuối cùng và giới hạn cắt."}
               </div>
             </section>
 
             <section className="custom-symbol-designer-panel">
-              <header><strong>{isEn ? "Selected layer" : "所选图层"}</strong></header>
+              <header><strong>{isEn ? "Selected layer" : "Lớp đã chọn"}</strong></header>
               {selectedLayer ? (
                 <>
                   <div className="custom-symbol-designer-number-grid">
                     <NumericField label="X" field="layer-x" value={selectedLayer.transform.translateX ?? 0} onChange={(value) => updateSelectedTransform("translateX", value)} />
                     <NumericField label="Y" field="layer-y" value={selectedLayer.transform.translateY ?? 0} onChange={(value) => updateSelectedTransform("translateY", value)} />
-                    <NumericField label={isEn ? "Scale X" : "横向缩放"} field="layer-scale-x" value={selectedLayer.transform.scaleX ?? 1} step={0.05} onChange={(value) => updateSelectedTransform("scaleX", Math.max(0.02, value))} />
-                    <NumericField label={isEn ? "Scale Y" : "纵向缩放"} field="layer-scale-y" value={selectedLayer.transform.scaleY ?? 1} step={0.05} onChange={(value) => updateSelectedTransform("scaleY", Math.max(0.02, value))} />
-                    <NumericField label={isEn ? "Rotation °" : "旋转 °"} field="layer-rotation" value={selectedLayer.transform.rotateDeg ?? 0} onChange={(value) => updateSelectedTransform("rotateDeg", value)} />
+                    <NumericField label={isEn ? "Scale X" : "Cân X"} field="layer-scale-x" value={selectedLayer.transform.scaleX ?? 1} step={0.05} onChange={(value) => updateSelectedTransform("scaleX", Math.max(0.02, value))} />
+                    <NumericField label={isEn ? "Scale Y" : "Thang Y"} field="layer-scale-y" value={selectedLayer.transform.scaleY ?? 1} step={0.05} onChange={(value) => updateSelectedTransform("scaleY", Math.max(0.02, value))} />
+                    <NumericField label={isEn ? "Rotation °" : "Xoay °"} field="layer-rotation" value={selectedLayer.transform.rotateDeg ?? 0} onChange={(value) => updateSelectedTransform("rotateDeg", value)} />
                   </div>
                   <div className="custom-symbol-designer-inspector-actions">
-                    <button type="button" data-duplicate-custom-symbol-layer onClick={() => duplicateLayer(selectedLayer.id)}><Copy size={13} />{isEn ? "Duplicate" : "复制"}</button>
-                    <button type="button" className="is-danger" data-delete-custom-symbol-layer onClick={() => deleteLayer(selectedLayer.id)}><Trash2 size={13} />{isEn ? "Delete" : "删除"}</button>
+                    <button type="button" data-duplicate-custom-symbol-layer onClick={() => duplicateLayer(selectedLayer.id)}><Copy size={13} />{isEn ? "Duplicate" : "Trùng lặp"}</button>
+                    <button type="button" className="is-danger" data-delete-custom-symbol-layer onClick={() => deleteLayer(selectedLayer.id)}><Trash2 size={13} />{isEn ? "Delete" : "Xóa"}</button>
                   </div>
                   {selectedLayer.kind === "geometry" && selectedGeometryProperties ? (
                     <div className="custom-symbol-geometry-properties" data-custom-symbol-geometry-properties>
@@ -1091,10 +1091,10 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
                           {selectedLayer.geometryPreset === "eraser"
                             ? isEn
                               ? "Eraser stroke"
-                              : "橡皮擦轨迹"
+                              : "Nét tẩy"
                             : isEn
                               ? "Geometry"
-                              : "几何属性"}
+                              : "Hình học"}
                         </strong>
                         <span>{selectedLayer.geometryPreset ?? selectedLayer.shape.kind}</span>
                       </div>
@@ -1105,14 +1105,14 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
                               selectedLayer.geometryPreset === "line"
                                 ? isEn
                                   ? "Length"
-                                  : "长度"
+                                  : "Chiều dài"
                                 : selectedLayer.geometryPreset === "circle"
                                   ? isEn
                                     ? "Diameter"
-                                    : "直径"
+                                    : "Đường kính"
                                   : isEn
                                     ? "Width"
-                                    : "宽度"
+                                    : "Chiều rộng"
                             }
                             field="geometry-width"
                             value={selectedGeometryProperties.width}
@@ -1126,7 +1126,7 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
                         selectedLayer.geometryPreset !== "circle" &&
                         selectedLayer.geometryPreset !== "eraser" ? (
                           <NumericField
-                            label={isEn ? "Height" : "高度"}
+                            label={isEn ? "Height" : "Chiều cao"}
                             field="geometry-height"
                             value={selectedGeometryProperties.height}
                             step={10}
@@ -1140,10 +1140,10 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
                             selectedLayer.geometryPreset === "eraser"
                               ? isEn
                                 ? "Eraser width"
-                                : "擦除宽度"
+                                : "Chiều rộng cục tẩy"
                               : isEn
                                 ? "Stroke width"
-                                : "线宽"
+                                : "Chiều rộng hành trình"
                           }
                           field="geometry-stroke-width"
                           value={selectedGeometryProperties.strokeWidth}
@@ -1154,7 +1154,7 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
                         />
                         {selectedLayer.geometryPreset === "rect" ? (
                           <NumericField
-                            label={isEn ? "Corner radius" : "圆角"}
+                            label={isEn ? "Corner radius" : "Bán kính góc"}
                             field="geometry-corner-radius"
                             value={selectedGeometryProperties.cornerRadius}
                             step={2}
@@ -1175,7 +1175,7 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
                             checked={selectedGeometryProperties.fill}
                             onChange={(event) => updateSelectedGeometry({ fill: event.currentTarget.checked })}
                           />
-                          <span>{isEn ? "Filled shape" : "填充图形"}</span>
+                          <span>{isEn ? "Filled shape" : "Hình đầy"}</span>
                         </label>
                       ) : null}
                     </div>
@@ -1183,25 +1183,25 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
                   {selectedLayer.kind === "glyph" ? (
                     <div className="custom-symbol-crop-controls" data-custom-symbol-crop-controls>
                       <div className="custom-symbol-crop-heading">
-                        <strong>{isEn ? "Non-destructive crop" : "非破坏裁剪"}</strong>
+                        <strong>{isEn ? "Non-destructive crop" : "Cây trồng không phá hủy"}</strong>
                         <span>
                           {selectedLayer.clipRect
                             ? isEn
                               ? "Enabled"
-                              : "已启用"
+                              : "Đã bật"
                             : isEn
                               ? "Full glyph"
-                              : "完整字形"}
+                              : "Hình tượng đầy đủ"}
                         </span>
                       </div>
                       <div className="custom-symbol-crop-presets">
-                        <button type="button" data-crop-preset="full" onClick={() => applyClipPreset("full")}>{isEn ? "Full" : "完整"}</button>
-                        <button type="button" data-crop-preset="top" onClick={() => applyClipPreset("top")}>{isEn ? "Top" : "上"}</button>
-                        <button type="button" data-crop-preset="middle" onClick={() => applyClipPreset("middle")}>{isEn ? "Middle" : "中"}</button>
-                        <button type="button" data-crop-preset="bottom" onClick={() => applyClipPreset("bottom")}>{isEn ? "Bottom" : "下"}</button>
-                        <button type="button" data-crop-preset="left" onClick={() => applyClipPreset("left")}>{isEn ? "Left" : "左"}</button>
-                        <button type="button" data-crop-preset="center" onClick={() => applyClipPreset("center")}>{isEn ? "Center" : "中列"}</button>
-                        <button type="button" data-crop-preset="right" onClick={() => applyClipPreset("right")}>{isEn ? "Right" : "右"}</button>
+                        <button type="button" data-crop-preset="full" onClick={() => applyClipPreset("full")}>{isEn ? "Full" : "Đầy đủ"}</button>
+                        <button type="button" data-crop-preset="top" onClick={() => applyClipPreset("top")}>{isEn ? "Top" : "Trên cùng"}</button>
+                        <button type="button" data-crop-preset="middle" onClick={() => applyClipPreset("middle")}>{isEn ? "Middle" : "Giữa"}</button>
+                        <button type="button" data-crop-preset="bottom" onClick={() => applyClipPreset("bottom")}>{isEn ? "Bottom" : "Đáy"}</button>
+                        <button type="button" data-crop-preset="left" onClick={() => applyClipPreset("left")}>{isEn ? "Left" : "Còn lại"}</button>
+                        <button type="button" data-crop-preset="center" onClick={() => applyClipPreset("center")}>{isEn ? "Center" : "Trung tâm"}</button>
+                        <button type="button" data-crop-preset="right" onClick={() => applyClipPreset("right")}>{isEn ? "Right" : "Đúng rồi"}</button>
                       </div>
                       {selectedLayer.clipRect ? (
                         <div className="custom-symbol-designer-number-grid is-crop-grid">
@@ -1213,16 +1213,16 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
                       ) : null}
                       <div className="custom-symbol-split-actions">
                         <button type="button" data-split-custom-symbol-glyph="horizontal" onClick={() => splitSelectedGlyph("horizontal")}>
-                          {isEn ? "Split top / middle / bottom" : "上 / 中 / 下三分"}
+                          {isEn ? "Split top / middle / bottom" : "Tách trên/giữa/dưới"}
                         </button>
                         <button type="button" data-split-custom-symbol-glyph="vertical" onClick={() => splitSelectedGlyph("vertical")}>
-                          {isEn ? "Split left / center / right" : "左 / 中 / 右三分"}
+                          {isEn ? "Split left / center / right" : "Chia trái/giữa/phải"}
                         </button>
                       </div>
                     </div>
                   ) : null}
                 </>
-              ) : <div className="custom-symbol-designer-inspector-empty">{isEn ? "Select a layer." : "选择一个图层。"}</div>}
+              ) : <div className="custom-symbol-designer-inspector-empty">{isEn ? "Select a layer." : "Chọn một lớp."}</div>}
             </section>
 
             <section
@@ -1232,24 +1232,24 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
               data-registration-symbol-id={registeredSymbol?.id ?? ""}
             >
               <header>
-                <strong>{isEn ? "Register as a LaTeX command" : "注册为 LaTeX 命令"}</strong>
+                <strong>{isEn ? "Register as a LaTeX command" : "Đăng ký làm lệnh LaTeX"}</strong>
                 <span>
                   {registeredSymbol
                     ? registrationDirty
                       ? isEn
                         ? "Unsaved changes"
-                        : "有未保存修改"
+                        : "Thay đổi chưa được lưu"
                       : isEn
                         ? "Registered"
-                        : "已注册"
+                        : "Đã đăng ký"
                     : isEn
                       ? "Draft"
-                      : "草稿"}
+                      : "Bản nháp"}
                 </span>
               </header>
 
               <label className="custom-symbol-registration-field">
-                <span>{isEn ? "Symbol name" : "字符名称"}</span>
+                <span>{isEn ? "Symbol name" : "Tên ký hiệu"}</span>
                 <input
                   type="text"
                   value={documentState.name}
@@ -1261,12 +1261,12 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
                       name: value,
                     }));
                   }}
-                  placeholder={isEn ? "My custom symbol" : "我的自定义字符"}
+                  placeholder={isEn ? "My custom symbol" : "Biểu tượng tùy chỉnh của tôi"}
                 />
               </label>
 
               <label className="custom-symbol-registration-field">
-                <span>{isEn ? "Command" : "命令"}</span>
+                <span>{isEn ? "Command" : "Lệnh"}</span>
                 <input
                   type="text"
                   value={documentState.command}
@@ -1284,7 +1284,7 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
               </label>
 
               <label className="custom-symbol-registration-field">
-                <span>{isEn ? "Math role" : "数学类型"}</span>
+                <span>{isEn ? "Math role" : "Vai trò toán học"}</span>
                 <select
                   value={documentState.role}
                   data-custom-symbol-role-select
@@ -1306,7 +1306,7 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
 
               {documentState.role === "operator" ? (
                 <label className="custom-symbol-registration-field">
-                  <span>{isEn ? "Limits" : "上下限行为"}</span>
+                  <span>{isEn ? "Limits" : "Giới hạn"}</span>
                   <select
                     value={documentState.limitsBehavior}
                     data-custom-symbol-limits-select
@@ -1329,7 +1329,7 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
               ) : null}
 
               <label className="custom-symbol-registration-field">
-                <span>{isEn ? "Word OMML fallback (optional)" : "Word OMML fallback（可选）"}</span>
+                <span>{isEn ? "Word OMML fallback (optional)" : "Dự phòng Word OMML (tùy chọn)"}</span>
                 <input
                   type="text"
                   value={documentState.ommlFallback ?? ""}
@@ -1356,10 +1356,10 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
                 {registeredSymbol
                   ? isEn
                     ? "Update registered symbol"
-                    : "更新已注册字符"
+                    : "Cập nhật ký hiệu đã đăng ký"
                   : isEn
                     ? "Register symbol"
-                    : "注册字符"}
+                    : "Ký hiệu đăng ký"}
               </button>
 
               {registrationState.kind !== "idle" ? (
@@ -1383,8 +1383,8 @@ export function CustomSymbolDesignerDialog({ open, language, onClose }: Props) {
         </div>
 
         <footer className="custom-symbol-designer-footer">
-          <span>{documentState.layers.length} {isEn ? "layers" : "图层"} · {shapeCount} {isEn ? "shapes" : "矢量单元"}</span>
-          <button type="button" onClick={onClose}>{isEn ? "Close" : "关闭"}</button>
+          <span>{documentState.layers.length} {isEn ? "layers" : "lớp"} · {shapeCount} {isEn ? "shapes" : "hình dạng"}</span>
+          <button type="button" onClick={onClose}>{isEn ? "Close" : "Đóng"}</button>
         </footer>
       </section>
     </div>,

@@ -289,21 +289,21 @@ export function LatexSourceEditor({
           {!compact && (
             <div className="source-title">
               <Code2 size={16} />
-              <span>{isEn ? "LaTeX source" : "LaTeX 源码"}</span>
+              <span>{isEn ? "LaTeX source" : "Nguồn LaTeX"}</span>
               {syncError ? (
                 <span className="source-error-chip">
                   <AlertTriangle size={12} />
                   {syncError === "incomplete-format-wrapper"
                     ? isEn
                       ? "Formula wrapper is incomplete"
-                      : "公式环境包裹尚未完成"
+                      : "Trình bao bọc công thức chưa đầy đủ"
                     : isEn
                       ? "Incomplete fragment is shown as LaTeX"
-                      : "未完成片段按源码显示，其余保持渲染"}
+                      : "Đoạn chưa hoàn chỉnh được hiển thị dưới dạng LaTeX"}
                 </span>
               ) : dirty ? (
                 <span className="source-live-chip">
-                  {isEn ? "Live synced" : "已实时同步"}
+                  {isEn ? "Live synced" : "Đồng bộ trực tiếp"}
                 </span>
               ) : null}
             </div>
@@ -314,10 +314,10 @@ export function LatexSourceEditor({
               {syncError === "incomplete-format-wrapper"
                 ? isEn
                   ? "Incomplete wrapper"
-                  : "环境包裹未完成"
+                  : "Trình bao bọc chưa hoàn chỉnh"
                 : isEn
                   ? "Partial LaTeX preview"
-                  : "局部源码预览"}
+                  : "Xem trước một phần LaTeX"}
             </span>
           )}
           <div className="source-actions">
@@ -328,7 +328,7 @@ export function LatexSourceEditor({
                 data-source-reset
                 onClick={() => replaceDraft(latex)}
               >
-                <RotateCcw size={14} /> {isEn ? "Reset" : "还原"}
+                <RotateCcw size={14} /> {isEn ? "Reset" : "Đặt lại"}
               </button>
             )}
             {showCopyAction && (
@@ -336,8 +336,8 @@ export function LatexSourceEditor({
                 type="button"
                 className="text-button source-copy-button"
                 onClick={onCopy}
-                aria-label={isEn ? "Copy LaTeX source" : "复制 LaTeX 源码"}
-                title={isEn ? "Copy LaTeX source" : "复制 LaTeX 源码"}
+                aria-label={isEn ? "Copy LaTeX source" : "Sao chép nguồn LaTeX"}
+                title={isEn ? "Copy LaTeX source" : "Sao chép nguồn LaTeX"}
               >
                 <Copy size={14} />
               </button>
@@ -347,8 +347,8 @@ export function LatexSourceEditor({
                 type="button"
                 className="text-button source-collapse-button"
                 onClick={onCollapse}
-                aria-label={isEn ? "Hide LaTeX source" : "收起 LaTeX 源码"}
-                title={isEn ? "Hide LaTeX source" : "收起 LaTeX 源码"}
+                aria-label={isEn ? "Hide LaTeX source" : "Ẩn nguồn LaTeX"}
+                title={isEn ? "Hide LaTeX source" : "Ẩn nguồn LaTeX"}
               >
                 <PanelBottomClose size={14} />
               </button>

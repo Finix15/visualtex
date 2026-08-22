@@ -2,14 +2,14 @@ import assert from "node:assert/strict";
 import { localizeReleaseNotes } from "../src/update/releaseNotes.ts";
 
 const bilingualNotes = `
-## 中文
+## Tiếng Việt
 
-### 新增功能
-- 新增自动更新提醒。
-- 支持按当前语言显示更新说明。
+### Tính năng mới
+- Thêm thông báo cập nhật tự động.
+- Hiển thị ghi chú phát hành theo ngôn ngữ hiện tại.
 
-### 问题修复
-- 修复度数符号删除后光标卡住的问题。
+### Sửa lỗi
+- Sửa lỗi con trỏ bị kẹt sau khi xóa ký hiệu độ.
 
 ## English
 
@@ -21,9 +21,9 @@ const bilingualNotes = `
 - Fixed the degree-symbol caret getting stuck after deletion.
 `;
 
-assert.deepEqual(localizeReleaseNotes(bilingualNotes, "cn"), {
-  features: ["新增自动更新提醒。", "支持按当前语言显示更新说明。"],
-  fixes: ["修复度数符号删除后光标卡住的问题。"],
+assert.deepEqual(localizeReleaseNotes(bilingualNotes, "vi"), {
+  features: ["Thêm thông báo cập nhật tự động.", "Hiển thị ghi chú phát hành theo ngôn ngữ hiện tại."],
+  fixes: ["Sửa lỗi con trỏ bị kẹt sau khi xóa ký hiệu độ."],
   other: [],
 });
 
@@ -37,7 +37,7 @@ assert.deepEqual(localizeReleaseNotes(bilingualNotes, "en"), {
 });
 
 const legacyNotes = `VisualTeX improves editing stability.\n\n- Existing release note.`;
-assert.deepEqual(localizeReleaseNotes(legacyNotes, "cn"), {
+assert.deepEqual(localizeReleaseNotes(legacyNotes, "vi"), {
   features: [],
   fixes: [],
   other: ["VisualTeX improves editing stability.", "Existing release note."],

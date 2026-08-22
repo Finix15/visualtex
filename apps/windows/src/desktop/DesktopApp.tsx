@@ -13,7 +13,7 @@ interface SilentOcrHudPayload {
 function SilentOcrHud() {
   const [payload, setPayload] = useState<SilentOcrHudPayload>({
     status: "running",
-    message: "正在处理静默 OCR…",
+    message: "Processing silent OCR…",
     progress: 8,
   });
 
@@ -53,10 +53,10 @@ function SilentOcrHud() {
         : LoaderCircle;
   const statusTitle =
     payload.status === "success"
-      ? "识别成功"
+      ? "Recognition successful"
       : payload.status === "error"
-        ? "识别失败"
-        : "静默 OCR";
+        ? "Recognition failed"
+        : "Silent OCR";
   return (
     <main className="silent-ocr-hud-page">
       <div className={`windows-quick-ocr-hud ${statusClass}`} role="status" aria-live="polite">

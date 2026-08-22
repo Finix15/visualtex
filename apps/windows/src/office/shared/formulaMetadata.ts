@@ -68,7 +68,7 @@ export const VISUALTEX_FORMULA_SCHEMA = "visualtex-formula" as const;
 export const VISUALTEX_FORMULA_SCHEMA_VERSION = 1 as const;
 export const VISUALTEX_FORMULA_XML_NAMESPACE = "urn:visualtex:formula:1";
 export const VISUALTEX_METADATA_PREFIX = "visualtex:v1:deflate:";
-export const CURRENT_VISUALTEX_VERSION = "1.2.5";
+export const CURRENT_VISUALTEX_VERSION = "1.2.6";
 
 function bytesToBase64Url(bytes: Uint8Array) {
   let binary = "";
@@ -280,8 +280,8 @@ export function createFormulaMetadata({
     ...(formulaLetterFont ?? original?.formulaLetterFont
       ? { formulaLetterFont: formulaLetterFont ?? original?.formulaLetterFont }
       : {}),
-    ...(formulaChineseFont ?? original?.formulaChineseFont
-      ? { formulaChineseFont: formulaChineseFont ?? original?.formulaChineseFont }
+    ...(original?.formulaChineseFont
+      ? { formulaChineseFont: original.formulaChineseFont }
       : {}),
     ...resolvedInlineOleSize,
     ...(original?.nativeOmmlFingerprint

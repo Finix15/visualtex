@@ -187,7 +187,7 @@ interface FormulaFieldProps {
   latex: string;
   zoom: number;
   formulaRowVerticalInset: number;
-  language: "cn" | "en";
+  language: "vi" | "en";
   formulaLetterFont: FormulaLetterFont;
   formulaChineseFont: FormulaChineseFont;
   autoPairDelimiters: boolean;
@@ -4364,7 +4364,7 @@ function FormulaField(props: FormulaFieldProps) {
     registeredLineIdRef.current = initialLineId;
     const lineId = initialLineId;
     const field = new MathfieldElement();
-    MathfieldElement.locale = propsRef.current.language === "en" ? "en" : "zh-cn";
+    MathfieldElement.locale = propsRef.current.language === "en" ? "en" : "en";
     field.value = propsRef.current.latex;
     field.className = "visual-mathfield";
     field.smartMode = false;
@@ -4382,7 +4382,7 @@ function FormulaField(props: FormulaFieldProps) {
       "aria-label",
       isEn
         ? "Formula line " + (propsRef.current.index + 1)
-        : "第 " + (propsRef.current.index + 1) + " 行公式",
+        : "No." + (propsRef.current.index + 1) + "row formula",
     );
     field.removeAttribute("placeholder");
     const initialMetrics = formulaRowHeightMetrics(
@@ -6292,13 +6292,13 @@ function FormulaField(props: FormulaFieldProps) {
   useEffect(() => {
     const field = fieldRef.current;
     if (!field) return;
-    MathfieldElement.locale = props.language === "en" ? "en" : "zh-cn";
+    MathfieldElement.locale = props.language === "en" ? "en" : "en";
     const isEn = props.language === "en";
     field.setAttribute(
       "aria-label",
       isEn
         ? "Formula line " + (props.index + 1)
-        : "第 " + (props.index + 1) + " 行公式",
+        : "No." + (props.index + 1) + "row formula",
     );
     field.removeAttribute("placeholder");
   }, [props.index, props.language]);
@@ -9469,7 +9469,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
           <div
             className="formula-editor-context-menu"
             role="menu"
-            aria-label={language === "en" ? "Formula actions" : "公式操作"}
+            aria-label={language === "en" ? "Formula actions" : "Hành động của công thức"}
             style={{ left: contextMenu.left, top: contextMenu.top }}
             onPointerDown={(event) => event.stopPropagation()}
             onContextMenu={(event) => event.preventDefault()}
@@ -9484,7 +9484,7 @@ export const MathEditor = forwardRef<MathEditorHandle, Props>(
               <span>
                 {language === "en"
                   ? "Copy PNG to Clipboard"
-                  : "复制 PNG 到剪贴板"}
+                  : "Sao chép PNG vào Clipboard"}
               </span>
             </button>
           </div>

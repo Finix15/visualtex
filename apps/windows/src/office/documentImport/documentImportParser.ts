@@ -280,10 +280,10 @@ function parseInline(
       const image = rest.match(/^!\[([^\]]*)\]\((\S+?)(?:\s+["'][^"']*["'])?\)/);
       if (image) {
         flush();
-        const alt = decodeText(image[1], format).trim() || "未命名图片";
+        const alt = decodeText(image[1], format).trim() || "Unnamed picture";
         runs.push({
           kind: "text",
-          text: `【图片：${alt}（${image[2]}）】`,
+          text: `[Picture:${alt}（${image[2]}）】`,
           ...inherited,
         });
         index += image[0].length;
@@ -551,7 +551,7 @@ function parseInline(
             } else if (name === "url") {
               runs.push({ kind: "text", text: decodeText(argument, format), ...inherited });
             } else if (name === "footnote" || name === "thanks") {
-              runs.push({ kind: "text", text: "（注：", ...inherited });
+              runs.push({ kind: "text", text: "(Note:", ...inherited });
               runs.push(...parseInline(argument, format, inherited));
               runs.push({ kind: "text", text: "）", ...inherited });
             } else if (name === "cite" || name === "citep" || name === "citet") {
@@ -561,13 +561,13 @@ function parseInline(
             } else if (name === "input" || name === "include" || name === "subfile") {
               runs.push({
                 kind: "text",
-                text: `【外部 LaTeX 文件：${decodeText(argument, format)}】`,
+                text: `[External LaTeX file:${decodeText(argument, format)}】`,
                 ...inherited,
               });
             } else if (name === "bibliography" || name === "addbibresource") {
               runs.push({
                 kind: "text",
-                text: `【参考文献数据：${decodeText(argument, format)}】`,
+                text: `[Reference data:${decodeText(argument, format)}】`,
                 ...inherited,
               });
             } else if (name === "bibliographystyle") {
@@ -575,9 +575,9 @@ function parseInline(
             } else if (name === "label" || name === "index" || name === "glossary") {
               // Structural metadata has no visible body in Word.
             } else if (name === "includegraphics") {
-              runs.push({ kind: "text", text: `【图片：${decodeText(argument, format)}】`, ...inherited });
+              runs.push({ kind: "text", text: `[Picture:${decodeText(argument, format)}】`, ...inherited });
             } else if (name === "caption") {
-              runs.push({ kind: "text", text: "图注：", ...inherited, bold: true });
+              runs.push({ kind: "text", text: "Legend:", ...inherited, bold: true });
               runs.push(...parseInline(argument, format, inherited));
             } else {
               // Unknown formatting commands commonly wrap their visible text in
@@ -785,8 +785,8 @@ function appendMixedBlocks(
       });
       warnings.push(
         start.environment
-          ? `LaTeX 环境 ${start.environment} 未闭合，预览已读取到文末。`
-          : `行间公式缺少结束标记 ${start.endToken}，预览已读取到文末。`,
+          ? `LaTeX environment${start.environment}is not closed and the preview has been read to the end of the text.`
+          : `Missing end tag for inline formula${start.endToken}, the preview has been read to the end of the article.`,
       );
       return;
     }
@@ -889,7 +889,7 @@ function normalizeMarkdownSource(source: string, warnings: string[]) {
       const target = references.get((key || label).trim().toLowerCase());
       return target ? `[${label}](${target})` : match;
     });
-    next = next.replace(/\[\^([^\]]+)\]/g, (_match, key: string) => `〔注 ${key}〕`);
+    next = next.replace(/\[\^([^\]]+)\]/g, (_match, key: string) => `〔Note${key}〕`);
     next = next.replace(
       /\[(?!\^)([^\]]+)\](?![\[(])/g,
       (match, label: string, offset: number, whole: string) => {
@@ -906,7 +906,7 @@ function normalizeMarkdownSource(source: string, warnings: string[]) {
   if (retained[0]?.trim() === "---") {
     const end = retained.slice(1).findIndex((line) => /^(?:---|\.\.\.)\s*$/.test(line.trim()));
     if (end >= 0) {
-      output.push("**文档元数据**", "```yaml", ...retained.slice(1, end + 1), "```", "");
+      output.push("```yaml", "```yaml", ...retained.slice(1, end + 1), "```", "");
       start = end + 2;
     }
   }
@@ -993,14 +993,14 @@ function normalizeMarkdownSource(source: string, warnings: string[]) {
   if (footnotes.size) {
     output.push("");
     for (const [key, value] of footnotes) {
-      output.push(`**注 ${key}：** ${replaceReferences(value)}`, "");
+      output.push(`**Note${key}：** ${replaceReferences(value)}`, "");
     }
   }
   if (references.size) {
-    warnings.push(`已解析 ${references.size} 个 Markdown 引用式链接。`);
+    warnings.push(`resolved${references.size}Markdown quote links.`);
   }
   if (footnotes.size) {
-    warnings.push(`已将 ${footnotes.size} 个 Markdown 脚注转换为 Word 注释段落。`);
+    warnings.push(`has been${footnotes.size}Convert Markdown footnotes to Word comment paragraphs.`);
   }
   return output.join("\n");
 }
@@ -1024,7 +1024,7 @@ function replaceLatexTableEnvironment(body: string, warnings: string[]) {
     },
   );
   if (converted) {
-    warnings.push(`已将 ${converted} 个 LaTeX tabular 表格转换为可编辑的 Word 文本行。`);
+    warnings.push(`has been${converted}Converts LaTeX tabular tables into editable lines of Word text.`);
   }
   return result;
 }
@@ -1299,7 +1299,7 @@ function normalizeLatexExtensions(source: string, warnings: string[]) {
     if (!changed) break;
   }
   if (macros.size) {
-    warnings.push(`已展开 ${macros.size} 个 LaTeX 自定义宏（支持嵌套内容、默认参数和最多九个参数）。`);
+    warnings.push(`expanded${macros.size}LaTeX custom macros (supports nested content, default arguments, and up to nine arguments).`);
   }
 
   const takeCommand = (name: string) => {
@@ -1342,7 +1342,7 @@ function normalizeLatexExtensions(source: string, warnings: string[]) {
     )
     .replace(/\\begin\{minipage\}(?:\[[^\]]*\])?\s*\{[^{}]*\}/gi, "")
     .replace(/\\end\{minipage\}/gi, "")
-    .replace(/\\begin\{thebibliography\}\s*\{[^{}]*\}/gi, "\\section*{参考文献}\n\\begin{itemize}\n")
+    .replace(/\\begin\{thebibliography\}\s*\{[^{}]*\}/gi, "\\section*{reference}\n\\begin{itemize}")
     .replace(/\\end\{thebibliography\}/gi, "\n\\end{itemize}")
     .replace(/\\bibitem(?:\[([^\]]+)\])?\{([^{}]+)\}/gi, (_match, label: string | undefined, key: string) =>
       `\\item \\textbf{[${label || key}]} `,
@@ -1360,38 +1360,38 @@ function normalizeLatexExtensions(source: string, warnings: string[]) {
     .replace(/\\item\s*\[([^\]]+)\]/g, "\\item \\textbf{$1}：")
     .replace(/\\begin\{(?:center|flushleft|flushright|figure\*?|table\*?)\}/gi, "")
     .replace(/\\end\{(?:center|flushleft|flushright|figure\*?|table\*?)\}/gi, "")
-    .replace(/\\includegraphics(?:\[[^\]]*\])?\{([^{}]+)\}/gi, "【图片：$1】")
-    .replace(/\\caption\s*\{((?:[^{}]|\{[^{}]*\})*)\}/gi, "\\textbf{图注：} $1")
-    .replace(/\\begin\{abstract\}/gi, "\\section*{摘要}")
+    .replace(/\\includegraphics(?:\[[^\]]*\])?\{([^{}]+)\}/gi, "[Picture: $1]")
+    .replace(/\\caption\s*\{((?:[^{}]|\{[^{}]*\})*)\}/gi, "\\textbf{Caption:} $1")
+    .replace(/\\begin\{abstract\}/gi, "\\section*{Abstract}")
     .replace(/\\end\{abstract\}/gi, "");
 
   const theoremDefinitions = new Map<string, TheoremEnvironmentDefinition>();
   const builtInTheorems: Array<
     [string, string, boolean, string, TheoremBodyKind]
   > = [
-    ["theorem", "定理", true, "theorem", "quote"],
-    ["lemma", "引理", true, "lemma", "quote"],
-    ["proposition", "命题", true, "proposition", "quote"],
-    ["corollary", "推论", true, "corollary", "quote"],
-    ["definition", "定义", true, "definition", "quote"],
-    ["axiom", "公理", true, "axiom", "quote"],
-    ["assumption", "假设", true, "assumption", "quote"],
-    ["conjecture", "猜想", true, "conjecture", "quote"],
-    ["claim", "断言", true, "claim", "quote"],
-    ["criterion", "判据", true, "criterion", "quote"],
-    ["property", "性质", true, "property", "quote"],
-    ["fact", "事实", true, "fact", "quote"],
-    ["observation", "观察", true, "observation", "quote"],
-    ["example", "例", true, "example", "quote"],
-    ["exercise", "练习", true, "exercise", "quote"],
-    ["problem", "问题", true, "problem", "quote"],
-    ["question", "问题", true, "question", "quote"],
-    ["remark", "注", false, "remark", "quote"],
-    ["note", "注", false, "note", "quote"],
-    ["notation", "记号", false, "notation", "quote"],
-    ["case", "情形", false, "case", "quote"],
-    ["proof", "证明", false, "proof", "normal"],
-    ["solution", "解答", false, "solution", "normal"],
+    ["theorem", "Theorem", true, "theorem", "quote"],
+    ["lemma", "bổ đề", true, "lemma", "quote"],
+    ["proposition", "đề xuất", true, "proposition", "quote"],
+    ["corollary", "hệ quả tất yếu", true, "corollary", "quote"],
+    ["definition", "định nghĩa", true, "definition", "quote"],
+    ["axiom", "tiên đề", true, "axiom", "quote"],
+    ["assumption", "giả định", true, "assumption", "quote"],
+    ["conjecture", "phỏng đoán", true, "conjecture", "quote"],
+    ["claim", "yêu cầu bồi thường", true, "claim", "quote"],
+    ["criterion", "tiêu chí", true, "criterion", "quote"],
+    ["property", "tài sản", true, "property", "quote"],
+    ["fact", "sự thật", true, "fact", "quote"],
+    ["observation", "quan sát", true, "observation", "quote"],
+    ["example", "ví dụ", true, "example", "quote"],
+    ["exercise", "bài tập", true, "exercise", "quote"],
+    ["problem", "vấn đề", true, "problem", "quote"],
+    ["question", "câu hỏi", true, "question", "quote"],
+    ["remark", "nhận xét", false, "remark", "quote"],
+    ["note", "ghi chú", false, "note", "quote"],
+    ["notation", "ký hiệu", false, "notation", "quote"],
+    ["case", "trường hợp", false, "case", "quote"],
+    ["proof", "bằng chứng", false, "proof", "normal"],
+    ["solution", "Answer", false, "solution", "normal"],
   ];
   for (const [environment, label, numbered, counterName, bodyKind] of builtInTheorems) {
     const definition = { label, numbered, counterName, bodyKind };
@@ -1482,7 +1482,7 @@ function normalizeLatexExtensions(source: string, warnings: string[]) {
   });
   if (unknown.size) {
     warnings.push(
-      `以下 LaTeX 环境没有对应的 Word 原生结构，已保留其中可见内容：${[...unknown].join("、")}。`,
+      `The following LaTeX environment does not have a corresponding Word native structure, and the visible content has been preserved:${[...unknown].join("、")}。`,
     );
   }
   return body;
@@ -1571,7 +1571,7 @@ function normalizeLatexSource(source: string, warnings: string[]) {
     const contentStart = markedBegin >= 0 ? markedBegin + beginSentinel.length : 0;
     const markedEnd = body.indexOf(endSentinel, contentStart);
     body = markedEnd >= 0 ? body.slice(contentStart, markedEnd) : body.slice(contentStart);
-    if (end < 0) warnings.push("LaTeX 文档缺少 \\end{document}，预览已读取其余内容。");
+    if (end < 0) warnings.push("LaTeX document is missing \\end{document}, preview has read the rest.");
   }
 
   const result: string[] = [];
@@ -1604,8 +1604,8 @@ export function parseDocumentImport(
   source: string,
   requestedFormat: DocumentSourceFormat,
 ): ParsedDocumentImport {
-  if (!source.trim()) throw new Error("请输入需要导入的 LaTeX 或 Markdown 内容。");
-  if (source.length > 5_000_000) throw new Error("批量导入内容不能超过 5 MB。");
+  if (!source.trim()) throw new Error("Please enter the LaTeX or Markdown content to be imported.");
+  if (source.length > 5_000_000) throw new Error("Batch import content cannot exceed 5 MB.");
   const warnings: string[] = [];
   const format = requestedFormat === "auto" ? detectFormat(source) : requestedFormat;
   const normalized = (format === "latex"
@@ -1659,7 +1659,7 @@ export function parseDocumentImport(
       else if (!inCode) {
         inCode = true;
         codeEnd = "```";
-        codeDescription = "Markdown 代码块";
+        codeDescription = "Markdown code block";
       } else code.push(raw);
       continue;
     }
@@ -1670,7 +1670,7 @@ export function parseDocumentImport(
         flushQuote();
         inCode = true;
         codeEnd = `\\end{${start[1]}}`;
-        codeDescription = `LaTeX ${start[1]} 环境`;
+        codeDescription = `LaTeX ${start[1]}Environment`;
         continue;
       }
     }
@@ -1705,7 +1705,7 @@ export function parseDocumentImport(
         flushParagraph();
         flushQuote();
         if (theoremBodyKinds.length) theoremBodyKinds.pop();
-        else warnings.push("忽略了没有对应开始标记的 LaTeX 定理环境结束标记。");
+        else warnings.push("LaTeX theorem environment end tags that have no corresponding start tag are ignored.");
         continue;
       }
       if (/^\\begin\{(?:quote|quotation)\}\s*$/i.test(trimmed)) {
@@ -1731,7 +1731,7 @@ export function parseDocumentImport(
         flushParagraph();
         flushQuote();
         if (listModes.length) listModes.pop();
-        else warnings.push(`忽略了没有对应开始标记的 ${trimmed}。`);
+        else warnings.push(`Ignore those without corresponding start tags${trimmed}。`);
         continue;
       }
       const heading = trimmed.match(/^\\(part|chapter|section|subsection|subsubsection|paragraph|subparagraph)\*?\{(.*)\}\s*$/i);
@@ -1806,15 +1806,15 @@ export function parseDocumentImport(
     else paragraph.push(trimmed);
   }
 
-  if (inCode) finishCode(`${codeDescription}未闭合，预览已读取到文末。`);
+  if (inCode) finishCode(`${codeDescription}is not closed and the preview has been read to the end of the text.`);
   flushParagraph();
   flushQuote();
-  if (latexQuoteDepth > 0) warnings.push("LaTeX quote/quotation 环境未闭合，预览已读取到文末。");
+  if (latexQuoteDepth > 0) warnings.push("The LaTeX quote/quotation environment is not closed and the preview has been read to the end of the text.");
   if (theoremBodyKinds.length) {
-    warnings.push(`LaTeX 文档有 ${theoremBodyKinds.length} 个定理/证明环境未闭合。`);
+    warnings.push(`LaTeX documentation has${theoremBodyKinds.length}theorem/proof environments are not closed.`);
   }
-  if (listModes.length) warnings.push(`LaTeX 文档有 ${listModes.length} 个列表环境未闭合。`);
-  if (!blocks.length) throw new Error("没有找到可以插入 Word 的文字或公式。");
+  if (listModes.length) warnings.push(`LaTeX documentation has${listModes.length}list environments are not closed.`);
+  if (!blocks.length) throw new Error("No text or formula found that could be inserted into Word.");
 
   const runs = blocks.flatMap((block) => block.runs);
   const formulaCount = runs.filter((run) => run.kind === "formula").length;

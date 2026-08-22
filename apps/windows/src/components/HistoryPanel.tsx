@@ -38,7 +38,7 @@ export function HistoryPanel({ open, onClose, onRestore }: Props) {
   }, [open]);
 
   const timeLabel = (time: number) =>
-    new Intl.DateTimeFormat(isEn ? "en-US" : "zh-CN", {
+    new Intl.DateTimeFormat(isEn ? "en-US" : "vi-VN", {
       month: "short",
       day: "numeric",
       hour: "2-digit",
@@ -58,13 +58,13 @@ export function HistoryPanel({ open, onClose, onRestore }: Props) {
       <header className="history-header">
         <div>
           <span className="eyebrow">RECENT</span>
-          <h2 id="history-panel-title">{isEn ? "Formula history" : "公式历史"}</h2>
+          <h2 id="history-panel-title">{isEn ? "Formula history" : "Lịch sử công thức"}</h2>
         </div>
         <button
           type="button"
           className="icon-button"
           onClick={onClose}
-          aria-label={isEn ? "Close history" : "关闭历史"}
+          aria-label={isEn ? "Close history" : "Đóng lịch sử"}
         >
           <X size={18} />
         </button>
@@ -74,11 +74,11 @@ export function HistoryPanel({ open, onClose, onRestore }: Props) {
         {history.length === 0 ? (
           <div className="empty-state">
             <span className="empty-icon"><Clock3 size={24} /></span>
-            <h3>{isEn ? "No formula history yet" : "还没有历史公式"}</h3>
+            <h3>{isEn ? "No formula history yet" : "Chưa có lịch sử công thức"}</h3>
             <p>
               {isEn
                 ? "The current formula will be saved here after you pause editing."
-                : "停止编辑片刻后，当前公式会自动保存在这里。"}
+                : "Công thức hiện tại sẽ được lưu tại đây sau khi bạn tạm dừng chỉnh sửa."}
             </p>
           </div>
         ) : (
@@ -96,7 +96,7 @@ export function HistoryPanel({ open, onClose, onRestore }: Props) {
                     <MathPreview latex={line} key={index} />
                   ))}
                   {itemLines.length > 3 && (
-                    <small>+{itemLines.length - 3} {isEn ? "lines" : "行"}</small>
+                    <small>+{itemLines.length - 3} {isEn ? "lines" : "dòng"}</small>
                   )}
                 </span>
                 <span>{timeLabel(item.createdAt)}</span>
@@ -109,7 +109,7 @@ export function HistoryPanel({ open, onClose, onRestore }: Props) {
       {history.length > 0 && (
         <footer className="history-footer">
           <button type="button" className="text-button danger-text" onClick={clearHistory}>
-            <Trash2 size={14} /> {isEn ? "Clear history" : "清空历史"}
+            <Trash2 size={14} /> {isEn ? "Clear history" : "Xóa lịch sử"}
           </button>
         </footer>
       )}

@@ -172,7 +172,7 @@ function syncOfficeEditorSystemSettings(raw?: string | null) {
     editor.setEditorLayout(persisted.editorLayout);
   }
   if (
-    (persisted.language === "cn" || persisted.language === "en") &&
+    (persisted.language === "vi" || persisted.language === "en") &&
     persisted.language !== editor.language
   ) {
     editor.setLanguage(persisted.language);
@@ -230,29 +230,6 @@ function normalizeOfficeFontSizePt(value: unknown, fallback: number) {
   return Math.round(Math.min(200, Math.max(5, resolved)) * 2) / 2;
 }
 
-const OFFICE_CHINESE_FONT_SIZE_OPTIONS = [
-  { name: "初号", fontSizePt: 42 },
-  { name: "小初", fontSizePt: 36 },
-  { name: "一号", fontSizePt: 26 },
-  { name: "小一", fontSizePt: 24 },
-  { name: "二号", fontSizePt: 22 },
-  { name: "小二", fontSizePt: 18 },
-  { name: "三号", fontSizePt: 16 },
-  { name: "小三", fontSizePt: 15 },
-  { name: "四号", fontSizePt: 14 },
-  { name: "小四", fontSizePt: 12 },
-  { name: "五号", fontSizePt: 10.5 },
-  { name: "小五", fontSizePt: 9 },
-  { name: "六号", fontSizePt: 7.5 },
-  { name: "小六", fontSizePt: 6.5 },
-  { name: "七号", fontSizePt: 5.5 },
-  { name: "八号", fontSizePt: 5 },
-] as const;
-
-const OFFICE_CHINESE_FONT_SIZE_POINTS = new Set<number>(
-  OFFICE_CHINESE_FONT_SIZE_OPTIONS.map((option) => option.fontSizePt),
-);
-
 const OFFICE_FONT_SIZE_OPTIONS = [
   ...Array.from({ length: 63 }, (_, index) => 5 + index * 0.5),
   ...Array.from({ length: 18 }, (_, index) => 38 + index * 2),
@@ -265,13 +242,10 @@ const OFFICE_FONT_SIZE_OPTIONS = [
   160,
   180,
   200,
-].filter((fontSizePt) => !OFFICE_CHINESE_FONT_SIZE_POINTS.has(fontSizePt));
+];
 
 function officePointFontSizeOptions(currentFontSizePt: number) {
   const current = normalizeOfficeFontSizePt(currentFontSizePt, currentFontSizePt);
-  if (OFFICE_CHINESE_FONT_SIZE_POINTS.has(current)) {
-    return OFFICE_FONT_SIZE_OPTIONS;
-  }
   return OFFICE_FONT_SIZE_OPTIONS.includes(current)
     ? OFFICE_FONT_SIZE_OPTIONS
     : [...OFFICE_FONT_SIZE_OPTIONS, current].sort((left, right) => left - right);
@@ -291,14 +265,14 @@ async function waitForOfficeCommitResult(
     const current = await getOfficeSession(sessionId);
     if (current.status === "completed") return;
     if (current.status === "failed") {
-      throw new Error(current.error || `${hostLabel} 公式写入失败。`);
+      throw new Error(current.error || `${hostLabel}Formula writing failed.`);
     }
     if (current.status === "cancelled" || current.explicitCancel) {
-      throw new Error(`${hostLabel} 公式写入已取消。`);
+      throw new Error(`${hostLabel}Formula writing canceled.`);
     }
     await delay(100);
   }
-  throw new Error(`等待 ${hostLabel} 确认写入超时，请重试。`);
+  throw new Error(`Wait${hostLabel}Confirm write timeout, please try again.`);
 }
 
 function documentFingerprint(
@@ -520,18 +494,18 @@ export function OfficeDialogApp() {
 
   useEffect(() => {
     if (!sessionId && isMacosOfflineTauriTransport()) {
-      document.title = "VisualTeX Office Formula — 待命";
+      document.title = "VisualTeX Office Formula — on standby";
       return;
     }
     if (loading || (session && !sessionHydrated)) {
-      document.title = "VisualTeX Office Formula — 正在加载";
+      document.title = "VisualTeX Office Formula — Loading";
       return;
     }
     if (error || !session) {
-      document.title = `VisualTeX Office Formula — 加载失败${error ? `：${error.slice(0, 80)}` : ""}`;
+      document.title = `VisualTeX Office Formula — Loading failed${error ? `：${error.slice(0, 80)}` : ""}`;
       return;
     }
-    document.title = `VisualTeX Office Formula — ${session.host === "word" ? "Word" : "PowerPoint"} 已就绪`;
+    document.title = `VisualTeX Office Formula — ${session.host === "word" ? "Word" : "PowerPoint"}is ready`;
   }, [loading, error, session?.id, session?.host, sessionHydrated, sessionId]);
 
   const title = useEditorStore((state) => state.title);
@@ -707,7 +681,7 @@ export function OfficeDialogApp() {
       formulaChineseFont: resolvedSessionFormulaFonts.formulaChineseFont,
     });
     useEditorStore.getState().replaceDocumentState({
-      title: session.title || (isEn ? "Office Formula" : "Office 公式"),
+      title: session.title || (isEn ? "Office Formula" : "Công thức văn phòng"),
       lines: nextLines,
       activeLineId:
         session.activeLineId &&
@@ -852,7 +826,7 @@ export function OfficeDialogApp() {
         setToast(
           isEn
             ? "The formula editor did not finish mounting in time."
-            : "公式编辑器未能及时完成挂载。",
+            : "Trình soạn thảo công thức không hoàn tất quá trình gắn kết kịp thời.",
         );
         return;
       }
@@ -906,7 +880,7 @@ export function OfficeDialogApp() {
                 reason,
                 isEn
                   ? "Unable to reveal the Office formula editor"
-                  : "无法显示 Office 公式编辑器",
+                  : "Không hiện được trình soạn thảo công thức Office",
               ),
             );
           });
@@ -1150,7 +1124,7 @@ export function OfficeDialogApp() {
         setToast(
           errorMessage(
             reason,
-            isEn ? "Unable to save the Office formula" : "无法保存 Office 公式",
+            isEn ? "Unable to save the Office formula" : "Không lưu được công thức Office",
           ),
         );
       });
@@ -1402,7 +1376,7 @@ export function OfficeDialogApp() {
         ? {
             ...current,
             status: "cancelling",
-            message: isEn ? "Cancelling OCR…" : "正在取消 OCR…",
+            message: isEn ? "Cancelling OCR…" : "Đang hủy OCR…",
           }
         : current,
     );
@@ -1421,7 +1395,7 @@ export function OfficeDialogApp() {
       setToast(
         isEn
           ? "Another pasted image is being recognized"
-          : "已有一张粘贴图片正在识别",
+          : "Một hình ảnh được dán khác đang được nhận dạng",
       );
       return;
     }
@@ -1438,7 +1412,7 @@ export function OfficeDialogApp() {
       status: "running",
       message: isEn
         ? "Checking the local OCR runtime…"
-        : "正在检查本地 OCR 环境…",
+        : "Đang kiểm tra thời gian chạy OCR cục bộ…",
       seconds: 0,
       model: ocrModel,
     });
@@ -1452,7 +1426,7 @@ export function OfficeDialogApp() {
         throw new Error(
           isEn
             ? "Install the OCR runtime before pasting an image"
-            : "请先安装 OCR 运行环境，再在公式框中粘贴图片",
+            : "Cài đặt thời gian chạy OCR trước khi dán hình ảnh",
         );
       }
 
@@ -1461,7 +1435,7 @@ export function OfficeDialogApp() {
         throw new Error(
           isEn
             ? `Install ${selectedOcrModel.labelEn} before using it for OCR`
-            : `请先安装${selectedOcrModel.labelZh}模型，再使用该模型进行 OCR`,
+            : `Cài đặt ${selectedOcrModel.labelEn} trước khi sử dụng cho OCR`,
         );
       }
       const availableOcrModel = ocrModel;
@@ -1494,7 +1468,7 @@ export function OfficeDialogApp() {
         .join("\n");
       if (!recognizedLatex) {
         throw new Error(
-          isEn ? "OCR returned an empty formula" : "OCR 没有返回可用公式",
+          isEn ? "OCR returned an empty formula" : "OCR trả về công thức trống",
         );
       }
 
@@ -1504,7 +1478,7 @@ export function OfficeDialogApp() {
         throw new Error(
           isEn
             ? "The original formula line no longer exists; the OCR result was not inserted"
-            : "原来的公式行已被删除，OCR 结果没有插入到其他位置",
+            : "Dòng công thức gốc không còn tồn tại; kết quả OCR không được chèn",
         );
       }
 
@@ -1513,15 +1487,15 @@ export function OfficeDialogApp() {
         message: result.backgroundInverted
           ? isEn
             ? "Recognized and inserted · dark background inverted"
-            : "识别完成并已插入 · 已自动反色"
+            : "Đã nhận dạng và chèn · đảo ngược nền tối"
           : isEn
             ? "Recognized and inserted at the saved cursor"
-            : "识别完成，已插入原光标位置",
+            : "Nhận dạng và chèn vào con trỏ đã lưu",
         seconds: current?.seconds ?? 0,
         model: ocrModel,
       }));
       setToast(
-        isEn ? "Pasted image converted to LaTeX" : "粘贴图片已转换为 LaTeX",
+        isEn ? "Pasted image converted to LaTeX" : "Hình ảnh đã dán được chuyển đổi sang LaTeX",
       );
       scheduleInlineOcrClear(1800);
     } catch (reason) {
@@ -1531,14 +1505,14 @@ export function OfficeDialogApp() {
       if (cancelled) {
         setInlineOcr((current) => ({
           status: "cancelled",
-          message: isEn ? "OCR cancelled" : "OCR 已取消",
+          message: isEn ? "OCR cancelled" : "OCR đã bị hủy",
           seconds: current?.seconds ?? 0,
           model: ocrModel,
         }));
         scheduleInlineOcrClear(1200);
       } else {
         const visibleMessage =
-          message || (isEn ? "Image OCR failed" : "图片 OCR 失败");
+          message || (isEn ? "Image OCR failed" : "OCR hình ảnh không thành công");
         setInlineOcr((current) => ({
           status: "error",
           message: visibleMessage,
@@ -1561,7 +1535,7 @@ export function OfficeDialogApp() {
     async (
       status: "editing" | "committing" | "cancelled",
     ): Promise<UpdateOfficeSessionInput> => {
-      if (!session) throw new Error("Office Session 尚未加载。");
+      if (!session) throw new Error("Office Session has not been loaded.");
       const exportResult =
         status === "cancelled"
           ? session.exportResult
@@ -1569,7 +1543,7 @@ export function OfficeDialogApp() {
             ? generateSvgExportResult()
             : await getCompleteExportResult(currentFingerprint);
       if (status === "committing" && !exportResult) {
-        throw new Error(isEn ? "Formula export is empty" : "公式导出结果为空");
+        throw new Error(isEn ? "Formula export is empty" : "Xuất công thức trống");
       }
       return {
         title,
@@ -1645,14 +1619,14 @@ export function OfficeDialogApp() {
     if (finalizingRef.current) return false;
     historyManager.commitPendingTransaction();
     if (!latex.trim()) {
-      setToast(isEn ? "Enter a formula before inserting" : "请输入公式后再插入");
+      setToast(isEn ? "Enter a formula before inserting" : "Nhập công thức trước khi chèn");
       return false;
     }
     const targetSessionKey = sessionKey;
     finalizingRef.current = true;
     try {
       if (isMacosOfflineTauriTransport()) {
-        if (!session) throw new Error("Office Session 尚未加载。");
+        if (!session) throw new Error("Office Session has not been loaded.");
         const update = await buildCurrentSessionUpdate("committing");
         await commitMacosOfflineOfficeSession(session.id, update);
         lastSavedFingerprintRef.current = currentFingerprint;
@@ -1664,12 +1638,12 @@ export function OfficeDialogApp() {
           finalizingRef.current = false;
           const detail = errorMessage(
             closeError,
-            isEn ? "Unknown window error" : "未知窗口错误",
+            isEn ? "Unknown window error" : "Lỗi cửa sổ không xác định",
           );
           setToast(
             isEn
               ? `The formula was inserted, but the editor could not close: ${detail}`
-              : `公式已经插入，但编辑窗口无法自动关闭：${detail}`,
+              : `Đã chèn công thức nhưng người soạn thảo không đóng được: ${detail}`,
           );
         }
         return true;
@@ -1690,7 +1664,7 @@ export function OfficeDialogApp() {
       setToast(
         errorMessage(
           error,
-          isEn ? "Unable to insert the Office formula" : "无法插入 Office 公式",
+          isEn ? "Unable to insert the Office formula" : "Không chèn được công thức Office",
         ),
       );
       return false;
@@ -1803,7 +1777,7 @@ export function OfficeDialogApp() {
       setToast(
         errorMessage(
           error,
-          isEn ? "Unable to cancel the Office formula" : "无法取消 Office 公式",
+          isEn ? "Unable to cancel the Office formula" : "Không hủy được công thức Office",
         ),
       );
     }
@@ -1857,12 +1831,12 @@ export function OfficeDialogApp() {
       .catch((reason) => {
         const message = errorMessage(
           reason,
-          isEn ? "Unknown window error" : "未知窗口错误",
+          isEn ? "Unknown window error" : "Lỗi cửa sổ không xác định",
         );
         setToast(
           isEn
             ? `Unable to register window close handling: ${message}`
-            : `无法注册窗口关闭处理：${message}`,
+            : `Không thể đăng ký xử lý đóng cửa sổ: ${message}`,
         );
       });
 
@@ -1875,7 +1849,7 @@ export function OfficeDialogApp() {
   const handleCopy = async () => {
     await copyLatex(latex, latexCodeFormat);
     addHistory(latex);
-    setToast(isEn ? "LaTeX copied" : "LaTeX 已复制");
+    setToast(isEn ? "LaTeX copied" : "Sao chép LaTeX");
   };
 
   const editorAvailable = Boolean(session && sessionHydrated);
@@ -1885,7 +1859,7 @@ export function OfficeDialogApp() {
         <div
           className="office-display-mode-setting"
           role="group"
-          aria-label={isEn ? "Word formula layout" : "Word 公式排版"}
+          aria-label={isEn ? "Word formula layout" : "Bố cục công thức chữ"}
         >
           <button
             type="button"
@@ -1896,7 +1870,7 @@ export function OfficeDialogApp() {
             }}
             disabled={session.mode === "edit"}
           >
-            {isEn ? "Inline" : "行内"}
+            {isEn ? "Inline" : "Nội tuyến"}
           </button>
           <button
             type="button"
@@ -1913,7 +1887,7 @@ export function OfficeDialogApp() {
             }}
             disabled={session.mode === "edit"}
           >
-            {isEn ? "Display" : "行间"}
+            {isEn ? "Display" : "Hiển thị"}
           </button>
         </div>
       ) : null}
@@ -1923,36 +1897,27 @@ export function OfficeDialogApp() {
           session.host === "word" && session.mode === "create"
             ? isEn
               ? "Starts from the current Word paragraph font size"
-              : "默认读取当前 Word 段落正文的字号"
+              : "Bắt đầu từ cỡ chữ của đoạn văn Word hiện tại"
             : isEn
               ? "Formula font size"
-              : "公式字号"
+              : "Cỡ chữ công thức"
         }
       >
-        <span>{isEn ? "Size" : "字号"}</span>
+        <span>{isEn ? "Size" : "Kích thước"}</span>
         <select
           value={officeFontSizePt}
           data-office-font-size
-          aria-label={isEn ? "Formula font size" : "公式字号"}
+          aria-label={isEn ? "Formula font size" : "Cỡ chữ công thức"}
           onChange={(event) =>
             setOfficeFontSizePt(
               normalizeOfficeFontSizePt(event.target.value, officeFontSizePt),
             )
           }
         >
-          <optgroup label={isEn ? "Chinese sizes" : "中文字号"}>
-            {OFFICE_CHINESE_FONT_SIZE_OPTIONS.map((option) => (
-              <option key={option.name} value={option.fontSizePt}>
-                {isEn
-                  ? `${option.name} (${option.fontSizePt} pt)`
-                  : `${option.name}（${option.fontSizePt} 磅）`}
-              </option>
-            ))}
-          </optgroup>
-          <optgroup label={isEn ? "Point sizes" : "磅值"}>
+          <optgroup label={isEn ? "Point sizes" : "Kích thước điểm"}>
             {officePointFontSizeOptions(officeFontSizePt).map((fontSizePt) => (
               <option key={fontSizePt} value={fontSizePt}>
-                {isEn ? `${fontSizePt} pt` : `${fontSizePt} 磅`}
+                {isEn ? `${fontSizePt} pt` : `${fontSizePt} điểm`}
               </option>
             ))}
           </optgroup>
@@ -1972,7 +1937,7 @@ export function OfficeDialogApp() {
             }}
             disabled={session.mode === "edit"}
           />
-          <span>{isEn ? "Add equation number" : "添加公式编号"}</span>
+          <span>{isEn ? "Add equation number" : "Cộng số phương trình"}</span>
         </label>
       ) : null}
     </>
@@ -1983,8 +1948,8 @@ export function OfficeDialogApp() {
         type="button"
         className="icon-button compact office-history-icon-button"
         data-office-undo-action
-        aria-label={isEn ? "Undo" : "撤销"}
-        title={isEn ? "Undo" : "撤销"}
+        aria-label={isEn ? "Undo" : "Hoàn tác"}
+        title={isEn ? "Undo" : "Hoàn tác"}
         onClick={() => void historyManager.undo()}
         disabled={historyBusy || !historyState.canUndo || historyState.isReplaying}
       >
@@ -1994,8 +1959,8 @@ export function OfficeDialogApp() {
         type="button"
         className="icon-button compact office-history-icon-button"
         data-office-redo-action
-        aria-label={isEn ? "Redo" : "重做"}
-        title={isEn ? "Redo" : "重做"}
+        aria-label={isEn ? "Redo" : "Làm lại"}
+        title={isEn ? "Redo" : "Làm lại"}
         onClick={() => void historyManager.redo()}
         disabled={historyBusy || !historyState.canRedo || historyState.isReplaying}
       >
@@ -2009,7 +1974,7 @@ export function OfficeDialogApp() {
         onClick={() => void handleCancel()}
         disabled={historyBusy || inlineOcrIsBusy || historyState.isReplaying}
       >
-        {isEn ? "Cancel" : "取消"}
+        {isEn ? "Cancel" : "Hủy bỏ"}
       </button>
       <button
         type="button"
@@ -2027,19 +1992,19 @@ export function OfficeDialogApp() {
           session.mode === "edit"
             ? isEn
               ? "Update formula (Ctrl/Command+Enter)"
-              : "更新公式（Ctrl/Command+Enter）"
+              : "Cập nhật công thức (Ctrl/Command+Enter)"
             : isEn
               ? "Finish and insert (Ctrl/Command+Enter)"
-              : "完成并插入（Ctrl/Command+Enter）"
+              : "Hoàn tất và chèn (Ctrl/Command+Enter)"
         }
       >
         {session.mode === "edit"
           ? isEn
             ? "Update formula"
-            : "更新公式"
+            : "Cập nhật công thức"
           : isEn
             ? "Finish and insert"
-            : "完成并插入"}
+            : "Hoàn tất và chèn"}
       </button>
     </>
   ) : null;
@@ -2104,10 +2069,10 @@ export function OfficeDialogApp() {
               <div>
                 <strong>{inlineOcr.message}</strong>
                 <span>
-                  {isEn ? inlineOcrModel.labelEn : inlineOcrModel.labelZh}
+                  {isEn ? inlineOcrModel.labelEn : inlineOcrModel.labelVi}
                   {" · "}
                   {inlineOcr.seconds}
-                  {isEn ? "s" : " 秒"}
+                  {isEn ? "s" : "s"}
                 </span>
               </div>
               {inlineOcrIsBusy ? (
@@ -2118,14 +2083,14 @@ export function OfficeDialogApp() {
                   disabled={inlineOcr.status === "cancelling"}
                 >
                   <X size={13} />
-                  {isEn ? "Cancel" : "取消"}
+                  {isEn ? "Cancel" : "Hủy bỏ"}
                 </button>
               ) : (
                 <button
                   type="button"
                   className="inline-ocr-dismiss"
                   onClick={() => setInlineOcr(null)}
-                  aria-label={isEn ? "Dismiss OCR status" : "关闭 OCR 状态"}
+                  aria-label={isEn ? "Dismiss OCR status" : "Loại bỏ trạng thái OCR"}
                 >
                   <X size={13} />
                 </button>
@@ -2141,7 +2106,7 @@ export function OfficeDialogApp() {
     return (
       <div className="office-dialog-state">
         <LoaderCircle className="is-spinning" size={28} />
-        <strong>{isEn ? "Loading Office Session…" : "正在加载 Office Session…"}</strong>
+        <strong>{isEn ? "Loading Office Session…" : "Đang tải phiên làm việc văn phòng…"}</strong>
       </div>
     );
   }
@@ -2150,8 +2115,8 @@ export function OfficeDialogApp() {
     return (
       <div className="office-dialog-state is-error">
         <X size={28} />
-        <strong>{isEn ? "Unable to open VisualTeX" : "无法打开 VisualTeX"}</strong>
-        <p>{error || (isEn ? "Session not found" : "Session 不存在")}</p>
+        <strong>{isEn ? "Unable to open VisualTeX" : "Không mở được VisualTeX"}</strong>
+        <p>{error || (isEn ? "Session not found" : "Không tìm thấy phiên")}</p>
       </div>
     );
   }
@@ -2172,13 +2137,13 @@ export function OfficeDialogApp() {
             {error
               ? isEn
                 ? "Unable to open VisualTeX"
-                : "无法打开 VisualTeX"
+                : "Không mở được VisualTeX"
               : isEn
                 ? "Loading Office Session…"
-                : "正在加载 Office Session…"}
+                : "Đang tải phiên làm việc văn phòng…"}
           </strong>
           {error ? (
-            <p>{error || (isEn ? "Session not found" : "Session 不存在")}</p>
+            <p>{error || (isEn ? "Session not found" : "Không tìm thấy phiên")}</p>
           ) : null}
         </div>
       ) : null}

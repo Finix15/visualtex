@@ -249,7 +249,7 @@ export async function revealDesktopApp() {
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
     throw new Error(
-      `无法打开 VisualTeX 桌面窗口 (${response.status})${detail ? `: ${detail}` : ""}`,
+      `Unable to open VisualTeX desktop window (${response.status})${detail ? `: ${detail}` : ""}`,
     );
   }
 }
@@ -261,7 +261,7 @@ export async function ensureCompanionReady() {
     return health;
   } catch (error) {
     throw new Error(
-      "VisualTeX 本地伴侣服务未运行。请先启动 VisualTeX.app。",
+      "The VisualTeX local companion service is not running. Please start VisualTeX.app first.",
       { cause: error },
     );
   }

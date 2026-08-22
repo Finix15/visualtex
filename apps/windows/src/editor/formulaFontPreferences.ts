@@ -42,14 +42,14 @@ export const FORMULA_LETTER_FONT_OPTIONS: ReadonlyArray<{
 
 export const FORMULA_CHINESE_FONT_OPTIONS: ReadonlyArray<{
   id: FormulaChineseFont;
-  labelZh: string;
+  labelVi: string;
   labelEn: string;
 }> = [
-  { id: "system", labelZh: "系统默认", labelEn: "System default" },
-  { id: "pingfang", labelZh: "苹方（兼容）", labelEn: "PingFang compatible" },
-  { id: "songti", labelZh: "宋体", labelEn: "SimSun / Songti" },
-  { id: "kaiti", labelZh: "楷体", labelEn: "KaiTi" },
-  { id: "heiti", labelZh: "黑体", labelEn: "SimHei" },
+  { id: "system", labelVi: "Mặc định hệ thống", labelEn: "System default" },
+  { id: "pingfang", labelVi: "Tương thích với PingFang", labelEn: "PingFang compatible" },
+  { id: "songti", labelVi: "SimSun / Songti", labelEn: "SimSun / Songti" },
+  { id: "kaiti", labelVi: "KaiTi", labelEn: "KaiTi" },
+  { id: "heiti", labelVi: "SimHei", labelEn: "SimHei" },
 ];
 
 const LETTER_FONT_FAMILIES: Record<
@@ -89,24 +89,6 @@ const LETTER_PRIMARY_FONT_NAMES: Record<FormulaLetterFont, string> = {
   stix: "STIX Two Math",
   palatino: "Palatino Linotype",
   helvetica: "Arial",
-};
-
-const CHINESE_PRIMARY_FONT_NAMES: Record<FormulaChineseFont, string> = {
-  system: "Microsoft YaHei",
-  pingfang: "Microsoft YaHei",
-  songti: "SimSun",
-  kaiti: "KaiTi",
-  heiti: "SimHei",
-};
-
-const CHINESE_FONT_FAMILIES: Record<FormulaChineseFont, string> = {
-  system:
-    '"Microsoft YaHei", "Microsoft JhengHei", "Noto Sans CJK SC", "PingFang SC", sans-serif',
-  pingfang:
-    '"PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif',
-  songti: 'SimSun, NSimSun, "Songti SC", STSong, serif',
-  kaiti: 'KaiTi, "KaiTi_GB2312", "Kaiti SC", STKaiti, serif',
-  heiti: 'SimHei, "Microsoft YaHei", "Heiti SC", STHeiti, sans-serif',
 };
 
 export function normalizeFormulaLetterFont(value: unknown): FormulaLetterFont {
@@ -166,7 +148,8 @@ export function formulaLetterFontFamilies(value: FormulaLetterFont) {
 }
 
 export function formulaChineseFontFamily(value: FormulaChineseFont) {
-  return CHINESE_FONT_FAMILIES[normalizeFormulaChineseFont(value)];
+  void value;
+  return "inherit";
 }
 
 export function formulaLetterPrimaryFontName(value: FormulaLetterFont) {
@@ -174,5 +157,6 @@ export function formulaLetterPrimaryFontName(value: FormulaLetterFont) {
 }
 
 export function formulaChinesePrimaryFontName(value: FormulaChineseFont) {
-  return CHINESE_PRIMARY_FONT_NAMES[normalizeFormulaChineseFont(value)];
+  void value;
+  return "";
 }

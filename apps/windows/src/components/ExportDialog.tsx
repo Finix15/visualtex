@@ -25,7 +25,7 @@ interface ExportDialogProps {
   open: boolean;
   title: string;
   formulas: readonly string[];
-  language: "cn" | "en";
+  language: "vi" | "en";
   onClose: () => void;
   onNotify: (message: string) => void;
 }
@@ -33,9 +33,9 @@ interface ExportDialogProps {
 interface ExportFormatDefinition {
   extension: "md" | "svg" | "png";
   mime: string;
-  labelZh: string;
+  labelVi: string;
   labelEn: string;
-  descriptionZh: string;
+  descriptionVi: string;
   descriptionEn: string;
 }
 
@@ -43,25 +43,25 @@ const EXPORT_FORMATS: Record<ExportFormat, ExportFormatDefinition> = {
   markdown: {
     extension: "md",
     mime: "text/markdown;charset=utf-8",
-    labelZh: "Markdown",
+    labelVi: "Markdown",
     labelEn: "Markdown",
-    descriptionZh: "按行导出为独立的块级 LaTeX 公式",
+    descriptionVi: "Xuất mỗi dòng dưới dạng khối LaTeX hiển thị riêng",
     descriptionEn: "Export every line as a separate display LaTeX block",
   },
   svg: {
     extension: "svg",
     mime: "image/svg+xml;charset=utf-8",
-    labelZh: "SVG",
+    labelVi: "SVG",
     labelEn: "SVG",
-    descriptionZh: "自包含矢量图，适合排版和继续缩放",
+    descriptionVi: "Tác phẩm nghệ thuật vector độc lập để xuất bản và mở rộng quy mô",
     descriptionEn: "Self-contained vector artwork for publishing and scaling",
   },
   png: {
     extension: "png",
     mime: "image/png",
-    labelZh: "PNG",
+    labelVi: "PNG",
     labelEn: "PNG",
-    descriptionZh: "透明背景高分辨率位图",
+    descriptionVi: "Bitmap có độ phân giải cao với nền trong suốt",
     descriptionEn: "High-resolution bitmap with a transparent background",
   },
 };
@@ -140,7 +140,7 @@ export function ExportDialog({
     if (!isTauriEnvironment()) return path;
     try {
       const selected = await save({
-        title: isEn ? "Choose export path" : "选择导出路径",
+        title: isEn ? "Choose export path" : "Chọn đường dẫn xuất",
         defaultPath: path.trim() || suggestedFilename,
         filters: [
           {
@@ -162,7 +162,7 @@ export function ExportDialog({
   const writeExport = async () => {
     if (!nonEmptyFormulas.length || busy) {
       if (!nonEmptyFormulas.length) {
-        setError(isEn ? "There is no formula to export." : "没有可导出的公式。");
+        setError(isEn ? "There is no formula to export." : "Không có công thức để xuất.");
       }
       return;
     }
@@ -226,7 +226,7 @@ export function ExportDialog({
       onNotify(
         isEn
           ? `${definition.labelEn} exported successfully`
-          : `${definition.labelZh} 已成功导出`,
+          : `${definition.labelEn} đã xuất thành công`,
       );
       onClose();
     } catch (cause) {
@@ -239,7 +239,7 @@ export function ExportDialog({
   const copyPng = async () => {
     if (!nonEmptyFormulas.length || copyBusy) {
       if (!nonEmptyFormulas.length) {
-        setError(isEn ? "There is no formula to export." : "没有可导出的公式。");
+        setError(isEn ? "There is no formula to export." : "Không có công thức để xuất.");
       }
       return;
     }
@@ -251,7 +251,7 @@ export function ExportDialog({
         formulaLetterFont,
         formulaChineseFont,
       });
-      onNotify(isEn ? "PNG copied to Clipboard" : "PNG 已复制到剪贴板");
+      onNotify(isEn ? "PNG copied to Clipboard" : "PNG được sao chép vào Clipboard");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -269,11 +269,11 @@ export function ExportDialog({
       >
         <header>
           <div>
-            <strong id="export-dialog-title">{isEn ? "Export formula" : "导出公式"}</strong>
+            <strong id="export-dialog-title">{isEn ? "Export formula" : "Xuất công thức"}</strong>
             <span>
               {isEn
                 ? "Choose a format and enter an exact destination path."
-                : "选择导出格式，并输入准确的保存路径。"}
+                : "Chọn định dạng và nhập đường dẫn đích chính xác."}
             </span>
           </div>
           <button
@@ -281,13 +281,13 @@ export function ExportDialog({
             className="icon-button compact"
             onClick={onClose}
             disabled={busy}
-            aria-label={isEn ? "Close export dialog" : "关闭导出窗口"}
+            aria-label={isEn ? "Close export dialog" : "Đóng hộp thoại xuất"}
           >
             <X size={17} />
           </button>
         </header>
 
-        <div className="export-format-grid" role="radiogroup" aria-label={isEn ? "Export format" : "导出格式"}>
+        <div className="export-format-grid" role="radiogroup" aria-label={isEn ? "Export format" : "Định dạng xuất"}>
           {(
             [
               ["markdown", FileText],
@@ -308,8 +308,8 @@ export function ExportDialog({
               >
                 <Icon size={22} />
                 <span>
-                  <strong>{isEn ? item.labelEn : item.labelZh}</strong>
-                  <small>{isEn ? item.descriptionEn : item.descriptionZh}</small>
+                  <strong>{isEn ? item.labelEn : item.labelVi}</strong>
+                  <small>{isEn ? item.descriptionEn : item.descriptionVi}</small>
                 </span>
               </button>
             );
@@ -333,16 +333,16 @@ export function ExportDialog({
               {copyBusy
                 ? isEn
                   ? "Copying PNG…"
-                  : "正在复制 PNG…"
+                  : "Đang sao chép PNG…"
                 : isEn
                   ? "Copy PNG to Clipboard"
-                  : "复制 PNG 到剪贴板"}
+                  : "Sao chép PNG vào Clipboard"}
             </span>
           </button>
         </div>
 
         <label className="export-path-field">
-          <span>{isEn ? "Export path" : "导出路径"}</span>
+          <span>{isEn ? "Export path" : "Đường dẫn xuất"}</span>
           <div>
             <input
               value={path}
@@ -351,7 +351,7 @@ export function ExportDialog({
               placeholder={
                 isEn
                   ? `For example: C:\\Users\\Name\\Documents\\${suggestedFilename}`
-                  : `例如：C:\\Users\\用户名\\Documents\\${suggestedFilename}`
+                  : `Ví dụ: C:\\Users\\Name\\Documents\\${suggestedFilename}`
               }
               spellCheck={false}
               autoComplete="off"
@@ -363,13 +363,13 @@ export function ExportDialog({
               disabled={busy || !isTauriEnvironment()}
             >
               <FolderOpen size={15} />
-              {isEn ? "Browse" : "浏览"}
+              {isEn ? "Browse" : "Duyệt qua"}
             </button>
           </div>
           <small>
             {isEn
               ? `The filename will use .${definition.extension}. Missing folders are created automatically.`
-              : `文件将使用 .${definition.extension} 扩展名；不存在的文件夹会自动创建。`}
+              : `Tên tệp sẽ sử dụng .${definition.extension}. Các thư mục bị thiếu sẽ được tạo tự động.`}
           </small>
         </label>
 
@@ -382,7 +382,7 @@ export function ExportDialog({
             onClick={onClose}
             disabled={busy}
           >
-            {isEn ? "Cancel" : "取消"}
+            {isEn ? "Cancel" : "Hủy bỏ"}
           </button>
           <button
             type="button"
@@ -394,10 +394,10 @@ export function ExportDialog({
             {busy
               ? isEn
                 ? "Exporting…"
-                : "正在导出…"
+                : "Đang xuất…"
               : isEn
                 ? `Export ${definition.labelEn}`
-                : `导出 ${definition.labelZh}`}
+                : `Xuất ${definition.labelEn}`}
           </button>
         </footer>
       </section>

@@ -25,11 +25,8 @@ import {
 import { errorMessage } from "../../runtime/errorMessage";
 import { expandCustomSymbolsForMathMl } from "../../math/customSymbolRendering";
 import {
-  DEFAULT_FORMULA_CHINESE_FONT,
   DEFAULT_FORMULA_LETTER_FONT,
-  formulaChinesePrimaryFontName,
   formulaLetterPrimaryFontName,
-  normalizeFormulaChineseFont,
   normalizeFormulaLetterFont,
   type FormulaChineseFont,
   type FormulaLetterFont,
@@ -60,7 +57,7 @@ const texInput = new TeX({
   macros: VISUALTEX_MATHML_MACROS,
   formatError: (_jax: unknown, error: unknown) => {
     throw new Error(
-      errorMessage(error, "MathJax 无法解析该公式。"),
+      errorMessage(error, "MathJax cannot parse the formula."),
       { cause: error },
     );
   },
@@ -964,19 +961,14 @@ function applyOmmlFontPreferences(
   const letterFont = normalizeFormulaLetterFont(
     preferences.formulaLetterFont ?? DEFAULT_FORMULA_LETTER_FONT,
   );
-  const chineseFont = normalizeFormulaChineseFont(
-    preferences.formulaChineseFont ?? DEFAULT_FORMULA_CHINESE_FONT,
-  );
   const letterFontName = formulaLetterPrimaryFontName(letterFont);
-  const chineseFontName = formulaChinesePrimaryFontName(chineseFont);
 
   return body.replace(/<m:r>([\s\S]*?)<\/m:r>/g, (whole, inner: string) => {
     const text = inner.match(/<m:t(?:\s[^>]*)?>([\s\S]*?)<\/m:t>/)?.[1] ?? "";
     if (!text) return whole;
 
     const hasLatinOrGreek = /[A-Za-z\u0370-\u03ff\u1f00-\u1fff]/u.test(text);
-    const hasChinese = /[\u3400-\u9fff\uf900-\ufaff]/u.test(text);
-    if (!hasLatinOrGreek && !hasChinese) return whole;
+    if (!hasLatinOrGreek) return whole;
 
     const script = inner.match(/<m:scr\s+m:val="([^"]+)"\/>/)?.[1] ?? "";
     const isNormalText = inner.includes("<m:nor/>");
@@ -986,7 +978,7 @@ function applyOmmlFontPreferences(
     const fontAttributes: string[] = [];
     if (hasLatinOrGreek) {
       const latinFont = isTextRun
-        ? chineseFontName
+        ? ""
         : letterFont !== DEFAULT_FORMULA_LETTER_FONT && !isSpecialMathAlphabet
           ? letterFontName
           : "";
@@ -998,11 +990,6 @@ function applyOmmlFontPreferences(
           `w:cs="${escaped}"`,
         );
       }
-    }
-    if (hasChinese) {
-      fontAttributes.push(
-        `w:eastAsia="${escapeXmlAttribute(chineseFontName)}"`,
-      );
     }
     if (!fontAttributes.length) return whole;
 

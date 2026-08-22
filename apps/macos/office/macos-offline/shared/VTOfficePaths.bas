@@ -41,3 +41,39 @@ End Function
 Public Function VTWordApplicationScriptsRoot() As String
     VTWordApplicationScriptsRoot = VTUserHomePath() & VT_WORD_APPLICATION_SCRIPTS_SUFFIX
 End Function
+
+Public Function VTOfficeUiLanguage() As String
+    Dim fileNumber As Integer
+    Dim payload As String
+    Dim preferencePath As String
+
+    On Error GoTo UseEnglish
+    preferencePath = VTApplicationSupportRoot() & "/ui-language.json"
+    If Len(Dir$(preferencePath)) = 0 Then GoTo UseEnglish
+
+    fileNumber = FreeFile
+    Open preferencePath For Binary Access Read As #fileNumber
+    If LOF(fileNumber) > 4096 Then GoTo CloseAndUseEnglish
+    payload = Input$(LOF(fileNumber), #fileNumber)
+    Close #fileNumber
+    fileNumber = 0
+
+    payload = Replace$(payload, " ", vbNullString)
+    payload = Replace$(payload, vbCr, vbNullString)
+    payload = Replace$(payload, vbLf, vbNullString)
+    payload = Replace$(payload, vbTab, vbNullString)
+    If InStr(1, payload, """schemaVersion"":1", vbBinaryCompare) = 0 Then GoTo UseEnglish
+    If InStr(1, payload, """language"":""vi""", vbBinaryCompare) > 0 Then
+        VTOfficeUiLanguage = "vi"
+        Exit Function
+    End If
+
+UseEnglish:
+    VTOfficeUiLanguage = "en"
+    Exit Function
+
+CloseAndUseEnglish:
+    Close #fileNumber
+    fileNumber = 0
+    GoTo UseEnglish
+End Function

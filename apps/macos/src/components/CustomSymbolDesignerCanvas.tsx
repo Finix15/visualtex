@@ -678,12 +678,12 @@ export function CustomSymbolDesignerCanvas({
 
   return (
     <div className="custom-symbol-designer-canvas-shell" data-custom-symbol-canvas-shell>
-      <div className="custom-symbol-designer-viewport-controls" aria-label={isEn ? "Canvas zoom" : "画布缩放"}>
-        <button type="button" data-custom-symbol-zoom-out onClick={() => zoomAround(1.18)} title={isEn ? "Zoom out" : "缩小"}>−</button>
+      <div className="custom-symbol-designer-viewport-controls" aria-label={isEn ? "Canvas zoom" : "Thu phóng canvas"}>
+        <button type="button" data-custom-symbol-zoom-out onClick={() => zoomAround(1.18)} title={isEn ? "Zoom out" : "Thu nhỏ"}>−</button>
         <span data-custom-symbol-zoom-percent>{zoomPercent}%</span>
-        <button type="button" data-custom-symbol-fit-view onClick={fitViewport}>{isEn ? "Fit content" : "适应内容"}</button>
-        <button type="button" data-custom-symbol-fit-workspace onClick={fitWorkspace}>{isEn ? "Workspace" : "工作区"}</button>
-        <button type="button" data-custom-symbol-zoom-in onClick={() => zoomAround(0.84)} title={isEn ? "Zoom in" : "放大"}>+</button>
+        <button type="button" data-custom-symbol-fit-view onClick={fitViewport}>{isEn ? "Fit content" : "Phù hợp với nội dung"}</button>
+        <button type="button" data-custom-symbol-fit-workspace onClick={fitWorkspace}>{isEn ? "Workspace" : "Không gian làm việc"}</button>
+        <button type="button" data-custom-symbol-zoom-in onClick={() => zoomAround(0.84)} title={isEn ? "Zoom in" : "Phóng to"}>+</button>
       </div>
       <svg
         ref={svgRef}

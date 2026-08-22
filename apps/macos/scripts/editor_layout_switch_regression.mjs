@@ -201,7 +201,7 @@ async function main() {
           formulaAlignment: "left",
           editorLayout: "standard",
           sourceOpen: false,
-          language: "cn",
+          language: "vi",
           zoom: 1,
         },
         version: 0,

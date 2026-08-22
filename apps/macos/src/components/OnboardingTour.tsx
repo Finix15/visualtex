@@ -64,82 +64,82 @@ export function tutorialSteps(language: Language, platform: DesktopPlatform): Tu
   const steps: TutorialStep[] = [
     {
       id: "welcome",
-      title: isEn ? "Welcome to VisualTeX" : "欢迎使用 VisualTeX",
+      title: isEn ? "Welcome to VisualTeX" : "Chào mừng đến với VisualTeX",
       description: isEn
         ? "Write formulas naturally and inspect the source whenever you need it."
-        : "用熟悉的方式输入公式，需要时随时查看源码。",
+        : "Viết công thức một cách tự nhiên và kiểm tra nguồn bất cứ khi nào bạn cần.",
     },
     {
       id: "library",
-      title: isEn ? "Start from the formula library" : "从公式库开始",
+      title: isEn ? "Start from the formula library" : "Bắt đầu từ thư viện công thức",
       description: isEn
         ? "Choose a structure or symbol to insert it at the cursor."
-        : "选择结构或符号，它会直接插入当前光标。",
+        : "Chọn cấu trúc hoặc ký hiệu để chèn vào con trỏ.",
     },
     {
       id: "keyboard",
-      title: isEn ? "Keep your hands on the keyboard" : "保持双手在键盘上",
+      title: isEn ? "Keep your hands on the keyboard" : "Giữ tay trên bàn phím",
       description: isEn
         ? "A few keys cover line creation, navigation, and deletion."
-        : "几个按键就能完成换行、跳转和删除。",
+        : "Một số phím bao gồm việc tạo, điều hướng và xóa dòng.",
     },
     {
       id: "hotkeys-tiles",
-      title: isEn ? "Turn formulas into fast shortcuts" : "把常用公式变成快捷入口",
+      title: isEn ? "Turn formulas into fast shortcuts" : "Biến công thức thành phím tắt nhanh",
       description: isEn
         ? "Right-click any formula tool or tile to bind a hotkey. Save the current formula as a custom tile, then organize it by section, colour, and shortcut."
-        : "右键公式工具或磁贴即可绑定快捷键；还可以把当前公式保存为自定义磁贴，再按分区、颜色和快捷键管理。",
+        : "Nhấp chuột phải vào bất kỳ công cụ hoặc ô công thức nào để liên kết phím nóng. Lưu công thức hiện tại dưới dạng ô tùy chỉnh, sau đó sắp xếp công thức theo phần, màu sắc và phím tắt.",
     },
     {
       id: "layouts-themes",
-      title: isEn ? "Choose your layout and colour theme" : "选择适合你的布局与主题",
+      title: isEn ? "Choose your layout and colour theme" : "Chọn bố cục và chủ đề màu sắc của bạn",
       description: isEn
         ? "Open Settings → Appearance & editing to switch between Standard and Classic layouts and five complete colour themes. Office formula editors follow the same theme."
-        : "在“设置 → 外观与编辑”中切换标准布局、经典布局和五套完整主题；Office 公式编辑窗口也会同步主应用主题。",
+        : "Mở Cài đặt → Giao diện & chỉnh sửa để chuyển đổi giữa bố cục Tiêu chuẩn và Cổ điển cũng như năm chủ đề màu hoàn chỉnh. Các trình soạn thảo công thức văn phòng cũng tuân theo chủ đề tương tự.",
     },
     {
       id: "code-format",
-      title: isEn ? "Switch the LaTeX code format" : "切换 LaTeX 代码格式",
+      title: isEn ? "Switch the LaTeX code format" : "Chuyển đổi định dạng mã LaTeX",
       description: isEn
         ? "Choose an independent or combined environment from the top bar. The source panel and copied output update immediately."
-        : "从顶部选择单公式或多公式环境；下方源码区和复制结果会立即按所选格式更新。",
+        : "Chọn môi trường độc lập hoặc kết hợp từ thanh trên cùng. Bảng nguồn và bản sao chép đầu ra cập nhật ngay lập tức.",
     },
     {
       id: "export",
-      title: isEn ? "Export the current document" : "导出当前公式文档",
+      title: isEn ? "Export the current document" : "Xuất tài liệu hiện tại",
       description: isEn
         ? "Open Export in the top bar to save the current document as Markdown, SVG, or PNG. Choose the destination once and VisualTeX remembers it for later exports."
-        : "从顶部打开“导出”，可将当前公式文档保存为 Markdown、SVG 或 PNG；首次选择路径后，VisualTeX 会记住后续导出位置。",
+        : "Mở Xuất ở thanh trên cùng để lưu tài liệu hiện tại dưới dạng Markdown, SVG hoặc PNG. Chọn đích một lần và VisualTeX sẽ ghi nhớ đích đó để xuất sau này.",
     },
     {
       id: "input-behavior",
-      title: isEn ? "Customize input behavior" : "自定义操作逻辑",
+      title: isEn ? "Customize input behavior" : "Tùy chỉnh hành vi nhập liệu",
       description: isEn
         ? "Use Input behavior to control automatic exits from scripts, accents, and font commands, plus the large command suggestion panels. With font auto-exit off, type multiple characters and press Enter to confirm."
-        : "通过“操作逻辑”分别控制上下标、重音和字体命令的自动跳出，以及大型命令候选框。关闭字体命令自动跳出后，可连续输入多个字符并按 Enter 确认。",
+        : "Sử dụng hành vi Nhập liệu để kiểm soát việc tự động thoát khỏi các lệnh tập lệnh, dấu trọng âm và phông chữ, cùng với bảng gợi ý lệnh lớn. Khi tắt tính năng tự động thoát phông chữ, hãy nhập nhiều ký tự và nhấn Enter để xác nhận.",
     },
     {
       id: "ocr-setup",
-      title: isEn ? "First-time OCR setup" : "第一次使用 OCR",
+      title: isEn ? "First-time OCR setup" : "Thiết lập OCR lần đầu",
       description:
         platform === "macos"
           ? isEn
             ? "The complete macOS package includes Python, PaddleOCR, and the default M model. Setup verifies and extracts the local archives."
-            : "完整 macOS 包已内置 Python、PaddleOCR 与默认 M 模型；首次安装只在本机校验并解压。"
+            : "Gói macOS hoàn chỉnh bao gồm Python, PaddleOCR và mô hình M mặc định. Thiết lập xác minh và trích xuất các kho lưu trữ cục bộ."
           : platform === "windows"
             ? isEn
               ? "The Windows installer checks for a compatible 64-bit Python 3.9–3.13 runtime. OCR setup is available after that prerequisite is present."
-              : "Windows 安装程序会检测兼容的 64 位 Python 3.9–3.13；具备该环境后即可安装 OCR。"
+              : "Trình cài đặt Windows kiểm tra thời gian chạy Python 3.9–3.13 64-bit tương thích. Thiết lập OCR khả dụng sau khi có điều kiện tiên quyết đó."
             : isEn
               ? "Open Formula image OCR from the app menu and follow the local runtime setup."
-              : "从应用菜单打开“图片公式识别”，并按提示准备本地运行环境。",
+              : "Mở OCR hình ảnh Công thức từ menu ứng dụng và làm theo thiết lập thời gian chạy cục bộ.",
     },
     {
       id: "paste-image",
-      title: isEn ? "Paste images directly afterward" : "之后直接粘贴图片",
+      title: isEn ? "Paste images directly afterward" : "Dán hình ảnh trực tiếp sau đó",
       description: isEn
         ? "Once OCR is ready, paste an image into a formula field and the result returns to the saved cursor."
-        : "OCR 准备好后，把光标放进公式框即可粘贴图片识别，结果会插回原光标位置。",
+        : "Sau khi OCR sẵn sàng, hãy dán hình ảnh vào trường công thức và kết quả sẽ quay trở lại con trỏ đã lưu.",
     },
   ];
 
@@ -147,42 +147,42 @@ export function tutorialSteps(language: Language, platform: DesktopPlatform): Tu
     steps.push(
       {
         id: "mac-word-plugin",
-        title: isEn ? "Use the native VisualTeX tab in Word" : "在 Word 中使用原生 VisualTeX 标签页",
+        title: isEn ? "Use the native VisualTeX tab in Word" : "Sử dụng tab VisualTeX gốc trong Word",
         description: isEn
           ? "After installing the DOTM and restarting Word, open the VisualTeX tab. Insert picture or native OMML formulas, edit the selected formula, convert an image formula to Word math, and manage numbering or cross-references."
-          : "安装 DOTM 并重启 Word 后，打开“VisualTeX”标签页。可以插入图片公式或原生 OMML 公式、编辑所选公式、把图片公式转换成 Word 原生公式，并管理编号与交叉引用。",
+          : "Sau khi cài đặt DOTM và khởi động lại Word, hãy mở tab VisualTeX. Chèn hình ảnh hoặc công thức OMML gốc, chỉnh sửa công thức đã chọn, chuyển đổi công thức hình ảnh thành toán Word và quản lý việc đánh số hoặc tham chiếu chéo.",
       },
       {
         id: "mac-powerpoint-load",
-        title: isEn ? "Register the PPAM once in PowerPoint" : "在 PowerPoint 中登记一次 PPAM",
+        title: isEn ? "Register the PPAM once in PowerPoint" : "Đăng ký PPAM một lần trong PowerPoint",
         description: isEn
           ? "Open Tools → PowerPoint Add-ins, click +, select the fixed VisualTeX.ppam file, keep VisualTeX checked, and restart PowerPoint. Later VisualTeX updates reuse the same registered path."
-          : "打开“工具 → PowerPoint 加载项”，点击＋，选择固定路径下的 VisualTeX.ppam，保持 VisualTeX 勾选并重启 PowerPoint。后续 VisualTeX 更新会继续复用这个登记路径。",
+          : "Mở Công cụ → Phần bổ trợ PowerPoint, nhấp vào +, chọn tệp VisualTeX.ppam đã sửa, giữ nguyên VisualTeX được chọn và khởi động lại PowerPoint. Các bản cập nhật VisualTeX sau này sẽ sử dụng lại đường dẫn đã đăng ký tương tự.",
       },
       {
         id: "mac-powerpoint-use",
-        title: isEn ? "Create and edit formulas in PowerPoint" : "在 PowerPoint 中新建与编辑公式",
+        title: isEn ? "Create and edit formulas in PowerPoint" : "Tạo và chỉnh sửa công thức trong PowerPoint",
         description: isEn
           ? "Open the VisualTeX tab and choose New formula. Select an existing VisualTeX formula and use Edit selected formula or double-click it to reopen the editor; Delete selected formula removes it cleanly."
-          : "打开“VisualTeX”标签页并点击“新建公式”。选中已有 VisualTeX 公式后，可以点击“编辑所选公式”或直接双击重新打开编辑器；“删除所选公式”会完整删除公式对象。",
+          : "Mở tab VisualTeX và chọn Công thức mới. Chọn một công thức VisualTeX hiện có và sử dụng Chỉnh sửa công thức đã chọn hoặc bấm đúp vào công thức đó để mở lại trình chỉnh sửa; Xóa công thức đã chọn sẽ loại bỏ nó một cách sạch sẽ.",
       },
     );
   } else if (platform === "windows") {
     steps.push({
       id: "windows-office-manage",
-      title: isEn ? "Manage the Windows OLE service" : "管理 Windows OLE 服务",
+      title: isEn ? "Manage the Windows OLE service" : "Quản lý dịch vụ Windows OLE",
       description: isEn
         ? "When OLE is selected in the installer, setup completes the certificate, catalog, Ribbon cache, and background registration automatically. In Settings → Windows Office integration, stop the current companion, disable startup, or remove the OLE manifest."
-        : "安装程序勾选 OLE 后，会自动完成证书、可信目录、Ribbon 缓存和后台注册，不需要额外配置。可在“设置 → Windows Office 集成”中停止当前伴侣服务、关闭开机启动，或移除 OLE manifest。",
+        : "Khi OLE được chọn trong trình cài đặt, quá trình thiết lập sẽ tự động hoàn tất chứng chỉ, danh mục, bộ đệm Ribbon và đăng ký nền. Trong Cài đặt → Tích hợp Windows Office, dừng đồng hành hiện tại, tắt khởi động hoặc xóa tệp kê khai OLE.",
     });
   }
 
   steps.push({
     id: "updates",
-    title: isEn ? "Check for updates anytime" : "随时检查更新",
+    title: isEn ? "Check for updates anytime" : "Kiểm tra cập nhật bất cứ lúc nào",
     description: isEn
       ? "Open the top-left menu and choose Check for updates. The same action is also available in Settings."
-      : "打开左上角菜单，选择“检查更新”；也可以在设置中执行同一操作。",
+      : "Mở menu trên cùng bên trái và chọn Kiểm tra cập nhật. Hành động tương tự cũng có sẵn trong Cài đặt.",
   });
   return steps;
 }
@@ -240,10 +240,10 @@ export function OnboardingTour({ open, language, platform, onFinish }: Props) {
   const pasteShortcut = platform === "windows" ? "Ctrl+V" : "⌘V";
   const platformLabel =
     platform === "windows"
-      ? isEn ? "Formula workspace for Windows" : "Windows 公式工作台"
+      ? isEn ? "Formula workspace for Windows" : "Không gian làm việc công thức dành cho Windows"
       : platform === "macos"
-        ? isEn ? "Formula workspace for macOS" : "macOS 公式工作台"
-        : isEn ? "Visual formula workspace" : "可视化公式工作台";
+        ? isEn ? "Formula workspace for macOS" : "Không gian làm việc công thức dành cho macOS"
+        : isEn ? "Visual formula workspace" : "Không gian làm việc công thức trực quan";
 
   return (
     <div className="onboarding-backdrop">
@@ -263,7 +263,7 @@ export function OnboardingTour({ open, language, platform, onFinish }: Props) {
             type="button"
             className="icon-button compact"
             onClick={onFinish}
-            aria-label={isEn ? "Close tutorial" : "关闭教程"}
+            aria-label={isEn ? "Close tutorial" : "Đóng hướng dẫn"}
           >
             <X size={16} />
           </button>
@@ -291,7 +291,7 @@ export function OnboardingTour({ open, language, platform, onFinish }: Props) {
               <div className="onboarding-library-demo">
                 <div className="onboarding-library-rail">
                   <PanelLeft size={15} />
-                  <span>{isEn ? "Formula tools" : "公式工具"}</span>
+                  <span>{isEn ? "Formula tools" : "Công cụ công thức"}</span>
                 </div>
                 <div className="onboarding-formula-grid">
                   {["\\frac{a}{b}", "\\sqrt{x}", "\\int_a^b f(x)\\,dx", "\\sum_{i=1}^{n} a_i"].map((latex) => (
@@ -307,9 +307,9 @@ export function OnboardingTour({ open, language, platform, onFinish }: Props) {
                   <MathPreview latex="\\int_{-\\infty}^{\\infty} e^{-x^2}\\,dx = \\sqrt{\\pi}" />
                 </div>
                 <div className="onboarding-key-row">
-                  <span><Keyboard size={14} /><kbd>Enter</kbd><small>{isEn ? "New line" : "新建一行"}</small></span>
-                  <span><kbd>Tab</kbd><small>{isEn ? "Next field" : "下个位置"}</small></span>
-                  <span><kbd>⌫</kbd><small>{isEn ? "Delete empty line" : "删除空行"}</small></span>
+                  <span><Keyboard size={14} /><kbd>Enter</kbd><small>{isEn ? "New line" : "Dòng mới"}</small></span>
+                  <span><kbd>Tab</kbd><small>{isEn ? "Next field" : "Trường tiếp theo"}</small></span>
+                  <span><kbd>⌫</kbd><small>{isEn ? "Delete empty line" : "Xóa dòng trống"}</small></span>
                 </div>
               </div>
             )}
@@ -319,45 +319,45 @@ export function OnboardingTour({ open, language, platform, onFinish }: Props) {
                 <section className="onboarding-hotkey-guide">
                   <header>
                     <Keyboard size={17} />
-                    <strong>{isEn ? "Formula hotkeys" : "公式快捷键"}</strong>
+                    <strong>{isEn ? "Formula hotkeys" : "Phím nóng công thức"}</strong>
                   </header>
                   <div className="onboarding-hotkey-flow">
                     <span>
                       <b>1</b>
-                      <small>{isEn ? "Right-click a tool or tile" : "右键公式工具或磁贴"}</small>
+                      <small>{isEn ? "Right-click a tool or tile" : "Nhấp chuột phải vào một công cụ hoặc ô"}</small>
                     </span>
                     <i><ArrowRight size={14} /></i>
                     <span>
                       <b>2</b>
-                      <small>{isEn ? "Press and assign a shortcut" : "按下组合键并完成绑定"}</small>
+                      <small>{isEn ? "Press and assign a shortcut" : "Nhấn và gán phím tắt"}</small>
                     </span>
                     <i><ArrowRight size={14} /></i>
                     <span>
                       <kbd>⌥1</kbd>
-                      <small>{isEn ? "Insert at the active cursor" : "在当前公式光标处插入"}</small>
+                      <small>{isEn ? "Insert at the active cursor" : "Chèn vào con trỏ đang hoạt động"}</small>
                     </span>
                   </div>
                   <div className="onboarding-hotkey-manager-note">
                     <Settings2 size={14} />
-                    <span>{isEn ? "Settings → Manage formula hotkeys" : "设置 → 管理公式快捷键，可统一修改或删除"}</span>
+                    <span>{isEn ? "Settings → Manage formula hotkeys" : "Cài đặt → Quản lý phím nóng công thức"}</span>
                   </div>
                 </section>
 
                 <section className="onboarding-custom-tile-guide">
                   <header>
                     <PanelLeft size={17} />
-                    <strong>{isEn ? "Custom formula tiles" : "自定义公式磁贴"}</strong>
+                    <strong>{isEn ? "Custom formula tiles" : "Gạch công thức tùy chỉnh"}</strong>
                   </header>
                   <div className="onboarding-custom-tile-preview">
                     <MathPreview latex="\\int_0^1 x^2\\,\\mathrm{d}x" />
                   </div>
                   <button type="button" tabIndex={-1}>
-                    {isEn ? "Save current formula" : "保存当前公式"}
+                    {isEn ? "Save current formula" : "Lưu công thức hiện tại"}
                   </button>
                   <small>
                     {isEn
                       ? "Create sections, then right-click a tile to change its shortcut, colour, or section."
-                      : "先建立分区；保存后右键磁贴，可调整快捷键、颜色和所属分区。"}
+                      : "Tạo các phần, sau đó nhấp chuột phải vào ô để thay đổi phím tắt, màu hoặc phần của ô đó."}
                   </small>
                 </section>
               </div>
@@ -372,8 +372,8 @@ export function OnboardingTour({ open, language, platform, onFinish }: Props) {
                       <span />
                       <b />
                     </div>
-                    <strong>{isEn ? "Standard layout" : "标准布局"}</strong>
-                    <small>{isEn ? "Editor with side tools and tiles" : "公式区配合侧边工具和磁贴"}</small>
+                    <strong>{isEn ? "Standard layout" : "Bố cục chuẩn"}</strong>
+                    <small>{isEn ? "Editor with side tools and tiles" : "Trình chỉnh sửa với các công cụ phụ và ô xếp"}</small>
                   </article>
                   <article>
                     <div className="onboarding-layout-mini is-classic" aria-hidden="true">
@@ -381,15 +381,15 @@ export function OnboardingTour({ open, language, platform, onFinish }: Props) {
                       <span />
                       <b />
                     </div>
-                    <strong>{isEn ? "Classic layout" : "经典布局"}</strong>
-                    <small>{isEn ? "Bottom tools with a right tile rail" : "底部公式工具＋右侧磁贴栏"}</small>
+                    <strong>{isEn ? "Classic layout" : "Bố cục cổ điển"}</strong>
+                    <small>{isEn ? "Bottom tools with a right tile rail" : "Dụng cụ phía dưới có thanh ray bên phải"}</small>
                   </article>
                 </div>
 
                 <div className="onboarding-theme-guide">
                   <header>
                     <Settings2 size={17} />
-                    <strong>{isEn ? "15 preset themes + Custom" : "15 套预设主题 + 自定义"}</strong>
+                    <strong>{isEn ? "15 preset themes + Custom" : "15 chủ đề cài sẵn + Tùy chỉnh"}</strong>
                   </header>
                   <div className="onboarding-theme-swatches">
                     {THEME_DEFINITIONS.filter((item) => item.id !== "custom").map(
@@ -400,14 +400,14 @@ export function OnboardingTour({ open, language, platform, onFinish }: Props) {
                               <b key={color} style={{ background: color }} />
                             ))}
                           </i>
-                          <small>{isEn ? definition.labelEn : definition.labelZh}</small>
+                          <small>{isEn ? definition.labelEn : definition.labelVi}</small>
                         </span>
                       ),
                     )}
                   </div>
                   <div className="onboarding-theme-sync-note">
                     <Check size={14} />
-                    <span>{isEn ? "Office formula editors inherit the same theme" : "Word 和 PowerPoint 公式编辑窗口会自动继承主题"}</span>
+                    <span>{isEn ? "Office formula editors inherit the same theme" : "Trình soạn thảo công thức Office kế thừa cùng một chủ đề"}</span>
                   </div>
                 </div>
               </div>
@@ -417,17 +417,17 @@ export function OnboardingTour({ open, language, platform, onFinish }: Props) {
               <div className="onboarding-code-format-demo">
                 <div className="onboarding-code-format-toolbar">
                   <Code2 size={16} />
-                  <strong>{isEn ? "LaTeX code format" : "LaTeX 代码格式"}</strong>
+                  <strong>{isEn ? "LaTeX code format" : "Định dạng mã LaTeX"}</strong>
                   <span>⌄</span>
                 </div>
                 <div className="onboarding-code-format-choice">
                   <span>
-                    <small>{isEn ? "Independent" : "单公式环境"}</small>
+                    <small>{isEn ? "Independent" : "Độc lập"}</small>
                     <strong>\\[ ... \\]</strong>
                   </span>
                   <span className="is-selected">
                     <Check size={14} />
-                    <small>{isEn ? "Combined" : "多公式环境"}</small>
+                    <small>{isEn ? "Combined" : "Kết hợp"}</small>
                     <strong>align*</strong>
                   </span>
                 </div>
@@ -440,7 +440,7 @@ export function OnboardingTour({ open, language, platform, onFinish }: Props) {
               <div className="onboarding-export-demo">
                 <div className="onboarding-export-trigger">
                   <Download size={17} />
-                  <strong>{isEn ? "Export" : "导出"}</strong>
+                  <strong>{isEn ? "Export" : "Xuất khẩu"}</strong>
                   <span>⌄</span>
                 </div>
                 <div className="onboarding-export-formats">
@@ -449,8 +449,8 @@ export function OnboardingTour({ open, language, platform, onFinish }: Props) {
                   <span><FileImage size={18} /><strong>PNG</strong><small>.png</small></span>
                 </div>
                 <div className="onboarding-export-path">
-                  <span><FolderOpen size={16} /><small>{isEn ? "Export location" : "导出路径"}</small></span>
-                  <strong>{isEn ? "Choose on first export" : "首次导出时选择"}</strong>
+                  <span><FolderOpen size={16} /><small>{isEn ? "Export location" : "Vị trí xuất"}</small></span>
+                  <strong>{isEn ? "Choose on first export" : "Chọn ở lần xuất đầu tiên"}</strong>
                 </div>
               </div>
             )}
@@ -459,26 +459,26 @@ export function OnboardingTour({ open, language, platform, onFinish }: Props) {
               <div className="onboarding-input-behavior-demo">
                 <div className="onboarding-input-behavior-heading">
                   <MousePointerClick size={17} />
-                  <strong>{isEn ? "Input behavior" : "操作逻辑"}</strong>
+                  <strong>{isEn ? "Input behavior" : "Hành vi nhập liệu"}</strong>
                 </div>
                 <div className="onboarding-input-behavior-options">
                   <span>
-                    <div><strong>{isEn ? "Exit superscript after input" : "上标输入后跳出"}</strong><small>{isEn ? "Return after one character" : "输入一个字符后返回主公式"}</small></div>
+                    <div><strong>{isEn ? "Exit superscript after input" : "Thoát chỉ số trên sau khi nhập"}</strong><small>{isEn ? "Return after one character" : "Trở về sau một ký tự"}</small></div>
                     <i className="is-on" />
                   </span>
                   <span>
-                    <div><strong>{isEn ? "Exit font command after input" : "字体命令输入后跳出"}</strong><small>{isEn ? "Off: type multiple characters" : "关闭后可连续输入多个字符"}</small></div>
+                    <div><strong>{isEn ? "Exit font command after input" : "Thoát lệnh phông chữ sau khi nhập"}</strong><small>{isEn ? "Off: type multiple characters" : "Tắt: gõ nhiều ký tự"}</small></div>
                     <i />
                   </span>
                   <span>
-                    <div><strong>{isEn ? "Structured command suggestions" : "求和、积分等结构候选框"}</strong><small>{isEn ? "Large VisualTeX command panel" : "VisualTeX 大型命令候选框"}</small></div>
+                    <div><strong>{isEn ? "Structured command suggestions" : "Gợi ý lệnh có cấu trúc"}</strong><small>{isEn ? "Large VisualTeX command panel" : "Bảng lệnh VisualTeX lớn"}</small></div>
                     <i className="is-on" />
                   </span>
                 </div>
                 <div className="onboarding-input-behavior-example">
                   <code>\\mathbb&#123;AB&#125;</code>
                   <kbd>Enter</kbd>
-                  <small>{isEn ? "Confirm and leave the font scope" : "确认并退出字体作用域"}</small>
+                  <small>{isEn ? "Confirm and leave the font scope" : "Xác nhận và để lại phạm vi phông chữ"}</small>
                 </div>
               </div>
             )}
@@ -487,20 +487,20 @@ export function OnboardingTour({ open, language, platform, onFinish }: Props) {
               <div className="onboarding-ocr-setup-demo">
                 <span>
                   <ScanLine size={20} />
-                  <strong>{isEn ? "Open Formula image OCR" : "打开“图片公式识别”"}</strong>
-                  <small>{isEn ? "From the app menu" : "从应用菜单进入"}</small>
+                  <strong>{isEn ? "Open Formula image OCR" : "Mở OCR hình ảnh công thức"}</strong>
+                  <small>{isEn ? "From the app menu" : "Từ menu ứng dụng"}</small>
                 </span>
                 <i><ArrowRight size={15} /></i>
                 <span>
                   <Download size={20} />
-                  <strong>{isEn ? "Prepare runtime" : "准备 OCR 环境"}</strong>
-                  <small>{platform === "windows" ? "Python 3.9–3.13 x64" : isEn ? "One-time setup" : "只需安装一次"}</small>
+                  <strong>{isEn ? "Prepare runtime" : "Chuẩn bị thời gian chạy"}</strong>
+                  <small>{platform === "windows" ? "Python 3.9–3.13 x64" : isEn ? "One-time setup" : "Thiết lập một lần"}</small>
                 </span>
                 <i><ArrowRight size={15} /></i>
                 <span>
                   <Check size={20} />
-                  <strong>{isEn ? "Verify locally" : "完成本地校验"}</strong>
-                  <small>{isEn ? "Ready for recognition" : "随后即可识别"}</small>
+                  <strong>{isEn ? "Verify locally" : "Xác minh cục bộ"}</strong>
+                  <small>{isEn ? "Ready for recognition" : "Sẵn sàng để được công nhận"}</small>
                 </span>
               </div>
             )}
@@ -509,17 +509,17 @@ export function OnboardingTour({ open, language, platform, onFinish }: Props) {
               <div className="onboarding-paste-demo">
                 <div className="onboarding-paste-field">
                   <span className="onboarding-paste-caret" />
-                  <small>{isEn ? "Formula field" : "公式输入框"}</small>
+                  <small>{isEn ? "Formula field" : "Trường công thức"}</small>
                 </div>
                 <span className="onboarding-paste-shortcut">
                   <ScanLine size={20} />
-                  <strong>{isEn ? "Paste formula image" : "粘贴公式图片"}</strong>
+                  <strong>{isEn ? "Paste formula image" : "Dán hình ảnh công thức"}</strong>
                   <kbd>{pasteShortcut}</kbd>
                 </span>
                 <i><ArrowRight size={15} /></i>
                 <span className="onboarding-paste-result">
                   <Code2 size={20} />
-                  <strong>{isEn ? "Inserted at saved cursor" : "插回原光标位置"}</strong>
+                  <strong>{isEn ? "Inserted at saved cursor" : "Đã chèn vào con trỏ đã lưu"}</strong>
                   <MathPreview latex="\\frac{a+b}{c}" />
                 </span>
               </div>
@@ -533,12 +533,12 @@ export function OnboardingTour({ open, language, platform, onFinish }: Props) {
                   <span>VisualTeX</span>
                 </div>
                 <div className="onboarding-native-ribbon-tools">
-                  <span><b>OMML</b><small>{isEn ? "Inline" : "行内公式"}</small></span>
-                  <span><b>OMML</b><small>{isEn ? "Display" : "行间公式"}</small></span>
-                  <span><Check size={16} /><small>{isEn ? "Edit selected" : "编辑所选公式"}</small></span>
-                  <span><RefreshCw size={16} /><small>{isEn ? "Update numbers" : "更新公式编号"}</small></span>
+                  <span><b>OMML</b><small>{isEn ? "Inline" : "Nội tuyến"}</small></span>
+                  <span><b>OMML</b><small>{isEn ? "Display" : "Hiển thị"}</small></span>
+                  <span><Check size={16} /><small>{isEn ? "Edit selected" : "Đã chọn chỉnh sửa"}</small></span>
+                  <span><RefreshCw size={16} /><small>{isEn ? "Update numbers" : "Cập nhật số"}</small></span>
                 </div>
-                <p>{isEn ? "The DOTM loads automatically after Word restarts." : "重启 Word 后，DOTM 会从 Startup 目录自动加载。"}</p>
+                <p>{isEn ? "The DOTM loads automatically after Word restarts." : "DOTM tự động tải sau khi Word khởi động lại."}</p>
               </div>
             )}
 
@@ -554,11 +554,11 @@ export function OnboardingTour({ open, language, platform, onFinish }: Props) {
                   <span>VisualTeX</span>
                 </div>
                 <div className="onboarding-native-ribbon-tools">
-                  <span><Presentation size={17} /><small>{isEn ? "New formula" : "新建公式"}</small></span>
-                  <span><Check size={16} /><small>{isEn ? "Edit selected" : "编辑所选公式"}</small></span>
-                  <span><Trash2 size={16} /><small>{isEn ? "Delete selected" : "删除所选公式"}</small></span>
+                  <span><Presentation size={17} /><small>{isEn ? "New formula" : "Công thức mới"}</small></span>
+                  <span><Check size={16} /><small>{isEn ? "Edit selected" : "Đã chọn chỉnh sửa"}</small></span>
+                  <span><Trash2 size={16} /><small>{isEn ? "Delete selected" : "Xóa đã chọn"}</small></span>
                 </div>
-                <p>{isEn ? "Double-click an existing VisualTeX formula to edit it again." : "双击已有 VisualTeX 公式，也可以直接重新打开编辑器。"}</p>
+                <p>{isEn ? "Double-click an existing VisualTeX formula to edit it again." : "Bấm đúp vào công thức VisualTeX hiện có để chỉnh sửa lại."}</p>
               </div>
             )}
 
@@ -566,12 +566,12 @@ export function OnboardingTour({ open, language, platform, onFinish }: Props) {
               <div className="onboarding-windows-office-demo">
                 <span>
                   <Settings2 size={21} />
-                  <strong>{isEn ? "Windows Office integration" : "Windows Office 集成"}</strong>
+                  <strong>{isEn ? "Windows Office integration" : "Tích hợp Windows Office"}</strong>
                 </span>
                 <div>
-                  <span><Power size={19} /><strong>{isEn ? "Stop companion now" : "停止当前伴侣服务"}</strong></span>
-                  <span><ToggleLeft size={19} /><strong>{isEn ? "Disable startup" : "关闭开机启动"}</strong></span>
-                  <span><Trash2 size={19} /><strong>{isEn ? "Remove OLE manifest" : "移除 OLE manifest"}</strong></span>
+                  <span><Power size={19} /><strong>{isEn ? "Stop companion now" : "Dừng đồng hành ngay"}</strong></span>
+                  <span><ToggleLeft size={19} /><strong>{isEn ? "Disable startup" : "Tắt khởi động"}</strong></span>
+                  <span><Trash2 size={19} /><strong>{isEn ? "Remove OLE manifest" : "Xóa bảng kê khai OLE"}</strong></span>
                 </div>
               </div>
             )}
@@ -580,17 +580,17 @@ export function OnboardingTour({ open, language, platform, onFinish }: Props) {
               <div className="onboarding-update-demo">
                 <span>
                   <Menu size={20} />
-                  <strong>{isEn ? "Open app menu" : "打开左上角菜单"}</strong>
+                  <strong>{isEn ? "Open app menu" : "Mở menu ứng dụng"}</strong>
                 </span>
                 <i><ArrowRight size={15} /></i>
                 <span className="onboarding-update-menu-item">
                   <RefreshCw size={20} />
-                  <strong>{isEn ? "Check for updates" : "检查更新"}</strong>
+                  <strong>{isEn ? "Check for updates" : "Kiểm tra cập nhật"}</strong>
                 </span>
                 <i><ArrowRight size={15} /></i>
                 <span>
                   <Check size={20} />
-                  <strong>{isEn ? "Review the result" : "查看版本结果"}</strong>
+                  <strong>{isEn ? "Review the result" : "Xem lại kết quả"}</strong>
                 </span>
               </div>
             )}
@@ -599,9 +599,9 @@ export function OnboardingTour({ open, language, platform, onFinish }: Props) {
 
         <footer className="onboarding-footer">
           <button type="button" className="onboarding-skip" onClick={onFinish}>
-            {isEn ? "Skip" : "跳过"}
+            {isEn ? "Skip" : "Bỏ qua"}
           </button>
-          <div className="onboarding-progress" aria-label={isEn ? "Tutorial progress" : "教程进度"}>
+          <div className="onboarding-progress" aria-label={isEn ? "Tutorial progress" : "Tiến trình hướng dẫn"}>
             {steps.map((item, index) => (
               <span key={item.id} className={index === step ? "is-active" : index < step ? "is-complete" : ""} />
             ))}
@@ -610,7 +610,7 @@ export function OnboardingTour({ open, language, platform, onFinish }: Props) {
             {step > 0 && (
               <button type="button" className="secondary-button" onClick={() => setStep((value) => value - 1)}>
                 <ArrowLeft size={15} />
-                {isEn ? "Back" : "上一步"}
+                {isEn ? "Back" : "Trở lại"}
               </button>
             )}
             <button
@@ -619,7 +619,7 @@ export function OnboardingTour({ open, language, platform, onFinish }: Props) {
               onClick={() => lastStep ? onFinish() : setStep((value) => value + 1)}
             >
               {lastStep ? <Check size={15} /> : null}
-              {lastStep ? (isEn ? "Start editing" : "开始使用") : (isEn ? "Continue" : "继续")}
+              {lastStep ? (isEn ? "Start editing" : "Bắt đầu chỉnh sửa") : (isEn ? "Continue" : "Tiếp tục")}
               {!lastStep ? <ArrowRight size={15} /> : null}
             </button>
           </div>

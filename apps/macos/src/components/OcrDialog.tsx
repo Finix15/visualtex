@@ -55,7 +55,7 @@ import {
 
 interface OcrDialogProps {
   open: boolean;
-  language: "cn" | "en";
+  language: "vi" | "en";
   model: OcrModelName;
   onModelChange: (model: OcrModelName) => void;
   onClose: () => void;
@@ -190,7 +190,7 @@ export function OcrDialog({
         defaultModel: DEFAULT_OCR_MODEL,
         message: isEn
           ? "OCR is available in the VisualTeX desktop app, not in the browser preview."
-          : "OCR 只能在 VisualTeX 桌面应用中运行，浏览器预览无法调用本地模型。",
+          : "OCR có sẵn trong ứng dụng VisualTeX dành cho máy tính để bàn, không có trong bản xem trước của trình duyệt.",
       });
       return;
     }
@@ -212,7 +212,7 @@ export function OcrDialog({
         setError(
           isEn
             ? "Choose a VisualTeX .vtxocrmodel package."
-            : "请选择 VisualTeX 的 .vtxocrmodel 模型包。",
+            : "Chọn gói VisualTeX .vtxocrmodel.",
         );
         return;
       }
@@ -235,7 +235,7 @@ export function OcrDialog({
           (nextRuntime.installedModels.includes(model) ? model : undefined) ??
           (nextRuntime.installedModels.at(-1) as OcrModelName | undefined);
         if (imported) onModelChange(imported);
-        onNotify(isEn ? "Verified OCR model imported" : "OCR 模型已校验并导入");
+        onNotify(isEn ? "Verified OCR model imported" : "Đã nhập mô hình OCR đã được xác minh");
       } catch (importError) {
         setError(readError(importError));
       } finally {
@@ -308,10 +308,10 @@ export function OcrDialog({
             packages.length > 1
               ? isEn
                 ? "Import one .vtxocrmodel package at a time."
-                : "每次只能导入一个 .vtxocrmodel 模型包。"
+                : "Nhập một gói .vtxocrmodel mỗi lần."
               : isEn
                 ? "Drop a VisualTeX .vtxocrmodel package here."
-                : "请将 VisualTeX 的 .vtxocrmodel 模型包拖到这里。",
+                : "Thả gói VisualTeX .vtxocrmodel vào đây.",
           );
           return;
         }
@@ -421,7 +421,7 @@ export function OcrDialog({
       candidate.type.startsWith("image/"),
     );
     if (nextFile) selectFile(nextFile);
-    else setError(isEn ? "Drop an image file here." : "请拖入图片文件。");
+    else setError(isEn ? "Drop an image file here." : "Thả file ảnh vào đây.");
   };
 
   const handleInstall = async () => {
@@ -430,7 +430,7 @@ export function OcrDialog({
     setInstallProgress({
       stage: "start",
       percent: 1,
-      message: isEn ? "Starting OCR installation" : "正在启动 OCR 安装",
+      message: isEn ? "Starting OCR installation" : "Bắt đầu cài đặt OCR",
       detail: null,
     });
 
@@ -441,7 +441,7 @@ export function OcrDialog({
       setRuntime(nextRuntime);
       const availableModel = resolveAvailableOcrModel(nextRuntime, model);
       void prewarmOcrModel(availableModel).catch(() => undefined);
-      onNotify(isEn ? "OCR runtime installed" : "OCR 运行环境安装完成");
+      onNotify(isEn ? "OCR runtime installed" : "Đã cài đặt thời gian chạy OCR");
     } catch (installError) {
       setError(readError(installError));
       await refreshRuntime(true);
@@ -475,7 +475,7 @@ export function OcrDialog({
     const confirmed = window.confirm(
       isEn
         ? `Remove the installed ${selectedModel.labelEn} model? The OCR runtime and other models will be kept.`
-        : `确定删除已安装的${selectedModel.labelZh}吗？OCR 运行环境和其他模型会保留。`,
+        : `Xóa mẫu ${selectedModel.labelEn} đã cài đặt? Thời gian chạy OCR và các mô hình khác sẽ được giữ nguyên.`,
     );
     if (!confirmed) return;
     setModelBusy(true);
@@ -485,7 +485,7 @@ export function OcrDialog({
       setRuntime(nextRuntime);
       const fallback = resolveAvailableOcrModel(nextRuntime, DEFAULT_OCR_MODEL);
       onModelChange(fallback);
-      onNotify(isEn ? "Optional OCR model removed" : "可选 OCR 模型已删除");
+      onNotify(isEn ? "Optional OCR model removed" : "Đã xóa mô hình OCR tùy chọn");
     } catch (removeError) {
       setError(readError(removeError));
     } finally {
@@ -495,18 +495,18 @@ export function OcrDialog({
 
   const handleRecognize = async () => {
     if (!file) {
-      setError(isEn ? "Choose or paste a formula image first." : "请先选择或粘贴一张公式图片。");
+      setError(isEn ? "Choose or paste a formula image first." : "Trước tiên hãy chọn hoặc dán hình ảnh công thức.");
       return;
     }
     if (!runtime?.installed) {
-      setError(isEn ? "Install the OCR runtime first." : "请先安装 OCR 运行环境。");
+      setError(isEn ? "Install the OCR runtime first." : "Trước tiên hãy cài đặt thời gian chạy OCR.");
       return;
     }
     if (!selectedModelInstalled) {
       setError(
         isEn
           ? "Import the selected OCR model package first."
-          : "请先导入当前选择的 OCR 模型包。",
+          : "Trước tiên hãy nhập gói mô hình OCR đã chọn.",
       );
       return;
     }
@@ -519,7 +519,7 @@ export function OcrDialog({
       id: "pending",
       stage: "preprocess",
       model,
-      message: isEn ? "Preparing the formula image" : "正在准备公式图片",
+      message: isEn ? "Preparing the formula image" : "Chuẩn bị hình ảnh công thức",
     });
     setResult(null);
     setLatex("");
@@ -539,7 +539,7 @@ export function OcrDialog({
     } catch (recognitionError) {
       const message = readError(recognitionError);
       if (cancellingRef.current || message.includes("OCR_CANCELLED")) {
-        onNotify(isEn ? "OCR recognition cancelled" : "OCR 识别已取消");
+        onNotify(isEn ? "OCR recognition cancelled" : "Nhận dạng OCR đã bị hủy");
       } else {
         setError(message);
       }
@@ -561,7 +561,7 @@ export function OcrDialog({
       id: current?.id ?? "pending",
       stage: "cancelling",
       model,
-      message: isEn ? "Stopping the OCR worker…" : "正在停止 OCR 进程…",
+      message: isEn ? "Stopping the OCR worker…" : "Đang dừng nhân viên OCR…",
     }));
     try {
       await cancelOcrRecognition();
@@ -630,7 +630,7 @@ export function OcrDialog({
     const value = normalizeResultLatex(latex);
     if (!value) return;
     onInsert(value);
-    onNotify(isEn ? "OCR formula inserted at the cursor" : "OCR 公式已插入当前光标");
+    onNotify(isEn ? "OCR formula inserted at the cursor" : "Công thức OCR được chèn vào con trỏ");
     onClose();
   };
 
@@ -638,7 +638,7 @@ export function OcrDialog({
     const value = normalizeResultLatex(latex);
     if (!value) return;
     onAppend(value);
-    onNotify(isEn ? "OCR formula appended as a new line" : "OCR 公式已追加为新公式行");
+    onNotify(isEn ? "OCR formula appended as a new line" : "Công thức OCR được thêm vào dưới dạng dòng mới");
     onClose();
   };
 
@@ -649,7 +649,7 @@ export function OcrDialog({
       setResult(null);
       setLatex("");
       setError("");
-      onNotify(isEn ? "OCR worker restarted" : "OCR 识别进程已重启");
+      onNotify(isEn ? "OCR worker restarted" : "Nhân viên OCR đã khởi động lại");
     } catch (restartError) {
       setError(readError(restartError));
     }
@@ -659,7 +659,7 @@ export function OcrDialog({
     const confirmed = window.confirm(
       isEn
         ? "Remove the OCR runtime and its installed packages?"
-        : "确定删除 OCR 运行环境和已经安装的依赖吗？",
+        : "Xóa thời gian chạy OCR và các gói đã cài đặt của nó?",
     );
     if (!confirmed) return;
 
@@ -699,14 +699,14 @@ export function OcrDialog({
             </span>
             <div>
               <span className="eyebrow">PP-FORMULANET OCR</span>
-              <h2 id="ocr-dialog-title">{isEn ? "Formula image recognition" : "图片公式识别"}</h2>
+              <h2 id="ocr-dialog-title">{isEn ? "Formula image recognition" : "Nhận dạng hình ảnh công thức"}</h2>
             </div>
           </div>
           <button
             type="button"
             className="icon-button"
             onClick={requestClose}
-            aria-label={isEn ? "Close OCR" : "关闭 OCR"}
+            aria-label={isEn ? "Close OCR" : "Đóng OCR"}
           >
             <X size={18} />
           </button>
@@ -742,7 +742,7 @@ export function OcrDialog({
                 <>
                   <img
                     src={previewUrl}
-                    alt={isEn ? "Formula source preview" : "公式原图预览"}
+                    alt={isEn ? "Formula source preview" : "Xem trước nguồn công thức"}
                     onLoad={(event) =>
                       setImageSize({
                         width: event.currentTarget.naturalWidth,
@@ -753,7 +753,7 @@ export function OcrDialog({
                   <div className="ocr-image-actions">
                     <button type="button" onClick={() => fileInputRef.current?.click()}>
                       <RefreshCw size={14} />
-                      {isEn ? "Replace" : "更换图片"}
+                      {isEn ? "Replace" : "Thay thế"}
                     </button>
                   </div>
                 </>
@@ -762,15 +762,15 @@ export function OcrDialog({
                   <span className="ocr-drop-icon">
                     <ImagePlus size={28} />
                   </span>
-                  <strong>{isEn ? "Drop a formula image here" : "将公式图片拖到这里"}</strong>
-                  <span>{isEn ? "Choose a file or paste an image" : "选择文件，或直接粘贴剪贴板图片"}</span>
+                  <strong>{isEn ? "Drop a formula image here" : "Thả ảnh công thức vào đây"}</strong>
+                  <span>{isEn ? "Choose a file or paste an image" : "Chọn file hoặc dán hình ảnh"}</span>
                   <button type="button" onClick={() => fileInputRef.current?.click()}>
                     <Upload size={15} />
-                    {isEn ? "Choose image" : "选择图片"}
+                    {isEn ? "Choose image" : "Chọn hình ảnh"}
                   </button>
                   <small>
                     <ClipboardPaste size={13} />
-                    {isEn ? "Paste with ⌘V while this dialog is open" : "窗口打开时可直接按 ⌘V 粘贴"}
+                    {isEn ? "Paste with ⌘V while this dialog is open" : "Dán bằng ⌘V khi hộp thoại này đang mở"}
                   </small>
                 </div>
               )}
@@ -778,7 +778,7 @@ export function OcrDialog({
 
             {file && (
               <div className="ocr-file-meta">
-                <span>{file.name || (isEn ? "Clipboard image" : "剪贴板图片")}</span>
+                <span>{file.name || (isEn ? "Clipboard image" : "Hình ảnh bảng nhớ tạm")}</span>
                 <span>
                   {imageSize.width > 0 ? imageSize.width + "×" + imageSize.height + " · " : ""}
                   {readableBytes(file.size)}
@@ -787,7 +787,7 @@ export function OcrDialog({
             )}
 
             <label className="ocr-model-field">
-              <span>{isEn ? "Recognition model" : "识别模型"}</span>
+              <span>{isEn ? "Recognition model" : "Model nhận dạng"}</span>
               <select
                 value={model}
                 disabled={recognizing || cancelling || modelBusy}
@@ -799,19 +799,19 @@ export function OcrDialog({
                   const available = installedModels.includes(item.id);
                   return (
                     <option value={item.id} key={item.id}>
-                      {isEn ? item.labelEn : item.labelZh}
+                      {isEn ? item.labelEn : item.labelVi}
                       {available
                         ? isEn
                           ? " · installed"
-                          : " · 已安装"
+                          : "· đã cài đặt"
                         : isEn
                           ? " · not installed"
-                          : " · 未安装"}
+                          : "· chưa được cài đặt"}
                     </option>
                   );
                 })}
               </select>
-              <small>{isEn ? selectedModel.hintEn : selectedModel.hintZh}</small>
+              <small>{isEn ? selectedModel.hintEn : selectedModel.hintVi}</small>
             </label>
 
             <div
@@ -832,28 +832,28 @@ export function OcrDialog({
                   {selectedModelInstalled
                     ? isEn
                       ? `${selectedModel.labelEn} is installed`
-                      : `${selectedModel.labelZh}已安装`
+                      : `${selectedModel.labelEn} đã được cài đặt`
                     : isEn
                       ? `${selectedModel.labelEn} is not installed`
-                      : `${selectedModel.labelZh}尚未安装`}
+                      : `${selectedModel.labelEn} chưa được cài đặt`}
                 </strong>
                 <span>
                   {selectedModelInstalled
                     ? isEn
                       ? "Recognition and warmup use this verified local model."
-                      : "识别与预热会使用这个已校验的本地模型。"
+                      : "Nhận dạng và khởi động sử dụng mô hình cục bộ đã được xác minh này."
                     : isEn
                       ? "Import the matching verified .vtxocrmodel package before recognition."
-                      : "识别前请导入对应的已校验 .vtxocrmodel 模型包。"}
+                      : "Nhập gói .vtxocrmodel đã được xác minh phù hợp trước khi nhận dạng."}
                 </span>
                 <small className="ocr-model-drop-hint">
                   {modelPackageDragging
                     ? isEn
                       ? "Release to verify and import this model package"
-                      : "松开鼠标即可校验并导入这个模型包"
+                      : "Phát hành để xác minh và nhập gói mô hình này"
                     : isEn
                       ? "Choose a package below, or drag one .vtxocrmodel package into this area."
-                      : "可点击下方按钮选择，也可将一个 .vtxocrmodel 模型包拖到此区域。"}
+                      : "Chọn gói bên dưới hoặc kéo một gói .vtxocrmodel vào khu vực này."}
                 </small>
                 <div className="ocr-install-actions">
                   {!selectedModelInstalled && (
@@ -867,7 +867,7 @@ export function OcrDialog({
                       ) : (
                         <Upload size={14} />
                       )}
-                      {isEn ? "Import package" : "导入模型包"}
+                      {isEn ? "Import package" : "Gói hàng nhập khẩu"}
                     </button>
                   )}
                   {selectedModelRemovable && (
@@ -878,7 +878,7 @@ export function OcrDialog({
                       disabled={modelBusy || recognizing}
                     >
                       <Trash2 size={14} />
-                      {isEn ? "Remove model" : "删除模型"}
+                      {isEn ? "Remove model" : "Xóa mô hình"}
                     </button>
                   )}
                 </div>
@@ -891,7 +891,7 @@ export function OcrDialog({
                 <span>
                   {isEn
                     ? "The L model occupies about 698 MB and can use several GB of memory. Use M unless L accuracy is necessary."
-                    : "L 模型约占 698 MB，并可能占用数 GB 内存；没有明确精度需求时建议使用 M 模型。"}
+                    : "Model L chiếm khoảng 698 MB và có thể sử dụng vài GB bộ nhớ. Sử dụng M trừ khi cần độ chính xác L."}
                 </span>
               </div>
             )}
@@ -901,7 +901,7 @@ export function OcrDialog({
               <span>
                 {isEn
                   ? "Use a tight crop around one formula. Avoid blur, shadows, and perspective distortion."
-                  : "建议只截取一条公式并尽量裁紧，避免模糊、阴影和明显透视变形。"}
+                  : "Sử dụng cắt xén chặt chẽ xung quanh một công thức. Tránh làm mờ, đổ bóng và biến dạng phối cảnh."}
               </span>
             </div>
           </div>
@@ -923,12 +923,12 @@ export function OcrDialog({
                     {runtime?.installed
                       ? isEn
                         ? "Local OCR runtime ready"
-                        : "本地 OCR 环境已就绪"
+                        : "Thời gian chạy OCR cục bộ đã sẵn sàng"
                       : isEn
                         ? "OCR runtime is not installed"
-                        : "尚未安装 OCR 运行环境"}
+                        : "Thời gian chạy OCR chưa được cài đặt"}
                   </strong>
-                  <span>{runtime?.message ?? (isEn ? "Checking runtime…" : "正在检查运行环境…")}</span>
+                  <span>{runtime?.message ?? (isEn ? "Checking runtime…" : "Đang kiểm tra thời gian chạy…")}</span>
                 </div>
               </div>
 
@@ -938,11 +938,11 @@ export function OcrDialog({
                   <span>Paddle {runtime.paddleVersion}</span>
                   <span>PaddleOCR {runtime.paddleocrVersion}</span>
                   <span>
-                    {isEn ? "Models" : "模型"}: {installedModels.length > 0
+                    {isEn ? "Models" : "Model"}: {installedModels.length > 0
                       ? installedModels.join(", ")
                       : isEn
                         ? "none"
-                        : "未安装"}
+                        : "không có"}
                   </span>
                   <button
                     type="button"
@@ -950,11 +950,11 @@ export function OcrDialog({
                     disabled={!selectedModelInstalled}
                   >
                     <RefreshCw size={13} />
-                    {isEn ? "Restart" : "重启进程"}
+                    {isEn ? "Restart" : "Khởi động lại"}
                   </button>
                   <button type="button" className="is-danger" onClick={handleResetRuntime}>
                     <Trash2 size={13} />
-                    {isEn ? "Reset" : "重置环境"}
+                    {isEn ? "Reset" : "Đặt lại"}
                   </button>
                 </div>
               ) : (
@@ -975,7 +975,7 @@ export function OcrDialog({
                       <p>
                         {isEn
                           ? "VisualTeX will verify and extract the bundled Python 3.10, PaddlePaddle 3.3.1, PaddleOCR 3.7.0, and the default M model entirely on this Mac. No network or pip installation is used."
-                          : "VisualTeX 会在本机校验并解压应用内置的 Python 3.10、PaddlePaddle 3.3.1、PaddleOCR 3.7.0 与默认 M 模型；全程不联网，也不会运行 pip 安装。"}
+                          : "VisualTeX sẽ xác minh và trích xuất gói Python 3.10, PaddlePaddle 3.3.1, PaddleOCR 3.7.0 và mô hình M mặc định hoàn toàn trên máy Mac này. Không có cài đặt mạng hoặc pip được sử dụng."}
                       </p>
                       <button
                         type="button"
@@ -988,7 +988,7 @@ export function OcrDialog({
                         }
                       >
                         <Download size={15} />
-                        {isEn ? "Install OCR runtime" : "安装 OCR 运行环境"}
+                        {isEn ? "Install OCR runtime" : "Cài đặt thời gian chạy OCR"}
                       </button>
                     </>
                   )}
@@ -1000,14 +1000,14 @@ export function OcrDialog({
               <div className="ocr-result-heading">
                 <div>
                   <span className="eyebrow">LATEX RESULT</span>
-                  <strong>{isEn ? "Recognition result" : "识别结果"}</strong>
+                  <strong>{isEn ? "Recognition result" : "Kết quả nhận dạng"}</strong>
                 </div>
                 {result && (
                   <span>
                     {result.backgroundInverted
                       ? isEn
                         ? "Dark background normalized · "
-                        : "已自动反色 · "
+                        : "Đã chuẩn hóa nền tối ·"
                       : ""}
                     {result.elapsedMs} ms · {result.processedWidth}×{result.processedHeight}
                   </span>
@@ -1019,17 +1019,17 @@ export function OcrDialog({
                   <LoaderCircle size={24} className="is-spinning" />
                   <strong>
                     {recognitionProgress?.message ??
-                      (isEn ? "Recognizing formula…" : "正在识别公式…")}
+                      (isEn ? "Recognizing formula…" : "Nhận biết công thức…")}
                   </strong>
                   <span>
                     {isEn
                       ? `${selectedModel.labelEn} · ${recognitionSeconds}s elapsed`
-                      : `${selectedModel.labelZh} · 已等待 ${recognitionSeconds} 秒`}
+                      : `${selectedModel.labelEn} · ${recognitionSeconds} đã trôi qua`}
                   </span>
                   <small className="ocr-recognition-meta">
                     {isEn
                       ? `First use may download ${selectedModel.downloadMb.toFixed(1)} MB. You can cancel without closing VisualTeX.`
-                      : `首次使用可能需要下载 ${selectedModel.downloadMb.toFixed(1)} MB；现在可以随时取消，不会卡住 VisualTeX。`}
+                      : `Lần sử dụng đầu tiên có thể tải xuống ${selectedModel.downloadMb.toFixed(1)} MB. Bạn có thể hủy mà không cần đóng VisualTeX.`}
                   </small>
                 </div>
               ) : latex ? (
@@ -1038,7 +1038,7 @@ export function OcrDialog({
                     <MathPreview latex={latex.split("\n")[0]} />
                   </div>
                   <label className="ocr-latex-editor">
-                    <span>{isEn ? "Editable LaTeX" : "可编辑 LaTeX"}</span>
+                    <span>{isEn ? "Editable LaTeX" : "LaTeX có thể chỉnh sửa"}</span>
                     <textarea value={latex} onChange={(event) => setLatex(event.target.value)} spellCheck={false} />
                   </label>
                 </>
@@ -1048,7 +1048,7 @@ export function OcrDialog({
                   <span>
                     {isEn
                       ? "Choose an image and run recognition."
-                      : "选择图片并开始识别后，结果会显示在这里。"}
+                      : "Chọn một hình ảnh và chạy nhận dạng."}
                   </span>
                 </div>
               )}
@@ -1079,10 +1079,10 @@ export function OcrDialog({
               {cancelling
                 ? isEn
                   ? "Stopping…"
-                  : "正在停止…"
+                  : "Đang dừng…"
                 : isEn
                   ? "Cancel recognition"
-                  : "取消识别"}
+                  : "Hủy nhận dạng"}
             </button>
           ) : (
             <button
@@ -1098,21 +1098,21 @@ export function OcrDialog({
               }
             >
               <ScanLine size={15} />
-              {isEn ? "Recognize" : "开始识别"}
+              {isEn ? "Recognize" : "Nhận biết"}
             </button>
           )}
           <div className="ocr-result-actions">
             <button type="button" className="secondary-button" onClick={handleCopy} disabled={!latex.trim()}>
               {copied ? <Check size={15} /> : <Copy size={15} />}
-              {copied ? (isEn ? "Copied" : "已复制") : isEn ? "Copy LaTeX" : "复制 LaTeX"}
+              {copied ? (isEn ? "Copied" : "Sao chép") : isEn ? "Copy LaTeX" : "Sao chép LaTeX"}
             </button>
             <button type="button" className="secondary-button" onClick={handleAppend} disabled={!latex.trim()}>
               <Plus size={15} />
-              {isEn ? "Append line" : "追加为新行"}
+              {isEn ? "Append line" : "Nối dòng"}
             </button>
             <button type="button" className="primary-button" onClick={handleInsert} disabled={!latex.trim()}>
               <ScanLine size={15} />
-              {isEn ? "Insert at cursor" : "插入当前光标"}
+              {isEn ? "Insert at cursor" : "Chèn vào con trỏ"}
             </button>
           </div>
         </footer>

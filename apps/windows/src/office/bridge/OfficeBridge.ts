@@ -75,7 +75,7 @@ export class OfficeBridge {
     options: { silentFailure?: boolean } = {},
   ) {
     if (this.commandRunning || this.dialog.isOpen) {
-      this.adapter.showMessage("VisualTeX 编辑窗口已经打开。");
+      this.adapter.showMessage("The VisualTeX editing window has been opened.");
       onCommandCompleted?.();
       return;
     }
@@ -87,7 +87,7 @@ export class OfficeBridge {
     this.commandRunning = true;
     this.commandCompleted = onCommandCompleted ?? null;
     try {
-      this.adapter.showMessage("正在连接 VisualTeX 本地伴侣服务…");
+      this.adapter.showMessage("Connecting to VisualTeX local companion service...");
       await ensureCompanionReady();
       const selection = await this.adapter.readSelection(mode);
       const session = await createOfficeSession({
@@ -99,7 +99,7 @@ export class OfficeBridge {
         ...selection.sessionSeed,
       });
       this.activeSessionId = session.id;
-      this.adapter.showMessage("正在打开 VisualTeX 编辑器…");
+      this.adapter.showMessage("Opening VisualTeX editor...");
       await this.dialog.open(session.id, {
         onMessage: (message) => this.handleDialogMessage(message),
         onClosed: () => this.handleDialogClosed(session.id),
@@ -111,12 +111,12 @@ export class OfficeBridge {
       // button appear dead after one invocation. Release it once the dialog is
       // open; the Session watcher and dialog handlers continue independently.
       this.completeOfficeCommand();
-      this.adapter.showMessage("VisualTeX 编辑器已打开。");
+      this.adapter.showMessage("The VisualTeX editor is open.");
     } catch (error) {
       if (!options.silentFailure) {
         showCommandError(
           this.adapter,
-          officeErrorMessage(error, "无法启动 VisualTeX Office 编辑器。"),
+          officeErrorMessage(error, "Unable to start the VisualTeX Office editor."),
         );
       }
       this.activeSessionId = null;
@@ -132,7 +132,7 @@ export class OfficeBridge {
     } catch (error) {
       showCommandError(
         this.adapter,
-        officeErrorMessage(error, "无法打开 VisualTeX.app。"),
+        officeErrorMessage(error, "Unable to open VisualTeX.app."),
       );
     }
   }
@@ -183,7 +183,7 @@ export class OfficeBridge {
     if (session.status === "cancelled" || session.explicitCancel) {
       this.dialog.close();
       this.activeSessionId = null;
-      this.adapter.showMessage("已取消，Office 文档未修改。");
+      this.adapter.showMessage("Canceled, Office document has not been modified.");
       this.finishSession();
       return;
     }
@@ -210,7 +210,7 @@ export class OfficeBridge {
       });
       this.dialog.close();
       this.activeSessionId = null;
-      this.adapter.showMessage("已取消，Office 文档未修改。");
+      this.adapter.showMessage("Canceled, Office document has not been modified.");
       this.finishSession();
       return;
     }
@@ -275,19 +275,19 @@ export class OfficeBridge {
           status: "cancelled",
           explicitCancel: false,
         });
-        this.adapter.showMessage("空公式已取消，Office 文档未修改。");
+        this.adapter.showMessage("The empty formula has been canceled and the Office document has not been modified.");
       } else if (!sessionHasRequiredExport(session, this.adapter)) {
         await updateOfficeSession(sessionId, {
           status: "failed",
-          error: "公式导出尚未成功，已保留恢复记录。",
+          error: "The formula export has not been successful and the recovery record has been retained.",
         });
-        this.adapter.showMessage("公式未插入：导出失败，Session 已保留以便恢复。");
+        this.adapter.showMessage("Formula not inserted: Export failed, Session reserved for recovery.");
       }
     } catch (error) {
       this.adapter.showMessage(
-        `无法处理关闭事件：${officeErrorMessage(
+        `Unable to handle shutdown event:${officeErrorMessage(
           error,
-          "无法处理 VisualTeX 编辑窗口关闭事件。",
+          "Unable to handle the VisualTeX edit window close event.",
         )}`,
       );
     } finally {
@@ -309,20 +309,20 @@ export class OfficeBridge {
       }
       if (!sessionHasFormula(session.lines)) {
         await updateOfficeSession(sessionId, { status: "cancelled" });
-        this.adapter.showMessage("空公式没有插入 Office 文档。");
+        this.adapter.showMessage("An empty formula was not inserted into the Office document.");
         if (closeAfterSuccess) this.dialog.close();
         this.activeSessionId = null;
         this.finishSession();
         return;
       }
       if (!session.exportResult) {
-        throw new Error("公式 SVG 尚未生成，无法写入 Office 文档。");
+        throw new Error("The formula SVG has not been generated and cannot be written to the Office document.");
       }
       if (session.mode === "edit" && !session.dirty) {
         await updateOfficeSession(sessionId, { status: "completed" });
         this.activeSessionId = null;
         if (closeAfterSuccess) this.dialog.close();
-        this.adapter.showMessage("公式内容未变化，无需更新。");
+        this.adapter.showMessage("The content of the formula has not changed and does not need to be updated.");
         this.finishSession();
         return;
       }
@@ -333,16 +333,16 @@ export class OfficeBridge {
       this.activeSessionId = null;
       if (closeAfterSuccess) this.dialog.close();
       this.adapter.showMessage(
-        session.mode === "edit" ? "VisualTeX 公式已更新。" : "VisualTeX 公式已插入。",
+        session.mode === "edit" ? "VisualTeX formulas have been updated." : "VisualTeX formula inserted.",
       );
       this.finishSession();
     } catch (error) {
-      const message = officeErrorMessage(error, "Office 公式写入失败。");
+      const message = officeErrorMessage(error, "Office formula writing failed.");
       await updateOfficeSession(sessionId, {
         status: "failed",
         error: message,
       }).catch(() => undefined);
-      this.adapter.showMessage(`${message} Session 已保留以便恢复。`);
+      this.adapter.showMessage(`${message}Session has been preserved for recovery.`);
     } finally {
       this.commitRunning = false;
     }

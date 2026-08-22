@@ -32,7 +32,7 @@ class OfficeFormulaErrorBoundary extends Component<
     if (!this.state.error) return this.props.children;
     return (
       <main className="office-dialog-state is-error" role="alert">
-        <strong>VisualTeX Office 公式编辑器加载失败</strong>
+        <strong>VisualTeX Office Equation Editor failed to load</strong>
         <p>{this.state.error.stack || this.state.error.message}</p>
       </main>
     );

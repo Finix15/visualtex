@@ -64,13 +64,13 @@ export class WindowsOleAdapter implements OfficeHostAdapter {
     );
     if (selection.readOnly) {
       throw new OfficeIntegrationError(
-        "当前 Office 文档为只读状态，无法插入或编辑公式。",
+        "The current Office document is read-only and formulas cannot be inserted or edited.",
         "document_read_only",
       );
     }
     if (mode === "edit" && (!selection.formulaId || !selection.metadata)) {
       throw new OfficeIntegrationError(
-        "请选择一个带有 VisualTeX 元数据的公式后再编辑。",
+        "Please select a formula with VisualTeX metadata before editing.",
         "formula_not_selected",
       );
     }
@@ -108,7 +108,7 @@ export class WindowsOleAdapter implements OfficeHostAdapter {
       "word.updateEquationNumbers",
       {},
     );
-    this.showMessage(`VisualTeX 已更新 ${result.updated} 个公式编号。`);
+    this.showMessage(`VisualTeX updated${result.updated}formula number.`);
     return result.updated;
   }
 
@@ -126,7 +126,7 @@ export function windowsOfficeHostFromReadyInfo(host: Office.HostType): OfficeHos
   if (host === Office.HostType.Word) return "word";
   if (host === Office.HostType.PowerPoint) return "powerpoint";
   throw new OfficeIntegrationError(
-    "VisualTeX Windows OLE 插件仅支持 Word 和 PowerPoint。",
+    "The VisualTeX Windows OLE plug-in supports Word and PowerPoint only.",
     "unsupported_office_host",
   );
 }

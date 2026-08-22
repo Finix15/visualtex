@@ -69,7 +69,7 @@ assert.equal(serialized.settings.formulaToolButtonPadding, 7);
 assert.equal(serialized.settings.formulaRowVerticalInset, 13);
 assert.equal(serialized.settings.pngExportBackground, "#123456");
 assert.equal(serialized.settings.formulaLetterFont, "palatino");
-assert.equal(serialized.settings.formulaChineseFont, "songti");
+assert.equal(serialized.settings.formulaChineseFont, undefined);
 assert.deepEqual(serialized.settings.inputBehavior, expectedInputBehavior);
 assert.equal(serialized.settings.personalize, false);
 assert.equal(serialized.settings.suggestionCount, 9);
@@ -79,7 +79,7 @@ assert.equal(serialized.settings.classicTileWidth, 486);
 assert.equal(serialized.settings.classicDockHeight, 372);
 
 state().setTheme("light");
-state().setLanguage("cn");
+state().setLanguage("vi");
 state().setEditorLayout("standard");
 state().setZoom(0.6);
 state().setSourceOpen(false);
@@ -101,6 +101,7 @@ state().setPowerPointDefaultFontSizePt(20);
 state().setClassicTileWidth(300);
 state().setClassicDockHeight(240);
 
+serialized.settings.formulaChineseFont = "songti";
 state().loadDocument(serialized);
 const restored = state();
 

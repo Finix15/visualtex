@@ -16,7 +16,7 @@ export type WorkspaceExportFormat = "markdown" | "svg" | "png";
 
 export interface WorkspaceOcrModelOption {
   id: string;
-  labelZh: string;
+  labelVi: string;
   labelEn: string;
 }
 

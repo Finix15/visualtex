@@ -1328,3 +1328,99 @@ Private Sub VTWritePowerPointHealth()
         "}"
     VTWriteTextAtomic statusPath, payload
 End Sub
+
+' VISUALTEX_LOCALIZED_RIBBON_BEGIN
+Public Sub VTPowerPointRibbonGetLabel(ByVal control As IRibbonControl, ByRef returnedValue)
+    returnedValue = VTPowerPointRibbonLocalizedText(control.Id & "|label")
+End Sub
+
+Public Sub VTPowerPointRibbonGetScreentip(ByVal control As IRibbonControl, ByRef returnedValue)
+    returnedValue = VTPowerPointRibbonLocalizedText(control.Id & "|screentip")
+End Sub
+
+Public Sub VTPowerPointRibbonGetSupertip(ByVal control As IRibbonControl, ByRef returnedValue)
+    returnedValue = VTPowerPointRibbonLocalizedText(control.Id & "|supertip")
+End Sub
+
+Public Sub VTPowerPointRibbonGetSizeString(ByVal control As IRibbonControl, ByRef returnedValue)
+    returnedValue = VTPowerPointRibbonLocalizedText(control.Id & "|sizeString")
+End Sub
+
+Private Function VTPowerPointRibbonLocalizedText(ByVal key As String) As String
+    Dim useVietnamese As Boolean
+    useVietnamese = (VTOfficeUiLanguage() = "vi")
+    Select Case key
+        Case "VisualTeX.Mac.PowerPoint.Group|label"
+            If useVietnamese Then
+                VTPowerPointRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0043|00F4|006E|0067|0020|0063|1EE5|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063")
+            Else
+                VTPowerPointRibbonLocalizedText = "Formula Tool"
+            End If
+        Case "VisualTeX.Mac.PowerPoint.New|label"
+            If useVietnamese Then
+                VTPowerPointRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0043|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|006D|1EDB|0069")
+            Else
+                VTPowerPointRibbonLocalizedText = "New formula"
+            End If
+        Case "VisualTeX.Mac.PowerPoint.Edit|label"
+            If useVietnamese Then
+                VTPowerPointRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0043|0068|1EC9|006E|0068|0020|0073|1EED|0061|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0111|00E3|0020|0063|0068|1ECD|006E")
+            Else
+                VTPowerPointRibbonLocalizedText = "Edit selected formula"
+            End If
+        Case "VisualTeX.Mac.PowerPoint.Delete|label"
+            If useVietnamese Then
+                VTPowerPointRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0058|00F3|0061|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0111|00E3|0020|0063|0068|1ECD|006E")
+            Else
+                VTPowerPointRibbonLocalizedText = "Delete selected formula"
+            End If
+        Case "VisualTeX.Mac.PowerPoint.FormulaFontSize|label"
+            If useVietnamese Then
+                VTPowerPointRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0043|1EE1|0020|0063|0068|1EEF|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0053|0056|0047")
+            Else
+                VTPowerPointRibbonLocalizedText = "SVG formula font size"
+            End If
+        Case "VisualTeX.Mac.PowerPoint.FormulaFontSize|screentip"
+            If useVietnamese Then
+                VTPowerPointRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0043|0068|1ECD|006E|0020|0063|1EE1|0020|0063|0068|1EEF|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0053|0056|0047")
+            Else
+                VTPowerPointRibbonLocalizedText = "Select SVG formula font size"
+            End If
+        Case "VisualTeX.Mac.PowerPoint.FormulaFontSize|supertip"
+            If useVietnamese Then
+                VTPowerPointRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0043|0068|1ECD|006E|0020|006D|1ED9|0074|0020|0068|006F|1EB7|0063|0020|006E|0068|0069|1EC1|0075|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|" & _
+                    "0063|0020|0056|0069|0073|0075|0061|006C|0054|0065|0058|0020|0053|0056|0047|0020|0074|0072|01B0|1EDB|0063|0020|006B|0068|0069|0020|0063|0068|" & _
+                    "1ECD|006E|0020|0074|1EEB|0020|0064|0061|006E|0068|0020|0073|00E1|0063|0068|0020|006B|00ED|0063|0068|0020|0074|0068|01B0|1EDB|0063|0020|0111|" & _
+                    "0069|1EC3|006D|0020|0076|00E0|0020|0070|0068|00F4|006E|0067|0020|0063|0068|1EEF|0020|0074|0069|1EBF|006E|0067|0020|0054|0072|0075|006E|0067|" & _
+                    "003B|0020|00E1|0070|0020|0064|1EE5|006E|0067|0020|0063|0068|00FA|006E|0067|0020|006E|0067|0061|0079|0020|0073|0061|0075|0020|006B|0068|0069|" & _
+                    "0020|0063|0068|1ECD|006E|002C|0020|0067|0069|1EEF|0020|006E|0067|0075|0079|00EA|006E|0020|0074|0072|0075|006E|0067|0020|0074|00E2|006D|002C|" & _
+                    "0020|0078|006F|0061|0079|0020|0076|00E0|0020|0070|0068|00E2|006E|0020|0063|1EA5|0070|002E")
+            Else
+                VTPowerPointRibbonLocalizedText = "Select one or more VisualTeX SVG formulas before selecting a point size; the change is applied immediately after selection."
+            End If
+        Case "VisualTeX.Mac.PowerPoint.FormulaFontSize|sizeString"
+            If useVietnamese Then
+                VTPowerPointRibbonLocalizedText = VTUnicodeFromHex( _
+                    "0054|00F9|0079|0020|0063|0068|1EC9|006E|0068|0020|0028|0035|0031|0032|0020|0111|0069|1EC3|006D|0029")
+            Else
+                VTPowerPointRibbonLocalizedText = "Custom (512 pt)"
+            End If
+        Case "VisualTeX.Mac.PowerPoint.Open|label"
+            If useVietnamese Then
+                VTPowerPointRibbonLocalizedText = VTUnicodeFromHex( _
+                    "004D|1EDF|0020|0056|0069|0073|0075|0061|006C|0054|0065|0058")
+            Else
+                VTPowerPointRibbonLocalizedText = "Open VisualTeX"
+            End If
+        Case Else
+            VTPowerPointRibbonLocalizedText = vbNullString
+    End Select
+End Function
+' VISUALTEX_LOCALIZED_RIBBON_END

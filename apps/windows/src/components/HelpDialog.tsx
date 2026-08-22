@@ -1,10 +1,11 @@
 import { Fragment, useEffect, useMemo, type ReactNode } from "react";
 import { BookOpenText, X } from "lucide-react";
-import manualMarkdown from "../../docs/help/VisualTeX-Help.md?raw";
+import manualEnglish from "../../../macos/docs/help/VisualTeX_Help_English.md?raw";
+import manualVietnamese from "../../../macos/docs/help/VisualTeX_Help_Vietnamese.md?raw";
 
 interface HelpDialogProps {
   open: boolean;
-  language: "cn" | "en";
+  language: "vi" | "en";
   onClose: () => void;
 }
 
@@ -152,7 +153,10 @@ function renderInline(text: string): ReactNode {
 }
 
 export function HelpDialog({ open, language, onClose }: HelpDialogProps) {
-  const blocks = useMemo(() => parseManual(manualMarkdown), []);
+  const blocks = useMemo(
+    () => parseManual(language === "vi" ? manualVietnamese : manualEnglish),
+    [language],
+  );
   const sections = useMemo(
     () =>
       blocks.filter(
@@ -192,22 +196,22 @@ export function HelpDialog({ open, language, onClose }: HelpDialogProps) {
           <div>
             <strong id="help-dialog-title">
               <BookOpenText size={18} />
-              {isEn ? "Help Manual" : "帮助手册"}
+              {isEn ? "Help Manual" : "Hướng dẫn trợ giúp"}
             </strong>
-            <span>VisualTeX Windows 1.2.5</span>
+            <span>VisualTeX Windows 1.2.6</span>
           </div>
           <button
             type="button"
             className="icon-button compact"
             onClick={onClose}
-            aria-label={isEn ? "Close help manual" : "关闭帮助手册"}
+            aria-label={isEn ? "Close help manual" : "Đóng hướng dẫn trợ giúp"}
           >
             <X size={17} />
           </button>
         </header>
 
         <div className="help-dialog-body">
-          <nav className="help-dialog-toc" aria-label={isEn ? "Manual sections" : "手册目录"}>
+          <nav className="help-dialog-toc" aria-label={isEn ? "Manual sections" : "Phần hướng dẫn sử dụng"}>
             {sections.map((section) => (
               <button
                 type="button"

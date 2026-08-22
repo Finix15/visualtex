@@ -16,6 +16,19 @@ Public Function VTUnicodeText(ParamArray codePoints() As Variant) As String
     Next index
 End Function
 
+Public Function VTUnicodeFromHex(ByVal encoded As String) As String
+    Dim parts() As String
+    Dim index As Long
+    Dim codePoint As Long
+
+    parts = Split(encoded, "|")
+    For index = LBound(parts) To UBound(parts)
+        codePoint = CLng("&H" & parts(index))
+        If codePoint > 32767 Then codePoint = codePoint - 65536
+        VTUnicodeFromHex = VTUnicodeFromHex & ChrW(codePoint)
+    Next index
+End Function
+
 Public Function VTFormulaFontPresetCount() As Long
     VTFormulaFontPresetCount = 20
 End Function
@@ -52,68 +65,9 @@ End Function
 
 Public Function VTFormulaFontPresetLabel( _
     ByVal presetIndex As Long) As String
-
-    Select Case presetIndex
-        Case 0
-            VTFormulaFontPresetLabel = _
-                VTUnicodeText(20843, 21495) & " (5 pt)"
-        Case 1
-            VTFormulaFontPresetLabel = _
-                VTUnicodeText(19971, 21495) & " (5.5 pt)"
-        Case 2
-            VTFormulaFontPresetLabel = _
-                VTUnicodeText(23567, 20845) & " (6.5 pt)"
-        Case 3
-            VTFormulaFontPresetLabel = _
-                VTUnicodeText(20845, 21495) & " (7.5 pt)"
-        Case 4
-            VTFormulaFontPresetLabel = _
-                VTUnicodeText(23567, 20116) & " (9 pt)"
-        Case 5
-            VTFormulaFontPresetLabel = _
-                VTUnicodeText(20116, 21495) & " (10.5 pt)"
-        Case 6
-            VTFormulaFontPresetLabel = _
-                VTUnicodeText(23567, 22235) & " (12 pt)"
-        Case 7
-            VTFormulaFontPresetLabel = _
-                VTUnicodeText(22235, 21495) & " (14 pt)"
-        Case 8
-            VTFormulaFontPresetLabel = _
-                VTUnicodeText(23567, 19977) & " (15 pt)"
-        Case 9
-            VTFormulaFontPresetLabel = _
-                VTUnicodeText(19977, 21495) & " (16 pt)"
-        Case 10
-            VTFormulaFontPresetLabel = _
-                VTUnicodeText(23567, 20108) & " (18 pt)"
-        Case 11
-            VTFormulaFontPresetLabel = _
-                VTUnicodeText(20108, 21495) & " (22 pt)"
-        Case 12
-            VTFormulaFontPresetLabel = _
-                VTUnicodeText(23567, 19968) & " (24 pt)"
-        Case 13
-            VTFormulaFontPresetLabel = _
-                VTUnicodeText(19968, 21495) & " (26 pt)"
-        Case 14
-            VTFormulaFontPresetLabel = _
-                VTUnicodeText(23567, 21021) & " (36 pt)"
-        Case 15
-            VTFormulaFontPresetLabel = _
-                VTUnicodeText(21021, 21495) & " (42 pt)"
-        Case 16
-            VTFormulaFontPresetLabel = "48 pt"
-        Case 17
-            VTFormulaFontPresetLabel = "54 pt"
-        Case 18
-            VTFormulaFontPresetLabel = "72 pt"
-        Case 19
-            VTFormulaFontPresetLabel = "96 pt"
-        Case Else
-            Err.Raise vbObjectError + 7213, "VisualTeX", _
-                "The requested formula font-size label does not exist."
-    End Select
+    VTFormulaFontPresetLabel = Replace$( _
+        Format$(VTFormulaFontPresetSize(presetIndex), "0.##"), _
+        ",", ".") & " pt"
 End Function
 
 Public Function VTFormulaFontPresetIndex( _

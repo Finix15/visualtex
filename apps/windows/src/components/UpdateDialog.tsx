@@ -103,7 +103,7 @@ export function UpdateDialog({
     releaseNotes.fixes.length > 0 ||
     releaseNotes.other.length > 0;
   const publishedDate = result?.publishedAt
-    ? new Intl.DateTimeFormat(isEn ? "en-US" : "zh-CN", {
+    ? new Intl.DateTimeFormat(isEn ? "en-US" : "vi-VN", {
         year: "numeric",
         month: "short",
         day: "numeric",
@@ -112,18 +112,18 @@ export function UpdateDialog({
   const title = checking
     ? isEn
       ? "Checking for updates"
-      : "正在检查更新"
+      : "Đang kiểm tra cập nhật"
     : error
       ? isEn
         ? "Unable to check"
-        : "暂时无法检查更新"
+        : "Không thể kiểm tra được"
       : updateAvailable
         ? isEn
           ? "A new version is available"
-          : "发现新版本"
+          : "Đã có phiên bản mới"
         : isEn
           ? "VisualTeX is up to date"
-          : "VisualTeX 已是最新版本";
+          : "VisualTeX đã được cập nhật";
 
   return (
     <div className="modal-backdrop update-backdrop" role="presentation">
@@ -154,14 +154,14 @@ export function UpdateDialog({
             </span>
             <div>
               <h2 id="update-dialog-title">{title}</h2>
-              <span>{isEn ? "Application update" : "应用更新"}</span>
+              <span>{isEn ? "Application update" : "Cập nhật ứng dụng"}</span>
             </div>
           </div>
           <button
             type="button"
             className="icon-button"
             onClick={onClose}
-            aria-label={isEn ? "Close update dialog" : "关闭更新弹窗"}
+            aria-label={isEn ? "Close update dialog" : "Đóng hộp thoại cập nhật"}
           >
             <X size={18} />
           </button>
@@ -172,14 +172,14 @@ export function UpdateDialog({
             <p>
               {isEn
                 ? "Connecting to the VisualTeX release server…"
-                : "正在连接 VisualTeX 发布服务器…"}
+                : "Đang kết nối với máy chủ phát hành VisualTeX…"}
             </p>
           ) : error ? (
             <>
               <p>
                 {isEn
                   ? "Check your network connection and try again."
-                  : "请检查网络连接后重试。"}
+                  : "Hãy kiểm tra kết nối mạng của bạn và thử lại."}
               </p>
               <code>{error}</code>
             </>
@@ -187,12 +187,12 @@ export function UpdateDialog({
             <>
               <div className="update-version-row">
                 <span>
-                  <small>{isEn ? "Installed" : "当前版本"}</small>
+                  <small>{isEn ? "Installed" : "Đã cài đặt"}</small>
                   <strong>v{result.currentVersion}</strong>
                 </span>
                 <RefreshCw size={16} aria-hidden="true" />
                 <span>
-                  <small>{isEn ? "Latest" : "最新版本"}</small>
+                  <small>{isEn ? "Latest" : "Mới nhất"}</small>
                   <strong>v{result.latestVersion}</strong>
                 </span>
               </div>
@@ -203,7 +203,7 @@ export function UpdateDialog({
                     <strong>{result.releaseName}</strong>
                     {publishedDate && (
                       <small>
-                        {isEn ? `Published ${publishedDate}` : `发布于 ${publishedDate}`}
+                        {isEn ? `Published ${publishedDate}` : `Đã xuất bản ${publishedDate}`}
                       </small>
                     )}
                   </div>
@@ -214,7 +214,7 @@ export function UpdateDialog({
                         <section>
                           <h3>
                             <Sparkles size={15} />
-                            {isEn ? "New features" : "新增功能"}
+                            {isEn ? "New features" : "Tính năng mới"}
                           </h3>
                           <ul>
                             {releaseNotes.features.map((item, index) => (
@@ -227,7 +227,7 @@ export function UpdateDialog({
                         <section>
                           <h3>
                             <Wrench size={15} />
-                            {isEn ? "Bug fixes" : "问题修复"}
+                            {isEn ? "Bug fixes" : "Sửa lỗi"}
                           </h3>
                           <ul>
                             {releaseNotes.fixes.map((item, index) => (
@@ -238,7 +238,7 @@ export function UpdateDialog({
                       )}
                       {releaseNotes.other.length > 0 && (
                         <section>
-                          <h3>{isEn ? "Other changes" : "其他更新"}</h3>
+                          <h3>{isEn ? "Other changes" : "Những thay đổi khác"}</h3>
                           <ul>
                             {releaseNotes.other.map((item, index) => (
                               <li key={`other-${index}`}>{item}</li>
@@ -251,7 +251,7 @@ export function UpdateDialog({
                     <p>
                       {isEn
                         ? "Open GitHub Releases to view the complete update details and download the installer for your platform."
-                        : "前往 GitHub Releases 查看完整更新说明，并下载适合当前平台的安装包。"}
+                        : "Mở Bản phát hành GitHub để xem chi tiết cập nhật đầy đủ và tải xuống trình cài đặt cho nền tảng của bạn."}
                     </p>
                   )}
                 </>
@@ -259,17 +259,17 @@ export function UpdateDialog({
                 <p>
                   {isEn
                     ? "You are using the latest stable version."
-                    : "你正在使用最新的稳定版本。"}
+                    : "Bạn đang sử dụng phiên bản ổn định mới nhất."}
                 </p>
               )}
             </>
           ) : null}
 
-          <section className="update-project-card" aria-label={isEn ? "Project information" : "项目信息"}>
+          <section className="update-project-card" aria-label={isEn ? "Project information" : "Thông tin dự án"}>
             <div className="update-project-author">
               <UserRound size={15} aria-hidden="true" />
               <span>
-                <small>{isEn ? "Author" : "作者"}</small>
+                <small>{isEn ? "Author" : "Tác giả"}</small>
                 <strong>paulhe666</strong>
               </span>
             </div>
@@ -286,28 +286,28 @@ export function UpdateDialog({
               <Star size={14} aria-hidden="true" />
               {isEn
                 ? "If you like the project, please give it a Star!"
-                : "如果觉得项目不错请点个 Star 噢！"}
+                : "Nếu bạn thích dự án, hãy cho nó một Ngôi sao!"}
             </p>
           </section>
 
           <section
             className="update-community-card"
-            aria-label={isEn ? "VisualTeX QQ community" : "VisualTeX QQ 交流群"}
+            aria-label={isEn ? "VisualTeX QQ community" : "Cộng đồng VisualTeX QQ"}
           >
             <div className="update-community-copy">
               <span className="update-community-icon">
                 <UsersRound size={18} aria-hidden="true" />
               </span>
               <div>
-                <small>{isEn ? "Community" : "交流社区"}</small>
-                <strong>{isEn ? "VisualTeX QQ Group" : "VisualTeX 交流群"}</strong>
+                <small>{isEn ? "Community" : "Cộng đồng"}</small>
+                <strong>{isEn ? "VisualTeX QQ Group" : "Nhóm VisualTeX QQ"}</strong>
                 <p>
                   {isEn
                     ? "Scan with QQ or search the group number to discuss usage, report issues, and follow development updates."
-                    : "使用 QQ 扫码或搜索群号，交流使用方法、反馈问题并获取开发动态。"}
+                    : "Quét bằng QQ hoặc tìm kiếm số nhóm để thảo luận về cách sử dụng, báo cáo sự cố và theo dõi các cập nhật phát triển."}
                 </p>
                 <span className="update-community-number">
-                  {isEn ? "Group number" : "群号"}：
+                  {isEn ? "Group number" : "Số nhóm"}：
                   <b>{VISUALTEX_QQ_GROUP_NUMBER}</b>
                 </span>
               </div>
@@ -318,12 +318,12 @@ export function UpdateDialog({
                 alt={
                   isEn
                     ? `QR code for VisualTeX QQ group ${VISUALTEX_QQ_GROUP_NUMBER}`
-                    : `VisualTeX QQ 交流群 ${VISUALTEX_QQ_GROUP_NUMBER} 二维码`
+                    : `Mã QR cho nhóm VisualTeX QQ ${VISUALTEX_QQ_GROUP_NUMBER}`
                 }
                 width={240}
                 height={240}
               />
-              <figcaption>{isEn ? "Scan with QQ" : "使用 QQ 扫码加入"}</figcaption>
+              <figcaption>{isEn ? "Scan with QQ" : "Quét bằng QQ"}</figcaption>
             </figure>
           </section>
 
@@ -342,19 +342,19 @@ export function UpdateDialog({
                 {automaticPrompt
                   ? isEn
                     ? "Do not remind me again"
-                    : "以后不再提醒"
+                    : "Đừng nhắc nữa"
                   : isEn
                     ? "Check automatically on startup"
-                    : "启动时自动检查更新"}
+                    : "Kiểm tra tự động khi khởi động"}
               </strong>
               <small>
                 {automaticPrompt
                   ? isEn
                     ? "Automatic update notifications will stay off. You can turn them back on in Settings."
-                    : "以后不会再主动弹出更新提示，可在设置中重新开启。"
+                    : "Thông báo cập nhật tự động sẽ tắt. Bạn có thể bật lại chúng trong Cài đặt."
                   : isEn
                     ? "When disabled, VisualTeX will not make automatic update requests or show update notifications."
-                    : "关闭后不会自动联网检查，也不会主动显示更新弹窗。"}
+                    : "Khi bị tắt, VisualTeX sẽ không thực hiện yêu cầu cập nhật tự động hoặc hiển thị thông báo cập nhật."}
               </small>
             </span>
           </label>
@@ -362,24 +362,24 @@ export function UpdateDialog({
 
         <footer className="dialog-footer update-dialog-footer">
           <button type="button" className="secondary-button" onClick={onClose}>
-            {isEn ? "Later" : "稍后"}
+            {isEn ? "Later" : "Sau đó"}
           </button>
           {checking ? (
             <button type="button" className="primary-button" disabled>
               <LoaderCircle size={15} className="is-spinning" />
-              {isEn ? "Checking…" : "检查中…"}
+              {isEn ? "Checking…" : "Đang kiểm tra…"}
             </button>
           ) : error ? (
             <button type="button" className="primary-button" onClick={onRetry}>
-              <RefreshCw size={15} /> {isEn ? "Try again" : "重新检查"}
+              <RefreshCw size={15} /> {isEn ? "Try again" : "Thử lại"}
             </button>
           ) : updateAvailable ? (
             <button type="button" className="primary-button" onClick={onOpenRelease}>
-              <Download size={15} /> {isEn ? "Open download page" : "打开下载页面"}
+              <Download size={15} /> {isEn ? "Open download page" : "Mở trang tải xuống"}
             </button>
           ) : (
             <button type="button" className="primary-button" onClick={onClose}>
-              {isEn ? "Done" : "完成"}
+              {isEn ? "Done" : "Xong"}
             </button>
           )}
         </footer>

@@ -6,14 +6,14 @@ import {
 } from "../src/update/releaseNotes.ts";
 
 const bilingualNotes = `
-## 中文
+## Tiếng Việt
 
-### 新增功能
-- 新增自动更新提醒。
-- 支持按当前语言显示更新说明。
+### Tính năng mới
+- Thêm thông báo cập nhật tự động.
+- Hiển thị ghi chú phát hành theo ngôn ngữ hiện tại.
 
-### 问题修复
-- 修复度数符号删除后光标卡住的问题。
+### Sửa lỗi
+- Sửa lỗi con trỏ bị kẹt sau khi xóa ký hiệu độ.
 
 ## English
 
@@ -25,9 +25,9 @@ const bilingualNotes = `
 - Fixed the degree-symbol caret getting stuck after deletion.
 `;
 
-assert.deepEqual(localizeReleaseNotes(bilingualNotes, "cn"), {
-  features: ["新增自动更新提醒。", "支持按当前语言显示更新说明。"],
-  fixes: ["修复度数符号删除后光标卡住的问题。"],
+assert.deepEqual(localizeReleaseNotes(bilingualNotes, "vi"), {
+  features: ["Thêm thông báo cập nhật tự động.", "Hiển thị ghi chú phát hành theo ngôn ngữ hiện tại."],
+  fixes: ["Sửa lỗi con trỏ bị kẹt sau khi xóa ký hiệu độ."],
   other: [],
 });
 
@@ -41,7 +41,7 @@ assert.deepEqual(localizeReleaseNotes(bilingualNotes, "en"), {
 });
 
 const legacyNotes = `VisualTeX improves editing stability.\n\n- Existing release note.`;
-assert.deepEqual(localizeReleaseNotes(legacyNotes, "cn"), {
+assert.deepEqual(localizeReleaseNotes(legacyNotes, "vi"), {
   features: [],
   fixes: [],
   other: ["VisualTeX improves editing stability.", "Existing release note."],
@@ -50,9 +50,9 @@ assert.deepEqual(localizeReleaseNotes(legacyNotes, "cn"), {
 const privateChineseName = String.fromCodePoint(24278, 29632, 20581);
 const privateEnglishName = ["Liao", "Pojian"].join(" ");
 const privateIdentityNotes =
-  `## 中文\n- 作者：${privateChineseName}（paulhe666）\n` +
+  `## Tiếng Việt\n- Tác giả: ${privateChineseName} (paulhe666)\n` +
   `## English\n- Author: ${privateEnglishName} (paulhe666)`;
-for (const language of ["cn", "en"]) {
+for (const language of ["vi", "en"]) {
   const localized = localizeReleaseNotes(privateIdentityNotes, language);
   const visible = [
     ...localized.features,
@@ -72,14 +72,13 @@ const qqGroupCard = await readFile("public/qq-group-card.svg", "utf8");
 assert(updateDialogSource.includes('const QQ_GROUP_NUMBER = "1045801770"'));
 assert(updateDialogSource.includes('const QQ_GROUP_IMAGE_URL = "/qq-group-card.svg"'));
 assert(updateDialogSource.includes('className="update-community-card"'));
-assert(updateDialogSource.includes("加入 VisualTeX QQ 交流群"));
+assert(updateDialogSource.includes("Join the VisualTeX QQ communication group"));
 assert(!updateDialogSource.includes(privateChineseName));
 assert(
   !updateDialogSource
     .toLocaleLowerCase()
     .includes(privateEnglishName.toLocaleLowerCase()),
 );
-assert(!updateDialogSource.includes("Join the VisualTeX QQ community"));
 assert(qqGroupCard.includes("https://qm.qq.com/q/TppXdoOO8Q") === false);
 assert(qqGroupCard.includes("1045801770"));
 assert(qqGroupCard.includes("VisualTeX 交流群"));

@@ -63,7 +63,7 @@ export function ExportMenu({
 
   const pathLabel = compactPath(
     directory,
-    isEn ? "Choose on first export" : "首次导出时选择",
+    isEn ? "Choose on first export" : "Chọn ở lần xuất đầu tiên",
   );
 
   return (
@@ -76,7 +76,7 @@ export function ExportMenu({
         onClick={() => setOpen((value) => !value)}
       >
         {busy ? <LoaderCircle size={16} className="is-spinning" /> : <Download size={16} />}
-        <span>{isEn ? "Export" : "导出"}</span>
+        <span>{isEn ? "Export" : "Xuất khẩu"}</span>
         <ChevronDown size={14} aria-hidden="true" />
       </button>
 
@@ -84,14 +84,14 @@ export function ExportMenu({
         <div
           className="export-menu-popover"
           role="menu"
-          aria-label={isEn ? "Export formula" : "导出公式"}
+          aria-label={isEn ? "Export formula" : "Xuất công thức"}
         >
           <div className="export-menu-heading">
-            <strong>{isEn ? "Export format" : "导出格式"}</strong>
+            <strong>{isEn ? "Export format" : "Định dạng xuất"}</strong>
             <span>
               {isEn
                 ? "Export the current formula document"
-                : "导出当前公式文档"}
+                : "Xuất tài liệu công thức hiện tại"}
             </span>
           </div>
 
@@ -136,7 +136,7 @@ export function ExportMenu({
 
           <div className="export-path-section">
             <div className="export-path-copy">
-              <span>{isEn ? "Export location" : "导出路径"}</span>
+              <span>{isEn ? "Export location" : "Vị trí xuất"}</span>
               <strong title={directory || pathLabel}>{pathLabel}</strong>
             </div>
             <button
@@ -146,7 +146,7 @@ export function ExportMenu({
               onClick={() => void onChooseDirectory()}
             >
               <FolderOpen size={15} />
-              <span>{isEn ? "Choose" : "选择"}</span>
+              <span>{isEn ? "Choose" : "Chọn"}</span>
             </button>
           </div>
         </div>
