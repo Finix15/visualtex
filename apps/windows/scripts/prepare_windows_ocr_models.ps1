@@ -4,6 +4,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+Import-Module Microsoft.PowerShell.Utility -Force -ErrorAction Stop
 Set-StrictMode -Version Latest
 
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path

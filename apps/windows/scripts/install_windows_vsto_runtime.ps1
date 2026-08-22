@@ -7,6 +7,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+Import-Module Microsoft.PowerShell.Utility -Force -ErrorAction Stop
+Import-Module (Join-Path $PSHOME "Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1") -Force -ErrorAction Stop
 $root = Split-Path -Parent $PSScriptRoot
 $logRoot = Join-Path $env:LOCALAPPDATA "VisualTeX\office\install-logs"
 New-Item -Path $logRoot -ItemType Directory -Force | Out-Null

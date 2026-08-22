@@ -53,9 +53,11 @@ function Resolve-MSBuild {
     if (-not (Test-Path $vswhere)) {
         throw "Visual Studio Installer vswhere.exe was not found."
     }
-    $installationPath = & $vswhere -latest -version "[17.0,18.0)" -products * -requires Microsoft.Component.MSBuild -property installationPath
+    $installationPath = & $vswhere -latest -version "[17.0,19.0)" -products * `
+        -requires Microsoft.Component.MSBuild Microsoft.VisualStudio.Component.VC.Tools.x86.x64 Microsoft.VisualStudio.Component.VC.ATL `
+        -property installationPath
     if (-not $installationPath) {
-        throw "Visual Studio 2022 with MSBuild was not found."
+        throw "Visual Studio Build Tools with MSBuild, Visual C++ x86/x64 and ATL was not found."
     }
     foreach ($relative in @(
         "MSBuild\Current\Bin\amd64\MSBuild.exe",
@@ -143,10 +145,9 @@ try {
     $msbuild = Resolve-MSBuild
 
     $sdkRoot = Join-Path (Split-Path -Parent $dotnet) "sdk"
-    $sdk = Get-ChildItem $sdkRoot -Directory |
-        Sort-Object { [version]$_.Name } -Descending |
-        Select-Object -First 1
-    if (-not $sdk) { throw ".NET SDK directory was not found below $sdkRoot." }
+    $sdkPath = Join-Path $sdkRoot $dotnetVersion
+    $sdk = Get-Item -LiteralPath $sdkPath -ErrorAction SilentlyContinue
+    if (-not $sdk) { throw ".NET SDK directory matching dotnet $dotnetVersion was not found at $sdkPath." }
     $env:DOTNET_ROOT = Split-Path -Parent $dotnet
     $env:DOTNET_HOST_PATH = $dotnet
     $env:DOTNET_MSBUILD_SDK_RESOLVER_CLI_DIR = Split-Path -Parent $dotnet

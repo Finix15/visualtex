@@ -5,6 +5,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+Import-Module Microsoft.PowerShell.Utility -Force -ErrorAction Stop
 $root = Split-Path -Parent $PSScriptRoot
 
 function Get-RegistryView([string]$Architecture) {

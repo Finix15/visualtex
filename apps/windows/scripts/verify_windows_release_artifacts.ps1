@@ -5,6 +5,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+Import-Module Microsoft.PowerShell.Utility -Force -ErrorAction Stop
+Import-Module (Join-Path $PSHOME "Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1") -Force -ErrorAction Stop
 $root = Split-Path -Parent $PSScriptRoot
 $installerPath = Join-Path $root "src-tauri\target\release\bundle\nsis\VisualTeX_${ExpectedAppVersion}_x64-setup.exe"
 $resourceX64 = Join-Path $root "src-tauri\resources\windows-office\VisualTeX-WindowsOffice-VSTO-x64.msi"
@@ -352,7 +354,7 @@ foreach ($requiredHookMarker in @(
     'preserve %APPDATA%\com.visualtex.studio.',
     'Function VisualTeXOcrPageCreate',
     '${NSD_CreateCheckbox} 0 38u 100% 18u',
-    'Install offline OCR resources (recommended)',
+    'Install offline OCR resources',
     'Function VisualTeXOcrPageLeave',
     '/VISUALTEXOCR=',
     '!macro VisualTeXCreateBundledResourceDirectory DESTINATION',

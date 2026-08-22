@@ -23,11 +23,13 @@ apps/windows/src-windows/**/obj/
 apps/windows/src-windows/**/TestResults/
 apps/windows/src-windows/artifacts/
 apps/windows/WINDOWS-BUILD-OUTPUT/
+apps/windows/build-logs/
 
 # OCR runtimes and caches
 apps/*/.cache/
 apps/*/ocr/.venv/
 apps/*/ocr/output/
+apps/windows/src-tauri/resources/ocr-python/
 __pycache__/
 *.py[cod]
 

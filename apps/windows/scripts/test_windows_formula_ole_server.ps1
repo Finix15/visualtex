@@ -20,9 +20,11 @@ $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer
 if (-not (Test-Path $vswhere)) {
     throw "Visual Studio Installer vswhere.exe was not found."
 }
-$visualStudio = & $vswhere -latest -version "[17.0,18.0)" -products * -requires Microsoft.Component.MSBuild -property installationPath
+$visualStudio = & $vswhere -latest -version "[17.0,19.0)" -products * `
+    -requires Microsoft.Component.MSBuild Microsoft.VisualStudio.Component.VC.Tools.x86.x64 Microsoft.VisualStudio.Component.VC.ATL `
+    -property installationPath
 if (-not $visualStudio) {
-    throw "Visual Studio 2022 with MSBuild was not found."
+    throw "Visual Studio Build Tools with MSBuild, Visual C++ x86/x64 and ATL was not found."
 }
 $msbuild = Join-Path $visualStudio "MSBuild\Current\Bin\MSBuild.exe"
 if (-not (Test-Path $msbuild)) {

@@ -7,6 +7,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+Import-Module Microsoft.PowerShell.Utility -Force -ErrorAction Stop
+Import-Module (Join-Path $PSHOME "Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1") -Force -ErrorAction Stop
 $expectedSha256 = "CFE1A40BBE4A50022DB2164ABDB0154984E2CECB761A23CDC81CB5754F6E0A18"
 $expectedVersion = "10.0.60917.00"
 $expectedCompany = "Microsoft Corporation"

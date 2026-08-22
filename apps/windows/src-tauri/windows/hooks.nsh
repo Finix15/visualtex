@@ -62,18 +62,18 @@ Function VisualTeXOfficePageCreate
     Abort
   ${EndIf}
 
-  !insertmacro MUI_HEADER_TEXT "Office 集成" "选择是否安装 VisualTeX 的 Word / PowerPoint 原生集成"
-  ${NSD_CreateLabel} 0 0 100% 24u "请选择是否启用 Windows 原生 Office 集成 / Choose Windows native Office integration"
+  !insertmacro MUI_HEADER_TEXT "Tích hợp Office" "Chọn có cài tích hợp Word / PowerPoint native của VisualTeX hay không"
+  ${NSD_CreateLabel} 0 0 100% 24u "Chọn chế độ tích hợp Office native trên Windows / Choose Windows native Office integration"
   Pop $0
 
-  ${NSD_CreateRadioButton} 0 34u 100% 16u "仅 VisualTeX（不安装 Office 插件） / VisualTeX only"
+  ${NSD_CreateRadioButton} 0 34u 100% 16u "Chỉ VisualTeX (không cài phần bổ trợ Office) / VisualTeX only"
   Pop $VisualTeXOfficeOnlyRadio
 
-  ${NSD_CreateRadioButton} 0 58u 100% 16u "VisualTeX + 原生 Office 集成（推荐）"
+  ${NSD_CreateRadioButton} 0 58u 100% 16u "VisualTeX + tích hợp Office native (khuyên dùng)"
   Pop $VisualTeXOfficeNativeRadio
   ${NSD_Check} $VisualTeXOfficeNativeRadio
 
-  ${NSD_CreateLabel} 0 88u 100% 44u "原生模式统一使用 Word/PowerPoint Ribbon COM 加载项与 ATL OLE LocalServer。安装过程不会启动 Office，并会清理旧 Office.js Trusted Catalog 残留。"
+  ${NSD_CreateLabel} 0 88u 100% 44u "Chế độ native dùng phần bổ trợ Ribbon COM cho Word/PowerPoint và ATL OLE LocalServer. Trình cài đặt không khởi chạy Office và sẽ dọn phần Office.js Trusted Catalog cũ."
   Pop $0
 
   nsDialogs::Show
@@ -86,14 +86,14 @@ Function VisualTeXOfficePageLeave
     Pop $1
     Pop $2
     ${If} $1 != "0"
-      MessageBox MB_ICONEXCLAMATION|MB_YESNO "检测到 Microsoft Office 仍在运行。强制关闭会立即结束 Word、PowerPoint、Excel、Outlook、OneNote、Access、Publisher、Visio 和 Project；未保存的 Office 文档可能丢失。$\r$\n$\r$\n是否强制关闭所有这些 Office 进程并继续安装？选择“否”将返回上一页，由您自行保存并关闭 Office。$\r$\n$\r$\nMicrosoft Office is still running. Force closing will terminate all common Office apps immediately and may discard unsaved work.$\r$\n$\r$\nForce close all Office processes and continue? Choose No to go back and close Office yourself." IDYES visualtex_force_close_office IDNO visualtex_office_close_declined
+      MessageBox MB_ICONEXCLAMATION|MB_YESNO "Microsoft Office vẫn đang chạy. Buộc đóng sẽ kết thúc ngay Word, PowerPoint, Excel, Outlook, OneNote, Access, Publisher, Visio và Project; tài liệu Office chưa lưu có thể bị mất.$\r$\n$\r$\nBuộc đóng tất cả tiến trình Office và tiếp tục cài đặt? Chọn $\"Không$\" để quay lại trang trước, tự lưu và đóng Office.$\r$\n$\r$\nMicrosoft Office is still running. Force closing will terminate all common Office apps immediately and may discard unsaved work.$\r$\n$\r$\nForce close all Office processes and continue? Choose No to go back and close Office yourself." IDYES visualtex_force_close_office IDNO visualtex_office_close_declined
 
 visualtex_force_close_office:
       nsExec::ExecToStack `"$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -Command "Get-Process WINWORD,POWERPNT,EXCEL,OUTLOOK,ONENOTE,MSACCESS,MSPUB,VISIO,MSPROJECT -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 800; if (Get-Process WINWORD,POWERPNT,EXCEL,OUTLOOK,ONENOTE,MSACCESS,MSPUB,VISIO,MSPROJECT -ErrorAction SilentlyContinue) { exit 1 }; exit 0"`
       Pop $1
       Pop $2
       ${If} $1 != "0"
-        MessageBox MB_ICONSTOP "无法完全关闭所有 Office 进程。请保存工作并在任务管理器中关闭残留的 Office 进程后重试。$\r$\n$\r$\nThe installer could not close every Office process. Save your work, close the remaining Office processes in Task Manager, and try again."
+        MessageBox MB_ICONSTOP "Không thể đóng hết các tiến trình Office. Hãy lưu công việc, đóng các tiến trình Office còn lại trong Task Manager rồi thử lại.$\r$\n$\r$\nThe installer could not close every Office process. Save your work, close the remaining Office processes in Task Manager, and try again."
         Abort
       ${EndIf}
       Goto visualtex_office_process_check_done
@@ -116,20 +116,20 @@ Function VisualTeXOcrPageCreate
     Abort
   ${EndIf}
 
-  !insertmacro MUI_HEADER_TEXT "OCR 离线资源" "选择是否随 VisualTeX 安装本地 OCR 运行资源"
-  ${NSD_CreateLabel} 0 0 100% 28u "VisualTeX 的 OCR 为可选组件。默认安装后可在应用内配置 OCR 环境；如果暂时不需要 OCR，可以取消下面的勾选以节省磁盘空间。"
+  !insertmacro MUI_HEADER_TEXT "Tài nguyên OCR ngoại tuyến" "Chọn có cài tài nguyên OCR cục bộ cùng VisualTeX hay không"
+  ${NSD_CreateLabel} 0 0 100% 28u "OCR là thành phần tùy chọn. Sau khi cài mặc định, bạn có thể cấu hình OCR trong ứng dụng; nếu chưa cần OCR, bỏ chọn bên dưới để tiết kiệm dung lượng."
   Pop $0
 
-  ${NSD_CreateCheckbox} 0 38u 100% 18u "安装 OCR 离线资源（推荐） / Install offline OCR resources (recommended)"
+  ${NSD_CreateCheckbox} 0 38u 100% 18u "Cài tài nguyên OCR ngoại tuyến (khuyên dùng) / Install offline OCR resources"
   Pop $VisualTeXOcrCheckbox
   ${If} $VisualTeXOcrChoice != "none"
     ${NSD_Check} $VisualTeXOcrCheckbox
   ${EndIf}
 
-  ${NSD_CreateLabel} 0 66u 100% 48u "包含 VisualTeX 私有 Python 3.12.10、离线 wheel 依赖、OCR worker 与模型目录索引。S/M/L OCR 模型仍按需单独下载。"
+  ${NSD_CreateLabel} 0 66u 100% 48u "Gồm Python 3.12.10 riêng của VisualTeX, các wheel ngoại tuyến, OCR worker và danh mục mô hình. Mô hình OCR S/M/L vẫn được tải riêng khi cần."
   Pop $0
 
-  ${NSD_CreateLabel} 0 116u 100% 20u "取消勾选后这些 OCR 文件不会写入安装目录；以后可重新运行安装包并勾选此项补装。"
+  ${NSD_CreateLabel} 0 116u 100% 20u "Nếu bỏ chọn, các tệp OCR sẽ không được cài; bạn có thể chạy lại bộ cài và chọn mục này sau."
   Pop $0
 
   nsDialogs::Show
@@ -255,7 +255,7 @@ FunctionEnd
     StrCmp $1 "0" visualtex_vsto_runtime_ready 0
     DetailPrint "Microsoft VSTO Runtime is missing. Detection output: $2"
     IfSilent visualtex_vsto_runtime_install 0
-    MessageBox MB_ICONQUESTION|MB_YESNO "此电脑尚未安装 Microsoft Visual Studio Tools for Office Runtime。VisualTeX 的 Word/PowerPoint 原生 Ribbon 插件必须依赖该微软组件。$\r$\n$\r$\n安装包已内置微软官方、数字签名有效的 VSTO Runtime。是否现在安装并继续配置 Office 集成？安装过程中会出现 Windows UAC 管理员权限确认。$\r$\n$\r$\n选择“否”仍会保留 VisualTeX 主程序，但会跳过 Office 插件安装。" IDYES visualtex_vsto_runtime_install IDNO visualtex_vsto_runtime_declined
+    MessageBox MB_ICONQUESTION|MB_YESNO "Máy này chưa có Microsoft Visual Studio Tools for Office Runtime, thành phần bắt buộc cho phần bổ trợ Ribbon native của VisualTeX.$\r$\n$\r$\nBộ cài đã kèm VSTO Runtime chính thức của Microsoft với chữ ký số hợp lệ. Cài ngay và tiếp tục cấu hình Office? Windows sẽ yêu cầu quyền quản trị qua UAC.$\r$\n$\r$\nChọn Không sẽ giữ ứng dụng VisualTeX nhưng bỏ qua phần bổ trợ Office." IDYES visualtex_vsto_runtime_install IDNO visualtex_vsto_runtime_declined
 
 visualtex_vsto_runtime_declined:
     DetailPrint "The user declined Microsoft VSTO Runtime installation. VisualTeX Office integration was skipped."
@@ -270,7 +270,7 @@ visualtex_vsto_runtime_install:
 visualtex_vsto_runtime_failed:
     DetailPrint "Microsoft VSTO Runtime installation failed or the UAC prompt was cancelled. Native Office integration was skipped."
     IfSilent visualtex_office_done 0
-    MessageBox MB_ICONEXCLAMATION "Microsoft VSTO Runtime 安装失败，或管理员权限确认被取消。VisualTeX 主程序已经安装，但本次将跳过 Word/PowerPoint 原生插件。$\r$\n$\r$\n请查看 %LOCALAPPDATA%\VisualTeX\office\install-logs 中最新的 vsto-runtime 日志。"
+    MessageBox MB_ICONEXCLAMATION "Cài Microsoft VSTO Runtime thất bại hoặc yêu cầu quyền quản trị đã bị hủy. VisualTeX đã được cài nhưng phần bổ trợ Word/PowerPoint sẽ bị bỏ qua.$\r$\n$\r$\nXem nhật ký vsto-runtime mới nhất trong %LOCALAPPDATA%\VisualTeX\office\install-logs."
     Goto visualtex_office_done
 
 visualtex_vsto_runtime_ready:
@@ -289,14 +289,14 @@ visualtex_office_static_installed:
     WriteRegDWORD HKCU "Software\VisualTeX\OfficeIntegration" "RuntimeVerificationPending" 1
     DetailPrint "Companion and Word/PowerPoint connection verification are deferred until VisualTeX is launched from Finish or by the user."
     IfSilent visualtex_office_done 0
-    MessageBox MB_ICONINFORMATION "Office 集成的文件、注册信息、证书、COM 类和 OLE 服务已安装并完成静态验证。安装阶段不会启动常驻后台进程，也不会创建任何 WebView。$\r$\n$\r$\n点击“完成”启动 VisualTeX 后，本地 companion 才会按正常运行模式启动；也可以稍后在“设置 → Office 集成”中验证 Word 和 PowerPoint 连接。"
+    MessageBox MB_ICONINFORMATION "Tệp tích hợp Office, đăng ký hệ thống, chứng chỉ, lớp COM và dịch vụ OLE đã được cài và kiểm tra tĩnh. Giai đoạn cài đặt không khởi chạy tiến trình VisualTeX thường trú và không tạo WebView.$\r$\n$\r$\nCompanion cục bộ chỉ khởi chạy bình thường sau khi bạn bấm Hoàn tất để mở VisualTeX; bạn cũng có thể kiểm tra kết nối Word và PowerPoint sau trong Cài đặt → Tích hợp Office."
     Goto visualtex_office_done
 
 visualtex_office_failed:
     SetDetailsView show
     DetailPrint "VisualTeX main application installed, but the machine-wide Office files, registry entries, COM classes or OLE server failed static installation verification. See the newest vsto-bootstrap and vsto-diagnostic reports under %LOCALAPPDATA%\VisualTeX\office\install-logs."
     IfSilent visualtex_office_done 0
-    MessageBox MB_ICONEXCLAMATION "VisualTeX 主程序已安装，但 Office 插件的文件、注册信息、COM 类或 OLE 服务未通过静态安装验证。请查看安装详情，以及 %LOCALAPPDATA%\VisualTeX\office\install-logs 中最新的 vsto-bootstrap 和 vsto-diagnostic 报告。"
+    MessageBox MB_ICONEXCLAMATION "VisualTeX đã được cài, nhưng tệp phần bổ trợ Office, đăng ký hệ thống, lớp COM hoặc dịch vụ OLE không qua kiểm tra tĩnh. Xem chi tiết cài đặt và báo cáo vsto-bootstrap, vsto-diagnostic mới nhất trong %LOCALAPPDATA%\VisualTeX\office\install-logs."
     Goto visualtex_office_done
   ${ElseIf} $VisualTeXOfficeChoice == "none"
     IfFileExists "$INSTDIR\scripts\uninstall_windows_vsto.ps1" 0 visualtex_office_done
@@ -311,13 +311,13 @@ visualtex_office_failed:
 visualtex_main_binary_missing:
   DetailPrint "The VisualTeX main executable is missing after installation. Windows Security or another antivirus may have quarantined it. Office integration was skipped."
   IfSilent visualtex_office_done 0
-  MessageBox MB_ICONEXCLAMATION "VisualTeX 主程序在安装后立即丢失，Windows 安全中心或其他安全软件可能已将 visualtex.exe 隔离。Office 插件安装已跳过。$\r$\n$\r$\n请打开 Windows 安全中心 → 病毒和威胁防护 → 保护历史记录，检查 Behavior:Win32/Persistence.A!ml 等记录。"
+  MessageBox MB_ICONEXCLAMATION "Ứng dụng VisualTeX biến mất ngay sau khi cài; Windows Security hoặc phần mềm bảo mật khác có thể đã cách ly visualtex.exe. Phần bổ trợ Office đã bị bỏ qua.$\r$\n$\r$\nMở Windows Security → Virus & threat protection → Protection history và kiểm tra các mục như Behavior:Win32/Persistence.A!ml."
   Goto visualtex_office_done
 
 visualtex_office_missing:
   DetailPrint "Windows native Office installation resources are missing. The VisualTeX main application was installed without Office integration."
   IfSilent visualtex_office_done 0
-  MessageBox MB_ICONEXCLAMATION "Windows 原生 Office 安装资源缺失。VisualTeX 主程序已正常安装。"
+  MessageBox MB_ICONEXCLAMATION "Thiếu tài nguyên cài đặt Office native cho Windows. Ứng dụng VisualTeX chính đã được cài bình thường."
   Goto visualtex_office_done
 
 visualtex_office_done:
@@ -368,7 +368,7 @@ visualtex_postinstall_cleanup_done:
   ${If} $0 != "0"
     SetDetailsView show
     DetailPrint "VisualTeX Office integration uninstall failed. ExitCode=$0 Output=$1"
-    MessageBox MB_ICONSTOP "无法卸载 VisualTeX Office 集成或 HTTPS 证书。主程序尚未删除，您可以关闭 Word 和 PowerPoint 后重试。$\r$\n$\r$\n请查看 %LOCALAPPDATA%\VisualTeX\office\install-logs 中最新的 vsto-uninstall-bootstrap 和 certificate-remove 日志。"
+    MessageBox MB_ICONSTOP "Không thể gỡ tích hợp Office hoặc chứng chỉ HTTPS của VisualTeX. Ứng dụng chính chưa bị xóa; hãy đóng Word và PowerPoint rồi thử lại.$\r$\n$\r$\nXem nhật ký vsto-uninstall-bootstrap và certificate-remove mới nhất trong %LOCALAPPDATA%\VisualTeX\office\install-logs."
     SetErrorLevel 1
     Quit
   ${EndIf}

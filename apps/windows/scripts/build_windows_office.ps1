@@ -5,6 +5,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+Import-Module Microsoft.PowerShell.Utility -Force -ErrorAction Stop
 $root = Split-Path -Parent $PSScriptRoot
 $solution = Join-Path $root "src-windows\VisualTeX.WindowsOffice.sln"
 $tests = Join-Path $root "src-windows\VisualTeX.WindowsOffice.Tests\VisualTeX.WindowsOffice.Tests.csproj"
@@ -60,7 +61,9 @@ $msbuild = Get-Command msbuild.exe -ErrorAction SilentlyContinue | Select-Object
 if (-not $msbuild) {
     $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
     if (Test-Path $vswhere) {
-        $installationPath = & $vswhere -latest -version "[17.0,18.0)" -products * -requires Microsoft.Component.MSBuild -property installationPath
+        $installationPath = & $vswhere -latest -version "[17.0,19.0)" -products * `
+            -requires Microsoft.Component.MSBuild Microsoft.VisualStudio.Component.VC.Tools.x86.x64 Microsoft.VisualStudio.Component.VC.ATL `
+            -property installationPath
         if ($installationPath) {
             $candidate = Join-Path $installationPath "MSBuild\Current\Bin\amd64\MSBuild.exe"
             if (Test-Path $candidate) { $msbuild = $candidate }
@@ -68,18 +71,18 @@ if (-not $msbuild) {
     }
 }
 if (-not $msbuild) {
-    throw "MSBuild from Visual Studio Build Tools is required for Word/PowerPoint native add-ins and WiX MSI."
+    throw "Visual Studio Build Tools with MSBuild, Visual C++ x86/x64 and ATL is required for Word/PowerPoint native add-ins and WiX MSI."
 }
 $sdkRoot = Join-Path (Split-Path -Parent $dotnet) "sdk"
-$sdk = Get-ChildItem $sdkRoot -Directory | Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
-if (-not $sdk) { throw ".NET SDK directory was not found below $sdkRoot." }
+$sdkPath = Join-Path $sdkRoot $dotnetVersion
+$sdk = Get-Item -LiteralPath $sdkPath -ErrorAction SilentlyContinue
+if (-not $sdk) { throw ".NET SDK directory matching dotnet $dotnetVersion was not found at $sdkPath." }
 $env:DOTNET_ROOT = Split-Path -Parent $dotnet
 $env:DOTNET_HOST_PATH = $dotnet
 $env:DOTNET_MSBUILD_SDK_RESOLVER_CLI_DIR = Split-Path -Parent $dotnet
 $env:MSBuildSDKsPath = Join-Path $sdk.FullName "Sdks"
 $env:MSBuildEnableWorkloadResolver = "false"
 $referenceRoot = Join-Path $env:USERPROFILE ".nuget\packages\microsoft.netframework.referenceassemblies.net48\1.0.3\build"
-if (-not (Test-Path $referenceRoot)) { throw ".NET Framework 4.8 reference assemblies package is missing." }
 
 New-Item $resourceRoot -ItemType Directory -Force | Out-Null
 
@@ -103,6 +106,9 @@ foreach ($architecture in $architectures) {
     foreach ($project in @($wordProject, $powerPointProject)) {
         & $dotnet restore $project --ignore-failed-sources -p:Platform=$packagePlatform -r $runtimeIdentifier
         if ($LASTEXITCODE -ne 0) { throw "NuGet restore failed: $project" }
+        if (-not (Test-Path $referenceRoot)) {
+            throw ".NET Framework 4.8 reference assemblies package is missing after restoring $project."
+        }
         & $msbuild $project /m /p:Configuration=$Configuration /p:Platform=$packagePlatform /p:TargetFrameworkRootPath=$referenceRoot
         if ($LASTEXITCODE -ne 0) { throw "$packagePlatform VSTO build failed: $project" }
     }

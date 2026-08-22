@@ -3,6 +3,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+Import-Module Microsoft.PowerShell.Utility -Force -ErrorAction Stop
+Import-Module Microsoft.PowerShell.Archive -Force -ErrorAction Stop
+Import-Module (Join-Path $PSHOME "Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1") -Force -ErrorAction Stop
 Set-StrictMode -Version Latest
 
 $PythonVersion = "3.12.10"
@@ -492,7 +495,10 @@ Get-VerifiedDownload $PythonArchiveUrl $PythonArchive $PythonArchiveSha256
 Get-VerifiedDownload $PipWheelUrl $PipWheel $PipWheelSha256
 $Vcomp140Source = Resolve-Vcomp140Dll
 
-$workRoot = Join-Path $env:TEMP ("visualtex-ocr-python-build-" + [guid]::NewGuid().ToString("N"))
+# Keep the staging root deliberately short. Some PaddleOCR transitive packages
+# contain paths close to MAX_PATH and Windows PowerShell 5.1/pip can otherwise
+# fail while extracting them even when long paths are enabled system-wide.
+$workRoot = Join-Path $env:TEMP ("vtxocr-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
 $runtimeRoot = Join-Path $workRoot "runtime"
 $validationRoot = Join-Path $workRoot "validation"
 $stagedWheelhouse = Join-Path $workRoot "wheelhouse"

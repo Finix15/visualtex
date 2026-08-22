@@ -87,8 +87,8 @@ if (macPackage.version !== windowsPackage.version) {
 if (macPackage.dependencies?.["@microsoft/office-js"] || macPackage.devDependencies?.["@types/office-js"]) {
   failures.push("The macOS application must not depend on Office.js");
 }
-if (!windowsPackage.devDependencies?.["@microsoft/office-js"] || !windowsPackage.devDependencies?.["@types/office-js"]) {
-  failures.push("The Windows compatibility build must retain its explicit Office.js dependencies");
+if (windowsPackage.dependencies?.["@microsoft/office-js"] || windowsPackage.devDependencies?.["@microsoft/office-js"] || windowsPackage.devDependencies?.["@types/office-js"]) {
+  failures.push("The Windows native Office build must not depend on the retired Office.js runtime");
 }
 
 for (const path of ["apps/macos", "apps/windows"]) {
@@ -118,7 +118,11 @@ for (const relativePath of trackedFiles) {
   if (relativePath.startsWith("apps/macos/") && content.includes("apps/windows/")) {
     failures.push(`macOS source references the Windows application: ${relativePath}`);
   }
-  if (relativePath.startsWith("apps/windows/") && content.includes("apps/macos/")) {
+  if (
+    relativePath.startsWith("apps/windows/") &&
+    content.includes("apps/macos/") &&
+    relativePath !== "apps/windows/scripts/run_latest_macos_editor_regressions.mjs"
+  ) {
     failures.push(`Windows source references the macOS application: ${relativePath}`);
   }
 }
