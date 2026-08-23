@@ -61,8 +61,10 @@ struct OfficeUiLanguagePreference<'a> {
 }
 
 #[tauri::command]
-fn write_office_ui_language(language: String) -> Result<(), String> {
+fn write_office_ui_language(app: AppHandle, language: String) -> Result<(), String> {
     let language = if language == "vi" { "vi" } else { "en" };
+    #[cfg(target_os = "windows")]
+    office::server::update_desktop_office_window_titles(&app, language);
     let updated_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| error.to_string())?

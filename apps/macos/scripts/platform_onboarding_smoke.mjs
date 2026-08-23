@@ -45,6 +45,8 @@ const firstRunSource = await readFile("src/components/MacOfficeFirstRunPrompt.ts
 const macSettingsSource = await readFile("src/components/MacOfficeIntegrationSettings.tsx", "utf8");
 const lifecycleSource = await readFile("src-tauri/src/office/lifecycle.rs", "utf8");
 
+assert.match(appSource, />\s*VN\s*<\/button>/);
+assert.doesNotMatch(appSource, />\s*CN\s*<\/button>/);
 assert(appSource.includes("<MacOfficeFirstRunPrompt"));
 assert(appSource.includes("onboardingStorageKey("));
 assert(appSource.indexOf("<MacOfficeFirstRunPrompt") < appSource.indexOf("<OnboardingTour"));

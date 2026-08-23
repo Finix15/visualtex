@@ -407,6 +407,77 @@ const OFFICE_EDITOR_WINDOW_LABEL: &str = "office-session-editor";
 const OFFICE_CONVERTER_WINDOW_LABEL: &str = "office-session-converter";
 
 #[cfg(target_os = "windows")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OfficeWindowTitles {
+    editor: &'static str,
+    word_import: &'static str,
+    conversion: &'static str,
+}
+
+#[cfg(target_os = "windows")]
+fn office_ui_language_from_preferences(preferences: &serde_json::Value) -> &'static str {
+    if preferences
+        .pointer("/settings/language")
+        .and_then(serde_json::Value::as_str)
+        == Some("vi")
+    {
+        "vi"
+    } else {
+        "en"
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn office_window_titles(language: &str) -> OfficeWindowTitles {
+    if language == "vi" {
+        OfficeWindowTitles {
+            editor: "VisualTeX · Trình chỉnh sửa công thức Office",
+            word_import: "VisualTeX · Nhập tài liệu Word",
+            conversion: "VisualTeX · Chuyển đổi định dạng Office",
+        }
+    } else {
+        OfficeWindowTitles {
+            editor: "VisualTeX · Office Formula Editor",
+            word_import: "VisualTeX · Word Document Import",
+            conversion: "VisualTeX · Office Format Conversion",
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn current_office_window_titles(app: &tauri::AppHandle) -> OfficeWindowTitles {
+    let language = app
+        .try_state::<OfficeCompanionState>()
+        .map(|state| office_ui_language_from_preferences(&state.current_editor_preferences()))
+        .unwrap_or("en");
+    office_window_titles(language)
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn update_desktop_office_window_titles(app: &tauri::AppHandle, language: &str) {
+    let titles = office_window_titles(language);
+    if let Some(window) = app.get_webview_window(OFFICE_EDITOR_WINDOW_LABEL) {
+        let _ = window.set_title(titles.editor);
+    }
+    if let Some(window) = app.get_webview_window(OFFICE_CONVERTER_WINDOW_LABEL) {
+        let _ = window.set_title(titles.conversion);
+    }
+    for (label, window) in app.webview_windows() {
+        if label.starts_with("office-import-") {
+            let _ = window.set_title(titles.word_import);
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn update_desktop_office_window_titles_from_preferences(
+    app: &tauri::AppHandle,
+    preferences: &serde_json::Value,
+) {
+    update_desktop_office_window_titles(app, office_ui_language_from_preferences(preferences));
+}
+
+#[cfg(target_os = "windows")]
 fn office_editor_session_is_active(session_id: &str) -> bool {
     OFFICE_EDITOR_ACTIVE_SESSION
         .get_or_init(|| Mutex::new(None))
@@ -734,7 +805,9 @@ fn open_desktop_session_window(app: tauri::AppHandle, session_id: String) -> Res
         .lock()
         .map_err(|_| "VisualTeX Office editor window transition state is unavailable.".to_string())?;
 
+    let titles = current_office_window_titles(&app);
     if let Some(window) = app.get_webview_window(&label) {
+        let _ = window.set_title(titles.editor);
         let active_session = OFFICE_EDITOR_ACTIVE_SESSION
             .get_or_init(|| Mutex::new(None))
             .lock()
@@ -817,7 +890,7 @@ fn open_desktop_session_window(app: tauri::AppHandle, session_id: String) -> Res
     }
     OFFICE_EDITOR_PAGE_READY.store(false, std::sync::atomic::Ordering::Release);
     let build_result = WebviewWindowBuilder::new(&app, label, WebviewUrl::External(url))
-        .title("Office 公式编辑器")
+        .title(titles.editor)
         .inner_size(saved_editor_width, saved_editor_height)
         .min_inner_size(640.0, 480.0)
         .resizable(true)
@@ -882,6 +955,7 @@ fn open_desktop_bulk_import_window(
     app: tauri::AppHandle,
     session_id: String,
 ) -> Result<(), String> {
+    let titles = current_office_window_titles(&app);
     let label = format!("office-import-{}", session_id.replace('-', ""));
     let url = tauri::Url::parse(&format!(
         "https://127.0.0.1:{}/dialog/{}?runtime=vsto-bulk-import",
@@ -891,6 +965,7 @@ fn open_desktop_bulk_import_window(
     .map_err(|error| format!("Unable to construct the VisualTeX import URL: {error}"))?;
 
     if let Some(window) = app.get_webview_window(&label) {
+        let _ = window.set_title(titles.word_import);
         window
             .navigate(url)
             .map_err(|error| format!("Unable to navigate the VisualTeX import window: {error}"))?;
@@ -898,7 +973,7 @@ fn open_desktop_bulk_import_window(
     }
 
     let window = WebviewWindowBuilder::new(&app, label, WebviewUrl::External(url))
-        .title("VisualTeX · Word 文档批量导入")
+        .title(titles.word_import)
         .inner_size(1380.0, 880.0)
         .min_inner_size(900.0, 620.0)
         .resizable(true)
@@ -912,7 +987,9 @@ fn open_desktop_bulk_import_window(
 
 #[cfg(target_os = "windows")]
 fn ensure_desktop_conversion_window(app: &tauri::AppHandle) -> Result<WebviewWindow, String> {
+    let titles = current_office_window_titles(app);
     if let Some(window) = app.get_webview_window(OFFICE_CONVERTER_WINDOW_LABEL) {
+        let _ = window.set_title(titles.conversion);
         return Ok(window);
     }
     let url = tauri::Url::parse(&format!(
@@ -925,7 +1002,7 @@ fn ensure_desktop_conversion_window(app: &tauri::AppHandle) -> Result<WebviewWin
         OFFICE_CONVERTER_WINDOW_LABEL,
         WebviewUrl::External(url),
     )
-    .title("VisualTeX · Office 格式转换")
+    .title(titles.conversion)
     .inner_size(1240.0, 820.0)
     .resizable(false)
     .focused(false)
@@ -939,7 +1016,9 @@ fn open_desktop_conversion_window(
     app: tauri::AppHandle,
     session_id: String,
 ) -> Result<(), String> {
+    let titles = current_office_window_titles(&app);
     if let Some(window) = app.get_webview_window(OFFICE_CONVERTER_WINDOW_LABEL) {
+        let _ = window.set_title(titles.conversion);
         let encoded = serde_json::to_string(&session_id)
             .map_err(|error| format!("Unable to encode the conversion Session id: {error}"))?;
         let script = format!(
@@ -961,7 +1040,7 @@ fn open_desktop_conversion_window(
         OFFICE_CONVERTER_WINDOW_LABEL,
         WebviewUrl::External(url),
     )
-    .title("VisualTeX · Office 格式转换")
+    .title(titles.conversion)
     .inner_size(1240.0, 820.0)
     .resizable(false)
     .focused(false)
@@ -2706,6 +2785,44 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
     use tower::ServiceExt;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn office_window_titles_follow_the_normalized_editor_language() {
+        let vietnamese = serde_json::json!({
+            "settings": { "language": "vi" }
+        });
+        let english = serde_json::json!({
+            "settings": { "language": "en" }
+        });
+        let unsupported = serde_json::json!({
+            "settings": { "language": "zh" }
+        });
+
+        assert_eq!(office_ui_language_from_preferences(&vietnamese), "vi");
+        assert_eq!(office_ui_language_from_preferences(&english), "en");
+        assert_eq!(office_ui_language_from_preferences(&unsupported), "en");
+        assert_eq!(
+            office_ui_language_from_preferences(&serde_json::json!({})),
+            "en"
+        );
+
+        let vi_titles = office_window_titles("vi");
+        assert_eq!(
+            vi_titles.editor,
+            "VisualTeX · Trình chỉnh sửa công thức Office"
+        );
+        assert_eq!(vi_titles.word_import, "VisualTeX · Nhập tài liệu Word");
+        assert_eq!(
+            vi_titles.conversion,
+            "VisualTeX · Chuyển đổi định dạng Office"
+        );
+
+        let en_titles = office_window_titles("invalid");
+        assert_eq!(en_titles.editor, "VisualTeX · Office Formula Editor");
+        assert_eq!(en_titles.word_import, "VisualTeX · Word Document Import");
+        assert_eq!(en_titles.conversion, "VisualTeX · Office Format Conversion");
+    }
 
     fn test_state(temp: &TempDir) -> OfficeCompanionState {
         let root = temp.path().join("office-data");

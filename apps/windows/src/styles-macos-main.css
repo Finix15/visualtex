@@ -1549,7 +1549,7 @@ body[data-workspace-resize="dock"] * {
   width: min(420px, calc(100vw - 28px));
   max-height: min(560px, calc(100vh - 84px));
   padding: 18px;
-  z-index: 100;
+  z-index: 2200;
 }
 
 .input-behavior-heading strong,

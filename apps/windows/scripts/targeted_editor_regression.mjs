@@ -7,9 +7,9 @@ import {
 } from "./browser_test_runtime.mjs";
 
 const scenario = process.argv[2];
-if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "usage-ranking", "native-space-selection", "candidate-query-reset", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "structured-chinese-ime", "direct-shortcut-placeholder", "toolbar-placeholder-overflow", "horizontal-overflow", "accent-placeholder", "caret-probe", "scripts", "upright", "context-style", "suggestions", "navigation", "geometry", "source-layout", "toolbar-compact", "toolbar-postfix", "classic-panel-resize", "ocr-storage-ui", "formula-tiles", "formula-formatting", "cursor-placement", "settings", "layout", "multi-line-selection", "delete", "export"]).has(scenario)) {
+if (!new Set(["wrapper", "wrapper-auto", "wrapper-continuous", "wrapper-prefix", "native-input-popover", "input-behavior-overlay", "usage-ranking", "native-space-selection", "candidate-query-reset", "raw-placeholder-visual", "placeholder-selection", "structural-placeholder", "structured-chinese-ime", "direct-shortcut-placeholder", "toolbar-placeholder-overflow", "horizontal-overflow", "accent-placeholder", "caret-probe", "scripts", "upright", "context-style", "suggestions", "navigation", "geometry", "source-layout", "toolbar-compact", "toolbar-postfix", "classic-panel-resize", "ocr-storage-ui", "formula-tiles", "formula-formatting", "cursor-placement", "settings", "layout", "multi-line-selection", "delete", "export"]).has(scenario)) {
   throw new Error(
-    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|usage-ranking|native-space-selection|candidate-query-reset|raw-placeholder-visual|placeholder-selection|structural-placeholder|structured-chinese-ime|direct-shortcut-placeholder|toolbar-placeholder-overflow|horizontal-overflow|accent-placeholder|caret-probe|scripts|upright|context-style|suggestions|navigation|geometry|source-layout|toolbar-compact|toolbar-postfix|classic-panel-resize|ocr-storage-ui|formula-tiles|formula-formatting|cursor-placement|settings|layout|multi-line-selection|delete|export>",
+    "Usage: node scripts/targeted_editor_regression.mjs <wrapper|wrapper-auto|wrapper-continuous|wrapper-prefix|native-input-popover|input-behavior-overlay|usage-ranking|native-space-selection|candidate-query-reset|raw-placeholder-visual|placeholder-selection|structural-placeholder|structured-chinese-ime|direct-shortcut-placeholder|toolbar-placeholder-overflow|horizontal-overflow|accent-placeholder|caret-probe|scripts|upright|context-style|suggestions|navigation|geometry|source-layout|toolbar-compact|toolbar-postfix|classic-panel-resize|ocr-storage-ui|formula-tiles|formula-formatting|cursor-placement|settings|layout|multi-line-selection|delete|export>",
   );
 }
 
@@ -7650,6 +7650,52 @@ async function main() {
       return;
     }
 
+    if (scenario === "input-behavior-overlay") {
+      await waitForEvaluation(`(() => ({
+        ready: Boolean(document.querySelector('.canvas-input-behavior-trigger')),
+      }))()`, "input behavior overlay trigger");
+      await evaluate(`document.querySelector('.canvas-input-behavior-trigger').click()`);
+      await waitForEvaluation(`(() => ({
+        ready: Boolean(document.querySelector('.input-behavior-popover')),
+      }))()`, "input behavior overlay menu");
+      await evaluate(`document.querySelector('[data-open-auto-escape-map]')?.click()`);
+      const overlayState = await waitForEvaluation(`(() => {
+        const popover = document.querySelector('.input-behavior-popover.is-mapping-view');
+        if (!popover) return { ready: false };
+        const style = getComputedStyle(popover);
+        const rect = popover.getBoundingClientRect();
+        const points = [
+          [rect.left + rect.width / 2, rect.top + 20],
+          [rect.left + rect.width / 2, rect.top + rect.height / 2],
+          [rect.left + rect.width / 2, rect.bottom - 20],
+        ];
+        const frontmost = points.every(([x, y]) => {
+          const topmost = document.elementFromPoint(x, y);
+          return Boolean(topmost && popover.contains(topmost));
+        });
+        window.dispatchEvent(new Event('resize'));
+        window.dispatchEvent(new Event('scroll'));
+        return {
+          ready:
+            style.position === 'fixed' &&
+            Number.parseInt(style.zIndex || '0', 10) >= 2200 &&
+            rect.left >= 0 &&
+            rect.top >= 0 &&
+            rect.right <= window.innerWidth &&
+            rect.bottom <= window.innerHeight &&
+            frontmost,
+          position: style.position,
+          zIndex: style.zIndex,
+          rect: rect.toJSON(),
+          frontmost,
+        };
+      })()`, "frontmost fixed input behavior mapping overlay");
+      if (!overlayState.frontmost) {
+        throw new Error(`Input behavior mapping overlay is covered: ${JSON.stringify(overlayState)}`);
+      }
+      await evaluate(`document.querySelector('.canvas-input-behavior-trigger').click()`);
+    }
+
     if (scenario === "settings") {
       const powerPointDefaultInitial = await waitForEvaluation(`(() => {
         let input = document.querySelector(
@@ -7926,9 +7972,23 @@ async function main() {
           firstOutput ? getComputedStyle(firstOutput).fontSize : '0',
         );
         const rowHeight = firstRow?.getBoundingClientRect().height ?? 0;
+        const popover = document.querySelector('.input-behavior-popover.is-mapping-view');
+        const popoverStyle = popover ? getComputedStyle(popover) : null;
+        const popoverRect = popover?.getBoundingClientRect();
+        const samplePoints = popoverRect
+          ? [
+              [popoverRect.left + popoverRect.width / 2, popoverRect.top + 20],
+              [popoverRect.left + popoverRect.width / 2, popoverRect.top + popoverRect.height / 2],
+              [popoverRect.left + popoverRect.width / 2, popoverRect.bottom - 20],
+            ]
+          : [];
+        const frontmostAtSamplePoints = samplePoints.every(([x, y]) => {
+          const topmost = document.elementFromPoint(x, y);
+          return Boolean(topmost && popover?.contains(topmost));
+        });
         return {
           ready:
-            Boolean(document.querySelector('.input-behavior-popover.is-mapping-view')) &&
+            Boolean(popover) &&
             pp?.output === '+' &&
             relation?.output === '\\\\ge' &&
             alpha?.output === '\\\\alpha' &&
@@ -7938,7 +7998,10 @@ async function main() {
             [pp, relation, alpha, hat, dx].every((entry) => entry?.rendered) &&
             inputFontSize >= 13 &&
             outputFontSize >= 20 &&
-            rowHeight >= 42,
+            rowHeight >= 42 &&
+            popoverStyle?.position === 'fixed' &&
+            Number.parseInt(popoverStyle?.zIndex || '0', 10) >= 2200 &&
+            frontmostAtSamplePoints,
           pp,
           relation,
           alpha,
@@ -7947,6 +8010,9 @@ async function main() {
           inputFontSize,
           outputFontSize,
           rowHeight,
+          popoverPosition: popoverStyle?.position ?? '',
+          popoverZIndex: popoverStyle?.zIndex ?? '',
+          frontmostAtSamplePoints,
           count: document.querySelectorAll('[data-auto-escape-shortcut]').length,
         };
       })()`, "source-driven auto-escape mapping list");

@@ -65,6 +65,7 @@ export const MAX_CLASSIC_TILE_WIDTH = 2000;
 export const DEFAULT_CLASSIC_DOCK_HEIGHT = 245;
 export const MIN_CLASSIC_DOCK_HEIGHT = 132;
 export const MAX_CLASSIC_DOCK_HEIGHT = 2000;
+export const EDITOR_PERSISTENCE_VERSION = 1;
 
 const legacyClassicTileWidthStorageKey = "visualtex-classic-tile-width";
 const legacyClassicDockHeightStorageKey = "visualtex-classic-dock-height";
@@ -153,7 +154,7 @@ const editorPersistenceStorage = {
 };
 
 export const DEFAULT_INPUT_BEHAVIOR_SETTINGS: InputBehaviorSettings = {
-  autoEscapeShortcuts: false,
+  autoEscapeShortcuts: true,
   autoExitSuperscript: true,
   autoExitSubscript: true,
   autoExitAccent: true,
@@ -161,6 +162,33 @@ export const DEFAULT_INPUT_BEHAVIOR_SETTINGS: InputBehaviorSettings = {
   showStructuredCommandSuggestions: true,
   showOtherCommandSuggestions: false,
 };
+
+export function migrateEditorPersistedState(
+  persistedState: unknown,
+  version: number,
+): unknown {
+  if (
+    version >= EDITOR_PERSISTENCE_VERSION ||
+    !persistedState ||
+    typeof persistedState !== "object"
+  ) {
+    return persistedState;
+  }
+
+  const state = persistedState as Record<string, unknown>;
+  const persistedInputBehavior =
+    state.inputBehavior && typeof state.inputBehavior === "object"
+      ? (state.inputBehavior as Record<string, unknown>)
+      : {};
+
+  return {
+    ...state,
+    inputBehavior: {
+      ...persistedInputBehavior,
+      autoEscapeShortcuts: true,
+    },
+  };
+}
 
 function normalizeInputBehaviorSettings(
   value: unknown,
@@ -889,6 +917,9 @@ export const useEditorStore = create<EditorState>()(
     }),
     {
       name: "visualtex-editor",
+      version: EDITOR_PERSISTENCE_VERSION,
+      migrate: (persistedState, version) =>
+        migrateEditorPersistedState(persistedState, version) as Partial<EditorState>,
       storage: createJSONStorage(() => editorPersistenceStorage),
       partialize: (state) => ({
         title: state.title,

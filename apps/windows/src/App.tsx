@@ -1429,7 +1429,7 @@ function App() {
                     className={language === "vi" ? "is-active" : ""}
                     onClick={() => setLanguage("vi")}
                   >
-                    CN
+                    VN
                   </button>
                   <button
                     type="button"

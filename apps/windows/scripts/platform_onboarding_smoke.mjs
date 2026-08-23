@@ -28,6 +28,8 @@ const removeCertificateSource = await readFile("scripts/remove_windows_office_ce
 const windowsBundleSource = await readFile("src-tauri/tauri.windows.conf.json", "utf8");
 const certificateSource = await readFile("scripts/ensure_windows_office_certificate.ps1", "utf8");
 
+assert.match(appSource, />\s*VN\s*<\/button>/);
+assert.doesNotMatch(appSource, />\s*CN\s*<\/button>/);
 assert(updateDialogSource.includes("update-community-card"));
 assert(updateDialogSource.includes("VISUALTEX_QQ_GROUP_QR_DATA_URL"));
 assert(updateDialogSource.includes("VISUALTEX_QQ_GROUP_NUMBER"));

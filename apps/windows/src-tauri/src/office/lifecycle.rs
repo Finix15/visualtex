@@ -326,10 +326,14 @@ pub fn set_app_editor_layout(
 
 #[tauri::command]
 pub fn set_app_editor_preferences(
+    app: tauri::AppHandle,
     preferences: serde_json::Value,
     state: tauri::State<'_, OfficeCompanionState>,
 ) -> serde_json::Value {
-    state.set_current_editor_preferences(preferences)
+    let preferences = state.set_current_editor_preferences(preferences);
+    #[cfg(target_os = "windows")]
+    crate::office::server::update_desktop_office_window_titles_from_preferences(&app, &preferences);
+    preferences
 }
 
 #[tauri::command]

@@ -803,7 +803,25 @@ async function main() {
     const shortcutOption = menu.options.find(({ title }) =>
       /常用数学快捷转义|Common math shortcuts/.test(title),
     );
-    assert.equal(shortcutOption?.checked, false);
+    assert.equal(shortcutOption?.checked, true);
+
+    await evaluate(`(() => {
+      document.querySelector('[data-open-auto-escape-map]')?.click();
+      return true;
+    })()`);
+    await sleep(50);
+    const shortcutMappings = await evaluate(`(() => ({
+      count: Number(document.querySelector('.auto-escape-map-toolbar span')?.textContent ?? 0),
+      rows: document.querySelectorAll('[data-auto-escape-shortcut]').length,
+      hasAlpha: Boolean(document.querySelector('[data-auto-escape-shortcut="alpha"]')),
+      hasRelation: Boolean(document.querySelector('[data-auto-escape-shortcut=">="]')),
+      hasAccent: Boolean(document.querySelector('[data-auto-escape-shortcut="hat"]')),
+    }))()`);
+    assert.equal(shortcutMappings.count, 381);
+    assert.equal(shortcutMappings.rows, 381);
+    assert.equal(shortcutMappings.hasAlpha, true);
+    assert.equal(shortcutMappings.hasRelation, true);
+    assert.equal(shortcutMappings.hasAccent, true);
     await evaluate(`document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))`);
 
     const loadSingleFormulaLine = async (latex) => {

@@ -730,7 +730,8 @@ textarea:focus-visible,
 }
 
 .input-behavior-popover {
-  position: absolute;
+  position: fixed;
+  z-index: 2200;
   top: calc(100% + 8px);
   right: 0;
   width: min(350px, calc(100vw - 28px));

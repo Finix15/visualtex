@@ -1,11 +1,41 @@
 import assert from "node:assert/strict";
 import {
+  EDITOR_PERSISTENCE_VERSION,
+  migrateEditorPersistedState,
   useEditorStore,
   type EditorLayout,
 } from "../src/stores/editorStore.ts";
 import type { InputBehaviorSettingKey, Theme } from "../src/types/formula.ts";
 
 const store = useEditorStore;
+
+const legacyPersistedState = {
+  title: "Legacy preferences",
+  inputBehavior: {
+    autoEscapeShortcuts: false,
+    autoExitSuperscript: false,
+    showOtherCommandSuggestions: true,
+  },
+};
+const migratedPersistedState = migrateEditorPersistedState(
+  legacyPersistedState,
+  0,
+) as typeof legacyPersistedState;
+assert.equal(migratedPersistedState.inputBehavior.autoEscapeShortcuts, true);
+assert.equal(migratedPersistedState.inputBehavior.autoExitSuperscript, false);
+assert.equal(migratedPersistedState.inputBehavior.showOtherCommandSuggestions, true);
+assert.equal(migratedPersistedState.title, "Legacy preferences");
+
+const currentPersistedState = {
+  inputBehavior: { autoEscapeShortcuts: false },
+};
+assert.equal(
+  migrateEditorPersistedState(
+    currentPersistedState,
+    EDITOR_PERSISTENCE_VERSION,
+  ),
+  currentPersistedState,
+);
 
 function state() {
   return store.getState();
