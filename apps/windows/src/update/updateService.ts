@@ -2,9 +2,9 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import packageInfo from "../../package.json";
 
 const LATEST_RELEASE_API =
-  "https://api.github.com/repos/paulhe666/visualtex/releases/latest";
+  "https://api.github.com/repos/Finix15/visualtex/releases/latest";
 
-export const PROJECT_URL = "https://github.com/paulhe666/visualtex";
+export const PROJECT_URL = "https://github.com/Finix15/visualtex";
 export const CURRENT_VERSION = packageInfo.version;
 
 export interface UpdateCheckResult {

@@ -306,8 +306,8 @@ async function main() {
     const activeLineId = async () =>
       evaluate(`document.querySelector(".formula-line.is-active")?.dataset.lineId ?? ""`);
 
-    const undo = async () => click('button[aria-label="撤销"]');
-    const redo = async () => click('button[aria-label="重做"]');
+    const undo = async () => click('button[aria-label="Hoàn tác"], button[aria-label="Undo"]');
+    const redo = async () => click('button[aria-label="Làm lại"], button[aria-label="Redo"]');
 
     await client.send("Page.navigate", { url: baseUrl });
     await sleep(700);
@@ -315,7 +315,7 @@ async function main() {
 
     await resetDocument({ lines: [{ id: "group-line", latex: "" }] });
     assertEqual(
-      await evaluate(`document.querySelector('button[aria-label="撤销"]').disabled`),
+      await evaluate(`document.querySelector('button[aria-label="Hoàn tác"], button[aria-label="Undo"]').disabled`),
       true,
       "Undo should start disabled",
     );
@@ -738,7 +738,7 @@ async function main() {
       "CodeMirror undo should update formulas immediately",
     );
     assertEqual(
-      await evaluate(`document.querySelector('button[aria-label="撤销"]').disabled`),
+      await evaluate(`document.querySelector('button[aria-label="Hoàn tác"], button[aria-label="Undo"]').disabled`),
       true,
       "A source edit fully reverted by CodeMirror must not leave global history",
     );
@@ -813,7 +813,7 @@ async function main() {
     await focusField(0);
     await key("n", "KeyN", 78);
     assertEqual(
-      await evaluate(`document.querySelector('button[aria-label="重做"]').disabled`),
+      await evaluate(`document.querySelector('button[aria-label="Làm lại"], button[aria-label="Redo"]').disabled`),
       true,
       "new edit after undo/redo branch should clear redo",
     );

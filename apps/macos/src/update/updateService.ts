@@ -3,7 +3,7 @@ import packageInfo from "../../package.json";
 import { stripPersonalAuthorNames } from "./releaseNotes";
 
 const LATEST_RELEASE_API =
-  "https://api.github.com/repos/paulhe666/visualtex/releases/latest";
+  "https://api.github.com/repos/Finix15/visualtex/releases/latest";
 
 export const CURRENT_VERSION = packageInfo.version;
 

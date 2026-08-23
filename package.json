@@ -13,6 +13,9 @@
     "build": "npm run build:macos && npm run build:windows",
     "test:macos": "npm --prefix apps/macos run test:macos-offline-office",
     "test:windows": "npm --prefix apps/windows run test:windows-office-architecture",
+    "test:personal-release": "npm --prefix apps/windows run test:personal-release",
+    "release:personal": "npm --prefix apps/windows run release:personal",
+    "test:personal-release:installed": "npm --prefix apps/windows run test:personal-release:installed",
     "test:repository": "node tools/verify_repository_structure.mjs",
     "check": "npm run test:repository && npm run build"
   }

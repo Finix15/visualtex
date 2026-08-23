@@ -6,12 +6,12 @@
   <p>
     <a href="#中文">中文</a> · <a href="#english">English</a> ·
     <a href="https://visualtex.pauljianliao.com/">Website</a> ·
-    <a href="https://github.com/paulhe666/visualtex/releases">Releases</a>
+    <a href="https://github.com/Finix15/visualtex/releases">Releases</a>
   </p>
   <p>
-    <a href="https://github.com/paulhe666/visualtex/stargazers"><img src="https://img.shields.io/github/stars/paulhe666/visualtex?style=for-the-badge&logo=github&label=STARS" alt="GitHub Stars" /></a>
-    <a href="https://github.com/paulhe666/visualtex/releases/latest"><img src="https://img.shields.io/github/v/release/paulhe666/visualtex?style=for-the-badge&logo=github&label=RELEASE" alt="Latest Release" /></a>
-    <a href="https://github.com/paulhe666/visualtex/releases"><img src="https://img.shields.io/github/downloads/paulhe666/visualtex/total?style=for-the-badge&logo=github&label=DOWNLOADS" alt="Total Downloads" /></a>
+    <a href="https://github.com/Finix15/visualtex/stargazers"><img src="https://img.shields.io/github/stars/Finix15/visualtex?style=for-the-badge&logo=github&label=STARS" alt="GitHub Stars" /></a>
+    <a href="https://github.com/Finix15/visualtex/releases/latest"><img src="https://img.shields.io/github/v/release/Finix15/visualtex?style=for-the-badge&logo=github&label=RELEASE" alt="Latest Release" /></a>
+    <a href="https://github.com/Finix15/visualtex/releases"><img src="https://img.shields.io/github/downloads/Finix15/visualtex/total?style=for-the-badge&logo=github&label=DOWNLOADS" alt="Total Downloads" /></a>
     <a href="https://visualtex.pauljianliao.com/"><img src="https://img.shields.io/badge/WEBSITE-visualtex.pauljianliao.com-0A84FF?style=for-the-badge&logo=googlechrome&logoColor=white" alt="VisualTeX Website" /></a>
   </p>
   <p align="center">
@@ -36,7 +36,7 @@ VisualTeX 是一款面向数学、物理、工程与科研写作的桌面公式�
 
 ## 下载应用与 OCR 模型
 
-访问 **[VisualTeX 官网](https://visualtex.pauljianliao.com/)** 下载应用、Windows 安装包和 PP-FormulaNet OCR 模型。GitHub 版本也可从 [Releases](https://github.com/paulhe666/visualtex/releases) 获取。
+访问 **[VisualTeX 官网](https://visualtex.pauljianliao.com/)** 下载应用和 PP-FormulaNet OCR 模型。此 Windows 分支的安装包可从 [Finix15 Releases](https://github.com/Finix15/visualtex/releases) 获取。
 
 ## VisualTeX 1.2.5 新功能
 
@@ -53,7 +53,7 @@ VisualTeX 是一款面向数学、物理、工程与科研写作的桌面公式�
 - **内置帮助手册**：可直接在 VisualTeX 内查看编辑器、快捷键、磁贴、`align`、`cases`、矩阵、小键盘、OCR、Office 等功能说明。
 - **Windows PowerPoint 格式转换**：支持图片、OLE、OMML 公式之间的格式转换。
 
-完整更新说明见 [VisualTeX 1.2.5 Release](https://github.com/paulhe666/visualtex/releases/tag/v1.2.5)。
+完整更新说明见 [VisualTeX 1.2.5 Release](https://github.com/Finix15/visualtex/releases/tag/v1.2.5)。
 
 ## 实际界面
 
@@ -214,7 +214,7 @@ VisualTeX is a desktop formula editor for mathematics, physics, engineering, and
 
 ## Application and OCR model downloads
 
-Visit the **[VisualTeX website](https://visualtex.pauljianliao.com/)** to download the application, Windows installer, and PP-FormulaNet OCR models. GitHub builds are also available from [Releases](https://github.com/paulhe666/visualtex/releases).
+Visit the **[VisualTeX website](https://visualtex.pauljianliao.com/)** for the application and PP-FormulaNet OCR models. Windows builds from this branch are available from [Finix15 Releases](https://github.com/Finix15/visualtex/releases).
 
 ## What's new in VisualTeX 1.2.5
 
@@ -231,7 +231,7 @@ Visit the **[VisualTeX website](https://visualtex.pauljianliao.com/)** to downlo
 - **In-app Help Manual**: documentation for the editor, hotkeys, tiles, `align`, `cases`, matrices, Keypad Mode, OCR, custom symbols, Word, and PowerPoint.
 - **Windows PowerPoint format conversion**: convert formulas between picture, OLE, and OMML formats.
 
-See the full notes in the [VisualTeX 1.2.5 Release](https://github.com/paulhe666/visualtex/releases/tag/v1.2.5).
+See the full notes in the [VisualTeX 1.2.5 Release](https://github.com/Finix15/visualtex/releases/tag/v1.2.5).
 
 ## Real application renders
 

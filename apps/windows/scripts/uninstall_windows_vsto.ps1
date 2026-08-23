@@ -286,8 +286,15 @@ try {
         )
         Write-UninstallLog "Certificate cleanup exit code: $certificateExitCode"
         if ($certificateExitCode -ne 0) {
-            throw "VisualTeX Office certificate cleanup failed with exit code $certificateExitCode."
+            Write-UninstallLog "WARNING: Office integration was removed, but certificate cleanup failed. Uninstall will continue; CertificateCleanupPending and the certificate log are retained for manual cleanup."
         }
+    } else {
+        $modeKey = "HKCU:\Software\VisualTeX\OfficeIntegration"
+        New-Item -Path $modeKey -Force | Out-Null
+        New-ItemProperty -LiteralPath $modeKey -Name CertificateCleanupPending -PropertyType DWord -Value 1 -Force | Out-Null
+        New-ItemProperty -LiteralPath $modeKey -Name CertificateCleanupError -PropertyType String -Value "Certificate cleanup script was missing during uninstall." -Force | Out-Null
+        New-ItemProperty -LiteralPath $modeKey -Name CertificateCleanupLogPath -PropertyType String -Value $LogPath -Force | Out-Null
+        Write-UninstallLog "WARNING: Certificate cleanup script is missing. Uninstall will continue with CertificateCleanupPending=1."
     }
 
     $modeKey = "HKCU:\Software\VisualTeX\OfficeIntegration"

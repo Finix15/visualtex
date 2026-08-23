@@ -3,8 +3,14 @@ param(
     [string[]]$Paths = @(
         "scripts/ensure_windows_office_certificate.ps1",
         "scripts/patch_generated_nsis.ps1",
+        "scripts/remove_windows_office_certificate.ps1",
+        "scripts/test_certificate_cleanup_policy.ps1",
+        "scripts/test_personal_release_installed.ps1",
         "scripts/test_windows_installed_release.ps1",
         "scripts/test_windows_office_connection_readonly.ps1",
+        "scripts/test_windows_office_host_probe.ps1",
+        "scripts/test_windows_office_runtime.ps1",
+        "scripts/uninstall_windows_vsto.ps1",
         "scripts/verify_windows_release_artifacts.ps1"
     )
 )

@@ -270,17 +270,17 @@ export function UpdateDialog({
               <UserRound size={15} aria-hidden="true" />
               <span>
                 <small>{isEn ? "Author" : "Tác giả"}</small>
-                <strong>paulhe666</strong>
+                <strong>Finix15</strong>
               </span>
             </div>
             <button
               type="button"
               className="update-project-link"
               onClick={onOpenProject}
-              title="https://github.com/paulhe666/visualtex"
+              title="https://github.com/Finix15/visualtex"
             >
               <Github size={15} aria-hidden="true" />
-              <span>github.com/paulhe666/visualtex</span>
+              <span>github.com/Finix15/visualtex</span>
             </button>
             <p>
               <Star size={14} aria-hidden="true" />

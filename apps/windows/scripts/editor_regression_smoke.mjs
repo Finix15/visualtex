@@ -439,16 +439,16 @@ async function main() {
 
     await waitForEvaluation(
       `(() => {
-        const button = document.querySelector('button[aria-label="撤销"]');
+        const button = document.querySelector('button[aria-label="Hoàn tác"], button[aria-label="Undo"]');
         return { ready: Boolean(button && !button.disabled), disabled: button?.disabled ?? true };
       })()`,
       "native candidate undo button",
     );
-    await evaluate(`document.querySelector('button[aria-label="撤销"]').click()`);
+    await evaluate(`document.querySelector('button[aria-label="Hoàn tác"], button[aria-label="Undo"]').click()`);
     const nativeUndoState = await waitForEvaluation(
       `(() => {
         const value = document.querySelector("math-field").value;
-        const redo = document.querySelector('button[aria-label="重做"]');
+        const redo = document.querySelector('button[aria-label="Làm lại"], button[aria-label="Redo"]');
         return {
           ready: value.trim() === ${JSON.stringify(nativeBeforeArrow.value.trim())} && Boolean(redo && !redo.disabled),
           value,
@@ -462,7 +462,7 @@ async function main() {
     if (nativeUndoValue.trim() !== nativeBeforeArrow.value.trim()) {
       throw new Error(`Global undo did not restore the native candidate input: ${JSON.stringify({ nativeBeforeArrow, nativeUndoValue })}`);
     }
-    await evaluate(`document.querySelector('button[aria-label="重做"]').click()`);
+    await evaluate(`document.querySelector('button[aria-label="Làm lại"], button[aria-label="Redo"]').click()`);
     const nativeRedoState = await waitForEvaluation(
       `(() => {
         const value = document.querySelector("math-field").value;
@@ -897,7 +897,7 @@ async function main() {
     }
 
     for (let index = 0; index < 8; index += 1) {
-      await evaluate(`document.querySelector('button[aria-label="缩小公式"]').click()`);
+      await evaluate(`document.querySelector('button[aria-label="Thu nhỏ"], button[aria-label="Zoom out"]').click()`);
       await sleep(70);
     }
     await setField("\\alpha");
@@ -917,7 +917,7 @@ async function main() {
       return {
         ready: field.classList.contains("is-simple-formula") && rects.length > 0,
         zoomLabel: document.querySelector(".canvas-controls > span")?.textContent?.trim(),
-        zoomOutDisabled: document.querySelector('button[aria-label="缩小公式"]')?.disabled,
+        zoomOutDisabled: document.querySelector('button[aria-label="Thu nhỏ"], button[aria-label="Zoom out"]')?.disabled,
         fontSize: Number.parseFloat(getComputedStyle(field).fontSize),
         lineHeight: line.getBoundingClientRect().height,
         fieldHeight: field.getBoundingClientRect().height,
@@ -979,7 +979,7 @@ async function main() {
     }
 
     for (let index = 0; index < 8; index += 1) {
-      await evaluate(`document.querySelector('button[aria-label="放大公式"]').click()`);
+      await evaluate(`document.querySelector('button[aria-label="Phóng to"], button[aria-label="Zoom in"]').click()`);
       await sleep(70);
     }
 
@@ -1016,7 +1016,7 @@ async function main() {
 
     const ocrOpenMetrics = await evaluate(`new Promise((resolve, reject) => {
       const button = document.querySelector(
-        'button[aria-label="图片公式识别"], button[aria-label="Recognize formula image"]',
+        'button[aria-label="Nhận dạng hình ảnh công thức"], button[aria-label="Recognize formula image"]',
       );
       if (!button) {
         const labels = Array.from(document.querySelectorAll("button")).map((item) => ({
@@ -1098,7 +1098,7 @@ async function main() {
     if (ocrCenterMetrics.horizontalDelta > 2 || ocrCenterMetrics.verticalDelta > 2) {
       throw new Error(`OCR dialog is not centered: ${JSON.stringify(ocrCenterMetrics)}`);
     }
-    await evaluate(`document.querySelector('button[aria-label="关闭 OCR"]').click()`);
+    await evaluate(`document.querySelector('button[aria-label="Đóng OCR"], button[aria-label="Close OCR"]').click()`);
     await sleep(120);
 
     await setField("a=b");
@@ -1300,7 +1300,7 @@ async function main() {
       source: document.querySelector(".source-panel .cm-content")?.innerText ?? "",
       formulas: [...document.querySelectorAll("math-field")].map((field) => field.value),
       applyButtonVisible: [...document.querySelectorAll(".source-panel button")].some(
-        (button) => /同步到公式|Apply/.test(button.textContent ?? ""),
+        (button) => /Áp dụng|Apply/.test(button.textContent ?? ""),
       ),
     }))()`);
     if (

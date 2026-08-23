@@ -63,7 +63,10 @@
     "verify:embedded-frontend": "node scripts/verify_embedded_frontend_assets.mjs",
     "test:windows-app-lifecycle": "node scripts/windows_app_lifecycle_smoke.mjs",
     "test:windows-ocr-editor-parity": "node scripts/windows_ocr_editor_parity_regression.mjs",
-    "test:windows-cases": "npm run build:desktop && node scripts/windows_cases_regression.mjs"
+    "test:windows-cases": "npm run build:desktop && node scripts/windows_cases_regression.mjs",
+    "test:personal-release": "node scripts/personal_release.mjs --test",
+    "release:personal": "node scripts/personal_release.mjs --release",
+    "test:personal-release:installed": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test_personal_release_installed.ps1"
   },
   "dependencies": {
     "@codemirror/commands": "^6.8.1",

@@ -275,6 +275,7 @@ visualtex_vsto_runtime_failed:
 
 visualtex_vsto_runtime_ready:
     DetailPrint "Microsoft VSTO Runtime is installed and verified."
+    DetailPrint "VisualTeX will trust one self-signed certificate for HTTPS communication restricted to localhost/127.0.0.1."
 
     nsExec::ExecToLog `"$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\ensure_windows_office_certificate.ps1" -VisualTeXPath "$INSTDIR\${MAINBINARYNAME}.exe"`
     Pop $0
@@ -289,7 +290,7 @@ visualtex_office_static_installed:
     WriteRegDWORD HKCU "Software\VisualTeX\OfficeIntegration" "RuntimeVerificationPending" 1
     DetailPrint "Companion and Word/PowerPoint connection verification are deferred until VisualTeX is launched from Finish or by the user."
     IfSilent visualtex_office_done 0
-    MessageBox MB_ICONINFORMATION "Tệp tích hợp Office, đăng ký hệ thống, chứng chỉ, lớp COM và dịch vụ OLE đã được cài và kiểm tra tĩnh. Giai đoạn cài đặt không khởi chạy tiến trình VisualTeX thường trú và không tạo WebView.$\r$\n$\r$\nCompanion cục bộ chỉ khởi chạy bình thường sau khi bạn bấm Hoàn tất để mở VisualTeX; bạn cũng có thể kiểm tra kết nối Word và PowerPoint sau trong Cài đặt → Tích hợp Office."
+    MessageBox MB_ICONINFORMATION "Tệp tích hợp Office, đăng ký hệ thống, chứng chỉ, lớp COM và dịch vụ OLE đã được cài và kiểm tra tĩnh.$\r$\n$\r$\nChứng chỉ tự ký VisualTeX Local Office Companion chỉ dùng cho HTTPS cục bộ tại localhost/127.0.0.1 và được gỡ theo đúng dấu vân tay khi gỡ VisualTeX.$\r$\n$\r$\nBạn có thể kiểm tra kết nối Word và PowerPoint sau trong Cài đặt → Tích hợp Office."
     Goto visualtex_office_done
 
 visualtex_office_failed:

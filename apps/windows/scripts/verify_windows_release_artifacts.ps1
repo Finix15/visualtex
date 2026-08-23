@@ -9,6 +9,7 @@ Import-Module Microsoft.PowerShell.Utility -Force -ErrorAction Stop
 Import-Module (Join-Path $PSHOME "Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1") -Force -ErrorAction Stop
 $root = Split-Path -Parent $PSScriptRoot
 $installerPath = Join-Path $root "src-tauri\target\release\bundle\nsis\VisualTeX_${ExpectedAppVersion}_x64-setup.exe"
+$installerChecksumPath = $installerPath + ".sha256"
 $resourceX64 = Join-Path $root "src-tauri\resources\windows-office\VisualTeX-WindowsOffice-VSTO-x64.msi"
 $resourceX86 = Join-Path $root "src-tauri\resources\windows-office\VisualTeX-WindowsOffice-VSTO-x86.msi"
 $manifestX64 = Join-Path $root "src-tauri\resources\windows-office\VisualTeX-WindowsOffice-VSTO-x64.sha256.json"
@@ -23,6 +24,7 @@ $ocrModelRoot = Join-Path $root "src-tauri\resources\ocr-models\windows-x64"
 $ocrModelCatalogPath = Join-Path $ocrModelRoot "catalog.json"
 $paths = @(
     $installerPath,
+    $installerChecksumPath,
     $resourceX64,
     $resourceX86,
     $manifestX64,
@@ -41,6 +43,14 @@ foreach ($path in $paths) {
     $hash = Get-FileHash -LiteralPath $path -Algorithm SHA256
     Write-Host ("{0} | {1} bytes | SHA256 {2}" -f $item.FullName, $item.Length, $hash.Hash)
 }
+
+$installerHash = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash.ToUpperInvariant()
+$checksumLine = (Get-Content -LiteralPath $installerChecksumPath -Raw).Trim()
+$expectedChecksumLine = "{0}  {1}" -f $installerHash, (Split-Path -Leaf $installerPath)
+if (-not [string]::Equals($checksumLine, $expectedChecksumLine, [StringComparison]::Ordinal)) {
+    throw "Installer SHA-256 sidecar mismatch. Expected '$expectedChecksumLine', actual '$checksumLine'."
+}
+Write-Host "$installerChecksumPath | exact installer SHA-256 sidecar verified"
 
 function Assert-ManifestFileRecord {
     param(

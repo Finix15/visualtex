@@ -12,8 +12,8 @@
     {
       "identifier": "opener:allow-open-url",
       "allow": [
-        { "url": "https://github.com/paulhe666/visualtex/releases" },
-        { "url": "https://github.com/paulhe666/visualtex/releases/*" }
+        { "url": "https://github.com/Finix15/visualtex/releases" },
+        { "url": "https://github.com/Finix15/visualtex/releases/*" }
       ]
     }
   ]

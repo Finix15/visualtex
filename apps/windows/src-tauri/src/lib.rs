@@ -2467,6 +2467,7 @@ fn should_replace_with_bundled_python(error: &str) -> bool {
     let normalized = error.to_ascii_lowercase();
     damaged_venv_python_error(error)
         || normalized.contains("unsupported visualtex ocr python")
+        || normalized.contains("existing visualtex ocr environment uses python")
         || normalized.contains("32-bit interpreter")
         || normalized.contains("app-local microsoft openmp runtime")
 }

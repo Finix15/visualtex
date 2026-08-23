@@ -736,7 +736,7 @@ pub fn run_logged_command(
                     })
                     .unwrap_or_default();
                 break Err(format!(
-                    "{label} was stopped because the download or installation exceeded the installer limit of {} minutes.{download_detail} This is separate from pip's 30-second per-socket timeout. The pip cache and existing OCR environment were preserved; retry continues from the missing package. log={}",
+                    "{label} timed out because the download or installation exceeded the installer limit of {} minutes.{download_detail} This is separate from pip's 30-second per-socket timeout. The pip cache and existing OCR environment were preserved; retry continues from the missing package. log={}",
                     limits.step_timeout.as_secs() / 60,
                     log_path.display()
                 ));
@@ -745,7 +745,7 @@ pub fn run_logged_command(
                 let _ = terminate_process_tree(pid);
                 let _ = child.wait();
                 break Err(format!(
-                    "{label} showed no stdout/stderr or pip cache/temp-file growth for {} seconds and was stopped as genuinely inactive. The pip cache and existing OCR environment were preserved. log={}",
+                    "{label} timed out after showing no stdout/stderr or pip cache/temp-file growth for {} seconds and was stopped as genuinely inactive. The pip cache and existing OCR environment were preserved. log={}",
                     limits.idle_timeout.as_secs(),
                     log_path.display()
                 ));
@@ -932,14 +932,33 @@ pub(crate) fn decode_process_output(bytes: &[u8]) -> String {
     {
         let system_code_pages = unsafe { [GetOEMCP(), GetACP(), 936] };
         let mut attempted = Vec::new();
+        let mut decoded = Vec::new();
         for code_page in system_code_pages {
             if code_page == 65001 || attempted.contains(&code_page) {
                 continue;
             }
             attempted.push(code_page);
             if let Some(text) = decode_windows_code_page(bytes, code_page) {
-                return text;
+                decoded.push((code_page, text));
             }
+        }
+
+        // A GBK byte stream is also technically valid in several single-byte
+        // Windows code pages, where it becomes mojibake. Prefer the explicit
+        // GBK decode when it produces meaningful CJK text; otherwise preserve
+        // the original OEM/ANSI preference for ordinary console output.
+        if let Some((_, text)) = decoded.iter().find(|(code_page, text)| {
+            *code_page == 936
+                && text
+                    .chars()
+                    .filter(|character| ('\u{3400}'..='\u{9fff}').contains(character))
+                    .count()
+                    >= 2
+        }) {
+            return text.clone();
+        }
+        if let Some((_, text)) = decoded.into_iter().next() {
+            return text;
         }
     }
 

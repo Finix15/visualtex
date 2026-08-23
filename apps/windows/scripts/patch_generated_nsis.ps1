@@ -146,6 +146,9 @@ if ($patched -notmatch 'Same-version maintenance defaults to the second option' 
 
 $item = Get-Item -LiteralPath $OutputInstaller
 $hash = (Get-FileHash -LiteralPath $OutputInstaller -Algorithm SHA256).Hash
+$checksumPath = $OutputInstaller + ".sha256"
+Set-Content -LiteralPath $checksumPath -Value ("{0}  {1}" -f $hash, $item.Name) -Encoding ascii
 Write-Host "Patched NSIS installer: $($item.FullName)"
 Write-Host "Size: $($item.Length) bytes"
 Write-Host "SHA-256: $hash"
+Write-Host "SHA-256 sidecar: $checksumPath"

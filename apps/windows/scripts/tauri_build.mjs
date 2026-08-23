@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import process from "node:process";
 import { windowsPowerShellPath } from "./windows_powershell.mjs";
 
@@ -22,6 +23,26 @@ function run(command, args, env = process.env) {
   });
   if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status ?? 1);
+}
+
+function writeInstallerChecksum() {
+  const packageInfo = JSON.parse(readFileSync(resolve("package.json"), "utf8"));
+  const installer = resolve(
+    "src-tauri",
+    "target",
+    "release",
+    "bundle",
+    "nsis",
+    `VisualTeX_${packageInfo.version}_x64-setup.exe`,
+  );
+  const hash = createHash("sha256")
+    .update(readFileSync(installer))
+    .digest("hex")
+    .toUpperCase();
+  const checksum = `${hash}  ${basename(installer)}\n`;
+  writeFileSync(`${installer}.sha256`, checksum, "utf8");
+  console.log(`Installer SHA-256 sidecar: ${installer}.sha256`);
+  console.log(checksum.trim());
 }
 
 function preparePatchedNsisTemplate() {
@@ -292,6 +313,7 @@ run(tauri, ["bundle", "--bundles", "nsis", ...forwarded], {
   ...process.env,
   VISUALTEX_FRONTEND_PREBUILT: "1",
 });
+writeInstallerChecksum();
 
 // 6. Static package verification plus a clean-directory installed-runtime smoke
 // test. The smoke test launches the exact installed visualtex.exe and requires
