@@ -377,10 +377,10 @@ async function main() {
           ready:
             select instanceof HTMLSelectElement &&
             select.value === '28' &&
-            select.querySelectorAll('optgroup').length === 2 &&
-            labels.includes('小四（12 磅）') &&
-            labels.includes('五号（10.5 磅）') &&
-            labels.includes('初号（42 磅）') &&
+            select.querySelectorAll('optgroup').length === 1 &&
+            labels.includes('12 điểm') &&
+            labels.includes('10.5 điểm') &&
+            labels.includes('42 điểm') &&
             field?.position === field?.lastOffset,
           value: select?.value ?? '',
           selectedLabel: select?.selectedOptions[0]?.textContent?.trim() ?? '',
@@ -398,33 +398,33 @@ async function main() {
             field?.shadowRoot?.activeElement?.getAttribute?.('part') ?? '',
         };
       })()`,
-      "PowerPoint configured default font size with Chinese size options",
+      "PowerPoint configured default font size with Vietnamese point options",
     );
     assert.equal(powerpointDefault.value, "28");
-    assert.deepEqual(powerpointDefault.optionGroupLabels, ["中文字号", "磅值"]);
+    assert.deepEqual(powerpointDefault.optionGroupLabels, ["Kích thước điểm"]);
 
     await setFontSize(client, 12);
-    const powerpointChineseSize = await waitForEvaluation(
+    const powerpointPointSize = await waitForEvaluation(
       client,
       `(() => {
         const select = document.querySelector('[data-office-font-size]');
         return {
           ready:
             select?.value === '12' &&
-            select?.selectedOptions[0]?.textContent?.includes('小四'),
+            select?.selectedOptions[0]?.textContent?.includes('12 điểm'),
           value: select?.value ?? '',
           selectedLabel: select?.selectedOptions[0]?.textContent?.trim() ?? '',
         };
       })()`,
-      "PowerPoint Chinese font-size selection",
+      "PowerPoint point-size selection",
     );
     for (let attempt = 0; attempt < 80 && session.fontSizePt !== 12; attempt += 1) {
       await sleep(60);
     }
-    assert.equal(session.fontSizePt, 12, "PowerPoint should persist 小四 as 12 pt");
+    assert.equal(session.fontSizePt, 12, "PowerPoint should persist 12 pt");
     assert.ok(
       updates.some((update) => update.fontSizePt === 12),
-      "PowerPoint autosave should include the selected Chinese size",
+      "PowerPoint autosave should include the selected point size",
     );
 
     await setFontSize(client, 31.5);
@@ -582,27 +582,27 @@ async function main() {
     assert.equal(session.lines?.[0]?.latex, "x+y");
 
     await setFontSize(client, 10.5);
-    const wordChineseSize = await waitForEvaluation(
+    const wordPointSize = await waitForEvaluation(
       client,
       `(() => {
         const select = document.querySelector('[data-office-font-size]');
         return {
           ready:
             select?.value === '10.5' &&
-            select?.selectedOptions[0]?.textContent?.includes('五号'),
+            select?.selectedOptions[0]?.textContent?.includes('10.5 điểm'),
           value: select?.value ?? '',
           selectedLabel: select?.selectedOptions[0]?.textContent?.trim() ?? '',
         };
       })()`,
-      "Word Chinese font-size selection",
+      "Word point-size selection",
     );
     for (let attempt = 0; attempt < 80 && session.fontSizePt !== 10.5; attempt += 1) {
       await sleep(60);
     }
-    assert.equal(session.fontSizePt, 10.5, "Word should persist 五号 as 10.5 pt");
+    assert.equal(session.fontSizePt, 10.5, "Word should persist 10.5 pt");
     assert.ok(
       updates.some((update) => update.fontSizePt === 10.5),
-      "Word autosave should include the selected Chinese size",
+      "Word autosave should include the selected point size",
     );
 
     await setFontSize(client, 13);

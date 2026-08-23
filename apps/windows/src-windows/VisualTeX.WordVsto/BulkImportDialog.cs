@@ -17,7 +17,7 @@ internal sealed class BulkImportDialog : Form
 
     internal BulkImportDialog()
     {
-        Text = "VisualTeX 批量导入 LaTeX / Markdown";
+        Text = "VisualTeX nhập hàng loạt LaTeX / Markdown";
         StartPosition = FormStartPosition.CenterParent;
         MinimumSize = new Size(820, 600);
         Size = new Size(980, 720);
@@ -44,7 +44,7 @@ internal sealed class BulkImportDialog : Form
         var title = new Label
         {
             AutoSize = true,
-            Text = "批量导入为 Word 原生文字和独立公式",
+            Text = "Nhập thành văn bản gốc của Word và công thức độc lập",
             Font = new Font(Font, FontStyle.Bold),
             Margin = new Padding(0, 0, 0, 5),
         };
@@ -52,7 +52,7 @@ internal sealed class BulkImportDialog : Form
         {
             AutoSize = true,
             MaximumSize = new Size(900, 0),
-            Text = "普通文字会成为 Word 原生段落；每个行内公式和行间公式都会成为独立的 VisualTeX 公式，可分别编辑和调整字号。",
+            Text = "Văn bản thường trở thành đoạn Word gốc; mỗi công thức cùng dòng hoặc riêng dòng trở thành công thức VisualTeX độc lập, có thể sửa và đổi cỡ riêng.",
             ForeColor = Color.FromArgb(80, 80, 80),
             Margin = new Padding(0, 0, 0, 10),
         };
@@ -78,25 +78,25 @@ internal sealed class BulkImportDialog : Form
         options.Controls.Add(new Label
         {
             AutoSize = true,
-            Text = "源格式：",
+            Text = "Định dạng nguồn:",
             Padding = new Padding(0, 7, 0, 0),
         });
         _sourceFormat.DropDownStyle = ComboBoxStyle.DropDownList;
         _sourceFormat.Width = 145;
-        _sourceFormat.Items.AddRange(new object[] { "自动识别", "Markdown", "LaTeX" });
+        _sourceFormat.Items.AddRange(new object[] { "Tự động nhận diện", "Markdown", "LaTeX" });
         _sourceFormat.SelectedIndex = 0;
         options.Controls.Add(_sourceFormat);
         options.Controls.Add(new Label
         {
             AutoSize = true,
-            Text = "公式格式：",
+            Text = "Định dạng công thức:",
             Padding = new Padding(18, 7, 0, 0),
         });
         _objectMode.DropDownStyle = ComboBoxStyle.DropDownList;
         _objectMode.Width = 210;
         _objectMode.Items.AddRange(new object[]
         {
-            "Word 原生 OMML（推荐）",
+            "OMML gốc của Word (khuyên dùng)",
             "VisualTeX OLE",
         });
         _objectMode.SelectedIndex = 0;
@@ -104,7 +104,7 @@ internal sealed class BulkImportDialog : Form
         var open = new Button
         {
             AutoSize = true,
-            Text = "打开文件…",
+            Text = "Mở tệp…",
             Margin = new Padding(18, 0, 0, 0),
         };
         open.Click += (_, _) => OpenFile();
@@ -112,7 +112,7 @@ internal sealed class BulkImportDialog : Form
         var preview = new Button
         {
             AutoSize = true,
-            Text = "解析预览",
+            Text = "Phân tích và xem trước",
             Margin = new Padding(8, 0, 0, 0),
         };
         preview.Click += (_, _) => ParseAndPreview(showError: true);
@@ -126,11 +126,11 @@ internal sealed class BulkImportDialog : Form
         _source.ScrollBars = ScrollBars.Both;
         _source.WordWrap = false;
         _source.Font = new Font("Consolas", 10.5f, FontStyle.Regular, GraphicsUnit.Point);
-        _source.Text = "# 示例\r\n\r\n这是正文和行内公式 $E=mc^2$。\r\n\r\n$$\r\n\\int_0^1 x^2\\,\\mathrm{d}x=\\frac13\r\n$$";
+        _source.Text = "# Ví dụ\r\n\r\nĐây là văn bản và công thức cùng dòng $E=mc^2$。\r\n\r\n$$\r\n\\int_0^1 x^2\\,\\mathrm{d}x=\\frac13\r\n$$";
         _source.TextChanged += (_, _) =>
         {
             _parsed = null;
-            _summary.Text = "内容已更改，请解析预览。";
+            _summary.Text = "Nội dung đã thay đổi; hãy phân tích lại bản xem trước.";
             _warnings.Clear();
         };
         root.Controls.Add(_source, 0, 2);
@@ -146,7 +146,7 @@ internal sealed class BulkImportDialog : Form
         status.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 45));
         _summary.Dock = DockStyle.Fill;
         _summary.Padding = new Padding(8);
-        _summary.Text = "点击“解析预览”查看导入结构。";
+        _summary.Text = "Nhấn “Phân tích và xem trước” để xem cấu trúc nhập.";
         _summary.BorderStyle = BorderStyle.FixedSingle;
         status.Controls.Add(_summary, 0, 0);
         _warnings.Dock = DockStyle.Fill;
@@ -166,12 +166,12 @@ internal sealed class BulkImportDialog : Form
         };
         var cancel = new Button
         {
-            Text = "取消",
+            Text = "Hủy",
             DialogResult = DialogResult.Cancel,
             AutoSize = true,
             Padding = new Padding(10, 3, 10, 3),
         };
-        _insert.Text = "插入到 Word";
+        _insert.Text = "Chèn vào Word";
         _insert.AutoSize = true;
         _insert.Padding = new Padding(10, 3, 10, 3);
         _insert.Click += (_, _) =>
@@ -188,7 +188,7 @@ internal sealed class BulkImportDialog : Form
     }
 
     internal WordBulkImportDocument ParsedDocument =>
-        _parsed ?? throw new InvalidOperationException("批量导入内容尚未解析。");
+        _parsed ?? throw new InvalidOperationException("Nội dung nhập hàng loạt chưa được phân tích.");
 
     internal string SourceText
     {
@@ -229,26 +229,26 @@ internal sealed class BulkImportDialog : Form
                 SelectedSourceFormat,
                 SelectedObjectMode);
             _summary.Text =
-                $"识别为 {_parsed.SourceFormat}；共 {_parsed.Blocks.Count} 个块，" +
-                $"{_parsed.TextCharacterCount} 个文字字符，" +
-                $"{_parsed.InlineFormulaCount} 个行内公式，" +
-                $"{_parsed.DisplayFormulaCount} 个行间公式。";
+                $"Đã nhận diện là {_parsed.SourceFormat}; tổng cộng {_parsed.Blocks.Count} khối, " +
+                $"{_parsed.TextCharacterCount} ký tự văn bản, " +
+                $"{_parsed.InlineFormulaCount} công thức cùng dòng, " +
+                $"{_parsed.DisplayFormulaCount} công thức riêng dòng.";
             _warnings.Text = _parsed.Warnings.Count == 0
-                ? "没有解析警告。"
+                ? "Không có cảnh báo phân tích."
                 : string.Join(Environment.NewLine, _parsed.Warnings.Select((warning, index) => $"{index + 1}. {warning}"));
             return true;
         }
         catch (Exception error)
         {
             _parsed = null;
-            _summary.Text = "无法解析当前内容。";
+            _summary.Text = "Không thể phân tích nội dung hiện tại.";
             _warnings.Text = error.Message;
             if (showError)
             {
                 MessageBox.Show(
                     this,
                     error.Message,
-                    "VisualTeX 批量导入",
+                    "Nhập hàng loạt bằng VisualTeX",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
             }
@@ -260,8 +260,8 @@ internal sealed class BulkImportDialog : Form
     {
         using var dialog = new OpenFileDialog
         {
-            Title = "打开 Markdown 或 LaTeX 文件",
-            Filter = "Markdown / LaTeX (*.md;*.markdown;*.tex;*.txt)|*.md;*.markdown;*.tex;*.txt|所有文件 (*.*)|*.*",
+            Title = "Mở tệp Markdown hoặc LaTeX",
+            Filter = "Markdown / LaTeX (*.md;*.markdown;*.tex;*.txt)|*.md;*.markdown;*.tex;*.txt|Tất cả tệp (*.*)|*.*",
             CheckFileExists = true,
             Multiselect = false,
         };
@@ -271,8 +271,8 @@ internal sealed class BulkImportDialog : Form
         {
             MessageBox.Show(
                 this,
-                "文件超过 5 MB，无法批量导入。",
-                "VisualTeX 批量导入",
+                "Tệp lớn hơn 5 MB nên không thể nhập hàng loạt.",
+                "Nhập hàng loạt bằng VisualTeX",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
             return;

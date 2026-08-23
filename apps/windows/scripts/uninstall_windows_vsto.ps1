@@ -119,7 +119,13 @@ function Wait-DirectProcess {
         [string]$FilePath,
         [string[]]$ArgumentList
     )
-    $process = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -PassThru
+    # Windows PowerShell 5.1 flattens ArgumentList into one command line. Quote
+    # values containing spaces explicitly so MSI log paths under a user profile
+    # such as "C:\Users\Tuan Anh\..." are not split into invalid arguments.
+    $nativeArguments = $ArgumentList | ForEach-Object {
+        if ($_ -match '[\s"]') { Quote-ProcessArgument $_ } else { $_ }
+    }
+    $process = Start-Process -FilePath $FilePath -ArgumentList ($nativeArguments -join " ") -PassThru
     try {
         $process.WaitForExit()
         return $process.ExitCode
@@ -274,8 +280,8 @@ try {
             "-NoProfile",
             "-NonInteractive",
             "-ExecutionPolicy", "Bypass",
-            "-File", (Quote-ProcessArgument $certificateScript),
-            "-LogPath", (Quote-ProcessArgument $certificateLog),
+            "-File", $certificateScript,
+            "-LogPath", $certificateLog,
             "-TimeoutSeconds", "15"
         )
         Write-UninstallLog "Certificate cleanup exit code: $certificateExitCode"

@@ -10,6 +10,7 @@
       "../scripts/install_windows_vsto.ps1": "scripts/install_windows_vsto.ps1",
       "../scripts/install_windows_vsto_runtime.ps1": "scripts/install_windows_vsto_runtime.ps1",
       "../scripts/test_windows_office_runtime.ps1": "scripts/test_windows_office_runtime.ps1",
+      "../scripts/test_windows_office_host_probe.ps1": "scripts/test_windows_office_host_probe.ps1",
       "../scripts/uninstall_windows_vsto.ps1": "scripts/uninstall_windows_vsto.ps1",
       "resources/windows-office/VisualTeX-WindowsOffice-VSTO-x64.msi": "windows-office/VisualTeX-WindowsOffice-VSTO-x64.msi",
       "resources/windows-office/VisualTeX-WindowsOffice-VSTO-x64.sha256.json": "windows-office/VisualTeX-WindowsOffice-VSTO-x64.sha256.json",

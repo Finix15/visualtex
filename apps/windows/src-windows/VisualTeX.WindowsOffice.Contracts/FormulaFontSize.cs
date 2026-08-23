@@ -18,7 +18,9 @@ public static class FormulaFontSize
         42f, 48f, 72f, 96f,
     };
 
-    private static readonly (string Name, float Points)[] ChineseSizes =
+    // Preserve legacy Chinese aliases when opening documents or accepting text
+    // entered with an older add-in, but never expose these names in the UI.
+    private static readonly (string Name, float Points)[] LegacyChineseSizes =
     {
         ("初号", 42f),
         ("小初", 36f),
@@ -73,7 +75,7 @@ public static class FormulaFontSize
     {
         if (TryParse(value, out var result)) return result;
         throw new InvalidOperationException(
-            "请输入 5–200 之间的公式字号，或输入初号、小初、一号、小一等中文字号。");
+            "Vui lòng nhập cỡ chữ công thức từ 5 đến 200 pt.");
     }
 
     public static bool TryParse(string? value, out float fontSizePt)
@@ -86,7 +88,7 @@ public static class FormulaFontSize
             .Replace(" ", string.Empty)
             .Replace("　", string.Empty)
             .Replace("字号", string.Empty);
-        foreach (var size in ChineseSizes)
+        foreach (var size in LegacyChineseSizes)
         {
             if (!string.Equals(compact, size.Name, StringComparison.Ordinal)) continue;
             fontSizePt = size.Points;
@@ -118,21 +120,13 @@ public static class FormulaFontSize
     public static string FormatDisplay(double? value)
     {
         var normalized = Normalize(value);
-        foreach (var size in ChineseSizes)
-        {
-            if (Math.Abs(size.Points - normalized) < 0.001f) return size.Name;
-        }
         return normalized.ToString("0.#", CultureInfo.InvariantCulture);
     }
 
     public static string Describe(double? value)
     {
         var normalized = Normalize(value);
-        var display = FormatDisplay(normalized);
-        return display.EndsWith("号", StringComparison.Ordinal)
-            || display.StartsWith("小", StringComparison.Ordinal)
-            ? $"{display}（{normalized.ToString("0.#", CultureInfo.InvariantCulture)} 磅）"
-            : $"{display} 磅";
+        return $"{FormatDisplay(normalized)} pt";
     }
 
     public static float ResolveRenderFontSize(FormulaMetadata? metadata) =>

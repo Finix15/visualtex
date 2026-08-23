@@ -23,7 +23,7 @@ internal sealed class EquationReferenceDialog : Form
     public EquationReferenceDialog(IReadOnlyList<EquationReferenceTarget> targets)
     {
         _targets = targets;
-        Text = "插入 VisualTeX 公式引用";
+        Text = "Chèn tham chiếu công thức VisualTeX";
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
@@ -34,7 +34,7 @@ internal sealed class EquationReferenceDialog : Form
 
         var searchLabel = new Label
         {
-            Text = "搜索公式：",
+            Text = "Tìm công thức:",
             AutoSize = true,
             Location = new Point(18, 19),
         };
@@ -47,7 +47,7 @@ internal sealed class EquationReferenceDialog : Form
 
         var styleLabel = new Label
         {
-            Text = "引用格式：",
+            Text = "Định dạng tham chiếu:",
             AutoSize = true,
             Location = new Point(18, 333),
         };
@@ -56,14 +56,14 @@ internal sealed class EquationReferenceDialog : Form
         _styleBox.Items.AddRange(new object[]
         {
             "(1)",
-            "式（1）",
+            "Công thức (1)",
             "1",
         });
         _styleBox.SelectedIndex = 0;
 
         var insertButton = new Button
         {
-            Text = "插入引用",
+            Text = "Chèn tham chiếu",
             DialogResult = DialogResult.OK,
             Location = new Point(414, 370),
             Size = new Size(90, 32),
@@ -74,7 +74,7 @@ internal sealed class EquationReferenceDialog : Form
             DialogResult = DialogResult.None;
             MessageBox.Show(
                 this,
-                "请先选择一个带编号公式。",
+                "Vui lòng chọn một công thức đã đánh số trước.",
                 "VisualTeX",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
@@ -82,7 +82,7 @@ internal sealed class EquationReferenceDialog : Form
 
         var cancelButton = new Button
         {
-            Text = "取消",
+            Text = "Hủy",
             DialogResult = DialogResult.Cancel,
             Location = new Point(510, 370),
             Size = new Size(90, 32),

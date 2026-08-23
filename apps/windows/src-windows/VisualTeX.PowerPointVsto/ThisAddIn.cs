@@ -83,33 +83,33 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
     <tabs>
       <tab id="VisualTeX.PowerPointVsto.Tab" label="VisualTeX" insertAfterMso="TabHome">
         <group id="VisualTeX.PowerPointVsto.Group" label="VisualTeX">
-          <button id="VisualTeX.PowerPointVsto.New" label="新建公式" size="large" tag="insertFormula" getImage="GetRibbonImage" onAction="OnNewFormula" />
-          <button id="VisualTeX.PowerPointVsto.Edit" label="编辑所选公式" size="large" tag="editSelected" getImage="GetRibbonImage" onAction="OnEditSelected" />
-          <button id="VisualTeX.PowerPointVsto.ConvertOmml" label="转为 OMML" screentip="转为 PowerPoint 原生公式" supertip="转换为 PowerPoint 原生 Office Math（PPTX 内部以 OMML 保存），可继续使用 PowerPoint 公式工具编辑。" imageMso="EquationInsertNew" onAction="OnConvertSelectedOmml" />
-          <button id="VisualTeX.PowerPointVsto.ConvertSelected" label="转为原生 OLE" screentip="转为可嵌入编辑的原生 OLE" supertip="转换后外观应保持不变，但对象会嵌入 PowerPoint 文件，并可通过 VisualTeX 双击重新编辑。" tag="convertToOle" getImage="GetRibbonImage" onAction="OnConvertSelected" />
-          <button id="VisualTeX.PowerPointVsto.ExportPicture" label="转为 SVG 图片" imageMso="PictureInsertFromFile" onAction="OnExportSelectedAsPicture" />
-          <button id="VisualTeX.PowerPointVsto.Delete" label="删除所选公式" imageMso="Delete" onAction="OnDeleteSelected" />
-          <button id="VisualTeX.PowerPointVsto.OpenDesktop" label="打开 VisualTeX" imageMso="FileOpen" onAction="OnOpenDesktop" />
+          <button id="VisualTeX.PowerPointVsto.New" label="Tạo công thức" size="large" tag="insertFormula" getImage="GetRibbonImage" onAction="OnNewFormula" />
+          <button id="VisualTeX.PowerPointVsto.Edit" label="Sửa công thức đã chọn" size="large" tag="editSelected" getImage="GetRibbonImage" onAction="OnEditSelected" />
+          <button id="VisualTeX.PowerPointVsto.ConvertOmml" label="Chuyển sang OMML" screentip="Chuyển sang công thức gốc PowerPoint" supertip="Chuyển sang Office Math gốc của PowerPoint (được lưu dưới dạng OMML trong PPTX) để tiếp tục chỉnh sửa bằng công cụ công thức PowerPoint." imageMso="EquationInsertNew" onAction="OnConvertSelectedOmml" />
+          <button id="VisualTeX.PowerPointVsto.ConvertSelected" label="Chuyển sang OLE" screentip="Chuyển sang OLE có thể chỉnh sửa" supertip="Giữ nguyên hình thức, nhúng đối tượng vào tệp PowerPoint và cho phép nhấp đúp để sửa lại bằng VisualTeX." tag="convertToOle" getImage="GetRibbonImage" onAction="OnConvertSelected" />
+          <button id="VisualTeX.PowerPointVsto.ExportPicture" label="Chuyển sang ảnh SVG" imageMso="PictureInsertFromFile" onAction="OnExportSelectedAsPicture" />
+          <button id="VisualTeX.PowerPointVsto.Delete" label="Xóa công thức đã chọn" imageMso="Delete" onAction="OnDeleteSelected" />
+          <button id="VisualTeX.PowerPointVsto.OpenDesktop" label="Mở VisualTeX" imageMso="FileOpen" onAction="OnOpenDesktop" />
         </group>
-        <group id="VisualTeX.PowerPointVsto.FontSizeGroup" label="公式字号">
-          <button id="VisualTeX.PowerPointVsto.FontSizeDecrease" label="减小" imageMso="FontSizeDecrease" getEnabled="GetFormulaFontSizeEnabled" onAction="OnDecreaseFormulaFontSize" />
-          <comboBox id="VisualTeX.PowerPointVsto.FontSize" label="字号" sizeString="初号（42 磅）" getText="GetFormulaFontSizeText" getEnabled="GetFormulaFontSizeEnabled" onChange="OnFormulaFontSizeChanged">
-            <item id="VisualTeX.PowerPointVsto.FontSizeChu" label="初号" />
-            <item id="VisualTeX.PowerPointVsto.FontSizeXiaoChu" label="小初" />
-            <item id="VisualTeX.PowerPointVsto.FontSizeYi" label="一号" />
-            <item id="VisualTeX.PowerPointVsto.FontSizeXiaoYi" label="小一" />
-            <item id="VisualTeX.PowerPointVsto.FontSizeEr" label="二号" />
-            <item id="VisualTeX.PowerPointVsto.FontSizeXiaoEr" label="小二" />
-            <item id="VisualTeX.PowerPointVsto.FontSizeSan" label="三号" />
-            <item id="VisualTeX.PowerPointVsto.FontSizeXiaoSan" label="小三" />
-            <item id="VisualTeX.PowerPointVsto.FontSizeSi" label="四号" />
-            <item id="VisualTeX.PowerPointVsto.FontSizeXiaoSi" label="小四" />
-            <item id="VisualTeX.PowerPointVsto.FontSizeWu" label="五号" />
-            <item id="VisualTeX.PowerPointVsto.FontSizeXiaoWu" label="小五" />
-            <item id="VisualTeX.PowerPointVsto.FontSizeLiu" label="六号" />
-            <item id="VisualTeX.PowerPointVsto.FontSizeXiaoLiu" label="小六" />
-            <item id="VisualTeX.PowerPointVsto.FontSizeQi" label="七号" />
-            <item id="VisualTeX.PowerPointVsto.FontSizeBa" label="八号" />
+        <group id="VisualTeX.PowerPointVsto.FontSizeGroup" label="Cỡ chữ công thức">
+          <button id="VisualTeX.PowerPointVsto.FontSizeDecrease" label="Giảm" imageMso="FontSizeDecrease" getEnabled="GetFormulaFontSizeEnabled" onAction="OnDecreaseFormulaFontSize" />
+          <comboBox id="VisualTeX.PowerPointVsto.FontSize" label="Cỡ chữ" sizeString="42 pt" getText="GetFormulaFontSizeText" getEnabled="GetFormulaFontSizeEnabled" onChange="OnFormulaFontSizeChanged">
+            <item id="VisualTeX.PowerPointVsto.FontSizeChu" label="42" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeXiaoChu" label="36" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeYi" label="26" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeXiaoYi" label="24" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeEr" label="22" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeXiaoEr" label="18" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeSan" label="16" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeXiaoSan" label="15" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeSi" label="14" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeXiaoSi" label="12" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeWu" label="10.5" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeXiaoWu" label="9" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeLiu" label="7.5" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeXiaoLiu" label="6.5" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeQi" label="5.5" />
+            <item id="VisualTeX.PowerPointVsto.FontSizeBa" label="5" />
             <item id="VisualTeX.PowerPointVsto.FontSize8" label="8" />
             <item id="VisualTeX.PowerPointVsto.FontSize9" label="9" />
             <item id="VisualTeX.PowerPointVsto.FontSize10" label="10" />
@@ -126,7 +126,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             <item id="VisualTeX.PowerPointVsto.FontSize48" label="48" />
             <item id="VisualTeX.PowerPointVsto.FontSize72" label="72" />
           </comboBox>
-          <button id="VisualTeX.PowerPointVsto.FontSizeIncrease" label="增大" imageMso="FontSizeIncrease" getEnabled="GetFormulaFontSizeEnabled" onAction="OnIncreaseFormulaFontSize" />
+          <button id="VisualTeX.PowerPointVsto.FontSizeIncrease" label="Tăng" imageMso="FontSizeIncrease" getEnabled="GetFormulaFontSizeEnabled" onAction="OnIncreaseFormulaFontSize" />
         </group>
       </tab>
     </tabs>
@@ -188,8 +188,8 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             doubleClickError = error.Message;
         }
         SetStatus(doubleClickError is null
-            ? "VisualTeX PowerPoint VSTO 已就绪。"
-            : $"VisualTeX 已就绪，但双击监听不可用：{doubleClickError}");
+            ? "VisualTeX PowerPoint VSTO đã sẵn sàng."
+            : $"VisualTeX đã sẵn sàng nhưng không thể theo dõi thao tác nhấp đúp: {doubleClickError}");
     }
 
     public void OnDisconnection(ext_DisconnectMode removeMode, ref Array custom) => Dispose();
@@ -227,20 +227,20 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         try
         {
             var current = _formulaService?.GetSelectedFormulaFontSize()
-                ?? throw new InvalidOperationException("请先选择一个公式。");
+                ?? throw new InvalidOperationException("Vui lòng chọn một công thức trước.");
             ApplyFormulaFontSize(FormulaFontSize.PreviousPreset(current));
         }
-        catch (Exception error) { ReportError($"无法设置公式字号：{error.Message}"); }
+        catch (Exception error) { ReportError($"Không thể đặt cỡ chữ công thức: {error.Message}"); }
     }
     public void OnIncreaseFormulaFontSize(Office.IRibbonControl control)
     {
         try
         {
             var current = _formulaService?.GetSelectedFormulaFontSize()
-                ?? throw new InvalidOperationException("请先选择一个公式。");
+                ?? throw new InvalidOperationException("Vui lòng chọn một công thức trước.");
             ApplyFormulaFontSize(FormulaFontSize.NextPreset(current));
         }
-        catch (Exception error) { ReportError($"无法设置公式字号：{error.Message}"); }
+        catch (Exception error) { ReportError($"Không thể đặt cỡ chữ công thức: {error.Message}"); }
     }
     public void OnNewFormula(object control) => BeginSession("create", "crossPlatformPicture", null);
     public void OnEditSelected(object control) => BeginSelectedSession(null);
@@ -257,11 +257,11 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         {
             (_sessionClient ?? throw new InvalidOperationException("VisualTeX Session client is unavailable."))
                 .OpenDesktop();
-            SetStatus("VisualTeX 已打开。");
+            SetStatus("VisualTeX đã mở.");
         }
         catch (Exception error)
         {
-            SetStatus($"无法打开 VisualTeX：{error.Message}");
+            SetStatus($"Không thể mở VisualTeX: {error.Message}");
         }
     }
 
@@ -290,11 +290,11 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             var applied = (_formulaService
                     ?? throw new InvalidOperationException("PowerPoint formula service is unavailable."))
                 .SetSelectedFormulaFontSize(value);
-            SetStatus($"公式字号已设置为 {FormulaFontSize.Describe(applied)}。");
+            SetStatus($"Cỡ chữ công thức đã được đặt thành {FormulaFontSize.Describe(applied)}。");
         }
         catch (Exception error)
         {
-            ReportError($"无法设置公式字号：{error.Message}");
+            ReportError($"Không thể đặt cỡ chữ công thức: {error.Message}");
         }
         finally { InvalidateFormulaFontControls(); }
     }
@@ -389,12 +389,12 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 ?? throw new InvalidOperationException("PowerPoint formula service is unavailable.");
             var selection = ResolveFormulaSelection(service);
             if (selection.Metadata is null)
-                throw new InvalidOperationException("请先选择一个 VisualTeX 公式。");
+                throw new InvalidOperationException("Vui lòng chọn một công thức VisualTeX trước.");
             BeginSession("edit", requestedObjectMode, selection, conversionOnly);
         }
         catch (Exception error)
         {
-            ReportError($"VisualTeX PowerPoint 写入失败：{error.Message}");
+            ReportError($"Không thể ghi công thức VisualTeX vào PowerPoint: {error.Message}");
         }
     }
 
@@ -433,16 +433,16 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                     GrantVisualTeXForegroundActivation();
                     await _sessionClient.OpenEditorAsync(activeSessionId!, cancellationToken)
                         .ConfigureAwait(false);
-                    SetStatus("已有 VisualTeX 编辑任务，已将编辑窗口切换到前台。");
+                    SetStatus("Đã có tác vụ chỉnh sửa VisualTeX; cửa sổ chỉnh sửa đã được đưa lên trước.");
                 }
                 catch (Exception error)
                 {
-                    SetStatus($"已有编辑任务，但无法置前窗口：{error.Message}");
+                    SetStatus($"Đã có tác vụ chỉnh sửa nhưng không thể đưa cửa sổ lên trước: {error.Message}");
                 }
             }
             else
             {
-                SetStatus("VisualTeX 正在准备编辑窗口，请稍候再试。");
+                SetStatus("VisualTeX đang chuẩn bị cửa sổ chỉnh sửa. Vui lòng thử lại sau.");
             }
             return;
         }
@@ -457,7 +457,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             var dispatcher = _dispatcher ?? throw new InvalidOperationException("PowerPoint dispatcher is unavailable.");
             var service = _formulaService ?? throw new InvalidOperationException("PowerPoint formula service is unavailable.");
             var client = _sessionClient ?? throw new InvalidOperationException("VisualTeX Session client is unavailable.");
-            SetStatus("正在连接 VisualTeX 本地服务…");
+            SetStatus("Đang kết nối dịch vụ VisualTeX cục bộ…");
             await client.EnsureHealthyAsync(cancellationToken).ConfigureAwait(false);
             if (conversionOnly)
                 await client.PrewarmConverterAsync(cancellationToken).ConfigureAwait(false);
@@ -466,9 +466,9 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 : await dispatcher.InvokeAsync(
                     () => ResolveFormulaSelection(service)).ConfigureAwait(false);
             if (selection.ReadOnly)
-                throw new UnauthorizedAccessException("当前 PowerPoint 演示文稿为只读状态。");
+                throw new UnauthorizedAccessException("Bản trình bày PowerPoint hiện tại đang ở chế độ chỉ đọc.");
             if (mode == "edit" && selection.Metadata is null)
-                throw new InvalidOperationException("请先选择一个 VisualTeX 公式。");
+                throw new InvalidOperationException("Vui lòng chọn một công thức VisualTeX trước.");
 
             // PowerPoint commonly leaves the just-inserted formula selected.
             // Do not treat that selection as initial content for New Formula;
@@ -514,14 +514,14 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             {
                 await client.OpenConverterAsync(session.Id, cancellationToken)
                     .ConfigureAwait(false);
-                SetStatus("正在直接转换 PowerPoint 公式格式…");
+                SetStatus("Đang chuyển đổi trực tiếp định dạng công thức PowerPoint…");
             }
             else
             {
                 GrantVisualTeXForegroundActivation();
                 await client.OpenEditorAsync(session.Id, cancellationToken)
                     .ConfigureAwait(false);
-                SetStatus("VisualTeX 编辑器已打开。");
+                SetStatus("Trình chỉnh sửa VisualTeX đã mở.");
             }
             session = await client.WaitForCommitAsync(
                 session.Id,
@@ -529,19 +529,19 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 cancellationToken).ConfigureAwait(false);
             if (session.Status == "cancelled" || session.ExplicitCancel)
             {
-                SetStatus("已取消，PowerPoint 未修改。");
+                SetStatus("Đã hủy; PowerPoint không bị thay đổi.");
                 return;
             }
             if (session.Status == "failed")
-                throw new InvalidOperationException(session.Error ?? "VisualTeX Session 失败。");
+                throw new InvalidOperationException(session.Error ?? "Phiên VisualTeX thất bại.");
             if (session.Mode == "edit"
                 && !session.Dirty
                 && (!requiresObjectModeChange || session.ExportResult is null))
             {
                 await client.CompleteAsync(session.Id, cancellationToken).ConfigureAwait(false);
                 SetStatus(requiresObjectModeChange
-                    ? "未执行对象格式转换。"
-                    : "公式内容未变化。");
+                    ? "Chưa thực hiện chuyển đổi định dạng đối tượng."
+                    : "Nội dung công thức không thay đổi.");
                 return;
             }
 
@@ -572,7 +572,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                         current.DocumentId,
                         session.SourceDocumentId,
                         StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidOperationException("活动演示文稿已切换，未写入公式。");
+                    throw new InvalidOperationException("Bản trình bày đang hoạt động đã thay đổi; công thức chưa được ghi.");
                 if (session.ObjectMode == "nativeOle")
                 {
                     if (imagePath is null || emfPath is null)
@@ -605,16 +605,16 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             };
             await client.CompleteAsync(session.Id, cancellationToken).ConfigureAwait(false);
             SetStatus(requiresObjectModeChange && session.ObjectMode == "nativeOle"
-                ? "已转换为原生 OLE：外观保持不变，可双击编辑，并嵌入 PowerPoint 文件。"
+                ? "Đã chuyển sang OLE: giữ nguyên hình thức, có thể nhấp đúp để sửa và được nhúng trong tệp PowerPoint."
                 : requiresObjectModeChange && session.ObjectMode == "wordOmml"
-                    ? "已转换为 PowerPoint 原生 Office Math（OMML），可继续使用 PowerPoint 公式工具编辑。"
+                    ? "Đã chuyển sang Office Math (OMML) gốc của PowerPoint và có thể tiếp tục sửa bằng công cụ công thức PowerPoint."
                     : requiresObjectModeChange && session.ObjectMode == "crossPlatformPicture"
-                        ? "已转换为嵌入式 SVG 图片，可跨平台显示并保持矢量清晰度。"
-                        : session.Mode == "edit" ? "PowerPoint 公式已更新。" : "PowerPoint 公式已插入。");
+                        ? "Đã chuyển sang ảnh SVG nhúng, hiển thị đa nền tảng với độ nét vectơ."
+                        : session.Mode == "edit" ? "Công thức PowerPoint đã được cập nhật." : "Công thức PowerPoint đã được chèn.");
         }
         catch (OperationCanceledException)
         {
-            SetStatus("VisualTeX 操作已取消。");
+            SetStatus("Thao tác VisualTeX đã bị hủy.");
         }
         catch (Exception error)
         {
@@ -627,7 +627,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 }
                 catch { }
             }
-            ReportError($"VisualTeX PowerPoint 写入失败：{error.Message}");
+            ReportError($"Không thể ghi công thức VisualTeX vào PowerPoint: {error.Message}");
         }
         finally
         {
@@ -661,11 +661,11 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         try
         {
             await dispatcher.InvokeAsync(service.DeleteSelectedFormula).ConfigureAwait(false);
-            SetStatus("PowerPoint 公式已删除。");
+            SetStatus("Công thức PowerPoint đã được xóa.");
         }
         catch (Exception error)
         {
-            ReportError($"删除 PowerPoint 公式失败：{error.Message}");
+            ReportError($"Không thể xóa công thức PowerPoint: {error.Message}");
         }
     }
 

@@ -96,7 +96,7 @@ public sealed class WordBulkImportParserTests
         var heading = Assert.Single(document.Blocks[0].Runs);
         Assert.True(heading.Bold);
         Assert.False(heading.Italic);
-        Assert.Equal("证明（谱展开）：", heading.Text);
+        Assert.Equal("Chứng minh（谱展开）：", heading.Text);
         var body = Assert.Single(document.Blocks[1].Runs, run =>
             !run.IsFormula && run.Text.Contains("对任意", StringComparison.Ordinal));
         Assert.False(body.Bold);
@@ -390,7 +390,7 @@ public sealed class WordBulkImportParserTests
 
         Assert.Equal(1, document.DisplayFormulaCount);
         Assert.Single(document.Warnings);
-        Assert.Contains("缺少结束标记", document.Warnings[0]);
+        Assert.Contains("thiếu dấu kết thúc", document.Warnings[0]);
     }
 
     [Fact]

@@ -888,6 +888,7 @@ const runtimeVerification = await source("scripts/test_windows_office_runtime.ps
 const certificateInstaller = await source("scripts/ensure_windows_office_certificate.ps1");
 const certificateUninstaller = await source("scripts/remove_windows_office_certificate.ps1");
 const uninstallVsto = await source("scripts/uninstall_windows_vsto.ps1");
+const runtimeHostProbe = await source("scripts/test_windows_office_host_probe.ps1");
 const buildWindowsOffice = await source("scripts/build_windows_office.ps1");
 const ribbonDispatchSmoke = await source(
   "scripts/test_windows_vsto_ribbon_dispatch.ps1",
@@ -901,6 +902,11 @@ const nativeMsi = await source(
 const nativeMsiProject = await source(
   "src-windows/VisualTeX.WindowsOffice.Installer/VisualTeX.WindowsOffice.Installer.wixproj",
 );
+assert.ok(uninstallVsto.includes('$nativeArguments -join " "'));
+assert.ok(uninstallVsto.includes("Quote-ProcessArgument $_"));
+assert.ok(uninstallVsto.includes('"-File", $certificateScript'));
+assert.ok(uninstallVsto.includes('"-LogPath", $certificateLog'));
+assert.ok(!uninstallVsto.includes('(Quote-ProcessArgument $certificateScript)'));
 assert.ok(installOle.includes("forwarding to the native Ribbon + OLE LocalServer installer"));
 assert.ok(!installVsto.includes("uninstall_windows_ole.ps1"));
 assert.ok(!installVsto.includes("ensure_windows_office_certificate.ps1"));
@@ -1047,20 +1053,22 @@ for (const msiRequirement of [
 }
 assert.ok(!nativeMsi.includes("CustomAction"));
 assert.ok(!installOle.includes("TrustedCatalog"));
-assert.ok(runtimeVerification.includes("Get-ComAddInItem"));
-assert.ok(runtimeVerification.includes("Resolve-OfficeExecutablePath"));
 assert.ok(runtimeVerification.includes("Resolve-PowerShellExecutable"));
 assert.ok(runtimeVerification.includes("Sysnative\\WindowsPowerShell"));
 assert.ok(runtimeVerification.includes("ArchitectureRelaunched"));
 assert.ok(runtimeVerification.includes("ProgramW6432"));
-assert.ok(runtimeVerification.includes("GetActiveObject"));
+assert.ok(runtimeVerification.includes("Invoke-HiddenOfficeComAddInProbe"));
 assert.ok(runtimeVerification.includes("RuntimeVerificationPending"));
 assert.ok(runtimeVerification.includes("Start-CompanionAsInteractiveUser"));
 assert.ok(runtimeVerification.includes("must run in the interactive user's non-elevated session"));
 assert.ok(!runtimeVerification.includes("Shell.Application"));
-assert.ok(runtimeVerification.includes('startupMode = "desktop-executable-rot"'));
-assert.ok(runtimeVerification.includes("desktop application did not enumerate"));
-assert.ok(!runtimeVerification.includes("New-Object -ComObject $comType"));
+assert.ok(runtimeVerification.includes('startupMode = "hidden-com-worker"'));
+assert.ok(runtimeVerification.includes("WorkerTimeoutSeconds = 25"));
+assert.ok(runtimeHostProbe.includes("New-Object -ComObject Word.Application"));
+assert.ok(runtimeHostProbe.includes("New-Object -ComObject PowerPoint.Application"));
+assert.ok(runtimeHostProbe.includes("$document.Close(0)"));
+assert.ok(runtimeHostProbe.includes("$presentation.Close()"));
+assert.ok(runtimeHostProbe.includes("$application.Quit()"));
 assert.ok(runtimeVerification.includes('"VisualTeX.WordVsto"'));
 assert.ok(runtimeVerification.includes('"VisualTeX.PowerPointVsto"'));
 assert.ok(runtimeVerification.includes("Get-DisabledItems"));
@@ -1093,6 +1101,7 @@ assert.ok(platformBundle.includes('"-SkipTests"'));
 assert.ok(!platformBundle.includes('"scripts/build_windows_ole_bridge.ps1"'));
 assert.ok(windowsBundle.includes('"../scripts/install_windows_vsto.ps1"'));
 assert.ok(windowsBundle.includes('"../scripts/install_windows_vsto_runtime.ps1"'));
+assert.ok(windowsBundle.includes('"../scripts/test_windows_office_host_probe.ps1"'));
 assert.ok(!windowsBundle.includes('"../scripts/install_windows_ole.ps1"'));
 for (const bundledOfficeResource of [
   "VisualTeX-WindowsOffice-VSTO-x64.msi",

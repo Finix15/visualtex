@@ -165,9 +165,9 @@ internal static class WordBulkImportParser
         WordBulkFormulaObjectMode objectMode)
     {
         if (string.IsNullOrWhiteSpace(serialized))
-            throw new InvalidDataException("批量导入没有返回可用的文档结构。");
+            throw new InvalidDataException("Nhập hàng loạt không trả về cấu trúc tài liệu hợp lệ.");
         if (serialized.Length > 5_000_000)
-            throw new InvalidDataException("批量导入文档结构不能超过 5 MB。");
+            throw new InvalidDataException("Cấu trúc tài liệu nhập hàng loạt không được vượt quá 5 MB.");
 
         SerializedDocument? wire;
         try
@@ -182,12 +182,12 @@ internal static class WordBulkImportParser
         }
         catch (JsonException error)
         {
-            throw new InvalidDataException("批量导入返回了无效的文档结构。", error);
+            throw new InvalidDataException("Nhập hàng loạt trả về cấu trúc tài liệu không hợp lệ.", error);
         }
         if (wire is null || wire.Blocks.Count == 0)
-            throw new InvalidDataException("批量导入没有找到可以插入 Word 的内容。");
+            throw new InvalidDataException("Nhập hàng loạt không tìm thấy nội dung có thể chèn vào Word.");
         if (wire.Blocks.Count > 10_000)
-            throw new InvalidDataException("批量导入包含过多段落（上限 10000）。");
+            throw new InvalidDataException("Nội dung nhập hàng loạt có quá nhiều đoạn (tối đa 10000).");
 
         var blocks = new List<WordBulkBlock>(wire.Blocks.Count);
         foreach (var sourceBlock in wire.Blocks)
@@ -254,10 +254,10 @@ internal static class WordBulkImportParser
         }
 
         if (blocks.Count == 0)
-            throw new InvalidDataException("批量导入没有找到可以插入 Word 的内容。");
+            throw new InvalidDataException("Nhập hàng loạt không tìm thấy nội dung có thể chèn vào Word.");
         var formulaCount = blocks.Sum(block => block.Runs.Count(run => run.IsFormula));
         if (formulaCount > 1_000)
-            throw new InvalidDataException("批量导入包含过多公式（上限 1000）。");
+            throw new InvalidDataException("Nội dung nhập hàng loạt có quá nhiều công thức (tối đa 1000).");
 
         return new WordBulkImportDocument
         {
@@ -281,7 +281,7 @@ internal static class WordBulkImportParser
     {
         if (source is null) throw new ArgumentNullException(nameof(source));
         if (source.Length > 5_000_000)
-            throw new InvalidDataException("批量导入内容不能超过 5 MB。");
+            throw new InvalidDataException("Nội dung nhập hàng loạt không được vượt quá 5 MB.");
 
         var format = sourceFormat == WordBulkSourceFormat.Auto
             ? DetectFormat(source)
@@ -290,12 +290,12 @@ internal static class WordBulkImportParser
         var normalized = NormalizeSource(source, format, warnings);
         var blocks = ParseBlocks(normalized, format, warnings);
         if (blocks.Count == 0)
-            throw new InvalidDataException("没有找到可以插入 Word 的文字或公式。");
+            throw new InvalidDataException("Không tìm thấy văn bản hoặc công thức có thể chèn vào Word.");
         if (blocks.Count > 10_000)
-            throw new InvalidDataException("批量导入包含过多段落（上限 10000）。");
+            throw new InvalidDataException("Nội dung nhập hàng loạt có quá nhiều đoạn (tối đa 10000).");
         var formulaCount = blocks.Sum(block => block.Runs.Count(run => run.IsFormula));
         if (formulaCount > 1_000)
-            throw new InvalidDataException("批量导入包含过多公式（上限 1000）。");
+            throw new InvalidDataException("Nội dung nhập hàng loạt có quá nhiều công thức (tối đa 1000).");
 
         return new WordBulkImportDocument
         {
@@ -315,7 +315,7 @@ internal static class WordBulkImportParser
     {
         if (source is null) throw new ArgumentNullException(nameof(source));
         if (source.Length > 5_000_000)
-            throw new InvalidDataException("LaTeX 重绘范围不能超过 5 MB。");
+            throw new InvalidDataException("Phạm vi vẽ lại LaTeX không được vượt quá 5 MB.");
 
         var spans = new List<WordLatexFormulaSpan>();
         for (var index = 0; index < source.Length;)
@@ -421,7 +421,7 @@ internal static class WordBulkImportParser
         }
 
         if (spans.Count > 1_000)
-            throw new InvalidDataException("LaTeX 重绘包含过多公式（上限 1000）。");
+            throw new InvalidDataException("Phạm vi vẽ lại LaTeX có quá nhiều công thức (tối đa 1000).");
         return spans;
     }
 
@@ -580,7 +580,7 @@ internal static class WordBulkImportParser
             normalized = end >= 0
                 ? normalized.Substring(contentStart, end - contentStart)
                 : normalized.Substring(contentStart);
-            if (end < 0) warnings.Add("LaTeX 文档缺少 \\end{document}，已导入其余内容。");
+            if (end < 0) warnings.Add("Tài liệu LaTeX thiếu \\end{document}; phần nội dung còn lại vẫn được nhập.");
         }
 
         var lines = normalized.Split('\n');
@@ -692,7 +692,7 @@ internal static class WordBulkImportParser
                 {
                     inCodeFence = true;
                     codeFenceEnd = "```";
-                    codeFenceDescription = "Markdown 代码块";
+                    codeFenceDescription = "Khối mã Markdown";
                 }
                 else
                 {
@@ -713,7 +713,7 @@ internal static class WordBulkImportParser
                     var environment = codeStart.Groups["name"].Value;
                     inCodeFence = true;
                     codeFenceEnd = $"\\end{{{environment}}}";
-                    codeFenceDescription = $"LaTeX {environment} 环境";
+                    codeFenceDescription = $"Môi trường LaTeX {environment}";
                     continue;
                 }
             }
@@ -873,7 +873,7 @@ internal static class WordBulkImportParser
                     FlushQuote();
                     if (listModes.Count == 0)
                     {
-                        warnings.Add($"忽略了没有对应开始标记的 {trimmed}。");
+                        warnings.Add($"Đã bỏ qua {trimmed} vì không có dấu bắt đầu tương ứng.");
                     }
                     else
                     {
@@ -910,7 +910,7 @@ internal static class WordBulkImportParser
                     FlushParagraph();
                     FlushQuote();
                     if (listModes.Count == 0)
-                        warnings.Add("检测到列表外的 \\item，已按一级项目符号导入。");
+                        warnings.Add("Phát hiện \\item ngoài danh sách; đã nhập dưới dạng dấu đầu dòng cấp một.");
                     blocks.Add(new WordBulkBlock
                     {
                         Kind = listModes.Count > 0 && listModes.Peek() == "numbered"
@@ -983,39 +983,39 @@ internal static class WordBulkImportParser
         }
 
         if (inCodeFence)
-            FinishCodeBlock($"{codeFenceDescription}未闭合，已导入到文末。");
+            FinishCodeBlock($"{codeFenceDescription} chưa đóng; nội dung đã được nhập đến cuối tài liệu.");
         FlushParagraph();
         FlushQuote();
         if (inLatexQuote)
-            warnings.Add("LaTeX quote/quotation 环境未闭合，已导入到文末。");
+            warnings.Add("Môi trường LaTeX quote/quotation chưa đóng; nội dung đã được nhập đến cuối tài liệu.");
         if (listModes.Count > 0)
-            warnings.Add($"LaTeX 文档有 {listModes.Count} 个列表环境未闭合，已导入其余内容。");
+            warnings.Add($"Tài liệu LaTeX có {listModes.Count} môi trường danh sách chưa đóng; phần còn lại vẫn được nhập.");
         return blocks;
     }
 
     private static string LatexTheoremLabel(string environment) =>
         environment.Trim().ToLowerInvariant() switch
         {
-            "theorem" => "定理",
-            "lemma" => "引理",
-            "proposition" => "命题",
-            "corollary" => "推论",
-            "definition" => "定义",
-            "proof" => "证明",
-            "remark" => "注记",
-            "example" => "例",
-            "exercise" => "练习",
-            "assumption" => "假设",
-            "axiom" => "公理",
-            "claim" => "断言",
-            "conjecture" => "猜想",
-            "criterion" => "判据",
-            "fact" => "事实",
-            "notation" => "记号",
-            "observation" => "观察",
-            "problem" => "问题",
-            "question" => "问题",
-            "solution" => "解",
+            "theorem" => "Định lý",
+            "lemma" => "Bổ đề",
+            "proposition" => "Mệnh đề",
+            "corollary" => "Hệ quả",
+            "definition" => "Định nghĩa",
+            "proof" => "Chứng minh",
+            "remark" => "Nhận xét",
+            "example" => "Ví dụ",
+            "exercise" => "Bài tập",
+            "assumption" => "Giả thiết",
+            "axiom" => "Tiên đề",
+            "claim" => "Khẳng định",
+            "conjecture" => "Phỏng đoán",
+            "criterion" => "Tiêu chuẩn",
+            "fact" => "Sự kiện",
+            "notation" => "Ký hiệu",
+            "observation" => "Quan sát",
+            "problem" => "Bài toán",
+            "question" => "Câu hỏi",
+            "solution" => "Lời giải",
             _ => environment,
         };
 
@@ -1101,8 +1101,8 @@ internal static class WordBulkImportParser
             ? NormalizeDelimitedDisplayLatex(builder.ToString())
             : NormalizeDisplayEnvironmentLatex(start.Environment, builder.ToString());
         warning = start.Environment is null
-            ? $"行间公式缺少结束标记 {start.EndToken}，已导入到文末。"
-            : $"LaTeX 环境 {start.Environment} 未闭合，已导入到文末。";
+            ? $"Công thức riêng dòng thiếu dấu kết thúc {start.EndToken}; nội dung đã được nhập đến cuối tài liệu."
+            : $"Môi trường LaTeX {start.Environment} chưa đóng; nội dung đã được nhập đến cuối tài liệu.";
         return true;
     }
 
@@ -1147,7 +1147,7 @@ internal static class WordBulkImportParser
         latex = NormalizeDisplayEnvironmentLatex(
             environment,
             builder.ToString());
-        warning = $"LaTeX 环境 {environment} 未闭合，已导入到文末。";
+        warning = $"Môi trường LaTeX {environment} chưa đóng; nội dung đã được nhập đến cuối tài liệu.";
         return true;
     }
 
@@ -1245,7 +1245,7 @@ internal static class WordBulkImportParser
         }
         index = lines.Count - 1;
         latex = NormalizeDelimitedDisplayLatex(builder.ToString());
-        warning = $"行间公式缺少结束标记 {endToken}，已导入到文末。";
+        warning = $"Công thức riêng dòng thiếu dấu kết thúc {endToken}; nội dung đã được nhập đến cuối tài liệu.";
         return true;
     }
 

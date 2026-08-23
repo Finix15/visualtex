@@ -1048,7 +1048,7 @@ internal sealed class WordFormulaService
     {
         var selected = ReadSelection();
         if (selected.Metadata is null || string.IsNullOrWhiteSpace(selected.FormulaId))
-            throw new InvalidOperationException("请先选择一个 VisualTeX 公式。");
+            throw new InvalidOperationException("Vui lòng chọn một công thức VisualTeX trước.");
 
         var target = FormulaFontSize.Normalize(requestedFontSizePt);
         Document? document = null;
@@ -1744,15 +1744,15 @@ internal sealed class WordFormulaService
                 ? document.Content.Duplicate
                 : selection.Range.Duplicate;
             if (!wholeDocument && scope.Start == scope.End)
-                throw new InvalidOperationException("请先选择包含 LaTeX 代码的 Word 内容。");
+                throw new InvalidOperationException("Vui lòng chọn nội dung Word có chứa mã LaTeX trước.");
 
             var sourceText = scope.Text ?? string.Empty;
             var spans = WordBulkImportParser.FindFormulaSpans(sourceText);
             if (spans.Count == 0)
                 throw new InvalidDataException(
                     wholeDocument
-                        ? "当前 Word 文档中没有找到 $...$、$$...$$、\\(...\\) 或 \\[...\\] 公式。"
-                        : "所选内容中没有找到 $...$、$$...$$、\\(...\\) 或 \\[...\\] 公式。");
+                        ? "Không tìm thấy công thức $...$, $$...$$, \\(...\\) hoặc \\[...\\] trong tài liệu Word hiện tại."
+                        : "Không tìm thấy công thức $...$, $$...$$, \\(...\\) hoặc \\[...\\] trong phần đã chọn.");
 
             var plan = new WordLatexRedrawPlan
             {
@@ -1935,7 +1935,7 @@ internal sealed class WordFormulaService
             validationRange = document.Range(plan.ScopeStart, plan.ScopeEnd);
             if (!string.Equals(validationRange.Text ?? string.Empty, plan.SourceText, StringComparison.Ordinal))
                 throw new InvalidOperationException(
-                    "渲染期间 Word 内容发生了变化。为避免替换错误位置，本次重绘已停止，请重新选择后再试。");
+                    "Nội dung Word đã thay đổi trong khi kết xuất. Để tránh thay sai vị trí, thao tác đã dừng; hãy chọn lại và thử lần nữa.");
 
             selection = _application.Selection;
             viewState = CaptureViewState();
@@ -1946,7 +1946,7 @@ internal sealed class WordFormulaService
             // resolved live ranges also prevents a late locator failure after some
             // formulas have already been replaced.
             resolvedTargets = ResolveLatexRedrawTargets(document, plan, prepared);
-            undoRecord = BeginUndoRecord("VisualTeX 重绘 LaTeX 公式");
+            undoRecord = BeginUndoRecord("VisualTeX vẽ lại công thức LaTeX");
             foreach (var resolved in resolvedTargets
                          .OrderByDescending(item => item.SourceRange.Start))
             {
@@ -1959,7 +1959,7 @@ internal sealed class WordFormulaService
                             resolved.ExpectedSource,
                             StringComparison.Ordinal))
                         throw new InvalidOperationException(
-                            $"渲染期间公式内容发生变化：{resolved.Target.Latex}");
+                            $"Nội dung công thức đã thay đổi trong khi kết xuất: {resolved.Target.Latex}");
 
                     if (resolved.Target.PreserveDisplayParagraphBoundary)
                         preservedDisplayParagraphRange =
@@ -2082,8 +2082,8 @@ internal sealed class WordFormulaService
                     : "OMML";
                 throw new InvalidDataException(
                     wholeDocument
-                        ? $"当前 Word 文档中没有找到可转换的 {modeLabel} 公式。"
-                        : $"所选内容中没有找到可转换的 {modeLabel} 公式。");
+                        ? $"Không tìm thấy công thức {modeLabel} có thể chuyển đổi trong tài liệu Word hiện tại."
+                        : $"Không tìm thấy công thức {modeLabel} có thể chuyển đổi trong phần đã chọn.");
             }
 
             // Preflight every source before opening a destructive Word undo record.
@@ -2096,10 +2096,10 @@ internal sealed class WordFormulaService
             }
 
             viewState = CaptureViewState();
-            undoRecord = BeginUndoRecord("VisualTeX 公式转为 LaTeX 代码");
+            undoRecord = BeginUndoRecord("Chuyển công thức VisualTeX sang mã LaTeX");
             if (undoRecord is null)
                 throw new InvalidOperationException(
-                    "Word 无法建立公式转 LaTeX 的撤销事务。为避免公式丢失，本次转换未开始。");
+                    "Word không thể tạo giao dịch hoàn tác cho việc chuyển công thức sang LaTeX. Để tránh mất công thức, quá trình chưa bắt đầu.");
 
             var undoRecordEnded = false;
             var documentMutationStarted = false;
@@ -2128,7 +2128,7 @@ internal sealed class WordFormulaService
                 if (documentMutationStarted
                     && !TryUndoFormulaToLatexConversion(document))
                     throw new InvalidOperationException(
-                        "公式转 LaTeX 失败，而且 Word 无法自动撤销本次转换。请立即使用 Ctrl+Z，并保留当前文档以便排查。",
+                        "Chuyển công thức sang LaTeX thất bại và Word không thể tự hoàn tác. Hãy dùng Ctrl+Z ngay và giữ tài liệu hiện tại để kiểm tra.",
                         conversionError);
                 throw;
             }
@@ -2348,7 +2348,7 @@ internal sealed class WordFormulaService
         var latexSource = target.LatexSource;
         if (string.IsNullOrWhiteSpace(latexSource))
             throw new InvalidDataException(
-                $"公式 {metadata.FormulaId} 没有可安全恢复的 LaTeX 源码。");
+                $"Công thức {metadata.FormulaId} không có mã LaTeX có thể khôi phục an toàn.");
         var formulaStart = target.FormulaRange.Start;
         Table? numberedTable = null;
         Range? tableRange = null;
@@ -2484,7 +2484,7 @@ internal sealed class WordFormulaService
                     frame = remaining[index];
                     if (frame.Width <= 1f && frame.Height <= 1f)
                         throw new InvalidDataException(
-                            $"公式 {metadata.FormulaId} 的 LaTeX 源码仍位于隐藏编号框架中。为避免源码不可见，转换已回滚。");
+                            $"Công thức {metadata.FormulaId} vẫn có mã LaTeX trong khung đánh số ẩn. Quá trình đã được hoàn tác để tránh làm mã nguồn vô hình.");
                 }
                 finally { Release(frame); }
             }
@@ -2503,7 +2503,7 @@ internal sealed class WordFormulaService
             .Trim();
         if (string.IsNullOrWhiteSpace(latex))
             throw new InvalidDataException(
-                $"公式 {metadata.FormulaId} 的 LaTeX 元数据为空。为避免删除原公式，转换已中止。");
+                $"Công thức {metadata.FormulaId} có siêu dữ liệu LaTeX trống. Quá trình đã dừng để tránh xóa công thức gốc.");
         if (string.Equals(
                 metadata.DisplayMode,
                 "block",
@@ -2533,7 +2533,7 @@ internal sealed class WordFormulaService
         var normalizedExpected = NormalizeFormulaToLatexVerificationText(expected);
         if (!string.Equals(actual, normalizedExpected, StringComparison.Ordinal))
             throw new InvalidDataException(
-                $"公式 {formulaId} 的 LaTeX 写回校验失败。Word 实际写入内容与预期源码不一致。");
+                $"Công thức {formulaId} không vượt qua kiểm tra ghi lại LaTeX. Nội dung Word thực tế khác mã nguồn dự kiến.");
 
         Frames? frames = null;
         try
@@ -2541,7 +2541,7 @@ internal sealed class WordFormulaService
             frames = inserted.Frames;
             if (frames.Count > 0)
                 throw new InvalidDataException(
-                    $"公式 {formulaId} 的 LaTeX 源码被 Word Frame 包围。为避免源码不可见，本次转换已撤销。");
+                    $"Công thức {formulaId} có mã LaTeX nằm trong Word Frame. Thao tác đã được hoàn tác để tránh làm mã nguồn vô hình.");
         }
         finally { Release(frames); }
     }
@@ -2697,11 +2697,11 @@ internal sealed class WordFormulaService
             foreach (var target in plan.Targets.OrderBy(item => item.RelativeStart))
             {
                 if (!prepared.TryGetValue(target.Id, out var formula))
-                    throw new InvalidDataException($"缺少公式 {target.Id} 的渲染结果。");
+                    throw new InvalidDataException($"Thiếu kết quả cho công thức {target.Id}  kết quả kết xuất.");
                 if (target.RelativeStart < 0
                     || target.SourceLength <= 0
                     || target.RelativeStart + target.SourceLength > plan.SourceText.Length)
-                    throw new InvalidDataException($"公式 {target.Id} 的源文本范围无效。");
+                    throw new InvalidDataException($"Công thức {target.Id} có vùng văn bản nguồn không hợp lệ.");
 
                 var expectedSource = plan.SourceText.Substring(
                     target.RelativeStart,
@@ -2804,7 +2804,7 @@ internal sealed class WordFormulaService
         }
 
         throw new InvalidOperationException(
-            $"无法在原位置附近重新定位公式：{target.Latex}。为避免替换错误内容，本次重绘已停止。");
+            $"Không thể xác định lại công thức gần vị trí ban đầu: {target.Latex}。 Để tránh thay sai nội dung, thao tác vẽ lại đã dừng.");
     }
 
     private static Range? FindExactLatexSourceRange(
@@ -3581,7 +3581,7 @@ internal sealed class WordFormulaService
                     FormulaId: item.Session.FormulaId,
                     MathMl: item.MathMl
                         ?? throw new InvalidDataException(
-                            $"公式 {item.Session.FormulaId} 没有可用的 MathML。")))
+                            $"Công thức {item.Session.FormulaId} không có MathML hợp lệ.")))
                 .ToList();
             if (ommlFormulas.Count > 0 && !nativeOmmlBulk)
             {
@@ -3601,7 +3601,7 @@ internal sealed class WordFormulaService
                 selection = _application.Selection;
                 selection.SetRange(insertionStart, insertionStart);
             }
-            undoRecord = BeginUndoRecord("VisualTeX 批量导入 LaTeX / Markdown");
+            undoRecord = BeginUndoRecord("VisualTeX nhập hàng loạt LaTeX / Markdown");
 
             var nativeOleBulk = prepared.Count > 0
                 && prepared.Values.All(item => string.Equals(
@@ -3640,7 +3640,7 @@ internal sealed class WordFormulaService
                     var formulaRun = block.Runs.Single(run => run.IsFormula);
                     if (!prepared.TryGetValue(formulaRun.Id, out var formula))
                         throw new InvalidDataException(
-                            $"缺少行间公式 {formulaRun.Id} 的渲染结果。");
+                            $"Thiếu công thức riêng dòng {formulaRun.Id}  kết quả kết xuất.");
                     InsertPreparedFormula(
                         document,
                         selection,
@@ -3667,7 +3667,7 @@ internal sealed class WordFormulaService
                     }
                     if (!prepared.TryGetValue(run.Id, out var formula))
                         throw new InvalidDataException(
-                            $"缺少行内公式 {run.Id} 的渲染结果。");
+                            $"Thiếu công thức cùng dòng {run.Id}  kết quả kết xuất.");
 
                     // Write the complete native paragraph before materializing
                     // inline formulas. Word keeps a caret collapsed at an OMML
@@ -3803,7 +3803,7 @@ internal sealed class WordFormulaService
             var mathMl = formula.MathMl;
             if (string.IsNullOrWhiteSpace(mathMl))
                 throw new InvalidDataException(
-                    $"公式 {formula.Session.FormulaId} 没有可用的 MathML。");
+                    $"Công thức {formula.Session.FormulaId} không có MathML hợp lệ.");
             var omml = WordOmmlConverter.TransformMathMlToOmml(mathMl!);
             var equation = XElement.Parse(
                 WordOmmlConverter.ExtractSingleOMath(omml),
@@ -3830,7 +3830,7 @@ internal sealed class WordFormulaService
                 var formulaRun = block.Runs.Single(run => run.IsFormula);
                 if (!prepared.TryGetValue(formulaRun.Id, out var formula))
                     throw new InvalidDataException(
-                        $"缺少行间公式 {formulaRun.Id} 的渲染结果。");
+                        $"Thiếu công thức riêng dòng {formulaRun.Id}  kết quả kết xuất.");
                 AppendFormula(paragraph, formula, display: true);
             }
             else
@@ -3847,7 +3847,7 @@ internal sealed class WordFormulaService
                     }
                     if (!prepared.TryGetValue(run.Id, out var formula))
                         throw new InvalidDataException(
-                            $"缺少行内公式 {run.Id} 的渲染结果。");
+                            $"Thiếu công thức cùng dòng {run.Id}  kết quả kết xuất.");
                     AppendFormula(paragraph, formula, display: false);
                 }
             }
@@ -3915,7 +3915,7 @@ internal sealed class WordFormulaService
             find.Wrap = WdFindWrap.wdFindStop;
             if (!find.Execute())
                 throw new InvalidOperationException(
-                    "Word 未能定位批量 OMML 导入的结束标记。");
+                    "Word không thể xác định dấu kết thúc của lần nhập OMML hàng loạt.");
             var insertionEnd = markerSearch.Start;
             markerSearch.Text = string.Empty;
             Release(insertedRange);
@@ -3927,8 +3927,8 @@ internal sealed class WordFormulaService
             maths = insertedRange.OMaths;
             if (maths.Count != orderedFormulas.Count)
                 throw new InvalidDataException(
-                    $"批量 OMML 一次性写入生成了 {maths.Count} 个公式，"
-                    + $"预期 {orderedFormulas.Count} 个。");
+                    $"Một lần ghi OMML hàng loạt đã tạo {maths.Count} công thức, "
+                    + $"dự kiến {orderedFormulas.Count} công thức.");
             // Word normalizes imported OMML (especially aligned/equation-array
             // structures) after insertion. First finalize inline/display types,
             // then fingerprint the actual Word XML in one batch. Persisting the
@@ -4049,8 +4049,8 @@ internal sealed class WordFormulaService
             paragraphs = insertedRange.Paragraphs;
             if (paragraphs.Count < source.Blocks.Count)
                 throw new InvalidDataException(
-                    $"批量 OMML 一次性写入生成了 {paragraphs.Count} 个段落，"
-                    + $"预期至少 {source.Blocks.Count} 个。");
+                    $"Một lần ghi OMML hàng loạt đã tạo {paragraphs.Count} đoạn, "
+                    + $"dự kiến ít nhất {source.Blocks.Count} đoạn.");
             for (var index = 0; index < source.Blocks.Count; index++)
             {
                 var block = source.Blocks[index];
@@ -4302,7 +4302,7 @@ internal sealed class WordFormulaService
                     var formulaRun = block.Runs.Single(run => run.IsFormula);
                     if (!prepared.TryGetValue(formulaRun.Id, out var formula))
                         throw new InvalidDataException(
-                            $"缺少行间公式 {formulaRun.Id} 的渲染结果。");
+                            $"Thiếu công thức riêng dòng {formulaRun.Id}  kết quả kết xuất.");
                     EnsureWritableParagraph(selection);
                     var placeholderStart = selection.Start;
                     selection.TypeText(BulkInlineFormulaPlaceholder);
@@ -4323,7 +4323,7 @@ internal sealed class WordFormulaService
                     }
                     if (!prepared.TryGetValue(run.Id, out var formula))
                         throw new InvalidDataException(
-                            $"缺少行内公式 {run.Id} 的渲染结果。");
+                            $"Thiếu công thức cùng dòng {run.Id}  kết quả kết xuất.");
                     var placeholderStart = selection.Start;
                     selection.TypeText(BulkInlineFormulaPlaceholder);
                     pendingFormulas.Add((placeholderStart, formula, false));
@@ -4482,7 +4482,7 @@ internal sealed class WordFormulaService
                 var mathMl = prepared.MathMl;
                 if (string.IsNullOrWhiteSpace(mathMl))
                     throw new InvalidDataException(
-                        $"公式 {metadata.FormulaId} 没有可用的 MathML。" );
+                        $"Công thức {metadata.FormulaId} không có MathML hợp lệ." );
                 if (!display)
                 {
                     var placeholder = PrepareInlineBaselineSentinelBeforeInsert(
@@ -4555,11 +4555,11 @@ internal sealed class WordFormulaService
                     FormulaOleContract.NativeOleMode,
                     StringComparison.Ordinal))
                 throw new InvalidDataException(
-                    $"批量导入不支持公式对象格式 {session.ObjectMode}。" );
+                    $"Nhập hàng loạt không hỗ trợ định dạng đối tượng công thức {session.ObjectMode}。" );
             if (string.IsNullOrWhiteSpace(prepared.PngPath)
                 || string.IsNullOrWhiteSpace(prepared.EmfPath))
                 throw new InvalidDataException(
-                    $"公式 {metadata.FormulaId} 没有可用的 OLE 预览。" );
+                    $"Công thức {metadata.FormulaId} không có bản xem trước OLE hợp lệ." );
             shape = AddOleObject(document, insertion);
             InitializeOle(shape, metadata, prepared.EmfPath!, prepared.PngPath!);
             Configure(
@@ -4624,7 +4624,7 @@ internal sealed class WordFormulaService
             anchor = document.Range(paragraphStart, paragraphStart);
             paragraphs = anchor.Paragraphs;
             if (paragraphs.Count == 0)
-                throw new InvalidDataException("Word 未能定位批量导入段落。");
+                throw new InvalidDataException("Word không thể xác định đoạn nhập hàng loạt.");
             paragraph = paragraphs[1];
             paragraphRange = paragraph.Range;
             selection.SetRange(paragraphRange.End, paragraphRange.End);
@@ -4729,7 +4729,7 @@ internal sealed class WordFormulaService
         {
             paragraphs = sourceRange.Paragraphs;
             if (paragraphs.Count == 0)
-                throw new InvalidDataException("Word 未能定位行间公式所在段落。");
+                throw new InvalidDataException("Word không thể xác định đoạn chứa công thức riêng dòng.");
             paragraph = paragraphs[1];
             paragraphRange = paragraph.Range.Duplicate;
             var result = paragraphRange;

@@ -1092,6 +1092,94 @@ function Get-ComAddInItem([object]$Collection, [object]$Index) {
     return $Collection.Item($Index)
 }
 
+function Invoke-HiddenOfficeComAddInProbe {
+    param(
+        [ValidateSet("Word", "PowerPoint")][string]$HostName,
+        [string]$ProgId,
+        [int]$WorkerTimeoutSeconds = 25
+    )
+
+    $workerScript = Join-Path $PSScriptRoot "test_windows_office_host_probe.ps1"
+    if (-not (Test-Path -LiteralPath $workerScript -PathType Leaf)) {
+        throw "The hidden Office verification worker is missing: $workerScript"
+    }
+
+    $processName = if ($HostName -eq "Word") { "WINWORD" } else { "POWERPNT" }
+    $existingProcessIds = @(
+        Get-Process $processName -ErrorAction SilentlyContinue |
+            ForEach-Object { [int]$_.Id }
+    )
+    $resultPath = Join-Path $logRoot ("office-host-probe-{0}-{1}.json" -f $HostName.ToLowerInvariant(), [Guid]::NewGuid().ToString("N"))
+    $arguments = @(
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        (Quote-ProcessArgument $workerScript),
+        "-HostName",
+        $HostName,
+        "-ProgId",
+        $ProgId,
+        "-ResultPath",
+        (Quote-ProcessArgument $resultPath)
+    )
+    $worker = $null
+    $timedOut = $false
+    try {
+        $worker = Start-Process `
+            -FilePath (Resolve-PowerShellExecutable $script:resolvedOfficePlatform) `
+            -ArgumentList ($arguments -join " ") `
+            -WindowStyle Hidden `
+            -PassThru
+        if (-not $worker.WaitForExit([Math]::Max(1, $WorkerTimeoutSeconds) * 1000)) {
+            $timedOut = $true
+            Stop-Process -Id $worker.Id -Force -ErrorAction SilentlyContinue
+            try { $worker.WaitForExit(3000) | Out-Null } catch { }
+        }
+
+        if ($timedOut) {
+            return [pscustomobject]@{
+                host = $HostName
+                progId = $ProgId
+                enumerated = $false
+                connected = $false
+                connectAttempted = $false
+                description = ""
+                discoveredProgIds = @()
+                inventory = @()
+                stage = "worker-timeout"
+                startupMode = "hidden-com-worker"
+                error = "$HostName verification exceeded the ${WorkerTimeoutSeconds}-second timeout."
+            }
+        }
+        if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
+            return [pscustomobject]@{
+                host = $HostName
+                progId = $ProgId
+                enumerated = $false
+                connected = $false
+                connectAttempted = $false
+                description = ""
+                discoveredProgIds = @()
+                inventory = @()
+                stage = "worker-result"
+                startupMode = "hidden-com-worker"
+                error = "$HostName verification worker exited without a result. ExitCode=$($worker.ExitCode)."
+            }
+        }
+        return Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+    } finally {
+        if ($null -ne $worker) { try { $worker.Dispose() } catch { } }
+        Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 400
+        foreach ($officeProcess in @(Get-Process $processName -ErrorAction SilentlyContinue)) {
+            if ([int]$officeProcess.Id -in $existingProcessIds) { continue }
+            Stop-Process -Id $officeProcess.Id -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Test-OfficeComAddIn {
     param(
         [ValidateSet("Word", "PowerPoint")][string]$HostName,
@@ -1423,12 +1511,12 @@ try {
         }
         Write-Host "[SKIP] Word/PowerPoint COMAddIn.Connect - companion-only verification does not launch Office."
     } else {
-        $wordResult = Test-OfficeComAddIn Word "VisualTeX.WordVsto"
+        $wordResult = Invoke-HiddenOfficeComAddInProbe Word "VisualTeX.WordVsto"
         Add-Check "Word COMAddIn.Connect" ([bool]$wordResult.connected) $(if ($wordResult.connected) { "True" } else { "False; $($wordResult.error)" })
         $wordLoadBehaviorAfter = Get-LoadBehavior Word $script:resolvedOfficePlatform
         Add-Check "Word LoadBehavior after startup" ($wordLoadBehaviorAfter -eq 3) "Before=$wordLoadBehaviorBefore; After=$wordLoadBehaviorAfter"
 
-        $powerPointResult = Test-OfficeComAddIn PowerPoint "VisualTeX.PowerPointVsto"
+        $powerPointResult = Invoke-HiddenOfficeComAddInProbe PowerPoint "VisualTeX.PowerPointVsto"
         Add-Check "PowerPoint COMAddIn.Connect" ([bool]$powerPointResult.connected) $(if ($powerPointResult.connected) { "True" } else { "False; $($powerPointResult.error)" })
         $powerPointLoadBehaviorAfter = Get-LoadBehavior PowerPoint $script:resolvedOfficePlatform
         Add-Check "PowerPoint LoadBehavior after startup" ($powerPointLoadBehaviorAfter -eq 3) "Before=$powerPointLoadBehaviorBefore; After=$powerPointLoadBehaviorAfter"

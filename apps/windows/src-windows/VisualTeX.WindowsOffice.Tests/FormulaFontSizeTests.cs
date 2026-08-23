@@ -15,7 +15,7 @@ public sealed class FormulaFontSizeTests
     }
 
     [Fact]
-    public void PresetNavigationIncludesChineseStandardSizes()
+    public void PresetNavigationIncludesLegacyStandardSizes()
     {
         Assert.Equal(14f, FormulaFontSize.NextPreset(13.5));
         Assert.Equal(12f, FormulaFontSize.PreviousPreset(13.5));
@@ -43,18 +43,18 @@ public sealed class FormulaFontSizeTests
     [InlineData("小六", 6.5)]
     [InlineData("七号", 5.5)]
     [InlineData("八号", 5)]
-    public void ParsesChineseFontSizeNames(string value, double expected)
+    public void ParsesLegacyChineseFontSizeNames(string value, double expected)
     {
         Assert.Equal((float)expected, FormulaFontSize.Parse(value));
     }
 
     [Fact]
-    public void FormatsStandardChineseSizesAndNumericCustomSizes()
+    public void FormatsAllSizesAsNumericPoints()
     {
-        Assert.Equal("四号", FormulaFontSize.FormatDisplay(14));
-        Assert.Equal("小初", FormulaFontSize.FormatDisplay(36));
+        Assert.Equal("14", FormulaFontSize.FormatDisplay(14));
+        Assert.Equal("36", FormulaFontSize.FormatDisplay(36));
         Assert.Equal("13.5", FormulaFontSize.FormatDisplay(13.5));
-        Assert.Equal("小四（12 磅）", FormulaFontSize.Describe(12));
+        Assert.Equal("12 pt", FormulaFontSize.Describe(12));
     }
 
     [Fact]

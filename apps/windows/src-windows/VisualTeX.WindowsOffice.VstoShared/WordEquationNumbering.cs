@@ -67,11 +67,11 @@ internal sealed class EquationNumberFormat
 
     public static EquationNumberFormat Resolve(string? id) => id switch
     {
-        Heading1DotId => new EquationNumberFormat(Heading1DotId, "按章编号（1.1）", 1, "."),
-        Heading1DashId => new EquationNumberFormat(Heading1DashId, "按章编号（1-1）", 1, "-"),
-        Heading2DotId => new EquationNumberFormat(Heading2DotId, "按节编号（1.1.1）", 2, "."),
-        Heading2DashId => new EquationNumberFormat(Heading2DashId, "按节编号（1.1-1）", 2, "-"),
-        _ => new EquationNumberFormat(ContinuousId, "全文连续编号（1）", 0, string.Empty),
+        Heading1DotId => new EquationNumberFormat(Heading1DotId, "Theo chương (1.1)", 1, "."),
+        Heading1DashId => new EquationNumberFormat(Heading1DashId, "Theo chương (1-1)", 1, "-"),
+        Heading2DotId => new EquationNumberFormat(Heading2DotId, "Theo mục (1.1.1)", 2, "."),
+        Heading2DashId => new EquationNumberFormat(Heading2DashId, "Theo mục (1.1-1)", 2, "-"),
+        _ => new EquationNumberFormat(ContinuousId, "Liên tục toàn tài liệu (1)", 0, string.Empty),
     };
 }
 
@@ -6064,13 +6064,13 @@ internal static class WordEquationNumbering
     {
         var prefix = style switch
         {
-            EquationReferenceStyle.EquationPrefix => "式（",
+            EquationReferenceStyle.EquationPrefix => "Công thức (",
             EquationReferenceStyle.Parenthesized => "(",
             _ => string.Empty,
         };
         var suffix = style switch
         {
-            EquationReferenceStyle.EquationPrefix => "）",
+            EquationReferenceStyle.EquationPrefix => ")",
             EquationReferenceStyle.Parenthesized => ")",
             _ => string.Empty,
         };

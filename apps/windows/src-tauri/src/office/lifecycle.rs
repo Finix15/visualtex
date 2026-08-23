@@ -723,7 +723,17 @@ pub fn test_windows_office_runtime(
         if force_close_office {
             arguments.push("-ForceCloseOffice".to_string());
         }
-        run_windows_script(&app, "test_windows_office_runtime.ps1", &arguments)?;
+        if run_windows_script(&app, "test_windows_office_runtime.ps1", &arguments).is_err() {
+            let status = state.platform_backend.status();
+            let detail = status
+                .last_error
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("Office runtime verification did not complete successfully.");
+            return Err(format!(
+                "Không thể xác minh kết nối Office: {detail}\n\nXem báo cáo mới nhất trong %LOCALAPPDATA%\\VisualTeX\\office\\install-logs.\nOffice connection verification failed; see the latest report in the same log folder."
+            ));
+        }
         return Ok(state.platform_backend.status());
     }
     #[cfg(not(target_os = "windows"))]

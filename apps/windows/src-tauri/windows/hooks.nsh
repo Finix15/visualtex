@@ -368,7 +368,7 @@ visualtex_postinstall_cleanup_done:
   ${If} $0 != "0"
     SetDetailsView show
     DetailPrint "VisualTeX Office integration uninstall failed. ExitCode=$0 Output=$1"
-    MessageBox MB_ICONSTOP "Không thể gỡ tích hợp Office hoặc chứng chỉ HTTPS của VisualTeX. Ứng dụng chính chưa bị xóa; hãy đóng Word và PowerPoint rồi thử lại.$\r$\n$\r$\nXem nhật ký vsto-uninstall-bootstrap và certificate-remove mới nhất trong %LOCALAPPDATA%\VisualTeX\office\install-logs."
+    MessageBox MB_ICONSTOP "Không thể gỡ tích hợp Office hoặc chứng chỉ HTTPS của VisualTeX. Ứng dụng chính chưa bị xóa. Hãy xem nguyên nhân cụ thể trong nhật ký rồi thử lại.$\r$\n$\r$\nNếu Word hoặc PowerPoint thực sự đang chạy, hãy lưu tài liệu và đóng chúng. Xem các nhật ký vsto-uninstall-bootstrap và certificate-remove mới nhất trong %LOCALAPPDATA%\VisualTeX\office\install-logs."
     SetErrorLevel 1
     Quit
   ${EndIf}

@@ -135,64 +135,64 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
     <tabs>
       <tab id="VisualTeX.WordVsto.Tab" label="VisualTeX" insertAfterMso="TabHome">
         <group id="VisualTeX.WordVsto.Group" label="VisualTeX">
-          <button id="VisualTeX.WordVsto.Inline" label="OLE 行内公式" size="large" tag="oleInline" getImage="GetRibbonImage" onAction="OnInsertInline" />
-          <button id="VisualTeX.WordVsto.Display" label="OLE 行间公式" size="large" tag="oleDisplay" getImage="GetRibbonImage" onAction="OnInsertDisplay" />
-          <button id="VisualTeX.WordVsto.InlineOmml" label="OMML 行内公式" size="large" screentip="插入 Word 原生公式" supertip="插入可由 Word 原生公式工具直接编辑、同时保留 VisualTeX LaTeX 元数据的 OMML 行内公式。" tag="ommlInline" getImage="GetRibbonImage" onAction="OnInsertInlineOmml" />
-          <button id="VisualTeX.WordVsto.DisplayOmml" label="OMML 行间公式" size="large" screentip="插入 Word 原生公式" supertip="插入可由 Word 原生公式工具直接编辑、同时保留 VisualTeX LaTeX 元数据的 OMML 行间公式。" tag="ommlDisplay" getImage="GetRibbonImage" onAction="OnInsertDisplayOmml" />
-          <button id="VisualTeX.WordVsto.Edit" label="编辑所选公式" size="large" tag="editSelected" getImage="GetRibbonImage" onAction="OnEditSelected" />
+          <button id="VisualTeX.WordVsto.Inline" label="Công thức OLE cùng dòng" size="large" tag="oleInline" getImage="GetRibbonImage" onAction="OnInsertInline" />
+          <button id="VisualTeX.WordVsto.Display" label="Công thức OLE riêng dòng" size="large" tag="oleDisplay" getImage="GetRibbonImage" onAction="OnInsertDisplay" />
+          <button id="VisualTeX.WordVsto.InlineOmml" label="OMML cùng dòng" size="large" screentip="Chèn công thức gốc của Word" supertip="Chèn công thức OMML cùng dòng có thể chỉnh sửa trực tiếp bằng công cụ công thức Word, đồng thời giữ siêu dữ liệu LaTeX của VisualTeX." tag="ommlInline" getImage="GetRibbonImage" onAction="OnInsertInlineOmml" />
+          <button id="VisualTeX.WordVsto.DisplayOmml" label="OMML riêng dòng" size="large" screentip="Chèn công thức gốc của Word" supertip="Chèn công thức OMML riêng dòng có thể chỉnh sửa trực tiếp bằng công cụ công thức Word, đồng thời giữ siêu dữ liệu LaTeX của VisualTeX." tag="ommlDisplay" getImage="GetRibbonImage" onAction="OnInsertDisplayOmml" />
+          <button id="VisualTeX.WordVsto.Edit" label="Sửa công thức đã chọn" size="large" tag="editSelected" getImage="GetRibbonImage" onAction="OnEditSelected" />
           <box id="VisualTeX.WordVsto.ConversionBox" boxStyle="vertical">
-            <button id="VisualTeX.WordVsto.ConvertSelected" label="转为原生 OLE" screentip="转为可嵌入编辑的原生 OLE" supertip="转换后对象随 Word 文档保存，并可通过 VisualTeX 双击重新编辑。" tag="convertToOle" getImage="GetRibbonImage" onAction="OnConvertSelected" />
-            <button id="VisualTeX.WordVsto.ConvertSelectedToOmml" label="转为 Word OMML" screentip="转为 Word 原生公式" supertip="将所选 VisualTeX 公式转换为 Word 原生 OMML；可在 Word 中直接编辑，也可继续用 VisualTeX 编辑。" tag="convertToOmml" getImage="GetRibbonImage" onAction="OnConvertSelectedToOmml" />
-            <button id="VisualTeX.WordVsto.ExportPicture" label="导出所选为图片" imageMso="PictureInsertFromFile" onAction="OnExportSelectedAsPicture" />
+            <button id="VisualTeX.WordVsto.ConvertSelected" label="Chuyển sang OLE" screentip="Chuyển sang OLE có thể chỉnh sửa" supertip="Đối tượng được lưu cùng tài liệu Word và có thể nhấp đúp để sửa lại bằng VisualTeX." tag="convertToOle" getImage="GetRibbonImage" onAction="OnConvertSelected" />
+            <button id="VisualTeX.WordVsto.ConvertSelectedToOmml" label="Chuyển sang Word OMML" screentip="Chuyển sang công thức gốc của Word" supertip="Chuyển công thức VisualTeX đã chọn sang OMML gốc của Word; có thể sửa trong Word hoặc tiếp tục sửa bằng VisualTeX." tag="convertToOmml" getImage="GetRibbonImage" onAction="OnConvertSelectedToOmml" />
+            <button id="VisualTeX.WordVsto.ExportPicture" label="Xuất phần chọn thành ảnh" imageMso="PictureInsertFromFile" onAction="OnExportSelectedAsPicture" />
           </box>
           <box id="VisualTeX.WordVsto.NumberingBox" boxStyle="vertical">
-            <button id="VisualTeX.WordVsto.UpdateNumbers" label="更新公式编号" tag="updateNumbers" getImage="GetRibbonImage" onAction="OnUpdateEquationNumbers" />
-            <menu id="VisualTeX.WordVsto.NumberFormat" label="编号格式" screentip="设置当前文档的公式编号格式" supertip="选择后立即更新当前文档已有的 VisualTeX 公式编号，并应用于后续新插入的带编号公式。">
-              <toggleButton id="VisualTeX.WordVsto.NumberFormatContinuous" label="全文连续编号（1）" tag="continuous" getPressed="GetEquationNumberFormatPressed" onAction="OnEquationNumberFormatChanged" />
-              <toggleButton id="VisualTeX.WordVsto.NumberFormatHeading1Dot" label="按章编号（1.1）" tag="heading1-dot" getPressed="GetEquationNumberFormatPressed" onAction="OnEquationNumberFormatChanged" />
-              <toggleButton id="VisualTeX.WordVsto.NumberFormatHeading1Dash" label="按章编号（1-1）" tag="heading1-dash" getPressed="GetEquationNumberFormatPressed" onAction="OnEquationNumberFormatChanged" />
-              <toggleButton id="VisualTeX.WordVsto.NumberFormatHeading2Dot" label="按节编号（1.1.1）" tag="heading2-dot" getPressed="GetEquationNumberFormatPressed" onAction="OnEquationNumberFormatChanged" />
-              <toggleButton id="VisualTeX.WordVsto.NumberFormatHeading2Dash" label="按节编号（1.1-1）" tag="heading2-dash" getPressed="GetEquationNumberFormatPressed" onAction="OnEquationNumberFormatChanged" />
+            <button id="VisualTeX.WordVsto.UpdateNumbers" label="Cập nhật số công thức" tag="updateNumbers" getImage="GetRibbonImage" onAction="OnUpdateEquationNumbers" />
+            <menu id="VisualTeX.WordVsto.NumberFormat" label="Định dạng đánh số" screentip="Đặt định dạng số công thức cho tài liệu hiện tại" supertip="Cập nhật ngay số của các công thức VisualTeX hiện có và áp dụng cho công thức được chèn sau này.">
+              <toggleButton id="VisualTeX.WordVsto.NumberFormatContinuous" label="Liên tục toàn tài liệu (1)" tag="continuous" getPressed="GetEquationNumberFormatPressed" onAction="OnEquationNumberFormatChanged" />
+              <toggleButton id="VisualTeX.WordVsto.NumberFormatHeading1Dot" label="Theo chương (1.1)" tag="heading1-dot" getPressed="GetEquationNumberFormatPressed" onAction="OnEquationNumberFormatChanged" />
+              <toggleButton id="VisualTeX.WordVsto.NumberFormatHeading1Dash" label="Theo chương (1-1)" tag="heading1-dash" getPressed="GetEquationNumberFormatPressed" onAction="OnEquationNumberFormatChanged" />
+              <toggleButton id="VisualTeX.WordVsto.NumberFormatHeading2Dot" label="Theo mục (1.1.1)" tag="heading2-dot" getPressed="GetEquationNumberFormatPressed" onAction="OnEquationNumberFormatChanged" />
+              <toggleButton id="VisualTeX.WordVsto.NumberFormatHeading2Dash" label="Theo mục (1.1-1)" tag="heading2-dash" getPressed="GetEquationNumberFormatPressed" onAction="OnEquationNumberFormatChanged" />
             </menu>
-            <button id="VisualTeX.WordVsto.InsertReference" label="插入公式引用" screentip="引用带编号公式" supertip="从当前文档的带编号公式中选择目标，并插入可自动更新的 Word REF 字段。" imageMso="HyperlinkInsert" onAction="OnInsertEquationReference" />
+            <button id="VisualTeX.WordVsto.InsertReference" label="Chèn tham chiếu công thức" screentip="Tham chiếu công thức đã đánh số" supertip="Chọn một công thức đã đánh số trong tài liệu hiện tại và chèn trường REF của Word có thể tự cập nhật." imageMso="HyperlinkInsert" onAction="OnInsertEquationReference" />
           </box>
-          <button id="VisualTeX.WordVsto.BulkImport" label="批量导入" size="large" screentip="批量导入 LaTeX / Markdown" supertip="将 Markdown 或 LaTeX 文档解析为 Word 原生文字，以及可单独编辑和调整字号的行内/行间公式。" tag="batchImport" getImage="GetRibbonImage" onAction="OnBulkImport" />
+          <button id="VisualTeX.WordVsto.BulkImport" label="Nhập hàng loạt" size="large" screentip="Nhập hàng loạt LaTeX / Markdown" supertip="Phân tích tài liệu Markdown hoặc LaTeX thành văn bản gốc của Word và các công thức cùng dòng/riêng dòng có thể chỉnh sửa, đổi cỡ riêng." tag="batchImport" getImage="GetRibbonImage" onAction="OnBulkImport" />
         </group>
-        <group id="VisualTeX.WordVsto.RedrawGroup" label="LaTeX 重绘">
-          <menu id="VisualTeX.WordVsto.RedrawSelection" label="重绘所选" size="large" screentip="重绘所选公式或 LaTeX 代码" supertip="可将所选 LaTeX 代码原位重绘为公式，也可将所选 VisualTeX OLE 或 OMML 公式恢复为 LaTeX 代码。" tag="batchImport" getImage="GetRibbonImage">
-            <button id="VisualTeX.WordVsto.RedrawSelectionOmml" label="LaTeX 重绘为 Word OMML" screentip="原位替换为 Word 原生公式" onAction="OnRedrawSelectionToOmml" />
-            <button id="VisualTeX.WordVsto.RedrawSelectionOle" label="LaTeX 重绘为 VisualTeX OLE" screentip="原位替换为可双击编辑的 OLE" onAction="OnRedrawSelectionToOle" />
+        <group id="VisualTeX.WordVsto.RedrawGroup" label="Vẽ lại LaTeX">
+          <menu id="VisualTeX.WordVsto.RedrawSelection" label="Vẽ lại phần chọn" size="large" screentip="Vẽ lại công thức hoặc mã LaTeX đã chọn" supertip="Vẽ lại mã LaTeX đã chọn thành công thức tại chỗ, hoặc khôi phục công thức VisualTeX OLE/OMML đã chọn về mã LaTeX." tag="batchImport" getImage="GetRibbonImage">
+            <button id="VisualTeX.WordVsto.RedrawSelectionOmml" label="Vẽ LaTeX thành Word OMML" screentip="Thay tại chỗ bằng công thức gốc của Word" onAction="OnRedrawSelectionToOmml" />
+            <button id="VisualTeX.WordVsto.RedrawSelectionOle" label="Vẽ LaTeX thành VisualTeX OLE" screentip="Thay tại chỗ bằng OLE có thể nhấp đúp để sửa" onAction="OnRedrawSelectionToOle" />
             <menuSeparator id="VisualTeX.WordVsto.RedrawSelectionSeparator" />
-            <button id="VisualTeX.WordVsto.RedrawSelectionOleToLatex" label="所选 OLE 公式转为 LaTeX 代码" screentip="恢复所选 VisualTeX OLE 的 LaTeX 源码" onAction="OnRedrawSelectionOleToLatex" />
-            <button id="VisualTeX.WordVsto.RedrawSelectionOmmlToLatex" label="所选 OMML 公式转为 LaTeX 代码" screentip="恢复所选 VisualTeX OMML 的 LaTeX 源码" onAction="OnRedrawSelectionOmmlToLatex" />
+            <button id="VisualTeX.WordVsto.RedrawSelectionOleToLatex" label="OLE đã chọn sang mã LaTeX" screentip="Khôi phục mã nguồn LaTeX của VisualTeX OLE đã chọn" onAction="OnRedrawSelectionOleToLatex" />
+            <button id="VisualTeX.WordVsto.RedrawSelectionOmmlToLatex" label="OMML đã chọn sang mã LaTeX" screentip="Khôi phục mã nguồn LaTeX của VisualTeX OMML đã chọn" onAction="OnRedrawSelectionOmmlToLatex" />
           </menu>
-          <menu id="VisualTeX.WordVsto.RedrawDocument" label="重绘全文" size="large" screentip="重绘全文公式或 LaTeX 代码" supertip="可将全文 LaTeX 代码原位重绘为公式，也可将全文 VisualTeX OLE 或 OMML 公式恢复为 LaTeX 代码；开始前会再次确认。" imageMso="RefreshAll">
-            <button id="VisualTeX.WordVsto.RedrawDocumentOmml" label="全文 LaTeX 重绘为 Word OMML" onAction="OnRedrawDocumentToOmml" />
-            <button id="VisualTeX.WordVsto.RedrawDocumentOle" label="全文 LaTeX 重绘为 VisualTeX OLE" onAction="OnRedrawDocumentToOle" />
+          <menu id="VisualTeX.WordVsto.RedrawDocument" label="Vẽ lại toàn tài liệu" size="large" screentip="Vẽ lại công thức hoặc mã LaTeX trong toàn tài liệu" supertip="Vẽ lại mã LaTeX trong toàn tài liệu thành công thức tại chỗ, hoặc khôi phục công thức VisualTeX OLE/OMML thành mã LaTeX; sẽ yêu cầu xác nhận trước khi bắt đầu." imageMso="RefreshAll">
+            <button id="VisualTeX.WordVsto.RedrawDocumentOmml" label="Toàn bộ LaTeX thành Word OMML" onAction="OnRedrawDocumentToOmml" />
+            <button id="VisualTeX.WordVsto.RedrawDocumentOle" label="Toàn bộ LaTeX thành VisualTeX OLE" onAction="OnRedrawDocumentToOle" />
             <menuSeparator id="VisualTeX.WordVsto.RedrawDocumentSeparator" />
-            <button id="VisualTeX.WordVsto.RedrawDocumentOleToLatex" label="全文 OLE 公式转为 LaTeX 代码" onAction="OnRedrawDocumentOleToLatex" />
-            <button id="VisualTeX.WordVsto.RedrawDocumentOmmlToLatex" label="全文 OMML 公式转为 LaTeX 代码" onAction="OnRedrawDocumentOmmlToLatex" />
+            <button id="VisualTeX.WordVsto.RedrawDocumentOleToLatex" label="Toàn bộ OLE sang mã LaTeX" onAction="OnRedrawDocumentOleToLatex" />
+            <button id="VisualTeX.WordVsto.RedrawDocumentOmmlToLatex" label="Toàn bộ OMML sang mã LaTeX" onAction="OnRedrawDocumentOmmlToLatex" />
           </menu>
         </group>
-        <group id="VisualTeX.WordVsto.FontSizeGroup" label="公式字号">
-          <button id="VisualTeX.WordVsto.FontSizeDecrease" label="减小" imageMso="FontSizeDecrease" getEnabled="GetFormulaFontSizeEnabled" onAction="OnDecreaseFormulaFontSize" />
-          <comboBox id="VisualTeX.WordVsto.FontSize" label="字号" sizeString="初号（42 磅）" getText="GetFormulaFontSizeText" getEnabled="GetFormulaFontSizeEnabled" onChange="OnFormulaFontSizeChanged">
-            <item id="VisualTeX.WordVsto.FontSizeChu" label="初号" />
-            <item id="VisualTeX.WordVsto.FontSizeXiaoChu" label="小初" />
-            <item id="VisualTeX.WordVsto.FontSizeYi" label="一号" />
-            <item id="VisualTeX.WordVsto.FontSizeXiaoYi" label="小一" />
-            <item id="VisualTeX.WordVsto.FontSizeEr" label="二号" />
-            <item id="VisualTeX.WordVsto.FontSizeXiaoEr" label="小二" />
-            <item id="VisualTeX.WordVsto.FontSizeSan" label="三号" />
-            <item id="VisualTeX.WordVsto.FontSizeXiaoSan" label="小三" />
-            <item id="VisualTeX.WordVsto.FontSizeSi" label="四号" />
-            <item id="VisualTeX.WordVsto.FontSizeXiaoSi" label="小四" />
-            <item id="VisualTeX.WordVsto.FontSizeWu" label="五号" />
-            <item id="VisualTeX.WordVsto.FontSizeXiaoWu" label="小五" />
-            <item id="VisualTeX.WordVsto.FontSizeLiu" label="六号" />
-            <item id="VisualTeX.WordVsto.FontSizeXiaoLiu" label="小六" />
-            <item id="VisualTeX.WordVsto.FontSizeQi" label="七号" />
-            <item id="VisualTeX.WordVsto.FontSizeBa" label="八号" />
+        <group id="VisualTeX.WordVsto.FontSizeGroup" label="Cỡ chữ công thức">
+          <button id="VisualTeX.WordVsto.FontSizeDecrease" label="Giảm" imageMso="FontSizeDecrease" getEnabled="GetFormulaFontSizeEnabled" onAction="OnDecreaseFormulaFontSize" />
+          <comboBox id="VisualTeX.WordVsto.FontSize" label="Cỡ chữ" sizeString="42 pt" getText="GetFormulaFontSizeText" getEnabled="GetFormulaFontSizeEnabled" onChange="OnFormulaFontSizeChanged">
+            <item id="VisualTeX.WordVsto.FontSizeChu" label="42" />
+            <item id="VisualTeX.WordVsto.FontSizeXiaoChu" label="36" />
+            <item id="VisualTeX.WordVsto.FontSizeYi" label="26" />
+            <item id="VisualTeX.WordVsto.FontSizeXiaoYi" label="24" />
+            <item id="VisualTeX.WordVsto.FontSizeEr" label="22" />
+            <item id="VisualTeX.WordVsto.FontSizeXiaoEr" label="18" />
+            <item id="VisualTeX.WordVsto.FontSizeSan" label="16" />
+            <item id="VisualTeX.WordVsto.FontSizeXiaoSan" label="15" />
+            <item id="VisualTeX.WordVsto.FontSizeSi" label="14" />
+            <item id="VisualTeX.WordVsto.FontSizeXiaoSi" label="12" />
+            <item id="VisualTeX.WordVsto.FontSizeWu" label="10.5" />
+            <item id="VisualTeX.WordVsto.FontSizeXiaoWu" label="9" />
+            <item id="VisualTeX.WordVsto.FontSizeLiu" label="7.5" />
+            <item id="VisualTeX.WordVsto.FontSizeXiaoLiu" label="6.5" />
+            <item id="VisualTeX.WordVsto.FontSizeQi" label="5.5" />
+            <item id="VisualTeX.WordVsto.FontSizeBa" label="5" />
             <item id="VisualTeX.WordVsto.FontSize8" label="8" />
             <item id="VisualTeX.WordVsto.FontSize9" label="9" />
             <item id="VisualTeX.WordVsto.FontSize10" label="10" />
@@ -209,7 +209,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             <item id="VisualTeX.WordVsto.FontSize48" label="48" />
             <item id="VisualTeX.WordVsto.FontSize72" label="72" />
           </comboBox>
-          <button id="VisualTeX.WordVsto.FontSizeIncrease" label="增大" imageMso="FontSizeIncrease" getEnabled="GetFormulaFontSizeEnabled" onAction="OnIncreaseFormulaFontSize" />
+          <button id="VisualTeX.WordVsto.FontSizeIncrease" label="Tăng" imageMso="FontSizeIncrease" getEnabled="GetFormulaFontSizeEnabled" onAction="OnIncreaseFormulaFontSize" />
         </group>
       </tab>
     </tabs>
@@ -298,8 +298,8 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             doubleClickError = error.Message;
         }
         SetStatus(doubleClickError is null
-            ? "VisualTeX Word VSTO 已就绪。"
-            : $"VisualTeX 已就绪，但 OLE 双击监听不可用：{doubleClickError}");
+            ? "VisualTeX Word VSTO đã sẵn sàng."
+            : $"VisualTeX đã sẵn sàng nhưng không thể theo dõi thao tác nhấp đúp OLE: {doubleClickError}");
     }
 
     public void OnDisconnection(ext_DisconnectMode removeMode, ref Array custom) => Dispose();
@@ -338,20 +338,20 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         try
         {
             var current = _formulaService?.GetSelectedFormulaFontSize()
-                ?? throw new InvalidOperationException("请先选择一个 VisualTeX 公式。");
+                ?? throw new InvalidOperationException("Vui lòng chọn một công thức VisualTeX trước.");
             ApplyFormulaFontSize(FormulaFontSize.PreviousPreset(current));
         }
-        catch (Exception error) { SetStatus($"无法设置公式字号：{error.Message}"); }
+        catch (Exception error) { SetStatus($"Không thể đặt cỡ chữ công thức: {error.Message}"); }
     }
     public void OnIncreaseFormulaFontSize(object control)
     {
         try
         {
             var current = _formulaService?.GetSelectedFormulaFontSize()
-                ?? throw new InvalidOperationException("请先选择一个 VisualTeX 公式。");
+                ?? throw new InvalidOperationException("Vui lòng chọn một công thức VisualTeX trước.");
             ApplyFormulaFontSize(FormulaFontSize.NextPreset(current));
         }
-        catch (Exception error) { SetStatus($"无法设置公式字号：{error.Message}"); }
+        catch (Exception error) { SetStatus($"Không thể đặt cỡ chữ công thức: {error.Message}"); }
     }
     public void OnInsertInline(object control) =>
         BeginSession("create", "inline", FormulaOleContract.NativeOleMode);
@@ -430,11 +430,11 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         {
             (_sessionClient ?? throw new InvalidOperationException("VisualTeX Session client is unavailable."))
                 .OpenDesktop();
-            SetStatus("VisualTeX 已打开。");
+            SetStatus("VisualTeX đã mở.");
         }
         catch (Exception error)
         {
-            SetStatus($"无法打开 VisualTeX：{error.Message}");
+            SetStatus($"Không thể mở VisualTeX: {error.Message}");
         }
     }
 
@@ -447,11 +447,11 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             var applied = (_formulaService
                     ?? throw new InvalidOperationException("Word formula service is unavailable."))
                 .SetSelectedFormulaFontSize(value);
-            SetStatus($"公式字号已设置为 {FormulaFontSize.Describe(applied)}。");
+            SetStatus($"Cỡ chữ công thức đã được đặt thành {FormulaFontSize.Describe(applied)}。");
         }
         catch (Exception error)
         {
-            SetStatus($"无法设置公式字号：{error.Message}");
+            SetStatus($"Không thể đặt cỡ chữ công thức: {error.Message}");
         }
         finally { InvalidateFormulaFontControls(); }
     }
@@ -660,7 +660,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         }
         catch (Exception error)
         {
-            SetStatus($"VisualTeX 双击检测失败：{error.Message}");
+            SetStatus($"Phát hiện nhấp đúp VisualTeX thất bại: {error.Message}");
         }
     }
 
@@ -731,7 +731,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             }
             catch (Exception error)
             {
-                SetStatus($"VisualTeX Word 双击检测失败：{error.Message}");
+                SetStatus($"Phát hiện nhấp đúp trong Word thất bại: {error.Message}");
                 return false;
             }
         });
@@ -850,16 +850,16 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                     GrantVisualTeXForegroundActivation();
                     await _sessionClient.OpenEditorAsync(activeSessionId!, cancellationToken)
                         .ConfigureAwait(false);
-                    SetStatus("已有 VisualTeX 编辑任务，已将编辑窗口切换到前台。");
+                    SetStatus("Đã có tác vụ chỉnh sửa VisualTeX; cửa sổ chỉnh sửa đã được đưa lên trước.");
                 }
                 catch (Exception error)
                 {
-                    SetStatus($"已有编辑任务，但无法置前窗口：{error.Message}");
+                    SetStatus($"Đã có tác vụ chỉnh sửa nhưng không thể đưa cửa sổ lên trước: {error.Message}");
                 }
             }
             else
             {
-                SetStatus("VisualTeX 正在准备编辑窗口，请稍候再试。");
+                SetStatus("VisualTeX đang chuẩn bị cửa sổ chỉnh sửa. Vui lòng thử lại sau.");
             }
             return;
         }
@@ -890,7 +890,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             var dispatcher = _dispatcher ?? throw new InvalidOperationException("Word dispatcher is unavailable.");
             var service = _formulaService ?? throw new InvalidOperationException("Word formula service is unavailable.");
             var client = _sessionClient ?? throw new InvalidOperationException("VisualTeX Session client is unavailable.");
-            SetStatus("正在连接 VisualTeX 本地服务…");
+            SetStatus("Đang kết nối dịch vụ VisualTeX cục bộ…");
             await client.EnsureHealthyAsync(cancellationToken).ConfigureAwait(false);
             TraceOpenPerformance("health");
             var selection = capturedSelection?.Metadata is not null
@@ -898,9 +898,9 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 : await dispatcher.InvokeAsync(service.ReadSelection).ConfigureAwait(false);
             TraceOpenPerformance("read-selection");
             if (selection.ReadOnly)
-                throw new UnauthorizedAccessException("当前 Word 文档为只读状态。");
+                throw new UnauthorizedAccessException("Tài liệu Word hiện tại đang ở chế độ chỉ đọc.");
             if (mode == "edit" && selection.Metadata is null)
-                throw new InvalidOperationException("请先选择一个 VisualTeX 公式。");
+                throw new InvalidOperationException("Vui lòng chọn một công thức VisualTeX trước.");
 
             // A create command may be invoked while the previous formula is
             // still selected. Only edit commands are allowed to seed the new
@@ -960,7 +960,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             {
                 await client.OpenConverterAsync(session.Id, cancellationToken)
                     .ConfigureAwait(false);
-                SetStatus("正在直接转换 Word 公式格式…");
+                SetStatus("Đang chuyển đổi trực tiếp định dạng công thức Word…");
             }
             else
             {
@@ -968,7 +968,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 await client.OpenEditorAsync(session.Id, cancellationToken)
                     .ConfigureAwait(false);
                 TraceOpenPerformance("open-editor-window");
-                SetStatus("VisualTeX 编辑器已打开。");
+                SetStatus("Trình chỉnh sửa VisualTeX đã mở.");
             }
             session = await client.WaitForCommitAsync(
                 session.Id,
@@ -978,19 +978,19 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 WordEquationNumbering.SetDefaultDisplayEquationNumbered(session.Numbered);
             if (session.Status == "cancelled" || session.ExplicitCancel)
             {
-                SetStatus("已取消，Word 文档未修改。");
+                SetStatus("Đã hủy; tài liệu Word không bị thay đổi.");
                 return;
             }
             if (session.Status == "failed")
-                throw new InvalidOperationException(session.Error ?? "VisualTeX Session 失败。");
+                throw new InvalidOperationException(session.Error ?? "Phiên VisualTeX thất bại.");
             if (session.Mode == "edit"
                 && !session.Dirty
                 && (!requiresObjectModeChange || session.ExportResult is null))
             {
                 await client.CompleteAsync(session.Id, cancellationToken).ConfigureAwait(false);
                 SetStatus(requiresObjectModeChange
-                    ? "未执行对象格式转换。"
-                    : "公式内容未变化。");
+                    ? "Chưa thực hiện chuyển đổi định dạng đối tượng."
+                    : "Nội dung công thức không thay đổi.");
                 return;
             }
 
@@ -1030,7 +1030,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                         activeDocumentId,
                         session.SourceDocumentId,
                         StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidOperationException("活动 Word 文档已切换，未写入公式。");
+                    throw new InvalidOperationException("Tài liệu Word đang hoạt động đã thay đổi; công thức chưa được ghi.");
                 if (string.Equals(
                         session.ObjectMode,
                         FormulaOleContract.WordOmmlMode,
@@ -1068,19 +1068,19 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                     session.ObjectMode,
                     FormulaOleContract.WordOmmlMode,
                     StringComparison.Ordinal))
-                SetStatus("已转换为 Word 原生 OMML：可在 Word 中直接编辑，也可继续用 VisualTeX 编辑。");
+                SetStatus("Đã chuyển sang OMML gốc của Word: có thể sửa trực tiếp trong Word hoặc tiếp tục sửa bằng VisualTeX.");
             else if (requiresObjectModeChange
                 && string.Equals(
                     session.ObjectMode,
                     FormulaOleContract.NativeOleMode,
                     StringComparison.Ordinal))
-                SetStatus("已转换为原生 OLE：可双击使用 VisualTeX 编辑，并随 Word 文档保存。");
+                SetStatus("Đã chuyển sang OLE: có thể nhấp đúp để sửa bằng VisualTeX và được lưu cùng tài liệu Word.");
             else
-                SetStatus(session.Mode == "edit" ? "Word 公式已更新。" : "Word 公式已插入。");
+                SetStatus(session.Mode == "edit" ? "Công thức Word đã được cập nhật." : "Công thức Word đã được chèn.");
         }
         catch (OperationCanceledException)
         {
-            SetStatus("VisualTeX 操作已取消。");
+            SetStatus("Thao tác VisualTeX đã bị hủy.");
         }
         catch (Exception error)
         {
@@ -1093,7 +1093,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 }
                 catch { }
             }
-            SetStatus($"VisualTeX Word 写入失败：{error.Message}");
+            SetStatus($"Không thể ghi công thức VisualTeX vào Word: {error.Message}");
         }
         finally
         {
@@ -1155,7 +1155,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 TimeSpan.FromSeconds(2),
                 lifetime.Token).ConfigureAwait(false))
         {
-            SetStatus("VisualTeX 正在执行其他 Word 操作，请稍候再试。");
+            SetStatus("VisualTeX đang thực hiện một thao tác Word khác. Vui lòng thử lại sau.");
             return;
         }
 
@@ -1187,16 +1187,16 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             {
                 var confirmed = await dispatcher.InvokeAsync(() =>
                     System.Windows.Forms.MessageBox.Show(
-                        $"将在整个文档中原位重绘 {plan.Targets.Count} 个 LaTeX 公式为 {modeLabel}。\r\n\r\n"
-                        + "该操作会保留正文并删除公式两侧的 LaTeX 定界符，可通过一次 Ctrl+Z 整体撤销。是否继续？",
-                        "VisualTeX LaTeX 重绘",
+                        $"Sẽ vẽ lại tại chỗ trong toàn tài liệu {plan.Targets.Count} công thức LaTeX thành {modeLabel}。\r\n\r\n"
+                        + "Thao tác này giữ nguyên văn bản và xóa dấu phân cách LaTeX quanh công thức. Có thể hoàn tác toàn bộ bằng một lần Ctrl+Z. Tiếp tục?",
+                        "Vẽ lại LaTeX bằng VisualTeX",
                         System.Windows.Forms.MessageBoxButtons.YesNo,
                         System.Windows.Forms.MessageBoxIcon.Question,
                         System.Windows.Forms.MessageBoxDefaultButton.Button2)
                     == System.Windows.Forms.DialogResult.Yes).ConfigureAwait(false);
                 if (!confirmed)
                 {
-                    SetStatus("已取消全文 LaTeX 重绘，Word 文档未修改。");
+                    SetStatus("Đã hủy vẽ lại LaTeX toàn tài liệu; tài liệu Word không bị thay đổi.");
                     return;
                 }
             }
@@ -1204,7 +1204,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             WriteRedrawAcceptanceLog(
                 $"redraw-start scope={(wholeDocument ? "document" : "selection")} "
                 + $"mode={objectMode} formulas={plan.Targets.Count}");
-            SetStatus($"正在准备重绘 {plan.Targets.Count} 个 LaTeX 公式为 {modeLabel}…");
+            SetStatus($"Đang chuẩn bị vẽ lại {plan.Targets.Count} công thức LaTeX thành {modeLabel}…");
             await client.EnsureHealthyAsync(lifetime.Token).ConfigureAwait(false);
             await client.PrewarmConverterAsync(lifetime.Token).ConfigureAwait(false);
 
@@ -1247,7 +1247,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                     || !pendingKeys.Add(key))
                     continue;
 
-                SetStatus($"正在准备公式 {index + 1}/{plan.Targets.Count}…");
+                SetStatus($"Đang chuẩn bị công thức {index + 1}/{plan.Targets.Count}…");
                 try
                 {
                     var conversionSession = await CreateBulkFormulaConversionSessionAsync(
@@ -1282,7 +1282,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             {
                 WriteRedrawAcceptanceLog(
                     $"render-batch-start unique={pendingTemplates.Count} total={plan.Targets.Count}");
-                SetStatus($"正在批量渲染 {pendingTemplates.Count} 个独立公式…");
+                SetStatus($"Đang kết xuất hàng loạt {pendingTemplates.Count} công thức độc lập…");
                 await client.OpenConverterBatchAsync(
                         pendingTemplates.Select(item => item.Session.Id).ToList(),
                         lifetime.Token)
@@ -1347,7 +1347,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                     continue;
                 }
                 if (!rendered.TryGetValue(key, out var template))
-                    throw new InvalidDataException($"缺少公式 {target.Id} 的批量渲染结果。");
+                    throw new InvalidDataException($"Thiếu kết quả cho công thức {target.Id} khi kết xuất hàng loạt.");
 
                 var run = new WordBulkRun
                 {
@@ -1378,14 +1378,14 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                     $"redraw-complete formulas=0 unique=0 skipped={skippedTargets.Count} "
                     + "renderAverageMs=0 renderMaxMs=0 insertTotalMs=0 insertMaxMs=0");
                 SetStatus(
-                    $"LaTeX 重绘未转换任何公式：{skippedTargets.Count} 个公式无法解析，均已保留原代码。");
+                    $"Vẽ lại LaTeX không chuyển đổi công thức nào: {skippedTargets.Count} công thức không thể phân tích; mã gốc đã được giữ lại.");
                 return;
             }
 
             plan.Targets = plan.Targets
                 .Where(target => prepared.ContainsKey(target.Id))
                 .ToList();
-            SetStatus("公式渲染完成，正在原位写入 Word…");
+            SetStatus("Đã kết xuất công thức; đang ghi vào vị trí cũ trong Word…");
             var result = await dispatcher.InvokeAsync(
                     () => service.ApplyLatexRedrawPlan(plan, prepared))
                 .ConfigureAwait(false);
@@ -1406,18 +1406,18 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 + $"renderAverageMs={averageRenderMilliseconds} renderMaxMs={maxRenderMilliseconds} "
                 + $"insertTotalMs={result.TotalInsertMilliseconds} insertMaxMs={result.MaxInsertMilliseconds}");
             var performanceSuffix = maxRenderMilliseconds <= 250
-                ? $"渲染最大 {maxRenderMilliseconds} ms/公式"
-                : $"渲染最大 {maxRenderMilliseconds} ms/公式（本机超过 250 ms 目标）";
+                ? $"Thời gian kết xuất tối đa {maxRenderMilliseconds} ms/công thức"
+                : $"Thời gian kết xuất tối đa {maxRenderMilliseconds} ms/công thức (vượt mục tiêu 250 ms trên máy này)";
             var skippedSuffix = skippedTargets.Count == 0
                 ? string.Empty
-                : $"；{skippedTargets.Count} 个无法解析的公式已保留原 LaTeX";
+                : $"；{skippedTargets.Count} công thức không thể phân tích đã giữ nguyên LaTeX";
             SetStatus(
-                $"LaTeX 重绘完成：{result.FormulaCount} 个公式已转换为 {modeLabel}{skippedSuffix}；{performanceSuffix}。");
+                $"Vẽ lại LaTeX hoàn tất: {result.FormulaCount} công thức đã được chuyển thành {modeLabel}{skippedSuffix}；{performanceSuffix}。");
         }
         catch (OperationCanceledException error)
         {
             WriteRedrawAcceptanceLog("redraw-cancelled " + error);
-            SetStatus("VisualTeX LaTeX 重绘已取消。");
+            SetStatus("Đã hủy vẽ lại LaTeX bằng VisualTeX.");
         }
         catch (Exception error)
         {
@@ -1431,7 +1431,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 }
                 catch { }
             }
-            SetStatus($"VisualTeX LaTeX 重绘失败：{error.Message}");
+            SetStatus($"Vẽ lại LaTeX bằng VisualTeX thất bại: {error.Message}");
             if (!string.Equals(
                     Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE"),
                     "1",
@@ -1443,7 +1443,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                     {
                         System.Windows.Forms.MessageBox.Show(
                             error.Message,
-                            "VisualTeX LaTeX 重绘",
+                            "Vẽ lại LaTeX bằng VisualTeX",
                             System.Windows.Forms.MessageBoxButtons.OK,
                             System.Windows.Forms.MessageBoxIcon.Error);
                         return true;
@@ -1481,7 +1481,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 TimeSpan.FromSeconds(2),
                 lifetime.Token).ConfigureAwait(false))
         {
-            SetStatus("VisualTeX 正在执行其他 Word 操作，请稍候再试。");
+            SetStatus("VisualTeX đang thực hiện một thao tác Word khác. Vui lòng thử lại sau.");
             return;
         }
 
@@ -1501,8 +1501,8 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             if (count == 0)
                 throw new InvalidDataException(
                     wholeDocument
-                        ? $"当前 Word 文档中没有找到 VisualTeX {modeLabel} 公式。"
-                        : $"所选内容中没有找到 VisualTeX {modeLabel} 公式。");
+                        ? $"Không tìm thấy công thức VisualTeX {modeLabel} trong phần tương ứng."
+                        : $"Không tìm thấy công thức VisualTeX {modeLabel} trong phần tương ứng.");
 
             if (wholeDocument
                 && !string.Equals(
@@ -1512,16 +1512,16 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             {
                 var confirmed = await dispatcher.InvokeAsync(() =>
                     System.Windows.Forms.MessageBox.Show(
-                        $"将把当前文档中的 {count} 个 VisualTeX {modeLabel} 公式原位恢复为 LaTeX 代码。\r\n\r\n"
-                        + "另一种公式对象不会被修改；该操作可通过一次 Ctrl+Z 整体撤销。是否继续？",
-                        "VisualTeX 公式转为 LaTeX",
+                        $"Sẽ khôi phục tại chỗ {count} công thức VisualTeX {modeLabel} trong tài liệu hiện tại thành mã LaTeX.\r\n\r\n"
+                        + "Loại đối tượng công thức còn lại sẽ không bị thay đổi. Có thể hoàn tác toàn bộ bằng một lần Ctrl+Z. Tiếp tục?",
+                        "Chuyển công thức VisualTeX sang LaTeX",
                         System.Windows.Forms.MessageBoxButtons.YesNo,
                         System.Windows.Forms.MessageBoxIcon.Question,
                         System.Windows.Forms.MessageBoxDefaultButton.Button2)
                     == System.Windows.Forms.DialogResult.Yes).ConfigureAwait(false);
                 if (!confirmed)
                 {
-                    SetStatus($"已取消全文 {modeLabel} 公式转为 LaTeX，Word 文档未修改。");
+                    SetStatus($"Đã hủy chuyển toàn bộ công thức {modeLabel} sang LaTeX; tài liệu Word không bị thay đổi.");
                     return;
                 }
             }
@@ -1529,7 +1529,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             WriteRedrawAcceptanceLog(
                 $"formula-to-latex-start scope={(wholeDocument ? "document" : "selection")} "
                 + $"mode={objectMode} formulas={count}");
-            SetStatus($"正在把 {count} 个 VisualTeX {modeLabel} 公式恢复为 LaTeX 代码…");
+            SetStatus($"Đang khôi phục {count} công thức VisualTeX {modeLabel} thành mã LaTeX…");
             var result = await dispatcher.InvokeAsync(
                     () => service.ConvertFormulaObjectsToLatex(
                         wholeDocument,
@@ -1539,17 +1539,17 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 $"formula-to-latex-complete scope={(wholeDocument ? "document" : "selection")} "
                 + $"mode={objectMode} formulas={result.FormulaCount}");
             SetStatus(
-                $"公式转为 LaTeX 完成：{result.FormulaCount} 个 VisualTeX {modeLabel} 公式已恢复为源码。");
+                $"Chuyển sang LaTeX hoàn tất: {result.FormulaCount} công thức VisualTeX {modeLabel} đã được khôi phục thành mã nguồn.");
         }
         catch (OperationCanceledException error)
         {
             WriteRedrawAcceptanceLog("formula-to-latex-cancelled " + error);
-            SetStatus("VisualTeX 公式转为 LaTeX 已取消。");
+            SetStatus("Đã hủy chuyển công thức VisualTeX sang LaTeX.");
         }
         catch (Exception error)
         {
             WriteRedrawAcceptanceLog("formula-to-latex-failed " + error);
-            SetStatus($"VisualTeX 公式转为 LaTeX 失败：{error.Message}");
+            SetStatus($"Chuyển công thức VisualTeX sang LaTeX thất bại: {error.Message}");
             if (!string.Equals(
                     Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE"),
                     "1",
@@ -1561,7 +1561,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                     {
                         System.Windows.Forms.MessageBox.Show(
                             error.Message,
-                            "VisualTeX 公式转为 LaTeX",
+                            "Chuyển công thức VisualTeX sang LaTeX",
                             System.Windows.Forms.MessageBoxButtons.OK,
                             System.Windows.Forms.MessageBoxIcon.Error);
                         return true;
@@ -1593,7 +1593,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 TimeSpan.FromSeconds(2),
                 lifetime.Token).ConfigureAwait(false))
         {
-            SetStatus("VisualTeX 正在执行其他 Word 操作，请稍候再试。");
+            SetStatus("VisualTeX đang thực hiện một thao tác Word khác. Vui lòng thử lại sau.");
             return;
         }
 
@@ -1617,7 +1617,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             var selection = await dispatcher.InvokeAsync(service.ReadSelection)
                 .ConfigureAwait(false);
             if (selection.ReadOnly)
-                throw new UnauthorizedAccessException("当前 Word 文档为只读状态。");
+                throw new UnauthorizedAccessException("Tài liệu Word hiện tại đang ở chế độ chỉ đọc.");
             var sourceDocumentId = selection.DocumentId;
             var fontSizePt = FormulaFontSize.Normalize(
                 await dispatcher.InvokeAsync(service.ReadCurrentTypingFontSize)
@@ -1634,7 +1634,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             if (document is null)
             {
                 WriteBulkAcceptanceLog("bulk-import-cancelled-no-document");
-                SetStatus("已取消批量导入，Word 文档未修改。");
+                SetStatus("Đã hủy nhập hàng loạt; tài liệu Word không bị thay đổi.");
                 return;
             }
 
@@ -1642,7 +1642,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 $"parsed blocks={document.Blocks.Count} formulas={document.FormulaCount} "
                 + $"mode={document.FormulaObjectMode} fontSizePt={fontSizePt:0.##}");
             SetStatus(
-                $"正在准备批量导入：{document.Blocks.Count} 个块，{document.FormulaCount} 个公式…");
+                $"Đang chuẩn bị nhập hàng loạt: {document.Blocks.Count} khối, {document.FormulaCount} công thức…");
             await client.EnsureHealthyAsync(lifetime.Token).ConfigureAwait(false);
             await client.PrewarmConverterAsync(lifetime.Token).ConfigureAwait(false);
             var formulaRuns = document.Blocks
@@ -1677,7 +1677,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 WriteBulkAcceptanceLog(
                     $"render-prepare index={index + 1}/{formulaRuns.Count} "
                     + $"display={run.DisplayMode} latex={run.Latex}");
-                SetStatus($"正在准备公式 {index + 1}/{formulaRuns.Count}…");
+                SetStatus($"Đang chuẩn bị công thức {index + 1}/{formulaRuns.Count}…");
                 var conversionSession = await CreateBulkFormulaConversionSessionAsync(
                         client,
                         run,
@@ -1694,7 +1694,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             {
                 WriteBulkAcceptanceLog(
                     $"render-batch-start unique={pendingTemplates.Count} total={formulaRuns.Count}");
-                SetStatus($"正在批量渲染 {pendingTemplates.Count} 个独立公式…");
+                SetStatus($"Đang kết xuất hàng loạt {pendingTemplates.Count} công thức độc lập…");
                 var renderStopwatch = Stopwatch.StartNew();
                 await client.OpenConverterBatchAsync(
                         pendingTemplates.Select(item => item.Session.Id).ToList(),
@@ -1743,7 +1743,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 });
             }
 
-            SetStatus("公式渲染完成，正在写入 Word…");
+            SetStatus("Đã kết xuất công thức; đang ghi vào Word…");
             var insertStopwatch = Stopwatch.StartNew();
             var result = await dispatcher.InvokeAsync(() =>
                     service.InsertBulkDocument(
@@ -1761,8 +1761,8 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 $"bulk-import-complete blocks={result.BlockCount} formulas={result.FormulaCount} "
                 + $"elapsedMs={operationStopwatch.ElapsedMilliseconds}");
             SetStatus(
-                $"批量导入完成：{result.BlockCount} 个内容块，{result.FormulaCount} 个独立公式；"
-                + $"耗时 {operationStopwatch.Elapsed.TotalSeconds:0.0} 秒。");
+                $"Nhập hàng loạt hoàn tất: {result.BlockCount} khối nội dung, {result.FormulaCount} công thức độc lập; "
+                + $"mất {operationStopwatch.Elapsed.TotalSeconds:0.0} giây.");
 
             // Session finalization and temporary-file cleanup are companion-side
             // bookkeeping. They must never keep Word's single-operation gate
@@ -1780,12 +1780,12 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         catch (OperationCanceledException error)
         {
             WriteBulkAcceptanceLog("bulk-import-cancelled " + error);
-            SetStatus("VisualTeX 批量导入已取消。");
+            SetStatus("Đã hủy nhập hàng loạt bằng VisualTeX.");
         }
         catch (Exception error)
         {
             WriteBulkAcceptanceLog("bulk-import-failed " + error);
-            SetStatus($"VisualTeX 批量导入失败：{error.Message}");
+            SetStatus($"Nhập hàng loạt bằng VisualTeX thất bại: {error.Message}");
             if (!string.Equals(
                     Environment.GetEnvironmentVariable("VISUALTEX_VSTO_ACCEPTANCE"),
                     "1",
@@ -1797,7 +1797,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                     {
                         System.Windows.Forms.MessageBox.Show(
                             error.Message,
-                            "VisualTeX 批量导入",
+                            "Nhập hàng loạt bằng VisualTeX",
                             System.Windows.Forms.MessageBoxButtons.OK,
                             System.Windows.Forms.MessageBoxIcon.Error);
                         return true;
@@ -1940,7 +1940,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 Host = "word",
                 SourceDocumentId = sourceDocumentId,
                 SourceObjectId = sourceObjectId,
-                Title = "Word 文档批量导入",
+                Title = "Nhập hàng loạt vào tài liệu Word",
                 Lines = new List<FormulaLine> { line },
                 ActiveLineId = line.Id,
                 CodeFormat = "auto-document",
@@ -1968,10 +1968,10 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             return (null, session.Id);
         if (session.Status == "failed")
             throw new InvalidOperationException(
-                session.Error ?? "VisualTeX 文档导入窗口返回失败状态。");
+                session.Error ?? "Cửa sổ nhập tài liệu VisualTeX trả về trạng thái thất bại.");
         if (session.Status is not ("committing" or "completed"))
             throw new InvalidOperationException(
-                $"VisualTeX 文档导入窗口返回了意外状态：{session.Status}。");
+                $"Cửa sổ nhập tài liệu VisualTeX trả về trạng thái không mong đợi: {session.Status}.");
 
         var source = string.Join("\n", session.Lines.Select(item => item.Latex));
         var objectMode = string.Equals(
@@ -2054,22 +2054,22 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         {
             var detail = string.IsNullOrWhiteSpace(session.Error)
                 || string.Equals(session.Error, "[object Object]", StringComparison.Ordinal)
-                ? "MathJax 无法解析该公式，转换窗口没有返回有效错误文本。"
+                ? "MathJax không thể phân tích công thức và cửa sổ chuyển đổi không trả về lỗi hợp lệ."
                 : session.Error!.Trim();
             var formula = run.Latex.Length <= 500
                 ? run.Latex
                 : run.Latex.Substring(0, 500) + "…";
             throw new InvalidOperationException(
-                $"公式渲染失败：{formula}\r\n原因：{detail}");
+                $"Kết xuất công thức thất bại: {formula}\r\nNguyên nhân: {detail}");
         }
         if (session.Status == "cancelled" || session.ExplicitCancel)
-            throw new OperationCanceledException("批量公式渲染已取消。" );
+            throw new OperationCanceledException("Đã hủy kết xuất công thức hàng loạt." );
         var export = session.ExportResult
             ?? throw new InvalidOperationException(
-                $"公式 {run.Latex} 没有生成导出结果。" );
+                $"Công thức {run.Latex} không tạo được kết quả xuất." );
         if (string.IsNullOrWhiteSpace(export.MathMl))
             throw new InvalidDataException(
-                $"公式 {run.Latex} 没有生成 MathML。" );
+                $"Công thức {run.Latex} không tạo được MathML." );
 
         var template = new RenderedWordBulkFormulaTemplate
         {
@@ -2099,7 +2099,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 if (formula.Length > 240)
                     formula = formula.Substring(0, 237) + "...";
                 throw new InvalidDataException(
-                    $"OLE 公式预览生成失败：{formula}\r\n原因：{error.Message}",
+                    $"Không thể tạo bản xem trước công thức OLE: {formula}\r\nNguyên nhân: {error.Message}",
                     error);
             }
         }
@@ -2225,11 +2225,11 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         {
             var count = await dispatcher.InvokeAsync(service.UpdateEquationNumbers)
                 .ConfigureAwait(false);
-            SetStatus($"已更新 {count} 个 Word 公式编号。");
+            SetStatus($"Đã cập nhật số cho {count} công thức Word.");
         }
         catch (Exception error)
         {
-            SetStatus($"更新 Word 公式编号失败：{error.Message}");
+            SetStatus($"Không thể cập nhật số công thức Word: {error.Message}");
         }
     }
 
@@ -2249,18 +2249,18 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 .ConfigureAwait(false);
             if (string.Equals(current, format.Id, StringComparison.Ordinal))
             {
-                SetStatus($"当前公式编号格式已是“{format.DisplayName}”。");
+                SetStatus($"Định dạng số công thức hiện đã là “{format.DisplayName}”.");
                 return;
             }
 
             var count = await dispatcher.InvokeAsync(
                     () => service.SetEquationNumberFormat(format.Id))
                 .ConfigureAwait(false);
-            SetStatus($"公式编号格式已设置为“{format.DisplayName}”，并更新了 {count} 个带编号公式。");
+            SetStatus($"Đã đặt định dạng số công thức thành “{format.DisplayName}” và cập nhật {count} công thức đã đánh số.");
         }
         catch (Exception error)
         {
-            SetStatus($"设置公式编号格式失败：{error.Message}");
+            SetStatus($"Không thể đặt định dạng số công thức: {error.Message}");
         }
         finally { InvalidateEquationNumberFormatControls(); }
     }
@@ -2282,12 +2282,12 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                     document = application.ActiveDocument;
                     selection = application.Selection;
                     if (document.ReadOnly)
-                        throw new UnauthorizedAccessException("当前 Word 文档为只读状态。");
+                        throw new UnauthorizedAccessException("Tài liệu Word hiện tại đang ở chế độ chỉ đọc.");
                     var targets = WordEquationNumbering.GetEquationReferenceTargets(document);
                     if (targets.Count == 0)
                     {
                         System.Windows.Forms.MessageBox.Show(
-                            "当前文档没有带编号的 VisualTeX 行间公式。请先插入行间公式并勾选“添加公式编号”。",
+                            "Tài liệu hiện tại không có công thức VisualTeX riêng dòng đã đánh số. Hãy chèn công thức riêng dòng và chọn “Thêm số công thức” trước.",
                             "VisualTeX",
                             System.Windows.Forms.MessageBoxButtons.OK,
                             System.Windows.Forms.MessageBoxIcon.Information);
@@ -2342,11 +2342,11 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 }
             }).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(inserted))
-                SetStatus($"已插入公式 ({inserted}) 的交叉引用；更新编号时引用会同步刷新。");
+                SetStatus($"Đã chèn tham chiếu chéo đến công thức ({inserted}); tham chiếu sẽ được làm mới khi cập nhật số.");
         }
         catch (Exception error)
         {
-            SetStatus($"插入公式引用失败：{error.Message}");
+            SetStatus($"Không thể chèn tham chiếu công thức: {error.Message}");
         }
     }
 
@@ -2359,11 +2359,11 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         {
             await dispatcher.InvokeAsync(service.ExportSelectedOleAsPicture)
                 .ConfigureAwait(false);
-            SetStatus("Word OLE 公式已导出为跨平台图片。");
+            SetStatus("Công thức Word OLE đã được xuất thành ảnh đa nền tảng.");
         }
         catch (Exception error)
         {
-            SetStatus($"导出 Word OLE 公式失败：{error.Message}");
+            SetStatus($"Không thể xuất công thức Word OLE: {error.Message}");
         }
     }
 
@@ -2375,11 +2375,11 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
         try
         {
             await dispatcher.InvokeAsync(service.DeleteSelectedFormula).ConfigureAwait(false);
-            SetStatus("Word 公式已删除。");
+            SetStatus("Công thức Word đã được xóa.");
         }
         catch (Exception error)
         {
-            SetStatus($"删除 Word 公式失败：{error.Message}");
+            SetStatus($"Không thể xóa công thức Word: {error.Message}");
         }
     }
 

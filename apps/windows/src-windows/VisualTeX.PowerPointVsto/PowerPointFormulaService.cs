@@ -299,7 +299,7 @@ public sealed class PowerPointFormulaService
         if (selected.Metadata is null || string.IsNullOrWhiteSpace(selected.FormulaId))
         {
             if (SetSelectedMathZoneFontSize(target)) return target;
-            throw new InvalidOperationException("请先选择一个 VisualTeX 公式或 PowerPoint 原生公式。");
+            throw new InvalidOperationException("Vui lòng chọn một công thức VisualTeX hoặc công thức gốc của PowerPoint trước.");
         }
 
         Presentation? presentation = null;
