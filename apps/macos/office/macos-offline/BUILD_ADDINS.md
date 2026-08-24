@@ -58,3 +58,33 @@ npm run build:desktop
 ```
 
 Then install through VisualTeX Settings. Word is not launched by the installer: launch Word manually and wait for `OfficePluginStatus/word.json` before treating Word installation as healthy. PowerPoint requires one manual registration through **Tools → PowerPoint Add-Ins**; future updates overwrite the same fixed `VisualTeX.ppam` path.
+
+## Rebuild commands before a DMG build
+
+From `apps/macos`, close Word and PowerPoint, then run the commands below. The
+PowerPoint `--base` input must be the editable PPTM used to build the reviewed
+PPAM shell.
+
+```bash
+SCRATCH="$HOME/Library/Group Containers/UBF8T346G9.Office/VisualTeX/Scratch"
+
+npm run rebuild:macos-word-addin -- \
+  --output "$SCRATCH/VisualTeXWordBuild.dotm"
+
+npm run rebuild:macos-powerpoint-addin -- \
+  --base /absolute/path/VisualTeX-build.pptm \
+  --output "$SCRATCH/VisualTeXPowerPointBuild.pptm"
+
+npm run package:macos-offline-office -- \
+  --word "$SCRATCH/VisualTeXWordBuild.dotm" \
+  --powerpoint "$SCRATCH/VisualTeXPowerPointBuild.pptm" \
+  --powerpoint-shell office/macos-offline/resources/VisualTeX.ppam
+
+npm run test:macos-offline-office
+npm run tauri:build
+```
+
+The package command replaces the fixed files under `resources/` and updates both
+SHA-256 entries in `addins.json`. Do not bypass
+`verify_macos_offline_addins.mjs`: a failure there means the DMG would contain an
+older compiled VBA project.

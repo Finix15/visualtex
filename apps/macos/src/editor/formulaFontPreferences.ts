@@ -84,6 +84,22 @@ const LETTER_PRIMARY_FONT_NAMES: Record<FormulaLetterFont, string> = {
   helvetica: "Helvetica Neue",
 };
 
+const CHINESE_FONT_FAMILIES: Record<FormulaChineseFont, string> = {
+  system: "inherit",
+  pingfang: '"PingFang SC", "Hiragino Sans GB", sans-serif',
+  songti: '"Songti SC", "STSong", serif',
+  kaiti: '"Kaiti SC", "STKaiti", serif',
+  heiti: '"Heiti SC", "STHeiti", sans-serif',
+};
+
+const CHINESE_PRIMARY_FONT_NAMES: Record<FormulaChineseFont, string> = {
+  system: "",
+  pingfang: "PingFang SC",
+  songti: "Songti SC",
+  kaiti: "Kaiti SC",
+  heiti: "Heiti SC",
+};
+
 export function normalizeFormulaLetterFont(value: unknown): FormulaLetterFont {
   return FORMULA_LETTER_FONT_OPTIONS.some((item) => item.id === value)
     ? (value as FormulaLetterFont)
@@ -143,8 +159,7 @@ export function formulaLetterFontFamilies(value: FormulaLetterFont) {
 }
 
 export function formulaChineseFontFamily(value: FormulaChineseFont) {
-  void value;
-  return "inherit";
+  return CHINESE_FONT_FAMILIES[normalizeFormulaChineseFont(value)];
 }
 
 export function formulaLetterPrimaryFontName(value: FormulaLetterFont) {
@@ -152,6 +167,5 @@ export function formulaLetterPrimaryFontName(value: FormulaLetterFont) {
 }
 
 export function formulaChinesePrimaryFontName(value: FormulaChineseFont) {
-  void value;
-  return "";
+  return CHINESE_PRIMARY_FONT_NAMES[normalizeFormulaChineseFont(value)];
 }

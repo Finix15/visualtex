@@ -45,6 +45,8 @@
     "test:macos-offline-office:full": "node scripts/run_macos_offline_acceptance.mjs",
     "verify:office-performance-budget": "node scripts/verify_office_performance_budget.mjs",
     "package:macos-offline-office": "node scripts/package_macos_offline_addins.mjs",
+    "rebuild:macos-word-addin": "node scripts/rebuild_macos_word_addin.mjs",
+    "rebuild:macos-powerpoint-addin": "node scripts/compile_powerpoint_performance_build.mjs",
     "test:platform-onboarding": "tsx scripts/platform_onboarding_smoke.mjs",
     "test:startup-compatibility": "tsx scripts/startup_compatibility_smoke.mjs",
     "test:startup-browser": "node scripts/startup_browser_regression.mjs",

@@ -26,7 +26,10 @@ import { errorMessage } from "../../runtime/errorMessage";
 import { expandCustomSymbolsForMathMl } from "../../math/customSymbolRendering";
 import {
   DEFAULT_FORMULA_LETTER_FONT,
+  DEFAULT_FORMULA_CHINESE_FONT,
+  formulaChinesePrimaryFontName,
   formulaLetterPrimaryFontName,
+  normalizeFormulaChineseFont,
   normalizeFormulaLetterFont,
   type FormulaChineseFont,
   type FormulaLetterFont,
@@ -962,13 +965,18 @@ function applyOmmlFontPreferences(
     preferences.formulaLetterFont ?? DEFAULT_FORMULA_LETTER_FONT,
   );
   const letterFontName = formulaLetterPrimaryFontName(letterFont);
+  const chineseFont = normalizeFormulaChineseFont(
+    preferences.formulaChineseFont ?? DEFAULT_FORMULA_CHINESE_FONT,
+  );
+  const chineseFontName = formulaChinesePrimaryFontName(chineseFont);
 
   return body.replace(/<m:r>([\s\S]*?)<\/m:r>/g, (whole, inner: string) => {
     const text = inner.match(/<m:t(?:\s[^>]*)?>([\s\S]*?)<\/m:t>/)?.[1] ?? "";
     if (!text) return whole;
 
     const hasLatinOrGreek = /[A-Za-z\u0370-\u03ff\u1f00-\u1fff]/u.test(text);
-    if (!hasLatinOrGreek) return whole;
+    const hasHan = /\p{Script=Han}/u.test(text);
+    if (!hasLatinOrGreek && !hasHan) return whole;
 
     const script = inner.match(/<m:scr\s+m:val="([^"]+)"\/>/)?.[1] ?? "";
     const isNormalText = inner.includes("<m:nor/>");
@@ -990,6 +998,11 @@ function applyOmmlFontPreferences(
           `w:cs="${escaped}"`,
         );
       }
+    }
+    if (hasHan && chineseFontName) {
+      fontAttributes.push(
+        `w:eastAsia="${escapeXmlAttribute(chineseFontName)}"`,
+      );
     }
     if (!fontAttributes.length) return whole;
 

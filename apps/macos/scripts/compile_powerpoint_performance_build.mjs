@@ -41,16 +41,24 @@ const preservePowerPoint = process.argv.includes("--preserve-powerpoint");
 const offlineOfficeRoot = join(repositoryRoot, "office", "macos-offline");
 const modules = [
   {
-    name: "VTOfficePaths",
-    path: join(offlineOfficeRoot, "shared", "VTOfficePaths.bas"),
-  },
-  {
     name: "VTProtocol",
     path: join(offlineOfficeRoot, "shared", "VTProtocol.bas"),
   },
   {
+    name: "VTOfficePaths",
+    path: join(offlineOfficeRoot, "shared", "VTOfficePaths.bas"),
+  },
+  {
+    name: "VTMetadata",
+    path: join(offlineOfficeRoot, "shared", "VTMetadata.bas"),
+  },
+  {
     name: "VTLauncher",
     path: join(offlineOfficeRoot, "shared", "VTLauncher.bas"),
+  },
+  {
+    name: "VTErrorHandling",
+    path: join(offlineOfficeRoot, "shared", "VTErrorHandling.bas"),
   },
   {
     name: "VTPowerPointAdapter",
@@ -59,6 +67,14 @@ const modules = [
       "powerpoint",
       "VTPowerPointAdapter.bas",
     ),
+  },
+  {
+    name: "VTPowerPointEvents",
+    path: join(offlineOfficeRoot, "powerpoint", "VTPowerPointEvents.cls"),
+  },
+  {
+    name: "VTRibbonCallbacks",
+    path: join(offlineOfficeRoot, "powerpoint", "VTRibbonCallbacks.bas"),
   },
 ];
 const outputPresentationName = basename(outputPath, ".pptm");

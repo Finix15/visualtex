@@ -32,7 +32,7 @@ function inspectAddin(name, vbaEntry, requiredMarkers) {
   const missing = requiredMarkers.filter((marker) => !containsMarker(project, marker));
   if (missing.length > 0) {
     throw new Error(
-      `${name} is stale and is missing reviewed VBA marker(s): ${missing.join(", ")}. Recompile the reviewed VBA sources in Office for Mac before building the DMG.`,
+      `${name} is stale and is missing reviewed VBA marker(s): ${missing.join(", ")}. Recompile and package the reviewed VBA sources in Office for Mac before building the DMG. Run the rebuild commands in office/macos-offline/BUILD_ADDINS.md; do not bypass this check.`,
     );
   }
   const expectedHash = manifest.files?.[name]?.sha256;
