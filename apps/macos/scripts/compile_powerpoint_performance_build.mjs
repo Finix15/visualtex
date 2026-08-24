@@ -643,10 +643,20 @@ def normalize_number(match):
         fixed = fixed.rstrip("0").rstrip(".")
     return "0" if fixed in {"", "-0"} else fixed
 
-def normalize_vba(value):
+def strip_vbe_metadata(value):
     lines = value.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    lines = [line for line in lines if not line.lstrip().lower().startswith("attribute ")]
-    value = "\n".join(lines).strip()
+    if lines and lines[0].lstrip("\ufeff").strip().lower() == "version 1.0 class":
+        while lines:
+            line = lines.pop(0)
+            if line.strip().lower() == "end":
+                break
+    return "\n".join(
+        line for line in lines
+        if not line.lstrip().lower().startswith("attribute ")
+    )
+
+def normalize_vba(value):
+    value = strip_vbe_metadata(value).strip()
     output = []
     non_string = []
     in_string = False
