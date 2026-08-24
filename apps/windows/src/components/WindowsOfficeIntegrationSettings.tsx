@@ -402,7 +402,7 @@ export function WindowsOfficeIntegrationSettings() {
           onClick={() => void run("word", "open_word")}
         >
           <ExternalLink size={15} />
-          {isEn ? "Open Word" : "Lời mở"}
+          {isEn ? "Open Word" : "Mở Word"}
         </button>
         <button
           type="button"

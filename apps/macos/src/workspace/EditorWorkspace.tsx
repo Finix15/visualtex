@@ -26,7 +26,6 @@ import {
   PanelBottomOpen,
   PanelRightOpen,
   Plus,
-  ScanLine,
   X,
 } from "lucide-react";
 import {
@@ -34,6 +33,7 @@ import {
   type MathEditorSelectionTarget,
 } from "../editor/MathEditor";
 import { InputBehaviorMenu } from "../components/InputBehaviorMenu";
+import { OcrModelSelector } from "../components/OcrModelSelector";
 import { FormulaToolbar } from "../toolbar/FormulaToolbar";
 import { LatexSourceEditor } from "../source-editor/LatexSourceEditor";
 import {
@@ -1371,30 +1371,13 @@ export function EditorWorkspace({
                 </div>
               )}
               {!keypadMode && showOcrActions && ocrModels.length > 0 && ocrModel && (
-                <label
-                  className="canvas-ocr-model"
-                  title={
-                    isEn
-                      ? "Model used when an image is pasted into a formula field"
-                      : "Model được sử dụng khi dán hình ảnh vào trường công thức"
-                  }
-                >
-                  <ScanLine size={14} />
-                  <select
-                    value={ocrModel}
-                    disabled={ocrBusy}
-                    onChange={(event) =>
-                      onOcrModelChange?.(event.target.value)
-                    }
-                    aria-label={isEn ? "OCR recognition model" : "Mô hình nhận dạng OCR"}
-                  >
-                    {ocrModels.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {isEn ? item.labelEn : item.labelVi}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <OcrModelSelector
+                  value={ocrModel}
+                  options={ocrModels}
+                  disabled={ocrBusy}
+                  isEn={isEn}
+                  onChange={onOcrModelChange}
+                />
               )}
               {!keypadMode && <div className="canvas-controls">
                 <button

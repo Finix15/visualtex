@@ -7651,6 +7651,91 @@ async function main() {
     }
 
     if (scenario === "input-behavior-overlay") {
+      const ribbonTypographyState = await waitForEvaluation(`(() => {
+        const controls = [...document.querySelectorAll([
+          '.workspace-export-trigger',
+          '.canvas-input-behavior-trigger',
+          '.quick-ocr-button',
+          '.silent-ocr-toggle',
+          '.ocr-model-selector-trigger',
+        ].join(','))].filter((element) => element.getClientRects().length > 0);
+        const fontSizes = controls.map((element) =>
+          Number.parseFloat(getComputedStyle(element).fontSize),
+        );
+        return {
+          ready:
+            controls.length >= 3 &&
+            fontSizes.every((size) => Math.abs(size - 11) < 0.1) &&
+            controls.every((element) => element.scrollWidth <= element.clientWidth + 1),
+          controls: controls.map((element, index) => ({
+            className: element.className,
+            text: element.textContent?.trim() ?? '',
+            fontSize: fontSizes[index],
+            clientWidth: element.clientWidth,
+            scrollWidth: element.scrollWidth,
+          })),
+        };
+      })()`, "uniform desktop ribbon typography");
+
+      const compactOcrLabel = await waitForEvaluation(`(() => {
+        const trigger = document.querySelector('[data-ocr-model-trigger]');
+        const text = trigger?.textContent?.trim() ?? '';
+        return {
+          ready:
+            Boolean(trigger) &&
+            (text === 'Balanced M' || text === 'Cân bằng M'),
+          text,
+        };
+      })()`, "compact selected OCR model label");
+      await evaluate(`(() => {
+        const trigger = document.querySelector('[data-ocr-model-trigger]');
+        trigger.focus();
+        trigger.click();
+      })()`);
+      const expandedOcrLabel = await waitForEvaluation(`(() => {
+        const menu = document.querySelector('[data-ocr-model-menu]');
+        const selected = menu?.querySelector('[aria-selected="true"]');
+        const text = selected?.textContent?.trim() ?? '';
+        const style = menu ? getComputedStyle(menu) : null;
+        return {
+          ready:
+            Boolean(menu && selected) &&
+            (/recommended/i.test(text) || /khuyên dùng/i.test(text)) &&
+            style?.position === 'fixed' &&
+            Number.parseInt(style?.zIndex || '0', 10) >= 2300,
+          text,
+          position: style?.position ?? '',
+          zIndex: style?.zIndex ?? '',
+        };
+      })()`, "expanded recommended OCR model label");
+      await evaluate(`document.querySelector('[data-ocr-model-trigger]').focus()`);
+      await key("ArrowDown", "ArrowDown", 40);
+      await evaluate(`document.querySelector('[data-ocr-model-trigger]').focus()`);
+      await key("Enter", "Enter", 13);
+      await waitForEvaluation(`(() => ({
+        ready:
+          !document.querySelector('[data-ocr-model-menu]') &&
+          /accuracy|chính xác/i.test(
+            document.querySelector('[data-ocr-model-trigger]')?.textContent ?? '',
+          ),
+        triggerText: document.querySelector('[data-ocr-model-trigger]')?.textContent ?? '',
+        menuOpen: Boolean(document.querySelector('[data-ocr-model-menu]')),
+        activeElement: document.activeElement?.getAttribute('data-ocr-model-trigger') ?? null,
+        activeOption: document.querySelector('[data-ocr-model-menu] .is-active')?.textContent ?? '',
+      }))()`, "keyboard OCR model selection");
+      await evaluate(`document.querySelector('[data-ocr-model-trigger]').click()`);
+      await waitForEvaluation(`(() => ({
+        ready: Boolean(document.querySelector('[data-ocr-model-menu]')),
+      }))()`, "reopen OCR model selector");
+      await evaluate(`document.querySelector('[data-ocr-model-option="PP-FormulaNet_plus-M"]').click()`);
+      await waitForEvaluation(`(() => ({
+        ready:
+          !document.querySelector('[data-ocr-model-menu]') &&
+          /Balanced M|Cân bằng M/.test(
+            document.querySelector('[data-ocr-model-trigger]')?.textContent ?? '',
+          ),
+      }))()`, "restore balanced OCR model");
+
       await waitForEvaluation(`(() => ({
         ready: Boolean(document.querySelector('.canvas-input-behavior-trigger')),
       }))()`, "input behavior overlay trigger");
@@ -7694,6 +7779,12 @@ async function main() {
         throw new Error(`Input behavior mapping overlay is covered: ${JSON.stringify(overlayState)}`);
       }
       await evaluate(`document.querySelector('.canvas-input-behavior-trigger').click()`);
+      console.log(JSON.stringify({
+        ribbonTypographyState,
+        compactOcrLabel,
+        expandedOcrLabel,
+        overlayState,
+      }, null, 2));
     }
 
     if (scenario === "settings") {

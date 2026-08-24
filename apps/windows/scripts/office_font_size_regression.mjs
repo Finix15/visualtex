@@ -20,6 +20,7 @@ const converterUrl = `${baseUrl}/dialog/${sessionId}?runtime=vsto-convert`;
 const distRoot = join(process.cwd(), "dist-office-windows-native");
 const chromeProfile = createBrowserProfilePath("visualtex-office-font-size");
 const chromePath = resolveChromiumExecutable();
+const ribbonOnly = process.argv.includes("--ribbon-only");
 
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
@@ -94,6 +95,7 @@ const server = createServer(async (request, response) => {
         powerpointDefaultFontSizePt: 28,
         editorPreferences: {
           settings: {
+            language: "vi",
             sourceOpen: false,
             classicTileWidth: 520,
             classicDockHeight: 420,
@@ -403,6 +405,45 @@ async function main() {
     assert.equal(powerpointDefault.value, "28");
     assert.deepEqual(powerpointDefault.optionGroupLabels, ["Kích thước điểm"]);
 
+    if (ribbonOnly) {
+      const ribbonState = await waitForEvaluation(
+        client,
+        `(() => {
+          const bar = document.querySelector('.editor-pane-header.is-office-editor-header');
+          const controls = bar
+            ? [...bar.querySelectorAll([
+                '.canvas-input-behavior-trigger',
+                '.ocr-model-selector-trigger',
+                '.office-display-mode-setting button',
+                '.office-font-size-setting select',
+                '.office-inline-actions .primary-button',
+                '.office-inline-actions .secondary-button',
+              ].join(','))].filter((element) => element.getClientRects().length > 0)
+            : [];
+          const fontSizes = controls.map((element) =>
+            Number.parseFloat(getComputedStyle(element).fontSize),
+          );
+          return {
+            ready:
+              controls.length >= 4 &&
+              fontSizes.every((size) => Math.abs(size - 11) < 0.1) &&
+              controls.every((element) => element.scrollWidth <= element.clientWidth + 1),
+            controls: controls.map((element, index) => ({
+              className: element.className,
+              text: element.textContent?.trim() ?? '',
+              fontSize: fontSizes[index],
+              clientWidth: element.clientWidth,
+              scrollWidth: element.scrollWidth,
+            })),
+          };
+        })()`,
+        "uniform Office ribbon typography",
+      );
+      console.log(JSON.stringify({ powerpointDefault, ribbonState }, null, 2));
+      console.log("Office ribbon typography regression passed");
+      return;
+    }
+
     await setFontSize(client, 12);
     const powerpointPointSize = await waitForEvaluation(
       client,
@@ -640,6 +681,25 @@ async function main() {
         const paneHeaderVisible = bar
           ? getComputedStyle(bar).display !== 'none'
           : false;
+        const primaryRibbonControls = bar
+          ? [...bar.querySelectorAll([
+              '.canvas-input-behavior-trigger',
+              '.ocr-model-selector-trigger',
+              '.office-display-mode-setting button',
+              '.office-font-size-setting select',
+              '.office-inline-actions .primary-button',
+              '.office-inline-actions .secondary-button',
+            ].join(','))].filter((element) => element.getClientRects().length > 0)
+          : [];
+        const primaryFontSizes = primaryRibbonControls.map((element) =>
+          Number.parseFloat(getComputedStyle(element).fontSize),
+        );
+        const uniformPrimaryTypography =
+          primaryRibbonControls.length >= 4 &&
+          primaryFontSizes.every((size) => Math.abs(size - 11) < 0.1) &&
+          primaryRibbonControls.every(
+            (element) => element.scrollWidth <= element.clientWidth + 1,
+          );
         return {
           ready: Boolean(
             bar &&
@@ -652,6 +712,7 @@ async function main() {
             sameRow &&
             aboveTiles &&
             paneHeaderVisible &&
+            uniformPrimaryTypography &&
             !text.includes('VisualTeX') &&
             !text.includes('Microsoft Word') &&
             !text.includes('新建 Office 公式') &&
@@ -660,6 +721,14 @@ async function main() {
           sameRow,
           aboveTiles,
           paneHeaderVisible,
+          uniformPrimaryTypography,
+          primaryRibbonControls: primaryRibbonControls.map((element, index) => ({
+            className: element.className,
+            text: element.textContent?.trim() ?? '',
+            fontSize: primaryFontSizes[index],
+            clientWidth: element.clientWidth,
+            scrollWidth: element.scrollWidth,
+          })),
           barHeight: barRect?.height ?? 0,
           barBottom: barRect?.bottom ?? 0,
           tileTop: tileRect?.top ?? 0,
@@ -671,6 +740,7 @@ async function main() {
     assert.equal(officeControlBarState.sameRow, true);
     assert.equal(officeControlBarState.aboveTiles, true);
     assert.equal(officeControlBarState.paneHeaderVisible, true);
+    assert.equal(officeControlBarState.uniformPrimaryTypography, true);
 
     await client.evaluate(`(() => {
       document.querySelector('[data-formula-tile-collapse]')?.click();
@@ -1712,11 +1782,9 @@ async function main() {
       JSON.stringify(
         {
           powerpointDefault,
-          powerpointChineseSize,
           powerpointSavedSize: 31.5,
           powerpointReloaded,
           wordInherited,
-          wordChineseSize,
           wordSavedSize: 13,
           wordConverter: {
             fontSizePt: session.fontSizePt,

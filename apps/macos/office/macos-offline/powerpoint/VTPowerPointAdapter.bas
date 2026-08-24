@@ -4,7 +4,7 @@ Option Explicit
 Private Const VT_POWERPOINT_HOST As String = "powerpoint"
 Private Const VT_POWERPOINT_STATUS_FILE As String = "/OfficePluginStatus/powerpoint.json"
 Private Const VT_POWERPOINT_SOURCE_REVISION As String = _
-    "powerpoint-office-performance-20260801-r4"
+    "powerpoint-office-performance-20260824-r5"
 Private Const VT_SHAPE_PREFIX As String = "VisualTeX_"
 Private Const VT_DEFAULT_PLACEHOLDER_WIDTH As Single = 180!
 Private Const VT_DEFAULT_PLACEHOLDER_HEIGHT As Single = 42!
@@ -1069,15 +1069,22 @@ Public Sub VTPowerPointRibbonGetFormulaFontSizeItemLabel( _
         If Not VTPowerPointSelectedFormulaFontState( _
            formulaCount, mixedSizes, fontSizePt) Then
             returnedValue = _
-                VTUnicodeText(35831, 36873, 25321) & " SVG " & _
-                VTUnicodeText(20844, 24335)
+                VTOfficeLocalizedText( _
+                    "0048|00E3|0079|0020|0063|0068|1ECD|006E|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0053|0056|0047", _
+                    "Select an SVG formula")
         ElseIf mixedSizes Then
             returnedValue = _
-                VTUnicodeText(24403, 21069) & ": " & _
-                VTUnicodeText(28151, 21512, 23383, 21495)
+                VTOfficeLocalizedText( _
+                    "0048|0069|1EC7|006E|0020|0074|1EA1|0069", _
+                    "Current") & ": " & _
+                VTOfficeLocalizedText( _
+                    "004E|0068|0069|1EC1|0075|0020|0063|1EE1|0020|0063|0068|1EEF", _
+                    "Mixed font sizes")
         Else
             returnedValue = _
-                VTUnicodeText(24403, 21069) & ": " & _
+                VTOfficeLocalizedText( _
+                    "0048|0069|1EC7|006E|0020|0074|1EA1|0069", _
+                    "Current") & ": " & _
                 VTFormulaFontSizeDisplayLabel(fontSizePt)
         End If
     Else
@@ -1086,7 +1093,9 @@ Public Sub VTPowerPointRibbonGetFormulaFontSizeItemLabel( _
     Exit Sub
 
 LabelFailed:
-    returnedValue = VTUnicodeText(23383, 21495)
+    returnedValue = VTOfficeLocalizedText( _
+        "0043|1EE1|0020|0063|0068|1EEF", _
+        "Font size")
     Err.Clear
 End Sub
 

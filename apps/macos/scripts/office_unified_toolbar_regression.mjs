@@ -312,6 +312,22 @@ async function main() {
               return { width: rect.width, height: rect.height };
             })
           : [];
+        const typography = [
+          ['displayMode', '.office-display-mode-setting button'],
+          ['fontSize', '.office-font-size-setting'],
+          ['inputLogic', '.canvas-input-behavior-trigger'],
+          ['ocrModel', '[data-ocr-model-trigger]'],
+          ['cancel', '[data-office-cancel-action]'],
+          ['primary', '[data-office-primary-action]'],
+        ].flatMap(([name, selector]) => {
+          const element = document.querySelector(selector);
+          if (!(element instanceof HTMLElement)) return [];
+          return [{
+            name,
+            fontSize: parseFloat(getComputedStyle(element).fontSize),
+            overflow: element.scrollWidth > element.clientWidth + 1,
+          }];
+        });
         return {
           viewport: { width: innerWidth, height: innerHeight },
           layoutDebug: {
@@ -342,6 +358,7 @@ async function main() {
           } : null,
           items,
           overlaps,
+          typography,
           allInsideHeader: Boolean(headerRect) && items
             .filter((item) => item.name !== 'alignment')
             .every((item) =>
@@ -739,6 +756,15 @@ async function main() {
       assert.equal(state.redoHasIcon, true, JSON.stringify(state));
       assert.deepEqual(state.overlaps, [], JSON.stringify(state));
       assert.equal(state.allInsideHeader, true, JSON.stringify(state));
+      assert.ok(state.typography.length >= 6, JSON.stringify(state));
+      assert.ok(
+        state.typography.every((item) => item.fontSize === 11),
+        JSON.stringify(state.typography),
+      );
+      assert.ok(
+        state.typography.every((item) => !item.overflow),
+        JSON.stringify(state.typography),
+      );
       const cancelItem = state.items.find((item) => item.name === "cancel");
       const primaryItem = state.items.find((item) => item.name === "primary");
       assert.ok(cancelItem && primaryItem, JSON.stringify(state));

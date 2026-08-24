@@ -4,7 +4,7 @@ Option Explicit
 Private Const VT_WORD_HOST As String = "word"
 Private Const VT_WORD_STATUS_FILE As String = "/OfficePluginStatus/word.json"
 Private Const VT_WORD_SOURCE_REVISION As String = _
-    "word-office-performance-20260801-r77"
+    "word-office-performance-20260824-r78"
 Private Const VT_WORD_LATEX_REDRAW_REVISION As String = _
     "word-latex-redraw-20260802-r1"
 Private Const VT_WORD_DOCUMENT_IMPORT_REVISION As String = _
@@ -11468,22 +11468,34 @@ Public Sub VTWordRibbonGetNumberingFormatItemLabel( _
 
     Select Case itemIndex
         Case 0
-            returnedValue = VTUnicodeText(39034, 24207, 32534, 21495) & _
+            returnedValue = VTOfficeLocalizedText( _
+                "0110|00E1|006E|0068|0020|0073|1ED1|0020|0074|0075|1EA7|006E|0020|0074|1EF1", _
+                "Sequential numbering") & _
                 " (1)"
         Case 1
-            returnedValue = VTUnicodeText(25353, 31456, 32534, 21495) & _
+            returnedValue = VTOfficeLocalizedText( _
+                "0110|00E1|006E|0068|0020|0073|1ED1|0020|0074|0068|0065|006F|0020|0063|0068|01B0|01A1|006E|0067", _
+                "Number by chapter") & _
                 " (2.1)"
         Case 2
-            returnedValue = VTUnicodeText(25353, 31456, 32534, 21495) & _
+            returnedValue = VTOfficeLocalizedText( _
+                "0110|00E1|006E|0068|0020|0073|1ED1|0020|0074|0068|0065|006F|0020|0063|0068|01B0|01A1|006E|0067", _
+                "Number by chapter") & _
                 " (2" & ChrW(8208) & "1)"
         Case 3
-            returnedValue = VTUnicodeText(25353, 33410, 32534, 21495) & _
+            returnedValue = VTOfficeLocalizedText( _
+                "0110|00E1|006E|0068|0020|0073|1ED1|0020|0074|0068|0065|006F|0020|0070|0068|1EA7|006E", _
+                "Number by section") & _
                 " (2.3.1)"
         Case 4
-            returnedValue = VTUnicodeText(25353, 33410, 32534, 21495) & _
+            returnedValue = VTOfficeLocalizedText( _
+                "0110|00E1|006E|0068|0020|0073|1ED1|0020|0074|0068|0065|006F|0020|0070|0068|1EA7|006E", _
+                "Number by section") & _
                 " (2.3" & ChrW(8208) & "1)"
         Case Else
-            returnedValue = VTUnicodeText(32534, 21495, 26684, 24335)
+            returnedValue = VTOfficeLocalizedText( _
+                "0110|1ECB|006E|0068|0020|0064|1EA1|006E|0067|0020|0111|00E1|006E|0068|0020|0073|1ED1", _
+                "Numbering format")
     End Select
 End Sub
 
@@ -29789,14 +29801,22 @@ Public Sub VTWordRibbonGetImageFontSizeItemLabel( _
         If Not VTWordSelectedImageFormulaState( _
            formulaCount, mixedSizes, fontSizePt) Then
             returnedValue = _
-                VTUnicodeText(35831, 36873, 25321, 22270, 29255, 20844, 24335)
+                VTOfficeLocalizedText( _
+                    "0048|00E3|0079|0020|0063|0068|1ECD|006E|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|0068|00EC|006E|0068|0020|1EA3|006E|0068", _
+                    "Select an image formula")
         ElseIf mixedSizes Then
             returnedValue = _
-                VTUnicodeText(24403, 21069) & ": " & _
-                VTUnicodeText(28151, 21512, 23383, 21495)
+                VTOfficeLocalizedText( _
+                    "0048|0069|1EC7|006E|0020|0074|1EA1|0069", _
+                    "Current") & ": " & _
+                VTOfficeLocalizedText( _
+                    "004E|0068|0069|1EC1|0075|0020|0063|1EE1|0020|0063|0068|1EEF", _
+                    "Mixed font sizes")
         Else
             returnedValue = _
-                VTUnicodeText(24403, 21069) & ": " & _
+                VTOfficeLocalizedText( _
+                    "0048|0069|1EC7|006E|0020|0074|1EA1|0069", _
+                    "Current") & ": " & _
                 VTFormulaFontSizeDisplayLabel(fontSizePt)
         End If
     Else
@@ -29805,7 +29825,9 @@ Public Sub VTWordRibbonGetImageFontSizeItemLabel( _
     Exit Sub
 
 LabelFailed:
-    returnedValue = VTUnicodeText(23383, 21495)
+    returnedValue = VTOfficeLocalizedText( _
+        "0043|1EE1|0020|0063|0068|1EEF", _
+        "Font size")
     Err.Clear
 End Sub
 

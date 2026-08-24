@@ -2,8 +2,9 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const root = resolve(new URL("..", import.meta.url).pathname);
+const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const offline = join(root, "office", "macos-offline");
 const failures = [];
 const notes = [];
@@ -18,6 +19,23 @@ function expect(condition, message) {
 
 function expectIncludes(text, value, message) {
   expect(text.includes(value), message ?? `Expected source to contain ${value}`);
+}
+
+function decodeOfficeUnicode(source) {
+  const values = [];
+  for (const match of source.matchAll(/VTUnicodeText\(([^)]*)\)/g)) {
+    const codePoints = [...match[1].matchAll(/\d+/g)].map((item) => Number(item[0]));
+    if (codePoints.length > 0) values.push(String.fromCharCode(...codePoints));
+  }
+  for (const match of source.matchAll(/"([0-9A-F]{4}(?:\|[0-9A-F]{4})+)"/gi)) {
+    values.push(
+      match[1]
+        .split("|")
+        .map((item) => String.fromCharCode(Number.parseInt(item, 16)))
+        .join(""),
+    );
+  }
+  return values;
 }
 
 const requiredFiles = [
@@ -88,6 +106,53 @@ const appRuntime = read("src-tauri/src/lib.rs");
 const quickOcrRuntime = read("src-tauri/src/quick_ocr.rs");
 const installer = read("src-tauri/src/office/macos_offline_installer.rs");
 const packager = read("scripts/package_macos_offline_addins.mjs");
+
+const officeUiSources = [metadata, wordAdapter, powerpointAdapter];
+const decodedOfficeUiText = officeUiSources.flatMap(decodeOfficeUnicode);
+expect(
+  officeUiSources.every((source) => !/[\u3400-\u9fff]/u.test(source)),
+  "macOS Office VBA sources must not embed literal Chinese interface text",
+);
+expect(
+  decodedOfficeUiText.every((value) => !/[\u3400-\u9fff]/u.test(value)),
+  "macOS Office VBA callbacks must not construct Chinese interface text from Unicode code points",
+);
+for (const expectedVietnamese of [
+  "Tùy chỉnh",
+  "Chưa chọn công thức",
+  "Đánh số tuần tự",
+  "Đánh số theo chương",
+  "Đánh số theo phần",
+  "Định dạng đánh số",
+  "Hãy chọn công thức hình ảnh",
+  "Hiện tại",
+  "Nhiều cỡ chữ",
+  "Cỡ chữ",
+  "Hãy chọn công thức SVG",
+]) {
+  expect(
+    decodedOfficeUiText.includes(expectedVietnamese),
+    `macOS Office localized callbacks are missing ${expectedVietnamese}`,
+  );
+}
+for (const expectedEnglish of [
+  "Custom",
+  "No formula selected",
+  "Sequential numbering",
+  "Number by chapter",
+  "Number by section",
+  "Numbering format",
+  "Select an image formula",
+  "Current",
+  "Mixed font sizes",
+  "Font size",
+  "Select an SVG formula",
+]) {
+  expect(
+    officeUiSources.some((source) => source.includes(`"${expectedEnglish}"`)),
+    `macOS Office localized callbacks are missing the English fallback ${expectedEnglish}`,
+  );
+}
 const documentImportWordIntegration = read(
   "scripts/document_import_word_integration.mjs",
 );
@@ -164,7 +229,7 @@ expectIncludes(wordRibbon, 'label="VisualTeX"', "Word dedicated Ribbon tab must 
 expectIncludes(wordRibbon, 'insertAfterMso="TabInsert"', "Word VisualTeX tab must be placed after Insert");
 expectIncludes(wordRibbon, 'onLoad="VTWordRibbonOnLoad"', "Word Ribbon load must initialize the persistent double-click event sink");
 expectIncludes(wordRibbon, '<dropDown id="VisualTeX.Mac.Word.ImageFontSize"', "Word must expose an image-formula point-size drop-down");
-expectIncludes(wordRibbon, 'getItemLabel="VTWordRibbonGetImageFontSizeItemLabel"', "The Word point-size drop-down must show Chinese names with pt values");
+expectIncludes(wordRibbon, 'getItemLabel="VTWordRibbonGetImageFontSizeItemLabel"', "The Word point-size drop-down must expose localized labels with pt values");
 expectIncludes(wordRibbon, 'getSelectedItemIndex="VTWordRibbonGetImageFontSizeSelectedIndex"', "The Word point-size drop-down must report the selected formula size");
 expectIncludes(wordRibbon, 'onAction="VTWordRibbonApplyImageFontSizePreset"', "The Word point-size drop-down must apply its selected preset immediately");
 expect(!wordRibbon.includes('<editBox id="VisualTeX.Mac.Word.ImageFontSize"'), "Word must not require typing an image formula point size");
@@ -175,24 +240,18 @@ expectIncludes(powerpointRibbon, 'label="VisualTeX"', "PowerPoint dedicated Ribb
 expectIncludes(powerpointRibbon, 'insertAfterMso="TabInsert"', "PowerPoint VisualTeX tab must be placed after Insert");
 expectIncludes(powerpointRibbon, 'onLoad="VTPowerPointRibbonOnLoad"', "PowerPoint Ribbon load must initialize the persistent double-click event sink");
 expectIncludes(powerpointRibbon, '<dropDown id="VisualTeX.Mac.PowerPoint.FormulaFontSize"', "PowerPoint must expose an SVG formula point-size drop-down");
-expectIncludes(powerpointRibbon, 'getItemLabel="VTPowerPointRibbonGetFormulaFontSizeItemLabel"', "The PowerPoint point-size drop-down must show Chinese names with pt values");
+expectIncludes(powerpointRibbon, 'getItemLabel="VTPowerPointRibbonGetFormulaFontSizeItemLabel"', "The PowerPoint point-size drop-down must expose localized labels with pt values");
 expectIncludes(powerpointRibbon, 'getSelectedItemIndex="VTPowerPointRibbonGetFormulaFontSizeSelectedIndex"', "The PowerPoint point-size drop-down must report the selected SVG formula size");
 expectIncludes(powerpointRibbon, 'onAction="VTPowerPointRibbonApplyFormulaFontSizePreset"', "The PowerPoint point-size drop-down must apply its selected preset immediately");
 expect(!powerpointRibbon.includes('<editBox id="VisualTeX.Mac.PowerPoint.FormulaFontSize"'), "PowerPoint must not require typing an SVG formula point size");
 expect(powerpointRibbon.indexOf('id="VisualTeX.Mac.PowerPoint.Delete"') < powerpointRibbon.indexOf('id="VisualTeX.Mac.PowerPoint.FormulaFontSize"'), "PowerPoint SVG formula size must appear after Delete Selected Formula instead of between the large buttons");
 expect(!powerpointRibbon.includes('idMso="TabHome"'), "PowerPoint VisualTeX controls must not be injected into Home");
-expectIncludes(metadata, "Public Function VTUnicodeText", "Dynamic Office Ribbon Chinese labels must be generated at runtime instead of relying on VBE source-file encoding");
+expectIncludes(metadata, "Public Function VTUnicodeText", "Dynamic Office Unicode labels must be generated at runtime instead of relying on VBE source-file encoding");
+expectIncludes(metadata, "Public Function VTOfficeLocalizedText", "Shared Office labels must follow the synchronized VisualTeX UI language");
 expectIncludes(metadata, "If codePoint > 32767 Then codePoint = codePoint - 65536", "Dynamic Office Ribbon labels must convert unsigned UTF-16 code units for Mac VBA");
 expectIncludes(metadata, "ChrW(codePoint)", "Dynamic Office Ribbon labels must use Unicode code points");
 expectIncludes(metadata, "VTFormulaFontPresetCount = 20", "The shared point-size list must include the four larger presets");
 for (const marker of [
-  "VTUnicodeText(20843, 21495)",
-  "VTUnicodeText(20116, 21495)",
-  "VTUnicodeText(23567, 22235)",
-  "VTUnicodeText(22235, 21495)",
-  "VTUnicodeText(23567, 20108)",
-  "VTUnicodeText(23567, 19968)",
-  "VTUnicodeText(21021, 21495)",
   "Case 16: VTFormulaFontPresetSize = 48#",
   "Case 17: VTFormulaFontPresetSize = 54#",
   "Case 18: VTFormulaFontPresetSize = 72#",
@@ -200,15 +259,14 @@ for (const marker of [
 ]) {
   expectIncludes(metadata, marker, `The shared Office point-size presets must include ${marker}`);
 }
-expect(!metadata.includes("八号（"), "VBA source must not embed Chinese point-size labels that Mac VBE can mis-encode");
 expectIncludes(metadata, "VTFormulaFontPresetIndex", "Word and PowerPoint must share one point-size preset mapping");
-expectIncludes(metadata, "VTUnicodeText(33258, 23450, 20041)", "A non-preset formula size must remain visible as a Unicode custom pt value");
+expectIncludes(metadata, '"Custom"', "A non-preset formula size must retain an English fallback");
 expectIncludes(wordAdapter, "VTWordRibbonGetImageFontSizeItemCount", "Word must expose a dynamic point-size drop-down item count callback");
 expectIncludes(wordAdapter, "VTWordRibbonApplyImageFontSizePreset", "Word must apply a selected image point-size preset immediately");
-expectIncludes(wordAdapter, "VTUnicodeText(28151, 21512, 23383, 21495)", "Word must report mixed selected image formula sizes without source-encoding corruption");
+expectIncludes(wordAdapter, '"Mixed font sizes"', "Word must report mixed selected image formula sizes with an English fallback");
 expectIncludes(powerpointAdapter, "VTPowerPointRibbonGetFormulaFontSizeItemCount", "PowerPoint must expose a dynamic point-size drop-down item count callback");
 expectIncludes(powerpointAdapter, "VTPowerPointRibbonApplyFormulaFontSizePreset", "PowerPoint must apply a selected SVG point-size preset immediately");
-expectIncludes(powerpointAdapter, "VTUnicodeText(28151, 21512, 23383, 21495)", "PowerPoint must report mixed selected SVG formula sizes without source-encoding corruption");
+expectIncludes(powerpointAdapter, '"Mixed font sizes"', "PowerPoint must report mixed selected SVG formula sizes with an English fallback");
 expectIncludes(powerpointAdapter, "VTPrewarmApplication VT_POWERPOINT_HOST", "PowerPoint must prewarm the resident VisualTeX editor during add-in startup");
 expectIncludes(powerpointAdapter, "Call VTWriteAndLaunchSession", "PowerPoint create and edit paths must use the shared write-and-launch bridge");
 expect(!powerpointAdapter.includes("VTWriteRequest sessionId, requestJson\n    VTLaunchSession"), "PowerPoint must not retain the two-round-trip request and launch path");
@@ -234,7 +292,7 @@ expectIncludes(launcher, "MAX_CLAIM_WAIT_SECONDS As Double = 0.2", "A stale resi
 expectIncludes(launcher, '"fastPath=inbox-poll;writeMs="', "The direct Office fast path must report sandbox inbox write and resident-claim timing without a process launch round trip");
 
 expectIncludes(wordAdapter, "Public Sub AutoExec()", "Word template must publish AutoExec health");
-expectIncludes(wordAdapter, '"word-office-performance-20260801-r77"', "Word health must identify the optimized native Office build");
+expectIncludes(wordAdapter, '"word-office-performance-20260824-r78"', "Word health must identify the localized native Office build");
 expectIncludes(wordAdapter, "VTInitializeWordEvents", "Word AutoExec must initialize its persistent application event sink");
 expectIncludes(wordEvents, "App_WindowBeforeDoubleClick", "Word must use its native application event for double-click editing");
 expectIncludes(wordEvents, "App_WindowSelectionChange", "Word must repair a clicked legacy image-number REF through the native selection-change event");
@@ -825,7 +883,7 @@ const compactConvertRow = wordRibbon.slice(
   wordRibbon.indexOf('</box>', wordRibbon.indexOf('<box id="VisualTeX.Mac.Word.ConvertRow"')),
 );
 expect((compactConvertRow.match(/<button\b/g) ?? []).length === 2, "The first compact Ribbon row must contain only the two direct conversion commands");
-expectIncludes(wordRibbon, 'id="VisualTeX.Mac.Word.DocumentImport"\n                  label="批量导入"\n                  size="large"', "Batch import must be an independent large Ribbon button with the same visual weight as the primary formula commands");
+expectIncludes(wordRibbon, 'id="VisualTeX.Mac.Word.DocumentImport"\n                  getLabel="VTWordRibbonGetLabel"\n                  size="large"', "Batch import must be an independent localized large Ribbon button with the same visual weight as the primary formula commands");
 expect(!compactConvertRow.includes('id="VisualTeX.Mac.Word.DocumentImport"'), "Batch import must not remain compressed inside the small conversion row");
 const redesignedWordIcons = [
   ["VisualTeXWordImageInline", "image-inline.svg"],
@@ -856,14 +914,14 @@ expectIncludes(packager, 'const wordRibbonIconRoot = join(offlineRoot, "word", "
 expectIncludes(packager, '"/usr/bin/sips"', "The Word packager must rasterize the original SVG artwork into embedded PNG Ribbon resources");
 expect(!packager.includes("windowsRibbonIconBytes"), "The Word packager must not reuse the Windows Ribbon icon data");
 expect(!packager.includes("RibbonIconData.cs"), "The Word packager must be independent from the old Windows icon source file");
-expectIncludes(wordRibbon, '<group id="VisualTeX.Mac.Word.RedrawGroup" label="LaTeX 重绘">', "LaTeX redraw must remain an independent Ribbon group after the primary tools");
-for (const label of [
-  "将 OMML 公式转为 LaTeX",
-  "将图片公式转为 LaTeX",
-  "将全文 OMML 公式转为 LaTeX",
-  "将全文图片公式转为 LaTeX",
+expectIncludes(wordRibbon, '<group id="VisualTeX.Mac.Word.RedrawGroup" getLabel="VTWordRibbonGetLabel">', "LaTeX redraw must remain an independent localized Ribbon group after the primary tools");
+for (const controlId of [
+  "VisualTeX.Mac.Word.RestoreSelectionOmmlToLatex",
+  "VisualTeX.Mac.Word.RestoreSelectionImageToLatex",
+  "VisualTeX.Mac.Word.RestoreDocumentOmmlToLatex",
+  "VisualTeX.Mac.Word.RestoreDocumentImageToLatex",
 ]) {
-  expectIncludes(wordRibbon, `label="${label}"`, `Word redraw menus must expose ${label}`);
+  expectIncludes(wordRibbon, `id="${controlId}"`, `Word redraw menus must expose ${controlId}`);
 }
 expectIncludes(wordAdapter, "payload = sourceRange.WordOpenXML", "Native Word formulas must be restored from their current WordOpenXML instead of VisualTeX metadata");
 expectIncludes(wordAdapter, 'VTStartWordFormulaRestore "selection", "omml", "image"', "Native OMML without a VisualTeX Bookmark must use the hidden direct image conversion path");
@@ -879,7 +937,7 @@ expectIncludes(mathMlToLatex, 'case "msubsup"', "The MathML converter must prese
 expectIncludes(styles, ".doc-import-primary:disabled", "The batch-import primary action must define a readable disabled state");
 expectIncludes(styles, "opacity: 1", "Batch-import disabled actions must not disappear through low global opacity");
 expectIncludes(styles, "border-top: 1px solid color-mix", "The batch-import footer must have a distinct high-contrast boundary");
-expectIncludes(wordRibbon, '<group id="VisualTeX.Mac.Word.FontSizeGroup" label="公式字号">', "Image formula point sizes must live in an independent Windows-parity Ribbon group");
+expectIncludes(wordRibbon, '<group id="VisualTeX.Mac.Word.FontSizeGroup" getLabel="VTWordRibbonGetLabel">', "Image formula point sizes must live in an independent localized Ribbon group");
 const numberingFormatStart = wordAdapter.indexOf(
   "Public Sub VTWordRibbonGetNumberingFormatItemCount(",
 );
@@ -897,9 +955,9 @@ expect(
 );
 expect(
   !/[\u3400-\u9fff]/u.test(numberingFormatSource),
-  "The macOS VBA numbering-format compatibility callbacks must generate Chinese labels through VTUnicodeText instead of source-code-page text",
+  "The macOS VBA numbering-format callbacks must not embed Chinese interface text",
 );
-expectIncludes(numberingFormatSource, "VTUnicodeText(", "The numbering-format compatibility callbacks must construct their Chinese labels at runtime as Unicode");
+expectIncludes(numberingFormatSource, "VTOfficeLocalizedText(", "The numbering-format callbacks must follow the VisualTeX UI language");
 expect(!numberingFormatSource.includes("InputBox("), "The numbering-format drop-down must never ask the user to type a numeric option");
 expectIncludes(wordAdapter, "numberFontSizePt = VTVisibleEquationNumberFontSize", "Image Equation numbers must use the same document-level number size as native OMath numbers");
 expectIncludes(wordAdapter, "sourceHeightPoints = target.Height", "Image-to-OMML conversion must preserve the source formula height for number alignment");
@@ -1086,7 +1144,7 @@ expectIncludes(wordAdapter, "sourceDocumentId <> VTWordDocumentIdentity()", "Wor
 expectIncludes(wordAdapter, "Private Function VTWordBookmarkName", "Word pending Bookmarks must use one bounded name generator");
 expectIncludes(wordAdapter, "Len(VTWordBookmarkName) > 40", "Word Bookmark names must be guarded by the host length limit");
 expectIncludes(powerpointAdapter, "Public Sub Auto_Open()", "PowerPoint add-in must publish Auto_Open health");
-expectIncludes(powerpointAdapter, '"powerpoint-office-performance-20260801-r4"', "PowerPoint health must identify the optimized native Office build");
+expectIncludes(powerpointAdapter, '"powerpoint-office-performance-20260824-r5"', "PowerPoint health must identify the localized native Office build");
 expectIncludes(powerpointAdapter, "Public Sub VTPowerPointRibbonOnLoad", "PowerPoint Ribbon load must retain its IRibbonUI handle and initialize events");
 expectIncludes(powerpointAdapter, "VisualTeX_DoubleClickEditSelected", "PowerPoint must expose a non-modal native double-click macro entry point");
 expectIncludes(powerpointAdapter, "VTInitializePowerPointEvents", "PowerPoint Auto_Open must initialize its persistent application event sink");
@@ -1528,6 +1586,11 @@ expectIncludes(editorWorkspace, 'data-quick-ocr-mode-option="immediate"', "Quick
 expectIncludes(editorWorkspace, "data-silent-ocr-toggle", "The desktop editor toolbar must expose a silent OCR mode toggle");
 expectIncludes(applicationConfiguration, '"visualtex.silent-ocr.enabled"', "Silent OCR enablement must migrate with VisualTeX user configuration backups");
 expectIncludes(applicationConfiguration, '"visualtex.quick-ocr.capture-mode"', "Quick OCR capture mode must migrate with VisualTeX user configuration backups");
+expectIncludes(editorWorkspace, "<OcrModelSelector", "The macOS desktop and Office editor must use the accessible OCR model combobox");
+expectIncludes(styles, ".ocr-model-selector-menu", "The OCR model listbox must have a dedicated floating layer");
+expectIncludes(styles, "--ribbon-primary-font-size: 11px", "VisualTeX ribbon labels must share the 11px primary font size");
+expectIncludes(formulaToolbar, 'root.style.setProperty("--matrix-picker-size"', "The horizontal matrix picker must follow the measured dock height");
+expectIncludes(styles, "grid-template-columns: repeat(6, minmax(0, 1fr))", "All six matrix delimiters must fit on one non-overlapping horizontal row");
 expect(!inputBehaviorMenu.includes("option.descriptionEn"), "Input behavior cards must not render explanatory subtext below each option title");
 expect(!inputBehaviorMenu.includes("控制普通数学输入是否使用快捷转义"), "Input behavior section headings must not render explanatory subtext");
 expect(!inputBehaviorMenu.includes("分别选择哪些单槽结构"), "Caret auto-exit heading must not render explanatory subtext");
@@ -1690,7 +1753,7 @@ expectIncludes(settingsDialog, 'latex={String.raw`x=\\frac{-b\\pm\\sqrt{b^2-4ac}
 expectIncludes(mathEditor, '"--formula-area-inset-left"', "The real desktop and Office formula canvas must consume the persisted left spacing preference");
 expectIncludes(mathEditor, '"--formula-area-inset-right"', "The real desktop and Office formula canvas must consume the persisted right spacing preference");
 expectIncludes(mathEditor, '"--formula-row-vertical-inset"', "The real desktop and Office formula rows must consume the persisted top-and-bottom content spacing preference");
-expectIncludes(settingsDialog, 'isEn ? "Interface customization" : "界面自定义"', "Interface customization must remain a dedicated popup entry and dialog title");
+expectIncludes(settingsDialog, 'isEn ? "Interface customization" : "Tùy chỉnh giao diện"', "Interface customization must remain a dedicated localized popup entry and dialog title");
 expectIncludes(editorWorkspace, 'highlightActiveLine ? " has-active-line-highlight" : ""', "Desktop and Office workspaces must opt into active-row highlighting only when the preference is enabled");
 expectIncludes(styles, ".workspace.has-active-line-highlight .formula-line.is-active", "Active-row colour and accent styling must be gated by the persisted interface preference");
 expectIncludes(styles, ".workspace.has-active-line-highlight .formula-line:hover", "Mouse-hover row feedback must be disabled together with active-row highlighting");
@@ -1755,7 +1818,7 @@ expect(!rustRuntime.includes("ActivateIgnoringOtherApps"), "Office foreground ac
 expectIncludes(rustRuntime, "native_window.setLevel(objc2_app_kit::NSNormalWindowLevel)", "A visible resident editor must return to the normal macOS window level");
 expectIncludes(rustRuntime, "ready: false", "A newly activated resident editor generation must not be focusable before frontend readiness");
 expectIncludes(rustRuntime, "runtime.next_generation", "Resident editor activation must reject stale readiness and close callbacks by generation");
-expectIncludes(dialogApp, "公式已经插入，但编辑窗口无法自动关闭", "A close failure after a successful native commit must not be reported as an insertion failure");
+expectIncludes(dialogApp, "Đã chèn công thức nhưng người soạn thảo không đóng được", "A close failure after a successful native commit must not be reported as an insertion failure");
 expect(!dialogApp.includes("无法插入 PowerPoint 公式"), "The shared Office editor must not mislabel Word failures as PowerPoint insertion failures");
 expectIncludes(dialogApp, "latex.trim() && autoCommitOnClose", "Closing a non-empty native editor must commit when auto-apply is enabled");
 expectIncludes(dialogApp, "await handleCancel();", "Closing an empty native editor must cancel and remove the pending host object");
@@ -1887,16 +1950,16 @@ expectIncludes(desktopApp, 'setMacOfficePromptMode("repair")', "A previously con
 expectIncludes(desktopApp, "setPowerpointRegistrationRequired", "Desktop startup must remember whether PowerPoint genuinely needs first-time PPAM registration before opening the Office prompt");
 expectIncludes(desktopApp, 'setMacOfficePromptMode("update")', "A stale DOTM or PPAM must enter the explicit Office add-in update flow");
 expectIncludes(desktopApp, "setMacOfficeFirstRunOpen(true)", "A stale Office add-in must always show the update prompt instead of being replaced silently");
-expectIncludes(desktopApp, "Office 插件已更新到当前 VisualTeX 版本", "A completed Office add-in update must visibly confirm that the current VisualTeX version is installed");
+expectIncludes(desktopApp, "Bổ trợ Office đã được cập nhật lên phiên bản VisualTeX này", "A completed Office add-in update must visibly confirm that the current VisualTeX version is installed");
 expectIncludes(macFirstRun, '"request_quit_macos_office_hosts_for_addin_update"', "When Office is running, the update prompt must continue the add-in update without manual file deletion");
-expectIncludes(macFirstRun, "无需手动删除旧文件", "The macOS update prompt must explicitly tell users that stale DOTM and PPAM files are replaced automatically");
-expectIncludes(macFirstRun, "原有登记保持不变", "A current PowerPoint PPAM must not be mislabeled as requiring first-time registration during a Word repair");
-expectIncludes(macFirstRun, "修复 VisualTeX Office 插件", "Missing files after an earlier setup must be presented as repair rather than first-time configuration");
+expectIncludes(macFirstRun, "Bạn không cần phải xóa nó theo cách thủ công", "The macOS update prompt must explicitly tell users that stale DOTM and PPAM files are replaced automatically");
+expectIncludes(macFirstRun, "PPAM PowerPoint nào đã được đăng ký đều giữ nguyên đường dẫn", "A current PowerPoint PPAM must not be mislabeled as requiring first-time registration during a Word repair");
+expectIncludes(macFirstRun, "Sửa chữa phần bổ trợ VisualTeX Office", "Missing files after an earlier setup must be presented as repair rather than first-time configuration");
 expectIncludes(installer, "powerpoint_script.clone()", "PowerPoint installed status must include its AppleScriptTask resource");
 expectIncludes(installer, 'health.plugin_version.as_deref() == Some(env!("CARGO_PKG_VERSION"))', "Installer must reject stale plug-in health versions");
 expect(!installer.includes("source_revision_matches"), "Runtime health must not reject a current-version add-in only because an optional sourceRevision field is absent");
-expectIncludes(packager, "word-office-performance-20260801-r77", "Packaging must reject a Word DOTM that lacks the current performance revision");
-expectIncludes(packager, "powerpoint-office-performance-20260801-r4", "Packaging must reject a PowerPoint PPAM that lacks the current performance revision");
+expectIncludes(packager, "word-office-performance-20260824-r78", "Packaging must reject a Word DOTM that lacks the current localized revision");
+expectIncludes(packager, "powerpoint-office-performance-20260824-r5", "Packaging must reject a PowerPoint PPAM that lacks the current localized revision");
 expectIncludes(installer, "POWERPOINT_VBA_SOURCE_REVISION", "Installer validation must reject a stale PowerPoint PPAM without SVG point-size support");
 expectIncludes(installer, "Library/Application Scripts/com.microsoft.Word", "Installer must use Word's AppleScriptTask directory");
 expectIncludes(installer, "Library/Application Scripts/com.microsoft.Powerpoint", "Installer must use PowerPoint's AppleScriptTask directory");

@@ -29,6 +29,17 @@ Public Function VTUnicodeFromHex(ByVal encoded As String) As String
     Next index
 End Function
 
+Public Function VTOfficeLocalizedText( _
+    ByVal vietnameseHex As String, _
+    ByVal englishText As String) As String
+
+    If VTOfficeUiLanguage() = "vi" Then
+        VTOfficeLocalizedText = VTUnicodeFromHex(vietnameseHex)
+    Else
+        VTOfficeLocalizedText = englishText
+    End If
+End Function
+
 Public Function VTFormulaFontPresetCount() As Long
     VTFormulaFontPresetCount = 20
 End Function
@@ -95,11 +106,15 @@ Public Function VTFormulaFontSizeDisplayLabel( _
             VTFormulaFontPresetLabel(presetIndex)
     ElseIf fontSizePt > 0# Then
         VTFormulaFontSizeDisplayLabel = _
-            VTUnicodeText(33258, 23450, 20041) & " (" & _
+            VTOfficeLocalizedText( _
+                "0054|00F9|0079|0020|0063|0068|1EC9|006E|0068", _
+                "Custom") & " (" & _
             VTJsonNumber(fontSizePt) & " pt)"
     Else
         VTFormulaFontSizeDisplayLabel = _
-            VTUnicodeText(26410, 36873, 25321, 20844, 24335)
+            VTOfficeLocalizedText( _
+                "0043|0068|01B0|0061|0020|0063|0068|1ECD|006E|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063", _
+                "No formula selected")
     End If
 End Function
 

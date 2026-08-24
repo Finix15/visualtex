@@ -18,6 +18,8 @@ export interface WorkspaceOcrModelOption {
   id: string;
   labelVi: string;
   labelEn: string;
+  selectedLabelVi?: string;
+  selectedLabelEn?: string;
 }
 
 export interface EditorWorkspaceProps {

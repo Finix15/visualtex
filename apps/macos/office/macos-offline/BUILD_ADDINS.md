@@ -32,7 +32,7 @@ PowerPoint for Mac loads `.ppam` files as add-ins and does not provide a reliabl
    - `powerpoint/VTPowerPointAdapter.bas`
    - `powerpoint/VTPowerPointEvents.cls`
    - `powerpoint/VTRibbonCallbacks.bas`
-3. Run **Debug → Compile VBAProject**. Confirm `VTPowerPointEvents` compiles, `Auto_Open` initializes the application event sink, and the compiled project contains `powerpoint-office-performance-20260801-r4`, `App_WindowSelectionChange`, and `VTPowerPointRibbonApplyFormulaFontSizePreset`.
+3. Run **Debug → Compile VBAProject**. Confirm `VTPowerPointEvents` compiles, `Auto_Open` initializes the application event sink, and the compiled project contains `powerpoint-office-performance-20260824-r5`, `App_WindowSelectionChange`, and `VTPowerPointRibbonApplyFormulaFontSizePreset`.
 4. Save the editable build input as a `.pptm` file and quit PowerPoint so Office flushes `ppt/vbaProject.bin`.
 5. Keep a known-good `VisualTeX.ppam` as the package shell. Do not attempt to open or edit the PPAM directly on macOS.
 

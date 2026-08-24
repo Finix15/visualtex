@@ -1246,8 +1246,13 @@ export function FormulaToolbar({
             (availableHeight + rowGap) / (targetRowHeight + rowGap),
           ),
         );
+        const matrixPickerSize = Math.max(
+          40,
+          Math.min(152, Math.floor(availableHeight - 8)),
+        );
 
         root.style.setProperty("--toolbar-row-count", String(nextRowCount));
+        root.style.setProperty("--matrix-picker-size", `${matrixPickerSize}px`);
         root.dataset.toolbarRowCount = String(nextRowCount);
         setHorizontalRowCount((current) =>
           current === nextRowCount ? current : nextRowCount,

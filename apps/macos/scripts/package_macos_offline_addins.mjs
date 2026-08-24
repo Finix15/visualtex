@@ -130,9 +130,11 @@ function validateMacroContainer(path, kind, options = {}) {
     }
     const expectedMarkers = [
       packageVersion,
+      "VTOfficeLocalizedText",
+      "No formula selected",
       ...(kind === "Word"
         ? [
-            "word-office-performance-20260801-r77",
+            "word-office-performance-20260824-r78",
             "word-structured-document-import-20260730-r61",
             "VTWordRibbonDocumentImport",
             "word-latex-redraw-20260802-r1",
@@ -148,11 +150,14 @@ function validateMacroContainer(path, kind, options = {}) {
             "VTAppendText",
             "VTWriteAndLaunchSession",
             "VTPrewarmApplication",
+            "Sequential numbering",
+            "Select an image formula",
           ]
         : [
-            "powerpoint-office-performance-20260801-r4",
+            "powerpoint-office-performance-20260824-r5",
             "App_WindowSelectionChange",
             "VTPowerPointRibbonApplyFormulaFontSizePreset",
+            "Select an SVG formula",
           ]),
     ];
     const missingMarkers = expectedMarkers.filter(

@@ -3019,4 +3019,195 @@
   }
 }
 
+:root {
+  --ribbon-primary-font-size: 11px;
+  --ribbon-secondary-font-size: 9px;
+}
+
+.workspace-export-trigger,
+.canvas-input-behavior-trigger,
+.quick-ocr-button,
+.silent-ocr-toggle,
+.ocr-model-selector-trigger,
+.office-display-mode-setting button,
+.office-font-size-setting,
+.office-font-size-setting select,
+.office-auto-commit-setting,
+.office-inline-actions .primary-button,
+.office-inline-actions .secondary-button {
+  font-size: var(--ribbon-primary-font-size);
+}
+
+.editor-pane-header.is-office-editor-header
+  .office-display-mode-setting
+  button,
+.editor-pane-header.is-office-editor-header .office-font-size-setting,
+.editor-pane-header.is-office-editor-header .office-font-size-setting select,
+.editor-pane-header.is-office-editor-header .office-auto-commit-setting,
+.office-dialog-shell .office-control-bar .office-display-mode-setting button,
+.office-dialog-shell .office-control-bar .office-font-size-setting,
+.office-dialog-shell .office-control-bar .office-font-size-setting select,
+.office-dialog-shell .office-control-bar .office-auto-commit-setting {
+  font-size: var(--ribbon-primary-font-size);
+}
+
+.silent-ocr-toggle kbd {
+  font-size: var(--ribbon-secondary-font-size);
+}
+
+.canvas-controls > span,
+.editor-pane-header.is-office-editor-header .canvas-controls > span {
+  font-size: 10px;
+}
+
+.canvas-ocr-model {
+  width: auto;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+
+.ocr-model-selector-trigger {
+  width: auto;
+  min-width: 118px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 5px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  outline: none;
+  cursor: pointer;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.ocr-model-selector-trigger > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ocr-model-selector-trigger > svg {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  transition: transform 150ms ease;
+}
+
+.ocr-model-selector-trigger[aria-expanded="true"] > svg {
+  transform: rotate(180deg);
+}
+
+.ocr-model-selector-trigger:hover:not(:disabled),
+.ocr-model-selector-trigger[aria-expanded="true"] {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.ocr-model-selector-trigger:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.ocr-model-selector-trigger:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
+
+.ocr-model-selector-menu {
+  position: fixed;
+  z-index: 2300;
+  display: grid;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+
+.ocr-model-selector-menu > button {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.ocr-model-selector-menu > button:hover,
+.ocr-model-selector-menu > button.is-active {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.ocr-model-selector-menu > button[aria-selected="true"] {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.editor-pane-header.is-office-editor-header .canvas-input-behavior-trigger {
+  width: auto;
+  min-width: 122px;
+}
+
+.editor-pane-header.is-office-editor-header .canvas-ocr-model {
+  width: auto;
+  min-width: 142px;
+}
+
+.editor-pane-header.is-office-editor-header .ocr-model-selector-trigger {
+  min-width: 116px;
+}
+
+@media (max-width: 1180px) {
+  .editor-pane-header.is-office-editor-header .canvas-input-behavior-trigger {
+    width: auto;
+    min-width: 108px;
+  }
+
+  .editor-pane-header.is-office-editor-header .canvas-ocr-model {
+    width: auto;
+    min-width: 128px;
+  }
+
+  .editor-pane-header.is-office-editor-header .ocr-model-selector-trigger {
+    min-width: 102px;
+  }
+}
+
+@media (max-width: 900px) {
+  .workspace:not(.is-office-workspace) .ocr-model-selector-trigger {
+    min-width: 88px;
+  }
+}
+
+@media (max-width: 760px) {
+  .editor-pane-header.is-office-editor-header .canvas-input-behavior-trigger {
+    width: 30px;
+    min-width: 30px;
+  }
+
+  .editor-pane-header.is-office-editor-header .canvas-ocr-model {
+    width: auto;
+    min-width: 116px;
+  }
+
+  .editor-pane-header.is-office-editor-header .ocr-model-selector-trigger {
+    min-width: 90px;
+  }
+}
+
 /* __VISUALTEX_SHARED_LATEST_APPEND__ */

@@ -54,6 +54,8 @@ export const OCR_MODELS = [
     id: "PP-FormulaNet_plus-M",
     labelVi: "Cân bằng M (khuyên dùng)",
     labelEn: "Balanced M (recommended)",
+    selectedLabelVi: "Cân bằng M",
+    selectedLabelEn: "Balanced M",
     hintVi: "Được bao gồm trong gói ngoại tuyến VisualTeX; cân bằng cho các công thức phức tạp",
     hintEn: "Included in the VisualTeX offline bundle; balanced for complex formulas",
     downloadMb: 620.5,

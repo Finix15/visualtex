@@ -1330,6 +1330,12 @@ async function main() {
           button.getBoundingClientRect().height,
         ),
         delimiterInside: delimiterButtons.every((button) => inside(button.getBoundingClientRect())),
+        delimiterPickerGap: sizePickerRect && delimiterButtons.length > 0
+          ? sizePickerRect.left - Math.max(...delimiterButtons.map((button) => button.getBoundingClientRect().right))
+          : -1,
+        gridAspectRatio: grid
+          ? grid.getBoundingClientRect().width / grid.getBoundingClientRect().height
+          : -1,
         delimiterPreviewInside: delimiterButtons.every((button) => {
           const buttonRect = button.getBoundingClientRect();
           const previewRect = button.querySelector('.math-preview-fit-content')?.getBoundingClientRect();
@@ -1370,6 +1376,8 @@ async function main() {
       JSON.stringify(matrixState),
     );
     assert.equal(matrixState.delimiterInside, true, JSON.stringify(matrixState));
+    assert.ok(matrixState.delimiterPickerGap >= 0, JSON.stringify(matrixState));
+    assert.ok(Math.abs(matrixState.gridAspectRatio - 1) <= 0.03, JSON.stringify(matrixState));
     assert.equal(matrixState.delimiterPreviewInside, true, JSON.stringify(matrixState));
     assert.ok(
       matrixState.delimiterScales.every((scale) => scale > 0 && scale <= 1.151),

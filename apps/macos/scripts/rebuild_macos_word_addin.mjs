@@ -915,7 +915,7 @@ function verifyBuiltVba(path) {
     "VisualTeX_EditImageField",
     "VisualTeX_EditSelectedImageFromNativeMonitor",
     "VTEnsureVisualTeXImageMacroButton",
-    "word-office-performance-20260801-r77",
+    "word-office-performance-20260824-r78",
     "1.2.6",
   ];
   for (const value of required) {

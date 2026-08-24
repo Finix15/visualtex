@@ -520,7 +520,7 @@ async function main() {
 
   const result = {
     status: "PASS",
-    revision: "powerpoint-office-performance-20260801-r4",
+    revision: "powerpoint-office-performance-20260824-r5",
     presentationName,
     formulaId: created.request.formulaId,
     create: {

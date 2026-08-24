@@ -54,6 +54,8 @@ export const OCR_MODELS = [
     id: "PP-FormulaNet_plus-M",
     labelVi: "Cân bằng M (khuyên dùng)",
     labelEn: "Balanced M (recommended)",
+    selectedLabelVi: "Cân bằng M",
+    selectedLabelEn: "Balanced M",
     hintVi: "Gói mô hình riêng biệt; cân bằng cho các công thức phức tạp, được khuyên dùng",
     hintEn: "Separate model package; balanced for complex formulas, recommended",
     downloadMb: 620.5,

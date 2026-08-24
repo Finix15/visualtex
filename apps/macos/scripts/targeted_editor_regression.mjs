@@ -390,26 +390,84 @@ async function main() {
 
     if (scenario === "ocr-model-selection") {
       await waitForEvaluation(`(() => ({
-        ready: Boolean(document.querySelector(".canvas-ocr-model select")),
+        ready: Boolean(document.querySelector("[data-ocr-model-trigger]")),
       }))()`, "OCR model selector");
 
       await sleep(1500);
+      const compactState = await evaluate(`(() => {
+        const trigger = document.querySelector("[data-ocr-model-trigger]");
+        trigger?.click();
+        return {
+          triggerText: trigger?.textContent?.trim() ?? "",
+        };
+      })()`);
+      const expandedMLabel = await waitForEvaluation(`(() => ({
+        ready: Boolean(document.querySelector('[data-ocr-model-option="PP-FormulaNet_plus-M"]')),
+        text: document.querySelector('[data-ocr-model-option="PP-FormulaNet_plus-M"]')?.textContent?.trim() ?? "",
+      }))()`, "expanded recommended OCR model label");
+      assert.equal(compactState.triggerText, "Cân bằng M", JSON.stringify(compactState));
+      assert.doesNotMatch(compactState.triggerText, /khuyên dùng/i);
+      assert.match(expandedMLabel.text, /Cân bằng M \(khuyên dùng\)/i);
+      const ribbonTypography = await evaluate(`(() => [
+        ['export', '.workspace-export-trigger'],
+        ['inputBehavior', '.canvas-input-behavior-trigger'],
+        ['quickOcr', '.quick-ocr-button'],
+        ['silentOcr', '.silent-ocr-toggle'],
+        ['ocrModel', '[data-ocr-model-trigger]'],
+      ].flatMap(([name, selector]) => {
+        const element = document.querySelector(selector);
+        if (!(element instanceof HTMLElement)) return [];
+        return [{
+          name,
+          fontSize: parseFloat(getComputedStyle(element).fontSize),
+          overflow: element.scrollWidth > element.clientWidth + 1,
+        }];
+      }))()`);
+      assert.equal(ribbonTypography.length, 5, JSON.stringify(ribbonTypography));
+      assert.ok(
+        ribbonTypography.every((item) => item.fontSize === 11 && !item.overflow),
+        JSON.stringify(ribbonTypography),
+      );
+      await evaluate(`document.querySelector('[data-ocr-model-trigger]')?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true })
+      )`);
+
+      await evaluate(`(() => {
+        const trigger = document.querySelector('[data-ocr-model-trigger]');
+        trigger?.focus();
+        trigger?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+      })()`);
+      await sleep(120);
+      await evaluate(`document.querySelector('[data-ocr-model-trigger]')?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })
+      )`);
+      await sleep(120);
+      await evaluate(`document.querySelector('[data-ocr-model-trigger]')?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true })
+      )`);
+      await sleep(650);
+      const keyboardState = await evaluate(`(() => ({
+        triggerText: document.querySelector('[data-ocr-model-trigger]')?.textContent?.trim() ?? "",
+        stored: localStorage.getItem("visualtex.ocr.model"),
+        focused: document.activeElement?.hasAttribute("data-ocr-model-trigger") ?? false,
+      }))()`);
+      assert.equal(keyboardState.triggerText, "Độ chính xác cao L", JSON.stringify(keyboardState));
+      assert.equal(keyboardState.stored, "PP-FormulaNet_plus-L", JSON.stringify(keyboardState));
+      assert.equal(keyboardState.focused, true, JSON.stringify(keyboardState));
+
       const selectModel = async (model) => {
         await evaluate(`(() => {
-          const select = document.querySelector(".canvas-ocr-model select");
-          if (!select) return;
-          const setter = Object.getOwnPropertyDescriptor(
-            HTMLSelectElement.prototype,
-            "value",
-          )?.set;
-          setter?.call(select, ${JSON.stringify(model)});
-          select.dispatchEvent(new Event("change", { bubbles: true }));
+          document.querySelector("[data-ocr-model-trigger]")?.click();
         })()`);
+        await sleep(120);
+        await evaluate(`document.querySelector('[data-ocr-model-option="${model}"]')?.click()`);
         await sleep(650);
         return evaluate(`(() => {
-          const select = document.querySelector(".canvas-ocr-model select");
+          const stored = localStorage.getItem("visualtex.ocr.model");
           return {
-            selected: select?.value ?? "",
+            selected: stored === ${JSON.stringify(model)} ? stored : "",
+            triggerText:
+              document.querySelector("[data-ocr-model-trigger]")?.textContent?.trim() ?? "",
             stored: localStorage.getItem("visualtex.ocr.model"),
             prewarmed: window.__visualtexOcrModelSelectionProbe?.prewarmed ?? [],
           };
@@ -423,19 +481,20 @@ async function main() {
         sState.prewarmed.includes("PP-FormulaNet_plus-M"),
         JSON.stringify(sState),
       );
+      assert.equal(sState.triggerText, "Nhanh S", JSON.stringify(sState));
 
-      await evaluate(`document.querySelector('button[aria-label="图片公式识别"]')?.click()`);
+      await evaluate(`document.querySelector('button[aria-label="Nhận dạng hình ảnh công thức"]')?.click()`);
       const sDialogState = await waitForEvaluation(`(() => {
         const dialog = document.querySelector(".ocr-dialog");
         const select = dialog?.querySelector(".ocr-model-field select");
-        const warning = dialog?.querySelector(".ocr-model-warning strong")?.textContent ?? "";
+        const warning = dialog?.querySelector('[role="status"] strong')?.textContent ?? "";
         const importButton = [...(dialog?.querySelectorAll(".ocr-install-actions button") ?? [])]
-          .find((button) => button.textContent?.includes("导入模型包"));
+          .find((button) => button.textContent?.includes("Gói hàng nhập khẩu"));
         return {
           ready:
             Boolean(dialog) &&
             select?.value === "PP-FormulaNet_plus-S" &&
-            warning.includes("尚未安装") &&
+            warning.includes("chưa được cài đặt") &&
             Boolean(importButton),
           selected: select?.value ?? "",
           warning,
@@ -456,15 +515,16 @@ async function main() {
       await sleep(650);
       const lState = await evaluate(`(() => ({
         selected: document.querySelector(".ocr-dialog .ocr-model-field select")?.value ?? "",
-        toolbarSelected: document.querySelector(".canvas-ocr-model select")?.value ?? "",
+        toolbarSelected:
+          document.querySelector('[data-ocr-model-trigger]')?.textContent?.trim() ?? "",
         stored: localStorage.getItem("visualtex.ocr.model"),
-        warning: document.querySelector(".ocr-dialog .ocr-model-warning strong")?.textContent ?? "",
+        warning: document.querySelector('.ocr-dialog [role="status"] strong')?.textContent ?? "",
         prewarmed: window.__visualtexOcrModelSelectionProbe?.prewarmed ?? [],
       }))()`);
       assert.equal(lState.selected, "PP-FormulaNet_plus-L", JSON.stringify(lState));
-      assert.equal(lState.toolbarSelected, "PP-FormulaNet_plus-L", JSON.stringify(lState));
+      assert.equal(lState.toolbarSelected, "Độ chính xác cao L", JSON.stringify(lState));
       assert.equal(lState.stored, "PP-FormulaNet_plus-L", JSON.stringify(lState));
-      assert.match(lState.warning, /尚未安装/);
+      assert.match(lState.warning, /chưa được cài đặt/);
 
       console.log(JSON.stringify({ sState, sDialogState, lState }, null, 2));
       console.log("Targeted OCR model selection persistence regression passed");

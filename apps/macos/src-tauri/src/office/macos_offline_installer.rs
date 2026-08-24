@@ -25,8 +25,8 @@ const LEGACY_WORD_MANIFEST_ID: &str = "d6fcb260-4c37-4f73-a173-cf24674f81f2";
 const LEGACY_POWERPOINT_MANIFEST_ID: &str = "a6d13cf2-54e8-4dfa-a20c-15de864ab3c5";
 const WORD_VBA_ENTRY: &str = "word/vbaProject.bin";
 const POWERPOINT_VBA_ENTRY: &str = "ppt/vbaProject.bin";
-const WORD_VBA_SOURCE_REVISION: &str = "word-office-performance-20260801-r77";
-const POWERPOINT_VBA_SOURCE_REVISION: &str = "powerpoint-office-performance-20260801-r4";
+const WORD_VBA_SOURCE_REVISION: &str = "word-office-performance-20260824-r78";
+const POWERPOINT_VBA_SOURCE_REVISION: &str = "powerpoint-office-performance-20260824-r5";
 const CUSTOM_UI_ENTRY: &str = "customUI/customUI14.xml";
 const CONTENT_TYPES_ENTRY: &str = "[Content_Types].xml";
 const CONTENT_TYPES_ZIP_PATTERN: &str = "\\[Content_Types\\].xml";
@@ -971,6 +971,9 @@ fn validate_compiled_addin(
             "AutoExec",
             "App_WindowBeforeDoubleClick",
             "VTWordRibbonApplyImageFontSizePreset",
+            "VTOfficeLocalizedText",
+            "Sequential numbering",
+            "Select an image formula",
             env!("CARGO_PKG_VERSION"),
             WORD_VBA_SOURCE_REVISION,
         ],
@@ -983,6 +986,8 @@ fn validate_compiled_addin(
             "App_WindowBeforeDoubleClick",
             "App_WindowSelectionChange",
             "VTPowerPointRibbonApplyFormulaFontSizePreset",
+            "VTOfficeLocalizedText",
+            "Select an SVG formula",
             env!("CARGO_PKG_VERSION"),
             POWERPOINT_VBA_SOURCE_REVISION,
         ],
