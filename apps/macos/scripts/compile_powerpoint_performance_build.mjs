@@ -6,6 +6,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -79,6 +80,7 @@ const modules = [
 ];
 const outputPresentationName = basename(outputPath, ".pptm");
 const lockPath = join(scratchRoot, "VisualTeXPowerPointPerformanceCompile.lock");
+const lockOwnerPath = join(lockPath, "pid");
 
 function run(program, args, options = {}) {
   return execFileSync(program, args, {
@@ -120,12 +122,43 @@ function acquireLock() {
     if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) {
       throw error;
     }
-    throw new Error(`PowerPoint performance compile lock exists: ${lockPath}`);
+    const ownerPid = Number.parseInt(
+      bestEffort("/bin/cat", [lockOwnerPath]).trim(),
+      10,
+    );
+    const ownerCommand = Number.isSafeInteger(ownerPid)
+      ? bestEffort("/bin/ps", ["-p", String(ownerPid), "-o", "command="]).trim()
+      : "";
+    let ownerIsAlive = false;
+    if (Number.isSafeInteger(ownerPid) && ownerPid > 0) {
+      try {
+        process.kill(ownerPid, 0);
+        ownerIsAlive = ownerCommand.includes(
+          "compile_powerpoint_performance_build.mjs",
+        );
+      } catch {
+        ownerIsAlive = false;
+      }
+    }
+    if (ownerIsAlive) {
+      throw new Error(
+        `Another PowerPoint VBA build is already running (pid ${ownerPid}).`,
+      );
+    }
+    rmSync(lockPath, { recursive: true, force: true });
+    mkdirSync(lockPath);
   }
+  writeFileSync(lockOwnerPath, `${process.pid}\n`, "utf8");
 }
 
 function releaseLock() {
-  rmSync(lockPath, { recursive: true, force: true });
+  const ownerPid = Number.parseInt(
+    bestEffort("/bin/cat", [lockOwnerPath]).trim(),
+    10,
+  );
+  if (ownerPid === process.pid) {
+    rmSync(lockPath, { recursive: true, force: true });
+  }
 }
 
 function closeOutputPresentationWithoutSaving() {
@@ -198,7 +231,7 @@ function dismissOpenPrompts() {
         "-e",
         'repeat with candidateWindow in windows',
         "-e",
-        'repeat with buttonName in {"禁用宏", "Disable Macros"}',
+        'repeat with buttonName in {"Vô hiệu hóa Macro", "Tắt Macro", "Disable Macros", "禁用宏"}',
         "-e",
         "try",
         "-e",
@@ -224,9 +257,9 @@ function dismissOpenPrompts() {
         "-e",
         "end try",
         "-e",
-        'if warningText contains "无法加载外接程序" or warningText contains "could not load add-in" then',
+        'if warningText contains "không thể tải phần bổ trợ" or warningText contains "Không thể tải phần bổ trợ" or warningText contains "could not load add-in" or warningText contains "无法加载外接程序" then',
         "-e",
-        'repeat with buttonName in {"确定", "OK"}',
+        'repeat with buttonName in {"OK", "Đồng ý", "确定"}',
         "-e",
         "try",
         "-e",
@@ -284,9 +317,31 @@ function openVbe() {
       "end if",
       "end try",
       "end repeat",
-      "set toolsMenu to menu 1 of menu bar item \"工具\" of menu bar 1",
-      "set macroMenu to menu 1 of menu item \"宏\" of toolsMenu",
-      'click menu item "Visual Basic 编辑器" of macroMenu',
+      "set openedEditor to false",
+      'repeat with toolsName in {"Công cụ", "Tools", "工具"}',
+      "if openedEditor is false then",
+      "try",
+      "set toolsMenu to menu 1 of menu bar item (toolsName as text) of menu bar 1",
+      'repeat with macroName in {"Macro", "Macros", "宏"}',
+      "if openedEditor is false then",
+      "try",
+      "set macroMenu to menu 1 of menu item (macroName as text) of toolsMenu",
+      'repeat with editorName in {"Trình soạn thảo Visual Basic", "Visual Basic Editor", "Visual Basic 编辑器"}',
+      "try",
+      "click menu item (editorName as text) of macroMenu",
+      "set openedEditor to true",
+      "exit repeat",
+      "end try",
+      "end repeat",
+      "end try",
+      "end if",
+      "end repeat",
+      "end try",
+      "end if",
+      "end repeat",
+      "if openedEditor is false then",
+      "key code 103 using {option down}",
+      "end if",
       "end tell",
       "end tell",
     ],
@@ -391,13 +446,13 @@ function removeVbaModule(moduleName) {
       "set vbeWindow to first window whose name starts with expectedPrefix",
       'perform action "AXRaise" of vbeWindow',
       "set removedModule to false",
-      'repeat with fileName in {"文件", "File"}',
+      'repeat with fileName in {"Tệp", "File", "文件"}',
       "if removedModule is false then",
       "try",
       "set fileMenu to menu 1 of menu bar item (fileName as text) of menu bar 1",
       "repeat with candidateItem in menu items of fileMenu",
       "set candidateName to name of candidateItem as text",
-      `if candidateName starts with ${JSON.stringify(`删除 ${moduleName}`)} or candidateName starts with ${JSON.stringify(`Remove ${moduleName}`)} then`,
+      `if candidateName starts with ${JSON.stringify(`Xóa ${moduleName}`)} or candidateName starts with ${JSON.stringify(`Loại bỏ ${moduleName}`)} or candidateName starts with ${JSON.stringify(`Remove ${moduleName}`)} or candidateName starts with ${JSON.stringify(`删除 ${moduleName}`)} then`,
       "click candidateItem",
       "set removedModule to true",
       "exit repeat",
@@ -412,7 +467,7 @@ function removeVbaModule(moduleName) {
       "try",
       "repeat with candidateButton in buttons of candidateWindow",
       "set buttonName to name of candidateButton as text",
-      'if buttonName starts with "否" or buttonName starts with "No" then',
+      'if buttonName starts with "Không" or buttonName starts with "No" or buttonName starts with "否" then',
       'perform action "AXRaise" of candidateWindow',
       "click candidateButton",
       "exit repeat",
@@ -440,13 +495,13 @@ function importVbaModule(modulePath) {
       "set vbeWindow to first window whose name starts with expectedPrefix",
       'perform action "AXRaise" of vbeWindow',
       "set openedImport to false",
-      'repeat with fileName in {"文件", "File"}',
+      'repeat with fileName in {"Tệp", "File", "文件"}',
       "if openedImport is false then",
       "try",
       "set fileMenu to menu 1 of menu bar item (fileName as text) of menu bar 1",
       "repeat with candidateItem in menu items of fileMenu",
       "set candidateName to name of candidateItem as text",
-      'if candidateName starts with "导入文件" or candidateName starts with "Import File" then',
+      'if candidateName starts with "Nhập tệp" or candidateName starts with "Import File" or candidateName starts with "导入文件" then',
       "click candidateItem",
       "set openedImport to true",
       "exit repeat",
@@ -489,13 +544,13 @@ function compileVbaProject() {
       "set vbeWindow to first window whose name starts with expectedPrefix",
       'perform action "AXRaise" of vbeWindow',
       "set startedCompile to false",
-      'repeat with debugName in {"调试", "Debug"}',
+      'repeat with debugName in {"Gỡ lỗi", "Debug", "调试"}',
       "if startedCompile is false then",
       "try",
       "set debugMenu to menu 1 of menu bar item (debugName as text) of menu bar 1",
       "repeat with candidateItem in menu items of debugMenu",
       "set candidateName to name of candidateItem as text",
-      'if candidateName starts with "编译 " or candidateName starts with "Compile " then',
+      'if candidateName starts with "Biên dịch " or candidateName starts with "Compile " or candidateName starts with "编译 " then',
       "click candidateItem",
       "set startedCompile to true",
       "exit repeat",
