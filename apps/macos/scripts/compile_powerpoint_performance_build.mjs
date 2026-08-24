@@ -528,7 +528,17 @@ function importVbaModule(modulePath) {
 }
 
 function replaceVbaModule(moduleName, modulePath) {
-  removeVbaModule(moduleName);
+  try {
+    removeVbaModule(moduleName);
+  } catch (error) {
+    // A newly created macro-enabled presentation has no VisualTeX modules yet.
+    // In that case replacement is simply an import. Preserve every other VBE
+    // automation failure so a hidden/blocked project is never packaged.
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes(`${moduleName} was not found in the PowerPoint VBA project`)) {
+      throw error;
+    }
+  }
   importVbaModule(modulePath);
 }
 
