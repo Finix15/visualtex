@@ -1252,38 +1252,37 @@ export function FormulaToolbar({
 
         const matrixBuilder = root.querySelector<HTMLElement>(".matrix-builder");
         if (matrixBuilder) {
+          const preferredOptionsWidth = nextRowCount <= 2 ? 190 : 214;
+          const minimumPickerSize = nextRowCount <= 2 ? 56 : 112;
+          const maximumPickerSize = nextRowCount <= 2 ? 72 : 152;
+          const horizontalChrome = nextRowCount <= 2 ? 12 : 14;
           const builderStyles = window.getComputedStyle(matrixBuilder);
-          const builderInnerWidth = Math.max(
-            0,
-            matrixBuilder.clientWidth -
-              (Number.parseFloat(builderStyles.paddingLeft) || 0) -
-              (Number.parseFloat(builderStyles.paddingRight) || 0),
-          );
           const builderInnerHeight = Math.max(
             0,
             matrixBuilder.clientHeight -
               (Number.parseFloat(builderStyles.paddingTop) || 0) -
               (Number.parseFloat(builderStyles.paddingBottom) || 0),
           );
-          const builderColumnGap =
-            Number.parseFloat(builderStyles.columnGap) || 0;
-          const preferredOptionsWidth = nextRowCount <= 2 ? 190 : 214;
-          const widthBudget = Math.max(
-            40,
-            builderInnerWidth - builderColumnGap - preferredOptionsWidth,
-          );
-          const rowSizeLimit = nextRowCount <= 2 ? 72 : 152;
           const matrixPickerSize = Math.max(
-            40,
+            minimumPickerSize,
             Math.min(
-              rowSizeLimit,
+              maximumPickerSize,
               Math.floor(builderInnerHeight),
-              Math.floor(widthBudget),
             ),
+          );
+          const requiredBuilderWidth =
+            preferredOptionsWidth + matrixPickerSize + horizontalChrome;
+          const matrixBuilderColumnSpan = Math.max(
+            1,
+            Math.ceil(requiredBuilderWidth / formulaToolButtonSize),
           );
           root.style.setProperty(
             "--matrix-picker-size",
             `${matrixPickerSize}px`,
+          );
+          root.style.setProperty(
+            "--matrix-builder-column-span",
+            String(matrixBuilderColumnSpan),
           );
         }
         setHorizontalRowCount((current) =>

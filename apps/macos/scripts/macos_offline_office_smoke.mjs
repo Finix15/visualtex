@@ -1590,7 +1590,8 @@ expectIncludes(editorWorkspace, "<OcrModelSelector", "The macOS desktop and Offi
 expectIncludes(styles, ".ocr-model-selector-menu", "The OCR model listbox must have a dedicated floating layer");
 expectIncludes(styles, "--ribbon-primary-font-size: 11px", "VisualTeX ribbon labels must share the 11px primary font size");
 expectIncludes(formulaToolbar, 'root.querySelector<HTMLElement>(".matrix-builder")', "The horizontal matrix picker must measure its actual builder bounds");
-expectIncludes(formulaToolbar, "builderInnerWidth - builderColumnGap - preferredOptionsWidth", "The horizontal matrix picker must respect the width left beside its options column");
+expectIncludes(formulaToolbar, "Math.ceil(requiredBuilderWidth / formulaToolButtonSize)", "The matrix builder must claim enough toolbar columns instead of shrinking its picker");
+expectIncludes(formulaToolbar, '"--matrix-builder-column-span"', "The matrix builder must publish its measured horizontal span");
 expectIncludes(formulaToolbar, '"--matrix-picker-size"', "The horizontal matrix picker must publish its bounded square size");
 expectIncludes(styles, "grid-template-columns: repeat(6, minmax(0, 1fr))", "All six matrix delimiters must fit on one non-overlapping horizontal row");
 expect(!inputBehaviorMenu.includes("option.descriptionEn"), "Input behavior cards must not render explanatory subtext below each option title");

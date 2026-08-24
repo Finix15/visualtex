@@ -11991,9 +11991,9 @@ body[data-workspace-resize="dock"] * {
   width: 100%;
   min-width: 0;
   height: auto;
-  grid-column: span 7;
+  grid-column: span var(--matrix-builder-column-span, 7);
   grid-row: 1 / span var(--toolbar-row-count, 3);
-  grid-template-columns: minmax(0, 1fr) var(--matrix-picker-size, 98px);
+  grid-template-columns: minmax(0, 214px) var(--matrix-picker-size, 112px);
   grid-template-rows: minmax(0, 1fr);
   align-items: stretch;
   justify-content: stretch;
@@ -12005,8 +12005,8 @@ body[data-workspace-resize="dock"] * {
 .formula-toolbar.is-horizontal .matrix-options-column {
   min-width: 0;
   min-height: 0;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  align-content: stretch;
+  grid-template-rows: auto 58px auto;
+  align-content: space-between;
   gap: 5px;
   padding-right: 8px;
   border-right: 1px solid var(--border);
@@ -12019,9 +12019,7 @@ body[data-workspace-resize="dock"] * {
 
 .formula-toolbar.is-horizontal .matrix-builder-heading strong {
   min-width: 0;
-  overflow: hidden;
   font-size: 11px;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -12036,7 +12034,8 @@ body[data-workspace-resize="dock"] * {
 .formula-toolbar.is-horizontal .matrix-delimiter-picker {
   min-width: 0;
   min-height: 0;
-  align-content: start;
+  height: 58px;
+  align-content: stretch;
   gap: 0;
   overflow: hidden;
 }
@@ -12048,8 +12047,8 @@ body[data-workspace-resize="dock"] * {
 .formula-toolbar.is-horizontal .matrix-delimiter-options {
   width: 100%;
   min-width: 0;
-  height: 100%;
-  min-height: 0;
+  height: 58px;
+  min-height: 58px;
   grid-template-columns: repeat(6, minmax(0, 1fr));
   grid-template-rows: minmax(0, 1fr);
   gap: 3px;
@@ -12072,7 +12071,6 @@ body[data-workspace-resize="dock"] * {
   min-height: 0;
   font-size: 18px;
   overflow: hidden;
-  contain: size layout paint;
 }
 
 .formula-toolbar.is-horizontal
@@ -12121,13 +12119,14 @@ body[data-workspace-resize="dock"] * {
 }
 
 .formula-toolbar.is-horizontal[data-toolbar-row-count="2"] .matrix-builder {
-  grid-column: span 5;
-  grid-template-columns: minmax(0, 1fr) var(--matrix-picker-size, 64px);
+  grid-column: span var(--matrix-builder-column-span, 6);
+  grid-template-columns: minmax(0, 190px) var(--matrix-picker-size, 56px);
   gap: 4px;
   padding: 4px;
 }
 
 .formula-toolbar.is-horizontal[data-toolbar-row-count="2"] .matrix-options-column {
+  grid-template-rows: auto 32px auto;
   gap: 2px;
   padding-right: 4px;
 }
@@ -12152,9 +12151,13 @@ body[data-workspace-resize="dock"] * {
 }
 
 .formula-toolbar.is-horizontal[data-toolbar-row-count="2"] .matrix-delimiter-options {
-  height: 100%;
-  min-height: 0;
+  height: 32px;
+  min-height: 32px;
   gap: 2px;
+}
+
+.formula-toolbar.is-horizontal[data-toolbar-row-count="2"] .matrix-delimiter-picker {
+  height: 32px;
 }
 
 .formula-toolbar.is-horizontal[data-toolbar-row-count="2"] .matrix-delimiter-options button {

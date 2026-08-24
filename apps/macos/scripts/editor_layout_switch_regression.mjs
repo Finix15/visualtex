@@ -1307,6 +1307,12 @@ async function main() {
           width: builderRect.width,
           height: builderRect.height,
         } : null,
+        builderColumnSpan: builder
+          ? Number.parseInt(
+              getComputedStyle(builder).getPropertyValue('--matrix-builder-column-span'),
+              10,
+            )
+          : -1,
         builderHasNoHorizontalOverflow: Boolean(
           builder && builder.scrollWidth <= builder.clientWidth + 1,
         ),
@@ -1362,6 +1368,7 @@ async function main() {
         gridAspectRatio: grid
           ? grid.getBoundingClientRect().width / grid.getBoundingClientRect().height
           : -1,
+        gridWidth: grid?.getBoundingClientRect().width ?? -1,
         delimiterPreviewInside: delimiterButtons.every((button) => {
           const buttonRect = button.getBoundingClientRect();
           const previewRect = button.querySelector('.math-preview-fit-content')?.getBoundingClientRect();
@@ -1379,9 +1386,10 @@ async function main() {
       };
     })()`);
     assert.equal(matrixState.exists, true, JSON.stringify(matrixState));
-    assert.ok(matrixState.builderRect.width >= 240, JSON.stringify(matrixState));
-    assert.ok(matrixState.builderRect.width <= 320, JSON.stringify(matrixState));
+    assert.ok(matrixState.builderRect.width >= 330, JSON.stringify(matrixState));
+    assert.ok(matrixState.builderRect.width <= 430, JSON.stringify(matrixState));
     assert.ok(matrixState.builderRect.height >= 90, JSON.stringify(matrixState));
+    assert.ok(matrixState.builderColumnSpan >= 7, JSON.stringify(matrixState));
     assert.equal(matrixState.builderHasNoHorizontalOverflow, true, JSON.stringify(matrixState));
     assert.equal(matrixState.builderHasNoVerticalOverflow, true, JSON.stringify(matrixState));
     assert.equal(matrixState.optionsHasNoHorizontalOverflow, true, JSON.stringify(matrixState));
@@ -1395,8 +1403,8 @@ async function main() {
     assert.equal(matrixState.badgeInside, true, JSON.stringify(matrixState));
     assert.equal(matrixState.gridInside, true, JSON.stringify(matrixState));
     assert.equal(matrixState.insertInside, true, JSON.stringify(matrixState));
-    assert.ok(matrixState.insertWidth >= 150, JSON.stringify(matrixState));
-    assert.ok(matrixState.insertWidth <= 190, JSON.stringify(matrixState));
+    assert.ok(matrixState.insertWidth >= 190, JSON.stringify(matrixState));
+    assert.ok(matrixState.insertWidth <= 220, JSON.stringify(matrixState));
     assert.ok(matrixState.insertHeight <= 38, JSON.stringify(matrixState));
     assert.ok(matrixState.nextTemplateGap >= 0, JSON.stringify(matrixState));
     assert.ok(matrixState.nextTemplateGap <= 8, JSON.stringify(matrixState));
@@ -1409,6 +1417,7 @@ async function main() {
     assert.equal(matrixState.delimiterInsideOptions, true, JSON.stringify(matrixState));
     assert.ok(matrixState.delimiterTopSpread <= 1, JSON.stringify(matrixState));
     assert.ok(matrixState.delimiterPickerGap >= 0, JSON.stringify(matrixState));
+    assert.ok(matrixState.gridWidth >= 112, JSON.stringify(matrixState));
     assert.ok(Math.abs(matrixState.gridAspectRatio - 1) <= 0.03, JSON.stringify(matrixState));
     assert.equal(matrixState.delimiterPreviewInside, true, JSON.stringify(matrixState));
     assert.ok(
