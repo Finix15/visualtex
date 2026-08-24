@@ -1,200 +1,189 @@
 <div align="center">
-  <img src="apps/macos/src-tauri/app-icon.svg" width="200" alt="VisualTeX" />
+  <img src="apps/macos/src-tauri/app-icon.svg" width="200" alt="Biểu tượng VisualTeX" />
   <h1>VisualTeX</h1>
-  <p><strong>可视化公式编辑器与 Microsoft Office 原生公式插件</strong></p>
-  <p><strong>Visual formula editor with native Microsoft Office integration</strong></p>
+  <p><strong>Trình soạn thảo công thức trực quan tích hợp nguyên bản với Microsoft Office</strong></p>
   <p>
-    <a href="#中文">中文</a> · <a href="#english">English</a> ·
-    <a href="https://visualtex.pauljianliao.com/">Website</a> ·
-    <a href="https://github.com/Finix15/visualtex/releases">Releases</a>
+    <a href="https://visualtex.pauljianliao.com/">Trang chủ</a> ·
+    <a href="https://github.com/Finix15/visualtex/releases">Tải xuống</a> ·
+    <a href="huongdan.txt">Hướng dẫn cài đặt</a>
   </p>
   <p>
-    <a href="https://github.com/Finix15/visualtex/stargazers"><img src="https://img.shields.io/github/stars/Finix15/visualtex?style=for-the-badge&logo=github&label=STARS" alt="GitHub Stars" /></a>
-    <a href="https://github.com/Finix15/visualtex/releases/latest"><img src="https://img.shields.io/github/v/release/Finix15/visualtex?style=for-the-badge&logo=github&label=RELEASE" alt="Latest Release" /></a>
-    <a href="https://github.com/Finix15/visualtex/releases"><img src="https://img.shields.io/github/downloads/Finix15/visualtex/total?style=for-the-badge&logo=github&label=DOWNLOADS" alt="Total Downloads" /></a>
-    <a href="https://visualtex.pauljianliao.com/"><img src="https://img.shields.io/badge/WEBSITE-visualtex.pauljianliao.com-0A84FF?style=for-the-badge&logo=googlechrome&logoColor=white" alt="VisualTeX Website" /></a>
+    <a href="https://github.com/Finix15/visualtex/stargazers"><img src="https://img.shields.io/github/stars/Finix15/visualtex?style=for-the-badge&logo=github&label=SAO" alt="Số sao GitHub" /></a>
+    <a href="https://github.com/Finix15/visualtex/releases/latest"><img src="https://img.shields.io/github/v/release/Finix15/visualtex?style=for-the-badge&logo=github&label=PHIÊN%20BẢN" alt="Phiên bản mới nhất" /></a>
+    <a href="https://github.com/Finix15/visualtex/releases"><img src="https://img.shields.io/github/downloads/Finix15/visualtex/total?style=for-the-badge&logo=github&label=LƯỢT%20TẢI" alt="Tổng lượt tải" /></a>
   </p>
-  <p align="center">
-  <img src="https://img.shields.io/badge/WORD-SUPPORTED-0099E5?style=for-the-badge&labelColor=555555" alt="Word">
-  <img src="https://img.shields.io/badge/POWERPOINT-SUPPORTED-0099E5?style=for-the-badge&labelColor=555555" alt="PowerPoint">
-  <img src="https://img.shields.io/badge/LaTeX-INPUT-0099E5?style=for-the-badge&labelColor=555555" alt="LaTeX">
-  <img src="https://img.shields.io/badge/LICENSE-MIT-55B800?style=for-the-badge&labelColor=555555" alt="MIT License">
-</p>
+  <p>
+    <img src="https://img.shields.io/badge/WORD-HỖ_TRỢ-0099E5?style=for-the-badge&labelColor=555555" alt="Hỗ trợ Word" />
+    <img src="https://img.shields.io/badge/POWERPOINT-HỖ_TRỢ-0099E5?style=for-the-badge&labelColor=555555" alt="Hỗ trợ PowerPoint" />
+    <img src="https://img.shields.io/badge/LaTeX-NHẬP_LIỆU-0099E5?style=for-the-badge&labelColor=555555" alt="Nhập liệu LaTeX" />
+    <img src="https://img.shields.io/badge/GIẤY_PHÉP-MIT-55B800?style=for-the-badge&labelColor=555555" alt="Giấy phép MIT" />
+  </p>
 </div>
 
 ---
 
-# 中文
+VisualTeX là ứng dụng soạn thảo công thức dành cho toán học, vật lý, kỹ thuật và viết tài liệu nghiên cứu. Ứng dụng kết hợp nhập liệu trực quan có cấu trúc, đồng bộ hai chiều với mã nguồn LaTeX, nhận dạng công thức từ ảnh ngay trên máy và quy trình làm việc nguyên bản trong Word, PowerPoint.
+
+Tiện ích Word hỗ trợ vẽ lại hàng loạt mã LaTeX trong vùng chọn hoặc toàn bộ tài liệu thành công thức nguyên bản hay công thức VisualTeX có thể chỉnh sửa lại. Ứng dụng cũng cung cấp đánh số, tham chiếu chéo và nhập tài liệu.
 
 <div align="center">
-  <p><strong>VisualTeX QQ 交流群：<code>1045801770</code></strong></p>
-  <p>欢迎交流使用问题、功能建议、Office 插件与项目开发。</p>
-  <img src="apps/macos/public/qq-group-card.svg" width="300" alt="VisualTeX QQ 交流群 1045801770" />
+  <p><strong>Nhóm trao đổi VisualTeX trên QQ: <code>1045801770</code></strong></p>
+  <p>Chào đón mọi trao đổi về cách sử dụng, đề xuất tính năng, tiện ích Office và phát triển dự án.</p>
+  <img src="apps/macos/public/qq-group-card.svg" width="300" alt="Nhóm QQ VisualTeX 1045801770" />
 </div>
 
-VisualTeX 是一款面向数学、物理、工程与科研写作的桌面公式编辑器。它提供结构化可视化输入、LaTeX 源码双向同步、本地图片公式识别，以及 Word 和 PowerPoint 原生公式工作流。Word 插件支持将选区或全文中的 LaTeX 代码批量重绘为原生公式或可再次编辑的 VisualTeX 公式，并提供编号、交叉引用与文档导入能力。
+## Tải và cài đặt
 
-## 下载应用与 OCR 模型
+Tải ứng dụng cùng các mô hình OCR PP-FormulaNet tại **[trang chủ VisualTeX](https://visualtex.pauljianliao.com/)** hoặc [GitHub Releases](https://github.com/Finix15/visualtex/releases).
 
-访问 **[VisualTeX 官网](https://visualtex.pauljianliao.com/)** 下载应用和 PP-FormulaNet OCR 模型。此 Windows 分支的安装包可从 [Finix15 Releases](https://github.com/Finix15/visualtex/releases) 获取。
+| Hệ điều hành | Bộ cài | Yêu cầu chính |
+| --- | --- | --- |
+| Windows | `.exe` | Windows 10/11, 64-bit |
+| macOS | `.dmg` | macOS 11 trở lên, Apple Silicon |
 
-## VisualTeX 1.2.5 新功能
+Xem [hướng dẫn cài đặt chi tiết](huongdan.txt) để biết cách chọn đúng tệp, xử lý cảnh báo bảo mật và cài tích hợp Office.
 
-- **小键盘模式**：面向紧凑公式输入重新设计布局；普通模式与小键盘模式分别记忆窗口尺寸。
-- **显式对齐与分段函数编辑**：`align` / `aligned` 可直接使用 `&` 指定对齐点；`cases` 完善多行、对齐、大括号与 Enter 行为。
-- **自定义快捷键与快速输入**：公式工具、常用工具和自定义磁贴均可配置快捷键，并统一持久化；支持希腊字母快捷输入。
-- **自定义符号设计器**：可自行绘制、组合并注册数学符号，进入公式工具栏、自动补全、MathLive 渲染及 SVG / PNG 导出链路。
-- **完整主题自定义**：主背景、纸张、层级、选中状态、强调色和公式光标等统一纳入主题系统，编辑器、设置和帮助窗口同步跟随。
-- **快捷 OCR 与静默 OCR**：支持截图后快速识别，以及后台识别并直接将 LaTeX 写入剪贴板；新增识别状态 HUD。
-- **Office 编辑器预热与性能优化**：Word / PowerPoint 编辑器采用常驻 / 预热式生命周期，减少重复冷启动和前台切换。
-- **Office 插件安装 / 更新 / 修复**：自动检测 DOTM / PPAM 缺失、旧版本、文件不完整或 PowerPoint 未注册，并支持直接覆盖更新。
-- **Word 编号与交叉引用重构**：支持顺序、章节、节编号及多种分隔形式；更新编号可按文档物理顺序全局修复，并强化中间插入、交叉引用、旧结构修复和大量公式性能。
-- **Word 重绘与文档导入增强**：加强复杂文档中的公式 identity / metadata、批量定位、段落布局与双击编辑目标保持。
-- **内置帮助手册**：可直接在 VisualTeX 内查看编辑器、快捷键、磁贴、`align`、`cases`、矩阵、小键盘、OCR、Office 等功能说明。
-- **Windows PowerPoint 格式转换**：支持图片、OLE、OMML 公式之间的格式转换。
+## Điểm mới trong VisualTeX 1.2.5
 
-完整更新说明见 [VisualTeX 1.2.5 Release](https://github.com/Finix15/visualtex/releases/tag/v1.2.5)。
+- **Chế độ bàn phím số:** bố cục nhập công thức nhỏ gọn; chế độ thường và bàn phím số ghi nhớ kích thước cửa sổ riêng.
+- **Căn chỉnh và chỉnh sửa hàm từng phần:** dùng trực tiếp `&` trong `align` / `aligned` để chọn điểm căn chỉnh; `cases` được cải thiện về nhiều dòng, dấu ngoặc, căn chỉnh và phím Enter.
+- **Phím tắt và nhập nhanh tùy chỉnh:** gán phím tắt lâu dài cho công cụ công thức, công cụ thường dùng và ô tùy chỉnh; hỗ trợ nhập nhanh chữ cái Hy Lạp.
+- **Trình thiết kế ký hiệu tùy chỉnh:** vẽ, kết hợp và đăng ký ký hiệu toán học để dùng trong thanh công cụ, tự động hoàn thành, MathLive và xuất SVG/PNG.
+- **Tùy chỉnh giao diện đầy đủ:** quản lý thống nhất màu nền, trang giấy, lớp bề mặt, trạng thái chọn, màu nhấn và con trỏ công thức.
+- **OCR nhanh và OCR nền:** nhận dạng từ ảnh chụp màn hình hoặc chạy nền rồi ghi LaTeX vào bảng nhớ tạm, kèm thông báo trạng thái.
+- **Tối ưu trình soạn thảo Office:** duy trì hoặc khởi động sẵn cửa sổ Word/PowerPoint để giảm thời gian chờ.
+- **Cài đặt, cập nhật và sửa chữa tiện ích Office:** phát hiện DOTM/PPAM bị thiếu, lỗi thời, không đầy đủ hoặc chưa đăng ký.
+- **Làm lại hệ thống đánh số và tham chiếu chéo trong Word:** hỗ trợ số thứ tự, chương, mục cùng nhiều dấu phân cách; cải thiện hiệu năng với tài liệu lớn.
+- **Cải thiện vẽ lại và nhập tài liệu Word:** quản lý định danh, siêu dữ liệu, bố cục đoạn và đích chỉnh sửa khi nhấp đúp ổn định hơn.
+- **Tài liệu trợ giúp tích hợp:** hướng dẫn trình soạn thảo, phím tắt, `align`, `cases`, ma trận, OCR, ký hiệu tùy chỉnh, Word và PowerPoint.
+- **Chuyển đổi định dạng trong PowerPoint trên Windows:** chuyển đổi giữa công thức dạng ảnh, OLE và OMML.
 
-## 实际界面
+Xem đầy đủ tại [ghi chú phát hành VisualTeX 1.2.5](https://github.com/Finix15/visualtex/releases/tag/v1.2.5).
 
-以下均为 VisualTeX 的真实运行截图，不是设计稿或模拟图。第一行展示蓝白主题主界面与布局、功能设置，第二行展示三套主题配色。
+## Giao diện thực tế
 
-### 蓝白主界面与功能布局
+Các hình dưới đây được chụp trực tiếp từ VisualTeX, không phải bản thiết kế hoặc mô phỏng.
 
-<p align="center">
-  <img src="docs/images/visualtex-readme-1.webp" width="45%" alt="VisualTeX 蓝白主题经典布局主界面" />
-  <img src="docs/images/visualtex-readme-2.webp" width="45%" alt="VisualTeX 布局切换与功能设置界面" />
-</p>
-<p align="center"><sub>蓝白主题经典布局 · 布局切换、操作逻辑与导出功能</sub></p>
-
-### 多主题界面
+### Không gian làm việc và bảng điều khiển
 
 <p align="center">
-  <img src="docs/images/visualtex-readme-3.webp" width="30%" alt="VisualTeX 暖米色主题" />
-  <img src="docs/images/visualtex-readme-4.webp" width="30%" alt="VisualTeX 深紫色主题" />
-  <img src="docs/images/visualtex-readme-5.webp" width="30%" alt="VisualTeX 深绿色主题" />
+  <img src="docs/images/visualtex-readme-1.webp" width="45%" alt="Không gian làm việc VisualTeX với giao diện xanh trắng" />
+  <img src="docs/images/visualtex-readme-2.webp" width="45%" alt="Thiết lập bố cục và tính năng VisualTeX" />
 </p>
-<p align="center"><sub>暖米色主题 · 深紫色主题 · 深绿色主题</sub></p>
+<p align="center"><sub>Bố cục cổ điển xanh trắng · Tùy chọn bố cục, nhập liệu và xuất tệp</sub></p>
 
-## 主要功能
+### Các chủ đề màu sắc
 
-### 可视化公式编辑
+<p align="center">
+  <img src="docs/images/visualtex-readme-3.webp" width="30%" alt="Chủ đề màu be ấm" />
+  <img src="docs/images/visualtex-readme-4.webp" width="30%" alt="Chủ đề tím đậm" />
+  <img src="docs/images/visualtex-readme-5.webp" width="30%" alt="Chủ đề xanh lục đậm" />
+</p>
+<p align="center"><sub>Màu be ấm · Tím đậm · Xanh lục đậm</sub></p>
 
-- 结构化输入分式、根式、积分、求和、极限、上下标、希腊字母、集合与关系符号；
-- 支持多公式行、1×1 至 10×10 矩阵、定界符和基于选区的结构插入；
-- 支持小键盘模式，并分别记忆普通模式与小键盘模式的窗口尺寸；
-- `align` / `aligned` 支持通过 `&` 自主指定可视化对齐点，`cases` 支持更稳定的多行分段函数编辑；
-- 支持标准布局与经典布局；经典布局将公式工具和 LaTeX 源码停靠在底部，并可随时折叠；
-- “操作逻辑”可开关常用数学输入自动转义：`alpha` 输入希腊字母，`>=` 输入大于等于号，`pp`、`ss`、`mm`、`dd`、`eq` 分别输入加号、减号、乘号、除号和等号；关闭后所有无反斜杠快捷转义均停用，同时 `xx` 始终保留为普通变量；
-- 可分别控制上下标、重音和字体命令的自动跳出，以及不同类型的命令候选框；
-- `mathbb`、`mathbf`、`mathcal` 等字体命令通过反斜杠或工具栏输入，支持单字符自动跳出，也支持连续输入后按 Enter 确认；
-- 粗体按钮使用标准 `\mathbf{...}`，粗体、数学斜体与 `\mathrm{...}` 正体均支持再次点击恢复；
-- 自动识别微分元 `d`、自然常数 `e`、虚数单位 `i/j` 和常见算子并转换为规范正体，不依赖快捷转义开关；
-- 文档级撤销与重做会恢复公式内容、活动行、光标和选区；
-- 公式工具、常用工具和自定义磁贴可绑定快捷键，并支持统一管理、冲突替换和持久化；
-- 支持希腊字母快捷输入、常用工具自定义和自定义磁贴分区；
-- 内置自定义符号设计器，可绘制、组合、裁剪并注册自定义数学字符；
-- 支持公式缩放、蓝白浅色、暖米色、深色、深紫色和深绿色主题，以及完整主题颜色自定义、中文/英文界面、本地历史和 JSON 文档。
+## Tính năng chính
 
-### LaTeX 源码
+### Soạn thảo công thức trực quan
 
-- CodeMirror 源码编辑区与可视化公式双向同步；
-- 支持纯 LaTeX、`$...$`、`\(...\)`、`\[...\]`、`equation`、`align`、`gather`、`multline`、`split` 等格式；
-- 多行环境自动处理顶层对齐符，同时保护矩阵内部的 `&` 与换行结构；
-- 复制公式不要求安装 TeX Live。
+- Nhập phân số, căn thức, tích phân, tổng, giới hạn, chỉ số, chữ cái Hy Lạp, tập hợp và quan hệ theo cấu trúc.
+- Hỗ trợ nhiều dòng công thức, ma trận từ 1×1 đến 10×10, dấu phân cách và chèn cấu trúc dựa trên vùng chọn.
+- Có chế độ bàn phím số với kích thước cửa sổ được ghi nhớ độc lập với chế độ thường.
+- Tự chọn điểm căn chỉnh bằng `&` trong `align` / `aligned`; chỉnh sửa `cases` nhiều dòng ổn định hơn.
+- Cung cấp bố cục tiêu chuẩn và cổ điển; khu vực công cụ và mã LaTeX có thể thu gọn.
+- Cho phép chuyển đổi văn bản thường: `alpha` thành chữ cái Hy Lạp, `>=` thành dấu lớn hơn hoặc bằng; `pp`, `ss`, `mm`, `dd`, `eq` thành cộng, trừ, nhân, chia và bằng.
+- Điều khiển độc lập việc tự thoát khỏi chỉ số, dấu trọng âm, lệnh phông chữ và từng bảng gợi ý lệnh.
+- Hỗ trợ `mathbb`, `mathbf`, `mathcal`; nút chữ đậm dùng chuẩn `\mathbf{...}` và có thể bật/tắt kiểu chữ.
+- Tự chuẩn hóa vi phân `d`, hằng số `e`, đơn vị ảo `i/j` và các toán tử thông dụng thành kiểu chữ đứng.
+- Hoàn tác và làm lại ở cấp tài liệu, khôi phục nội dung, dòng hiện hành, con trỏ và vùng chọn.
+- Gán phím tắt cho công cụ công thức, công cụ thường dùng và ô tùy chỉnh, có quản lý xung đột.
+- Tích hợp trình thiết kế ký hiệu để vẽ, kết hợp, cắt và đăng ký ký tự toán học riêng.
+- Hỗ trợ thu phóng, nhiều chủ đề sáng/tối, tùy chỉnh màu giao diện, lịch sử cục bộ và tài liệu JSON.
 
-### 文档导出与更新
+### Mã nguồn LaTeX
 
-- 从顶部“导出”菜单直接生成 Markdown、SVG 或 PNG；
-- 首次选择导出目录后自动记住路径，后续可直接导出当前公式文档；
-- Markdown 使用通用数学块语法保存多行公式，SVG 与 PNG 适合网页、笔记和演示文稿；
-- 支持启动时自动检查更新、中文/英文更新说明和手动检查更新。
+- Đồng bộ hai chiều giữa trình soạn thảo trực quan và vùng mã nguồn CodeMirror.
+- Hỗ trợ LaTeX thuần, `$...$`, `\(...\)`, `\[...\]`, `equation`, `align`, `gather`, `multline`, `split` và các định dạng liên quan.
+- Tự xử lý dấu căn chỉnh cấp cao nhất nhưng vẫn bảo toàn cấu trúc bên trong ma trận.
+- Sao chép công thức mà không cần cài TeX Live.
 
-### Word 文档 LaTeX 重绘
+### Xuất và cập nhật tài liệu
 
-- 扫描 Word 当前选区或整个文档中的 `$...$`、`\(...\)`、`$$...$$` 与 `\[...\]`；
-- 可批量转换为 Word 原生 OMML 或可双击编辑的 VisualTeX OLE；
-- 行内公式继承左右正文的字号，行间公式继承相邻正文段落字号，并复用原行间段落避免额外空行；
-- 采用预热转换器、重复公式缓存和倒序原位替换，兼顾大文档安全性与性能。
+- Xuất tài liệu công thức thành Markdown, SVG hoặc PNG và ghi nhớ thư mục đã chọn.
+- Markdown dùng khối công thức phổ biến; SVG và PNG phù hợp cho trang web, ghi chú và bài trình chiếu.
+- Tự động kiểm tra cập nhật khi khởi động, hiển thị ghi chú phát hành và cho phép kiểm tra thủ công.
 
-### 本地图片公式识别
+### Vẽ lại LaTeX trong Word
 
-- 选择、拖入或直接粘贴公式图片，识别结果可插回原光标位置；
-- 使用 PaddleOCR PP-FormulaNet plus-S、plus-M 和 plus-L；
-- 支持深色背景、透明图片、进度显示和取消；
-- 图片只在本机处理，不上传第三方服务；
-- 支持快捷 OCR：截图后自动返回编辑流程并回填识别结果；
-- 支持静默 OCR：后台完成识别并将 LaTeX 直接写入剪贴板；
-- OCR 状态 HUD 会显示识别过程和完成状态。
+- Quét `$...$`, `\(...\)`, `$$...$$` và `\[...\]` trong vùng chọn hoặc toàn bộ tài liệu.
+- Chuyển đổi hàng loạt thành OMML nguyên bản hoặc VisualTeX OLE có thể chỉnh sửa bằng cách nhấp đúp.
+- Kế thừa cỡ chữ theo nội dung xung quanh và tái sử dụng đoạn gốc để không sinh dòng trống.
+- Dùng bộ chuyển đổi khởi động sẵn, bộ nhớ đệm và thay thế theo thứ tự ngược để tăng độ an toàn, hiệu năng.
 
-## macOS 版本
+### Nhận dạng công thức từ ảnh
 
-macOS 版本位于 [`apps/macos`](apps/macos)，使用完全离线的原生 Office 集成：
+- Chọn, kéo thả hoặc dán ảnh rồi chèn LaTeX vào vị trí con trỏ đã lưu.
+- Hỗ trợ PaddleOCR PP-FormulaNet plus-S, plus-M và plus-L.
+- Xử lý ảnh nền tối hoặc trong suốt, hiển thị tiến độ và cho phép hủy.
+- Ảnh được xử lý ngay trên thiết bị, không tải lên dịch vụ bên thứ ba.
+- OCR nhanh hỗ trợ ảnh chụp màn hình; OCR nền ghi LaTeX thẳng vào bảng nhớ tạm.
 
-![VisualTeX macOS Word 原生加载项](docs/images/visualtex-macos-word-ribbon.png)
+## Phiên bản macOS
 
-- Word 通过 DOTM 全局模板加载 VisualTeX 标签页；
-- PowerPoint 通过固定路径 PPAM 加载项工作；
-- VBA、AppleScriptTask、Office Group Container 与 Tauri 本地窗口组成离线 Session 流程；
-- Word 支持图片公式和原生 OMML 行内/行间公式；
-- 支持重绘所选、重绘全文和 LaTeX / Markdown 文档导入，并保持公式身份、段落布局和双击编辑目标；
-- 支持图片公式转换为 Word 原生公式、图片与 OMML 公式编号、交叉引用、按钮编辑和双击编辑；
-- Word 编号支持顺序、章节、节编号和不同分隔形式，并可通过“更新编号”按文档物理顺序全局修复；
-- 强化中间插入、交叉引用、旧 `SEQ` / helper 修复，以及大量公式下的连续插入和更新性能；
-- DOTM / PPAM 支持安装、更新、修复和版本检测，可直接覆盖旧版插件；
-- Office 编辑窗口采用常驻 / 预热式生命周期，减少连续编辑时的重复冷启动；
-- 图片行间公式编号采用稳定的静态显示与原生 SEQ 引用源，点击或更新字段时不会发生数字下沉；
-- PowerPoint 支持新建、替换、删除和双击编辑 VisualTeX 公式；
-- 主应用内置帮助手册，覆盖编辑器、快捷键、小键盘、OCR、自定义符号以及 Word / PowerPoint 工作流；
-- 原生加载项不依赖 Office.js、XML Manifest、系统可信证书或外部网络；本地 companion 仅为 Session/OCR 使用私有回环 TLS。
+Ứng dụng macOS nằm tại [`apps/macos`](apps/macos) và tích hợp Office nguyên bản, hoàn toàn ngoại tuyến:
 
-## Windows 版本
+![Tiện ích Word nguyên bản của VisualTeX trên macOS](docs/images/visualtex-macos-word-ribbon.png)
 
-Windows 版本位于 [`apps/windows`](apps/windows)，使用 VSTO 与真正的 COM/OLE 公式对象：
+- Word dùng mẫu DOTM toàn cục; PowerPoint dùng tiện ích PPAM tại đường dẫn cố định.
+- VBA, AppleScriptTask, Office Group Container và cửa sổ Tauri cục bộ phối hợp thành quy trình phiên ngoại tuyến.
+- Word hỗ trợ công thức ảnh, OMML cùng dòng/riêng dòng, đánh số, tham chiếu chéo, nhập tài liệu và vẽ lại LaTeX.
+- Cài đặt, cập nhật, sửa chữa và phát hiện phiên bản DOTM/PPAM; có thể thay thế trực tiếp bản cũ.
+- PowerPoint hỗ trợ tạo, thay thế, xóa, đổi cỡ và nhấp đúp để chỉnh sửa công thức VisualTeX.
+- Tiện ích không phụ thuộc Office.js, XML Manifest, chứng chỉ tin cậy của hệ thống hoặc mạng ngoài.
 
-![VisualTeX Windows Word 原生加载项](docs/images/visualtex-windows-word-ribbon.png)
+## Phiên bản Windows
 
-- Word 和 PowerPoint 使用原生 VSTO Ribbon 与 Office 事件；
-- 专业模式插入真实的 `VisualTeX.Formula.1` OLE 对象；
-- OLE 对象保存公式元数据、EMF 矢量预览与 PNG 兼容预览；
-- Word 支持 OLE 与 OMML 行内/行间公式、格式转换、编号和引用；
-- Word Ribbon 支持批量导入，以及将选区或全文 LaTeX 重绘为 OMML/OLE，并按正文上下文继承字号；
-- PowerPoint 支持 OLE 公式的新建、编辑、删除与图片导出；
-- PowerPoint 支持图片、OLE、OMML 公式之间的格式转换；
-- Office 原生双击可重新打开 VisualTeX 编辑器；
-- 兼容图片模式用于跨平台文档和旧公式迁移。
+Ứng dụng Windows nằm tại [`apps/windows`](apps/windows), sử dụng VSTO và đối tượng COM/OLE thực:
 
-## 仓库结构
+![Tiện ích Word nguyên bản của VisualTeX trên Windows](docs/images/visualtex-windows-word-ribbon.png)
+
+- Word và PowerPoint sử dụng Ribbon VSTO cùng sự kiện Office nguyên bản.
+- Chế độ chuyên nghiệp chèn đối tượng OLE `VisualTeX.Formula.1` thực với siêu dữ liệu và bản xem trước EMF/PNG.
+- Word hỗ trợ OLE/OMML cùng dòng hoặc riêng dòng, chuyển đổi, đánh số, tham chiếu, nhập và vẽ lại LaTeX hàng loạt.
+- PowerPoint hỗ trợ tạo, chỉnh sửa, xóa, xuất ảnh và chuyển đổi giữa công thức dạng ảnh, OLE, OMML.
+- Nhấp đúp theo cơ chế Office nguyên bản để mở lại trình soạn thảo VisualTeX.
+- Chế độ ảnh phục vụ tài liệu đa nền tảng và di chuyển công thức cũ.
+
+## Cấu trúc kho mã nguồn
 
 ```text
 visualtex/
 ├── apps/
-│   ├── macos/       # 独立 macOS 应用、Tauri、DOTM/PPAM、OCR 与测试
-│   └── windows/     # 独立 Windows 应用、Tauri、VSTO/OLE、OCR 与测试
-├── docs/            # 仓库架构与真实界面截图
-├── tools/           # 顶层结构检查
-├── .github/         # 按平台独立运行的 CI
-├── package.json     # 只负责调度两个子项目
+│   ├── macos/       # Ứng dụng macOS độc lập, Tauri, DOTM/PPAM, OCR và kiểm thử
+│   └── windows/     # Ứng dụng Windows độc lập, Tauri, VSTO/OLE, OCR và kiểm thử
+├── docs/            # Kiến trúc và ảnh chụp giao diện thực tế
+├── tools/           # Công cụ kiểm tra cấu trúc cấp cao nhất
+├── .github/         # Quy trình CI riêng cho từng nền tảng
+├── package.json     # Chỉ điều phối hai dự án con
 └── README.md
 ```
 
-两个子项目不共享 `src`、`src-tauri`、编辑器组件、Office Session 实现、`package-lock.json` 或 `Cargo.lock`。
+Hai ứng dụng không dùng chung `src`, `src-tauri`, thành phần trình soạn thảo, cách triển khai phiên Office, `package-lock.json` hoặc `Cargo.lock`.
 
-## 本地开发
+## Phát triển cục bộ
 
 ```bash
-# 安装两个平台各自的依赖
+# Cài dependency cho cả hai nền tảng
 npm run bootstrap
 
-# 分别构建
+# Build riêng từng frontend
 npm run build:macos
 npm run build:windows
 
-# 检查仓库隔离结构并构建两个前端
+# Kiểm tra cấu trúc kho mã nguồn và build cả hai frontend
 npm run check
 ```
 
-平台原生打包和 Office 验收请进入对应目录执行：
+Đóng gói ứng dụng nguyên bản và kiểm thử Office trong thư mục tương ứng:
 
 ```bash
 cd apps/macos
@@ -204,176 +193,8 @@ cd ../windows
 npm run tauri:build
 ```
 
-详细设计见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
+Xem [tài liệu kiến trúc](docs/ARCHITECTURE.md) để biết thiết kế chi tiết và [hướng dẫn build, đóng gói](BUILD_PACKAGING_VI.md) để tạo bộ cài từ mã nguồn.
 
----
+## Giấy phép
 
-# English
-
-VisualTeX is a desktop formula editor for mathematics, physics, engineering, and scientific writing. It combines structured visual input, two-way LaTeX source editing, local formula-image recognition, and native Word and PowerPoint workflows. The Word integration supports bulk redraw from a selection or full document, editable formula workflows, numbering, cross-references, and document import.
-
-## Application and OCR model downloads
-
-Visit the **[VisualTeX website](https://visualtex.pauljianliao.com/)** for the application and PP-FormulaNet OCR models. Windows builds from this branch are available from [Finix15 Releases](https://github.com/Finix15/visualtex/releases).
-
-## What's new in VisualTeX 1.2.5
-
-- **Keypad Mode**: a compact formula-entry layout with independent window-size memory for Normal Mode and Keypad Mode.
-- **Explicit alignment and piecewise editing**: use `&` directly in `align` / `aligned` to choose visual alignment points; `cases` has improved multiline, brace, alignment, and Enter behavior.
-- **Custom hotkeys and quick input**: formula tools, Common tools, and custom tiles can use persistent shortcuts; Greek-letter quick input is integrated into the same editor configuration.
-- **Custom Symbol Designer**: draw, compose, and register mathematical symbols for the toolbar, autocomplete, MathLive rendering, and SVG / PNG export.
-- **Full theme customization**: backgrounds, paper, surface levels, selection states, accents, and formula-caret colors are managed by one theme system across the editor, settings, and Help Manual.
-- **Quick OCR and Silent OCR**: streamlined screenshot recognition plus background OCR that writes LaTeX directly to the clipboard, with a recognition status HUD.
-- **Prewarmed Office editor lifecycle**: Word / PowerPoint editors stay persistent or prewarmed to reduce repeated cold starts and focus switching.
-- **Office add-in Install / Update / Repair**: detects missing, outdated, incomplete, or unregistered DOTM / PPAM add-ins and can replace older versions directly.
-- **Reworked Word numbering and cross-references**: sequential, chapter, and section numbering with multiple separators, global repair by physical document order, stronger middle-insertion and reference handling, legacy-structure repair, and better large-document performance.
-- **Improved Word redraw and document import**: stricter formula identity / metadata, safer bulk target recovery, paragraph-layout preservation, and stable double-click edit targets.
-- **In-app Help Manual**: documentation for the editor, hotkeys, tiles, `align`, `cases`, matrices, Keypad Mode, OCR, custom symbols, Word, and PowerPoint.
-- **Windows PowerPoint format conversion**: convert formulas between picture, OLE, and OMML formats.
-
-See the full notes in the [VisualTeX 1.2.5 Release](https://github.com/Finix15/visualtex/releases/tag/v1.2.5).
-
-## Real application renders
-
-The following images are real VisualTeX runtime captures, not mockups. The first row shows the blue-and-white main workspace and layout or feature settings; the second row shows three additional colour themes.
-
-### Main workspace and controls
-
-<p align="center">
-  <img src="docs/images/visualtex-readme-1.webp" width="45%" alt="VisualTeX blue-and-white classic workspace" />
-  <img src="docs/images/visualtex-readme-2.webp" width="45%" alt="VisualTeX layout and feature settings" />
-</p>
-<p align="center"><sub>Blue-and-white classic workspace · Layout, input-behaviour, and export controls</sub></p>
-
-### Colour themes
-
-<p align="center">
-  <img src="docs/images/visualtex-readme-3.webp" width="30%" alt="VisualTeX warm beige theme" />
-  <img src="docs/images/visualtex-readme-4.webp" width="30%" alt="VisualTeX deep purple theme" />
-  <img src="docs/images/visualtex-readme-5.webp" width="30%" alt="VisualTeX deep green theme" />
-</p>
-<p align="center"><sub>Warm beige · Deep purple · Deep green</sub></p>
-
-## Core features
-
-### Visual formula editing
-
-- Structured fractions, roots, integrals, sums, limits, scripts, Greek letters, sets, and relations;
-- Multiple formula rows, 1×1 to 10×10 matrices, delimiters, and selection-aware structure insertion;
-- Keypad Mode with independent window-size memory from Normal Mode;
-- Explicit `&` alignment-point control for `align` / `aligned`, plus more stable multiline `cases` editing;
-- Standard and classic workspace layouts; the classic layout docks formula tools and LaTeX source at the bottom and can be collapsed;
-- Optional plain-text conversion: `alpha` inserts a Greek letter, `>=` inserts greater-than-or-equal, and `pp`, `ss`, `mm`, `dd`, and `eq` insert plus, minus, multiplication, division, and equals; disabling it turns off every no-backslash shortcut, while `xx` always remains ordinary variable input;
-- Independent controls for automatic exits from scripts, accents, and font commands, plus separate command-suggestion panels;
-- Font wrappers such as `mathbb`, `mathbf`, and `mathcal` are entered with a backslash or toolbar button and can exit after one character or accept multiple characters and confirm with Enter;
-- Bold uses standard `\mathbf{...}` output, while bold, default math italic, and `\mathrm{...}` upright styles can all be toggled back;
-- Differential `d`, constants `e`, imaginary units `i/j`, and common operators are automatically normalized to upright forms independently of shortcut conversion settings;
-- Document-level undo and redo with active-row, caret, and selection restoration;
-- Persistent hotkeys for formula tools, Common tools, and custom tiles, with centralized management and conflict replacement;
-- Greek-letter quick input, configurable Common tools, and custom tile groups;
-- A built-in Custom Symbol Designer for drawing, composing, cropping, and registering mathematical glyphs;
-- Formula zoom, blue-and-white light, warm beige, dark, deep purple, and deep green themes, full theme-color customization, Chinese and English UI, local history, and JSON documents.
-
-### LaTeX source
-
-- Two-way synchronization between the visual editor and CodeMirror source editor;
-- Raw LaTeX plus `$...$`, `\(...\)`, `\[...\]`, `equation`, `align`, `gather`, `multline`, `split`, and related formats;
-- Top-level alignment handling that preserves matrix-internal separators and line breaks;
-- Formula copying without a TeX Live installation.
-
-### Document export and updates
-
-- Export the current formula document directly as Markdown, SVG, or PNG;
-- Remember the selected export directory after the first export;
-- Markdown uses common display-math blocks, while SVG and PNG are ready for web pages, notes, and presentations;
-- Automatic startup update checks, localized release notes, and manual update checks.
-
-### Word document LaTeX redraw
-
-- Scan `$...$`, `\(...\)`, `$$...$$`, and `\[...\]` in the current Word selection or the full document;
-- Convert formulas in bulk to native Word OMML or double-click-editable VisualTeX OLE;
-- Inline formulas inherit surrounding body text size, while display formulas inherit adjacent paragraph size and reuse their original paragraph without extra blank lines;
-- A warmed converter, duplicate-formula cache, and reverse-order replacement improve safety and performance on large documents.
-
-### Local formula OCR
-
-- Select, drag, or paste formula images and insert recognized LaTeX at the saved caret;
-- PaddleOCR PP-FormulaNet plus-S, plus-M, and plus-L models;
-- Dark-background and transparent-image preprocessing, progress reporting, and cancellation;
-- Images remain on the local device;
-- Quick OCR streamlines screenshot capture, recognition, editor return, and result insertion;
-- Silent OCR recognizes in the background and writes LaTeX directly to the clipboard;
-- An OCR status HUD reports recognition progress and completion.
-
-## macOS application
-
-The macOS application lives in [`apps/macos`](apps/macos) and uses a fully offline native Office route:
-
-![VisualTeX native Word add-in on macOS](docs/images/visualtex-macos-word-ribbon.png)
-
-- A Word DOTM global template and a fixed-path PowerPoint PPAM add-in;
-- VBA, AppleScriptTask, the Office Group Container, and local Tauri Session windows;
-- Word picture formulas and native OMML inline or display formulas;
-- Redraw Selection, Redraw Document, and LaTeX / Markdown document import with formula identity, paragraph layout, and double-click edit targets preserved;
-- Picture-to-OMML conversion, picture and OMML equation numbering, cross-references, Ribbon editing, and double-click editing;
-- Sequential, chapter-based, and section-based Word numbering with multiple separators and global repair by physical document order;
-- Stronger middle insertion, cross-reference coordination, legacy `SEQ` / helper repair, and large-document numbering performance;
-- DOTM / PPAM Install, Update, Repair, and version detection with direct replacement of older add-ins;
-- A persistent / prewarmed Office editor lifecycle to reduce repeated cold-start delays;
-- Stable static picture-number display backed by a native SEQ source, preventing the number from dropping after selection or field refresh;
-- PowerPoint formula creation, replacement, deletion, and double-click editing;
-- An in-app Help Manual covering editor workflows, hotkeys, Keypad Mode, OCR, custom symbols, Word, and PowerPoint;
-- The native add-ins require no Office.js, XML manifests, system-trusted certificate, or external network; a private loopback TLS companion is used only for Session/OCR services.
-
-## Windows application
-
-The Windows application lives in [`apps/windows`](apps/windows) and uses VSTO with real COM/OLE formula objects:
-
-![VisualTeX native Word add-in on Windows](docs/images/visualtex-windows-word-ribbon.png)
-
-- Native VSTO Ribbons and Office events for Word and PowerPoint;
-- Real `VisualTeX.Formula.1` OLE objects in professional mode;
-- Embedded formula metadata, EMF vector previews, and PNG compatibility previews;
-- Word OLE and OMML inline/display formulas, conversion, numbering, and references;
-- Word Ribbon batch import plus selection-wide or document-wide LaTeX redraw to OMML/OLE with context-aware font sizing;
-- PowerPoint OLE creation, editing, deletion, and picture export;
-- PowerPoint conversion between picture, OLE, and OMML formula formats;
-- Native Office double-click activation;
-- A picture mode for cross-platform documents and legacy migration.
-
-## Repository layout
-
-```text
-visualtex/
-├── apps/
-│   ├── macos/       # Independent macOS editor, Tauri app, DOTM/PPAM, OCR, tests
-│   └── windows/     # Independent Windows editor, Tauri app, VSTO/OLE, OCR, tests
-├── docs/            # Repository architecture and real screenshots
-├── tools/           # Top-level structure verification
-├── .github/         # Platform-specific CI workflows
-├── package.json     # Dispatches commands to the two applications only
-└── README.md
-```
-
-The two applications do not share `src`, `src-tauri`, editor components, Office Session implementations, `package-lock.json`, or `Cargo.lock`.
-
-## Development
-
-```bash
-npm run bootstrap
-npm run build:macos
-npm run build:windows
-npm run check
-```
-
-Run native packaging and Office acceptance from the corresponding application directory:
-
-```bash
-cd apps/macos
-npm run tauri:build
-
-cd ../windows
-npm run tauri:build
-```
-
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the repository design.
+VisualTeX được phát hành theo [Giấy phép MIT](LICENSE).
