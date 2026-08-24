@@ -1307,6 +1307,18 @@ async function main() {
           width: builderRect.width,
           height: builderRect.height,
         } : null,
+        builderHasNoHorizontalOverflow: Boolean(
+          builder && builder.scrollWidth <= builder.clientWidth + 1,
+        ),
+        builderHasNoVerticalOverflow: Boolean(
+          builder && builder.scrollHeight <= builder.clientHeight + 1,
+        ),
+        optionsHasNoHorizontalOverflow: Boolean(
+          optionsColumn && optionsColumn.scrollWidth <= optionsColumn.clientWidth + 1,
+        ),
+        optionsHasNoVerticalOverflow: Boolean(
+          optionsColumn && optionsColumn.scrollHeight <= optionsColumn.clientHeight + 1,
+        ),
         optionsColumnInside: inside(optionsColumnRect),
         sizePickerInside: inside(sizePickerRect),
         hasTwoColumnOrder: Boolean(
@@ -1330,6 +1342,20 @@ async function main() {
           button.getBoundingClientRect().height,
         ),
         delimiterInside: delimiterButtons.every((button) => inside(button.getBoundingClientRect())),
+        delimiterInsideOptions: delimiterButtons.every((button) => {
+          const rect = button.getBoundingClientRect();
+          return Boolean(
+            optionsColumnRect &&
+            rect.left >= optionsColumnRect.left - 1 &&
+            rect.right <= optionsColumnRect.right + 1 &&
+            rect.top >= optionsColumnRect.top - 1 &&
+            rect.bottom <= optionsColumnRect.bottom + 1
+          );
+        }),
+        delimiterTopSpread: delimiterButtons.length > 0
+          ? Math.max(...delimiterButtons.map((button) => button.getBoundingClientRect().top)) -
+            Math.min(...delimiterButtons.map((button) => button.getBoundingClientRect().top))
+          : -1,
         delimiterPickerGap: sizePickerRect && delimiterButtons.length > 0
           ? sizePickerRect.left - Math.max(...delimiterButtons.map((button) => button.getBoundingClientRect().right))
           : -1,
@@ -1356,6 +1382,10 @@ async function main() {
     assert.ok(matrixState.builderRect.width >= 240, JSON.stringify(matrixState));
     assert.ok(matrixState.builderRect.width <= 320, JSON.stringify(matrixState));
     assert.ok(matrixState.builderRect.height >= 90, JSON.stringify(matrixState));
+    assert.equal(matrixState.builderHasNoHorizontalOverflow, true, JSON.stringify(matrixState));
+    assert.equal(matrixState.builderHasNoVerticalOverflow, true, JSON.stringify(matrixState));
+    assert.equal(matrixState.optionsHasNoHorizontalOverflow, true, JSON.stringify(matrixState));
+    assert.equal(matrixState.optionsHasNoVerticalOverflow, true, JSON.stringify(matrixState));
     assert.equal(matrixState.optionsColumnInside, true, JSON.stringify(matrixState));
     assert.equal(matrixState.sizePickerInside, true, JSON.stringify(matrixState));
     assert.equal(matrixState.hasTwoColumnOrder, true, JSON.stringify(matrixState));
@@ -1376,6 +1406,8 @@ async function main() {
       JSON.stringify(matrixState),
     );
     assert.equal(matrixState.delimiterInside, true, JSON.stringify(matrixState));
+    assert.equal(matrixState.delimiterInsideOptions, true, JSON.stringify(matrixState));
+    assert.ok(matrixState.delimiterTopSpread <= 1, JSON.stringify(matrixState));
     assert.ok(matrixState.delimiterPickerGap >= 0, JSON.stringify(matrixState));
     assert.ok(Math.abs(matrixState.gridAspectRatio - 1) <= 0.03, JSON.stringify(matrixState));
     assert.equal(matrixState.delimiterPreviewInside, true, JSON.stringify(matrixState));

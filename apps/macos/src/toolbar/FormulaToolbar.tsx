@@ -1246,14 +1246,46 @@ export function FormulaToolbar({
             (availableHeight + rowGap) / (targetRowHeight + rowGap),
           ),
         );
-        const matrixPickerSize = Math.max(
-          40,
-          Math.min(152, Math.floor(availableHeight - 8)),
-        );
 
         root.style.setProperty("--toolbar-row-count", String(nextRowCount));
-        root.style.setProperty("--matrix-picker-size", `${matrixPickerSize}px`);
         root.dataset.toolbarRowCount = String(nextRowCount);
+
+        const matrixBuilder = root.querySelector<HTMLElement>(".matrix-builder");
+        if (matrixBuilder) {
+          const builderStyles = window.getComputedStyle(matrixBuilder);
+          const builderInnerWidth = Math.max(
+            0,
+            matrixBuilder.clientWidth -
+              (Number.parseFloat(builderStyles.paddingLeft) || 0) -
+              (Number.parseFloat(builderStyles.paddingRight) || 0),
+          );
+          const builderInnerHeight = Math.max(
+            0,
+            matrixBuilder.clientHeight -
+              (Number.parseFloat(builderStyles.paddingTop) || 0) -
+              (Number.parseFloat(builderStyles.paddingBottom) || 0),
+          );
+          const builderColumnGap =
+            Number.parseFloat(builderStyles.columnGap) || 0;
+          const preferredOptionsWidth = nextRowCount <= 2 ? 190 : 214;
+          const widthBudget = Math.max(
+            40,
+            builderInnerWidth - builderColumnGap - preferredOptionsWidth,
+          );
+          const rowSizeLimit = nextRowCount <= 2 ? 72 : 152;
+          const matrixPickerSize = Math.max(
+            40,
+            Math.min(
+              rowSizeLimit,
+              Math.floor(builderInnerHeight),
+              Math.floor(widthBudget),
+            ),
+          );
+          root.style.setProperty(
+            "--matrix-picker-size",
+            `${matrixPickerSize}px`,
+          );
+        }
         setHorizontalRowCount((current) =>
           current === nextRowCount ? current : nextRowCount,
         );
@@ -1262,6 +1294,9 @@ export function FormulaToolbar({
 
     const observer = new ResizeObserver(measureRows);
     observer.observe(root);
+    observer.observe(strip);
+    const matrixBuilder = root.querySelector<HTMLElement>(".matrix-builder");
+    if (matrixBuilder) observer.observe(matrixBuilder);
     measureRows();
     return () => {
       window.cancelAnimationFrame(frame);
