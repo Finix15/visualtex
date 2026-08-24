@@ -1168,6 +1168,7 @@ export function FormulaToolbar({
 
     const resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(strip);
+    sections.forEach((section) => resizeObserver.observe(section));
     strip.addEventListener("scroll", handleScroll, { passive: true });
     measureGeometry();
     updateActiveCategoryDom(resolveCategory());
@@ -1284,6 +1285,25 @@ export function FormulaToolbar({
             "--matrix-builder-column-span",
             String(matrixBuilderColumnSpan),
           );
+
+          const matrixSection = matrixBuilder.closest<HTMLElement>(
+            '[data-toolbar-category-section="matrix"]',
+          );
+          if (matrixSection) {
+            matrixSection.style.removeProperty(
+              "--matrix-category-section-width",
+            );
+            const sectionLeft = matrixSection.getBoundingClientRect().left;
+            const contentRight = Array.from(matrixSection.children).reduce(
+              (right, child) =>
+                Math.max(right, child.getBoundingClientRect().right),
+              sectionLeft,
+            );
+            matrixSection.style.setProperty(
+              "--matrix-category-section-width",
+              `${Math.max(1, Math.ceil(contentRight - sectionLeft + 1))}px`,
+            );
+          }
         }
         setHorizontalRowCount((current) =>
           current === nextRowCount ? current : nextRowCount,

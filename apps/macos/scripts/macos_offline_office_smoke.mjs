@@ -1593,6 +1593,8 @@ expectIncludes(formulaToolbar, 'root.querySelector<HTMLElement>(".matrix-builder
 expectIncludes(formulaToolbar, "Math.ceil(requiredBuilderWidth / formulaToolButtonSize)", "The matrix builder must claim enough toolbar columns instead of shrinking its picker");
 expectIncludes(formulaToolbar, '"--matrix-builder-column-span"', "The matrix builder must publish its measured horizontal span");
 expectIncludes(formulaToolbar, '"--matrix-picker-size"', "The horizontal matrix picker must publish its bounded square size");
+expectIncludes(formulaToolbar, '"--matrix-category-section-width"', "The continuous matrix category must expand its paint box around every matrix tile");
+expectIncludes(formulaToolbar, "sections.forEach((section) => resizeObserver.observe(section))", "Continuous toolbar geometry must follow individual category width changes");
 expectIncludes(styles, "grid-template-columns: repeat(6, minmax(0, 1fr))", "All six matrix delimiters must fit on one non-overlapping horizontal row");
 expect(!inputBehaviorMenu.includes("option.descriptionEn"), "Input behavior cards must not render explanatory subtext below each option title");
 expect(!inputBehaviorMenu.includes("控制普通数学输入是否使用快捷转义"), "Input behavior section headings must not render explanatory subtext");

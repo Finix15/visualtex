@@ -1289,6 +1289,15 @@ async function main() {
       const matrixSection = builder?.closest(
         '[data-toolbar-category-section="matrix"]',
       );
+      const matrixSectionRect = matrixSection?.getBoundingClientRect();
+      const relationSection = document.querySelector(
+        '.classic-bottom-toolbar [data-toolbar-category-section="relation"]',
+      );
+      const relationSectionRect = relationSection?.getBoundingClientRect();
+      const matrixChildren = Array.from(matrixSection?.children ?? []);
+      const matrixContentRight = matrixChildren.length > 0
+        ? Math.max(...matrixChildren.map((child) => child.getBoundingClientRect().right))
+        : -1;
       const nextTemplate = matrixSection?.querySelector(
         ':scope > .template-button',
       );
@@ -1319,6 +1328,19 @@ async function main() {
         builderHasNoVerticalOverflow: Boolean(
           builder && builder.scrollHeight <= builder.clientHeight + 1,
         ),
+        matrixSectionContainsChildren: Boolean(
+          matrixSectionRect && matrixContentRight <= matrixSectionRect.right + 1,
+        ),
+        matrixSectionHasNoHorizontalOverflow: Boolean(
+          matrixSection && matrixSection.scrollWidth <= matrixSection.clientWidth + 1,
+        ),
+        relationStartsAfterMatrix: Boolean(
+          relationSectionRect && matrixContentRight >= 0 &&
+          relationSectionRect.left >= matrixContentRight - 1,
+        ),
+        matrixSectionContentGap: matrixSectionRect
+          ? matrixSectionRect.right - matrixContentRight
+          : -1,
         optionsHasNoHorizontalOverflow: Boolean(
           optionsColumn && optionsColumn.scrollWidth <= optionsColumn.clientWidth + 1,
         ),
@@ -1392,6 +1414,10 @@ async function main() {
     assert.ok(matrixState.builderColumnSpan >= 7, JSON.stringify(matrixState));
     assert.equal(matrixState.builderHasNoHorizontalOverflow, true, JSON.stringify(matrixState));
     assert.equal(matrixState.builderHasNoVerticalOverflow, true, JSON.stringify(matrixState));
+    assert.equal(matrixState.matrixSectionContainsChildren, true, JSON.stringify(matrixState));
+    assert.equal(matrixState.matrixSectionHasNoHorizontalOverflow, true, JSON.stringify(matrixState));
+    assert.equal(matrixState.relationStartsAfterMatrix, true, JSON.stringify(matrixState));
+    assert.ok(matrixState.matrixSectionContentGap >= -1, JSON.stringify(matrixState));
     assert.equal(matrixState.optionsHasNoHorizontalOverflow, true, JSON.stringify(matrixState));
     assert.equal(matrixState.optionsHasNoVerticalOverflow, true, JSON.stringify(matrixState));
     assert.equal(matrixState.optionsColumnInside, true, JSON.stringify(matrixState));

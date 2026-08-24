@@ -11784,8 +11784,15 @@ body[data-workspace-resize="dock"] * {
 
 .formula-toolbar.is-horizontal .toolbar-tab[data-category="matrix"],
 .formula-toolbar.is-horizontal
+  .template-strip.is-continuous-categories
   .toolbar-category-section[data-toolbar-category-section="matrix"] {
   --toolbar-category-tint: var(--toolbar-category-matrix);
+}
+
+.formula-toolbar.is-horizontal
+  .toolbar-category-section[data-toolbar-category-section="matrix"] {
+  width: var(--matrix-category-section-width, max-content);
+  min-width: var(--matrix-category-section-width, max-content);
 }
 
 .formula-toolbar.is-horizontal .toolbar-tab[data-category="relation"],
