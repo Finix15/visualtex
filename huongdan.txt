@@ -1,0 +1,122 @@
+# Hướng dẫn cài đặt VisualTeX từ GitHub Releases
+
+Tài liệu này dành cho người dùng tải VisualTeX từ trang [GitHub Releases](https://github.com/Finix15/visualtex/releases). Bạn không cần tải mã nguồn hoặc cài công cụ lập trình.
+
+## Chọn đúng bộ cài
+
+1. Mở trang [VisualTeX Releases](https://github.com/Finix15/visualtex/releases).
+2. Chọn bản phát hành mới nhất, sau đó mở mục **Assets** nếu danh sách tệp chưa hiển thị.
+3. Tải tệp phù hợp với máy:
+
+| Hệ điều hành | Tệp cần tải | Yêu cầu |
+| --- | --- | --- |
+| Windows | `VisualTeX_<phiên-bản>_x64-setup.exe` | Windows 10/11, 64-bit |
+| macOS | `VisualTeX_<phiên-bản>_aarch64.dmg` | macOS 11 trở lên, máy Apple Silicon (M1/M2/M3/M4...) |
+
+Ví dụ: `VisualTeX_1.2.6_x64-setup.exe` hoặc `VisualTeX_1.2.6_aarch64.dmg`.
+
+Không tải các tệp **Source code (zip)** hoặc **Source code (tar.gz)** nếu bạn chỉ muốn cài và sử dụng ứng dụng.
+
+> Chỉ bỏ qua cảnh báo bảo mật khi tệp được tải từ trang Releases chính thức ở trên. Nếu bản phát hành có mã SHA-256, hãy đối chiếu mã trước khi cài đặt.
+
+## Cài đặt trên Windows
+
+1. Đóng Microsoft Word và PowerPoint nếu đang mở.
+2. Mở thư mục **Downloads**, rồi nhấp đúp vào tệp `VisualTeX_<phiên-bản>_x64-setup.exe`.
+3. Nếu Windows hỏi quyền thay đổi thiết bị, chọn **Yes**.
+4. Chọn thành phần muốn cài:
+   - **VisualTeX only**: chỉ cài ứng dụng VisualTeX;
+   - **VisualTeX + Native Office Integration**: cài thêm tiện ích cho Word và PowerPoint;
+   - **OCR Offline Resources**: cài tài nguyên nhận dạng công thức từ ảnh để sử dụng ngoại tuyến.
+5. Tiếp tục theo hướng dẫn của trình cài đặt cho đến khi hoàn tất.
+6. Mở VisualTeX từ Start Menu.
+7. Nếu đã cài tích hợp Office, mở lại Word hoặc PowerPoint và kiểm tra thẻ **VisualTeX** trên thanh Ribbon.
+
+### Khi Windows SmartScreen chặn bộ cài
+
+Nếu xuất hiện thông báo **Windows protected your PC**:
+
+1. Chọn **More info**.
+2. Kiểm tra tên tệp đúng là bộ cài VisualTeX đã tải từ trang Releases chính thức.
+3. Chọn **Run anyway** để tiếp tục.
+
+Nếu máy thuộc cơ quan hoặc trường học và không có nút **Run anyway**, hãy liên hệ quản trị viên hệ thống. Không nên tự thay đổi chính sách bảo mật của máy.
+
+### Cập nhật hoặc cài lại trên Windows
+
+1. Đóng VisualTeX, Word và PowerPoint.
+2. Tải tệp `.exe` của phiên bản mới từ Releases.
+3. Chạy bộ cài mới và làm theo hướng dẫn. Trình cài đặt sẽ cập nhật bản hiện có.
+
+Nếu tiện ích Office không xuất hiện sau khi cập nhật, chạy lại bộ cài và chọn thành phần tích hợp Office, sau đó khởi động lại Word/PowerPoint.
+
+## Cài đặt trên macOS
+
+1. Đóng Microsoft Word và PowerPoint nếu đang mở.
+2. Mở thư mục **Downloads**, rồi nhấp đúp vào tệp `VisualTeX_<phiên-bản>_aarch64.dmg`.
+3. Trong cửa sổ vừa mở, kéo **VisualTeX** vào thư mục **Applications**.
+4. Chờ sao chép hoàn tất, sau đó đẩy ổ đĩa VisualTeX ra bằng nút **Eject** trong Finder.
+5. Mở **Applications** và chạy VisualTeX.
+6. Để dùng với Office, mở **Cài đặt** trong VisualTeX và cài:
+   - DOTM cho Microsoft Word;
+   - PPAM cho Microsoft PowerPoint.
+7. Đóng và mở lại Word/PowerPoint, rồi kiểm tra thẻ **VisualTeX** trên thanh Ribbon.
+
+### Khi macOS chặn ứng dụng
+
+Nếu macOS báo không thể mở VisualTeX vì không xác minh được nhà phát triển:
+
+1. Đóng hộp thoại cảnh báo.
+2. Trong Finder, mở thư mục **Applications**.
+3. Giữ phím `Control`, nhấp vào **VisualTeX**, chọn **Open**, rồi chọn **Open** lần nữa.
+
+Nếu vẫn bị chặn:
+
+1. Mở **System Settings** > **Privacy & Security**.
+2. Tìm thông báo VisualTeX vừa bị chặn.
+3. Chọn **Open Anyway**, xác thực bằng mật khẩu hoặc Touch ID, rồi xác nhận **Open**.
+
+Bạn thường chỉ cần thực hiện thao tác này ở lần mở đầu tiên.
+
+### Cập nhật hoặc cài lại trên macOS
+
+1. Đóng VisualTeX, Word và PowerPoint.
+2. Tải tệp `.dmg` của phiên bản mới từ Releases.
+3. Mở DMG và kéo VisualTeX vào **Applications**.
+4. Khi Finder hỏi, chọn **Replace** để thay thế phiên bản cũ.
+5. Mở VisualTeX. Nếu tiện ích Office không hoạt động, vào **Cài đặt** và cài lại DOTM/PPAM, sau đó mở lại Office.
+
+## Khắc phục sự cố nhanh
+
+### Không thấy tệp cài đặt trong Assets
+
+Hãy chắc chắn bạn đang xem một bản phát hành hoàn chỉnh, không phải trang mã nguồn hoặc bản phát hành chỉ dành cho nền tảng khác. Thử mở lại [danh sách Releases](https://github.com/Finix15/visualtex/releases) và chọn phiên bản mới nhất.
+
+### macOS báo ứng dụng không tương thích
+
+Bộ cài `aarch64.dmg` dành cho máy Mac Apple Silicon. Kiểm tra tại **Apple menu** > **About This Mac**. Nếu mục **Chip** là Apple M1/M2/M3/M4... thì máy tương thích; máy Mac dùng Intel không chạy được bộ cài này.
+
+### Không thấy thẻ VisualTeX trong Word hoặc PowerPoint
+
+- Đóng hoàn toàn Word/PowerPoint rồi mở lại.
+- Windows: chạy lại bộ cài và chọn **VisualTeX + Native Office Integration**.
+- macOS: vào **Cài đặt** của VisualTeX và cài hoặc sửa chữa DOTM/PPAM.
+- Nếu Office hỏi có cho phép macro hoặc add-in hay không, chỉ cho phép khi tệp đến từ bộ cài VisualTeX chính thức.
+
+### OCR chưa hoạt động
+
+- Windows: chạy lại bộ cài và chọn **OCR Offline Resources** nếu chưa cài.
+- Mở phần cài đặt OCR trong VisualTeX để kiểm tra hoặc cài model cần dùng.
+- Khởi động lại VisualTeX sau khi đổi model OCR.
+
+## Gỡ cài đặt
+
+### Windows
+
+Mở **Settings** > **Apps** > **Installed apps**, tìm **VisualTeX**, chọn menu dấu ba chấm rồi chọn **Uninstall**.
+
+### macOS
+
+1. Gỡ DOTM/PPAM trong phần **Cài đặt** của VisualTeX nếu đã cài tích hợp Office.
+2. Đóng VisualTeX, Word và PowerPoint.
+3. Mở **Applications**, kéo VisualTeX vào **Trash**, rồi dọn Trash khi không còn cần khôi phục ứng dụng.
