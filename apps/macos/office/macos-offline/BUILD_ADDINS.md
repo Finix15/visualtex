@@ -68,6 +68,10 @@ PPAM shell.
 ```bash
 SCRATCH="$HOME/Library/Group Containers/UBF8T346G9.Office/VisualTeX/Scratch"
 
+python3 -m venv "$SCRATCH/verification-venv"
+"$SCRATCH/verification-venv/bin/python" -m pip install oletools
+export VISUALTEX_PYTHON="$SCRATCH/verification-venv/bin/python"
+
 npm run rebuild:macos-word-addin -- \
   --output "$SCRATCH/VisualTeXWordBuild.dotm"
 

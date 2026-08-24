@@ -39,6 +39,8 @@ const outputPath = resolve(
 );
 const keepOpenOnError = process.argv.includes("--keep-open-on-error");
 const preservePowerPoint = process.argv.includes("--preserve-powerpoint");
+const verificationPython =
+  process.env.VISUALTEX_PYTHON || "/usr/bin/python3";
 const offlineOfficeRoot = join(repositoryRoot, "office", "macos-offline");
 const modules = [
   {
@@ -112,6 +114,19 @@ function osascript(lines, timeout = 60_000) {
     lines.flatMap((line) => ["-e", line]),
     { timeout },
   ).trim();
+}
+
+function verifyPythonDependencies() {
+  try {
+    run(verificationPython, [
+      "-c",
+      "from oletools.olevba import VBA_Parser",
+    ]);
+  } catch {
+    throw new Error(
+      `PowerPoint VBA verification requires oletools in ${verificationPython}. Create a virtual environment, install oletools, and rerun with VISUALTEX_PYTHON pointing to that environment's python executable.`,
+    );
+  }
 }
 
 function acquireLock() {
@@ -674,7 +689,7 @@ for source_path in source_paths:
         raise SystemExit(f"MISMATCH|{module_name}")
 print("MATCH")
 `;
-  const result = run("/usr/bin/python3", [
+  const result = run(verificationPython, [
     "-c",
     checker,
     outputPath,
@@ -685,6 +700,7 @@ print("MATCH")
   }
 }
 
+verifyPythonDependencies();
 acquireLock();
 let succeeded = false;
 try {
