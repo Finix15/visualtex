@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
     [string]$Configuration = "Release",
-    [switch]$SkipTests
+    [switch]$SkipTests,
+    [ValidateSet("x64", "x86")]
+    [string[]]$Platforms = @("x64")
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,25 +32,38 @@ function Stop-BuildOleServerProcesses {
 }
 
 $dotnet = $null
+$dotnetVersion = $null
 foreach ($candidate in @(
     (Join-Path $env:LOCALAPPDATA "Microsoft\dotnet\dotnet.exe"),
     (Join-Path $env:USERPROFILE ".dotnet\dotnet.exe"),
     (Join-Path $env:ProgramFiles "dotnet\dotnet.exe")
 )) {
-    if (Test-Path $candidate) { $dotnet = $candidate; break }
+    if (-not (Test-Path $candidate)) { continue }
+    $candidateVersion = @(& $candidate --list-sdks) |
+        ForEach-Object { ($_ -split ' ')[0] } |
+        Where-Object { $_.StartsWith("8.") } |
+        Sort-Object { [version]$_ } -Descending |
+        Select-Object -First 1
+    if ($candidateVersion) {
+        $dotnet = $candidate
+        $dotnetVersion = $candidateVersion
+        break
+    }
 }
 if (-not $dotnet) {
     $dotnet = Get-Command dotnet.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source
 }
 if (-not $dotnet) { throw ".NET 8 SDK is required to build and test Windows Office integration." }
-$dotnetVersion = & $dotnet --version
+if (-not $dotnetVersion) { $dotnetVersion = & $dotnet --version }
 if ($LASTEXITCODE -ne 0 -or -not $dotnetVersion.StartsWith("8.")) {
     throw ".NET 8 SDK is required; resolved dotnet reports '$dotnetVersion'."
 }
 Write-Host "Using dotnet $dotnetVersion from $dotnet"
 
 if (-not $SkipTests) {
-    & $dotnet test $tests --configuration $Configuration
+    Push-Location $root
+    try { & $dotnet test $tests --configuration $Configuration }
+    finally { Pop-Location }
     if ($LASTEXITCODE -ne 0) { throw "Windows Office tests failed." }
     & (Join-Path $PSScriptRoot "test_windows_formula_ole_server.ps1") -Configuration $Configuration
     if ($LASTEXITCODE -ne 0) { throw "Native Formula OLE tests failed." }
@@ -89,7 +104,7 @@ New-Item $resourceRoot -ItemType Directory -Force | Out-Null
 $architectures = @(
     [ordered]@{ PackagePlatform = "x64"; OlePlatform = "x64" },
     [ordered]@{ PackagePlatform = "x86"; OlePlatform = "Win32" }
-)
+) | Where-Object { $Platforms -contains $_.PackagePlatform }
 
 foreach ($architecture in $architectures) {
     $packagePlatform = $architecture.PackagePlatform
@@ -104,12 +119,18 @@ foreach ($architecture in $architectures) {
 
     $runtimeIdentifier = "win7-$packagePlatform"
     foreach ($project in @($wordProject, $powerPointProject)) {
-        & $dotnet restore $project --ignore-failed-sources -p:Platform=$packagePlatform -r $runtimeIdentifier
+        Push-Location $root
+        try {
+            & $dotnet restore $project --ignore-failed-sources -p:Platform=$packagePlatform -p:RestoreBuildInParallel=false -r $runtimeIdentifier
+        }
+        finally {
+            Pop-Location
+        }
         if ($LASTEXITCODE -ne 0) { throw "NuGet restore failed: $project" }
         if (-not (Test-Path $referenceRoot)) {
             throw ".NET Framework 4.8 reference assemblies package is missing after restoring $project."
         }
-        & $msbuild $project /m /p:Configuration=$Configuration /p:Platform=$packagePlatform /p:TargetFrameworkRootPath=$referenceRoot
+        & $msbuild $project /m:1 /p:Configuration=$Configuration /p:Platform=$packagePlatform /p:TargetFrameworkRootPath=$referenceRoot /p:UseSharedCompilation=false
         if ($LASTEXITCODE -ne 0) { throw "$packagePlatform VSTO build failed: $project" }
     }
 
@@ -141,6 +162,7 @@ foreach ($architecture in $architectures) {
     }
     $dependencyFileNames = @(
         "VisualTeX.WindowsOffice.Contracts.dll",
+        "VisualTeX.MathTypeConversion.dll",
         "System.Text.Json.dll",
         "System.Text.Encodings.Web.dll",
         "Microsoft.Bcl.AsyncInterfaces.dll",
@@ -165,6 +187,7 @@ foreach ($architecture in $architectures) {
     }
 
     $hashManifest = [ordered]@{
+        version = "1.0.43.0"
         architecture = $packagePlatform
         package = [ordered]@{
             file = $packageFileName
@@ -183,6 +206,15 @@ foreach ($architecture in $architectures) {
             sha256 = (Get-FileHash $oleServerOutput -Algorithm SHA256).Hash
         }
         dependencies = $dependencyEntries
+        mathTypeRuntime = [ordered]@{
+            protocolVersion = 1
+            files = @(Get-ChildItem (Join-Path $root "src-windows\artifacts\mathtype-runtime\windows-x64") -Recurse -File | ForEach-Object {
+                [ordered]@{
+                    path = $_.FullName.Substring((Join-Path $root "src-windows\artifacts\mathtype-runtime\windows-x64").Length + 1).Replace('\', '/')
+                    sha256 = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
+                }
+            })
+        }
     }
     $manifestFileName = "VisualTeX-WindowsOffice-VSTO-$packagePlatform.sha256.json"
     $hashManifest | ConvertTo-Json -Depth 4 | Set-Content `
@@ -190,4 +222,4 @@ foreach ($architecture in $architectures) {
         -Encoding UTF8
 }
 
-Write-Host "Windows Office x86 and x64 packages are ready for the Tauri/NSIS bundle."
+Write-Host "Windows Office package(s) ready for: $($Platforms -join ', ')."

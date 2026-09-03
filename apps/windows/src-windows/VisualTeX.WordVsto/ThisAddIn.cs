@@ -8,6 +8,7 @@ using Office = Microsoft.Office.Core;
 using Task = System.Threading.Tasks.Task;
 using VisualTeX.WindowsOffice.Contracts;
 using VisualTeX.WindowsOffice.VstoShared;
+using VisualTeX.MathTypeConversion;
 
 namespace VisualTeX.WordVsto;
 
@@ -106,6 +107,12 @@ public interface IWordRibbonCallbacks
     [DispId(30)]
     void OnRedrawDocumentOmmlToLatex(object control);
 
+    [DispId(31)]
+    void OnConvertSelectedMathType(object control);
+
+    [DispId(32)]
+    void OnConvertAllMathType(object control);
+
 }
 
 [ComVisible(true)]
@@ -140,6 +147,8 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
           <button id="VisualTeX.WordVsto.InlineOmml" label="OMML cùng dòng" size="large" screentip="Chèn công thức gốc của Word" supertip="Chèn công thức OMML cùng dòng có thể chỉnh sửa trực tiếp bằng công cụ công thức Word, đồng thời giữ siêu dữ liệu LaTeX của VisualTeX." tag="ommlInline" getImage="GetRibbonImage" onAction="OnInsertInlineOmml" />
           <button id="VisualTeX.WordVsto.DisplayOmml" label="OMML riêng dòng" size="large" screentip="Chèn công thức gốc của Word" supertip="Chèn công thức OMML riêng dòng có thể chỉnh sửa trực tiếp bằng công cụ công thức Word, đồng thời giữ siêu dữ liệu LaTeX của VisualTeX." tag="ommlDisplay" getImage="GetRibbonImage" onAction="OnInsertDisplayOmml" />
           <button id="VisualTeX.WordVsto.Edit" label="Sửa công thức đã chọn" size="large" tag="editSelected" getImage="GetRibbonImage" onAction="OnEditSelected" />
+          <button id="VisualTeX.WordVsto.ConvertSelectedMathType" label="Chuyển MathType đã chọn" size="large" screentip="Chuyển MathType 7 sang Word Equation" supertip="Quét đối tượng Equation.DSMT4 đã chọn và chuyển MTEF v5 thành OMML gốc của Word mà không gọi MathType." tag="convertToOmml" getImage="GetRibbonImage" onAction="OnConvertSelectedMathType" />
+          <button id="VisualTeX.WordVsto.ConvertAllMathType" label="Chuyển toàn bộ MathType" size="large" screentip="Chuyển toàn bộ MathType 7" supertip="Quét toàn bộ tài liệu, báo số lượng và yêu cầu xác nhận trước khi thay bằng Word Equation." tag="convertToOmml" getImage="GetRibbonImage" onAction="OnConvertAllMathType" />
           <box id="VisualTeX.WordVsto.ConversionBox" boxStyle="vertical">
             <button id="VisualTeX.WordVsto.ConvertSelected" label="Chuyển sang OLE" screentip="Chuyển sang OLE có thể chỉnh sửa" supertip="Đối tượng được lưu cùng tài liệu Word và có thể nhấp đúp để sửa lại bằng VisualTeX." tag="convertToOle" getImage="GetRibbonImage" onAction="OnConvertSelected" />
             <button id="VisualTeX.WordVsto.ConvertSelectedToOmml" label="Chuyển sang Word OMML" screentip="Chuyển sang công thức gốc của Word" supertip="Chuyển công thức VisualTeX đã chọn sang OMML gốc của Word; có thể sửa trong Word hoặc tiếp tục sửa bằng VisualTeX." tag="convertToOmml" getImage="GetRibbonImage" onAction="OnConvertSelectedToOmml" />
@@ -374,6 +383,79 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             null,
             FormulaOleContract.WordOmmlMode,
             conversionOnly: true);
+    public void OnConvertSelectedMathType(object control) => ConvertMathType(wholeDocument: false);
+    public void OnConvertAllMathType(object control) => ConvertMathType(wholeDocument: true);
+
+    private void ConvertMathType(bool wholeDocument)
+    {
+        try
+        {
+            var service = _formulaService
+                ?? throw new InvalidOperationException("Dịch vụ Word chưa sẵn sàng.");
+            SetStatus("Đang quét công thức MathType 7…");
+            var scanTimer = Stopwatch.StartNew();
+            var plan = service.ScanMathTypeEquations(wholeDocument);
+            scanTimer.Stop();
+            var details = string.Join(Environment.NewLine,
+                plan.Items.Where(item => !item.CanConvert)
+                    .GroupBy(item => item.Error)
+                    .Select(group => $"- {group.Count()}: {group.Key}")
+                    .Take(8));
+            if (plan.Items.Count == 0)
+            {
+                System.Windows.Forms.MessageBox.Show(
+                    "Không tìm thấy MathType 7 (Equation.DSMT4) trong phạm vi quét.",
+                    "VisualTeX", System.Windows.Forms.MessageBoxButtons.OK,
+                    System.Windows.Forms.MessageBoxIcon.Information);
+                SetStatus("Không tìm thấy công thức MathType 7.");
+                return;
+            }
+            string? backupPath = null;
+            if (wholeDocument)
+            {
+                SetStatus("Đang tạo bản sao nguyên MathType…");
+                backupPath = service.CreateMathTypeBackup(plan.Items.Count);
+            }
+            var unsupported = plan.Items.Count(item => item.Status == MathTypeParseStatus.Unsupported);
+            var corrupt = plan.Items.Count(item => item.Status == MathTypeParseStatus.Corrupt);
+            var automatic = plan.Items.Count(item => item.CanConvert && item.Risk == "auto_replace");
+            var spotCheck = plan.Items.Count(item => item.CanConvert && item.Risk == "spot_check");
+            var manualReview = plan.Items.Count(item => item.CanConvert && item.Risk == "manual_review");
+            var message = $"Tìm thấy: {plan.Items.Count}\nCó thể chuyển đã xác minh: {plan.ConvertibleCount}"
+                + $"\nTự động: {automatic}; kiểm tra mẫu: {spotCheck}; cần duyệt: {manualReview}"
+                + $"\nKhông hỗ trợ: {unsupported}\nDữ liệu lỗi: {corrupt}\nBỏ qua: {plan.SkippedCount}"
+                + $"\nThời gian quét: {scanTimer.Elapsed.TotalSeconds:F1} giây";
+            if (backupPath is not null) message += $"\n\nĐã tạo backup:\n{backupPath}";
+            if (details.Length != 0) message += "\n\nLý do bỏ qua:\n" + details;
+            message += "\n\nBắt đầu chuyển sang Word Equation?";
+            var answer = System.Windows.Forms.MessageBox.Show(
+                message, "VisualTeX – chuyển MathType",
+                System.Windows.Forms.MessageBoxButtons.OKCancel,
+                System.Windows.Forms.MessageBoxIcon.Question);
+            if (answer != System.Windows.Forms.DialogResult.OK)
+            {
+                SetStatus("Đã hủy; tài liệu Word không bị thay đổi.");
+                return;
+            }
+            var summary = service.ConvertMathTypeEquations(plan);
+            var completed = $"Đã chuyển {summary.Converted}; thất bại {summary.Failed}; bỏ qua {summary.Skipped}.";
+            System.Windows.Forms.MessageBox.Show(
+                completed, "VisualTeX – chuyển MathType",
+                System.Windows.Forms.MessageBoxButtons.OK,
+                summary.Failed == 0
+                    ? System.Windows.Forms.MessageBoxIcon.Information
+                    : System.Windows.Forms.MessageBoxIcon.Warning);
+            SetStatus(completed);
+        }
+        catch (Exception error)
+        {
+            SetStatus($"Không thể chuyển MathType: {error.Message}");
+            System.Windows.Forms.MessageBox.Show(
+                error.Message, "VisualTeX – chuyển MathType",
+                System.Windows.Forms.MessageBoxButtons.OK,
+                System.Windows.Forms.MessageBoxIcon.Error);
+        }
+    }
     public void OnUpdateEquationNumbers(object control) => _ = UpdateEquationNumbersAsync();
     public bool GetEquationNumberFormatPressed(Office.IRibbonControl control)
     {

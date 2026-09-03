@@ -35,6 +35,9 @@ function Invoke-DependencyProbe([string]$AssemblyPath, [string]$ClassName) {
         "System.Runtime.CompilerServices.Unsafe.dll",
         "System.Threading.Tasks.Extensions.dll"
     )
+    if ($ClassName -eq "VisualTeX.WordVsto.ThisAddIn") {
+        $requiredFiles += "VisualTeX.MathTypeConversion.dll"
+    }
     foreach ($file in $requiredFiles) {
         $candidate = Join-Path $directory $file
         if (-not (Test-Path $candidate)) {
@@ -105,6 +108,14 @@ function Invoke-DependencyProbe([string]$AssemblyPath, [string]$ClassName) {
         throw "VisualTeX metadata JSON probe returned unexpected content: $json"
     }
 
+    if ($ClassName -eq "VisualTeX.WordVsto.ThisAddIn") {
+        $mathTypeAssembly = [Reflection.Assembly]::Load("VisualTeX.MathTypeConversion")
+        Assert-SameDirectory $directory $mathTypeAssembly
+        [void]$mathTypeAssembly.GetType(
+            "VisualTeX.MathTypeConversion.MathTypeEquationDecoder",
+            $true)
+    }
+
     Write-Host "$ClassName CodeBase dependency resolution and JSON execution passed."
 }
 
@@ -128,13 +139,10 @@ $probes = @(
 )
 
 $requires32Bit = $Platform -eq "x86"
-$currentPowerShell = (Get-Process -Id $PID).Path
-$probePowerShell = if ($requires32Bit -eq (-not [Environment]::Is64BitProcess)) {
-    $currentPowerShell
-} elseif ($requires32Bit) {
+$probePowerShell = if ($requires32Bit) {
     Join-Path $env:WINDIR "SysWOW64\WindowsPowerShell\v1.0\powershell.exe"
 } else {
-    Join-Path $env:WINDIR "Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+    Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
 }
 if (-not (Test-Path $probePowerShell)) {
     throw "Matching Windows PowerShell host is missing: $probePowerShell"

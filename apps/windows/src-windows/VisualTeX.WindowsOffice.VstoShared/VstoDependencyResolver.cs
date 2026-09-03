@@ -12,6 +12,7 @@ internal static class VstoDependencyResolver
         StringComparer.OrdinalIgnoreCase)
     {
         "VisualTeX.WindowsOffice.Contracts",
+        "VisualTeX.MathTypeConversion",
         "System.Text.Json",
         "System.Text.Encodings.Web",
         "Microsoft.Bcl.AsyncInterfaces",

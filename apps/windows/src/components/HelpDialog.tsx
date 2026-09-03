@@ -198,7 +198,7 @@ export function HelpDialog({ open, language, onClose }: HelpDialogProps) {
               <BookOpenText size={18} />
               {isEn ? "Help Manual" : "Hướng dẫn trợ giúp"}
             </strong>
-            <span>VisualTeX Windows 1.2.6</span>
+            <span>VisualTeX Windows 1.2.7</span>
           </div>
           <button
             type="button"

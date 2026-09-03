@@ -740,6 +740,21 @@ function Get-RelatedProductCodes {
     return @($codes)
 }
 
+function Get-InstalledProductVersion([string]$ProductCode) {
+    $installer = $null
+    try {
+        $installer = New-Object -ComObject WindowsInstaller.Installer
+        return [string]$installer.GetType().InvokeMember(
+            "ProductInfo",
+            [Reflection.BindingFlags]::GetProperty,
+            $null,
+            $installer,
+            @($ProductCode, "VersionString"))
+    } finally {
+        if ($null -ne $installer) { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($installer) }
+    }
+}
+
 function Wait-ForRelatedProductCount([int]$ExpectedCount, [int]$TimeoutSeconds = 20) {
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
     do {
@@ -964,6 +979,9 @@ try {
     }
     $HashManifestPath = (Resolve-Path -LiteralPath $HashManifestPath).Path
     $hashManifest = Get-Content -LiteralPath $HashManifestPath -Raw | ConvertFrom-Json
+    if ([string]::IsNullOrWhiteSpace([string]$hashManifest.version)) {
+        throw "Office package manifest does not declare a version; refusing an unsafe repair."
+    }
     if ($hashManifest.architecture -ne $script:resolvedOfficePlatform) {
         throw "Package manifest architecture '$($hashManifest.architecture)' does not match installed Office '$script:resolvedOfficePlatform'."
     }
@@ -976,6 +994,14 @@ try {
         throw "MSI SHA-256 mismatch: $actualPackageHash != $($hashManifest.package.sha256)"
     }
     Add-DiagnosticCheck "MSI SHA-256" $true "$packageFileName $actualPackageHash" "package"
+
+    $packageVersion = [version]([string]$hashManifest.version)
+    foreach ($existingProduct in @(Get-RelatedProductCodes)) {
+        $installedVersionText = Get-InstalledProductVersion $existingProduct
+        if (-not [string]::IsNullOrWhiteSpace($installedVersionText) -and [version]$installedVersionText -gt $packageVersion) {
+            throw "Installed Office integration $installedVersionText is newer than bundled version $packageVersion. Repair was cancelled to prevent a downgrade."
+        }
+    }
 
     if ([string]::IsNullOrWhiteSpace($LogPath)) {
         $LogPath = Join-Path $logRoot "vsto-install-$stamp.log"
@@ -1012,6 +1038,24 @@ try {
         }
         Add-DiagnosticCheck "Installed file $($entry.file)" $true $actualHash "files"
     }
+    if ($null -eq $hashManifest.mathTypeRuntime -or [int]$hashManifest.mathTypeRuntime.protocolVersion -ne 1) {
+        throw "MathType sidecar manifest is missing or uses an unsupported protocol version."
+    }
+    foreach ($entry in @($hashManifest.mathTypeRuntime.files)) {
+        $relativePath = ([string]$entry.path).Replace('/', '\')
+        if ([string]::IsNullOrWhiteSpace($relativePath) -or $relativePath.Contains('..')) {
+            throw "MathType sidecar manifest contains an unsafe path: $relativePath"
+        }
+        $installedFile = Join-Path (Join-Path $installRoot "mathtype-runtime") $relativePath
+        if (-not (Test-Path -LiteralPath $installedFile -PathType Leaf)) {
+            throw "Installed MathType sidecar file is missing: $installedFile"
+        }
+        $actualHash = (Get-FileHash -LiteralPath $installedFile -Algorithm SHA256).Hash
+        if ($actualHash -ne $entry.sha256) {
+            throw "Installed MathType sidecar hash mismatch for $relativePath."
+        }
+    }
+    Add-DiagnosticCheck "MathType sidecar runtime" $true "$(@($hashManifest.mathTypeRuntime.files).Count) files; protocol 1" "files"
 
     $wordAssembly = Join-Path $installRoot "VisualTeX.WordVsto.dll"
     $powerPointAssembly = Join-Path $installRoot "VisualTeX.PowerPointVsto.dll"

@@ -8,8 +8,8 @@
     <OleServerPlatform Condition="'$(Platform)' != 'x86'">x64</OleServerPlatform>
     <ComponentBitness Condition="'$(Platform)' == 'x86'">always32</ComponentBitness>
     <ComponentBitness Condition="'$(Platform)' != 'x86'">always64</ComponentBitness>
-    <InstallerProductCode Condition="'$(Platform)' == 'x86'">48ABC5AF-2963-4BE6-86E3-F03950ECD270</InstallerProductCode>
-    <InstallerProductCode Condition="'$(Platform)' != 'x86'">8BF4D9CB-320D-4AEB-929F-7E04812795AF</InstallerProductCode>
+    <InstallerProductCode Condition="'$(Platform)' == 'x86'">415CAB92-23AF-4799-B67F-022DD447F752</InstallerProductCode>
+    <InstallerProductCode Condition="'$(Platform)' != 'x86'">3A3F3FD0-3DDC-4FC8-90AF-215257B49396</InstallerProductCode>
     <VstoFilesComponentGuid Condition="'$(Platform)' == 'x86'">94AE021E-806D-41E2-A1D7-CE120B00A61E</VstoFilesComponentGuid>
     <VstoFilesComponentGuid Condition="'$(Platform)' != 'x86'">D9AA16B0-E4D8-4C53-AAB6-A14781F0A4C1</VstoFilesComponentGuid>
     <OleServerFilesComponentGuid Condition="'$(Platform)' == 'x86'">3615ED79-EE73-4E2F-A033-C7AB1E5FB365</OleServerFilesComponentGuid>
@@ -22,7 +22,8 @@
       WordOutput=$(MSBuildThisFileDirectory)..\VisualTeX.WordVsto\bin\$(Platform)\$(Configuration)\net48;
       PowerPointOutput=$(MSBuildThisFileDirectory)..\VisualTeX.PowerPointVsto\bin\$(Platform)\$(Configuration)\net48;
       ContractsOutput=$(MSBuildThisFileDirectory)..\VisualTeX.WindowsOffice.Contracts\bin\$(Platform)\$(Configuration)\netstandard2.0;
-      OleServerOutput=$(MSBuildThisFileDirectory)..\artifacts\formula-ole-server\$(OleServerPlatform)\$(Configuration)
+      OleServerOutput=$(MSBuildThisFileDirectory)..\artifacts\formula-ole-server\$(OleServerPlatform)\$(Configuration);
+      MathTypeRuntime=$(MSBuildThisFileDirectory)..\artifacts\mathtype-runtime\windows-x64
     </DefineConstants>
   </PropertyGroup>
   <ItemGroup>
@@ -33,4 +34,7 @@
       <AdditionalProperties Condition="'$(Platform)' != 'x86'">Platform=x64</AdditionalProperties>
     </ProjectReference>
   </ItemGroup>
+  <Target Name="PrepareMathTypeRuntime" BeforeTargets="CoreCompile">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\..\scripts\prepare_windows_mathtype_sidecar.ps1&quot;" />
+  </Target>
 </Project>

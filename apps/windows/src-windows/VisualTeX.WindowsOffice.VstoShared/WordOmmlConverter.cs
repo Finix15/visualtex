@@ -302,6 +302,24 @@ internal static class WordOmmlConverter
         bool replaceTarget = false)
     {
         var omml = TransformMathMlToOmml(mathMl);
+        return InsertPreparedOmml(
+            application, targetDocument, insertionRange, omml, display,
+            out sourceFingerprint, includeLeadingTab, replaceTarget);
+    }
+
+    internal static Range InsertPreparedOmml(
+        Application application,
+        Document targetDocument,
+        Range insertionRange,
+        string omml,
+        bool display,
+        out string sourceFingerprint,
+        bool includeLeadingTab = false,
+        bool replaceTarget = false)
+    {
+        if (string.IsNullOrWhiteSpace(omml))
+            throw new InvalidDataException("The prepared OMML is empty.");
+        _ = XElement.Parse(ExtractSingleOMath(omml));
         sourceFingerprint = ComputeOmmlFingerprint(omml);
         var tempPath = CreateTemporaryDocx(
             omml,

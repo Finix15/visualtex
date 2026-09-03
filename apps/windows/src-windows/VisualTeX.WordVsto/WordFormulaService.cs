@@ -7,11 +7,52 @@ using Microsoft.Office.Interop.Word;
 using Application = Microsoft.Office.Interop.Word.Application;
 using VisualTeX.WindowsOffice.Contracts;
 using VisualTeX.WindowsOffice.VstoShared;
+using VisualTeX.MathTypeConversion;
 
 namespace VisualTeX.WordVsto;
 
 internal sealed class WordFormulaService
 {
+    internal sealed class MathTypeScanItem
+    {
+        internal string FormulaId { get; set; } = string.Empty;
+        internal int Start { get; set; }
+        internal int End { get; set; }
+        internal string ProgId { get; set; } = string.Empty;
+        internal string MathMl { get; set; } = string.Empty;
+        internal string PreparedOmml { get; set; } = string.Empty;
+        internal string Risk { get; set; } = "blocked";
+        internal List<string> Warnings { get; } = new();
+        internal bool Display { get; set; }
+        internal string Error { get; set; } = string.Empty;
+        internal MathTypeParseStatus Status { get; set; }
+        internal string ReasonCode { get; set; } = string.Empty;
+        internal int ErrorOffset { get; set; } = -1;
+        internal string OleFingerprint { get; set; } = string.Empty;
+        internal bool CanConvert => Status == MathTypeParseStatus.Convertible
+            && Error.Length == 0 && MathMl.Length != 0 && PreparedOmml.Length != 0;
+    }
+
+    internal sealed class MathTypeScanPlan
+    {
+        internal List<MathTypeScanItem> Items { get; } = new();
+        internal int ConvertibleCount => Items.Count(item => item.CanConvert);
+        internal int SkippedCount => Items.Count - ConvertibleCount;
+    }
+
+    internal sealed class MathTypeConversionSummary
+    {
+        internal int Converted { get; set; }
+        internal int Failed { get; set; }
+        internal int Skipped { get; set; }
+        internal List<string> Errors { get; } = new();
+    }
+    private sealed class MathTypeParagraphSnapshot
+    {
+        internal string Prefix { get; set; } = string.Empty;
+        internal string Suffix { get; set; } = string.Empty;
+        internal ParagraphFormat? Format { get; set; }
+    }
     private const string RangeReferencePrefix = "visualtex-word-vsto-range:";
     private const string InlineBaselineBookmarkPrefix = "VTBL_";
     // Ordinary spaces are used only while Word materializes an inline OMath and
@@ -73,6 +114,249 @@ internal sealed class WordFormulaService
     public WordFormulaService(Application application)
     {
         _application = application;
+    }
+
+    internal MathTypeScanPlan ScanMathTypeEquations(bool wholeDocument)
+    {
+        Document? document = null;
+        Selection? selection = null;
+        Range? scope = null;
+        InlineShapes? shapes = null;
+        var plan = new MathTypeScanPlan();
+        var sidecarRequests = new List<MathTypeSidecarRequest>();
+        try
+        {
+            document = _application.ActiveDocument
+                ?? throw new InvalidOperationException("Không có tài liệu Word đang mở.");
+            var extension = Path.GetExtension(document.Name);
+            if (!extension.Equals(".docx", StringComparison.OrdinalIgnoreCase)
+                && !extension.Equals(".docm", StringComparison.OrdinalIgnoreCase))
+                throw new NotSupportedException("Chỉ hỗ trợ DOCX và DOCM; hãy lưu tài liệu DOC thành DOCX trước.");
+            if (wholeDocument) scope = document.Content;
+            else
+            {
+                selection = _application.Selection;
+                scope = selection.Range;
+            }
+            shapes = scope.InlineShapes;
+            for (var index = 1; index <= shapes.Count; index++)
+            {
+                InlineShape? shape = null;
+                Range? range = null;
+                try
+                {
+                    shape = shapes[index];
+                    if (shape.Type != WdInlineShapeType.wdInlineShapeEmbeddedOLEObject) continue;
+                    range = shape.Range;
+                    var flatOpc = range.WordOpenXML;
+                    string progId;
+                    try { progId = shape.OLEFormat.ProgID ?? string.Empty; }
+                    catch { progId = string.Empty; }
+                    if (!string.Equals(progId, "Equation.DSMT4", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (flatOpc.IndexOf("Equation.DSMT4", StringComparison.OrdinalIgnoreCase) < 0)
+                            continue;
+                        progId = "Equation.DSMT4";
+                    }
+                    var item = new MathTypeScanItem
+                    {
+                        FormulaId = $"F{plan.Items.Count + 1:D4}",
+                        Start = range.Start,
+                        End = range.End,
+                        ProgId = progId,
+                        // MathType's MathML commonly declares display="block"
+                        // even when the source OLE is embedded in prose. Word's
+                        // layout must follow the source paragraph, not that hint.
+                        Display = IsStandaloneMathTypeParagraph(range),
+                    };
+                    try
+                    {
+                        var oleBytes = MathTypeDocumentScanner.ExtractOleFromFlatOpc(flatOpc);
+                        sidecarRequests.Add(new MathTypeSidecarRequest { FormulaId = item.FormulaId, OleBytes = oleBytes });
+                    }
+                    catch (Exception error) { item.Error = error.Message; }
+                    plan.Items.Add(item);
+                }
+                finally
+                {
+                    Release(range);
+                    Release(shape);
+                }
+            }
+            if (sidecarRequests.Count != 0)
+            {
+                var decodedById = MathTypeSidecarClient.ConvertBatch(sidecarRequests, maxWorkers: 4)
+                    .ToDictionary(value => value.FormulaId, StringComparer.Ordinal);
+                foreach (var item in plan.Items.Where(value => value.Error.Length == 0))
+                {
+                    if (!decodedById.TryGetValue(item.FormulaId, out var decoded))
+                    {
+                        item.Status = MathTypeParseStatus.Corrupt;
+                        item.Error = "SIDECAR_MISSING_RESULT: engine không trả kết quả.";
+                        continue;
+                    }
+                    item.Status = decoded.ParseStatus;
+                    item.ReasonCode = decoded.ReasonCode;
+                    item.OleFingerprint = decoded.Fingerprint;
+                    item.MathMl = decoded.MathMl;
+                    item.PreparedOmml = decoded.Omml;
+                    item.Risk = decoded.Risk;
+                    item.Warnings.AddRange(decoded.Warnings);
+                    if (!decoded.CanConvert) item.Error = $"{decoded.ReasonCode}: {string.Join("; ", decoded.Errors.Take(3))}";
+                    else
+                    {
+                        var single = WordOmmlConverter.ExtractSingleOMath(item.PreparedOmml);
+                        _ = XElement.Parse(single);
+                    }
+                }
+            }
+            return plan;
+        }
+        finally
+        {
+            Release(shapes);
+            Release(scope);
+            Release(selection);
+            Release(document);
+        }
+    }
+
+    internal MathTypeConversionSummary ConvertMathTypeEquations(MathTypeScanPlan plan)
+    {
+        if (plan is null) throw new ArgumentNullException(nameof(plan));
+        var summary = new MathTypeConversionSummary { Skipped = plan.SkippedCount };
+        Document? document = null;
+        UndoRecord? undo = null;
+        try
+        {
+            document = _application.ActiveDocument
+                ?? throw new InvalidOperationException("Không có tài liệu Word đang mở.");
+            EnsureWritable(document);
+            undo = BeginUndoRecord("VisualTeX chuyển MathType sang Word Equation");
+            foreach (var item in plan.Items.Where(value => value.CanConvert).OrderByDescending(value => value.Start))
+            {
+                Range? target = null;
+                Range? equation = null;
+                Bookmark? bookmark = null;
+                MathTypeParagraphSnapshot? paragraphSnapshot = null;
+                string originalXml = string.Empty;
+                try
+                {
+                    target = document.Range(item.Start, item.End);
+                    originalXml = target.WordOpenXML;
+                    var currentOle = MathTypeDocumentScanner.ExtractOleFromFlatOpc(originalXml);
+                    var currentFingerprint = MathTypeSidecarClient.ComputeFingerprint(currentOle);
+                    if (!string.Equals(currentFingerprint, item.OleFingerprint, StringComparison.Ordinal))
+                        throw new InvalidOperationException("Đối tượng MathType đã thay đổi sau khi quét; giữ nguyên OLE.");
+                    paragraphSnapshot = CaptureMathTypeParagraph(target);
+                    equation = WordOmmlConverter.InsertPreparedOmml(
+                        _application, document, target, item.PreparedOmml, item.Display,
+                        out var fingerprint, replaceTarget: true);
+                    EnforceMathTypeLayoutAndValidate(
+                        document, equation, paragraphSnapshot, item.Display);
+                    var latex = MathMlToLatexConverter.Convert(item.MathMl);
+                    var now = DateTimeOffset.UtcNow.ToString("O");
+                    var formulaId = Guid.NewGuid().ToString();
+                    var metadata = new FormulaMetadata
+                    {
+                        FormulaId = formulaId,
+                        Title = "MathType imported equation",
+                        Latex = latex,
+                        Lines = new List<FormulaLine> { new() { Id = Guid.NewGuid().ToString(), Latex = latex } },
+                        CodeFormat = "latex",
+                        DisplayMode = item.Display ? "block" : "inline",
+                        NativeOmmlFingerprint = fingerprint,
+                        CreatedWithVersion = "1.2.7",
+                        UpdatedWithVersion = "1.2.7",
+                        CreatedAt = now,
+                        UpdatedAt = now,
+                    };
+                    ApplyOmmlTypography(equation, FormulaFontSize.DefaultPt, metadata);
+                    bookmark = WordOmmlFormulaStore.Wrap(document, equation, metadata);
+                    EnforceMathTypeLayoutAndValidate(
+                        document, equation, paragraphSnapshot, item.Display);
+                    WordOmmlFormulaStore.SaveNew(document, metadata);
+                    summary.Converted++;
+                }
+                catch (Exception error)
+                {
+                    summary.Failed++;
+                    summary.Errors.Add($"Vị trí {item.Start}: {error.Message}");
+                    if (bookmark is not null)
+                    {
+                        try { bookmark.Delete(); } catch { }
+                    }
+                    if (!string.IsNullOrEmpty(originalXml))
+                    {
+                        try
+                        {
+                            Range? rollback = null;
+                            try
+                            {
+                                rollback = equation?.Duplicate
+                                    ?? document.Range(item.Start, Math.Max(item.Start, item.Start + 1));
+                                rollback.Delete();
+                                rollback.InsertXML(originalXml);
+                            }
+                            finally { Release(rollback); }
+                        }
+                        catch { }
+                    }
+                }
+                finally
+                {
+                    Release(bookmark);
+                    Release(equation);
+                    Release(target);
+                    Release(paragraphSnapshot?.Format);
+                }
+            }
+            return summary;
+        }
+        finally
+        {
+            EndUndoRecord(undo);
+            Release(undo);
+            Release(document);
+        }
+    }
+
+    internal string CreateMathTypeBackup(int expectedOleCount)
+    {
+        Document? document = null;
+        try
+        {
+            document = _application.ActiveDocument
+                ?? throw new InvalidOperationException("Không có tài liệu Word đang mở.");
+            if (string.IsNullOrWhiteSpace(document.Path))
+                throw new InvalidOperationException("Tài liệu phải được lưu trước khi chuyển toàn bộ MathType.");
+            if (!document.Saved)
+                throw new InvalidOperationException(
+                    "Tài liệu đang có thay đổi chưa lưu. Hãy nhấn Ctrl+S rồi chạy lại Chuyển toàn bộ MathType.");
+            var extension = Path.GetExtension(document.Name);
+            if (!extension.Equals(".docx", StringComparison.OrdinalIgnoreCase)
+                && !extension.Equals(".docm", StringComparison.OrdinalIgnoreCase))
+                throw new NotSupportedException("Chỉ có thể tạo backup cho DOCX hoặc DOCM.");
+            var baseName = Path.GetFileNameWithoutExtension(document.Name);
+            var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+            var path = Path.Combine(document.Path, $"{baseName}.visualtex-mathtype-backup-{stamp}{extension}");
+            for (var suffix = 2; File.Exists(path); suffix++)
+                path = Path.Combine(document.Path, $"{baseName}.visualtex-mathtype-backup-{stamp}-{suffix}{extension}");
+            var sourcePath = document.FullName;
+            try
+            {
+                MathTypeBackupVerifier.CopyAndVerify(sourcePath, path, expectedOleCount);
+                return path;
+            }
+            catch (Exception error)
+            {
+                try { if (File.Exists(path)) File.Delete(path); } catch { }
+                throw new IOException(
+                    $"Không thể tạo hoặc xác minh backup MathType (0x{error.HResult:X8}): {error.Message}",
+                    error);
+            }
+        }
+        finally { Release(document); }
     }
 
     private static void TraceAcceptancePerformance(
@@ -6515,6 +6799,36 @@ internal sealed class WordFormulaService
         }
     }
 
+    private static bool IsStandaloneMathTypeParagraph(Range formulaRange)
+    {
+        Paragraphs? paragraphs = null;
+        Paragraph? paragraph = null;
+        Range? paragraphRange = null;
+        InlineShapes? inlineShapes = null;
+        OMaths? maths = null;
+        try
+        {
+            if (HasVisibleSurroundingText(formulaRange)) return false;
+            paragraphs = formulaRange.Paragraphs;
+            if (paragraphs.Count != 1) return false;
+            paragraph = paragraphs[1];
+            paragraphRange = paragraph.Range.Duplicate;
+            inlineShapes = paragraphRange.InlineShapes;
+            if (inlineShapes.Count != 1) return false;
+            maths = paragraphRange.OMaths;
+            return maths.Count == 0;
+        }
+        catch { return false; }
+        finally
+        {
+            Release(maths);
+            Release(inlineShapes);
+            Release(paragraphRange);
+            Release(paragraph);
+            Release(paragraphs);
+        }
+    }
+
     private static bool ContainsVisibleBodyText(string? value)
     {
         if (string.IsNullOrEmpty(value)) return false;
@@ -6525,6 +6839,111 @@ internal sealed class WordFormulaService
             if (!char.IsWhiteSpace(character)) return true;
         }
         return false;
+    }
+
+    private static MathTypeParagraphSnapshot CaptureMathTypeParagraph(Range formulaRange)
+    {
+        Paragraphs? paragraphs = null;
+        Paragraph? paragraph = null;
+        Range? paragraphRange = null;
+        Range? prefix = null;
+        Range? suffix = null;
+        ParagraphFormat? format = null;
+        try
+        {
+            paragraphs = formulaRange.Paragraphs;
+            if (paragraphs.Count != 1)
+                throw new InvalidOperationException(
+                    "OLE MathType phải nằm trong đúng một đoạn văn.");
+            paragraph = paragraphs[1];
+            paragraphRange = paragraph.Range.Duplicate;
+            prefix = paragraphRange.Document.Range(paragraphRange.Start, formulaRange.Start);
+            suffix = paragraphRange.Document.Range(formulaRange.End, paragraphRange.End);
+            format = paragraphRange.ParagraphFormat.Duplicate;
+            var snapshot = new MathTypeParagraphSnapshot
+            {
+                Prefix = prefix.Text ?? string.Empty,
+                Suffix = suffix.Text ?? string.Empty,
+                Format = format,
+            };
+            format = null;
+            return snapshot;
+        }
+        finally
+        {
+            Release(format);
+            Release(suffix);
+            Release(prefix);
+            Release(paragraphRange);
+            Release(paragraph);
+            Release(paragraphs);
+        }
+    }
+
+    private static void EnforceMathTypeLayoutAndValidate(
+        Document document,
+        Range equationRange,
+        MathTypeParagraphSnapshot snapshot,
+        bool display)
+    {
+        OMaths? maths = null;
+        OMath? math = null;
+        Range? liveMathRange = null;
+        Paragraphs? paragraphs = null;
+        Paragraph? paragraph = null;
+        Range? paragraphRange = null;
+        Range? prefix = null;
+        Range? suffix = null;
+        try
+        {
+            maths = equationRange.OMaths;
+            if (maths.Count != 1)
+                throw new InvalidOperationException(
+                    "Word không tạo đúng một Equation tại vị trí MathType.");
+            math = maths[1];
+            var expectedType = display
+                ? WdOMathType.wdOMathDisplay
+                : WdOMathType.wdOMathInline;
+            if (math.Type != expectedType) math.Type = expectedType;
+            if (math.Type != expectedType)
+                throw new InvalidOperationException(
+                    display
+                        ? "Word không giữ được Equation dạng riêng dòng."
+                        : "Word không giữ được Equation dạng cùng dòng.");
+
+            liveMathRange = math.Range.Duplicate;
+            paragraphs = liveMathRange.Paragraphs;
+            if (paragraphs.Count != 1)
+                throw new InvalidOperationException(
+                    "Equation đã làm phát sinh ngắt đoạn ngoài dự kiến.");
+            paragraph = paragraphs[1];
+            paragraphRange = paragraph.Range.Duplicate;
+            if (snapshot.Format is not null)
+                paragraphRange.ParagraphFormat = snapshot.Format;
+
+            prefix = document.Range(paragraphRange.Start, liveMathRange.Start);
+            suffix = document.Range(liveMathRange.End, paragraphRange.End);
+            if (!string.Equals(prefix.Text ?? string.Empty, snapshot.Prefix, StringComparison.Ordinal)
+                || !string.Equals(suffix.Text ?? string.Empty, snapshot.Suffix, StringComparison.Ordinal))
+                throw new InvalidOperationException(
+                    "Word đã thay đổi hoặc tách phần văn bản quanh Equation; giữ nguyên MathType.");
+            if (!display
+                && ((prefix.Text ?? string.Empty).IndexOfAny(new[] { '\r', '\n' }) >= 0
+                    || (suffix.Text ?? string.Empty).TrimEnd('\r', '\n', '\a').IndexOfAny(new[] { '\r', '\n' }) >= 0))
+                throw new InvalidOperationException(
+                    "Equation cùng dòng đã tạo ngắt đoạn ngoài dự kiến.");
+        }
+        finally
+        {
+            Release(suffix);
+            Release(prefix);
+            Release(paragraphRange);
+            Release(paragraph);
+            Release(paragraphs);
+            Release(liveMathRange);
+            Release(math);
+            Release(maths);
+        }
     }
 
     private static float? ReadDefinedShapeFontPosition(InlineShape shape)
