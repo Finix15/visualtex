@@ -97,13 +97,6 @@
                   onAction="VTWordRibbonDocumentImport"
                   getScreentip="VTWordRibbonGetScreentip"
                   getSupertip="VTWordRibbonGetSupertip"/>
-          <button id="VisualTeX.Mac.Word.LegacyEquations"
-                  getLabel="VTWordRibbonGetLabel"
-                  size="large"
-                  image="VisualTeXWordLegacyEquations"
-                  onAction="VTWordRibbonLegacyEquations"
-                  getScreentip="VTWordRibbonGetScreentip"
-                  getSupertip="VTWordRibbonGetSupertip"/>
         </group>
 
         <group id="VisualTeX.Mac.Word.RedrawGroup" getLabel="VTWordRibbonGetLabel">

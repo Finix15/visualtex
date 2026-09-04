@@ -41,10 +41,6 @@
     ],
     "resources": {
       "ocr/worker.py": "ocr/worker.py",
-      "workers/mathtype-worker": "workers/mathtype-worker",
-      "workers/mathtype-worker.manifest.json": "workers/mathtype-worker.manifest.json",
-      "workers/mathtypejx.LICENSE": "workers/mathtypejx.LICENSE",
-      "workers/mathtypejx.NOTICE": "workers/mathtypejx.NOTICE",
       "../src/math/STIXTwoMath-OFL-1.1.txt": "licenses/STIXTwoMath-OFL-1.1.txt"
     },
     "macOS": {

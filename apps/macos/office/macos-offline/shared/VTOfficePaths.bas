@@ -42,11 +42,6 @@ Public Function VTWordApplicationScriptsRoot() As String
     VTWordApplicationScriptsRoot = VTUserHomePath() & VT_WORD_APPLICATION_SCRIPTS_SUFFIX
 End Function
 
-Public Function VTOfficeGroupContainerRoot() As String
-    VTOfficeGroupContainerRoot = VTUserHomePath() & _
-        "/Library/Group Containers/UBF8T346G9.Office/VisualTeX"
-End Function
-
 Public Function VTOfficeUiLanguage() As String
     Dim fileNumber As Integer
     Dim payload As String

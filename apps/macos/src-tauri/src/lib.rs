@@ -12,7 +12,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-mod legacy_equations;
 mod ocr_offline;
 mod office;
 mod quick_ocr;
@@ -1863,15 +1862,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(ocr_state)
         .manage(quick_ocr_state)
-        .manage(legacy_equations::LegacyEquationState::default())
         .setup(move |app| {
-            if let Ok(app_data) = app.path().app_data_dir() {
-                let state = app.state::<legacy_equations::LegacyEquationState>();
-                let root = legacy_equations::jobs::job_root(&app_data);
-                if let Err(error) = state.cleanup_expired_now(&root) {
-                    eprintln!("Unable to recover legacy-equation jobs: {error}");
-                }
-            }
             if maintenance_install {
                 match office::macos_offline_installer::install(app.handle()) {
                     Ok(status) => {
@@ -1967,16 +1958,6 @@ pub fn run() {
             reset_ocr_runtime,
             install_optional_ocr_model,
             remove_optional_ocr_model,
-            legacy_equations::commands::create_legacy_equation_job,
-            legacy_equations::commands::create_legacy_equation_job_from_office_session,
-            legacy_equations::commands::get_legacy_equation_job,
-            legacy_equations::commands::read_legacy_equation_batch,
-            legacy_equations::commands::submit_legacy_omml_batch,
-            legacy_equations::commands::finalize_legacy_equation_job,
-            legacy_equations::commands::cancel_legacy_equation_job,
-            legacy_equations::commands::delete_legacy_equation_job,
-            legacy_equations::commands::open_legacy_equation_output,
-            legacy_equations::commands::open_legacy_equation_report,
             office::lifecycle::get_office_companion_status,
             office::lifecycle::start_office_companion,
             office::lifecycle::stop_office_companion,

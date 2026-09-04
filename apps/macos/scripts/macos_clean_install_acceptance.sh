@@ -257,7 +257,7 @@ if [[ -z "$DOCK_SIZE" || ! "$DOCK_WIDTH" =~ ^[0-9]+$ || ! "$DOCK_HEIGHT" =~ ^[0-
   exit 1
 fi
 
-require_file "$APP_SUPPORT/dock-icon-v2.refreshed" "Dock icon migration marker"
+require_file "$APP_SUPPORT/dock-icon-v5.refreshed" "Dock icon migration marker"
 
 echo "VisualTeX clean-install acceptance: PASS"
 echo "Installed app: $APP_PATH"

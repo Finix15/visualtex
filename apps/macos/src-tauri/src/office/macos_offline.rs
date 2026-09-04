@@ -72,8 +72,6 @@ const POWERPOINT_RUNTIME_SUFFIX: &str =
 const METADATA_PREFIX: &str = "visualtex:v1:deflate:";
 const PENDING_PREFIX: &str = "visualtex:pending:v1:";
 const MAX_REQUEST_BYTES: u64 = 256 * 1024;
-const LEGACY_EQUATION_SESSION_SUFFIX: &str =
-    "Library/Group Containers/UBF8T346G9.Office/VisualTeX/LegacyEquationSessions";
 const WORD_FAST_OPEN_INBOX_SUFFIX: &str = "Library/Containers/com.microsoft.Word/Data/Library/Application Support/VisualTeX/FastOpen/word";
 const POWERPOINT_FAST_OPEN_INBOX_SUFFIX: &str = "Library/Containers/com.microsoft.Powerpoint/Data/Library/Application Support/VisualTeX/FastOpen/powerpoint";
 const FAST_OPEN_MAX_AGE: Duration = Duration::from_secs(10);
@@ -3040,9 +3038,6 @@ pub(crate) fn handle_open_url(app: &AppHandle, value: &str) -> Result<(), String
     let received_at = Instant::now();
     let received_epoch_ms = epoch_ms();
     let session_id = parse_office_url(value)?;
-    if open_legacy_equation_office_session(app, &session_id)? {
-        return Ok(());
-    }
     let state = app
         .try_state::<OfficeCompanionState>()
         .ok_or_else(|| "VisualTeX Office state is not initialized".to_string())?;
@@ -3125,84 +3120,6 @@ pub(crate) fn handle_open_url(app: &AppHandle, value: &str) -> Result<(), String
         received_at,
         silent,
     )
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct LegacyEquationOfficeRequest {
-    protocol_version: u32,
-    session_id: String,
-    host: String,
-    operation: String,
-    source_file: String,
-}
-
-fn legacy_equation_office_root() -> Result<PathBuf, String> {
-    let home = std::env::var_os("HOME").ok_or_else(|| "HOME is unavailable".to_string())?;
-    Ok(PathBuf::from(home).join(LEGACY_EQUATION_SESSION_SUFFIX))
-}
-
-pub(crate) fn legacy_equation_office_source(session_id: &str) -> Result<PathBuf, String> {
-    if !valid_uuid(session_id) {
-        return Err("Invalid legacy-equation Office session ID".to_string());
-    }
-    let root = legacy_equation_office_root()?;
-    let session = root.join(session_id);
-    let request_path = session.join(REQUEST_FILE);
-    if !request_path.exists() {
-        return Err("Legacy-equation Office request is unavailable".to_string());
-    }
-    let metadata = fs::symlink_metadata(&request_path).map_err(|error| error.to_string())?;
-    if !metadata.file_type().is_file()
-        || metadata.file_type().is_symlink()
-        || metadata.len() > MAX_REQUEST_BYTES
-    {
-        return Err("Legacy-equation Office request is unsafe".to_string());
-    }
-    let request: LegacyEquationOfficeRequest =
-        serde_json::from_slice(&fs::read(&request_path).map_err(|error| error.to_string())?)
-            .map_err(|error| format!("Malformed legacy-equation Office request: {error}"))?;
-    if request.protocol_version != 1
-        || request.session_id != session_id
-        || request.host != "word"
-        || request.operation != "legacyEquationConversion"
-        || request.source_file != "legacy-source.docx"
-    {
-        return Err("Legacy-equation Office request contract mismatch".to_string());
-    }
-    let source = session.join("legacy-source.docx");
-    let source_metadata = fs::symlink_metadata(&source).map_err(|error| error.to_string())?;
-    if !source_metadata.file_type().is_file() || source_metadata.file_type().is_symlink() {
-        return Err("Legacy-equation staged DOCX is unsafe".to_string());
-    }
-    let canonical_root = root.canonicalize().map_err(|error| error.to_string())?;
-    let canonical_source = source.canonicalize().map_err(|error| error.to_string())?;
-    if !canonical_source.starts_with(canonical_root.join(session_id)) {
-        return Err("Legacy-equation staged DOCX escaped its session".to_string());
-    }
-    Ok(canonical_source)
-}
-
-fn open_legacy_equation_office_session(app: &AppHandle, session_id: &str) -> Result<bool, String> {
-    match legacy_equation_office_source(session_id) {
-        Ok(_) => {}
-        Err(error) if error == "Legacy-equation Office request is unavailable" => return Ok(false),
-        Err(error) => return Err(error),
-    }
-    let label = format!("legacy-equation-converter-{session_id}");
-    if let Some(window) = app.get_webview_window(&label) {
-        window.show().map_err(|error| error.to_string())?;
-        window.set_focus().map_err(|error| error.to_string())?;
-        return Ok(true);
-    }
-    let path = format!("?view=legacy-equation-converter&officeSession={session_id}");
-    WebviewWindowBuilder::new(app, label, WebviewUrl::App(path.into()))
-        .title("VisualTeX — Legacy MathType")
-        .inner_size(960.0, 720.0)
-        .min_inner_size(720.0, 520.0)
-        .build()
-        .map_err(|error| format!("Unable to open legacy-equation converter: {error}"))?;
-    Ok(true)
 }
 
 fn decode_png(value: &str) -> Result<Vec<u8>, String> {

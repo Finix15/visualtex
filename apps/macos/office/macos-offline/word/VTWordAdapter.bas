@@ -11394,69 +11394,6 @@ Public Sub VTWordRibbonDocumentImport(ByVal control As IRibbonControl)
     VisualTeX_InsertLatexMarkdownDocument
 End Sub
 
-Public Sub VTWordRibbonLegacyEquations(ByVal control As IRibbonControl)
-    VisualTeX_ConvertLegacyEquations
-End Sub
-
-Public Sub VisualTeX_ConvertLegacyEquations()
-    Dim documentPath As String
-    Dim extension As String
-    Dim sessionId As String
-    Dim sessionRoot As String
-    Dim sessionPath As String
-    Dim sourcePath As String
-    Dim requestPath As String
-    Dim temporaryPath As String
-    Dim requestText As String
-    Dim fileNumber As Integer
-    Dim response As String
-
-    On Error GoTo ConversionFailed
-    If Documents.Count = 0 Then Err.Raise vbObjectError + 7190, "VisualTeX", "No Word document is open."
-    If Len(ActiveDocument.Path) = 0 Then Err.Raise vbObjectError + 7191, "VisualTeX", "Save the document as DOCX before conversion."
-    If Not ActiveDocument.Saved Then
-        If MsgBox("Save the current document before creating the conversion copy?", vbYesNo + vbQuestion, "VisualTeX") <> vbYes Then Exit Sub
-        ActiveDocument.Save
-    End If
-    documentPath = ActiveDocument.FullName
-    extension = LCase$(Mid$(documentPath, InStrRev(documentPath, ".") + 1))
-    If extension <> "docx" Then Err.Raise vbObjectError + 7192, "VisualTeX", "Only saved DOCX documents are supported."
-    If ActiveDocument.ReadOnly Then Err.Raise vbObjectError + 7193, "VisualTeX", "The document is read-only."
-    If ActiveDocument.ProtectionType <> wdNoProtection Then Err.Raise vbObjectError + 7194, "VisualTeX", "The document is protected."
-    ' Word for Mac reports false positives through ActiveDocument.Signatures
-    ' for ordinary DOCX files. The Phase 1 OPC validator performs the
-    ' authoritative _xmlsignatures package check before any worker runs.
-
-    sessionId = VTNewUuidV4()
-    sessionRoot = VTOfficeGroupContainerRoot() & "/LegacyEquationSessions"
-    If Len(Dir$(VTOfficeGroupContainerRoot(), vbDirectory)) = 0 Then MkDir VTOfficeGroupContainerRoot()
-    If Len(Dir$(sessionRoot, vbDirectory)) = 0 Then MkDir sessionRoot
-    sessionPath = sessionRoot & "/" & sessionId
-    MkDir sessionPath
-    sourcePath = sessionPath & "/legacy-source.docx"
-    ActiveDocument.SaveCopyAs sourcePath
-
-    requestText = "{""protocolVersion"":1,""sessionId"":""" & sessionId & _
-        """,""host"":""word"",""operation"":""legacyEquationConversion""," & _
-        """sourceFile"":""legacy-source.docx""}"
-    requestPath = sessionPath & "/request.json"
-    temporaryPath = sessionPath & "/request.json.tmp"
-    fileNumber = FreeFile
-    Open temporaryPath For Binary Access Write As #fileNumber
-    Put #fileNumber, , requestText
-    Close #fileNumber
-    fileNumber = 0
-    Name temporaryPath As requestPath
-
-    response = AppleScriptTask("VisualTeXWord.scpt", "OpenVisualTeXSession", sessionId)
-    If Left$(response, 3) <> "ok|" Then Err.Raise vbObjectError + 7196, "VisualTeX", "VisualTeX could not be opened."
-    Exit Sub
-
-ConversionFailed:
-    If fileNumber <> 0 Then Close #fileNumber
-    MsgBox Err.Description, vbExclamation, "VisualTeX"
-End Sub
-
 Public Sub VTWordRibbonRedrawSelectionImage( _
     ByVal control As IRibbonControl)
     VisualTeX_RedrawSelectionToImage
@@ -30908,22 +30845,6 @@ Private Function VTWordRibbonLocalizedText(ByVal key As String) As String
             Else
                 VTWordRibbonLocalizedText = "Parses Markdown or LaTeX documents into Word native text, as well as inline and interline formulas that can be individually edited and adjus" & _
                     "ted in font size."
-            End If
-        Case "VisualTeX.Mac.Word.LegacyEquations|label"
-            If useVietnamese Then
-                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
-                    "0043|0068|0075|0079|1EC3|006E|0020|0063|00F4|006E|0067|0020|0074|0068|1EE9|0063|0020|004D|0061|0074|0068|0054|0079|0070|0065|0020|0063|0169")
-            Else
-                VTWordRibbonLocalizedText = "Convert legacy MathType"
-            End If
-        Case "VisualTeX.Mac.Word.LegacyEquations|screentip"
-            VTWordRibbonLocalizedText = "Create a new DOCX with native Word equations"
-        Case "VisualTeX.Mac.Word.LegacyEquations|supertip"
-            If useVietnamese Then
-                VTWordRibbonLocalizedText = VTUnicodeFromHex( _
-                    "0054|1EA1|006F|0020|0062|1EA3|006E|0020|0073|0061|006F|0020|0044|004F|0043|0058|0020|006D|1EDB|0069|0020|0076|00E0|0020|0067|0069|1EEF|0020|006E|0067|0075|0079|00EA|006E|0020|0074|00E0|0069|0020|006C|0069|1EC7|0075|002E")
-            Else
-                VTWordRibbonLocalizedText = "Creates a new DOCX and leaves the source document unchanged."
             End If
         Case "VisualTeX.Mac.Word.RedrawGroup|label"
             If useVietnamese Then

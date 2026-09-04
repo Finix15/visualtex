@@ -12,7 +12,6 @@ import { DesktopApp } from "./DesktopApp";
 import { applyDocumentTheme, readSynchronizedTheme } from "../themeSync";
 import { VisualTexErrorBoundary } from "../runtime/VisualTexErrorBoundary";
 import { QuickOcrHud } from "../ocr/QuickOcrHud";
-import { LegacyEquationConverterApp } from "../office/legacyEquations/LegacyEquationConverterApp";
 
 configureOcrTransport(desktopOcrTransport);
 
@@ -24,7 +23,6 @@ const officeFormulaView = view === "office-formula";
 const officeDocumentImportView = view === "office-document-import";
 const officeWordLatexRedrawView = view === "office-word-latex-redraw";
 const quickOcrHudView = view === "quick-ocr-hud";
-const legacyEquationView = view === "legacy-equation-converter";
 if (officeFormulaView || officeDocumentImportView || officeWordLatexRedrawView) {
   document.body.classList.add("office-dialog-page");
   applyDocumentTheme(readSynchronizedTheme());
@@ -39,8 +37,6 @@ createRoot(root).render(
     <VisualTexErrorBoundary>
       {quickOcrHudView ? (
         <QuickOcrHud />
-      ) : legacyEquationView ? (
-        <LegacyEquationConverterApp />
       ) : officeFormulaView ? (
         <OfficeDialogApp />
       ) : officeDocumentImportView ? (
