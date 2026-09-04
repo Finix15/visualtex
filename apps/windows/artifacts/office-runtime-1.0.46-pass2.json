@@ -1,0 +1,302 @@
+﻿{
+    "schemaVersion":  1,
+    "generatedAt":  "2026-09-04T10:11:39.6122217+07:00",
+    "officePlatform":  "x64",
+    "succeeded":  true,
+    "checks":  [
+                   {
+                       "name":  "Word and PowerPoint closed",
+                       "passed":  true,
+                       "details":  "No existing WINWORD.EXE or POWERPNT.EXE process was found."
+                   },
+                   {
+                       "name":  "Office platform",
+                       "passed":  true,
+                       "details":  "x64"
+                   },
+                   {
+                       "name":  "Files and registry installation stage",
+                       "passed":  true,
+                       "details":  "Mode=vsto; FilesAndRegistryVerified=1"
+                   },
+                   {
+                       "name":  "Current-user HTTPS certificate",
+                       "passed":  true,
+                       "details":  "9D5C79EA1A9D9057BD7B8BD41A3100D815A736A1; C:\\Users\\Tuan Anh\\AppData\\Roaming\\com.visualtex.studio\\office\\localhost-cert.pem"
+                   },
+                   {
+                       "name":  "Companion process",
+                       "passed":  true,
+                       "details":  "Executable=D:\\VisualTeX\\visualtex.exe; PID=2240; StartedPID=; ExitCode=; AppDataRoot=C:\\Users\\Tuan Anh\\AppData\\Roaming\\com.visualtex.studio"
+                   },
+                   {
+                       "name":  "Companion TCP port",
+                       "passed":  true,
+                       "details":  "127.0.0.1:43127; Owner=visualtex PID=2240 Path=D:\\VisualTeX\\visualtex.exe"
+                   },
+                   {
+                       "name":  "Companion HTTPS health",
+                       "passed":  true,
+                       "details":  "ok=true; Raw={\"ok\":true,\"appVersion\":\"1.2.6\",\"officeUiVersion\":\"1.2.6\",\"protocolVersion\":1,\"ocrAvailable\":true}"
+                   },
+                   {
+                       "name":  "Companion certificate",
+                       "passed":  true,
+                       "details":  "Registry=9D5C79EA1A9D9057BD7B8BD41A3100D815A736A1; File=9D5C79EA1A9D9057BD7B8BD41A3100D815A736A1; Server=9D5C79EA1A9D9057BD7B8BD41A3100D815A736A1; TLS=None"
+                   },
+                   {
+                       "name":  "Companion protocol",
+                       "passed":  true,
+                       "details":  "Expected=1; Actual=1; Response={\"ok\":true,\"appVersion\":\"1.2.6\",\"officeUiVersion\":\"1.2.6\",\"protocolVersion\":1,\"ocrAvailable\":true}"
+                   },
+                   {
+                       "name":  "VSTO Runtime",
+                       "passed":  true,
+                       "details":  "HKLM\\SOFTWARE\\Microsoft\\VSTO Runtime Setup\\v4R; Install=; VSTORFeature_CLR40=1; Version=10.0.60917; registryView=x86; Target=x64; Loader=C:\\Program Files\\Common Files\\Microsoft Shared\\VSTO\\10.0\\VSTOLoader.dll; LoaderVersion=10.0.60917.0"
+                   },
+                   {
+                       "name":  "Office MSI installed",
+                       "passed":  true,
+                       "details":  "ProductCode={3A3F3FD0-3DDC-4FC8-90AF-215257B49396}; Source=WindowsInstaller.RelatedProducts, HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall"
+                   },
+                   {
+                       "name":  "Word LoadBehavior before startup",
+                       "passed":  true,
+                       "details":  "LoadBehavior=3"
+                   },
+                   {
+                       "name":  "PowerPoint LoadBehavior before startup",
+                       "passed":  true,
+                       "details":  "LoadBehavior=3"
+                   },
+                   {
+                       "name":  "Word managed COM registration",
+                       "passed":  true,
+                       "details":  "Architecture=x64; Scope=HKLM; CLSID={F1B68342-F9C6-4E7D-A9C6-A2F64C3558A1}; Inproc=mscoree.dll; Class=VisualTeX.WordVsto.ThisAddIn; CodeBase=C:\\Program Files\\VisualTeX\\WindowsOffice\\VSTO\\VisualTeX.WordVsto.dll; Category=True; LegacyHKCU=False"
+                   },
+                   {
+                       "name":  "PowerPoint managed COM registration",
+                       "passed":  true,
+                       "details":  "Architecture=x64; Scope=HKLM; CLSID={7E586D2D-57B0-4D14-AB24-EBA9021A5E6D}; Inproc=mscoree.dll; Class=VisualTeX.PowerPointVsto.ThisAddIn; CodeBase=C:\\Program Files\\VisualTeX\\WindowsOffice\\VSTO\\VisualTeX.PowerPointVsto.dll; Category=True; LegacyHKCU=False"
+                   },
+                   {
+                       "name":  "Word managed COM activation",
+                       "passed":  true,
+                       "details":  "ProgID=VisualTeX.WordVsto; CLSID=f1b68342-f9c6-4e7d-a9c6-a2f64c3558a1; HRESULT=0x00000000; Error="
+                   },
+                   {
+                       "name":  "PowerPoint managed COM activation",
+                       "passed":  true,
+                       "details":  "ProgID=VisualTeX.PowerPointVsto; CLSID=7e586d2d-57b0-4d14-ab24-eba9021a5e6d; HRESULT=0x00000000; Error="
+                   },
+                   {
+                       "name":  "OLE LocalServer",
+                       "passed":  true,
+                       "details":  "CLSID={8FF7F5AA-0D60-48D5-ADBD-65A64B4C827B}; Server=C:\\Program Files\\VisualTeX\\WindowsOffice\\VSTO\\VisualTeX.FormulaOleServer.exe; EmbeddingProbe=True; Error="
+                   },
+                   {
+                       "name":  "Word COMAddIn.Connect",
+                       "passed":  true,
+                       "details":  "True"
+                   },
+                   {
+                       "name":  "Word LoadBehavior after startup",
+                       "passed":  true,
+                       "details":  "Before=3; After=3"
+                   },
+                   {
+                       "name":  "PowerPoint COMAddIn.Connect",
+                       "passed":  true,
+                       "details":  "True"
+                   },
+                   {
+                       "name":  "PowerPoint LoadBehavior after startup",
+                       "passed":  true,
+                       "details":  "Before=3; After=3"
+                   }
+               ],
+    "word":  {
+                 "host":  "Word",
+                 "progId":  "VisualTeX.WordVsto",
+                 "enumerated":  true,
+                 "connected":  true,
+                 "connectAttempted":  false,
+                 "description":  "VisualTeX",
+                 "discoveredProgIds":  [
+                                           "OneNote.WordAddinTakeNotesService",
+                                           "VisualTeX.WordVsto"
+                                       ],
+                 "inventory":  [
+                                   {
+                                       "index":  1,
+                                       "progId":  "OneNote.WordAddinTakeNotesService",
+                                       "description":  "OneNote Notes about Word Documents",
+                                       "connected":  false
+                                   },
+                                   {
+                                       "index":  2,
+                                       "progId":  "VisualTeX.WordVsto",
+                                       "description":  "VisualTeX",
+                                       "connected":  true
+                                   }
+                               ],
+                 "stage":  "complete",
+                 "startupMode":  "hidden-com-worker",
+                 "error":  ""
+             },
+    "powerPoint":  {
+                       "host":  "PowerPoint",
+                       "progId":  "VisualTeX.PowerPointVsto",
+                       "enumerated":  true,
+                       "connected":  true,
+                       "connectAttempted":  false,
+                       "description":  "VisualTeX",
+                       "discoveredProgIds":  [
+                                                 "OneNote.PowerPointAddinTakeNotesService",
+                                                 "VisualTeX.PowerPointVsto"
+                                             ],
+                       "inventory":  [
+                                         {
+                                             "index":  1,
+                                             "progId":  "OneNote.PowerPointAddinTakeNotesService",
+                                             "description":  "OneNote Notes about PowerPoint Presentations",
+                                             "connected":  false
+                                         },
+                                         {
+                                             "index":  2,
+                                             "progId":  "VisualTeX.PowerPointVsto",
+                                             "description":  "VisualTeX",
+                                             "connected":  true
+                                         }
+                                     ],
+                       "stage":  "complete",
+                       "startupMode":  "hidden-com-worker",
+                       "error":  ""
+                   },
+    "certificate":  {
+                        "passed":  true,
+                        "details":  "9D5C79EA1A9D9057BD7B8BD41A3100D815A736A1; C:\\Users\\Tuan Anh\\AppData\\Roaming\\com.visualtex.studio\\office\\localhost-cert.pem"
+                    },
+    "vstoRuntime":  {
+                        "installed":  true,
+                        "architectureRuntimePresent":  true,
+                        "install":  null,
+                        "clr40":  1,
+                        "version":  "10.0.60917",
+                        "registryView":  "x86",
+                        "key":  "HKLM\\SOFTWARE\\Microsoft\\VSTO Runtime Setup\\v4R",
+                        "targetArchitecture":  "x64",
+                        "loaderPath":  "C:\\Program Files\\Common Files\\Microsoft Shared\\VSTO\\10.0\\VSTOLoader.dll",
+                        "loaderPresent":  true,
+                        "loaderVersion":  "10.0.60917.0"
+                    },
+    "msi":  {
+                "installed":  true,
+                "productCode":  "{3A3F3FD0-3DDC-4FC8-90AF-215257B49396}",
+                "productCodes":  [
+                                     "{3A3F3FD0-3DDC-4FC8-90AF-215257B49396}"
+                                 ],
+                "source":  "WindowsInstaller.RelatedProducts, HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall"
+            },
+    "oleLocalServer":  {
+                           "healthy":  true,
+                           "server":  "C:\\Program Files\\VisualTeX\\WindowsOffice\\VSTO\\VisualTeX.FormulaOleServer.exe",
+                           "clsid":  "{8FF7F5AA-0D60-48D5-ADBD-65A64B4C827B}",
+                           "embeddingProbe":  true,
+                           "error":  ""
+                       },
+    "companion":  {
+                      "stage":  "complete",
+                      "executable":  "D:\\VisualTeX\\visualtex.exe",
+                      "registeredExecutable":  "D:\\VisualTeX\\visualtex.exe",
+                      "appDataRoot":  "C:\\Users\\Tuan Anh\\AppData\\Roaming\\com.visualtex.studio",
+                      "installJsonPath":  "C:\\Users\\Tuan Anh\\AppData\\Roaming\\com.visualtex.studio\\office\\install.json",
+                      "startupLog":  "C:\\Users\\Tuan Anh\\AppData\\Local\\VisualTeX\\office\\logs\\startup.log",
+                      "companionLog":  "C:\\Users\\Tuan Anh\\AppData\\Local\\VisualTeX\\office\\logs\\companion.log",
+                      "port":  43127,
+                      "expectedProtocol":  1,
+                      "processId":  2240,
+                      "startedProcessId":  null,
+                      "startedProcessExitCode":  null,
+                      "processRunning":  true,
+                      "portListening":  true,
+                      "portOwner":  {
+                                        "processId":  2240,
+                                        "processName":  "visualtex",
+                                        "processPath":  "D:\\VisualTeX\\visualtex.exe",
+                                        "source":  "Get-NetTCPConnection"
+                                    },
+                      "httpsHealthy":  true,
+                      "certificateMatches":  true,
+                      "protocolMatches":  true,
+                      "certificatePath":  "C:\\Users\\Tuan Anh\\AppData\\Roaming\\com.visualtex.studio\\office\\localhost-cert.pem",
+                      "expectedThumbprint":  "9D5C79EA1A9D9057BD7B8BD41A3100D815A736A1",
+                      "localThumbprint":  "9D5C79EA1A9D9057BD7B8BD41A3100D815A736A1",
+                      "remoteThumbprint":  "9D5C79EA1A9D9057BD7B8BD41A3100D815A736A1",
+                      "tlsPolicyErrors":  "None",
+                      "healthRaw":  "{\"ok\":true,\"appVersion\":\"1.2.6\",\"officeUiVersion\":\"1.2.6\",\"protocolVersion\":1,\"ocrAvailable\":true}",
+                      "health":  {
+                                     "ok":  true,
+                                     "appVersion":  "1.2.6",
+                                     "officeUiVersion":  "1.2.6",
+                                     "protocolVersion":  1,
+                                     "ocrAvailable":  true
+                                 },
+                      "exceptionChain":  [
+
+                                         ],
+                      "errors":  [
+
+                                 ]
+                  },
+    "wordComRegistration":  {
+                                "host":  "Word",
+                                "architecture":  "x64",
+                                "progId":  "VisualTeX.WordVsto",
+                                "clsid":  "{F1B68342-F9C6-4E7D-A9C6-A2F64C3558A1}",
+                                "progIdClsid":  "{F1B68342-F9C6-4E7D-A9C6-A2F64C3558A1}",
+                                "inprocServer32":  "mscoree.dll",
+                                "className":  "VisualTeX.WordVsto.ThisAddIn",
+                                "assembly":  "VisualTeX.WordVsto, Version=1.0.46.0, Culture=neutral, PublicKeyToken=null",
+                                "codeBase":  "file:///C:\\Program Files\\VisualTeX\\WindowsOffice\\VSTO\\VisualTeX.WordVsto.dll",
+                                "codeBasePath":  "C:\\Program Files\\VisualTeX\\WindowsOffice\\VSTO\\VisualTeX.WordVsto.dll",
+                                "expectedAssemblyPath":  "C:\\Program Files\\VisualTeX\\WindowsOffice\\VSTO\\VisualTeX.WordVsto.dll",
+                                "implementedCategoryPresent":  true,
+                                "codeBaseMatches":  true,
+                                "legacyPerUserProgId":  false,
+                                "legacyPerUserClsid":  false,
+                                "legacyPerUserAddin":  false,
+                                "passed":  true
+                            },
+    "powerPointComRegistration":  {
+                                      "host":  "PowerPoint",
+                                      "architecture":  "x64",
+                                      "progId":  "VisualTeX.PowerPointVsto",
+                                      "clsid":  "{7E586D2D-57B0-4D14-AB24-EBA9021A5E6D}",
+                                      "progIdClsid":  "{7E586D2D-57B0-4D14-AB24-EBA9021A5E6D}",
+                                      "inprocServer32":  "mscoree.dll",
+                                      "className":  "VisualTeX.PowerPointVsto.ThisAddIn",
+                                      "assembly":  "VisualTeX.PowerPointVsto, Version=1.0.46.0, Culture=neutral, PublicKeyToken=null",
+                                      "codeBase":  "file:///C:\\Program Files\\VisualTeX\\WindowsOffice\\VSTO\\VisualTeX.PowerPointVsto.dll",
+                                      "codeBasePath":  "C:\\Program Files\\VisualTeX\\WindowsOffice\\VSTO\\VisualTeX.PowerPointVsto.dll",
+                                      "expectedAssemblyPath":  "C:\\Program Files\\VisualTeX\\WindowsOffice\\VSTO\\VisualTeX.PowerPointVsto.dll",
+                                      "implementedCategoryPresent":  true,
+                                      "codeBaseMatches":  true,
+                                      "legacyPerUserProgId":  false,
+                                      "legacyPerUserClsid":  false,
+                                      "legacyPerUserAddin":  false,
+                                      "passed":  true
+                                  },
+    "wordDisabledItems":  [
+
+                          ],
+    "powerPointDisabledItems":  [
+
+                                ],
+    "recentLoadEvents":  [
+
+                         ],
+    "failures":  [
+
+                 ]
+}
