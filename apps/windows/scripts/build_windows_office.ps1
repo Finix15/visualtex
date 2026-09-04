@@ -187,7 +187,7 @@ foreach ($architecture in $architectures) {
     }
 
     $hashManifest = [ordered]@{
-        version = "1.0.43.0"
+        version = "1.0.46.0"
         architecture = $packagePlatform
         package = [ordered]@{
             file = $packageFileName

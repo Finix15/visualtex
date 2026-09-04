@@ -4,7 +4,11 @@ namespace VisualTeX.MathTypeConversion;
 
 public static class MathTypeBackupVerifier
 {
-    public static void CopyAndVerify(string sourcePath, string backupPath, int expectedOleCount)
+    public static void CopyAndVerify(
+        string sourcePath,
+        string backupPath,
+        int expectedOleCount,
+        string? expectedSourceFingerprint = null)
     {
         if (string.IsNullOrWhiteSpace(sourcePath) || !File.Exists(sourcePath))
             throw new FileNotFoundException("Không tìm thấy file Word nguồn đã lưu.", sourcePath);
@@ -30,6 +34,13 @@ public static class MathTypeBackupVerifier
             var sourceHash = ComputeSha256(
                 sourcePath,
                 FileShare.ReadWrite | FileShare.Delete);
+            if (!string.IsNullOrWhiteSpace(expectedSourceFingerprint)
+                && !string.Equals(
+                    sourceHash,
+                    expectedSourceFingerprint,
+                    StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException(
+                    "File nguồn đã thay đổi sau khi quét MathType.");
             var backupHash = ComputeSha256(backupPath, FileShare.Read);
             if (!string.Equals(sourceHash, backupHash, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("SHA-256 của backup không khớp file nguồn.");

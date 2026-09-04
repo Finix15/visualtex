@@ -1,12 +1,91 @@
 using VisualTeX.MathTypeConversion;
 using VisualTeX.WordVsto;
+using VisualTeX.WindowsOffice.VstoShared;
 using System.IO.Compression;
+using System.Text;
 using System.Xml.Linq;
 
 namespace VisualTeX.WindowsOffice.Tests;
 
 public sealed class MathTypeConversionTests
 {
+    [Fact]
+    public void TabPositionedRegressionFormulasAreClassifiedInline()
+    {
+        var path = Path.Combine(
+            AppContext.BaseDirectory,
+            "Fixtures",
+            "MathType7",
+            "mathtype7-harmonic-motion.docx");
+        using var archive = ZipFile.OpenRead(path);
+        using var documentStream = archive.GetEntry("word/document.xml")!.Open();
+        var document = XDocument.Load(documentStream);
+        XNamespace word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        XNamespace office = "urn:schemas-microsoft-com:office:office";
+        var targets = new HashSet<int> { 548, 568, 630, 645, 659 };
+        var found = new HashSet<int>();
+        var ordinal = 0;
+
+        foreach (var ole in document.Descendants(office + "OLEObject"))
+        {
+            ordinal++;
+            if (!targets.Contains(ordinal)) continue;
+            var paragraph = ole.Ancestors(word + "p").First();
+            var owningObject = ole.Ancestors(word + "object").First();
+            var before = true;
+            var prefix = new StringBuilder();
+            var suffix = new StringBuilder();
+            AppendParagraphLayout(paragraph, owningObject, ref before, prefix, suffix, word);
+            suffix.Append('\r');
+
+            var display = WordMathTypeLayoutValidation.IsStandaloneDisplayCandidate(
+                prefix.ToString(),
+                suffix.ToString(),
+                inlineShapeCount: 1,
+                existingMathCount: 0,
+                out var reason);
+
+            Assert.False(display);
+            Assert.Equal("inline-tab-layout", reason);
+            Assert.Contains('\t', prefix.ToString());
+            found.Add(ordinal);
+        }
+
+        Assert.Equal(targets, found);
+    }
+
+    [Fact]
+    public void PackageSnapshotReadsAllMathTypeOleObjectsInDocumentOrder()
+    {
+        var path = Path.Combine(
+            AppContext.BaseDirectory,
+            "Fixtures",
+            "MathType7",
+            "mathtype7-harmonic-motion.docx");
+
+        var snapshot = MathTypeDocumentScanner.ReadPackageSnapshot(path);
+
+        Assert.Equal(Path.GetFullPath(path), snapshot.SourcePath);
+        Assert.Equal(64, snapshot.DocumentFingerprint.Length);
+        Assert.Equal(
+            MathTypeDocumentScanner.ComputeFileFingerprint(path),
+            snapshot.DocumentFingerprint);
+        Assert.Equal(680, snapshot.Items.Count);
+        Assert.Equal(Enumerable.Range(1, 680), snapshot.Items.Select(item => item.Index));
+        Assert.All(snapshot.Items, item =>
+        {
+            Assert.Equal("Equation.DSMT4", item.ProgId);
+            Assert.StartsWith("word/embeddings/oleObject", item.PartName, StringComparison.Ordinal);
+            Assert.EndsWith(".bin", item.PartName, StringComparison.OrdinalIgnoreCase);
+            Assert.NotEmpty(item.OleBytes);
+            Assert.Equal(64, item.OleFingerprint.Length);
+            Assert.Equal(
+                MathTypeSidecarClient.ComputeFingerprint(item.OleBytes),
+                item.OleFingerprint,
+                ignoreCase: true);
+        });
+    }
+
     [Fact]
     public void FullMathType7FixtureContainsExpectedOleInventory()
     {
@@ -73,6 +152,27 @@ public sealed class MathTypeConversionTests
 
         Assert.Throws<InvalidDataException>(() =>
             MathTypeBackupVerifier.CopyAndVerify(source, backup, 679));
+        Assert.False(File.Exists(backup));
+    }
+
+    [Fact]
+    public void BackupWithStaleScanFingerprintFailsClosedAndRemovesCopy()
+    {
+        var source = Path.Combine(
+            AppContext.BaseDirectory,
+            "Fixtures",
+            "MathType7",
+            "mathtype7-harmonic-motion.docx");
+        var backup = Path.Combine(
+            Path.GetTempPath(),
+            $"visualtex-backup-test-{Guid.NewGuid():N}.docx");
+
+        Assert.Throws<InvalidDataException>(() =>
+            MathTypeBackupVerifier.CopyAndVerify(
+                source,
+                backup,
+                680,
+                new string('0', 64)));
         Assert.False(File.Exists(backup));
     }
 
@@ -154,5 +254,44 @@ public sealed class MathTypeConversionTests
         var result = MathTypeEquationDecoder.DecodeOle(bytes.Take(bytes.Length / 2).ToArray());
         Assert.Equal(MathTypeParseStatus.Corrupt, result.Status);
         Assert.False(result.CanConvert);
+    }
+
+    private static void AppendParagraphLayout(
+        XElement element,
+        XElement owningObject,
+        ref bool before,
+        StringBuilder prefix,
+        StringBuilder suffix,
+        XNamespace word)
+    {
+        foreach (var child in element.Elements())
+        {
+            if (ReferenceEquals(child, owningObject))
+            {
+                before = false;
+                continue;
+            }
+            if (child.Name == word + "object")
+            {
+                (before ? prefix : suffix).Append('\u0001');
+                continue;
+            }
+            if (child.Name == word + "t")
+            {
+                (before ? prefix : suffix).Append(child.Value);
+                continue;
+            }
+            if (child.Name == word + "tab")
+            {
+                (before ? prefix : suffix).Append('\t');
+                continue;
+            }
+            if (child.Name == word + "br" || child.Name == word + "cr")
+            {
+                (before ? prefix : suffix).Append('\v');
+                continue;
+            }
+            AppendParagraphLayout(child, owningObject, ref before, prefix, suffix, word);
+        }
     }
 }

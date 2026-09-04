@@ -243,8 +243,6 @@ FunctionEnd
     IfFileExists "$INSTDIR\scripts\test_windows_office_runtime.ps1" 0 visualtex_office_missing
     IfFileExists "$INSTDIR\windows-office\VisualTeX-WindowsOffice-VSTO-x64.msi" 0 visualtex_office_missing
     IfFileExists "$INSTDIR\windows-office\VisualTeX-WindowsOffice-VSTO-x64.sha256.json" 0 visualtex_office_missing
-    IfFileExists "$INSTDIR\windows-office\VisualTeX-WindowsOffice-VSTO-x86.msi" 0 visualtex_office_missing
-    IfFileExists "$INSTDIR\windows-office\VisualTeX-WindowsOffice-VSTO-x86.sha256.json" 0 visualtex_office_missing
     IfFileExists "$INSTDIR\windows-office\vstor_redist.exe" 0 visualtex_office_missing
     IfFileExists "$INSTDIR\windows-office\vstor_redist.sha256.json" 0 visualtex_office_missing
 
@@ -281,7 +279,7 @@ visualtex_vsto_runtime_ready:
     Pop $0
     StrCmp $0 "0" 0 visualtex_office_failed
 
-    nsExec::ExecToLog `"$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install_windows_vsto.ps1" -PackageDirectory "$INSTDIR\windows-office" -VisualTeXPath "$INSTDIR\${MAINBINARYNAME}.exe"`
+    nsExec::ExecToLog `"$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install_windows_vsto.ps1" -PackageDirectory "$INSTDIR\windows-office" -OfficePlatform x64 -VisualTeXPath "$INSTDIR\${MAINBINARYNAME}.exe"`
     Pop $0
     StrCmp $0 "0" visualtex_office_static_installed visualtex_office_failed
 
@@ -297,7 +295,7 @@ visualtex_office_failed:
     SetDetailsView show
     DetailPrint "VisualTeX main application installed, but the machine-wide Office files, registry entries, COM classes or OLE server failed static installation verification. See the newest vsto-bootstrap and vsto-diagnostic reports under %LOCALAPPDATA%\VisualTeX\office\install-logs."
     IfSilent visualtex_office_done 0
-    MessageBox MB_ICONEXCLAMATION "VisualTeX đã được cài, nhưng tệp phần bổ trợ Office, đăng ký hệ thống, lớp COM hoặc dịch vụ OLE không qua kiểm tra tĩnh. Xem chi tiết cài đặt và báo cáo vsto-bootstrap, vsto-diagnostic mới nhất trong %LOCALAPPDATA%\VisualTeX\office\install-logs."
+    MessageBox MB_ICONEXCLAMATION "VisualTeX đã được cài, nhưng phần tích hợp Office x64 không thể cài đặt. Bản phát hành này chưa hỗ trợ Office 32-bit. Nếu đang dùng Office x64, xem báo cáo vsto-bootstrap và vsto-diagnostic mới nhất trong %LOCALAPPDATA%\VisualTeX\office\install-logs."
     Goto visualtex_office_done
   ${ElseIf} $VisualTeXOfficeChoice == "none"
     IfFileExists "$INSTDIR\scripts\uninstall_windows_vsto.ps1" 0 visualtex_office_done

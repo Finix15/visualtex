@@ -281,7 +281,7 @@ try {
     # installer can never pass merely because the desktop EXE starts correctly.
     $sourceOfficeRoot = Join-Path $root "src-tauri\resources\windows-office"
     $installedOfficeRoot = Join-Path $installRoot "windows-office"
-    foreach ($architecture in @("x64", "x86")) {
+    foreach ($architecture in @("x64")) {
         $manifestName = "VisualTeX-WindowsOffice-VSTO-$architecture.sha256.json"
         $msiName = "VisualTeX-WindowsOffice-VSTO-$architecture.msi"
         $sourceManifestPath = Join-Path $sourceOfficeRoot $manifestName
@@ -305,6 +305,15 @@ try {
         $installedMsiHash = (Get-FileHash -LiteralPath $installedMsiPath -Algorithm SHA256).Hash
         if ($sourceMsiHash -ne $installedMsiHash -or $installedMsiHash -ne $sourceManifest.package.sha256) {
             throw "Installed-release $architecture Office MSI payload is stale: installed=$installedMsiHash source=$sourceMsiHash manifest=$($sourceManifest.package.sha256)"
+        }
+    }
+    foreach ($forbiddenX86Payload in @(
+        "VisualTeX-WindowsOffice-VSTO-x86.msi",
+        "VisualTeX-WindowsOffice-VSTO-x86.sha256.json"
+    )) {
+        $forbiddenPath = Join-Path $installedOfficeRoot $forbiddenX86Payload
+        if (Test-Path -LiteralPath $forbiddenPath) {
+            throw "The x64-only installed release contains forbidden Office x86 payload: $forbiddenPath"
         }
     }
     $report.officePayloadHashesVerified = $true

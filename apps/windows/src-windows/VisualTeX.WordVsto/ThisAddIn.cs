@@ -414,7 +414,7 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
             if (wholeDocument)
             {
                 SetStatus("Đang tạo bản sao nguyên MathType…");
-                backupPath = service.CreateMathTypeBackup(plan.Items.Count);
+                backupPath = service.CreateMathTypeBackup(plan);
             }
             var unsupported = plan.Items.Count(item => item.Status == MathTypeParseStatus.Unsupported);
             var corrupt = plan.Items.Count(item => item.Status == MathTypeParseStatus.Corrupt);
@@ -425,6 +425,10 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 + $"\nTự động: {automatic}; kiểm tra mẫu: {spotCheck}; cần duyệt: {manualReview}"
                 + $"\nKhông hỗ trợ: {unsupported}\nDữ liệu lỗi: {corrupt}\nBỏ qua: {plan.SkippedCount}"
                 + $"\nThời gian quét: {scanTimer.Elapsed.TotalSeconds:F1} giây";
+            if (wholeDocument)
+                message += $"\n  Package: {plan.PackageReadDuration.TotalSeconds:F1}s; "
+                    + $"COM: {plan.ComMapDuration.TotalSeconds:F1}s; "
+                    + $"engine: {plan.SidecarDuration.TotalSeconds:F1}s";
             if (backupPath is not null) message += $"\n\nĐã tạo backup:\n{backupPath}";
             if (details.Length != 0) message += "\n\nLý do bỏ qua:\n" + details;
             message += "\n\nBắt đầu chuyển sang Word Equation?";
@@ -438,7 +442,11 @@ public sealed class ThisAddIn : IDTExtensibility2, Office.IRibbonExtensibility, 
                 return;
             }
             var summary = service.ConvertMathTypeEquations(plan);
-            var completed = $"Đã chuyển {summary.Converted}; thất bại {summary.Failed}; bỏ qua {summary.Skipped}.";
+            var completed = $"Đã chuyển {summary.Converted}; thất bại {summary.Failed}; "
+                + $"bỏ qua {summary.Skipped}; chèn Word {summary.WordInsertDuration.TotalSeconds:F1} giây.";
+            if (summary.Errors.Count != 0)
+                completed += "\n\nLỗi đầu tiên:\n"
+                    + string.Join("\n", summary.Errors.Take(8));
             System.Windows.Forms.MessageBox.Show(
                 completed, "VisualTeX – chuyển MathType",
                 System.Windows.Forms.MessageBoxButtons.OK,

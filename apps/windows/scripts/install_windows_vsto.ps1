@@ -942,6 +942,12 @@ try {
     Stop-VisualTeXProcessesForRepair
     $script:resolvedOfficePlatform = Resolve-OfficePlatform $OfficePlatform
     Write-Host "Detected Office platform: $script:resolvedOfficePlatform"
+    if ($OfficePlatform -eq "x64") {
+        $detectedOfficePlatform = Resolve-OfficePlatform "auto"
+        if ($detectedOfficePlatform -ne "x64") {
+            throw "VisualTeX 1.2.7 Office integration supports Microsoft Office x64 only. Detected Office $detectedOfficePlatform; the desktop app remains available, but the Office add-in was not installed."
+        }
+    }
     Assert-OfficeApplicationsInstalled $script:resolvedOfficePlatform
     Assert-VstoRuntimeInstalled $script:resolvedOfficePlatform
     Assert-NetFramework48Installed

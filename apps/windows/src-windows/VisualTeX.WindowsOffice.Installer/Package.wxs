@@ -4,7 +4,7 @@
     Name="VisualTeX Windows Office Integration"
     Manufacturer="VisualTeX"
     ProductCode="$(var.InstallerProductCode)"
-    Version="1.0.43.0"
+    Version="1.0.46.0"
     UpgradeCode="A81B4BF7-0E51-45CE-A5AA-5E28F6944F42"
     Scope="perMachine"
     Compressed="yes">
@@ -196,12 +196,12 @@
           <RegistryValue Type="string" Value="mscoree.dll" />
           <RegistryValue Name="ThreadingModel" Type="string" Value="Both" />
           <RegistryValue Name="Class" Type="string" Value="VisualTeX.WordVsto.ThisAddIn" />
-          <RegistryValue Name="Assembly" Type="string" Value="VisualTeX.WordVsto, Version=1.0.43.0, Culture=neutral, PublicKeyToken=null" />
+          <RegistryValue Name="Assembly" Type="string" Value="VisualTeX.WordVsto, Version=1.0.46.0, Culture=neutral, PublicKeyToken=null" />
           <RegistryValue Name="RuntimeVersion" Type="string" Value="v4.0.30319" />
           <RegistryValue Name="CodeBase" Type="string" Value="file:///[INSTALLFOLDER]VisualTeX.WordVsto.dll" KeyPath="yes" />
-          <RegistryKey Key="1.0.43.0">
+          <RegistryKey Key="1.0.46.0">
             <RegistryValue Name="Class" Type="string" Value="VisualTeX.WordVsto.ThisAddIn" />
-            <RegistryValue Name="Assembly" Type="string" Value="VisualTeX.WordVsto, Version=1.0.43.0, Culture=neutral, PublicKeyToken=null" />
+            <RegistryValue Name="Assembly" Type="string" Value="VisualTeX.WordVsto, Version=1.0.46.0, Culture=neutral, PublicKeyToken=null" />
             <RegistryValue Name="RuntimeVersion" Type="string" Value="v4.0.30319" />
             <RegistryValue Name="CodeBase" Type="string" Value="file:///[INSTALLFOLDER]VisualTeX.WordVsto.dll" />
           </RegistryKey>
@@ -226,12 +226,12 @@
           <RegistryValue Type="string" Value="mscoree.dll" />
           <RegistryValue Name="ThreadingModel" Type="string" Value="Both" />
           <RegistryValue Name="Class" Type="string" Value="VisualTeX.PowerPointVsto.ThisAddIn" />
-          <RegistryValue Name="Assembly" Type="string" Value="VisualTeX.PowerPointVsto, Version=1.0.43.0, Culture=neutral, PublicKeyToken=null" />
+          <RegistryValue Name="Assembly" Type="string" Value="VisualTeX.PowerPointVsto, Version=1.0.46.0, Culture=neutral, PublicKeyToken=null" />
           <RegistryValue Name="RuntimeVersion" Type="string" Value="v4.0.30319" />
           <RegistryValue Name="CodeBase" Type="string" Value="file:///[INSTALLFOLDER]VisualTeX.PowerPointVsto.dll" KeyPath="yes" />
-          <RegistryKey Key="1.0.43.0">
+          <RegistryKey Key="1.0.46.0">
             <RegistryValue Name="Class" Type="string" Value="VisualTeX.PowerPointVsto.ThisAddIn" />
-            <RegistryValue Name="Assembly" Type="string" Value="VisualTeX.PowerPointVsto, Version=1.0.43.0, Culture=neutral, PublicKeyToken=null" />
+            <RegistryValue Name="Assembly" Type="string" Value="VisualTeX.PowerPointVsto, Version=1.0.46.0, Culture=neutral, PublicKeyToken=null" />
             <RegistryValue Name="RuntimeVersion" Type="string" Value="v4.0.30319" />
             <RegistryValue Name="CodeBase" Type="string" Value="file:///[INSTALLFOLDER]VisualTeX.PowerPointVsto.dll" />
           </RegistryKey>

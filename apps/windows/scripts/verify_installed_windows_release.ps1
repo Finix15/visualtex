@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$ExpectedAppVersion = "1.2.7",
-    [string]$ExpectedOfficeMsiVersion = "1.0.41.0"
+    [string]$ExpectedOfficeMsiVersion = "1.0.46.0"
 )
 
 $ErrorActionPreference = "Stop"

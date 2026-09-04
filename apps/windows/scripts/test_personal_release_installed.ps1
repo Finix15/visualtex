@@ -19,7 +19,7 @@ if (Get-Process visualtex -ErrorAction SilentlyContinue) {
 
 $root = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($InstallerPath)) {
-    $InstallerPath = Join-Path $root "src-tauri\target\release\bundle\nsis\VisualTeX_1.2.6_x64-setup.exe"
+    $InstallerPath = Join-Path $root "src-tauri\target\release\bundle\nsis\VisualTeX_1.2.7_x64-setup.exe"
 }
 $InstallerPath = (Resolve-Path -LiteralPath $InstallerPath).Path
 $uninstallKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\VisualTeX"
@@ -64,6 +64,15 @@ try {
     $runtimeScript = Join-Path $installedRoot "scripts\test_windows_office_runtime.ps1"
     $installedExe = Join-Path $installedRoot "visualtex.exe"
     if (-not (Test-Path -LiteralPath $installedExe)) { $installedExe = Join-Path $installedRoot "VisualTeX.exe" }
+    foreach ($forbiddenX86Payload in @(
+        "windows-office\VisualTeX-WindowsOffice-VSTO-x86.msi",
+        "windows-office\VisualTeX-WindowsOffice-VSTO-x86.sha256.json"
+    )) {
+        $forbiddenPath = Join-Path $installedRoot $forbiddenX86Payload
+        if (Test-Path -LiteralPath $forbiddenPath) {
+            throw "The x64-only VisualTeX installer wrote a forbidden Office x86 payload: $forbiddenPath"
+        }
+    }
 
     $integration = Get-ItemProperty -LiteralPath $integrationKey -ErrorAction Stop
     $thumbprint = ([string]$integration.CertificateThumbprint -replace '[^0-9A-Fa-f]', '').ToUpperInvariant()
@@ -75,7 +84,7 @@ try {
 
     $report = Join-Path $env:TEMP "visualtex-personal-office-$([guid]::NewGuid().ToString('N')).json"
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runtimeScript `
-        -OfficePlatform auto -VisualTeXPath $installedExe -ReportPath $report
+        -OfficePlatform x64 -VisualTeXPath $installedExe -ReportPath $report
     if ($LASTEXITCODE -ne 0) { throw "Installed Office runtime verification failed with exit code $LASTEXITCODE." }
 
     $uninstaller = Join-Path $installedRoot "uninstall.exe"

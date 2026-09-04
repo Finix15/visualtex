@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$ExpectedAppVersion = "1.2.7",
-    [string]$ExpectedOfficeMsiVersion = "1.0.41.0"
+    [string]$ExpectedOfficeMsiVersion = "1.0.46.0"
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,13 +11,10 @@ $root = Split-Path -Parent $PSScriptRoot
 $installerPath = Join-Path $root "src-tauri\target\release\bundle\nsis\VisualTeX_${ExpectedAppVersion}_x64-setup.exe"
 $installerChecksumPath = $installerPath + ".sha256"
 $resourceX64 = Join-Path $root "src-tauri\resources\windows-office\VisualTeX-WindowsOffice-VSTO-x64.msi"
-$resourceX86 = Join-Path $root "src-tauri\resources\windows-office\VisualTeX-WindowsOffice-VSTO-x86.msi"
 $manifestX64 = Join-Path $root "src-tauri\resources\windows-office\VisualTeX-WindowsOffice-VSTO-x64.sha256.json"
-$manifestX86 = Join-Path $root "src-tauri\resources\windows-office\VisualTeX-WindowsOffice-VSTO-x86.sha256.json"
 $vstoRuntime = Join-Path $root "src-tauri\resources\windows-office\vstor_redist.exe"
 $vstoRuntimeManifest = Join-Path $root "src-tauri\resources\windows-office\vstor_redist.sha256.json"
 $buildX64 = Join-Path $root "src-windows\VisualTeX.WindowsOffice.Installer\bin\x64\Release\VisualTeX-WindowsOffice-VSTO-x64.msi"
-$buildX86 = Join-Path $root "src-windows\VisualTeX.WindowsOffice.Installer\bin\x86\Release\VisualTeX-WindowsOffice-VSTO-x86.msi"
 $ocrPythonRoot = Join-Path $root "src-tauri\resources\ocr-python\windows-x64"
 $ocrPythonManifestPath = Join-Path $ocrPythonRoot "manifest.json"
 $ocrModelRoot = Join-Path $root "src-tauri\resources\ocr-models\windows-x64"
@@ -26,13 +23,10 @@ $paths = @(
     $installerPath,
     $installerChecksumPath,
     $resourceX64,
-    $resourceX86,
     $manifestX64,
-    $manifestX86,
     $vstoRuntime,
     $vstoRuntimeManifest,
     $buildX64,
-    $buildX86,
     $ocrPythonManifestPath,
     $ocrModelCatalogPath
 )
@@ -114,8 +108,8 @@ try {
 Assert-ManifestFileRecord $ocrPythonRoot $ocrPythonManifest.wheelhouse.lock "Hash-locked OCR requirements"
 $wheelhouseRoot = Join-Path $ocrPythonRoot "wheelhouse"
 $manifestWheels = @($ocrPythonManifest.wheelhouse.files)
-if ($manifestWheels.Count -ne 68) {
-    throw "The fixed Windows OCR wheelhouse must contain exactly 68 wheels; manifest contains $($manifestWheels.Count)."
+if ($manifestWheels.Count -ne 71) {
+    throw "The fixed Windows OCR wheelhouse must contain exactly 71 wheels; manifest contains $($manifestWheels.Count)."
 }
 $manifestWheelNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 foreach ($wheel in $manifestWheels) {
@@ -148,7 +142,7 @@ foreach ($requiredLockMarker in @("paddlepaddle==3.3.1", "paddleocr==3.7.0", "to
         throw "OCR requirements lock is missing $requiredLockMarker"
     }
 }
-Write-Host "Private OCR Python 3.12.10 x64 archive, app-local Microsoft OpenMP runtime and exact 68-wheel offline closure verified."
+Write-Host "Private OCR Python 3.12.10 x64 archive, app-local Microsoft OpenMP runtime and exact 71-wheel offline closure verified."
 
 $ocrModelCatalog = Get-Content -LiteralPath $ocrModelCatalogPath -Raw | ConvertFrom-Json
 if ([int]$ocrModelCatalog.schemaVersion -ne 1 -or
@@ -244,7 +238,7 @@ function Assert-MsiComponentBitness {
 }
 
 $installer = New-Object -ComObject WindowsInstaller.Installer
-foreach ($path in @($resourceX64, $resourceX86, $buildX64, $buildX86)) {
+foreach ($path in @($resourceX64, $buildX64)) {
     $database = $installer.OpenDatabase($path, 0)
     $view = $database.OpenView("SELECT `Value` FROM `Property` WHERE `Property`='ProductVersion'")
     $view.Execute()
@@ -271,14 +265,9 @@ foreach ($path in @($resourceX64, $resourceX86, $buildX64, $buildX86)) {
 }
 Assert-MsiComponentBitness $installer $resourceX64 $true
 Assert-MsiComponentBitness $installer $buildX64 $true
-Assert-MsiComponentBitness $installer $resourceX86 $false
-Assert-MsiComponentBitness $installer $buildX86 $false
 
 if ((Get-FileHash $resourceX64 -Algorithm SHA256).Hash -ne (Get-FileHash $buildX64 -Algorithm SHA256).Hash) {
     throw "The x64 Office MSI bundled by Tauri is not the current x64 build."
-}
-if ((Get-FileHash $resourceX86 -Algorithm SHA256).Hash -ne (Get-FileHash $buildX86 -Algorithm SHA256).Hash) {
-    throw "The x86 Office MSI bundled by Tauri is not the current x86 build."
 }
 
 $runtimeManifest = Get-Content -LiteralPath $vstoRuntimeManifest -Raw | ConvertFrom-Json
@@ -302,8 +291,7 @@ if ([string]$runtimeVersion.ProductVersion -ne "10.0.60917.00" -or
 }
 
 foreach ($entry in @(
-    @{ Msi = $resourceX64; Manifest = $manifestX64 },
-    @{ Msi = $resourceX86; Manifest = $manifestX86 }
+    @{ Msi = $resourceX64; Manifest = $manifestX64 }
 )) {
     $manifest = Get-Content -LiteralPath $entry.Manifest -Raw | ConvertFrom-Json
     $actualHash = (Get-FileHash -LiteralPath $entry.Msi -Algorithm SHA256).Hash
@@ -434,14 +422,21 @@ $windowsResources = @($windowsTauriConfig.bundle.resources.PSObject.Properties)
 foreach ($requiredResource in @(
     @{ Source = "resources/windows-office/VisualTeX-WindowsOffice-VSTO-x64.msi"; Destination = "windows-office/VisualTeX-WindowsOffice-VSTO-x64.msi" },
     @{ Source = "resources/windows-office/VisualTeX-WindowsOffice-VSTO-x64.sha256.json"; Destination = "windows-office/VisualTeX-WindowsOffice-VSTO-x64.sha256.json" },
-    @{ Source = "resources/windows-office/VisualTeX-WindowsOffice-VSTO-x86.msi"; Destination = "windows-office/VisualTeX-WindowsOffice-VSTO-x86.msi" },
-    @{ Source = "resources/windows-office/VisualTeX-WindowsOffice-VSTO-x86.sha256.json"; Destination = "windows-office/VisualTeX-WindowsOffice-VSTO-x86.sha256.json" },
     @{ Source = "resources/windows-office/vstor_redist.exe"; Destination = "windows-office/vstor_redist.exe" },
     @{ Source = "resources/windows-office/vstor_redist.sha256.json"; Destination = "windows-office/vstor_redist.sha256.json" }
 )) {
     $record = @($windowsResources | Where-Object { $_.Name -eq $requiredResource.Source })
     if ($record.Count -ne 1 -or [string]$record[0].Value -ne [string]$requiredResource.Destination) {
         throw "Windows Tauri resource mapping is missing or invalid: $($requiredResource.Source) -> $($requiredResource.Destination)"
+    }
+}
+
+foreach ($forbiddenResource in @(
+    "resources/windows-office/VisualTeX-WindowsOffice-VSTO-x86.msi",
+    "resources/windows-office/VisualTeX-WindowsOffice-VSTO-x86.sha256.json"
+)) {
+    if (@($windowsResources | Where-Object { $_.Name -eq $forbiddenResource }).Count -ne 0) {
+        throw "The x64-only Windows release must not bundle Office x86 resource: $forbiddenResource"
     }
 }
 

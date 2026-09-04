@@ -651,7 +651,12 @@ pub fn install_windows_ole_integration(
     #[cfg(target_os = "windows")]
     {
         let executable = current_visualtex_executable()?;
-        let arguments = vec!["-VisualTeXPath".to_string(), executable];
+        let arguments = vec![
+            "-VisualTeXPath".to_string(),
+            executable,
+            "-OfficePlatform".to_string(),
+            "x64".to_string(),
+        ];
         run_windows_script(
             &app,
             "ensure_windows_office_certificate.ps1",
@@ -696,7 +701,12 @@ pub fn repair_windows_office_integration(
     #[cfg(target_os = "windows")]
     {
         let executable = current_visualtex_executable()?;
-        let arguments = vec!["-VisualTeXPath".to_string(), executable];
+        let arguments = vec![
+            "-VisualTeXPath".to_string(),
+            executable,
+            "-OfficePlatform".to_string(),
+            "x64".to_string(),
+        ];
         run_windows_script(
             &app,
             "ensure_windows_office_certificate.ps1",
@@ -723,7 +733,12 @@ pub fn test_windows_office_runtime(
     #[cfg(target_os = "windows")]
     {
         let executable = current_visualtex_executable()?;
-        let mut arguments = vec!["-VisualTeXPath".to_string(), executable];
+        let mut arguments = vec![
+            "-VisualTeXPath".to_string(),
+            executable,
+            "-OfficePlatform".to_string(),
+            "x64".to_string(),
+        ];
         if force_close_office {
             arguments.push("-ForceCloseOffice".to_string());
         }

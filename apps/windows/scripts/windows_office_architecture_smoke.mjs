@@ -1107,13 +1107,13 @@ assert.ok(!windowsBundle.includes('"../scripts/install_windows_ole.ps1"'));
 for (const bundledOfficeResource of [
   "VisualTeX-WindowsOffice-VSTO-x64.msi",
   "VisualTeX-WindowsOffice-VSTO-x64.sha256.json",
-  "VisualTeX-WindowsOffice-VSTO-x86.msi",
-  "VisualTeX-WindowsOffice-VSTO-x86.sha256.json",
   "vstor_redist.exe",
   "vstor_redist.sha256.json",
 ]) {
   assert.ok(windowsBundle.includes(bundledOfficeResource));
 }
+assert.ok(!windowsBundle.includes("VisualTeX-WindowsOffice-VSTO-x86.msi"));
+assert.ok(!windowsBundle.includes("VisualTeX-WindowsOffice-VSTO-x86.sha256.json"));
 assert.ok(installerHooks.includes("${NSD_Check} $VisualTeXOfficeNativeRadio"));
 assert.ok(installerHooks.includes("bundled private Python 3.12.10 x64 runtime"));
 assert.ok(!installerHooks.includes("VisualTeXProbeLauncher"));
@@ -1166,10 +1166,12 @@ assert.ok(installerHooks.includes("UAC"));
 assert.ok(installerHooks.includes("ensure_windows_office_certificate.ps1"));
 assert.ok(installerHooks.includes("test_windows_office_runtime.ps1"));
 assert.ok(installerHooks.includes("VisualTeX-WindowsOffice-VSTO-x64.msi"));
-assert.ok(installerHooks.includes("VisualTeX-WindowsOffice-VSTO-x86.msi"));
 assert.ok(installerHooks.includes("VisualTeX-WindowsOffice-VSTO-x64.sha256.json"));
-assert.ok(installerHooks.includes("VisualTeX-WindowsOffice-VSTO-x86.sha256.json"));
-assert.ok(installerHooks.includes('-PackageDirectory "$INSTDIR\\windows-office"'));
+assert.ok(!installerHooks.includes("VisualTeX-WindowsOffice-VSTO-x86.msi"));
+assert.ok(!installerHooks.includes("VisualTeX-WindowsOffice-VSTO-x86.sha256.json"));
+assert.ok(installerHooks.includes('-PackageDirectory "$INSTDIR\\windows-office" -OfficePlatform x64'));
+assert.ok(officeLifecycle.includes('"-OfficePlatform".to_string()'));
+assert.ok(officeLifecycle.includes('"x64".to_string()'));
 assert.ok(installerHooks.includes('-VisualTeXPath "$INSTDIR\\${MAINBINARYNAME}.exe"'));
 assert.ok(!installerHooks.includes('-VisualTeXPath "$INSTDIR\\VisualTeX.exe"'));
 assert.ok(installerHooks.includes("uninstall_windows_vsto.ps1"));

@@ -16,6 +16,9 @@ internal sealed class WordFormulaService
     internal sealed class MathTypeScanItem
     {
         internal string FormulaId { get; set; } = string.Empty;
+        internal int PackageIndex { get; set; }
+        internal string RelationshipId { get; set; } = string.Empty;
+        internal string PartName { get; set; } = string.Empty;
         internal int Start { get; set; }
         internal int End { get; set; }
         internal string ProgId { get; set; } = string.Empty;
@@ -24,6 +27,7 @@ internal sealed class WordFormulaService
         internal string Risk { get; set; } = "blocked";
         internal List<string> Warnings { get; } = new();
         internal bool Display { get; set; }
+        internal string LayoutReason { get; set; } = string.Empty;
         internal string Error { get; set; } = string.Empty;
         internal MathTypeParseStatus Status { get; set; }
         internal string ReasonCode { get; set; } = string.Empty;
@@ -36,6 +40,15 @@ internal sealed class WordFormulaService
     internal sealed class MathTypeScanPlan
     {
         internal List<MathTypeScanItem> Items { get; } = new();
+        internal bool WholeDocument { get; set; }
+        internal string OperationId { get; set; } = Guid.NewGuid().ToString("N");
+        internal string SourcePath { get; set; } = string.Empty;
+        internal string DocumentFingerprint { get; set; } = string.Empty;
+        internal int ExpectedOleCount { get; set; }
+        internal TimeSpan PackageReadDuration { get; set; }
+        internal TimeSpan ComMapDuration { get; set; }
+        internal TimeSpan SidecarDuration { get; set; }
+        internal TimeSpan WordInsertDuration { get; set; }
         internal int ConvertibleCount => Items.Count(item => item.CanConvert);
         internal int SkippedCount => Items.Count - ConvertibleCount;
     }
@@ -45,6 +58,7 @@ internal sealed class WordFormulaService
         internal int Converted { get; set; }
         internal int Failed { get; set; }
         internal int Skipped { get; set; }
+        internal TimeSpan WordInsertDuration { get; set; }
         internal List<string> Errors { get; } = new();
     }
     private sealed class MathTypeParagraphSnapshot
@@ -52,6 +66,18 @@ internal sealed class WordFormulaService
         internal string Prefix { get; set; } = string.Empty;
         internal string Suffix { get; set; } = string.Empty;
         internal ParagraphFormat? Format { get; set; }
+    }
+    private sealed class MathTypeRollbackBoundary
+    {
+        internal string BeforeName { get; set; } = string.Empty;
+        internal string AfterName { get; set; } = string.Empty;
+        internal int OriginalStart { get; set; }
+        internal int OriginalEnd { get; set; }
+    }
+    private sealed class MathTypeFatalRollbackException : InvalidOperationException
+    {
+        internal MathTypeFatalRollbackException(string message, Exception innerException)
+            : base(message, innerException) { }
     }
     private const string RangeReferencePrefix = "visualtex-word-vsto-range:";
     private const string InlineBaselineBookmarkPrefix = "VTBL_";
@@ -118,11 +144,18 @@ internal sealed class WordFormulaService
 
     internal MathTypeScanPlan ScanMathTypeEquations(bool wholeDocument)
     {
+        return wholeDocument
+            ? ScanWholeDocumentMathTypeEquations()
+            : ScanSelectedMathTypeEquations();
+    }
+
+    private MathTypeScanPlan ScanSelectedMathTypeEquations()
+    {
         Document? document = null;
         Selection? selection = null;
         Range? scope = null;
         InlineShapes? shapes = null;
-        var plan = new MathTypeScanPlan();
+        var plan = new MathTypeScanPlan { WholeDocument = false };
         var sidecarRequests = new List<MathTypeSidecarRequest>();
         try
         {
@@ -132,12 +165,8 @@ internal sealed class WordFormulaService
             if (!extension.Equals(".docx", StringComparison.OrdinalIgnoreCase)
                 && !extension.Equals(".docm", StringComparison.OrdinalIgnoreCase))
                 throw new NotSupportedException("Chỉ hỗ trợ DOCX và DOCM; hãy lưu tài liệu DOC thành DOCX trước.");
-            if (wholeDocument) scope = document.Content;
-            else
-            {
-                selection = _application.Selection;
-                scope = selection.Range;
-            }
+            selection = _application.Selection;
+            scope = selection.Range;
             shapes = scope.InlineShapes;
             for (var index = 1; index <= shapes.Count; index++)
             {
@@ -158,6 +187,7 @@ internal sealed class WordFormulaService
                             continue;
                         progId = "Equation.DSMT4";
                     }
+                    var layout = DetermineMathTypeLayout(range);
                     var item = new MathTypeScanItem
                     {
                         FormulaId = $"F{plan.Items.Count + 1:D4}",
@@ -167,7 +197,8 @@ internal sealed class WordFormulaService
                         // MathType's MathML commonly declares display="block"
                         // even when the source OLE is embedded in prose. Word's
                         // layout must follow the source paragraph, not that hint.
-                        Display = IsStandaloneMathTypeParagraph(range),
+                        Display = layout.Display,
+                        LayoutReason = layout.Reason,
                     };
                     try
                     {
@@ -183,33 +214,11 @@ internal sealed class WordFormulaService
                     Release(shape);
                 }
             }
-            if (sidecarRequests.Count != 0)
-            {
-                var decodedById = MathTypeSidecarClient.ConvertBatch(sidecarRequests, maxWorkers: 4)
-                    .ToDictionary(value => value.FormulaId, StringComparer.Ordinal);
-                foreach (var item in plan.Items.Where(value => value.Error.Length == 0))
-                {
-                    if (!decodedById.TryGetValue(item.FormulaId, out var decoded))
-                    {
-                        item.Status = MathTypeParseStatus.Corrupt;
-                        item.Error = "SIDECAR_MISSING_RESULT: engine không trả kết quả.";
-                        continue;
-                    }
-                    item.Status = decoded.ParseStatus;
-                    item.ReasonCode = decoded.ReasonCode;
-                    item.OleFingerprint = decoded.Fingerprint;
-                    item.MathMl = decoded.MathMl;
-                    item.PreparedOmml = decoded.Omml;
-                    item.Risk = decoded.Risk;
-                    item.Warnings.AddRange(decoded.Warnings);
-                    if (!decoded.CanConvert) item.Error = $"{decoded.ReasonCode}: {string.Join("; ", decoded.Errors.Take(3))}";
-                    else
-                    {
-                        var single = WordOmmlConverter.ExtractSingleOMath(item.PreparedOmml);
-                        _ = XElement.Parse(single);
-                    }
-                }
-            }
+            var sidecarTimer = Stopwatch.StartNew();
+            ApplyMathTypeSidecarResults(plan, sidecarRequests);
+            sidecarTimer.Stop();
+            plan.SidecarDuration = sidecarTimer.Elapsed;
+            plan.ExpectedOleCount = plan.Items.Count;
             return plan;
         }
         finally
@@ -221,9 +230,185 @@ internal sealed class WordFormulaService
         }
     }
 
+    private MathTypeScanPlan ScanWholeDocumentMathTypeEquations()
+    {
+        Document? document = null;
+        Range? scope = null;
+        InlineShapes? shapes = null;
+        var plan = new MathTypeScanPlan { WholeDocument = true };
+        try
+        {
+            document = _application.ActiveDocument
+                ?? throw new InvalidOperationException("Không có tài liệu Word đang mở.");
+            var extension = Path.GetExtension(document.Name);
+            if (!extension.Equals(".docx", StringComparison.OrdinalIgnoreCase)
+                && !extension.Equals(".docm", StringComparison.OrdinalIgnoreCase))
+                throw new NotSupportedException(
+                    "Chỉ hỗ trợ DOCX và DOCM; hãy lưu tài liệu DOC thành DOCX trước.");
+            if (string.IsNullOrWhiteSpace(document.Path))
+                throw new InvalidOperationException(
+                    "Tài liệu phải được lưu trước khi chuyển toàn bộ MathType.");
+            if (!document.Saved)
+                throw new InvalidOperationException(
+                    "Tài liệu đang có thay đổi chưa lưu. Hãy nhấn Ctrl+S rồi chạy lại.");
+
+            plan.SourcePath = document.FullName;
+            var packageTimer = Stopwatch.StartNew();
+            var snapshot = MathTypeDocumentScanner.ReadPackageSnapshot(plan.SourcePath);
+            packageTimer.Stop();
+            plan.PackageReadDuration = packageTimer.Elapsed;
+            plan.DocumentFingerprint = snapshot.DocumentFingerprint;
+            plan.ExpectedOleCount = snapshot.Items.Count;
+
+            var comTimer = Stopwatch.StartNew();
+            scope = document.Content;
+            shapes = scope.InlineShapes;
+            var live = new List<(int Start, int End, bool Display, string LayoutReason, string ProgId)>();
+            for (var index = 1; index <= shapes.Count; index++)
+            {
+                InlineShape? shape = null;
+                Range? range = null;
+                try
+                {
+                    shape = shapes[index];
+                    if (shape.Type != WdInlineShapeType.wdInlineShapeEmbeddedOLEObject)
+                        continue;
+                    range = shape.Range;
+                    string progId;
+                    try { progId = shape.OLEFormat.ProgID ?? string.Empty; }
+                    catch { progId = string.Empty; }
+                    var layout = DetermineMathTypeLayout(range);
+                    live.Add((range.Start, range.End, layout.Display, layout.Reason, progId));
+                }
+                finally
+                {
+                    Release(range);
+                    Release(shape);
+                }
+            }
+            if (live.Count != snapshot.Items.Count)
+                throw new InvalidDataException(
+                    $"Không thể ánh xạ MathType an toàn: package có {snapshot.Items.Count} OLE "
+                    + $"nhưng Word có {live.Count} embedded inline OLE.");
+
+            var sidecarRequests = new List<MathTypeSidecarRequest>(snapshot.Items.Count);
+            for (var index = 0; index < snapshot.Items.Count; index++)
+            {
+                var packageItem = snapshot.Items[index];
+                var liveItem = live[index];
+                if (!string.IsNullOrWhiteSpace(liveItem.ProgId)
+                    && !string.Equals(
+                        liveItem.ProgId,
+                        packageItem.ProgId,
+                        StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException(
+                        $"OLE thứ {index + 1} trong Word có ProgID '{liveItem.ProgId}', "
+                        + $"không khớp '{packageItem.ProgId}'.");
+                var item = new MathTypeScanItem
+                {
+                    FormulaId = $"F{index + 1:D4}",
+                    PackageIndex = packageItem.Index,
+                    RelationshipId = packageItem.RelationshipId,
+                    PartName = packageItem.PartName,
+                    Start = liveItem.Start,
+                    End = liveItem.End,
+                    ProgId = packageItem.ProgId,
+                    Display = liveItem.Display,
+                    LayoutReason = liveItem.LayoutReason,
+                    OleFingerprint = packageItem.OleFingerprint,
+                };
+                plan.Items.Add(item);
+                sidecarRequests.Add(new MathTypeSidecarRequest
+                {
+                    FormulaId = item.FormulaId,
+                    OleBytes = packageItem.OleBytes,
+                });
+            }
+            comTimer.Stop();
+            plan.ComMapDuration = comTimer.Elapsed;
+            EnsureMathTypeSourceUnchanged(plan);
+
+            var sidecarTimer = Stopwatch.StartNew();
+            ApplyMathTypeSidecarResults(plan, sidecarRequests);
+            sidecarTimer.Stop();
+            plan.SidecarDuration = sidecarTimer.Elapsed;
+            EnsureMathTypeSourceUnchanged(plan);
+            return plan;
+        }
+        finally
+        {
+            Release(shapes);
+            Release(scope);
+            Release(document);
+        }
+    }
+
+    private static void ApplyMathTypeSidecarResults(
+        MathTypeScanPlan plan,
+        IReadOnlyList<MathTypeSidecarRequest> requests)
+    {
+        if (requests.Count == 0) return;
+        var decodedById = MathTypeSidecarClient.ConvertBatch(requests, maxWorkers: 4)
+            .ToDictionary(value => value.FormulaId, StringComparer.Ordinal);
+        foreach (var item in plan.Items.Where(value => value.Error.Length == 0))
+        {
+            if (!decodedById.TryGetValue(item.FormulaId, out var decoded))
+            {
+                item.Status = MathTypeParseStatus.Corrupt;
+                item.Error = "SIDECAR_MISSING_RESULT: engine không trả kết quả.";
+                continue;
+            }
+            if (item.OleFingerprint.Length != 0
+                && !string.Equals(
+                    item.OleFingerprint,
+                    decoded.Fingerprint,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                item.Status = MathTypeParseStatus.Corrupt;
+                item.ReasonCode = "SIDECAR_FINGERPRINT_MISMATCH";
+                item.Error = "Engine trả fingerprint không khớp OLE đã quét.";
+                continue;
+            }
+            item.Status = decoded.ParseStatus;
+            item.ReasonCode = decoded.ReasonCode;
+            item.OleFingerprint = decoded.Fingerprint;
+            item.MathMl = decoded.MathMl;
+            item.PreparedOmml = decoded.Omml;
+            item.Risk = decoded.Risk;
+            item.Warnings.AddRange(decoded.Warnings);
+            if (!decoded.CanConvert)
+                item.Error = $"{decoded.ReasonCode}: {string.Join("; ", decoded.Errors.Take(3))}";
+            else
+            {
+                var single = WordOmmlConverter.ExtractSingleOMath(item.PreparedOmml);
+                _ = XElement.Parse(single);
+            }
+        }
+    }
+
+    private static void EnsureMathTypeSourceUnchanged(MathTypeScanPlan plan)
+    {
+        if (!plan.WholeDocument) return;
+        var current = MathTypeDocumentScanner.ComputeFileFingerprint(plan.SourcePath);
+        if (!string.Equals(
+                current,
+                plan.DocumentFingerprint,
+                StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                "File Word đã thay đổi trong lúc quét MathType. Hãy lưu và chạy lại.");
+    }
+
     internal MathTypeConversionSummary ConvertMathTypeEquations(MathTypeScanPlan plan)
     {
         if (plan is null) throw new ArgumentNullException(nameof(plan));
+        return plan.WholeDocument
+            ? ConvertWholeDocumentMathTypeEquations(plan)
+            : ConvertSelectedMathTypeEquations(plan);
+    }
+
+    private MathTypeConversionSummary ConvertSelectedMathTypeEquations(
+        MathTypeScanPlan plan)
+    {
         var summary = new MathTypeConversionSummary { Skipped = plan.SkippedCount };
         Document? document = null;
         UndoRecord? undo = null;
@@ -321,8 +506,503 @@ internal sealed class WordFormulaService
         }
     }
 
-    internal string CreateMathTypeBackup(int expectedOleCount)
+    private MathTypeConversionSummary ConvertWholeDocumentMathTypeEquations(
+        MathTypeScanPlan plan)
     {
+        var summary = new MathTypeConversionSummary { Skipped = plan.SkippedCount };
+        var timer = Stopwatch.StartNew();
+        var temporaryBookmarks = new Dictionary<string, MathTypeScanItem>(
+            StringComparer.Ordinal);
+        Document? document = null;
+        Document? scratchDocument = null;
+        UndoRecord? undo = null;
+        try
+        {
+            document = _application.ActiveDocument
+                ?? throw new InvalidOperationException("Không có tài liệu Word đang mở.");
+            EnsureWritable(document);
+            if (!document.Saved)
+                throw new InvalidOperationException(
+                    "Tài liệu đã thay đổi sau khi quét. Hãy nhấn Ctrl+S rồi chạy lại.");
+            if (!string.Equals(
+                    document.FullName,
+                    plan.SourcePath,
+                    StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    "Tài liệu đang mở không còn là tài liệu đã được quét.");
+            EnsureMathTypeSourceUnchanged(plan);
+
+            undo = BeginUndoRecord("VisualTeX chuyển toàn bộ MathType sang Word Equation");
+            CreateMathTypeConversionBookmarks(document, plan, temporaryBookmarks);
+            scratchDocument = _application.Documents.Add(Visible: false);
+            document.Activate();
+
+            var ordered = temporaryBookmarks
+                .Select(pair =>
+                {
+                    Bookmark? bookmark = null;
+                    try
+                    {
+                        bookmark = document.Bookmarks[pair.Key];
+                        return (Name: pair.Key, Item: pair.Value, Start: bookmark.Range.Start);
+                    }
+                    finally { Release(bookmark); }
+                })
+                .OrderByDescending(value => value.Start)
+                .ToArray();
+
+            foreach (var entry in ordered)
+            {
+                Bookmark? anchor = null;
+                Range? target = null;
+                Range? scratchOle = null;
+                Range? equation = null;
+                Bookmark? metadataBookmark = null;
+                MathTypeParagraphSnapshot? paragraphSnapshot = null;
+                MathTypeRollbackBoundary? rollbackBoundary = null;
+                var currentPosition = entry.Start;
+                try
+                {
+                    if (!document.Bookmarks.Exists(entry.Name))
+                        throw new InvalidOperationException("BOOKMARK_MISSING: bookmark tạm đã mất.");
+                    anchor = document.Bookmarks[entry.Name];
+                    target = anchor.Range.Duplicate;
+                    currentPosition = target.Start;
+                    VerifyMathTypeBookmarkTarget(target, entry.Item);
+                    paragraphSnapshot = CaptureMathTypeParagraph(target);
+                    scratchOle = CopyMathTypeOleToScratch(scratchDocument, target);
+                    rollbackBoundary = CreateMathTypeRollbackBoundary(
+                        document,
+                        target,
+                        entry.Item.FormulaId);
+
+                    equation = WordOmmlConverter.InsertPreparedOmml(
+                        _application,
+                        document,
+                        target,
+                        entry.Item.PreparedOmml,
+                        entry.Item.Display,
+                        out var fingerprint,
+                        replaceTarget: true);
+                    EnforceMathTypeLayoutAndValidate(
+                        document,
+                        equation,
+                        paragraphSnapshot,
+                        entry.Item.Display);
+                    var latex = MathMlToLatexConverter.Convert(entry.Item.MathMl);
+                    var now = DateTimeOffset.UtcNow.ToString("O");
+                    var metadata = new FormulaMetadata
+                    {
+                        FormulaId = Guid.NewGuid().ToString(),
+                        Title = "MathType imported equation",
+                        Latex = latex,
+                        Lines = new List<FormulaLine>
+                        {
+                            new() { Id = Guid.NewGuid().ToString(), Latex = latex },
+                        },
+                        CodeFormat = "latex",
+                        DisplayMode = entry.Item.Display ? "block" : "inline",
+                        NativeOmmlFingerprint = fingerprint,
+                        CreatedWithVersion = "1.2.7",
+                        UpdatedWithVersion = "1.2.7",
+                        CreatedAt = now,
+                        UpdatedAt = now,
+                    };
+                    ApplyOmmlTypography(equation, FormulaFontSize.DefaultPt, metadata);
+                    metadataBookmark = WordOmmlFormulaStore.Wrap(
+                        document,
+                        equation,
+                        metadata);
+                    EnforceMathTypeLayoutAndValidate(
+                        document,
+                        equation,
+                        paragraphSnapshot,
+                        entry.Item.Display);
+                    WordOmmlFormulaStore.SaveNew(document, metadata);
+                    summary.Converted++;
+                }
+                catch (Exception error)
+                {
+                    summary.Failed++;
+                    summary.Errors.Add(
+                        $"{entry.Item.FormulaId} | insert | vị trí {currentPosition}: {error.Message}");
+                    try { metadataBookmark?.Delete(); } catch { }
+                    if (scratchOle is not null)
+                    {
+                        try
+                        {
+                            RestoreMathTypeOleFromScratch(
+                                document,
+                                target,
+                                equation,
+                                scratchOle,
+                                rollbackBoundary,
+                                paragraphSnapshot,
+                                entry.Item);
+                        }
+                        catch (Exception rollbackError)
+                        {
+                            summary.Errors.Add(
+                                $"{entry.Item.FormulaId} | rollback | vị trí {currentPosition}: "
+                                + rollbackError.Message);
+                            throw new MathTypeFatalRollbackException(
+                                $"ROLLBACK_VERIFICATION_FAILED: Không thể phục hồi nguyên OLE "
+                                + $"{entry.Item.FormulaId}; đã dừng batch để bảo vệ tài liệu.",
+                                rollbackError);
+                        }
+                    }
+                }
+                finally
+                {
+                    DeleteMathTypeRollbackBoundary(document, rollbackBoundary);
+                    Release(metadataBookmark);
+                    Release(equation);
+                    Release(scratchOle);
+                    Release(target);
+                    Release(anchor);
+                    Release(paragraphSnapshot?.Format);
+                }
+            }
+            return summary;
+        }
+        catch (MathTypeFatalRollbackException error)
+        {
+            EndUndoRecord(undo);
+            Release(undo);
+            undo = null;
+            if (document is null || !TryUndoFormulaToLatexConversion(document))
+                throw new InvalidOperationException(
+                    error.Message + " Word không thể hoàn tác toàn bộ Undo Record tự động.",
+                    error);
+            throw new InvalidOperationException(
+                error.Message + " Toàn bộ batch đã được hoàn tác.",
+                error);
+        }
+        finally
+        {
+            if (document is not null)
+                DeleteMathTypeConversionBookmarks(document, temporaryBookmarks.Keys);
+            if (scratchDocument is not null)
+            {
+                try { scratchDocument.Close(WdSaveOptions.wdDoNotSaveChanges); } catch { }
+            }
+            timer.Stop();
+            summary.WordInsertDuration = timer.Elapsed;
+            plan.WordInsertDuration = timer.Elapsed;
+            EndUndoRecord(undo);
+            Release(undo);
+            Release(scratchDocument);
+            Release(document);
+        }
+    }
+
+    private static void CreateMathTypeConversionBookmarks(
+        Document document,
+        MathTypeScanPlan plan,
+        IDictionary<string, MathTypeScanItem> bookmarks)
+    {
+        Range? content = null;
+        InlineShapes? shapes = null;
+        try
+        {
+            content = document.Content;
+            shapes = content.InlineShapes;
+            var liveShapes = new List<(int Start, int End, string ProgId)>();
+            for (var index = 1; index <= shapes.Count; index++)
+            {
+                InlineShape? shape = null;
+                Range? range = null;
+                try
+                {
+                    shape = shapes[index];
+                    if (shape.Type != WdInlineShapeType.wdInlineShapeEmbeddedOLEObject)
+                        continue;
+                    range = shape.Range;
+                    string progId;
+                    try { progId = shape.OLEFormat.ProgID ?? string.Empty; }
+                    catch { progId = string.Empty; }
+                    liveShapes.Add((range.Start, range.End, progId));
+                }
+                finally
+                {
+                    Release(range);
+                    Release(shape);
+                }
+            }
+            if (liveShapes.Count != plan.ExpectedOleCount)
+                throw new InvalidOperationException(
+                    $"Danh sách OLE trong Word đã thay đổi: hiện có {liveShapes.Count}, "
+                    + $"dự kiến {plan.ExpectedOleCount}.");
+            if (plan.Items.Count != liveShapes.Count)
+                throw new InvalidOperationException("Kế hoạch MathType không khớp danh sách OLE live.");
+
+            for (var index = 0; index < plan.Items.Count; index++)
+            {
+                var item = plan.Items[index];
+                var live = liveShapes[index];
+                if (!string.IsNullOrWhiteSpace(live.ProgId)
+                    && !string.Equals(live.ProgId, item.ProgId, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException(
+                        $"{item.FormulaId}: ProgID live '{live.ProgId}' không khớp '{item.ProgId}'.");
+                if (!item.CanConvert) continue;
+                Range? range = null;
+                Bookmark? bookmark = null;
+                try
+                {
+                    range = document.Range(live.Start, live.End);
+                    var name = $"VTMT_{plan.OperationId.Substring(0, 8)}_{item.FormulaId}";
+                    bookmark = document.Bookmarks.Add(name, range);
+                    bookmarks.Add(name, item);
+                }
+                finally
+                {
+                    Release(bookmark);
+                    Release(range);
+                }
+            }
+        }
+        finally
+        {
+            Release(shapes);
+            Release(content);
+        }
+    }
+
+    private static void VerifyMathTypeBookmarkTarget(
+        Range range,
+        MathTypeScanItem item)
+    {
+        InlineShapes? shapes = null;
+        InlineShape? shape = null;
+        try
+        {
+            shapes = range.InlineShapes;
+            if (shapes.Count != 1)
+                throw new InvalidOperationException(
+                    $"{item.FormulaId}: bookmark không còn chứa đúng một OLE.");
+            shape = shapes[1];
+            if (shape.Type != WdInlineShapeType.wdInlineShapeEmbeddedOLEObject)
+                throw new InvalidOperationException(
+                    $"{item.FormulaId}: đối tượng tại bookmark không còn là embedded OLE.");
+            string progId;
+            try { progId = shape.OLEFormat.ProgID ?? string.Empty; }
+            catch { progId = string.Empty; }
+            if (!string.IsNullOrWhiteSpace(progId)
+                && !string.Equals(progId, item.ProgId, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    $"{item.FormulaId}: ProgID '{progId}' không khớp '{item.ProgId}'.");
+        }
+        finally
+        {
+            Release(shape);
+            Release(shapes);
+        }
+    }
+
+    private static Range CopyMathTypeOleToScratch(Document scratchDocument, Range source)
+    {
+        Range? content = null;
+        Range? placeholder = null;
+        InlineShapes? shapes = null;
+        InlineShape? shape = null;
+        try
+        {
+            content = scratchDocument.Content;
+            content.Text = "X";
+            placeholder = scratchDocument.Range(0, 1);
+            placeholder.FormattedText = source.FormattedText;
+            shapes = scratchDocument.InlineShapes;
+            if (shapes.Count != 1)
+                throw new InvalidOperationException(
+                    "Scratch document không materialize đúng một OLE MathType.");
+            shape = shapes[1];
+            var result = shape.Range.Duplicate;
+            try { scratchDocument.Saved = true; } catch { }
+            return result;
+        }
+        finally
+        {
+            Release(shape);
+            Release(shapes);
+            Release(placeholder);
+            Release(content);
+        }
+    }
+
+    private static MathTypeRollbackBoundary CreateMathTypeRollbackBoundary(
+        Document document,
+        Range target,
+        string formulaId)
+    {
+        Range? before = null;
+        Range? after = null;
+        Bookmark? beforeBookmark = null;
+        Bookmark? afterBookmark = null;
+        var token = Guid.NewGuid().ToString("N").Substring(0, 8);
+        var boundary = new MathTypeRollbackBoundary
+        {
+            BeforeName = $"VTMRB_{formulaId}_{token}",
+            AfterName = $"VTMRA_{formulaId}_{token}",
+            OriginalStart = target.Start,
+            OriginalEnd = target.End,
+        };
+        try
+        {
+            before = target.Duplicate;
+            before.SetRange(target.Start, target.Start);
+            after = target.Duplicate;
+            after.SetRange(target.End, target.End);
+            beforeBookmark = document.Bookmarks.Add(boundary.BeforeName, before);
+            afterBookmark = document.Bookmarks.Add(boundary.AfterName, after);
+            return boundary;
+        }
+        catch
+        {
+            DeleteMathTypeRollbackBoundary(document, boundary);
+            throw;
+        }
+        finally
+        {
+            Release(afterBookmark);
+            Release(beforeBookmark);
+            Release(after);
+            Release(before);
+        }
+    }
+
+    private static void DeleteMathTypeRollbackBoundary(
+        Document document,
+        MathTypeRollbackBoundary? boundary)
+    {
+        if (boundary is null) return;
+        foreach (var name in new[] { boundary.BeforeName, boundary.AfterName })
+        {
+            Bookmark? bookmark = null;
+            try
+            {
+                if (!document.Bookmarks.Exists(name)) continue;
+                bookmark = document.Bookmarks[name];
+                bookmark.Delete();
+            }
+            catch { }
+            finally { Release(bookmark); }
+        }
+    }
+
+    private static void RestoreMathTypeOleFromScratch(
+        Document document,
+        Range? originalTarget,
+        Range? equation,
+        Range scratchOle,
+        MathTypeRollbackBoundary? boundary,
+        MathTypeParagraphSnapshot? snapshot,
+        MathTypeScanItem item)
+    {
+        Bookmark? beforeBookmark = null;
+        Bookmark? afterBookmark = null;
+        Range? beforeRange = null;
+        Range? afterRange = null;
+        Range? rollback = null;
+        Range? restoredProbe = null;
+        InlineShapes? shapes = null;
+        InlineShape? shape = null;
+        Range? restoredOle = null;
+        MathTypeParagraphSnapshot? restoredSnapshot = null;
+        try
+        {
+            if (snapshot is null)
+                throw new InvalidOperationException(
+                    $"ROLLBACK_VERIFICATION_FAILED: Thiếu snapshot đoạn văn cho {item.FormulaId}.");
+            if (boundary is null
+                || !document.Bookmarks.Exists(boundary.BeforeName)
+                || !document.Bookmarks.Exists(boundary.AfterName))
+                throw new InvalidOperationException(
+                    $"ROLLBACK_BOUNDARY_LOST: Không còn đủ bookmark biên cho {item.FormulaId}.");
+            beforeBookmark = document.Bookmarks[boundary.BeforeName];
+            afterBookmark = document.Bookmarks[boundary.AfterName];
+            beforeRange = beforeBookmark.Range.Duplicate;
+            afterRange = afterBookmark.Range.Duplicate;
+            var rollbackStart = Math.Min(boundary.OriginalStart, beforeRange.Start);
+            var rollbackEnd = Math.Max(boundary.OriginalEnd, afterRange.End);
+            if (equation is not null)
+            {
+                rollbackStart = Math.Min(rollbackStart, equation.Start);
+                rollbackEnd = Math.Max(rollbackEnd, equation.End);
+            }
+            else if (originalTarget is not null)
+            {
+                rollbackStart = Math.Min(rollbackStart, originalTarget.Start);
+                rollbackEnd = Math.Max(rollbackEnd, originalTarget.End);
+            }
+            if (rollbackEnd <= rollbackStart)
+                throw new InvalidOperationException(
+                    $"ROLLBACK_BOUNDARY_LOST: Vùng rollback của {item.FormulaId} không hợp lệ.");
+            rollback = document.Range(rollbackStart, rollbackEnd);
+            rollback.FormattedText = scratchOle.FormattedText;
+            var restoredEnd = rollbackStart
+                + Math.Max(1, boundary.OriginalEnd - boundary.OriginalStart);
+            restoredProbe = document.Range(rollbackStart, restoredEnd);
+            shapes = restoredProbe.InlineShapes;
+            if (shapes.Count != 1)
+                throw new InvalidDataException(
+                    $"ROLLBACK_VERIFICATION_FAILED: Vùng phục hồi {item.FormulaId} không chứa đúng một OLE.");
+            shape = shapes[1];
+            restoredOle = shape.Range.Duplicate;
+            var flatOpc = restoredOle.WordOpenXML;
+            var bytes = MathTypeDocumentScanner.ExtractOleFromFlatOpc(flatOpc);
+            var fingerprint = MathTypeSidecarClient.ComputeFingerprint(bytes);
+            if (!string.Equals(
+                    fingerprint,
+                    item.OleFingerprint,
+                    StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException(
+                    $"ROLLBACK_VERIFICATION_FAILED: Fingerprint OLE phục hồi không khớp {item.FormulaId}.");
+            VerifyMathTypeBookmarkTarget(restoredOle, item);
+            restoredSnapshot = CaptureMathTypeParagraph(restoredOle);
+            if (WordMathTypeLayoutValidation.SurroundingsChanged(
+                    snapshot.Prefix,
+                    snapshot.Suffix,
+                    restoredSnapshot.Prefix,
+                    restoredSnapshot.Suffix))
+                throw new InvalidDataException(
+                    $"ROLLBACK_VERIFICATION_FAILED: Phần văn bản quanh {item.FormulaId} không được phục hồi nguyên trạng.");
+        }
+        finally
+        {
+            Release(restoredSnapshot?.Format);
+            Release(restoredOle);
+            Release(shape);
+            Release(shapes);
+            Release(restoredProbe);
+            Release(rollback);
+            Release(afterRange);
+            Release(beforeRange);
+            Release(afterBookmark);
+            Release(beforeBookmark);
+        }
+    }
+
+    private static void DeleteMathTypeConversionBookmarks(
+        Document document,
+        IEnumerable<string> names)
+    {
+        foreach (var name in names.ToArray())
+        {
+            Bookmark? bookmark = null;
+            try
+            {
+                if (!document.Bookmarks.Exists(name)) continue;
+                bookmark = document.Bookmarks[name];
+                bookmark.Delete();
+            }
+            catch { }
+            finally { Release(bookmark); }
+        }
+    }
+
+    internal string CreateMathTypeBackup(MathTypeScanPlan plan)
+    {
+        if (plan is null) throw new ArgumentNullException(nameof(plan));
         Document? document = null;
         try
         {
@@ -345,7 +1025,11 @@ internal sealed class WordFormulaService
             var sourcePath = document.FullName;
             try
             {
-                MathTypeBackupVerifier.CopyAndVerify(sourcePath, path, expectedOleCount);
+                MathTypeBackupVerifier.CopyAndVerify(
+                    sourcePath,
+                    path,
+                    plan.ExpectedOleCount,
+                    plan.DocumentFingerprint);
                 return path;
             }
             catch (Exception error)
@@ -6799,30 +7483,40 @@ internal sealed class WordFormulaService
         }
     }
 
-    private static bool IsStandaloneMathTypeParagraph(Range formulaRange)
+    private static (bool Display, string Reason) DetermineMathTypeLayout(Range formulaRange)
     {
         Paragraphs? paragraphs = null;
         Paragraph? paragraph = null;
         Range? paragraphRange = null;
+        Range? prefix = null;
+        Range? suffix = null;
         InlineShapes? inlineShapes = null;
         OMaths? maths = null;
         try
         {
-            if (HasVisibleSurroundingText(formulaRange)) return false;
             paragraphs = formulaRange.Paragraphs;
-            if (paragraphs.Count != 1) return false;
+            if (paragraphs.Count != 1) return (false, "inline-multiple-paragraphs");
             paragraph = paragraphs[1];
             paragraphRange = paragraph.Range.Duplicate;
+            prefix = paragraphRange.Document.Range(paragraphRange.Start, formulaRange.Start);
+            suffix = paragraphRange.Document.Range(formulaRange.End, paragraphRange.End);
             inlineShapes = paragraphRange.InlineShapes;
-            if (inlineShapes.Count != 1) return false;
             maths = paragraphRange.OMaths;
-            return maths.Count == 0;
+            var display = WordMathTypeLayoutValidation.IsStandaloneDisplayCandidate(
+                prefix.Text,
+                suffix.Text,
+                inlineShapes.Count,
+                maths.Count,
+                out var reason);
+            return (display, reason);
         }
-        catch { return false; }
+        catch { return (false, "inline-layout-inspection-failed"); }
         finally
         {
             Release(maths);
             Release(inlineShapes);
+            Release(suffix);
+            Release(prefix);
             Release(paragraphRange);
             Release(paragraph);
             Release(paragraphs);
@@ -6923,15 +7617,19 @@ internal sealed class WordFormulaService
 
             prefix = document.Range(paragraphRange.Start, liveMathRange.Start);
             suffix = document.Range(liveMathRange.End, paragraphRange.End);
-            if (!string.Equals(prefix.Text ?? string.Empty, snapshot.Prefix, StringComparison.Ordinal)
-                || !string.Equals(suffix.Text ?? string.Empty, snapshot.Suffix, StringComparison.Ordinal))
+            if (WordMathTypeLayoutValidation.SurroundingsChanged(
+                    snapshot.Prefix,
+                    snapshot.Suffix,
+                    prefix.Text ?? string.Empty,
+                    suffix.Text ?? string.Empty))
                 throw new InvalidOperationException(
-                    "Word đã thay đổi hoặc tách phần văn bản quanh Equation; giữ nguyên MathType.");
-            if (!display
-                && ((prefix.Text ?? string.Empty).IndexOfAny(new[] { '\r', '\n' }) >= 0
-                    || (suffix.Text ?? string.Empty).TrimEnd('\r', '\n', '\a').IndexOfAny(new[] { '\r', '\n' }) >= 0))
-                throw new InvalidOperationException(
-                    "Equation cùng dòng đã tạo ngắt đoạn ngoài dự kiến.");
+                    "LAYOUT_CONTROL_INSERTED: Word đã thay đổi hoặc tách phần văn bản "
+                    + "quanh Equation; giữ nguyên MathType.");
+            // Word exposes the internal rows/tokens of an inline OMath as '\r'
+            // characters in Range.Text. Those characters are not paragraph
+            // marks in OOXML and are expected when another inline equation is
+            // already present in the prefix or suffix. A real split is still
+            // rejected by the Paragraphs.Count and before/after comparisons.
         }
         finally
         {

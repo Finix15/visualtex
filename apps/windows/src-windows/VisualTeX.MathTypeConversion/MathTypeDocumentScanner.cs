@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Security.Cryptography;
 using System.Xml.Linq;
 
 namespace VisualTeX.MathTypeConversion;
@@ -20,12 +21,118 @@ public sealed class MathTypeEquationRecord
         && !string.IsNullOrWhiteSpace(MathMl) && string.IsNullOrWhiteSpace(Error);
 }
 
+public sealed class MathTypePackageOleRecord
+{
+    public int Index { get; set; }
+    public string RelationshipId { get; set; } = string.Empty;
+    public string ProgId { get; set; } = string.Empty;
+    public string PartName { get; set; } = string.Empty;
+    public string OleFingerprint { get; set; } = string.Empty;
+    public byte[] OleBytes { get; set; } = Array.Empty<byte>();
+}
+
+public sealed class MathTypePackageSnapshot
+{
+    public string SourcePath { get; set; } = string.Empty;
+    public string DocumentFingerprint { get; set; } = string.Empty;
+    public IReadOnlyList<MathTypePackageOleRecord> Items { get; set; }
+        = Array.Empty<MathTypePackageOleRecord>();
+}
+
 public static class MathTypeDocumentScanner
 {
     private const string MathTypeProgId = "Equation.DSMT4";
     private static readonly XNamespace Relationships = "http://schemas.openxmlformats.org/package/2006/relationships";
     private static readonly XNamespace Office = "urn:schemas-microsoft-com:office:office";
     private static readonly XNamespace RelationshipAttribute = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+    public static MathTypePackageSnapshot ReadPackageSnapshot(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            throw new ArgumentException("A DOCX path is required.", nameof(path));
+        var extension = Path.GetExtension(path);
+        if (!extension.Equals(".docx", StringComparison.OrdinalIgnoreCase)
+            && !extension.Equals(".docm", StringComparison.OrdinalIgnoreCase))
+            throw new NotSupportedException("Only DOCX and DOCM packages are supported.");
+
+        string documentFingerprint;
+        using (var hashStream = File.Open(
+                   path,
+                   FileMode.Open,
+                   FileAccess.Read,
+                   FileShare.ReadWrite | FileShare.Delete))
+        using (var sha = SHA256.Create())
+            documentFingerprint = ToHex(sha.ComputeHash(hashStream));
+
+        using var stream = File.Open(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        using var archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: false);
+        var document = LoadXml(archive, "word/document.xml");
+        var relationships = LoadXml(archive, "word/_rels/document.xml.rels")
+            .Root?.Elements(Relationships + "Relationship")
+            .Where(item => ((string?)item.Attribute("Type"))
+                ?.EndsWith("/oleObject", StringComparison.Ordinal) == true)
+            .ToDictionary(
+                item => (string)item.Attribute("Id")!,
+                item => (string)item.Attribute("Target")!,
+                StringComparer.Ordinal)
+            ?? new Dictionary<string, string>(StringComparer.Ordinal);
+        var items = new List<MathTypePackageOleRecord>();
+        foreach (var ole in document.Descendants(Office + "OLEObject"))
+        {
+            var progId = (string?)ole.Attribute("ProgID") ?? string.Empty;
+            if (!string.Equals(progId, MathTypeProgId, StringComparison.OrdinalIgnoreCase))
+                continue;
+            var objectType = (string?)ole.Attribute("Type") ?? "Embed";
+            if (!string.Equals(objectType, "Embed", StringComparison.OrdinalIgnoreCase))
+                throw new NotSupportedException("Linked MathType OLE objects are not supported.");
+            var relationshipId = (string?)ole.Attribute(RelationshipAttribute + "id")
+                ?? string.Empty;
+            if (!relationships.TryGetValue(relationshipId, out var target))
+                throw new InvalidDataException("The MathType OLE relationship is missing.");
+            var partName = NormalizeWordTarget(target);
+            var entry = archive.GetEntry(partName)
+                ?? throw new InvalidDataException("The MathType OLE part is missing.");
+            if (entry.Length <= 0 || entry.Length > MathTypeLimits.MaximumPayloadBytes)
+                throw new InvalidDataException("The MathType OLE part size is invalid.");
+            byte[] bytes;
+            using (var input = entry.Open())
+            using (var buffer = new MemoryStream(checked((int)entry.Length)))
+            {
+                input.CopyTo(buffer);
+                bytes = buffer.ToArray();
+            }
+            items.Add(new MathTypePackageOleRecord
+            {
+                Index = items.Count + 1,
+                RelationshipId = relationshipId,
+                ProgId = progId,
+                PartName = partName,
+                OleBytes = bytes,
+                OleFingerprint = ComputeSha256(bytes),
+            });
+        }
+        return new MathTypePackageSnapshot
+        {
+            SourcePath = Path.GetFullPath(path),
+            DocumentFingerprint = documentFingerprint,
+            Items = items,
+        };
+    }
+
+    public static string ComputeFileFingerprint(string path)
+    {
+        using var stream = File.Open(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        using var sha = SHA256.Create();
+        return ToHex(sha.ComputeHash(stream));
+    }
 
     public static int ValidateAndCountMathTypeOleObjects(string path)
     {
@@ -152,4 +259,13 @@ public static class MathTypeDocumentScanner
         if (value.Contains("../")) throw new InvalidDataException("The MathType relationship target is unsafe.");
         return value;
     }
+
+    private static string ComputeSha256(byte[] bytes)
+    {
+        using var sha = SHA256.Create();
+        return ToHex(sha.ComputeHash(bytes));
+    }
+
+    private static string ToHex(byte[] bytes) =>
+        string.Concat(bytes.Select(value => value.ToString("x2")));
 }

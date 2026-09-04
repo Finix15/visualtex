@@ -14,8 +14,8 @@
     <RootNamespace>VisualTeX.WordVsto</RootNamespace>
     <ComVisible>true</ComVisible>
     <UseWindowsForms>true</UseWindowsForms>
-    <AssemblyVersion>1.0.43.0</AssemblyVersion>
-    <FileVersion>1.0.43.0</FileVersion>
+    <AssemblyVersion>1.0.46.0</AssemblyVersion>
+    <FileVersion>1.0.46.0</FileVersion>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="System.IO.Compression" />
@@ -33,6 +33,7 @@
     <Compile Include="..\VisualTeX.WindowsOffice.VstoShared\WordOmmlConverter.cs" Link="WordOmmlConverter.cs" />
     <Compile Include="..\VisualTeX.WindowsOffice.VstoShared\WordOmmlFormulaStore.cs" Link="WordOmmlFormulaStore.cs" />
     <Compile Include="..\VisualTeX.WindowsOffice.VstoShared\WordOmmlNativeSource.cs" Link="WordOmmlNativeSource.cs" />
+    <Compile Include="..\VisualTeX.WindowsOffice.VstoShared\WordMathTypeLayoutValidation.cs" Link="WordMathTypeLayoutValidation.cs" />
     <Compile Include="..\VisualTeX.WindowsOffice.VstoShared\WordOleObjectAccessor.cs" Link="WordOleObjectAccessor.cs" />
     <Compile Include="..\VisualTeX.WindowsOffice.VstoShared\WordBulkImportParser.cs" Link="WordBulkImportParser.cs" />
     <ProjectReference Include="..\VisualTeX.WindowsOffice.Contracts\VisualTeX.WindowsOffice.Contracts.csproj" />
