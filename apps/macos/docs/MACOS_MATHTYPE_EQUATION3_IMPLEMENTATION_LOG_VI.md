@@ -144,3 +144,86 @@ MTEF hiện tại.
   converter OMML của VisualTeX, không tải stylesheet này.
 - Chưa chạy corpus 344 tài liệu/7.888 công thức hoặc Microsoft Word thực.
 - Phase 2 chưa được bắt đầu.
+
+## Phase 2 — MathML-to-OMML cross-platform
+
+Ngày kiểm tra: 2026-09-04
+Base revision: `0847b33` (`Harden MathType DOCX package processing`)
+
+### Outcome
+
+Phase 2 đạt test gate tự động. macOS công khai `mathMlToOmmlArtifacts()` và dùng một
+implementation MathML-to-OMML chung cho cả đầu vào MathML từ MTEF lẫn đầu vào LaTeX sau
+khi MathJax tạo Presentation MathML. Production path không dùng LaTeX làm trung gian từ
+MTEF và không tìm, tải hoặc đóng gói `MML2OMML.XSL`.
+
+### Thay đổi triển khai
+
+- Thêm API `mathMlToOmmlArtifacts(mathMl, displayMode, preferences?)` trả OMML,
+  Base64URL và DOCX tối thiểu giống contract hiện hữu.
+- `latexLinesToOmmlArtifacts()` tái sử dụng cùng parser, tree converter, font mapping,
+  validator và artifact builder; không có converter MathML-to-OMML thứ hai.
+- Thêm chuyển đổi `mmultiscripts`/`mprescripts` sang `m:sPre`, giữ postscript và các
+  slot presubscript/presuperscript.
+- Thêm validator TypeScript fail-closed cho XML/DTD/entity, giới hạn MathML 8 MB,
+  critical empty slot, token multiplicity, structure, root degree, matrix row/cell,
+  delimiter, accent/bar/group character, n-ary limits và prescript.
+- Thêm contract cố định lấy trực tiếp từ `oleObject1.bin`–`oleObject3.bin`, khóa bằng
+  SHA-256 và xác nhận cả ba là MTEF v5. Test riêng phủ fraction, square/indexed root,
+  scripts, matrix, delimiter một phía/rỗng, accents, n-ary/limits, prescripts,
+  text-mode, Unicode Greek/CJK/Vietnamese và supplementary character.
+- Browser regression tự chọn Google Chrome hoặc Microsoft Edge có sẵn trên macOS.
+- Khôi phục contract parser document-import bị regression từ trước: nhãn theorem family
+  tiếng Trung và logic strip LaTeX comments không còn tự bảo vệ comment khỏi chính bước
+  loại comment. Không sửa expectation để làm test pass.
+
+### Tests
+
+Gate chạy sau `npm ci`:
+
+```bash
+npm run build:desktop
+npm run test:word-omml
+npm run test:document-import:parser
+npm run test:mathtype-omml
+python -m pytest -q -rs tools/mathtypejx/tests
+```
+
+Kết quả:
+
+- desktop TypeScript/Vite build PASS, 2.314 modules transformed;
+- Word structural OMML regression PASS;
+- document-import parser PASS: 88 syntax fixtures, 122 line-ending cases,
+  144 rendered formulas;
+- MathType OMML contract PASS: 12 cases, gồm 3 OLE MTEF v5 thật;
+- Python core regression: `78 passed, 19 skipped`, không failure.
+
+19 skip Python được giữ nguyên: 12 lượt thiếu fixture DOCX/private corpus được cấu hình
+trong test hiện hữu và 7 lượt thiếu Microsoft `MML2OMML.XSL`. Không test nào bị xóa hoặc
+sửa để giảm skip. `npm ci` báo 7 advisory dependency hiện hữu (4 moderate, 3 high); không
+chạy `npm audit fix` vì có thể thay dependency ngoài scope Phase 2.
+
+### Corpus bổ sung
+
+File người dùng cung cấp
+`BÀI 3 VẬN TỐC - GIA TỐC TRONG DAO ĐỘNG ĐIỀU HOÀ.docx` được scan read-only:
+
+- phát hiện 680 OLE, toàn bộ có ProgID `Equation.DSMT4`;
+- extract thành công 680/680, toàn bộ MTEF v5;
+- MTEF-to-MathML thành công 680/680;
+- cấu trúc quan sát được gồm 474 fraction, 131 square root, 279 subscript,
+  340 superscript, 92 sub-sup, 13 matrix, 7 mover và 1 multiscript;
+- file nguồn không bị sửa; chưa chạy package replacement hay Word open/save/reopen trên
+  file này trong Phase 2.
+
+### Security và giới hạn
+
+- MathML có DTD/entity, XML malformed, quá 8 MB hoặc conversion mất token/cấu trúc bị
+  chặn trước khi artifact được trả cho writer.
+- Không có chuỗi `MML2OMML.XSL` trong production source/scripts của ứng dụng macOS.
+- **MTEF v3/Equation Editor 3.0 vẫn là release blocker:** cả ba fixture repository và
+  680 công thức bổ sung đều là MTEF v5. Phase 2 không tạo fixture giả và không xác nhận
+  Equation Editor 3.0.
+- Chưa chạy private corpus 344 tài liệu/7.888 công thức, Word macOS thực hoặc Word Windows
+  cross-open; các gate này thuộc Phase 6.
+- Phase 3 chưa được bắt đầu.

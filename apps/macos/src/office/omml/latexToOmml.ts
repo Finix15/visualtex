@@ -34,6 +34,7 @@ import {
   type FormulaChineseFont,
   type FormulaLetterFont,
 } from "../../editor/formulaFontPreferences";
+import { assertValidMathMlToOmml } from "./mathMlOmmlValidator";
 
 export type OmmlDisplayMode = "inline" | "block";
 
@@ -303,11 +304,18 @@ function latexToMathMl(latex: string, displayMode: OmmlDisplayMode) {
   return mathMl;
 }
 
-function parseMathMl(latex: string, displayMode: OmmlDisplayMode) {
+const MAX_MATHML_BYTES = 8 * 1024 * 1024;
+
+function parseMathMlString(mathMl: string) {
   if (typeof DOMParser === "undefined") {
     throw new Error("Word OMML export requires a browser DOM parser.");
   }
-  const mathMl = latexToMathMl(latex, displayMode);
+  if (new TextEncoder().encode(mathMl).byteLength > MAX_MATHML_BYTES) {
+    throw new Error("MathML exceeds the 8 MB conversion limit.");
+  }
+  if (/<!DOCTYPE|<!ENTITY/i.test(mathMl)) {
+    throw new Error("MathML must not contain a DTD or entity declaration.");
+  }
   const documentObject = new DOMParser().parseFromString(
     mathMl,
     "application/xml",
@@ -315,11 +323,11 @@ function parseMathMl(latex: string, displayMode: OmmlDisplayMode) {
   const parseError = documentObject.querySelector("parsererror");
   if (parseError) {
     throw new Error(
-      `MathJax produced invalid MathML: ${parseError.textContent ?? "parse error"}`,
+      `Invalid MathML: ${parseError.textContent ?? "parse error"}`,
     );
   }
   if (documentObject.documentElement.localName !== "math") {
-    throw new Error("MathJax did not produce a MathML math element.");
+    throw new Error("MathML input must have a math root element.");
   }
   return documentObject.documentElement;
 }
@@ -882,6 +890,36 @@ function convertEnclose(element: Element) {
   return body;
 }
 
+function convertMultiscripts(element: Element) {
+  const children = elementChildren(element);
+  const baseElement = children.shift();
+  if (!baseElement) return "";
+  const prescriptIndex = children.findIndex((child) => elementName(child) === "mprescripts");
+  const postscriptElements = prescriptIndex < 0 ? children : children.slice(0, prescriptIndex);
+  const prescriptElements = prescriptIndex < 0 ? [] : children.slice(prescriptIndex + 1);
+  let base = convertElement(baseElement);
+
+  for (let index = 0; index < postscriptElements.length; index += 2) {
+    const sub = postscriptElements[index];
+    const sup = postscriptElements[index + 1];
+    base =
+      `<m:sSubSup><m:e>${base}</m:e>` +
+      `<m:sub>${sub && elementName(sub) !== "none" ? convertElement(sub) : ""}</m:sub>` +
+      `<m:sup>${sup && elementName(sup) !== "none" ? convertElement(sup) : ""}</m:sup>` +
+      "</m:sSubSup>";
+  }
+  for (let index = 0; index < prescriptElements.length; index += 2) {
+    const sub = prescriptElements[index];
+    const sup = prescriptElements[index + 1];
+    base =
+      `<m:sPre><m:sPrePr/>` +
+      `<m:sub>${sub && elementName(sub) !== "none" ? convertElement(sub) : ""}</m:sub>` +
+      `<m:sup>${sup && elementName(sup) !== "none" ? convertElement(sup) : ""}</m:sup>` +
+      `<m:e>${base}</m:e></m:sPre>`;
+  }
+  return base;
+}
+
 function convertSemantics(element: Element) {
   const content = elementChildren(element).find(
     (child) => !["annotation", "annotation-xml"].includes(elementName(child)),
@@ -913,6 +951,8 @@ function convertElement(element: Element): string {
     case "msup":
     case "msubsup":
       return convertScript(element);
+    case "mmultiscripts":
+      return convertMultiscripts(element);
     case "munder":
     case "mover":
     case "munderover":
@@ -1023,6 +1063,49 @@ function wrapOmml(body: string) {
   );
 }
 
+function mathMlToOmmlBody(
+  mathMl: string,
+  preferences: OmmlFontPreferences = {},
+) {
+  const mathElement = parseMathMlString(mathMl);
+  const body = convertSequence(elementChildren(mathElement));
+  return applyOmmlFontPreferences(body, preferences);
+}
+
+function mathMlToOmml(
+  mathMl: string,
+  preferences: OmmlFontPreferences = {},
+) {
+  const omml = wrapOmml(validatedMathMlToOmmlBody(mathMl, preferences));
+  return omml;
+}
+
+function validatedMathMlToOmmlBody(
+  mathMl: string,
+  preferences: OmmlFontPreferences = {},
+) {
+  const body = mathMlToOmmlBody(mathMl, preferences);
+  const omml = wrapOmml(body);
+  assertValidMathMlToOmml(mathMl, omml);
+  return body;
+}
+
+function artifactsForOmml(omml: string): OmmlArtifacts {
+  return {
+    omml,
+    ommlBase64: utf8ToBase64Url(omml),
+    ommlDocxBase64: bytesToBase64Url(minimalDocxBytes(omml)),
+  };
+}
+
+export function mathMlToOmmlArtifacts(
+  mathMl: string,
+  _displayMode: OmmlDisplayMode,
+  preferences: OmmlFontPreferences = {},
+): OmmlArtifacts {
+  return artifactsForOmml(mathMlToOmml(mathMl, preferences));
+}
+
 function bytesToBase64Url(bytes: Uint8Array) {
   let binary = "";
   const chunkSize = 0x8000;
@@ -1078,18 +1161,21 @@ export function latexLinesToOmml(
   const explicitAlignment = relationAlignedCodeFormat(codeFormat);
   const converted = normalized.map((line) => {
     if (!explicitAlignment) {
-      const mathElement = parseMathMl(
+      const mathMl = latexToMathMl(
         stripVisualTexAlignmentMarkers(line),
         displayMode,
       );
-      return convertSequence(elementChildren(mathElement));
+      return validatedMathMlToOmmlBody(mathMl, fontPreferences);
     }
 
     return line
       .split(VISUALTEX_ALIGNMENT_MARKER_LATEX)
       .map((segment, index) => {
         const convertedSegment = segment.trim()
-          ? convertSequence(elementChildren(parseMathMl(segment, displayMode)))
+          ? (() => {
+              const mathMl = latexToMathMl(segment, displayMode);
+              return validatedMathMlToOmmlBody(mathMl, fontPreferences);
+            })()
           : "";
         return index === 0
           ? convertedSegment
@@ -1104,7 +1190,7 @@ export function latexLinesToOmml(
       : `<m:eqArr><m:eqArrPr><m:baseJc m:val="center"/></m:eqArrPr>${converted
           .map((line) => `<m:e>${line}</m:e>`)
           .join("")}</m:eqArr>`;
-  return wrapOmml(applyOmmlFontPreferences(body, fontPreferences));
+  return wrapOmml(body);
 }
 
 export function latexLinesToOmmlArtifacts(
@@ -1119,9 +1205,5 @@ export function latexLinesToOmmlArtifacts(
     codeFormat,
     fontPreferences,
   );
-  return {
-    omml,
-    ommlBase64: utf8ToBase64Url(omml),
-    ommlDocxBase64: bytesToBase64Url(minimalDocxBytes(omml)),
-  };
+  return artifactsForOmml(omml);
 }

@@ -36,6 +36,7 @@
     "test:mathlive-integrals": "npm run build:desktop && node scripts/mathlive_integral_regression.mjs",
     "test:native-suggestion-previews": "npm run build:desktop && node scripts/native_suggestion_preview_regression.mjs --audit",
     "test:word-omml": "node scripts/word_omml_regression.mjs",
+    "test:mathtype-omml": "node scripts/mathtype_omml_regression.mjs",
     "verify:ocr-offline": "python3 scripts/verify_offline_ocr_bundle.py",
     "verify:ocr-offline:full": "python3 scripts/verify_offline_ocr_bundle.py --full",
     "verify:ocr-model-packs": "python3 scripts/verify_offline_ocr_bundle.py --model-packs dist-ocr/model-packs/macos-arm64",

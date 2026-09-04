@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
 
@@ -8,7 +8,23 @@ const vitePort = 6400 + portOffset;
 const debugPort = 11400 + portOffset;
 const baseUrl = `http://127.0.0.1:${vitePort}`;
 const chromeProfile = `/tmp/visualtex-omml-smoke-${process.pid}`;
-const chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const browserCandidates = [
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+];
+let chromePath;
+for (const candidate of browserCandidates) {
+  try {
+    await access(candidate);
+    chromePath = candidate;
+    break;
+  } catch {
+    // Try the next supported Chromium browser.
+  }
+}
+if (!chromePath) {
+  throw new Error("Word OMML regression requires Google Chrome or Microsoft Edge.");
+}
 
 const sleep = (milliseconds) =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));

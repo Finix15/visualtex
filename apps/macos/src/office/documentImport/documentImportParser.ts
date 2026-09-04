@@ -115,28 +115,28 @@ const structuredLatexEnvironmentNames = new Set([
   "description",
 ]);
 const builtInTheoremDefinitions: TheoremEnvironmentDefinition[] = [
-  ["theorem", "Theorem", true, "theorem", "quote"],
-  ["lemma", "bổ đề", true, "lemma", "quote"],
-  ["proposition", "đề xuất", true, "proposition", "quote"],
-  ["corollary", "hệ quả tất yếu", true, "corollary", "quote"],
-  ["definition", "định nghĩa", true, "definition", "quote"],
-  ["axiom", "tiên đề", true, "axiom", "quote"],
-  ["conjecture", "phỏng đoán", true, "conjecture", "quote"],
-  ["claim", "yêu cầu bồi thường", true, "claim", "quote"],
-  ["criterion", "tiêu chí", true, "criterion", "quote"],
-  ["property", "tài sản", true, "property", "quote"],
-  ["fact", "sự thật", true, "fact", "quote"],
-  ["observation", "quan sát", true, "observation", "quote"],
-  ["example", "ví dụ", true, "example", "quote"],
-  ["exercise", "bài tập", true, "exercise", "quote"],
-  ["problem", "vấn đề", true, "problem", "quote"],
-  ["question", "câu hỏi", true, "question", "quote"],
-  ["remark", "nhận xét", false, "remark", "quote"],
-  ["note", "ghi chú", false, "note", "quote"],
-  ["notation", "ký hiệu", false, "notation", "quote"],
-  ["case", "trường hợp", false, "case", "quote"],
-  ["proof", "bằng chứng", false, "proof", "normal"],
-  ["solution", "Answer", false, "solution", "normal"],
+  ["theorem", "定理", true, "theorem", "quote"],
+  ["lemma", "引理", true, "lemma", "quote"],
+  ["proposition", "命题", true, "proposition", "quote"],
+  ["corollary", "推论", true, "corollary", "quote"],
+  ["definition", "定义", true, "definition", "quote"],
+  ["axiom", "公理", true, "axiom", "quote"],
+  ["conjecture", "猜想", true, "conjecture", "quote"],
+  ["claim", "断言", true, "claim", "quote"],
+  ["criterion", "判据", true, "criterion", "quote"],
+  ["property", "性质", true, "property", "quote"],
+  ["fact", "事实", true, "fact", "quote"],
+  ["observation", "观察", true, "observation", "quote"],
+  ["example", "例", true, "example", "quote"],
+  ["exercise", "练习", true, "exercise", "quote"],
+  ["problem", "问题", true, "problem", "quote"],
+  ["question", "问题", true, "question", "quote"],
+  ["remark", "注", false, "remark", "quote"],
+  ["note", "注", false, "note", "quote"],
+  ["notation", "记号", false, "notation", "quote"],
+  ["case", "情形", false, "case", "quote"],
+  ["proof", "证明", false, "proof", "normal"],
+  ["solution", "解答", false, "solution", "normal"],
 ].map(([environment, label, numbered, counterName, bodyStyle]) => ({
   environment: environment as string,
   label: label as string,
@@ -404,6 +404,7 @@ function extractLatexLiteralFallbacks(
 function latexProtectedRanges(
   source: string,
   theoremEnvironmentNames: ReadonlySet<string> = new Set(),
+  includeComments = true,
 ) {
   const ranges = latexLiteralFallbackRanges(source, theoremEnvironmentNames);
   const mathRanges = latexMathSourceRanges(source);
@@ -411,6 +412,7 @@ function latexProtectedRanges(
   for (let match = verbPattern.exec(source); match; match = verbPattern.exec(source)) {
     ranges.push({ start: match.index, end: verbPattern.lastIndex });
   }
+  if (!includeComments) return mergeProtectedRanges(ranges);
   for (let cursor = 0; cursor < source.length; cursor += 1) {
     if (
       source[cursor] !== "%" ||
@@ -535,7 +537,11 @@ function stripLatexComments(
   source: string,
   theoremEnvironmentNames: ReadonlySet<string>,
 ) {
-  const protectedRanges = latexProtectedRanges(source, theoremEnvironmentNames);
+  const protectedRanges = latexProtectedRanges(
+    source,
+    theoremEnvironmentNames,
+    false,
+  );
   const records: Array<{
     text: string;
     commentOnly: boolean;
