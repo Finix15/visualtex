@@ -9,8 +9,26 @@ use std::{
 };
 use tauri::{AppHandle, Manager};
 
+use super::package::{read_bounded, sha256_file, MAX_MANIFEST_BYTES};
+
 pub const MAX_STDOUT_BYTES: usize = 64 * 1024;
 pub const MAX_STDERR_BYTES: usize = 1024 * 1024;
+const WORKER_PROTOCOL_VERSION: u32 = 1;
+const MACHO_ARM64_CPU_TYPE: u32 = 0x0100_000c;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WorkerManifest {
+    protocol_version: u32,
+    worker_version: String,
+    target: String,
+    architecture: String,
+    sha256: String,
+    file_size: u64,
+    dependencies: Vec<serde_json::Value>,
+    bundled_data: Vec<String>,
+    exclusions: Vec<String>,
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum WorkerOperation {
@@ -71,6 +89,50 @@ fn production_worker(app: &AppHandle) -> Result<PathBuf, String> {
         .map(|root| root.join("workers").join("mathtype-worker"))
 }
 
+fn verify_production_worker(resource_root: &Path, worker: &Path) -> Result<(), String> {
+    let root = resource_root
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let metadata = std::fs::symlink_metadata(worker).map_err(|error| error.to_string())?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return Err("Bundled worker must be a regular non-symlink file".to_string());
+    }
+    let canonical = worker.canonicalize().map_err(|error| error.to_string())?;
+    if !canonical.starts_with(&root) {
+        return Err("Bundled worker escaped the application resource root".to_string());
+    }
+    let manifest_path = worker.with_file_name("mathtype-worker.manifest.json");
+    let manifest: WorkerManifest = serde_json::from_slice(&read_bounded(
+        &manifest_path,
+        MAX_MANIFEST_BYTES,
+        "MathType worker manifest",
+    )?)
+    .map_err(|error| format!("Malformed MathType worker manifest: {error}"))?;
+    if manifest.protocol_version != WORKER_PROTOCOL_VERSION
+        || manifest.worker_version.is_empty()
+        || manifest.target != "macos-arm64"
+        || manifest.architecture != "arm64"
+        || manifest.file_size != metadata.len()
+        || manifest.dependencies.is_empty()
+        || manifest.bundled_data.is_empty()
+        || manifest.exclusions.is_empty()
+        || sha256_file(worker)? != manifest.sha256
+    {
+        return Err("Bundled MathType worker manifest verification failed".to_string());
+    }
+    let mut header = [0_u8; 32];
+    std::fs::File::open(worker)
+        .and_then(|mut file| file.read_exact(&mut header))
+        .map_err(|error| format!("Unable to read MathType worker Mach-O header: {error}"))?;
+    if header.len() < 12
+        || u32::from_le_bytes(header[0..4].try_into().unwrap()) != 0xfeed_facf
+        || u32::from_le_bytes(header[4..8].try_into().unwrap()) != MACHO_ARM64_CPU_TYPE
+    {
+        return Err("Bundled MathType worker is not an arm64 Mach-O executable".to_string());
+    }
+    Ok(())
+}
+
 fn is_regular_executable(path: &Path) -> bool {
     std::fs::symlink_metadata(path)
         .map(|metadata| metadata.file_type().is_file() && !metadata.file_type().is_symlink())
@@ -95,6 +157,14 @@ fn select_worker(production: PathBuf, development: Option<PathBuf>) -> Result<Pa
 
 pub fn resolve_worker(app: &AppHandle) -> Result<PathBuf, String> {
     let production = production_worker(app)?;
+    if production.exists() {
+        let resource_root = app
+            .path()
+            .resource_dir()
+            .map_err(|error| error.to_string())?;
+        verify_production_worker(&resource_root, &production)?;
+        return Ok(production);
+    }
     #[cfg(debug_assertions)]
     let development = std::env::var_os("VISUALTEX_MATHTYPE_WORKER_DEV").map(PathBuf::from);
     #[cfg(not(debug_assertions))]
@@ -280,6 +350,37 @@ mod tests {
             select_worker(temp.path().join("missing"), Some(worker.clone())).unwrap(),
             worker
         );
+    }
+
+    #[test]
+    fn production_manifest_verifies_hash_size_and_arm64_macho() {
+        let temp = tempfile::tempdir().unwrap();
+        let workers = temp.path().join("workers");
+        std::fs::create_dir(&workers).unwrap();
+        let worker = workers.join("mathtype-worker");
+        let mut bytes = vec![0_u8; 64];
+        bytes[0..4].copy_from_slice(&0xfeed_facf_u32.to_le_bytes());
+        bytes[4..8].copy_from_slice(&MACHO_ARM64_CPU_TYPE.to_le_bytes());
+        std::fs::write(&worker, &bytes).unwrap();
+        let manifest = serde_json::json!({
+            "protocolVersion": 1,
+            "workerVersion": "test",
+            "target": "macos-arm64",
+            "architecture": "arm64",
+            "sha256": sha256_file(&worker).unwrap(),
+            "fileSize": bytes.len(),
+            "dependencies": [{"name": "test", "license": "MIT"}],
+            "bundledData": ["xslt"],
+            "exclusions": ["MML2OMML.XSL"]
+        });
+        std::fs::write(
+            workers.join("mathtype-worker.manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        verify_production_worker(temp.path(), &worker).unwrap();
+        std::fs::write(&worker, [1_u8; 64]).unwrap();
+        assert!(verify_production_worker(temp.path(), &worker).is_err());
     }
 
     #[test]

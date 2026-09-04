@@ -894,6 +894,7 @@ const redesignedWordIcons = [
   ["VisualTeXWordConvertOmml", "convert-omml.svg"],
   ["VisualTeXWordConvertImage", "convert-image.svg"],
   ["VisualTeXWordDocumentImport", "document-import.svg"],
+  ["VisualTeXWordLegacyEquations", "legacy-equations.svg"],
   ["VisualTeXWordUpdateNumbers", "update-numbers.svg"],
   ["VisualTeXWordNumberingFormat", "numbering-format.svg"],
   ["VisualTeXWordCrossReference", "cross-reference.svg"],
@@ -1182,7 +1183,9 @@ expectIncludes(officePaths, 'InStr(1, homePath, "/Library/Containers/", vbTextCo
 expectIncludes(officePaths, "homePath = Left$(homePath, sandboxMarker - 1)", "VBA paths must recover the real user home for Application Scripts");
 expectIncludes(officePaths, "Application.Name", "VBA runtime paths must select the current Word or PowerPoint host explicitly");
 expect(!officePaths.includes("/private/tmp"), "VBA runtime paths must not use a temporary directory blocked by the Office sandbox");
-expect(!officePaths.includes("UBF8T346G9.Office/VisualTeX"), "VBA runtime paths must not use Microsoft's protected application-group Data Vault");
+expectIncludes(officePaths, '"/Library/Group Containers/UBF8T346G9.Office/VisualTeX"', "Legacy-equation staging must use the fixed Office Group Container root");
+const officePathsWithoutLegacyStaging = officePaths.replace(/Public Function VTOfficeGroupContainerRoot[\s\S]*?End Function/, "");
+expect(!officePathsWithoutLegacyStaging.includes("UBF8T346G9.Office/VisualTeX"), "Only UUID-only legacy-equation staging may use Microsoft's application-group container");
 expectIncludes(protocol, "VisualTeXPlaceholder.png", "Word must load its transparent placeholder from the persistent Application Scripts directory");
 expectIncludes(protocol, "New Collection", "VBA protocol must use the Mac-compatible Collection type");
 expect(!protocol.includes("Scripting.Dictionary"), "VBA protocol must not depend on Windows Scripting Runtime");

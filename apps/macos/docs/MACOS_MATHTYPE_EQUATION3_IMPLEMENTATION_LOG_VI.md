@@ -366,3 +366,16 @@ Word DOTM/Ribbon chưa được bắt đầu.
 - **MTEF v3/Equation Editor 3.0 vẫn là release blocker:** UI luôn cảnh báo chưa có
   corpus MTEF v3 thực và không tuyên bố hỗ trợ đã được xác nhận.
 - Chưa chạy Word macOS/Windows real-document gate; Phase 5 chưa bắt đầu.
+
+## Phase 5 — Điều chỉnh thứ tự đã duyệt
+
+Ngày phê duyệt: 2026-09-04
+
+- Phase 5 được mở rộng để build/bundle worker self-contained tối thiểu cho `arm64`,
+  đúng kiến trúc máy acceptance hiện tại và không phụ thuộc Python/OCR runtime.
+- Phase 7 vẫn giữ các gate production đa kiến trúc, reproducible build, manifest đầy
+  đủ, ký, hardened runtime, notarize, staple, DMG và clean-machine verification.
+- Legacy conversion dùng protocol staging riêng: file nguồn/request tên cố định dưới
+  Office Group Container; AppleScriptTask chỉ nhận UUID và chỉ mở URL cố định.
+- Phase 5 chỉ PASS sau real Word conversion bằng bundled worker; source-level PASS
+  không thay thế acceptance này.

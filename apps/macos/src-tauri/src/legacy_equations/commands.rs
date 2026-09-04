@@ -60,6 +60,31 @@ pub fn create_legacy_equation_job(
     job_view(&state, &root, record.job_id)
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CreateLegacyEquationOfficeJobRequest {
+    pub session_id: String,
+    pub output_path: PathBuf,
+}
+
+#[tauri::command]
+pub fn create_legacy_equation_job_from_office_session(
+    app: AppHandle,
+    state: State<'_, LegacyEquationState>,
+    request: CreateLegacyEquationOfficeJobRequest,
+) -> Result<LegacyEquationJobView, String> {
+    parse_job_id(&request.session_id)?;
+    let input = crate::office::macos_offline::legacy_equation_office_source(&request.session_id)?;
+    let worker = resolve_worker(&app)?;
+    let root = root(&app)?;
+    let record = state.create(&root, &input, &request.output_path)?;
+    if let Err(error) = state.start(&root, record.job_id, &worker) {
+        let _ = state.delete(&root, record.job_id);
+        return Err(error);
+    }
+    job_view(&state, &root, record.job_id)
+}
+
 #[tauri::command]
 pub fn get_legacy_equation_job(
     app: AppHandle,

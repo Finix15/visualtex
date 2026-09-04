@@ -610,6 +610,14 @@ Test gate:
 
 ### Phase 5: Word Ribbon trên macOS
 
+> Điều chỉnh thứ tự được duyệt ngày 2026-09-04: Phase 5 bao gồm build và bundle một
+> worker self-contained tối thiểu, native cho kiến trúc máy acceptance hiện tại, để
+> real-Word gate chạy không cần Python hệ thống. Phase 7 vẫn chịu trách nhiệm universal
+> build, reproducibility, license manifest hoàn chỉnh, signing, hardened runtime,
+> notarization, staple, DMG và clean-machine verification. Luồng legacy equation dùng
+> staging protocol riêng: VBA tự ghi copy/request cố định trong Office Group Container
+> và AppleScriptTask chỉ nhận UUID v4; không tái sử dụng file bridge truyền path/payload.
+
 Thêm nút Ribbon:
 
 ```text

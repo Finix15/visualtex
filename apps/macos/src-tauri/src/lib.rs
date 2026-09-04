@@ -1968,6 +1968,7 @@ pub fn run() {
             install_optional_ocr_model,
             remove_optional_ocr_model,
             legacy_equations::commands::create_legacy_equation_job,
+            legacy_equations::commands::create_legacy_equation_job_from_office_session,
             legacy_equations::commands::get_legacy_equation_job,
             legacy_equations::commands::read_legacy_equation_batch,
             legacy_equations::commands::submit_legacy_omml_batch,

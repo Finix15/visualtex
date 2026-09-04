@@ -1,0 +1,44 @@
+{
+  "protocolVersion": 1,
+  "workerVersion": "0.1.0",
+  "target": "macos-arm64",
+  "architecture": "arm64",
+  "sha256": "03c7887fb3824b60a590a6b751408f228a90403cc0dced367269954683428377",
+  "fileSize": 15110976,
+  "dependencies": [
+    {
+      "name": "mathtypejx",
+      "version": "0.1.0",
+      "license": "MIT"
+    },
+    {
+      "name": "PyInstaller",
+      "version": "6.16.0",
+      "license": "GPL-2.0-or-later with bootloader exception"
+    },
+    {
+      "name": "lxml",
+      "version": "bundled",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "olefile",
+      "version": "bundled",
+      "license": "BSD-2-Clause"
+    },
+    {
+      "name": "Python",
+      "version": "3.12.14",
+      "license": "PSF-2.0"
+    }
+  ],
+  "bundledData": [
+    "mathtypejx/mtef/xslt"
+  ],
+  "exclusions": [
+    "MML2OMML.XSL",
+    "private corpus",
+    "virtualenv",
+    "OCR runtime"
+  ]
+}

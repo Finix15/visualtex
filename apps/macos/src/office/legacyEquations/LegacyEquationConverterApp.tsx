@@ -41,6 +41,7 @@ function progress(stage: UiStage) {
 }
 
 export function LegacyEquationConverterApp() {
+  const officeSession = new URLSearchParams(window.location.search).get("officeSession");
   const language = useEditorStore((state) => state.language);
   const isEn = language === "en";
   const t = (vi: string, en: string) => isEn ? en : vi;
@@ -57,6 +58,10 @@ export function LegacyEquationConverterApp() {
   const creating = useRef(false);
   const errorRef = useRef<HTMLDivElement>(null);
   const active = ["scanning", "converting", "validating", "finalizing", "cancelling"].includes(stage);
+
+  useEffect(() => {
+    if (officeSession) setInputPath("Word: legacy-source.docx");
+  }, [officeSession]);
 
   const fail = useCallback((reason: unknown) => {
     setError(legacyEquationError(reason, isEn ? "en" : "vi"));
@@ -142,7 +147,9 @@ export function LegacyEquationConverterApp() {
     const token = ++generation.current;
     setError(""); setStage("scanning"); setBatch(null); setSelected(new Set()); setDeselected(new Set());
     try {
-      const value = await legacyEquationClient.create(inputPath, outputPath);
+      const value = officeSession
+        ? await legacyEquationClient.createFromOfficeSession(officeSession, outputPath)
+        : await legacyEquationClient.create(inputPath, outputPath);
       if (token !== generation.current) return;
       setJob(value); localStorage.setItem(RECOVERY_KEY, value.jobId);
     } catch (reason) { if (token === generation.current) fail(reason); }
@@ -210,7 +217,7 @@ export function LegacyEquationConverterApp() {
     <header><h1>{t("Chuyển công thức MathType cũ", "Convert legacy MathType equations")}</h1>
       <p role="note">{t("Equation Editor 3.0 chưa có corpus MTEF v3 thực để xác nhận.", "Equation Editor 3.0 has not been validated with a real MTEF v3 corpus.")}</p></header>
     <section aria-label={t("Chọn tài liệu Word", "Choose Word document")}>
-      <button onClick={chooseInput}>{t("Chọn tài liệu Word", "Choose Word document")}</button><output>{inputPath}</output>
+      <button onClick={chooseInput} disabled={!!officeSession}>{t("Chọn tài liệu Word", "Choose Word document")}</button><output>{inputPath}</output>
       <button onClick={chooseOutput} disabled={!inputPath}>{t("Chọn tệp đầu ra", "Choose output")}</button><output>{outputPath}</output>
       <button data-testid="scan" onClick={start} disabled={!inputPath || !outputPath || active}>{t("Quét công thức", "Scan equations")}</button>
     </section>

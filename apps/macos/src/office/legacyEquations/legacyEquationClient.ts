@@ -5,6 +5,11 @@ export const legacyEquationClient = {
   create(inputPath: string, outputPath: string) {
     return invokeTauri<LegacyJobView>("create_legacy_equation_job", { request: { inputPath, outputPath } });
   },
+  createFromOfficeSession(sessionId: string, outputPath: string) {
+    return invokeTauri<LegacyJobView>("create_legacy_equation_job_from_office_session", {
+      request: { sessionId, outputPath },
+    });
+  },
   get(jobId: string) { return invokeTauri<LegacyJobView>("get_legacy_equation_job", { jobId }); },
   async readBatch(jobId: string, batchIndex: number) {
     const payload = await invokeTauri<string>("read_legacy_equation_batch", { jobId, batchIndex });

@@ -31,6 +31,7 @@ dependencies = [
 
 [project.scripts]
 mathtypejx = "mathtypejx.cli:main"
+mathtypejx-worker = "mathtypejx.worker:main"
 
 [project.optional-dependencies]
 dev = [

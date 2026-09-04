@@ -230,6 +230,7 @@ const RIBBON_ICON_FILES = {
     VisualTeXWordConvertOmml: { svg: "convert-omml.svg" },
     VisualTeXWordConvertImage: { svg: "convert-image.svg" },
     VisualTeXWordDocumentImport: { svg: "document-import.svg" },
+    VisualTeXWordLegacyEquations: { svg: "legacy-equations.svg" },
     VisualTeXWordUpdateNumbers: { svg: "update-numbers.svg" },
     VisualTeXWordNumberingFormat: { svg: "numbering-format.svg" },
     VisualTeXWordCrossReference: { svg: "cross-reference.svg" },
