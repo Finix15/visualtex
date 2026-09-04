@@ -211,7 +211,10 @@ fn ensure_office_hosts_stopped() -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
-fn request_office_application_quit(process_name: &str, bundle_identifier: &str) -> Result<(), String> {
+fn request_office_application_quit(
+    process_name: &str,
+    bundle_identifier: &str,
+) -> Result<(), String> {
     if !application_running(process_name) {
         return Ok(());
     }
@@ -227,7 +230,10 @@ fn request_office_application_quit(process_name: &str, bundle_identifier: &str) 
 }
 
 #[cfg(not(target_os = "macos"))]
-fn request_office_application_quit(_process_name: &str, _bundle_identifier: &str) -> Result<(), String> {
+fn request_office_application_quit(
+    _process_name: &str,
+    _bundle_identifier: &str,
+) -> Result<(), String> {
     Ok(())
 }
 
@@ -417,8 +423,7 @@ fn read_directory_with_interrupted_retry(directory: &Path) -> Result<fs::ReadDir
         match fs::read_dir(directory) {
             Ok(entries) => return Ok(entries),
             Err(error)
-                if error.kind() == std::io::ErrorKind::Interrupted
-                    && interrupted_attempts < 3 =>
+                if error.kind() == std::io::ErrorKind::Interrupted && interrupted_attempts < 3 =>
             {
                 interrupted_attempts += 1;
             }

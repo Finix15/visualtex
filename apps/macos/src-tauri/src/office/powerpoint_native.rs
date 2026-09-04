@@ -1198,11 +1198,18 @@ fn word_double_click_bounds_path() -> Result<PathBuf, String> {
 #[cfg(target_os = "macos")]
 fn read_word_double_click_bounds() -> Result<WordScreenBounds, String> {
     let path = word_double_click_bounds_path()?;
-    let text = read_to_string(&path)
-        .map_err(|error| format!("Unable to read Word double-click bounds {}: {error}", path.display()))?;
+    let text = read_to_string(&path).map_err(|error| {
+        format!(
+            "Unable to read Word double-click bounds {}: {error}",
+            path.display()
+        )
+    })?;
     let fields = text.trim().split('|').collect::<Vec<_>>();
     if fields.len() != 5 || fields[0] != "PASS" {
-        return Err(format!("Word returned invalid double-click bounds: {}", text.trim()));
+        return Err(format!(
+            "Word returned invalid double-click bounds: {}",
+            text.trim()
+        ));
     }
     let parse_number = |value: &str, label: &str| {
         value

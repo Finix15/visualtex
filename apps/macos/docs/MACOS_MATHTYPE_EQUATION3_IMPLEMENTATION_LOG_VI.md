@@ -227,3 +227,84 @@ File người dùng cung cấp
 - Chưa chạy private corpus 344 tài liệu/7.888 công thức, Word macOS thực hoặc Word Windows
   cross-open; các gate này thuộc Phase 6.
 - Phase 3 chưa được bắt đầu.
+
+## Phase 3 — Tauri job manager và worker protocol
+
+Ngày kiểm tra: 2026-09-04
+Base revision: `b9bc6651479bb0a19047d06147d21948576962aa`
+
+### Outcome
+
+Phase 3 đạt test gate tự động. Backend `legacy_equations` quản lý job UUID v4 trong
+VisualTeX app data, trao đổi file payload có giới hạn với worker bằng hai operation cố
+định `scan`/`finalize`, và chỉ publish candidate sau khi report, SHA-256, package
+validation và count conservation đều hợp lệ. Phase 4 chưa được bắt đầu.
+
+### Thay đổi triển khai
+
+- Thêm sáu module `mod.rs`, `commands.rs`, `jobs.rs`, `worker.rs`, `package.rs` và
+  `report.rs`; đăng ký đủ bảy Tauri command theo kế hoạch.
+- Frontend chỉ truyền job ID canonical UUID v4. Job root luôn được suy ra từ app data;
+  mọi lần truy cập đều kiểm tra thư mục thật, không symlink và không thoát root.
+- Worker được gọi trực tiếp bằng executable cùng argument array cố định, không qua
+  shell. Production thiếu bundled worker sẽ fail closed. Fallback
+  `VISUALTEX_MATHTYPE_WORKER_DEV` chỉ được biên dịch trong debug và yêu cầu executable
+  tuyệt đối, regular, không symlink; không có contract phụ thuộc Python hệ thống/OCR.
+- Giới hạn stdout 64 KiB, stderr 1 MiB, manifest/report 4 MiB và batch 16 MiB. Stderr
+  được redact job path trước khi ghi log và mọi JSON protocol đều fail closed khi sai
+  version, job ID, status hoặc schema.
+- Worker process được sở hữu riêng theo job; cancel chỉ kill đúng child của job đó.
+  Job `running`/`finalizing` còn lại sau restart được phục hồi thành `failed` với lý do
+  rõ ràng; startup đồng thời chạy TTL cleanup 24 giờ theo file allowlist.
+- Source DOCX được mở read-only để hash, từ chối symlink/traversal và được kiểm SHA-256
+  trước lẫn sau publish. Output collision bị từ chối. Candidate chỉ publish bằng
+  hard-link transaction không overwrite; link/fsync failure không để output tồn tại.
+- Formula có validation error không được đánh dấu `replaced`; các nhánh non-replaced
+  vẫn thuộc `preserved`/`skipped`/`failed`, và report bắt buộc
+  `detected = replaced + preserved + skipped + failed`, `sourceUnmodified=true` cùng
+  package validation và input/output SHA-256.
+- `cargo fmt` hiện hành cũng chuẩn hóa định dạng các Rust module hiện hữu mà crate
+  đưa vào format gate; không thay đổi logic của các module đó. Hai assertion test cũ
+  được sửa đúng contract thực: decode Unicode trả chuỗi Trung văn và test process dùng
+  `/bin/sleep` tuyệt đối.
+
+### Tests
+
+Các gate đã chạy:
+
+```bash
+cargo fmt --manifest-path apps/macos/src-tauri/Cargo.toml --check
+cargo test --manifest-path apps/macos/src-tauri/Cargo.toml --lib
+npm run build:desktop
+npm run test:mathtype-omml
+python -m pytest -q -rs tools/mathtypejx/tests
+git diff --check
+```
+
+Kết quả:
+
+- Rust full suite: `125 passed, 2 ignored`, không failure; riêng
+  `legacy_equations`: `23 passed`.
+- Desktop TypeScript/Vite build PASS, 2.314 modules transformed.
+- MathType OMML contract PASS: 12 cases, gồm 3 fixture MTEF v5 thật.
+- Python core regression: `78 passed, 19 skipped`, không failure.
+- `cargo fmt --check` và `git diff --check` PASS.
+
+Security/lifecycle tests phủ invalid/non-v4 UUID, input=output, output collision,
+traversal, input/output/job symlink swap, worker crash/non-zero, malformed/oversized
+stdout, oversized stderr/manifest/batch, stderr redaction, cancel cô lập process, hai job
+concurrent, write/atomic-link/fsync failure, count conservation, source hash mutation,
+unknown-file cleanup guard, TTL expiry, restart recovery và production worker missing.
+
+### Tests chưa chạy và giới hạn
+
+- Production worker chưa được đóng gói theo đúng phân chia Phase 7; production missing
+  worker hiện fail closed và đã có unit test.
+- Chưa chạy UI standalone, Word Ribbon, ký/notarize, Word macOS open/save/reopen hoặc
+  Word Windows cross-open; các gate này thuộc các phase sau.
+- Hai Rust test được ignore có chủ đích vì cần Office session/probe đích thực.
+- 19 skip Python được giữ nguyên: 12 lượt thiếu DOCX/private corpus và 7 lượt thiếu
+  Microsoft `MML2OMML.XSL`; không test nào bị sửa để giảm skip.
+- **MTEF v3/Equation Editor 3.0 vẫn là release blocker:** fixture repository và corpus
+  người dùng cung cấp đều chỉ xác nhận MTEF v5. Phase 3 không tạo fixture giả và không
+  tuyên bố hỗ trợ Equation Editor 3.0 đã được xác nhận.

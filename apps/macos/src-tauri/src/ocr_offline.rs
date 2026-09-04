@@ -496,7 +496,12 @@ pub fn install_bundle(
     mut progress: impl FnMut(&str, u8, &str, Option<String>),
 ) -> Result<OfflineBundleManifest, String> {
     let bundle = locate_bundle(app)?;
-    progress("offline-verify", 8, "Verifying the offline OCR package", None);
+    progress(
+        "offline-verify",
+        8,
+        "Verifying the offline OCR package",
+        None,
+    );
     let runtime_archive = verify_record(&bundle.root, &bundle.manifest.archives.runtime)?;
     let model_archive = verify_record(&bundle.root, &bundle.manifest.archives.default_model)?;
 
@@ -543,7 +548,12 @@ pub fn install_bundle(
         )
         .map_err(|error| format!("Unable to write installed OCR manifest: {error}"))?;
 
-        progress("offline-activate", 88, "Activating the offline OCR runtime", None);
+        progress(
+            "offline-activate",
+            88,
+            "Activating the offline OCR runtime",
+            None,
+        );
         if destination_root.exists() {
             fs::rename(destination_root, &backup)
                 .map_err(|error| format!("Unable to back up the existing OCR runtime: {error}"))?;

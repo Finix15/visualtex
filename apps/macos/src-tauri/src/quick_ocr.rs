@@ -227,8 +227,8 @@ fn read_stable_screenshot_file(path: &Path) -> Result<Option<(Vec<u8>, String)>,
     if second.len() != first.len() || second.len() == 0 {
         return Ok(None);
     }
-    let bytes = fs::read(path)
-        .map_err(|error| format!("Unable to read the system screenshot: {error}"))?;
+    let bytes =
+        fs::read(path).map_err(|error| format!("Unable to read the system screenshot: {error}"))?;
     if bytes.is_empty() {
         return Ok(None);
     }
@@ -812,7 +812,11 @@ async fn run_silent_ocr(app: AppHandle) {
         }
 
         let requested = current_model(&state);
-        let model = if runtime.installed_models.iter().any(|item| item == &requested) {
+        let model = if runtime
+            .installed_models
+            .iter()
+            .any(|item| item == &requested)
+        {
             requested
         } else if runtime
             .installed_models
@@ -853,9 +857,19 @@ async fn run_silent_ocr(app: AppHandle) {
             return Err("The formatted OCR source is empty".to_string());
         }
 
-        emit_hud(&app, "running", "Copying LaTeX with the current source format…", 92);
+        emit_hud(
+            &app,
+            "running",
+            "Copying LaTeX with the current source format…",
+            92,
+        );
         write_text_clipboard(&formatted_latex)?;
-        emit_hud(&app, "success", "Recognition complete; LaTeX was copied to the clipboard", 100);
+        emit_hud(
+            &app,
+            "success",
+            "Recognition complete; LaTeX was copied to the clipboard",
+            100,
+        );
         Ok(Some(()))
     }
     .await;
@@ -900,11 +914,8 @@ mod mac_hotkey {
         id: u32,
     }
 
-    type EventHandlerProc = unsafe extern "C" fn(
-        EventHandlerCallRef,
-        EventRef,
-        *mut c_void,
-    ) -> OSStatus;
+    type EventHandlerProc =
+        unsafe extern "C" fn(EventHandlerCallRef, EventRef, *mut c_void) -> OSStatus;
 
     #[link(name = "Carbon", kind = "framework")]
     unsafe extern "C" {
@@ -975,7 +986,9 @@ mod mac_hotkey {
         };
         if status != 0 {
             HANDLER_INSTALLED.store(false, Ordering::SeqCst);
-            return Err(format!("Unable to install the macOS silent OCR hotkey handler: {status}"));
+            return Err(format!(
+                "Unable to install the macOS silent OCR hotkey handler: {status}"
+            ));
         }
         Ok(())
     }
@@ -1010,7 +1023,9 @@ mod mac_hotkey {
             let reference = *hotkey as EventHotKeyRef;
             let status = unsafe { UnregisterEventHotKey(reference) };
             if status != 0 {
-                return Err(format!("Unable to unregister the silent OCR hotkey: {status}"));
+                return Err(format!(
+                    "Unable to unregister the silent OCR hotkey: {status}"
+                ));
             }
             *hotkey = 0;
         }
@@ -1040,7 +1055,9 @@ pub(crate) async fn capture_quick_ocr_screenshot(
         .map_err(|error| format!("Screenshot task failed: {error}"))?;
     let reveal_result = crate::office::background::reveal_main_window(&app);
     if let Err(error) = reveal_result {
-        return Err(format!("Unable to restore VisualTeX after the screenshot: {error}"));
+        return Err(format!(
+            "Unable to restore VisualTeX after the screenshot: {error}"
+        ));
     }
     Ok(capture?.map(|bytes| QuickOcrCapture {
         data_base64: BASE64_STANDARD.encode(bytes),
@@ -1054,17 +1071,20 @@ pub(crate) async fn wait_for_quick_ocr_system_screenshot(
 ) -> Result<Option<QuickOcrCapture>, String> {
     let baseline = create_system_screenshot_baseline();
     if let Some(window) = app.get_webview_window("main") {
-        window
-            .minimize()
-            .map_err(|error| format!("Unable to minimize VisualTeX while waiting for a system screenshot: {error}"))?;
+        window.minimize().map_err(|error| {
+            format!("Unable to minimize VisualTeX while waiting for a system screenshot: {error}")
+        })?;
     }
     tokio::time::sleep(Duration::from_millis(180)).await;
-    let capture = tauri::async_runtime::spawn_blocking(move || wait_for_next_system_screenshot(baseline))
-        .await
-        .map_err(|error| format!("System screenshot watcher failed: {error}"))?;
+    let capture =
+        tauri::async_runtime::spawn_blocking(move || wait_for_next_system_screenshot(baseline))
+            .await
+            .map_err(|error| format!("System screenshot watcher failed: {error}"))?;
     let reveal_result = crate::office::background::reveal_main_window(&app);
     if let Err(error) = reveal_result {
-        return Err(format!("Unable to restore VisualTeX after waiting for the system screenshot: {error}"));
+        return Err(format!(
+            "Unable to restore VisualTeX after waiting for the system screenshot: {error}"
+        ));
     }
     Ok(capture?.map(|(bytes, extension)| QuickOcrCapture {
         data_base64: BASE64_STANDARD.encode(bytes),
@@ -1101,13 +1121,17 @@ pub(crate) async fn configure_silent_ocr(
     copy_format: String,
 ) -> Result<(), String> {
     let normalized_model = model.trim();
-    if !ALLOWED_MODELS.iter().any(|allowed| allowed == &normalized_model) {
+    if !ALLOWED_MODELS
+        .iter()
+        .any(|allowed| allowed == &normalized_model)
+    {
         return Err("Unsupported silent OCR model".to_string());
     }
     *state
         .model
         .lock()
-        .map_err(|_| "Silent OCR model state is unavailable".to_string())? = normalized_model.to_string();
+        .map_err(|_| "Silent OCR model state is unavailable".to_string())? =
+        normalized_model.to_string();
     let normalized_copy_format = copy_format.trim();
     if !ALLOWED_SILENT_OCR_COPY_FORMATS
         .iter()
@@ -1139,10 +1163,7 @@ mod tests {
     #[test]
     fn silent_ocr_copy_format_matches_visualtex_source_wrappers() {
         let lines = vec!["x=y".to_string(), "a>b".to_string()];
-        assert_eq!(
-            format_silent_ocr_latex(&lines, "raw"),
-            "x=y\na>b"
-        );
+        assert_eq!(format_silent_ocr_latex(&lines, "raw"), "x=y\na>b");
         assert_eq!(
             format_silent_ocr_latex(&lines, "inline-dollar"),
             "$x=y$\n$a>b$"
@@ -1164,7 +1185,10 @@ mod tests {
             "\\begin{align}\nx&=y \\\\\na&>b\n\\end{align}"
         );
         assert_eq!(
-            format_silent_ocr_latex(&["\\text{速度}v=t".to_string()], "inline-text-double-dollar"),
+            format_silent_ocr_latex(
+                &["\\text{速度}v=t".to_string()],
+                "inline-text-double-dollar"
+            ),
             "速度$$v=t$$"
         );
     }

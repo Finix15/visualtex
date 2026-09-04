@@ -465,9 +465,7 @@ pub(crate) fn activate_foreground_app(_app: &AppHandle) -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn activate_foreground_app_via_launch_services(
-    app: &AppHandle,
-) -> Result<(), String> {
+pub(crate) fn activate_foreground_app_via_launch_services(app: &AppHandle) -> Result<(), String> {
     prepare_foreground_app(app)?;
     let identifier = &app.config().identifier;
     let status = Command::new("/usr/bin/open")
@@ -475,9 +473,7 @@ pub(crate) fn activate_foreground_app_via_launch_services(
         .arg(identifier)
         .status()
         .map_err(|error| {
-            format!(
-                "Unable to ask LaunchServices to activate {identifier}: {error}"
-            )
+            format!("Unable to ask LaunchServices to activate {identifier}: {error}")
         })?;
     if status.success() {
         Ok(())
@@ -489,9 +485,7 @@ pub(crate) fn activate_foreground_app_via_launch_services(
 }
 
 #[cfg(not(target_os = "macos"))]
-pub(crate) fn activate_foreground_app_via_launch_services(
-    _app: &AppHandle,
-) -> Result<(), String> {
+pub(crate) fn activate_foreground_app_via_launch_services(_app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 

@@ -12,6 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+mod legacy_equations;
 mod ocr_offline;
 mod office;
 mod quick_ocr;
@@ -225,10 +226,7 @@ fn read_main_window_mode_sizes(app: &AppHandle) -> MainWindowModeSizes {
     }
 }
 
-fn write_main_window_mode_sizes(
-    app: &AppHandle,
-    sizes: MainWindowModeSizes,
-) -> Result<(), String> {
+fn write_main_window_mode_sizes(app: &AppHandle, sizes: MainWindowModeSizes) -> Result<(), String> {
     let path = main_window_mode_sizes_path(app)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -1201,7 +1199,13 @@ fn install_runtime_inner(
         emit_progress(app, stage, percent, message, detail);
     })?;
 
-    emit_progress(app, "verify", 97, "Verifying the offline PP-FormulaNet interface", None);
+    emit_progress(
+        app,
+        "verify",
+        97,
+        "Verifying the offline PP-FormulaNet interface",
+        None,
+    );
     let status = get_runtime_status_inner(app, true)?;
     if !status.installed {
         return Err(status.message);
@@ -1616,7 +1620,8 @@ end run"#;
             .arg(&temporary)
             .output();
         let _ = fs::remove_file(&temporary);
-        let output = output.map_err(|error| format!("Unable to access the macOS clipboard: {error}"))?;
+        let output =
+            output.map_err(|error| format!("Unable to access the macOS clipboard: {error}"))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             return Err(if stderr.is_empty() {
@@ -1858,7 +1863,15 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(ocr_state)
         .manage(quick_ocr_state)
+        .manage(legacy_equations::LegacyEquationState::default())
         .setup(move |app| {
+            if let Ok(app_data) = app.path().app_data_dir() {
+                let state = app.state::<legacy_equations::LegacyEquationState>();
+                let root = legacy_equations::jobs::job_root(&app_data);
+                if let Err(error) = state.cleanup_expired_now(&root) {
+                    eprintln!("Unable to recover legacy-equation jobs: {error}");
+                }
+            }
             if maintenance_install {
                 match office::macos_offline_installer::install(app.handle()) {
                     Ok(status) => {
@@ -1954,6 +1967,13 @@ pub fn run() {
             reset_ocr_runtime,
             install_optional_ocr_model,
             remove_optional_ocr_model,
+            legacy_equations::commands::create_legacy_equation_job,
+            legacy_equations::commands::get_legacy_equation_job,
+            legacy_equations::commands::read_legacy_equation_batch,
+            legacy_equations::commands::submit_legacy_omml_batch,
+            legacy_equations::commands::finalize_legacy_equation_job,
+            legacy_equations::commands::cancel_legacy_equation_job,
+            legacy_equations::commands::delete_legacy_equation_job,
             office::lifecycle::get_office_companion_status,
             office::lifecycle::start_office_companion,
             office::lifecycle::stop_office_companion,
@@ -2038,7 +2058,9 @@ pub fn run() {
                 Ok(true) => return,
                 Ok(false) => {}
                 Err(error) => {
-                    eprintln!("Unable to consume VisualTeX Office fast-open request on Reopen: {error}");
+                    eprintln!(
+                        "Unable to consume VisualTeX Office fast-open request on Reopen: {error}"
+                    );
                     return;
                 }
             }
@@ -2109,7 +2131,7 @@ mod protocol_tests {
 
         assert_eq!(
             value.get("message").and_then(Value::as_str),
-            Some("Loading")
+            Some("正在加载")
         );
     }
 
@@ -2229,7 +2251,7 @@ mod tests {
 
     #[test]
     fn active_worker_can_be_terminated_without_taking_the_worker_lock() {
-        let mut child = Command::new("sleep")
+        let mut child = Command::new("/bin/sleep")
             .arg("30")
             .spawn()
             .expect("failed to start test process");

@@ -24,7 +24,10 @@ fn default_formula_chinese_font() -> String {
 }
 
 fn valid_formula_letter_font(value: &str) -> bool {
-    matches!(value, "katex" | "times" | "cambria" | "stix" | "palatino" | "helvetica")
+    matches!(
+        value,
+        "katex" | "times" | "cambria" | "stix" | "palatino" | "helvetica"
+    )
 }
 
 fn valid_formula_chinese_font(value: &str) -> bool {

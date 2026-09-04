@@ -107,7 +107,9 @@ fn convert_manifest(input: &Path, output: &Path) -> Result<(), String> {
         .parse::<usize>()
         .map_err(|_| "The OMML batch item count is invalid".to_string())?;
     if item_count == 0 || item_count > MAX_ITEMS {
-        return Err(format!("The OMML batch must contain 1 to {MAX_ITEMS} formulas"));
+        return Err(format!(
+            "The OMML batch must contain 1 to {MAX_ITEMS} formulas"
+        ));
     }
 
     let session_id = required(&values, "sessionId")?;
@@ -146,7 +148,10 @@ fn convert_manifest(input: &Path, output: &Path) -> Result<(), String> {
         };
         output_rows.extend([
             format!("{prefix}kind=text"),
-            format!("{prefix}textBase64={}", URL_SAFE_NO_PAD.encode(wrapped.as_bytes())),
+            format!(
+                "{prefix}textBase64={}",
+                URL_SAFE_NO_PAD.encode(wrapped.as_bytes())
+            ),
             format!(
                 "{prefix}sourceStart={}",
                 required(&values, &format!("{prefix}sourceStart"))?
@@ -307,36 +312,100 @@ fn escape_latex(value: &str, text_mode: bool) -> String {
 fn token(value: &str) -> String {
     let value = value.trim();
     let mapped = match value {
-        "−" => "-", "×" => "\\times ", "÷" => "\\div ", "±" => "\\pm ",
-        "∓" => "\\mp ", "·" => "\\cdot ", "∗" => "\\ast ", "∘" => "\\circ ",
-        "∞" => "\\infty ", "∂" => "\\partial ", "∇" => "\\nabla ",
-        "∑" => "\\sum ", "∏" => "\\prod ", "∫" => "\\int ",
-        "∬" => "\\iint ", "∭" => "\\iiint ", "∮" => "\\oint ",
-        "√" => "\\sqrt{}", "≈" => "\\approx ", "≃" => "\\simeq ",
-        "≅" => "\\cong ", "≠" => "\\ne ", "≤" => "\\le ", "≥" => "\\ge ",
-        "≪" => "\\ll ", "≫" => "\\gg ", "≡" => "\\equiv ", "∝" => "\\propto ",
-        "∈" => "\\in ", "∉" => "\\notin ", "∋" => "\\ni ",
-        "⊂" => "\\subset ", "⊃" => "\\supset ", "⊆" => "\\subseteq ",
-        "⊇" => "\\supseteq ", "∪" => "\\cup ", "∩" => "\\cap ",
-        "∧" => "\\land ", "∨" => "\\lor ", "¬" => "\\neg ",
-        "∀" => "\\forall ", "∃" => "\\exists ", "∄" => "\\nexists ",
-        "∅" => "\\varnothing ", "⊥" => "\\perp ", "∥" => "\\parallel ",
-        "←" => "\\leftarrow ", "→" => "\\rightarrow ", "↔" => "\\leftrightarrow ",
-        "⇐" => "\\Leftarrow ", "⇒" => "\\Rightarrow ", "⇔" => "\\Leftrightarrow ",
-        "↦" => "\\mapsto ", "α" => "\\alpha ", "β" => "\\beta ",
-        "γ" => "\\gamma ", "δ" => "\\delta ", "ε" => "\\epsilon ",
-        "ϵ" => "\\varepsilon ", "ζ" => "\\zeta ", "η" => "\\eta ",
-        "θ" => "\\theta ", "ϑ" => "\\vartheta ", "ι" => "\\iota ",
-        "κ" => "\\kappa ", "λ" => "\\lambda ", "μ" => "\\mu ",
-        "ν" => "\\nu ", "ξ" => "\\xi ", "π" => "\\pi ",
-        "ϖ" => "\\varpi ", "ρ" => "\\rho ", "ϱ" => "\\varrho ",
-        "σ" => "\\sigma ", "ς" => "\\varsigma ", "τ" => "\\tau ",
-        "υ" => "\\upsilon ", "φ" => "\\phi ", "ϕ" => "\\varphi ",
-        "χ" => "\\chi ", "ψ" => "\\psi ", "ω" => "\\omega ",
-        "Γ" => "\\Gamma ", "Δ" => "\\Delta ", "Θ" => "\\Theta ",
-        "Λ" => "\\Lambda ", "Ξ" => "\\Xi ", "Π" => "\\Pi ",
-        "Σ" => "\\Sigma ", "Υ" => "\\Upsilon ", "Φ" => "\\Phi ",
-        "Ψ" => "\\Psi ", "Ω" => "\\Omega ", _ => return escape_latex(value, false),
+        "−" => "-",
+        "×" => "\\times ",
+        "÷" => "\\div ",
+        "±" => "\\pm ",
+        "∓" => "\\mp ",
+        "·" => "\\cdot ",
+        "∗" => "\\ast ",
+        "∘" => "\\circ ",
+        "∞" => "\\infty ",
+        "∂" => "\\partial ",
+        "∇" => "\\nabla ",
+        "∑" => "\\sum ",
+        "∏" => "\\prod ",
+        "∫" => "\\int ",
+        "∬" => "\\iint ",
+        "∭" => "\\iiint ",
+        "∮" => "\\oint ",
+        "√" => "\\sqrt{}",
+        "≈" => "\\approx ",
+        "≃" => "\\simeq ",
+        "≅" => "\\cong ",
+        "≠" => "\\ne ",
+        "≤" => "\\le ",
+        "≥" => "\\ge ",
+        "≪" => "\\ll ",
+        "≫" => "\\gg ",
+        "≡" => "\\equiv ",
+        "∝" => "\\propto ",
+        "∈" => "\\in ",
+        "∉" => "\\notin ",
+        "∋" => "\\ni ",
+        "⊂" => "\\subset ",
+        "⊃" => "\\supset ",
+        "⊆" => "\\subseteq ",
+        "⊇" => "\\supseteq ",
+        "∪" => "\\cup ",
+        "∩" => "\\cap ",
+        "∧" => "\\land ",
+        "∨" => "\\lor ",
+        "¬" => "\\neg ",
+        "∀" => "\\forall ",
+        "∃" => "\\exists ",
+        "∄" => "\\nexists ",
+        "∅" => "\\varnothing ",
+        "⊥" => "\\perp ",
+        "∥" => "\\parallel ",
+        "←" => "\\leftarrow ",
+        "→" => "\\rightarrow ",
+        "↔" => "\\leftrightarrow ",
+        "⇐" => "\\Leftarrow ",
+        "⇒" => "\\Rightarrow ",
+        "⇔" => "\\Leftrightarrow ",
+        "↦" => "\\mapsto ",
+        "α" => "\\alpha ",
+        "β" => "\\beta ",
+        "γ" => "\\gamma ",
+        "δ" => "\\delta ",
+        "ε" => "\\epsilon ",
+        "ϵ" => "\\varepsilon ",
+        "ζ" => "\\zeta ",
+        "η" => "\\eta ",
+        "θ" => "\\theta ",
+        "ϑ" => "\\vartheta ",
+        "ι" => "\\iota ",
+        "κ" => "\\kappa ",
+        "λ" => "\\lambda ",
+        "μ" => "\\mu ",
+        "ν" => "\\nu ",
+        "ξ" => "\\xi ",
+        "π" => "\\pi ",
+        "ϖ" => "\\varpi ",
+        "ρ" => "\\rho ",
+        "ϱ" => "\\varrho ",
+        "σ" => "\\sigma ",
+        "ς" => "\\varsigma ",
+        "τ" => "\\tau ",
+        "υ" => "\\upsilon ",
+        "φ" => "\\phi ",
+        "ϕ" => "\\varphi ",
+        "χ" => "\\chi ",
+        "ψ" => "\\psi ",
+        "ω" => "\\omega ",
+        "Γ" => "\\Gamma ",
+        "Δ" => "\\Delta ",
+        "Θ" => "\\Theta ",
+        "Λ" => "\\Lambda ",
+        "Ξ" => "\\Xi ",
+        "Π" => "\\Pi ",
+        "Σ" => "\\Sigma ",
+        "Υ" => "\\Upsilon ",
+        "Φ" => "\\Phi ",
+        "Ψ" => "\\Psi ",
+        "Ω" => "\\Omega ",
+        _ => return escape_latex(value, false),
     };
     mapped.to_string()
 }
@@ -356,17 +425,23 @@ fn group(value: String) -> String {
 
 fn delimiter(value: &str, left: bool) -> String {
     let value = match value {
-        "{" => "\\{".to_string(), "}" => "\\}".to_string(),
+        "{" => "\\{".to_string(),
+        "}" => "\\}".to_string(),
         "|" => if left { "\\lvert" } else { "\\rvert" }.to_string(),
         "‖" => if left { "\\lVert" } else { "\\rVert" }.to_string(),
-        "〈" | "⟨" => "\\langle".to_string(), "〉" | "⟩" => "\\rangle".to_string(),
-        "" => ".".to_string(), other => other.to_string(),
+        "〈" | "⟨" => "\\langle".to_string(),
+        "〉" | "⟩" => "\\rangle".to_string(),
+        "" => ".".to_string(),
+        other => other.to_string(),
     };
     format!("{}{} ", if left { "\\left" } else { "\\right" }, value)
 }
 
 fn child(node: &XmlNode, index: usize) -> String {
-    node.children.get(index).map(convert_node).unwrap_or_default()
+    node.children
+        .get(index)
+        .map(convert_node)
+        .unwrap_or_default()
 }
 
 fn convert_node(node: &XmlNode) -> String {
@@ -375,9 +450,14 @@ fn convert_node(node: &XmlNode) -> String {
         "annotation" | "annotation-xml" | "mspace" | "none" => String::new(),
         "mi" => {
             let value = node.all_text().trim().to_string();
-            let variant = node.attribute("mathvariant").unwrap_or_default().to_ascii_lowercase();
+            let variant = node
+                .attribute("mathvariant")
+                .unwrap_or_default()
+                .to_ascii_lowercase();
             if (variant.contains("normal") || variant.contains("upright"))
-                && value.chars().all(|value| value.is_alphanumeric() || ".,".contains(value))
+                && value
+                    .chars()
+                    .all(|value| value.is_alphanumeric() || ".,".contains(value))
             {
                 format!("\\mathrm{{{}}}", escape_latex(&value, false))
             } else {
@@ -401,7 +481,9 @@ fn convert_node(node: &XmlNode) -> String {
         "msup" => format!("{}^{{{}}}", group(child(node, 0)), child(node, 1)),
         "msubsup" | "munderover" => format!(
             "{}_{{{}}}^{{{}}}",
-            group(child(node, 0)), child(node, 1), child(node, 2)
+            group(child(node, 0)),
+            child(node, 1),
+            child(node, 2)
         ),
         "mover" => convert_accent(node, false),
         "mfenced" => {
@@ -411,7 +493,11 @@ fn convert_node(node: &XmlNode) -> String {
             format!(
                 "{}{}{}",
                 delimiter(open, true),
-                node.children.iter().map(convert_node).collect::<Vec<_>>().join(separator),
+                node.children
+                    .iter()
+                    .map(convert_node)
+                    .collect::<Vec<_>>()
+                    .join(separator),
                 delimiter(close, false)
             )
         }
@@ -420,13 +506,22 @@ fn convert_node(node: &XmlNode) -> String {
                 .children
                 .iter()
                 .filter(|row| matches!(row.name.as_str(), "mtr" | "mlabeledtr"))
-                .map(|row| row.children.iter().map(convert_node).collect::<Vec<_>>().join(" & "))
+                .map(|row| {
+                    row.children
+                        .iter()
+                        .map(convert_node)
+                        .collect::<Vec<_>>()
+                        .join(" & ")
+                })
                 .collect::<Vec<_>>();
             format!("\\begin{{matrix}}{}\\end{{matrix}}", rows.join(" \\\\ "))
         }
         "menclose" => {
             let body = children(node);
-            let notation = node.attribute("notation").unwrap_or_default().to_ascii_lowercase();
+            let notation = node
+                .attribute("notation")
+                .unwrap_or_default()
+                .to_ascii_lowercase();
             if notation.contains("box") {
                 format!("\\boxed{{{body}}}")
             } else if notation.contains("radical") {
@@ -439,20 +534,34 @@ fn convert_node(node: &XmlNode) -> String {
         "mmultiscripts" => convert_multiscripts(node),
         _ => {
             let nested = children(node);
-            if nested.is_empty() { token(&node.all_text()) } else { nested }
+            if nested.is_empty() {
+                token(&node.all_text())
+            } else {
+                nested
+            }
         }
     }
 }
 
 fn convert_multiscripts(node: &XmlNode) -> String {
-    let Some(base) = node.children.first() else { return String::new(); };
+    let Some(base) = node.children.first() else {
+        return String::new();
+    };
     let mut result = group(convert_node(base));
     let mut index = 1;
     while index < node.children.len() && node.children[index].name != "mprescripts" {
         let sub = convert_node(&node.children[index]);
-        let sup = node.children.get(index + 1).map(convert_node).unwrap_or_default();
-        if !sub.is_empty() { result.push_str(&format!("_{{{sub}}}")); }
-        if !sup.is_empty() { result.push_str(&format!("^{{{sup}}}")); }
+        let sup = node
+            .children
+            .get(index + 1)
+            .map(convert_node)
+            .unwrap_or_default();
+        if !sub.is_empty() {
+            result.push_str(&format!("_{{{sub}}}"));
+        }
+        if !sup.is_empty() {
+            result.push_str(&format!("^{{{sup}}}"));
+        }
         index += 2;
     }
     result
@@ -460,12 +569,23 @@ fn convert_multiscripts(node: &XmlNode) -> String {
 
 fn convert_accent(node: &XmlNode, under: bool) -> String {
     let body = child(node, 0);
-    let mark = node.children.get(1).map(XmlNode::all_text).unwrap_or_default();
+    let mark = node
+        .children
+        .get(1)
+        .map(XmlNode::all_text)
+        .unwrap_or_default();
     let command = match mark.trim() {
-        "¯" | "̄" => "\\bar", "̂" => "\\hat", "˜" | "̃" => "\\tilde",
-        "˙" | "̇" => "\\dot", "¨" | "̈" => "\\ddot", "→" | "⃗" => "\\vec",
-        "⌢" => "\\widehat", "⏞" => "\\overbrace", "⏟" => "\\underbrace",
-        _ if under => "\\underaccent", _ => "\\overset",
+        "¯" | "̄" => "\\bar",
+        "̂" => "\\hat",
+        "˜" | "̃" => "\\tilde",
+        "˙" | "̇" => "\\dot",
+        "¨" | "̈" => "\\ddot",
+        "→" | "⃗" => "\\vec",
+        "⌢" => "\\widehat",
+        "⏞" => "\\overbrace",
+        "⏟" => "\\underbrace",
+        _ if under => "\\underaccent",
+        _ => "\\overset",
     };
     if matches!(command, "\\underaccent" | "\\overset") {
         format!("{command}{{{}}}{{{body}}}", token(mark.trim()))
