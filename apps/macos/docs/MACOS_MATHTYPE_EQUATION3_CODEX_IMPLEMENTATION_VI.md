@@ -14,7 +14,7 @@ Khi nhận nhiệm vụ triển khai tài liệu này, Codex phải:
    - `apps/macos/docs/MACOS_OFFLINE_OFFICE_ARCHITECTURE.md`;
    - `apps/macos/docs/MACOS_OFFLINE_OFFICE_ACCEPTANCE.md`;
    - `apps/macos/docs/OFFICE_PERFORMANCE_BUDGET.md`;
-   - `apps/windows/artifacts/mathtypejx-evaluation/source/README.md`, nếu source này có mặt.
+   - `tools/mathtypejx/README.md`.
 3. Chạy `git status --short` và giữ nguyên mọi thay đổi không liên quan của người dùng.
 4. Không chạy lệnh phá hủy như `git reset --hard`, `git clean -fd`, hoặc xóa recursive các thư mục không được xác thực.
 5. Không sửa hành vi Office Windows ngoài phần cần thiết để đưa parser thành core dùng chung.
@@ -81,13 +81,16 @@ Xây dựng một bộ chuyển đổi offline trên macOS có thể:
 
 ## 4. Gate 0: xác nhận source đầu vào
 
-Source tham chiếu hiện tại dự kiến nằm tại:
+Source chính thức được Git quản lý phải nằm tại:
 
 ```text
-apps/windows/artifacts/mathtypejx-evaluation/source/
+tools/mathtypejx/
 ```
 
-Thư mục này từng là artifact chưa được Git theo dõi. Trước khi triển khai trên Mac, Codex phải kiểm tra ít nhất các file sau tồn tại:
+Source này đã được promote từ artifact đánh giá trên Windows. Thư mục cũ
+`apps/windows/artifacts/mathtypejx-evaluation/source/` chỉ là nguồn migration cục
+bộ và không phải dependency production. Trước khi triển khai trên Mac, Codex phải
+kiểm tra ít nhất các file sau tồn tại dưới `tools/mathtypejx/`:
 
 ```text
 README.md
@@ -438,7 +441,7 @@ Warning về style hoặc spacing được phép chuyển chỉ khi risk level l
 Công việc:
 
 - hoàn thành Gate 0;
-- lưu source và notices vào Git-controlled shared location;
+- xác nhận source và notices đã nằm trong `tools/mathtypejx`;
 - chạy test hiện hữu trên Mac;
 - ghi baseline corpus và performance;
 - xác nhận Python version hỗ trợ;
@@ -455,7 +458,7 @@ python -m pip install -e "tools/mathtypejx[dev]"
 python -m pytest -q tools/mathtypejx/tests
 ```
 
-Nếu source chưa được promote, chạy test từ source artifact trước rồi mới di chuyển.
+Không chạy test production từ source artifact cũ trên Windows.
 
 Definition of done:
 
@@ -837,9 +840,10 @@ cd /path/to/visualtex
 git status --short
 
 test -f apps/macos/docs/MACOS_MATHTYPE_EQUATION3_CODEX_IMPLEMENTATION_VI.md
-test -f apps/windows/artifacts/mathtypejx-evaluation/source/pyproject.toml
-test -f apps/windows/artifacts/mathtypejx-evaluation/source/src/mathtypejx/mtef/records3.py
-test -f apps/windows/artifacts/mathtypejx-evaluation/source/src/mathtypejx/mtef/records5.py
+test -f tools/mathtypejx/pyproject.toml
+test -f tools/mathtypejx/src/mathtypejx/mtef/records3.py
+test -f tools/mathtypejx/src/mathtypejx/mtef/records5.py
+test -f tools/mathtypejx/tests/fixtures/oleObject1.bin
 
 cd apps/macos
 npm ci
