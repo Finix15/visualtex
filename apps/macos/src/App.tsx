@@ -1494,6 +1494,14 @@ function App() {
                 <ScanLine size={16} />
                 <span>{isEn ? "Formula image OCR" : "Hình ảnh công thức OCR"}</span>
               </button>
+              {isMacDesktop ? <button
+                type="button"
+                role="menuitem"
+                onClick={() => runMenuAction(() => window.location.assign("?view=legacy-equation-converter"))}
+              >
+                <Braces size={16} />
+                <span>{isEn ? "Convert legacy MathType equations" : "Chuyển công thức MathType cũ"}</span>
+              </button> : null}
               <button
                 type="button"
                 role="menuitem"

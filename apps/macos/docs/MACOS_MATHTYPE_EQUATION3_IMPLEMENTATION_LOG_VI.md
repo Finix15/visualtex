@@ -308,3 +308,61 @@ unknown-file cleanup guard, TTL expiry, restart recovery và production worker m
 - **MTEF v3/Equation Editor 3.0 vẫn là release blocker:** fixture repository và corpus
   người dùng cung cấp đều chỉ xác nhận MTEF v5. Phase 3 không tạo fixture giả và không
   tuyên bố hỗ trợ Equation Editor 3.0 đã được xác nhận.
+
+## Phase 4 — UI standalone
+
+Ngày kiểm tra: 2026-09-04
+Base revision: `a6b03905006c09350642aad8d5d74ed404e96e81`
+
+### Outcome
+
+Phase 4 đạt test gate tự động. VisualTeX có view standalone
+`legacy-equation-converter`, điểm mở từ menu desktop và state machine scan/review/
+convert/validate/finalize. Việc ghi chỉ bắt đầu sau xác nhận của người dùng; Phase 5 và
+Word DOTM/Ribbon chưa được bắt đầu.
+
+### Thay đổi triển khai
+
+- Thêm client/types/error mapping và React app cho legacy equations, dùng locale VI/EN
+  hiện hữu, file dialog DOCX, output mặc định `_VisualTeX_OMML.docx`, phân trang batch,
+  filter theo ProgID/risk, cancel/retry/recovery và report/output actions.
+- Mặc định chỉ chọn `auto-replace`; `spot-check`/`manual-review` cần chọn chủ động và
+  `blocked` không thể chọn. Mỗi MathML đi thẳng qua `mathMlToOmmlArtifacts()` và
+  validator chung; lỗi được submit dưới dạng `preserved`, không phải `replaced`.
+- Batch được hạch toán theo index và formula ID; batch thiếu/trùng hoặc count không bảo
+  toàn sẽ chặn finalize. Generation token bỏ qua stale async response và mutex UI chặn
+  double-click tạo hai job.
+- React state chỉ giữ summary, selection IDs và batch đang xem. Preview giới hạn 256
+  KiB, parse XML fail closed và dựng native MathML bằng element allowlist; không dùng
+  `innerHTML`, không log MathML/OMML.
+- Bổ sung job view có scan/conversion report bounded và hai command UUID-only mở output
+  bằng Word/Finder hoặc report. Frontend không nhận hay gửi job directory.
+- Close handler yêu cầu xác nhận khi job chạy và cancel đúng job trước khi đóng. Job ID
+  recovery được lưu local và đối chiếu lại backend khi app mở.
+- Script mới giữ đúng tên yêu cầu: `test:mathtype-converter` và
+  `test:mathtype-converter:browser`; browser dùng deterministic Tauri command mock,
+  không cần production worker và không tải nội dung từ Internet.
+
+### Tests
+
+- `npm run build:desktop`: PASS, 2.318 modules transformed.
+- `npm run test:mathtype-omml`: PASS, 12 cases/3 fixture MTEF v5 thật.
+- `npm run test:mathtype-converter`: PASS.
+- `npm run test:mathtype-converter:browser`: PASS; route, zero-formula flow,
+  double-click guard, Unicode filename, locale/warning, keyboard và progress ARIA.
+- `npm run test:macos-offline-office`: PASS toàn bộ bốn stage.
+- Rust full suite: `126 passed, 2 ignored`; không failure.
+- Python: `78 passed, 19 skipped`; không failure.
+- `cargo fmt --check` và `git diff --check`: PASS.
+
+### Security và giới hạn
+
+- Error từ Tauri được ánh xạ sang thông báo allowlist; filesystem path mở file được
+  resolve từ UUID/job record ở Rust. Report/batch vẫn chịu giới hạn Phase 3.
+- Production worker chưa đóng gói, thuộc Phase 7; UI browser test dùng mock command
+  boundary và production tiếp tục fail closed khi worker thiếu.
+- Hai Rust test Office thật vẫn ignored; 19 Python skip giữ nguyên vì thiếu private
+  DOCX corpus hoặc `MML2OMML.XSL`.
+- **MTEF v3/Equation Editor 3.0 vẫn là release blocker:** UI luôn cảnh báo chưa có
+  corpus MTEF v3 thực và không tuyên bố hỗ trợ đã được xác nhận.
+- Chưa chạy Word macOS/Windows real-document gate; Phase 5 chưa bắt đầu.

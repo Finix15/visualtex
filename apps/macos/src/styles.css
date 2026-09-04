@@ -14946,3 +14946,12 @@ body[data-workspace-resize="dock"] * {
     min-width: 90px;
   }
 }
+
+.legacy-equation-app { max-width: 1100px; margin: 0 auto; padding: 32px; display: grid; gap: 20px; }
+.legacy-equation-app header, .legacy-equation-app section { background: var(--panel-bg, rgba(255,255,255,.06)); border: 1px solid var(--border-color, rgba(128,128,128,.3)); border-radius: 12px; padding: 18px; }
+.legacy-equation-app section { display: grid; gap: 10px; }
+.legacy-equation-app output { overflow-wrap: anywhere; }
+.legacy-equation-app [role="progressbar"] { height: 24px; border-radius: 12px; padding: 3px 10px; background: rgba(90,120,255,.18); }
+.legacy-formula-list { display: grid; gap: 8px; max-height: 52vh; overflow: auto; }
+.legacy-formula-list article { border: 1px solid var(--border-color, rgba(128,128,128,.25)); border-radius: 8px; padding: 10px; }
+.legacy-formula-list pre { max-height: 100px; overflow: auto; white-space: pre-wrap; font-size: 12px; }

@@ -313,6 +313,37 @@ impl LegacyEquationState {
         )
     }
 
+    pub fn read_optional_report(
+        &self,
+        root: &Path,
+        id: Uuid,
+        filename: &str,
+    ) -> Result<Option<serde_json::Value>, String> {
+        if !matches!(filename, "scan-report.json" | "conversion-report.json") {
+            return Err("Unsupported legacy-equation report".to_string());
+        }
+        let path = validated_job_path(root, id)?.join(filename);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let bytes = read_bounded(&path, MAX_MANIFEST_BYTES, "legacy-equation report")?;
+        serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|error| format!("Malformed legacy-equation report: {error}"))
+    }
+
+    pub fn report_path(&self, root: &Path, id: Uuid) -> Result<PathBuf, String> {
+        let directory = validated_job_path(root, id)?;
+        for filename in ["conversion-report.txt", "conversion-report.json"] {
+            let path = directory.join(filename);
+            if path.exists() {
+                read_bounded(&path, MAX_MANIFEST_BYTES, "conversion report")?;
+                return Ok(path);
+            }
+        }
+        Err("Conversion report is not available".to_string())
+    }
+
     pub fn submit_batch(
         &self,
         root: &Path,
@@ -576,6 +607,25 @@ mod tests {
                 1,
                 &vec![b' '; MAX_BATCH_BYTES as usize + 1],
             )
+            .is_err());
+    }
+
+    #[test]
+    fn optional_ui_reports_are_bounded_and_must_be_json() {
+        let (temp, state, input, output) = fixture();
+        let root = job_root(temp.path());
+        let record = state.create(&root, &input, &output).unwrap();
+        let path = job_path(&root, record.job_id).join("scan-report.json");
+        fs::write(&path, b"not-json").unwrap();
+        assert!(state
+            .read_optional_report(&root, record.job_id, "scan-report.json")
+            .is_err());
+        fs::write(&path, vec![0_u8; MAX_MANIFEST_BYTES as usize + 1]).unwrap();
+        assert!(state
+            .read_optional_report(&root, record.job_id, "scan-report.json")
+            .is_err());
+        assert!(state
+            .read_optional_report(&root, record.job_id, "../request.json")
             .is_err());
     }
 }

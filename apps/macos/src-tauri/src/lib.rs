@@ -1974,6 +1974,8 @@ pub fn run() {
             legacy_equations::commands::finalize_legacy_equation_job,
             legacy_equations::commands::cancel_legacy_equation_job,
             legacy_equations::commands::delete_legacy_equation_job,
+            legacy_equations::commands::open_legacy_equation_output,
+            legacy_equations::commands::open_legacy_equation_report,
             office::lifecycle::get_office_companion_status,
             office::lifecycle::start_office_companion,
             office::lifecycle::stop_office_companion,
