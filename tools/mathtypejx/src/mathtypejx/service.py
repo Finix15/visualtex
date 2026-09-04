@@ -25,7 +25,7 @@ def convert_mathtype_to_omml(
     docx_path: str,
     output_path: Optional[str] = None,
     *,
-    remove_edit_info: bool = True,
+    remove_edit_info: bool = False,
     parallel: bool = True,
     max_workers: int = 8,
     progress_callback: Optional[Callable[[str, int, int], None]] = None,
@@ -62,7 +62,7 @@ def convert_mathtype_to_omml(
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
     if output_path is None:
-        output_path = str(input_path.parent / f"{input_path.stem}_omml.docx")
+        output_path = str(input_path.parent / f"{input_path.stem}_VisualTeX_OMML.docx")
     output_path = Path(output_path).resolve()
 
     _notify(progress_callback, "scan", 0, 1)
@@ -75,7 +75,7 @@ def convert_mathtype_to_omml(
     ]
 
     if not mathtype_formulas:
-        shutil.copy2(str(input_path), str(output_path))
+        replace_formulas(workdir, [], str(output_path))
         report = make_report(str(input_path), str(output_path), [])
         _notify(progress_callback, "done", 0, 0)
         return report
@@ -85,7 +85,7 @@ def convert_mathtype_to_omml(
     # ── Phase 2: Extract ──────────────────────────────────
     extracted = []
     for i, formula in enumerate(mathtype_formulas):
-        ole_data = read_ole_binary(workdir, formula.ole_name)
+        ole_data = read_ole_binary(workdir, formula.ole_name, formula.ole_part_name)
         formula.ole_data = ole_data
         if ole_data is None:
             formula.status = FormulaStatus.FAILED
@@ -148,7 +148,7 @@ def convert_batch(
     docx_paths: list[str],
     output_dir: str,
     *,
-    remove_edit_info: bool = True,
+    remove_edit_info: bool = False,
     max_workers: int = 4,
     progress_callback: Optional[Callable[[str, int, int], None]] = None,
 ) -> list[ConversionReport]:

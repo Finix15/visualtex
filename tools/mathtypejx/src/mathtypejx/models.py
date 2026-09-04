@@ -70,6 +70,7 @@ class FormulaInfo:
 
     # Metadata
     is_inline: bool = True                   # True = inline formula, False = display
+    ole_part_name: str = ""                  # Canonical package path from OPC relationship
 
 
 @dataclass
@@ -113,6 +114,7 @@ class ConversionReport:
                 {
                     "formula_id": f.formula_id,
                     "ole_name": f.ole_name,
+                    "ole_part_name": f.ole_part_name,
                     "part_name": f.part_name,
                     "prog_id": f.prog_id,
                     "status": f.status.value,

@@ -83,14 +83,13 @@ def _cmd_convert(args) -> int:
 
     if not mathtype_formulas:
         log("No MathType formulas to convert. Creating copy of input.")
-        import shutil
-        shutil.copy2(str(input_docx), str(output_docx))
+        replace_formulas(workdir, [], str(output_docx))
         return 0
 
     # Phase 2: Extract MTEF from each OLE
     for formula in mathtype_formulas:
         log(f"Extracting: {formula.ole_name} (r:id={formula.relationship_id})")
-        ole_data = read_ole_binary(workdir, formula.ole_name)
+        ole_data = read_ole_binary(workdir, formula.ole_name, formula.ole_part_name)
         formula.ole_data = ole_data
 
         if ole_data is None:

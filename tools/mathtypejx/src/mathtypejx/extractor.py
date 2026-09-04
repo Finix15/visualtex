@@ -7,6 +7,7 @@ from typing import Optional
 import olefile
 
 from .models import FormulaInfo, FormulaStatus
+from .package import DEFAULT_LIMITS, PackageLimits
 
 # Known stream names in MathType OLE containers
 MTEF_STREAM_NAMES = [
@@ -25,7 +26,11 @@ HEADER_STRUCT = struct.Struct("<H I H I I I I I")
 HEADER_SIZE = HEADER_STRUCT.size  # 28 bytes
 
 
-def extract_mtef(formula: FormulaInfo, ole_data: Optional[bytes] = None) -> bool:
+def extract_mtef(
+    formula: FormulaInfo,
+    ole_data: Optional[bytes] = None,
+    limits: PackageLimits = DEFAULT_LIMITS,
+) -> bool:
     """Extract MTEF byte data from an OLE binary and populate the FormulaInfo.
 
     Args:
@@ -40,7 +45,12 @@ def extract_mtef(formula: FormulaInfo, ole_data: Optional[bytes] = None) -> bool
         formula.status = FormulaStatus.FAILED
         formula.error_message = "No OLE data available"
         return False
+    if len(data) > limits.ole_part_max:
+        formula.status = FormulaStatus.FAILED
+        formula.error_message = "OLE data exceeds configured size limit"
+        return False
 
+    ole = None
     try:
         ole = olefile.OleFileIO(io.BytesIO(data))
     except Exception as e:
@@ -51,23 +61,30 @@ def extract_mtef(formula: FormulaInfo, ole_data: Optional[bytes] = None) -> bool
     mtef_bytes = None
     stream_name = None
 
-    for candidate in MTEF_STREAM_NAMES:
-        if ole.exists(candidate):
-            try:
-                stream = ole.openstream(candidate)
-                raw = stream.read()
-                mtef_bytes = _parse_header(raw)
-                stream_name = candidate
-                break
-            except Exception:
-                continue
-
-    ole.close()
+    available_streams = [list(item) for item in ole.listdir()]
+    try:
+        for candidate in MTEF_STREAM_NAMES:
+            if ole.exists(candidate):
+                try:
+                    stream_size = ole.get_size(candidate)
+                    if stream_size > HEADER_SIZE + limits.mtef_stream_max:
+                        continue
+                    raw = ole.openstream(candidate).read(HEADER_SIZE + limits.mtef_stream_max + 1)
+                    if len(raw) > HEADER_SIZE + limits.mtef_stream_max:
+                        continue
+                    mtef_bytes = _parse_header(raw, limits.mtef_stream_max)
+                    stream_name = candidate
+                    if mtef_bytes is not None:
+                        break
+                except (OSError, IOError, ValueError, struct.error):
+                    continue
+    finally:
+        ole.close()
 
     if mtef_bytes is None:
         formula.status = FormulaStatus.FAILED
         formula.error_message = (
-            f"No MathType equation stream found. Available streams: {ole.listdir()}"
+            f"No bounded MathType equation stream found. Available streams: {available_streams}"
         )
         return False
 
@@ -76,7 +93,7 @@ def extract_mtef(formula: FormulaInfo, ole_data: Optional[bytes] = None) -> bool
     return True
 
 
-def _parse_header(raw: bytes) -> Optional[bytes]:
+def _parse_header(raw: bytes, maximum_mtef_size: int = DEFAULT_LIMITS.mtef_stream_max) -> Optional[bytes]:
     """Parse the 28-byte EQNOLEFILEHDR and return the MTEF data portion.
 
     Returns None if the header is invalid.
@@ -91,9 +108,12 @@ def _parse_header(raw: bytes) -> Optional[bytes]:
         return None
 
     mtef_data = raw[HEADER_SIZE:]
-    # cbObject tells us the expected length
-    if cb_object > 0 and cb_object <= len(mtef_data):
+    if cb_object > 0:
+        if cb_object > maximum_mtef_size or cb_object > len(mtef_data):
+            return None
         mtef_data = mtef_data[:cb_object]
+    elif len(mtef_data) > maximum_mtef_size:
+        return None
 
     return mtef_data
 

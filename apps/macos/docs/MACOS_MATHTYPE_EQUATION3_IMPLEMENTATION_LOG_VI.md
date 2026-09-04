@@ -2,7 +2,7 @@
 
 ## Phase 0 — Baseline và provenance
 
-Ngày kiểm tra: 2026-09-04  
+Ngày kiểm tra: 2026-09-04
 Git revision: `69ebfaba611f7291d5d67f3ee57c759979ee2351`  
 Máy kiểm tra: Apple Silicon `arm64`, macOS 15.7.7 (24G720)
 
@@ -70,3 +70,77 @@ converter MathML-to-OMML thuộc VisualTeX theo kế hoạch, không tải style
 - Private corpus 344 tài liệu/7.888 công thức không có trong repository nên chưa chạy.
 - Chưa chạy benchmark corpus hoặc Microsoft Word thực; các kiểm tra này thuộc Phase 6.
 - Phase 1 chưa được bắt đầu trong lần thực thi này.
+
+## Phase 1 — Harden scanner, extractor và package writer
+
+Ngày kiểm tra: 2026-09-04
+Base revision: `971e4f1` (`Document macOS MathType Phase 0 baseline`)
+
+### Outcome
+
+Phase 1 đạt test gate tự động. Scanner và writer hiện fail closed với package không an
+toàn, duyệt WordprocessingML parts qua OPC relationships thay vì danh sách filename cố
+định, và chỉ publish output sau khi candidate đã được mở lại và xác thực. Tầng parser
+MTEF, builder MathML và converter semantic không thay đổi.
+
+### Thay đổi triển khai
+
+- Thêm giới hạn package tập trung cho DOCX nén/giải nén, ZIP entries, XML, OLE, số
+  công thức và MTEF stream.
+- Thay `ZipFile.extractall()` bằng extraction thủ công: reject traversal, absolute path,
+  backslash path, URI lạ, duplicate entry, encrypted entry, ZIP symlink, ZIP bomb theo
+  metadata và digital signature.
+- XML parser tắt DTD, entity resolution, network và huge-tree; malformed XML dừng an toàn.
+- Bắt đầu từ package-level `officeDocument` relationship và duyệt động header, footer,
+  footnote, endnote; textbox được phát hiện trong story part chứa nó.
+- Resolve relationship bằng POSIX OPC URI, không phụ thuộc current working directory;
+  lưu canonical `ole_part_name` cho từng công thức.
+- Extractor giới hạn kích thước OLE/MTEF, kiểm tra `cbObject` không vượt stream thực và
+  đóng CFB handle trong mọi nhánh.
+- Writer làm việc trên staging copy, giữ nguyên source tree, bảo toàn unknown parts,
+  xử lý nhiều OLE trong cùng run mà không làm mất text, và chỉ xóa relationship/embedding
+  khi không còn tham chiếu.
+- Candidate được repack, mở lại bằng safe reader, parse lại `word/document.xml`, `fsync`
+  và publish bằng hard-link không ghi đè. Collision hoặc lỗi trước khi publish không để
+  output nửa chừng.
+- Xóa thông tin biên tập tiếng Trung đã được tách khỏi hành vi mặc định
+  (`remove_edit_info=False`). Output mặc định đổi thành `<stem>_VisualTeX_OMML.docx`.
+
+### Tests
+
+Lệnh gate:
+
+```bash
+python -m compileall -q tools/mathtypejx/src tools/mathtypejx/tests
+python -m pytest -q -rs tools/mathtypejx/tests
+```
+
+Kết quả: `78 passed, 19 skipped`, không có failure; pytest 0,26 giây, wall-clock
+0,63 giây. Có 13 test Phase 1 mới cho:
+
+- ZIP traversal và ZIP bomb metadata;
+- malformed XML và XXE/DTD;
+- digital signature;
+- relationship target thoát package;
+- broken OLE relationship;
+- header có chỉ số 27;
+- nhiều công thức trong cùng run;
+- shared embedding và cleanup embedding không còn tham chiếu;
+- bảo toàn unknown part và source SHA-256;
+- output collision;
+- giới hạn OLE và MTEF header bị truncate.
+
+Ba fixture MTEF v5 tiếp tục sinh MathML. Không có diff dưới
+`src/mathtypejx/mtef/` hoặc `converter.py`, nên Phase 1 không thay đổi kết quả semantic
+MTEF hiện tại.
+
+### Release blockers và giới hạn
+
+- **MTEF v3/Equation Editor 3.0:** repository chưa có fixture hoặc corpus thực. Đây là
+  release blocker riêng; Phase 1 không tạo fixture giả và không xác nhận hỗ trợ Equation
+  Editor 3.0.
+- 12 test vẫn skip vì thiếu DOCX MathType thực/private corpus.
+- 7 test vẫn skip vì không có Microsoft `MML2OMML.XSL`; Phase 2 phải nối MathML vào
+  converter OMML của VisualTeX, không tải stylesheet này.
+- Chưa chạy corpus 344 tài liệu/7.888 công thức hoặc Microsoft Word thực.
+- Phase 2 chưa được bắt đầu.
